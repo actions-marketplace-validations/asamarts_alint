@@ -1,0 +1,21 @@
+# v0.9.18 A1 smoke fixture — `hygiene-no-js-build-outputs` must
+# only fire on `dist/`/`build/` whose ancestor chain contains a
+# `package.json`. Pre-fix, the rule fired on EVERY matching dir,
+# producing false positives in 8 polyglot monorepos.
+#
+# This fixture inlines the bundled rule with the v0.9.18
+# scope_filter (the smoke audit infrastructure exercises rules
+# directly without bundled-extends facts plumbing). A refactor
+# that drops the `scope_filter: { has_ancestor: package.json }`
+# would re-introduce the FPs and make this fixture's count drift
+# from 1 to 2.
+
+version: 1
+
+rules:
+  - id: hygiene-no-js-build-outputs
+    kind: dir_absent
+    paths: ["**/dist", "**/build", "**/out", "**/.next", "**/.nuxt", "**/.svelte-kit", "**/.turbo", "**/coverage"]
+    scope_filter:
+      has_ancestor: package.json
+    level: warning

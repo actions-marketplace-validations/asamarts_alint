@@ -1,0 +1,9 @@
+# Expected: only library/foo/src/RealName.rs (regular Rust subtree)
+# fires snake-case. The 3 files inside compiler/** + library/std/src/sys/**
+# stay silent — bundled excludes apply. If a refactor drops the
+# excludes, total would jump from 1 to 4.
+
+total = 1
+
+[per_rule]
+rust-sources-snake-case = 1

@@ -1,0 +1,9 @@
+# Expected: only frontend/dist (with package.json sibling) fires.
+# src/cmd/dist (no package.json ancestor — Go-style source dir)
+# stays silent. If a refactor drops the bundled scope_filter,
+# total would jump from 1 to 2.
+
+total = 1
+
+[per_rule]
+hygiene-no-js-build-outputs = 1

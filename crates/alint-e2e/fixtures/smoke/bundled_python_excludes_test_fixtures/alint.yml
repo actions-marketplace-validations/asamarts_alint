@@ -1,0 +1,40 @@
+# v0.9.18 A3 smoke fixture — `python-sources-final-newline` and
+# `python-sources-no-trailing-whitespace` must default-exclude
+# canonical test-fixture paths (tests/fixtures/**, **/testdata/**,
+# Lib/test/**, crates/**/resources/test/fixtures/**). Pre-fix,
+# ruff alone surfaced 235 false positives.
+#
+# This fixture inlines the bundled rule with the v0.9.18 exclude
+# defaults (the smoke audit infrastructure doesn't propagate
+# facts through `extends:`, so a self-contained inline definition
+# is used here mirroring the existing smoke-fixture pattern). A
+# refactor that drops the bundled exclude list would re-introduce
+# the FPs and make this fixture's count drift from 2 to 4.
+
+version: 1
+
+rules:
+  - id: python-sources-final-newline
+    kind: final_newline
+    paths:
+      include: ["**/*.py"]
+      exclude:
+        - "tests/fixtures/**"
+        - "**/tests/fixtures/**"
+        - "**/test/fixtures/**"
+        - "**/testdata/**"
+        - "Lib/test/**"
+        - "crates/**/resources/test/fixtures/**"
+    level: info
+  - id: python-sources-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.py"]
+      exclude:
+        - "tests/fixtures/**"
+        - "**/tests/fixtures/**"
+        - "**/test/fixtures/**"
+        - "**/testdata/**"
+        - "Lib/test/**"
+        - "crates/**/resources/test/fixtures/**"
+    level: info

@@ -1,0 +1,25 @@
+# v0.9.18 A6 smoke fixture — `rust-sources-snake-case` must
+# default-exclude `compiler/**` and `library/std/src/sys/**`.
+# Pre-fix, rust-lang/rust alone surfaced 1,091 false positives —
+# the largest single bundled-rule FP class in the case-study
+# corpus.
+#
+# This fixture inlines the bundled rule with the v0.9.18 exclude
+# defaults (the smoke audit infrastructure doesn't propagate facts
+# through `extends:`, so a self-contained inline definition is
+# used here mirroring the existing smoke-fixture pattern). A
+# refactor that drops the bundled excludes would re-introduce the
+# FPs and make this fixture's count drift from 1 to 4.
+
+version: 1
+
+rules:
+  - id: rust-sources-snake-case
+    kind: filename_case
+    paths:
+      include: ["**/src/**/*.rs"]
+      exclude:
+        - "compiler/**"
+        - "library/std/src/sys/**"
+    case: snake
+    level: error

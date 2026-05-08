@@ -1,0 +1,10 @@
+# Expected: only the real source file (`src/demo/core.py`) trips
+# the cosmetic rules. The fixture file (`tests/fixtures/ASYNC115.py`)
+# stays silent — bundled excludes apply. If a refactor drops the
+# excludes, total would jump from 2 to 4.
+
+total = 2
+
+[per_rule]
+python-sources-final-newline = 1
+python-sources-no-trailing-whitespace = 1
