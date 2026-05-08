@@ -1,0 +1,67 @@
+name: cargo-workspace ruleset — non-canonical layout override pattern (v0.9.18 A4)
+tags: [check, bundled, cargo-workspace, override, regression]
+
+# v0.9.18 A4 documentation regression — `monorepo/cargo-workspace@v1`
+# bundled per-member rules use `select: "crates/*"` (the canonical
+# Cargo workspace layout). Workspaces with non-canonical layouts
+# (deno's `ext/*`, `libs/*`, `runtime/`, `cli/`; clap's
+# `clap_builder`, `clap_derive`, etc.) silently no-op against the
+# bundled rules.
+#
+# Adopters with non-canonical layouts redefine the rules in their
+# `.alint.yml` with the correct `select:` glob — the user-level
+# rule ID overrides the bundled definition while keeping the rule
+# active. This scenario asserts that the override recipe documented
+# in the bundled YAML actually works.
+#
+# Fixture mirrors deno's layout — workspace members at `cli`,
+# `core`, `runtime` (depth-0 dirs without the `crates/` prefix).
+# The user override hits the missing-README rule on each.
+
+given:
+  tree:
+    Cargo.toml: |
+      [workspace]
+      members = ["cli", "core", "runtime"]
+    cli:
+      Cargo.toml: |
+        [package]
+        name = "cli"
+        version = "0.1.0"
+      # README missing — override fires.
+    core:
+      Cargo.toml: |
+        [package]
+        name = "core"
+        version = "0.1.0"
+      README.md: "# core\n"
+    runtime:
+      Cargo.toml: |
+        [package]
+        name = "runtime"
+        version = "0.1.0"
+      # README missing — override fires.
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/monorepo/cargo-workspace@v1
+    rules:
+      # Override the bundled `cargo-workspace-member-has-readme`
+      # with our non-canonical layout's selector. Same rule id
+      # = override; the bundled `crates/*`-targeted rule is
+      # replaced by this one.
+      - id: cargo-workspace-member-has-readme
+        kind: for_each_dir
+        select: "{cli,core,runtime}"
+        when_iter: 'iter.has_file("Cargo.toml")'
+        require:
+          - kind: file_exists
+            paths: "{path}/README.md"
+        level: warning
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: cargo-workspace-member-has-readme, level: warning, path: "cli"}
+      - {rule: cargo-workspace-member-has-readme, level: warning, path: "runtime"}
