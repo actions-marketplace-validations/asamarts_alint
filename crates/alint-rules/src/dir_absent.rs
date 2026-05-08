@@ -74,19 +74,24 @@ impl Rule for DirAbsentRule {
 }
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
-    alint_core::reject_scope_filter_on_cross_file(spec, "dir_absent")?;
     let Some(paths) = &spec.paths else {
         return Err(Error::rule_config(
             &spec.id,
             "dir_absent requires a `paths` field",
         ));
     };
+    // v0.9.18: dir_absent honours `scope_filter` so the same
+    // ancestor-manifest gate that scopes per-file rules can scope
+    // dir-iterating rules — required by `hygiene-no-js-build-outputs`
+    // (only fire on `dist/`/`build/` whose ancestor chain contains
+    // a `package.json`, so polyglot monorepos with non-JS dirs of
+    // the same name don't see false positives).
     Ok(Box::new(DirAbsentRule {
         id: spec.id.clone(),
         level: spec.level,
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
-        scope: Scope::from_paths_spec(paths)?,
+        scope: Scope::from_spec(spec)?,
         patterns: patterns_of(paths),
         git_tracked_only: spec.git_tracked_only,
     }))
@@ -201,28 +206,21 @@ mod tests {
     }
 
     #[test]
-    fn build_rejects_scope_filter_on_cross_file_rule() {
-        // dir_absent is a cross-file rule (requires_full_index =
-        // true); scope_filter is per-file-rules-only. The build
-        // path must reject it with a clear message pointing at
-        // the for_each_dir + when_iter: alternative.
+    fn build_accepts_scope_filter() {
+        // v0.9.18: dir_absent honours `scope_filter` so the
+        // ancestor-manifest gate that scopes per-file rules can
+        // also scope dir-iterating rules. The build path must
+        // accept the field and bundle it into the rule's `Scope`.
         let yaml = r#"
 id: t
 kind: dir_absent
-paths: "target"
-level: error
+paths: "**/dist"
+level: warning
 scope_filter:
-  has_ancestor: Cargo.toml
+  has_ancestor: package.json
 "#;
         let spec = spec_yaml(yaml);
-        let err = build(&spec).unwrap_err().to_string();
-        assert!(
-            err.contains("scope_filter is supported on per-file rules only"),
-            "expected per-file-only message, got: {err}",
-        );
-        assert!(
-            err.contains("dir_absent"),
-            "expected message to name the cross-file kind, got: {err}",
-        );
+        let rule = build(&spec).expect("scope_filter must be accepted on dir_absent");
+        assert_eq!(rule.id(), "t");
     }
 }

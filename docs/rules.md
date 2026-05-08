@@ -997,7 +997,7 @@ Hygiene checks for Node.js / npm / pnpm / yarn / bun projects. Tree-level gate: 
 | `node-package-json-exists` | `file_exists` | error | — | — |
 | `node-has-lockfile` | `file_exists` | warning | — | — |
 | `node-no-tracked-node-modules` | `dir_absent` | error | — | — |
-| `node-no-tracked-dist` | `dir_absent` | info | — | — |
+| `node-no-tracked-dist` | `dir_absent` | info | `package.json` | — |
 | `node-engine-or-nvmrc` | `file_exists` | info | — | — |
 | `node-sources-final-newline` | `final_newline` | info | `package.json` | `file_append_final_newline` |
 | `node-sources-no-trailing-whitespace` | `no_trailing_whitespace` | info | `package.json` | `file_trim_trailing_whitespace` |

@@ -1,0 +1,41 @@
+name: alint://bundled/hygiene/no-tracked-artifacts hygiene-no-js-build-outputs honours sibling package.json (v0.9.18 A1)
+tags: [check, extends, bundled, hygiene, scope-filter, regression]
+
+# v0.9.18 A1 regression — `hygiene-no-js-build-outputs` must only
+# fire on `dist/`/`build/`/etc. directories whose ancestor chain
+# contains a `package.json`. Pre-fix, the rule fired on EVERY
+# matching dir, producing false positives in 8 polyglot monorepos
+# (k8s `build/`, golang/go `src/cmd/dist`, dotnet `bin/`,
+# bazel `tools/build_defs/`, vscode `extensions/*/build/`,
+# nixpkgs `pkgs/development/python-modules/build`,
+# deno `tests/testdata/dist/`, angular `dev-infra/.../build/`).
+#
+# Fixture mirrors the polyglot-monorepo shape: a JS package
+# under `frontend/` with a tracked `dist/` (legitimate flag),
+# alongside a Go-style `src/cmd/dist` directory with NO
+# `package.json` ancestor (must NOT flag — that's the FP case).
+
+given:
+  tree:
+    README.md: "# polyglot demo\n"
+    frontend:
+      "package.json": '{"name": "frontend", "version": "0.0.1"}'
+      dist:
+        ".placeholder": ""
+    src:
+      cmd:
+        dist:
+          # No `package.json` ancestor. Pre-fix this would fire as
+          # a false positive — the directory is a Go source dir
+          # named `dist`, not a JS bundler output.
+          "main.go": "package main\n"
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: hygiene-no-js-build-outputs, level: warning, path: frontend/dist}
