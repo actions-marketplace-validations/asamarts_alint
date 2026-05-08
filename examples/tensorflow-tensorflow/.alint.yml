@@ -646,24 +646,43 @@ rules:
   # ──────────────────────────────────────────────────────────────────
 
   - id: tensorflow-bazel-files-have-apache-header
+    # v0.9.18 fix — premise repair (700 false positives pre-fix).
+    #
+    # The original rule looked for inline Apache headers in BUILD
+    # files. TF doesn't use per-file headers for Bazel — it
+    # declares licensing per-Bazel-package via `licenses(["notice"])`
+    # + `default_applicable_licenses = ["//tensorflow:license"]`
+    # in BUILD / BUILD.bazel files. Looking for "Licensed under
+    # the Apache License" produced 700 violations across the tree
+    # because the convention as written doesn't apply.
+    #
+    # Replacement pattern catches TF's actual convention: every
+    # Bazel BUILD file should carry EITHER a `licenses(...)` call
+    # OR a `default_applicable_licenses` attribute (or both). This
+    # mirrors what TF actually enforces in code review.
+    #
+    # The principled fix — a Bazel-licensing-declaration-aware rule
+    # kind that understands `licenses(["notice"])` semantics across
+    # Bazel's package-graph — is a v0.11+ ship-target (1 source
+    # today: this repo). For now this regex approximation does the
+    # right shape.
     kind: file_header
     paths:
       include:
         - "**/BUILD"
         - "**/BUILD.bazel"
-        - "**/*.bzl"
-        - "**/MODULE.bazel"
-        - "WORKSPACE"
       exclude:
         - "third_party/**"
     lines: 25
-    pattern: 'Licensed under the Apache License,?\s*Version 2'
+    pattern: '(licenses\(.*notice|default_applicable_licenses.*license)'
     level: info
     message: |
-      Every Bazel BUILD / *.bzl file should carry the canonical Apache
-      header. The bundled apache-2 ruleset doesn't cover Bazel
-      filename extensions; this rule extends the same pattern over
-      the Bazel surface.
+      Every Bazel BUILD file should declare its license — either
+      `licenses(["notice"])` or `default_applicable_licenses = [...]`.
+      TF uses per-package declarations rather than per-file headers
+      (unlike the bundled apache-2-source-has-license-header rule
+      which covers Python / Go / etc. sources). See
+      tensorflow/tensorflow's own license-declaration discipline.
 
   # ──────────────────────────────────────────────────────────────────
   # configure.py + setup.py + key Python entry-points have Apache

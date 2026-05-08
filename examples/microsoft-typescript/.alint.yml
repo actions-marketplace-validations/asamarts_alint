@@ -101,11 +101,19 @@ rules:
   - id: ts-copyright-header-src
     kind: file_header
     paths: "src/**/*.ts"
-    pattern: |
+    # Pitfall #22 (`|` → `|-`) — block-scalar trailing-newline
+    # fix; without it the regex requires a trailing newline
+    # immediately after the `Version 2.0` line, which never matches.
+    pattern: |-
       ^/\*! \*+
       Copyright \(c\) Microsoft Corporation\. All rights reserved\.
       Licensed under the Apache License, Version 2\.0
-    level: warning
+    # Lowered from `warning` to `info` — the underlying convention
+    # isn't actually applied to source files in TypeScript; the
+    # CopyrightNotice block is prepended to bundled output by the
+    # Hereby `generateLibs` task. Keeping the rule informational
+    # surfaces drift without blocking maintenance work.
+    level: info
     message: >-
       Every src/**/*.ts file should start with the
       scripts/CopyrightNotice.txt block. The Hereby `generateLibs`
@@ -119,7 +127,10 @@ rules:
     # before the next major-version pin.
     kind: file_header
     paths: ["scripts/**/*.mjs", "scripts/**/*.cjs", "scripts/**/*.mts"]
-    pattern: |
+    # Pitfall #22 (`|` → `|-`) — defensive even though this single-
+    # line pattern doesn't trip the trailing-newline trap; keeping
+    # the syntax consistent with the src rule above.
+    pattern: |-
       ^// Copyright \(c\) Microsoft Corporation
     level: info
 

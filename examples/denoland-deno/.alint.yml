@@ -117,7 +117,13 @@ rules:
     # The header may sit after a shebang, a `// deno-lint-...` directive,
     # a `// Ported ...` line, or a blank line — same set the JS script
     # tolerates.
-    pattern: |
+    # Pitfall #22 (`|` → `|-`) — defensive block-scalar trailing-
+    # newline fix. Verified NOT firing today (every Deno copyright
+    # line is `\n`-terminated naturally and the regex's terminating
+    # `// Copyright ...` line absorbs the trailing `\n`), but the
+    # `|` form is fragile; switching to `|-` removes the dependency
+    # on regex luck.
+    pattern: |-
       ^(?:#!.*\n)?(?:// (?:deno-lint-|Ported|Copyright).*\n|\s*\n)*// Copyright 2018-2026 the Deno authors\. MIT license\.
     level: error
 
