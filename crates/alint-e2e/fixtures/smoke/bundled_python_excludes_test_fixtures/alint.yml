@@ -24,7 +24,7 @@ rules:
         - "**/test/fixtures/**"
         - "**/testdata/**"
         - "Lib/test/**"
-        - "crates/**/resources/test/fixtures/**"
+        - "crates/**/resources/**"
     level: info
   - id: python-sources-no-trailing-whitespace
     kind: no_trailing_whitespace
@@ -36,5 +36,5 @@ rules:
         - "**/test/fixtures/**"
         - "**/testdata/**"
         - "Lib/test/**"
-        - "crates/**/resources/test/fixtures/**"
+        - "crates/**/resources/**"
     level: info

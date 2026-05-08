@@ -133,7 +133,7 @@ rules:
         - "**/test/fixtures/**"
         - "**/testdata/**"
         - "Lib/test/**"
-        - "crates/**/resources/test/fixtures/**"
+        - "crates/**/resources/**"
     scope_filter:
       has_ancestor: [pyproject.toml, setup.py, requirements.txt]
     level: info
@@ -151,7 +151,7 @@ rules:
         - "**/test/fixtures/**"
         - "**/testdata/**"
         - "Lib/test/**"
-        - "crates/**/resources/test/fixtures/**"
+        - "crates/**/resources/**"
     scope_filter:
       has_ancestor: [pyproject.toml, setup.py, requirements.txt]
     level: info
