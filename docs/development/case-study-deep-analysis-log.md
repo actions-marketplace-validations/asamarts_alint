@@ -638,6 +638,53 @@ above):
   test fixtures (also surfaced in spark). Cross-repo cleanup
   pattern.
 
+## v0.9.18 revalidation evidence (2026-05-08)
+
+After A1-A6 + B1-B3 landed, ran alint v0.9.18 (release build) against
+the cloned case-study trees at `/tmp/<repo>/`. Summary of FP-class
+elimination:
+
+| Repo | Rule | Pre-fix | Post-fix | Reduction | Source fix |
+|---|---|---:|---:|---:|---|
+| airflow | apache-2-source-has-license-header | 8,228 | 79 | -99% | A2 |
+| rust-lang/rust | rust-sources-snake-case | 1,091 | 10 | -99% | A6 (corrected) |
+| tensorflow | tensorflow-bazel-files-have-apache-header | 700 | 241 | -66% | B3 |
+| ruff | python-sources-final-newline | 176 | 0 | -100% | A3 (corrected) |
+| ruff | python-sources-no-trailing-whitespace | 59 | 0 | -100% | A3 (corrected) |
+| bazel | hygiene-no-js-build-outputs | 30 | 0 | -100% | A1 |
+| dotnet/runtime | hygiene-no-js-build-outputs | 21 | 1 | -95% | A1 |
+| deno | hygiene-no-js-build-outputs | 16 | 10 | -38% | A1 |
+| nixpkgs | hygiene-no-js-build-outputs | 3 | 0 | -100% | A1 |
+| vscode | hygiene-no-js-build-outputs | 19 | 19 | 0% | A1 (extension build/ has package.json ancestor) |
+| angular | hygiene-no-js-build-outputs | 3 | 3 | 0% | A1 (dev-infra build/ has package.json ancestor) |
+
+Two key takeaways:
+
+1. **A3 + A6 corrections.** The original A3 + A6 commit landed with
+   pattern scopes that didn't match the actual FP source. A3's
+   `crates/**/resources/test/fixtures/**` was too narrow (ruff's
+   parser fixtures live at `crates/ruff_python_parser/resources/`,
+   no `test/fixtures` infix). A6's `compiler/**` +
+   `library/std/src/sys/**` were the WRONG paths entirely — actual
+   rust-lang/rust violators are hyphenated names in `src/doc/**`,
+   `src/tools/{miri,clippy,rustfmt}/tests/**`, `tests/rustdoc-gui/**`,
+   and `**/*.miri.rs`. Both corrections committed in
+   `dc7c3ed8` after the live-tree revalidation surfaced the gaps.
+2. **A1 partial cases (vscode + angular).** Both repos have `build/`
+   directories that ARE inside JS-package ancestors (vscode-extension
+   subdirs each carry a `package.json`; angular's dev-infra similarly).
+   The scope_filter correctly admits these; the residual FPs are
+   "correct rule, wrong repo convention" and should be silenced via
+   per-config override. Filed as v0.10+ design candidate to consider
+   a `is_artifact:` heuristic (e.g. detect that `dist/` is present
+   in `.gitignore`) but the per-config override is the v0.9.x answer.
+
+Cross-cutting README count refresh deferred — the per-repo READMEs
+document detailed violation tables that need re-running per repo;
+treating that as a post-launch polish workstream because the
+top-line FP-elimination is verified end-to-end here. The deep-analysis
+log + this evidence table are the v0.9.18 ship-state authority.
+
 ## Methodology notes
 
 - **Captured commit SHA per repo:** each `examples/<repo>/README.md`
