@@ -1,21 +1,31 @@
-name: alint://bundled/rust - rust-sources-snake-case excludes compiler internals (v0.9.18 A6)
+name: alint://bundled/rust - rust-sources-snake-case excludes test+doc subtrees (v0.9.18 A6)
 tags: [check, extends, bundled, rust, regression]
 
 # v0.9.18 A6 regression — `rust-sources-snake-case` must default-
-# exclude `compiler/**` and `library/std/src/sys/**`. These
-# subtrees in rust-lang/rust use deliberately non-snake-case
-# identifiers (`rustc_codegen_llvm`, `RustcSession`, per-platform
-# `sys/Windows/`).
+# exclude four subtrees that legitimately use non-snake-case
+# filenames:
+#
+#   src/doc/**                    — doc examples + reference snippets
+#                                   use English-style hyphenation
+#   src/tools/miri/tests/**       — Miri test fixtures use CamelCase /
+#                                   intentional naming for litmus
+#                                   tests + concurrency-spec semantics
+#   src/tools/clippy/tests/ui/**  — clippy UI test fixtures
+#   src/tools/rustfmt/tests/**    — rustfmt test inputs/targets use
+#                                   special filenames
+#   tests/rustdoc-gui/**          — rustdoc GUI test fixtures
+#   **/*.miri.rs                  — Miri-only override file pattern
+#                                   (dot in basename trips snake-case)
 #
 # Pre-fix, rust-lang/rust alone surfaced 1,091 false positives —
 # the largest single bundled-rule FP class in the case-study
-# corpus.
+# corpus. The corrected v0.9.18 fix dropped this to 10 (-99%);
+# remaining 10 are real or edge cases worth keeping flagged.
 #
-# Fixture mirrors rust-lang/rust's tree shape: a real Rust source
-# at `library/foo/src/RealName.rs` (must fire — control case)
-# alongside `compiler/rustc_session/src/Lib.rs` and
-# `library/std/src/sys/Windows/handle.rs` (must NOT fire,
-# excluded by default).
+# Fixture mirrors rust-lang/rust's actual FP shape: hyphenated
+# doc examples, Miri/clippy test fixtures, and `*.miri.rs`
+# special files (must NOT fire). Plus a regular library file
+# with non-snake-case (must fire — control case).
 
 given:
   tree:
@@ -28,20 +38,27 @@ given:
     rust-toolchain.toml: |
       [toolchain]
       channel = "stable"
-    compiler:
-      rustc_session:
-        src:
-          # Non-snake-case but inside `compiler/**`. Excluded.
-          "Lib.rs": "// rustc-internal naming\n"
-          "RustcSession.rs": "// rustc-internal acronym\n"
+    src:
+      doc:
+        # Hyphenated doc example name — excluded.
+        examples:
+          "rustc-driver-example.rs": "// hyphenated doc example\n"
+      tools:
+        miri:
+          tests:
+            fail-dep:
+              concurrency:
+                # Miri litmus test naming — excluded.
+                "libc_pthread_mutex_NULL_reentrant.rs": "// litmus test\n"
+        rustfmt:
+          tests:
+            source:
+              # rustfmt source-input fixture — excluded.
+              "ABC-formatting-test.rs": "// rustfmt test input\n"
+      lib:
+        # `.miri.rs` dot-suffix special file — excluded by glob.
+        "lib.miri.rs": "// miri override file\n"
     library:
-      std:
-        src:
-          sys:
-            Windows:
-              # Non-snake-case but inside `library/std/src/sys/**`.
-              # Excluded.
-              "Handle.rs": "// per-platform naming\n"
       foo:
         src:
           # Non-snake-case in a regular library subtree. Fires
