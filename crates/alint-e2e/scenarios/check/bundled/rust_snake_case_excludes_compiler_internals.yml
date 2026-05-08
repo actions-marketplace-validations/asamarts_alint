@@ -1,0 +1,59 @@
+name: alint://bundled/rust - rust-sources-snake-case excludes compiler internals (v0.9.18 A6)
+tags: [check, extends, bundled, rust, regression]
+
+# v0.9.18 A6 regression — `rust-sources-snake-case` must default-
+# exclude `compiler/**` and `library/std/src/sys/**`. These
+# subtrees in rust-lang/rust use deliberately non-snake-case
+# identifiers (`rustc_codegen_llvm`, `RustcSession`, per-platform
+# `sys/Windows/`).
+#
+# Pre-fix, rust-lang/rust alone surfaced 1,091 false positives —
+# the largest single bundled-rule FP class in the case-study
+# corpus.
+#
+# Fixture mirrors rust-lang/rust's tree shape: a real Rust source
+# at `library/foo/src/RealName.rs` (must fire — control case)
+# alongside `compiler/rustc_session/src/Lib.rs` and
+# `library/std/src/sys/Windows/handle.rs` (must NOT fire,
+# excluded by default).
+
+given:
+  tree:
+    Cargo.toml: |
+      [package]
+      name = "demo"
+      version = "0.1.0"
+    Cargo.lock: |
+      # auto-generated lockfile
+    rust-toolchain.toml: |
+      [toolchain]
+      channel = "stable"
+    compiler:
+      rustc_session:
+        src:
+          # Non-snake-case but inside `compiler/**`. Excluded.
+          "Lib.rs": "// rustc-internal naming\n"
+          "RustcSession.rs": "// rustc-internal acronym\n"
+    library:
+      std:
+        src:
+          sys:
+            Windows:
+              # Non-snake-case but inside `library/std/src/sys/**`.
+              # Excluded.
+              "Handle.rs": "// per-platform naming\n"
+      foo:
+        src:
+          # Non-snake-case in a regular library subtree. Fires
+          # (control case).
+          "RealName.rs": "// regular Rust module - should be snake_case\n"
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/rust@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: rust-sources-snake-case, level: error, path: "library/foo/src/RealName.rs"}

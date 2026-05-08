@@ -59,10 +59,28 @@ rules:
     message: "`target/` is Cargo's build dir and must never be committed."
 
   # --- Source-file conventions --------------------------------------
+  # v0.9.18: default-exclude two compiler-internal subtrees that
+  # carry deliberately non-snake-case identifiers:
+  #
+  #   compiler/**             — rust-lang/rust uses `rustc_*` /
+  #                             acronym-y crate names by convention
+  #                             (`rustc_codegen_llvm`, `RustcSession`).
+  #   library/std/src/sys/**  — rust-lang/rust's per-platform sys
+  #                             modules use platform-vendor naming.
+  #
+  # Both directories are unique to rust-lang/rust + similar
+  # compiler projects (ferrocene, experimental forks); they're a
+  # no-op for other repos. Without these excludes, rust-lang/rust
+  # alone surfaced 1,091 false positives — the largest single
+  # bundled-rule FP class in the case-study corpus.
   - id: rust-sources-snake-case
     when: facts.has_rust
     kind: filename_case
-    paths: "**/src/**/*.rs"
+    paths:
+      include: ["**/src/**/*.rs"]
+      exclude:
+        - "compiler/**"
+        - "library/std/src/sys/**"
     case: snake
     level: error
     message: "Rust module filenames must be snake_case."
