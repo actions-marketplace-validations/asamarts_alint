@@ -1,0 +1,58 @@
+name: alint://bundled/python - cosmetic rules default-exclude test-fixture trees (v0.9.18 A3)
+tags: [check, extends, bundled, python, regression]
+
+# v0.9.18 A3 regression — `python-sources-final-newline` and
+# `python-sources-no-trailing-whitespace` must default-exclude the
+# canonical test-fixture trees. Linter and test-suite repos
+# (cpython `Lib/test/**`, ruff `crates/*/resources/test/fixtures/**`,
+# pytest-style `tests/fixtures/**`, Go-style `**/testdata/**`)
+# carry deliberately-malformed Python files.
+#
+# Pre-fix, ruff alone surfaced 235 false positives because the
+# rules fired on every `.py` under a `pyproject.toml` ancestor,
+# including its 1,597 deliberately-malformed test fixtures.
+#
+# Fixture exercises both shapes simultaneously: a real source
+# file with trailing whitespace + missing final newline (must
+# fire) AND a fixture file with the same defects (must NOT fire,
+# excluded by default).
+
+given:
+  tree:
+    "pyproject.toml": |
+      [project]
+      name = "demo"
+      version = "0.1.0"
+      requires-python = ">=3.10"
+    "uv.lock": "version = 1\n"
+    src:
+      demo:
+        "__init__.py": "\"\"\"demo package.\"\"\"\n"
+        # Real source — trailing whitespace + no final newline.
+        # Both rules must fire (control case).
+        "core.py": "def real():    \n    return 0"
+    tests:
+      fixtures:
+        # Deliberately-malformed fixture — same defects, but inside
+        # `tests/fixtures/**` so the bundled excludes apply. Both
+        # rules must stay silent.
+        "ASYNC115.py": "def fixture():    \n    return 0"
+    crates:
+      ruff_linter:
+        resources:
+          test:
+            fixtures:
+              flake8_async:
+                # ruff's actual canonical fixture path. Must stay silent.
+                "ASYNC115.py": "def fixture():    \n    return 0"
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/python@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: python-sources-final-newline, level: info, path: src/demo/core.py}
+      - {rule: python-sources-no-trailing-whitespace, level: info, path: src/demo/core.py}
