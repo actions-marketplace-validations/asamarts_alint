@@ -1,0 +1,56 @@
+name: compliance/apache-2@v1 — long-form ASF-preamble header validates (v0.9.18 A2)
+tags: [check, bundled, compliance, apache-2, regression]
+
+# v0.9.18 A2 regression — `apache-2-source-has-license-header`
+# must accept BOTH the short SPDX-template form AND the long
+# ASF-preamble form that every Apache TLP (arrow, spark,
+# airflow, etc.) uses. Pre-fix, the bundled rule's pattern
+# (`Licensed under the Apache License,?\s*Version 2`) only
+# matched the short form, producing 8,228 false positives
+# against airflow's tree alone.
+#
+# Fixture mixes both header forms. The rule must NOT fire on
+# either — both are canonical Apache headers.
+
+given:
+  tree:
+    LICENSE: |
+      Apache License
+      Version 2.0, January 2004
+      http://www.apache.org/licenses/
+    NOTICE: |
+      Demo project
+      Copyright 2026 Acme Corp
+    src:
+      # Long ASF-preamble form — every Apache TLP uses this.
+      asf_long_form.py: |
+        # Licensed to the Apache Software Foundation (ASF) under one
+        # or more contributor license agreements.  See the NOTICE file
+        # distributed with this work for additional information
+        # regarding copyright ownership.  The ASF licenses this file
+        # to you under the Apache License, Version 2.0 (the
+        # "License"); you may not use this file except in compliance
+        # with the License.  You may obtain a copy of the License at
+        #
+        #   http://www.apache.org/licenses/LICENSE-2.0
+
+        def asf_long_form():
+            pass
+      # Short SPDX-template form — the original bundled-pattern target.
+      spdx_short_form.py: |
+        # Copyright 2026 Acme Corp
+        #
+        # Licensed under the Apache License, Version 2.0 (the "License");
+        # you may not use this file except in compliance with the License.
+
+        def spdx_short_form():
+            pass
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/compliance/apache-2@v1
+
+when: [check]
+
+expect:
+  - violations: []
