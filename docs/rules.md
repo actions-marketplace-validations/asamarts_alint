@@ -402,6 +402,15 @@ No line may end with space or tab.
 
 File must end with a single `\n`. Fixable via `file_append_final_newline`.
 
+```yaml
+- id: text-files-final-newline
+  kind: final_newline
+  paths: "**/*.{md,yml,yaml,toml,sh}"
+  level: warning
+  fix:
+    file_append_final_newline: {}
+```
+
 ### `line_endings`
 
 Every line ending matches `target`: `lf` or `crlf`. Mixed endings in a single file fail.
@@ -533,7 +542,15 @@ Tree depth from repo root may not exceed `max`. A shallow depth stops deeply-nes
 
 ### `max_files_per_directory`
 
-Per-directory fanout may not exceed `max`. Useful for vendor directories that accidentally grow to thousands of entries.
+Per-directory fanout may not exceed `max_files`. Useful for vendor directories that accidentally grow to thousands of entries.
+
+```yaml
+- id: vendor-dir-fanout-cap
+  kind: max_files_per_directory
+  paths: "vendor/**"
+  max_files: 200
+  level: warning
+```
 
 ### `no_empty_files`
 
@@ -557,6 +574,13 @@ Checks that reject tree shapes which work on one OS but break checkouts elsewher
 ### `no_case_conflicts`
 
 Flag paths that differ only by case (e.g. `README.md` + `readme.md`). They can't coexist on macOS HFS+/APFS or Windows NTFS defaults, so a Linux-only dev committing both breaks checkouts for teammates.
+
+```yaml
+- id: no-case-colliding-paths
+  kind: no_case_conflicts
+  paths: "**"
+  level: error
+```
 
 ### `no_illegal_windows_names`
 
@@ -609,6 +633,13 @@ No fix op — chmod auto-apply is deferred.
 ### `executable_has_shebang`
 
 Every file with `+x` set must begin with `#!`. Catches plain text files accidentally marked executable.
+
+```yaml
+- id: executables-have-shebangs
+  kind: executable_has_shebang
+  paths: "**"
+  level: error
+```
 
 ### `shebang_has_executable`
 
@@ -821,11 +852,27 @@ The `iter` namespace exposes:
 
 ### `dir_contains`
 
-Every directory matching `paths` must contain files matching `require:`. Sugar for a common `for_each_dir` shape.
+Every directory matching `select:` must contain files matching every glob in `require:`. Sugar for a common `for_each_dir` shape.
+
+```yaml
+- id: packages-have-readme-and-license
+  kind: dir_contains
+  select: "packages/*"
+  require: ["README.md", "LICENSE*"]
+  level: error
+```
 
 ### `dir_only_contains`
 
-Every directory matching `paths` may contain only files matching `allow:`. Catches stray test data in `src/`.
+Every direct-child file of a directory matching `select:` must match at least one glob in `allow:`. Catches stray test data in `src/`.
+
+```yaml
+- id: src-only-rs
+  kind: dir_only_contains
+  select: "src/*"
+  allow: ["*.rs", "README.md"]
+  level: error
+```
 
 ### `unique_by`
 
@@ -841,7 +888,17 @@ No two files matching `paths` may share the value of `key` (a path template). Ca
 
 ### `every_matching_has`
 
-For every file matching `paths`, at least one of `require:` must also exist (at a template-derived location). Lightweight sibling of `pair`.
+For every file or directory matching `select:`, every nested rule under `require:` must be satisfied. Lightweight sibling of `pair` that iterates both file and directory entries.
+
+```yaml
+- id: every-pkg-has-readme
+  kind: every_matching_has
+  select: "packages/*"
+  require:
+    - kind: file_exists
+      paths: "{path}/README.md"
+  level: error
+```
 
 ---
 

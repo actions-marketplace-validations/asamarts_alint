@@ -912,6 +912,12 @@ fn generate_rules_pages(
     let mut kind_to_family: HashMap<String, String> = HashMap::new();
     let mut all_kinds: Vec<KindEntry> = Vec::new();
     let mut family_summaries: Vec<FamilySummary> = Vec::new();
+    // Per-rule H3 sections in `docs/rules.md` must contain a
+    // ```yaml usage example. Accumulated across all families and
+    // surfaced as a single hard failure so a docs PR sees every
+    // missing example at once instead of fixing them one at a
+    // time. Reflected on alint.org/docs/rules/<family>/<kind>/.
+    let mut missing_examples: Vec<String> = Vec::new();
 
     let mut family_order: u32 = 0;
     for h2 in split_h2_sections(&src) {
@@ -945,6 +951,7 @@ fn generate_rules_pages(
             &known_kinds,
             &mut kind_to_family,
             &mut all_kinds,
+            &mut missing_examples,
         )?;
 
         emit_family_index(
@@ -971,6 +978,24 @@ fn generate_rules_pages(
         }
     }
 
+    // Hard-fail on any per-rule H3 that lacks a ```yaml usage
+    // example. Caught here (rather than as a soft warning) so a
+    // missing-example PR fails the docs-bundle build before it
+    // ever reaches alint.org. To add an example, edit the H3
+    // section in `docs/rules.md` for that rule and include a
+    // realistic ```yaml ... ``` snippet.
+    if !missing_examples.is_empty() {
+        anyhow::bail!(
+            "{} rule kind H3 section(s) in docs/rules.md are missing a \
+             ```yaml usage example:\n  - {}\n\n\
+             Each per-rule heading must include at least one fenced \
+             ```yaml block before the next heading. The block becomes \
+             the usage example shown on alint.org/docs/rules/<family>/<kind>/.",
+            missing_examples.len(),
+            missing_examples.join("\n  - "),
+        );
+    }
+
     emit_rules_master_index(&rules_dir, &all_kinds, &family_summaries)?;
     Ok(kind_to_family)
 }
@@ -987,6 +1012,7 @@ fn process_family_h3s(
     known_kinds: &std::collections::HashSet<String>,
     kind_to_family: &mut std::collections::HashMap<String, String>,
     all_kinds: &mut Vec<KindEntry>,
+    missing_examples: &mut Vec<String>,
 ) -> Result<Vec<RuleEntry>> {
     let mut family_rules: Vec<RuleEntry> = Vec::new();
     let mut kind_order: u32 = 0;
@@ -1005,6 +1031,15 @@ fn process_family_h3s(
         });
         if group_kinds.is_empty() {
             continue;
+        }
+        // Every per-rule H3 must include at least one fenced
+        // ```yaml block. Surfaced collectively at the end of
+        // generate_rules_pages so authors see all gaps in one
+        // pass. Multi-kind headings (e.g. the structured-query
+        // family's three path_equals kinds) share one body, so
+        // one example per heading covers the group.
+        if !h3.body.contains("```yaml") {
+            missing_examples.push(format!("{} → {}", h2.title, h3.title));
         }
         let summary = first_sentence(&h3.body);
         for kind in &group_kinds {
