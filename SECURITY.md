@@ -8,7 +8,7 @@ so reports are taken seriously and handled privately until a fix ships.
 
 **Do not file a public GitHub issue for security vulnerabilities.**
 
-Email **asamarts@alint.org** with:
+Email **security@alint.org** with:
 
 - A description of the vulnerability and its impact
 - Steps to reproduce (config snippet + tree shape, or a minimal failing repo)

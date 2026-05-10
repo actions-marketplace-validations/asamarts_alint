@@ -59,7 +59,7 @@ appointed representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behaviour may be
 reported to the project maintainers responsible for enforcement at
-**asamarts@alint.org**.
+**security@alint.org**.
 
 All complaints will be reviewed and investigated promptly and fairly.
 
