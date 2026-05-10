@@ -65,4 +65,4 @@ rules:
     level: warning
     message: >-
       Workspace member's package.json must declare a `name`
-      field — pnpm's filter and graph resolution use it.
+      field. pnpm's filter and graph resolution use it.

@@ -207,8 +207,8 @@ rules:
     pattern: '(?:^|[\s;{(])(debugger\s*;|breakpoint\s*\(\s*\))'
     level: error
     message: >-
-      `debugger;` / `breakpoint()` must not be committed —
-      these halt execution at runtime. Remove before merge.
+      `debugger;` / `breakpoint()` must not be committed.
+      These halt execution at runtime. Remove before merge.
 
   # --- Model-attributed TODOs --------------------------------------
   # `TODO(claude:)`, `FIXME(cursor:)`, `XXX(gpt:)` etc. — TODO
@@ -236,5 +236,5 @@ rules:
     level: warning
     message: >-
       Agent-attributed TODO marker. Resolve, convert to a
-      tracked issue, or remove the model attribution — these
+      tracked issue, or remove the model attribution. These
       outlive the session that wrote them.

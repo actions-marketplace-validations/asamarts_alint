@@ -4,7 +4,7 @@
 [![CI](https://github.com/asamarts/alint/actions/workflows/ci.yml/badge.svg)](https://github.com/asamarts/alint/actions/workflows/ci.yml)
 [![License](https://img.shields.io/crates/l/alint.svg)](#license)
 
-**Fast, language-agnostic linter for repository structure, files, and content.** Declare the shape your repo should have — required files, filename conventions, content patterns, values inside `package.json` / `Cargo.toml` / GitHub workflows, cross-file relationships — in a single `.alint.yml`. alint enforces it.
+**Fast, language-agnostic linter for repository structure, files, and content.** Declare the shape your repo should have (required files, filename conventions, content patterns, values inside `package.json` / `Cargo.toml` / GitHub workflows, cross-file relationships) in a single `.alint.yml`. alint enforces it.
 
 - ⚡ **Fast at scale.** ~1.1 s on a 100K-file workspace bundle, ~12 s at 1M files. [Public benchmarks per release.](docs/benchmarks/HISTORY.md)
 - 🤖 **Agent-aware.** First-class `agent` output format with per-violation `agent_instruction` strings; bundled `agent-hygiene` and `agent-context` rulesets for AI-touched repos.
@@ -13,7 +13,7 @@
 
 alint fills the active-maintenance gap left when [Repolinter](https://github.com/todogroup/repolinter) was archived in early 2026, with a superset of its rule catalogue plus first-class cross-file, conditional-rule, structured-query, and agent-aware primitives.
 
-Working `.alint.yml` configs for 30 OSS repos — single-language workspaces, polyglot monorepos, scale stress-tests — live under [`examples/`](examples/README.md), each with a writeup of what alint catches that the repo's existing tooling misses.
+Working `.alint.yml` configs for 30 OSS repos (single-language workspaces, polyglot monorepos, scale stress-tests) live under [`examples/`](examples/README.md), each with a writeup of what alint catches that the repo's existing tooling misses.
 
 ## 60-second quickstart
 
@@ -38,20 +38,20 @@ alint fix --dry-run
 alint fix
 ```
 
-Bundled rulesets are gated by ecosystem facts (`has_rust`, `has_node`, `has_python`, …) — listing one for an ecosystem you don't have is a silent no-op. See [docs/rules.md](docs/rules.md) for the full rule catalogue and [alint.org](https://alint.org) for narrative docs.
+Bundled rulesets are gated by ecosystem facts (`has_rust`, `has_node`, `has_python`, …), so listing one for an ecosystem you don't have is a silent no-op. See [docs/rules.md](docs/rules.md) for the full rule catalogue and [alint.org](https://alint.org) for narrative docs.
 
 ## Core capabilities
 
-- **60 rule kinds** across 13 families — existence, content, naming, structured query (RFC 9535 JSONPath over JSON/YAML/TOML), text hygiene, security/unicode, encoding, structure, portable metadata, Unix metadata, git hygiene, cross-file relations, plugin (`command` shellout). Full reference: [`docs/rules.md`](docs/rules.md).
-- **19 bundled rulesets** — `oss-baseline`, language sets (`rust`, `node`, `python`, `go`, `java`), `ci/github-actions`, monorepo overlays (`cargo-workspace`, `pnpm-workspace`, `yarn-workspace`), hygiene (`no-tracked-artifacts`, `lockfiles`), tooling (`editorconfig`), docs (`adr`), compliance (`reuse`, `apache-2`), agent (`hygiene`, `context`). Built into the binary — no network round-trip; ecosystem-gated, so listing one for an absent ecosystem is a silent no-op.
-- **Auto-fix** — 12 ops covering content edits (whitespace, newlines, line endings, BOM/bidi/zero-width strip, blank-line collapse) and path ops (create/remove/rename/prepend/append). Preview with `alint fix --dry-run`. Configurable `fix_size_limit` (default 1 MiB) skips oversize files rather than rewriting them.
-- **Conditional rules** — bounded `when:` expression language (boolean logic, comparisons, `matches`, `in`) gates rules on *facts* evaluated once per run (`any_file_exists`, `all_files_exist`, `count_files`).
-- **Composition** — `extends:` pulls in other configs by local path, HTTPS URL (SRI-pinned), or `alint://bundled/<name>@<rev>`. Children override field-by-field. Monorepos can opt into `nested_configs: true` for auto-discovered subtree-scoped `.alint.yml` files.
-- **9 subcommands** — `check` (default; supports `--changed` for PR-fast-path linting), `fix`, `init` (auto-detect ecosystem + scaffold), `validate-config` (parse-only; for editor LSP / pre-commit / fail-fast CI), `explain <rule>`, `list`, `suggest` (scan for antipatterns and propose rules), `facts` (debug `when:` clauses), `export-agents-md` (sync `AGENTS.md` from active rules).
-- **8 output formats** — `human`, `json` (stable schema), `sarif` (GitHub Code Scanning), `github` (inline PR annotations), `markdown` (PR comments), `junit` (CI test reports), `gitlab` (Code Quality), `agent` (LLM-shaped JSON with `agent_instruction` per violation).
-- **JSON Schemas** — config at [`schemas/v1/config.json`](schemas/v1/config.json) for editor autocomplete; report shapes at [`schemas/v1/check-report.json`](schemas/v1/check-report.json) and [`schemas/v1/fix-report.json`](schemas/v1/fix-report.json) for downstream tooling.
-- **Telemetry-free.** No network access at runtime — only the user-explicit `extends: https://...` URLs (SRI-pinned). Reproducible builds (`Cargo.lock` committed, pinned toolchain). See [SECURITY.md](SECURITY.md) for the threat model.
-- **Official GitHub Action** — [`asamarts/alint@v0.9.17`](https://github.com/asamarts/alint).
+- **60 rule kinds** across 13 families: existence, content, naming, structured query (RFC 9535 JSONPath over JSON/YAML/TOML), text hygiene, security/unicode, encoding, structure, portable metadata, Unix metadata, git hygiene, cross-file relations, plugin (`command` shellout). Full reference: [`docs/rules.md`](docs/rules.md).
+- **19 bundled rulesets**: `oss-baseline`, language sets (`rust`, `node`, `python`, `go`, `java`), `ci/github-actions`, monorepo overlays (`cargo-workspace`, `pnpm-workspace`, `yarn-workspace`), hygiene (`no-tracked-artifacts`, `lockfiles`), tooling (`editorconfig`), docs (`adr`), compliance (`reuse`, `apache-2`), agent (`hygiene`, `context`). Built into the binary, no network round-trip; ecosystem-gated, so listing one for an absent ecosystem is a silent no-op.
+- **Auto-fix**: 12 ops covering content edits (whitespace, newlines, line endings, BOM/bidi/zero-width strip, blank-line collapse) and path ops (create/remove/rename/prepend/append). Preview with `alint fix --dry-run`. Configurable `fix_size_limit` (default 1 MiB) skips oversize files rather than rewriting them.
+- **Conditional rules**: a bounded `when:` expression language (boolean logic, comparisons, `matches`, `in`) gates rules on *facts* evaluated once per run (`any_file_exists`, `all_files_exist`, `count_files`).
+- **Composition**: `extends:` pulls in other configs by local path, HTTPS URL (SRI-pinned), or `alint://bundled/<name>@<rev>`. Children override field-by-field. Monorepos can opt into `nested_configs: true` for auto-discovered subtree-scoped `.alint.yml` files.
+- **9 subcommands**: `check` (default; supports `--changed` for PR-fast-path linting), `fix`, `init` (auto-detect ecosystem + scaffold), `validate-config` (parse-only; for editor LSP / pre-commit / fail-fast CI), `explain <rule>`, `list`, `suggest` (scan for antipatterns and propose rules), `facts` (debug `when:` clauses), `export-agents-md` (sync `AGENTS.md` from active rules).
+- **8 output formats**: `human`, `json` (stable schema), `sarif` (GitHub Code Scanning), `github` (inline PR annotations), `markdown` (PR comments), `junit` (CI test reports), `gitlab` (Code Quality), `agent` (LLM-shaped JSON with `agent_instruction` per violation).
+- **JSON Schemas**: config at [`schemas/v1/config.json`](schemas/v1/config.json) for editor autocomplete; report shapes at [`schemas/v1/check-report.json`](schemas/v1/check-report.json) and [`schemas/v1/fix-report.json`](schemas/v1/fix-report.json) for downstream tooling.
+- **Telemetry-free.** No network access at runtime, except the user-explicit `extends: https://...` URLs (SRI-pinned). Reproducible builds (`Cargo.lock` committed, pinned toolchain). See [SECURITY.md](SECURITY.md) for the threat model.
+- **Official GitHub Action**: [`asamarts/alint@v0.9.17`](https://github.com/asamarts/alint).
 
 ## Where alint shines
 
@@ -65,17 +65,17 @@ alint isn't trying to be everything to everyone. The validation pass across 30 O
 
 **Polyglot wins as a sixth shape:** when a single tree spans languages or platforms (apache/arrow's 6 languages, vercel/next.js's TS+Rust, NixOS/nixpkgs at 39k files, flutter's Dart-framework-with-6-native-embedders, protobuf's 11 language bindings), no per-language linter sees the cross-cutting conventions; alint is the layer that does.
 
-If your repo doesn't match one of these shapes — alint is probably still useful (the rule catalogue is broad), but you may want to start by reading the closest case study above to see what a working config looks like in your shape.
+If your repo doesn't match one of these shapes, alint is probably still useful (the rule catalogue is broad), but you may want to start by reading the closest case study above to see what a working config looks like in your shape.
 
 ## Non-goals
 
 alint is deliberately **not**:
 
-- a code / AST linter — use [ESLint](https://eslint.org/), [Clippy](https://doc.rust-lang.org/clippy/), [ruff](https://docs.astral.sh/ruff/)
-- a SAST scanner — use [Semgrep](https://semgrep.dev/), [CodeQL](https://codeql.github.com/)
-- an IaC scanner — use [Checkov](https://www.checkov.io/), [Conftest](https://www.conftest.dev/), [tfsec](https://aquasecurity.github.io/tfsec/)
-- a commit-message linter — use [commitlint](https://commitlint.js.org/)
-- a secret scanner — use [gitleaks](https://github.com/gitleaks/gitleaks), [trufflehog](https://github.com/trufflesecurity/trufflehog)
+- a code / AST linter (use [ESLint](https://eslint.org/), [Clippy](https://doc.rust-lang.org/clippy/), [ruff](https://docs.astral.sh/ruff/))
+- a SAST scanner (use [Semgrep](https://semgrep.dev/), [CodeQL](https://codeql.github.com/))
+- an IaC scanner (use [Checkov](https://www.checkov.io/), [Conftest](https://www.conftest.dev/), [tfsec](https://aquasecurity.github.io/tfsec/))
+- a commit-message linter (use [commitlint](https://commitlint.js.org/))
+- a secret scanner (use [gitleaks](https://github.com/gitleaks/gitleaks), [trufflehog](https://github.com/trufflesecurity/trufflehog))
 
 Scope is the filesystem shape and contents of a repository, not the semantics of the code inside it.
 
@@ -88,7 +88,7 @@ brew tap asamarts/alint
 brew install alint
 ```
 
-The [asamarts/homebrew-alint](https://github.com/asamarts/homebrew-alint) tap is auto-updated on every alint release — the formula downloads the matching pre-built binary, verifies its SHA-256, and installs to the Homebrew cellar.
+The [asamarts/homebrew-alint](https://github.com/asamarts/homebrew-alint) tap is auto-updated on every alint release. The formula downloads the matching pre-built binary, verifies its SHA-256, and installs to the Homebrew cellar.
 
 ### install.sh (Linux + macOS + Windows tarballs)
 
@@ -149,14 +149,14 @@ Also published: `:<major>.<minor>` (e.g. `:0.9`) and the raw git tag (`:v0.9.17`
 
 ## Quick start
 
-The fastest on-ramp is `alint init` — it scans your repo for the obvious markers (Cargo.toml, package.json, pnpm-workspace.yaml, …) and writes a `.alint.yml` with the right `extends:` lines:
+The fastest on-ramp is `alint init`. It scans your repo for the obvious markers (Cargo.toml, package.json, pnpm-workspace.yaml, …) and writes a `.alint.yml` with the right `extends:` lines:
 
 ```bash
 alint init             # ecosystem-aware (rust@v1, node@v1, …)
 alint init --monorepo  # plus workspace overlays for Cargo / pnpm / Yarn
 ```
 
-For an existing repo with prior debt, follow up with `alint suggest` — it scans for `*.bak` files, scratch docs at root, `console.log` residue in production source, and TODO markers older than 180 days, then proposes the bundled rulesets and rule entries that would catch them. Output is review-only — `suggest` never edits your config:
+For an existing repo with prior debt, follow up with `alint suggest`. It scans for `*.bak` files, scratch docs at root, `console.log` residue in production source, and TODO markers older than 180 days, then proposes the bundled rulesets and rule entries that would catch them. Output is review-only; `suggest` never edits your config:
 
 ```bash
 alint suggest                       # human-readable proposal table
@@ -165,7 +165,7 @@ alint suggest --format=json         # stable shape for agent consumption
 alint suggest --explain             # show file-level evidence per proposal
 ```
 
-For agent-driven workflows where `AGENTS.md` / `CLAUDE.md` / `.cursorrules` carries the directives the agent reads at session start, `alint export-agents-md` renders the active rule set as a markdown directive block — alint becomes the single source of truth, and the agent reads what alint enforces:
+For agent-driven workflows where `AGENTS.md` / `CLAUDE.md` / `.cursorrules` carries the directives the agent reads at session start, `alint export-agents-md` renders the active rule set as a markdown directive block. alint becomes the single source of truth, and the agent reads what alint enforces:
 
 ```bash
 alint export-agents-md                                # to stdout
@@ -174,7 +174,7 @@ alint export-agents-md --inline --output AGENTS.md    # splice between alint mar
 
 `--inline` writes only between `<!-- alint:start -->` / `<!-- alint:end -->` markers; everything else in `AGENTS.md` is human-owned prose. Re-runs are idempotent (when the on-disk content already matches, no write happens), and missing markers auto-init with a stderr warning so the second run splices cleanly.
 
-The generated file is editable — start there, override or extend as needed. If you'd rather hand-roll, the minimum viable shape is:
+The generated file is editable: start there, override or extend as needed. If you'd rather hand-roll, the minimum viable shape is:
 
 ```yaml
 # .alint.yml
@@ -210,46 +210,46 @@ alint check --format junit    # JUnit XML, the de-facto CI test report
 alint check --format gitlab   # GitLab Code Quality JSON (Code Climate spec)
 ```
 
-Exit codes: `0` no errors; `1` one or more errors; `2` config error; `3` internal error. Warnings do not fail by default — use `--fail-on-warning` to flip that.
+Exit codes: `0` no errors; `1` one or more errors; `2` config error; `3` internal error. Warnings do not fail by default; use `--fail-on-warning` to flip that.
 
 ## Cookbook
 
-Copy-pasteable recipes — composing bundled rulesets, structured-query rules over `package.json` / `Cargo.toml` / GitHub workflows, monorepo overlays + nested `.alint.yml`, conditional rules gated on per-run facts, custom `command` shellouts, fast PR-mode linting with `--changed`, auto-fix on commit, cross-file relationships, per-iteration `when_iter:` filters.
+Copy-pasteable recipes for composing bundled rulesets, structured-query rules over `package.json` / `Cargo.toml` / GitHub workflows, monorepo overlays + nested `.alint.yml`, conditional rules gated on per-run facts, custom `command` shellouts, fast PR-mode linting with `--changed`, auto-fix on commit, cross-file relationships, and per-iteration `when_iter:` filters.
 
 Read at [alint.org/docs/cookbook/](https://alint.org/docs/cookbook/) (source: [`docs/site/cookbook/`](docs/site/cookbook/)).
 
 ## Bundled rulesets
 
-Nineteen rulesets ship in the binary — zero network round-trip, pinned to the version of alint you're running:
+Nineteen rulesets ship in the binary, with zero network round-trip, pinned to the version of alint you're running:
 
 **Ecosystem + project-shape baselines**
 
-- **`oss-baseline@v1`** — README / LICENSE / SECURITY.md / CODE_OF_CONDUCT.md / .gitignore existence; minimum sensible file sizes; merge-marker + bidi-control bans; trailing-whitespace and final-newline hygiene (auto-fixable).
-- **`rust@v1`** — Cargo.toml / Cargo.lock / rust-toolchain.toml existence; no committed `target/`; snake_case source filenames; Trojan-Source defenses. Gated with `when: facts.has_rust`.
-- **`node@v1`** — package.json + lockfile; no committed `node_modules/`, `dist/`, `.next/`, etc.; Node-version pin via `.nvmrc` or `engines`; JS/TS source hygiene. Gated with `when: facts.has_node`.
-- **`python@v1`** — manifest (pyproject.toml / setup.py / setup.cfg) exists; lockfile (uv / poetry / Pipenv / PDM); pyproject.toml declares `project.name` + `project.requires-python` via structured-query; PEP 8 snake_case module filenames; Trojan-Source defenses. Gated with `when: facts.has_python`.
-- **`go@v1`** — go.mod + go.sum at root; go.mod declares `module <path>` + `go <version>`; Trojan-Source defenses on `*.go`. Gated with `when: facts.has_go`.
-- **`java@v1`** — Maven (`pom.xml`) or Gradle (`build.gradle` / `build.gradle.kts`) manifest; build wrapper (`mvnw` / `gradlew`); no committed `target/` / `build/` (using `git_tracked_only` so locally-built dirs stay silent); no committed `*.class`; PascalCase Java filenames; Trojan-Source defenses. Gated with `when: facts.has_java`.
-- **`monorepo@v1`** — every `packages/*`, `crates/*`, `apps/*`, `services/*` directory has a README + ecosystem manifest; unique basenames.
+- **`oss-baseline@v1`**: README / LICENSE / SECURITY.md / CODE_OF_CONDUCT.md / .gitignore existence; minimum sensible file sizes; merge-marker + bidi-control bans; trailing-whitespace and final-newline hygiene (auto-fixable).
+- **`rust@v1`**: Cargo.toml / Cargo.lock / rust-toolchain.toml existence; no committed `target/`; snake_case source filenames; Trojan-Source defenses. Gated with `when: facts.has_rust`.
+- **`node@v1`**: package.json + lockfile; no committed `node_modules/`, `dist/`, `.next/`, etc.; Node-version pin via `.nvmrc` or `engines`; JS/TS source hygiene. Gated with `when: facts.has_node`.
+- **`python@v1`**: manifest (pyproject.toml / setup.py / setup.cfg) exists; lockfile (uv / poetry / Pipenv / PDM); pyproject.toml declares `project.name` + `project.requires-python` via structured-query; PEP 8 snake_case module filenames; Trojan-Source defenses. Gated with `when: facts.has_python`.
+- **`go@v1`**: go.mod + go.sum at root; go.mod declares `module <path>` + `go <version>`; Trojan-Source defenses on `*.go`. Gated with `when: facts.has_go`.
+- **`java@v1`**: Maven (`pom.xml`) or Gradle (`build.gradle` / `build.gradle.kts`) manifest; build wrapper (`mvnw` / `gradlew`); no committed `target/` / `build/` (using `git_tracked_only` so locally-built dirs stay silent); no committed `*.class`; PascalCase Java filenames; Trojan-Source defenses. Gated with `when: facts.has_java`.
+- **`monorepo@v1`**: every `packages/*`, `crates/*`, `apps/*`, `services/*` directory has a README + ecosystem manifest; unique basenames.
 
-**Workspace-aware overlays** (use `when_iter:` to scope per-member checks to actual package directories — non-package dirs under `crates/` / `packages/` don't fire false positives)
+**Workspace-aware overlays** (use `when_iter:` to scope per-member checks to actual package directories, so non-package dirs under `crates/` / `packages/` don't fire false positives)
 
-- **`monorepo/cargo-workspace@v1`** — Cargo workspaces. Gated by `facts.is_cargo_workspace` (root `Cargo.toml` has `[workspace]`). Verifies `members = [...]` is declared and every workspace member has a README + `[package].name`.
-- **`monorepo/pnpm-workspace@v1`** — pnpm workspaces. Gated by `facts.is_pnpm_workspace` (root `pnpm-workspace.yaml` exists). Verifies the `packages:` declaration and per-member README + `name`.
-- **`monorepo/yarn-workspace@v1`** — Yarn / npm workspaces. Gated by `facts.is_yarn_workspace` (root `package.json` has `"workspaces"`). Per-member README + `name`, scoped to `{packages,apps}/*`.
+- **`monorepo/cargo-workspace@v1`**: Cargo workspaces. Gated by `facts.is_cargo_workspace` (root `Cargo.toml` has `[workspace]`). Verifies `members = [...]` is declared and every workspace member has a README + `[package].name`.
+- **`monorepo/pnpm-workspace@v1`**: pnpm workspaces. Gated by `facts.is_pnpm_workspace` (root `pnpm-workspace.yaml` exists). Verifies the `packages:` declaration and per-member README + `name`.
+- **`monorepo/yarn-workspace@v1`**: Yarn / npm workspaces. Gated by `facts.is_yarn_workspace` (root `package.json` has `"workspaces"`). Per-member README + `name`, scoped to `{packages,apps}/*`.
 
-**License compliance** (no fact gate — extending signals intent)
+**License compliance** (no fact gate; extending signals intent)
 
-- **`compliance/reuse@v1`** — FSFE [REUSE Specification](https://reuse.software/) compliance: top-level `LICENSES/` directory + every source file declares both `SPDX-License-Identifier:` and `SPDX-FileCopyrightText:` in its first ~10 lines.
-- **`compliance/apache-2@v1`** — Apache-2.0 compliance: LICENSE contains the Apache 2.0 text, root NOTICE file present, and every source file carries the canonical "Licensed under the Apache License, Version 2.0" header.
+- **`compliance/reuse@v1`**: FSFE [REUSE Specification](https://reuse.software/) compliance: top-level `LICENSES/` directory + every source file declares both `SPDX-License-Identifier:` and `SPDX-FileCopyrightText:` in its first ~10 lines.
+- **`compliance/apache-2@v1`**: Apache-2.0 compliance: LICENSE contains the Apache 2.0 text, root NOTICE file present, and every source file carries the canonical "Licensed under the Apache License, Version 2.0" header.
 
 **Namespaced utilities**
 
-- **`hygiene/no-tracked-artifacts@v1`** — build outputs (`node_modules`, `target`, `dist`, `__pycache__`, …), OS junk (`.DS_Store`, `Thumbs.db`), editor backups (`*~`, `*.swp`), secret-shaped files (`.env` and locals), and files over 10 MiB. Several rules auto-fixable via `file_remove`.
-- **`hygiene/lockfiles@v1`** — enforce lockfiles (`yarn.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `Cargo.lock`, `poetry.lock`, `uv.lock`) live only at the workspace root.
-- **`tooling/editorconfig@v1`** — root `.editorconfig` + `.gitattributes` with line-ending normalization.
-- **`docs/adr@v1`** — MADR-style Architecture Decision Records under `docs/adr/`: `NNNN-kebab-title.md` filename + required `## Status` / `## Context` / `## Decision` sections.
-- **`ci/github-actions@v1`** — GitHub Actions hardening guided by OpenSSF Scorecard: workflow-level `permissions.contents: read`, pin third-party actions to full commit SHAs, every workflow declares a `name:`. Scoped to `.github/workflows/*.y{,a}ml`, so it no-ops in repos that don't use GitHub Actions.
+- **`hygiene/no-tracked-artifacts@v1`**: build outputs (`node_modules`, `target`, `dist`, `__pycache__`, …), OS junk (`.DS_Store`, `Thumbs.db`), editor backups (`*~`, `*.swp`), secret-shaped files (`.env` and locals), and files over 10 MiB. Several rules auto-fixable via `file_remove`.
+- **`hygiene/lockfiles@v1`**: enforce lockfiles (`yarn.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `Cargo.lock`, `poetry.lock`, `uv.lock`) live only at the workspace root.
+- **`tooling/editorconfig@v1`**: root `.editorconfig` + `.gitattributes` with line-ending normalization.
+- **`docs/adr@v1`**: MADR-style Architecture Decision Records under `docs/adr/`: `NNNN-kebab-title.md` filename + required `## Status` / `## Context` / `## Decision` sections.
+- **`ci/github-actions@v1`**: GitHub Actions hardening guided by OpenSSF Scorecard: workflow-level `permissions.contents: read`, pin third-party actions to full commit SHAs, every workflow declares a `name:`. Scoped to `.github/workflows/*.y{,a}ml`, so it no-ops in repos that don't use GitHub Actions.
 
 All rulesets ship with non-blocking defaults (`info` / `warning` for recommendations, `error` only for unambiguous bugs). Override severity or scope by redeclaring the rule id in your own `.alint.yml`, or disable with `level: off`. Per-ruleset rule lists in [docs/rules.md](docs/rules.md#bundled-rulesets).
 
@@ -303,15 +303,15 @@ repos:
       - id: alint
 ```
 
-The hook runs `alint check` against the repo's `.alint.yml`. For auto-fix, add `id: alint-fix` — it's registered under `stages: [manual]` so it only runs when invoked explicitly (`pre-commit run alint-fix`), since fixers mutate the tree.
+The hook runs `alint check` against the repo's `.alint.yml`. For auto-fix, add `id: alint-fix`. It's registered under `stages: [manual]` so it only runs when invoked explicitly (`pre-commit run alint-fix`), since fixers mutate the tree.
 
 ## Docs
 
-- [**docs/rules.md**](docs/rules.md) — per-rule user reference, one entry per rule kind with a YAML example and fix-op cross-reference.
-- [**ARCHITECTURE.md**](docs/design/ARCHITECTURE.md) — rule model, DSL, execution model, crate layout, plugin model.
-- [**ROADMAP.md**](docs/design/ROADMAP.md) — scope per version from v0.1 through v1.0.
-- [**CHANGELOG.md**](CHANGELOG.md) — per-version changes, breaking and otherwise.
-- [**docs/benchmarks/METHODOLOGY.md**](docs/benchmarks/METHODOLOGY.md) — how benchmarks are measured and published.
+- [**docs/rules.md**](docs/rules.md): per-rule user reference, one entry per rule kind with a YAML example and fix-op cross-reference.
+- [**ARCHITECTURE.md**](docs/design/ARCHITECTURE.md): rule model, DSL, execution model, crate layout, plugin model.
+- [**ROADMAP.md**](docs/design/ROADMAP.md): scope per version from v0.1 through v1.0.
+- [**CHANGELOG.md**](CHANGELOG.md): per-version changes, breaking and otherwise.
+- [**docs/benchmarks/METHODOLOGY.md**](docs/benchmarks/METHODOLOGY.md): how benchmarks are measured and published.
 - Per-version, per-platform benchmark results under [`docs/benchmarks/<version>/`](docs/benchmarks/).
 
 ## Development

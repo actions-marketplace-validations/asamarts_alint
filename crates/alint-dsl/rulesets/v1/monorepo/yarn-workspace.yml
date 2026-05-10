@@ -75,4 +75,4 @@ rules:
     level: warning
     message: >-
       Workspace member's package.json must declare a `name`
-      field — workspace tooling uses it for graph resolution.
+      field. Workspace tooling uses it for graph resolution.
