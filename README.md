@@ -18,8 +18,8 @@ Working `.alint.yml` configs for 30 OSS repos (single-language workspaces, polyg
 ## 60-second quickstart
 
 ```sh
-# Install (Homebrew):
-brew tap asamarts/alint && brew install alint
+# Install (Linux + macOS + Windows tarballs):
+curl -sSL https://raw.githubusercontent.com/asamarts/alint/main/install.sh | bash
 
 # Initialise a config in the current repo (uses bundled oss-baseline + auto-detected ecosystem rulesets):
 cat > .alint.yml <<'YAML'
@@ -81,6 +81,14 @@ Scope is the filesystem shape and contents of a repository, not the semantics of
 
 ## Install
 
+### install.sh (Linux + macOS + Windows tarballs)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/asamarts/alint/main/install.sh | bash
+```
+
+Detects platform (Linux / macOS, x86_64 / aarch64), downloads the matching tarball, verifies the SHA-256, and installs to `$INSTALL_DIR` (default `~/.local/bin`). Windows users download the Windows tarball from the [Releases page](https://github.com/asamarts/alint/releases).
+
 ### Homebrew (macOS + Linuxbrew)
 
 ```bash
@@ -89,14 +97,6 @@ brew install alint
 ```
 
 The [asamarts/homebrew-alint](https://github.com/asamarts/homebrew-alint) tap is auto-updated on every alint release. The formula downloads the matching pre-built binary, verifies its SHA-256, and installs to the Homebrew cellar.
-
-### install.sh (Linux + macOS + Windows tarballs)
-
-```bash
-curl -sSL https://raw.githubusercontent.com/asamarts/alint/main/install.sh | bash
-```
-
-Detects platform (Linux / macOS, x86_64 / aarch64), downloads the matching tarball, verifies the SHA-256, and installs to `$INSTALL_DIR` (default `~/.local/bin`). Windows users download the Windows tarball from the [Releases page](https://github.com/asamarts/alint/releases).
 
 ### From crates.io
 
