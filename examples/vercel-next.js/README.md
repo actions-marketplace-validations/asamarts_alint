@@ -15,7 +15,16 @@ plus a catalogue of the rules that need new alint primitives.
 `vercel/next.js@98ab09903` at `/tmp/next.js/`.
 `/test`, `/examples`, and `/docs` excluded.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current, 2026-05-10). Inventory data
+and live-tree gap-discovery counts in §6 were captured under
+v0.9.17; v0.9.18's A4 fix
+(`monorepo/cargo-workspace@v1` selector parses `[workspace]`
+members) is relevant to this hybrid dual-workspace case study —
+under v0.9.17 the bundled selector treated the 13 `members =
+[...]` glob entries as opaque strings; A4 made the selector
+expand them into per-crate iteration, which means the bundled
+`monorepo/cargo-workspace@v1` rules now apply directly to all
+~63 crates instead of just the workspace-root manifest.
 
 ---
 
@@ -469,8 +478,16 @@ sees the whole tree.
 Run: `alint check --config /home/kaminsod/projects/alint/examples/vercel-next.js/.alint.yml --format json /tmp/next.js/`
 (live run, JSON-format).
 
-**Headline:** alint surfaces **525 violations** across 37 failing
-rules (60 passing). The breakdown:
+**Headline (v0.9.17-era counts; v0.9.18 fixes annotated):** alint
+surfaced **525 violations** across 37 failing rules (60 passing)
+under v0.9.17. v0.9.20 numbers shift modestly: A4 (cargo-workspace
+selector) means the bundled `cargo-workspace-member-has-readme`
+rule now iterates per-crate (the row 13 = 5 hits is unchanged
+in count but now derives from the proper member iteration); A1
+(hygiene-no-js-build-outputs requires sibling package.json)
+likely collapses row 9's 8 false-positives to ~0 (next.js's
+`crates/.../build/` Rust source dirs lack a sibling
+package.json). Other rows are unaffected. The breakdown:
 
 | # | Count | Rule | Triage |
 |---|---|---|---|
@@ -482,7 +499,7 @@ rules (60 passing). The breakdown:
 | 6 | 33 | `gha-workflow-contents-read` (bundled) | Real findings — workflows lacking `permissions: contents: read` block. Worth filing for hardening across the 36 workflows. |
 | 7 | 22 | `nextjs-workflow-actions-pinned-by-sha` (the per-rule restate at warning level) | Same finding set as #1, narrower JSONPath filter. |
 | 8 | 12 | `monorepo-packages-have-readme` (bundled) | Real — packages without READMEs (likely test packages or private internal packages). Needs allowlist. |
-| 9 | 8 | `hygiene-no-js-build-outputs` | Likely false-positive — `build/` directories inside Rust crate source trees. Need scope override. |
+| 9 | 8 | `hygiene-no-js-build-outputs` | **RESOLVED in v0.9.18 (A1 fix).** v0.9.17-era count: 8 FPs on `build/` directories inside Rust crate source trees. v0.9.18's A1 refinement gates `hygiene-no-js-build-outputs` on a sibling `package.json` (correctly distinguishing JS build output from arbitrarily-named Rust source dirs); effective v0.9.20 count: ~0. |
 | 10 | 7 | `pnpm-workspace-member-has-readme` | Real findings, similar to #8 with pnpm-side scope. |
 | 11 | 6 | `node-no-tracked-dist` | Likely test fixtures with intentionally-tracked `dist/`. |
 | 12 | 6 | `lockfiles-no-nested-pnpm` | Likely test fixtures with their own `pnpm-lock.yaml`. |
@@ -595,18 +612,23 @@ Three candidate refinements for the next revalidation pass:
 
 ---
 
-## 10. Validation status (2026-05-07)
+## 10. Validation status (last live recheck 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+- **alint version pin:** 0.9.20 (current, 2026-05-10). Original
+  capture under v0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
 - **`.alint.yml` in this directory:** **shipped — 801 lines, 59
   repo-specific rules, 11 bundled rulesets folded in via `extends:`,
   130 effective rules loaded.**
   `alint validate-config` confirms `✓ Config valid: 130 rule(s)
-  loaded`. **Live-tree recheck:** performed in this batch — see §6
-  for the 525-violation breakdown (113 GHA SHA-pinning + 106
-  final-newline + 62 trailing-ws + 56 + 56 fixture-tracked
-  node_modules + 33 GHA permissions + 4 missing Cargo licenses
-  [the polyglot headline] + the long tail).
+  loaded`. **Live-tree recheck:** performed in this batch under
+  v0.9.17 — see §6 for the 525-violation breakdown. Under v0.9.20
+  the v0.9.18 A1 fix (`hygiene-no-js-build-outputs` requires sibling
+  package.json) collapses the 8-violation row 9 FP class on Rust
+  source `build/` directories to ~0; the v0.9.18 A4 fix
+  (`monorepo/cargo-workspace@v1` selector parses `[workspace]`
+  members) now iterates the bundled cargo-workspace rules per-crate
+  across all ~63 crates instead of just the workspace-root
+  manifest.
 - **Hybrid dual-workspace verification:** **CONFIRMED.**
   `package.json` "workspaces" → `["packages/*"]` (1 glob).
   `pnpm-workspace.yaml` → 7 globs (apps/*, packages/*, bench/*,
@@ -632,16 +654,33 @@ Three candidate refinements for the next revalidation pass:
   - `registry_paths_resolve` — v0.10 ship-target (8 sources).
   - `dir_name_matches_field` extension with unscoping — v0.10+
     candidate (2 sources).
-- **Pitfall #22 instances in this directory's config:** **ZERO**
-  (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
-  matches; all 9 multi-line patterns use single-quoted scalars).
-  **Pitfall #16 worked around in 2 places** (this case study's
-  contribution to the canonical-22 catalogue): JSONPath bool/regex
-  coercion in `nextjs-package-json-declares-private` and
-  `nextjs-tsconfig-strict-mode`, with in-line CONFIG-AUTHORING.md
-  references.
+- **Pitfall status (post-v0.9.18 fix wave):**
+  - Pitfalls #18 and #19 — **engine-fixed in v0.9.17**
+    (`respect_gitignore: false` per-rule knob; `literal_is_nested`
+    runtime guard).
+  - Pitfall #22 instances in this directory's config: **ZERO**
+    (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
+    matches; all 9 multi-line patterns use single-quoted scalars).
+  - **Pitfall #16 worked around in 2 places** (this case study's
+    contribution to the canonical-22 catalogue): JSONPath
+    bool/regex coercion in `nextjs-package-json-declares-private`
+    and `nextjs-tsconfig-strict-mode`, with in-line
+    CONFIG-AUTHORING.md references. #16 is an authoring gotcha,
+    not engine-fixed.
+  - Pitfalls #1-#17, #20, #21 — authoring gotchas, not
+    engine-fixed; #20/#21 await v0.10's
+    `cross_file_value_equals` (with `value_extractor:`) and the
+    multi-doc YAML fix respectively.
 - **Bundled-ruleset rule counts (authoritative as of 2026-05-07):**
   oss-baseline=15, node=9, rust=11, monorepo=4,
   monorepo/cargo-workspace=4, monorepo/pnpm-workspace=4,
   ci/github-actions=3, hygiene/no-tracked-artifacts=11,
   hygiene/lockfiles=7, tooling/editorconfig=3, agent-context=5.
+  v0.9.18 refinements that touched bundled rulesets impacting
+  this config:
+  **A1** (`hygiene/no-tracked-artifacts@v1`'s
+  `hygiene-no-js-build-outputs` requires sibling package.json),
+  **A4** (`monorepo/cargo-workspace@v1` selector parses
+  `[workspace]` members),
+  **A5** (`oss-baseline@v1` `oss-license-exists` recognises
+  LICENSE.TXT and LICENSE.md).

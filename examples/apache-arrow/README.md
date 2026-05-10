@@ -19,8 +19,10 @@ per-package shape in the tree), **7 GLib sub-libraries** under
 across 14 external + 1 local hook repo, **53 `dev/release/*`
 scripts** implementing the Apache release dance, **11 root-level
 lint/format tool configs**, **102 path patterns** in
-`dev/release/rat_exclude_files.txt`. **alint version:** 0.9.17
-(`1dbd9b218a0e`, built 2026-05-07).
+`dev/release/rat_exclude_files.txt`. **alint version:** 0.9.20
+(2026-05-10). Categories below were validated against alint v0.9.17
++ the 2026-05-07 arrow SHA; categories are stable, absolute counts
+drift with upstream tip.
 
 ---
 
@@ -290,7 +292,7 @@ github-actions ecosystem entry).
 |---|---|---|
 | `LICENSE.txt` | alint-today | bundled `apache-2-license-text-present` |
 | `NOTICE.txt` | alint-today | bundled `apache-2-notice-file-exists` |
-| Source-header on every C++/Python/Cython/Ruby/CMake source file | alint-today (with override) | `apache-2-source-has-license-header` (this directory's override widens the bundled pattern to accept the longer ASF preamble + extends file-extension list to `.cs`, `.m`, `.mm`, `.pyx`, `.pxd`, `.fbs`, `.proto`, `.rb`) |
+| Source-header on every C++/Python/Cython/Ruby/CMake source file | alint-today | `apache-2-source-has-license-header`. v0.9.17 required this directory to ship an override widening the bundled pattern to accept the longer ASF preamble; v0.9.18 A2 fix landed the long-form preamble as the bundled default, so the pattern override is no longer needed. The file-extension extension (`.cs`, `.m`, `.mm`, `.pyx`, `.pxd`, `.fbs`, `.proto`, `.rb`) remains arrow-specific and is still expressed locally |
 | `.asf.yaml` | alint-today | `arrow-asf-yaml-present` + 2 yaml-path checks (`-declares-homepage`, `-declares-notification-list`) |
 | `.pre-commit-config.yaml` registers the `rat` hook | alint-today | `arrow-pre-commit-config-present` + `arrow-pre-commit-runs-rat` (`file_content_matches` for the `id: rat` line) |
 | `dev/release/rat_exclude_files.txt` (102 patterns) | alint-today (presence) + alint-future (every pattern resolves to ≥1 file) | `arrow-rat-exclude-list-present` + the future `registry_paths_resolve` v0.10 ship-target (see §6) |
@@ -425,14 +427,14 @@ config in `.alint.yml`):
 ```yaml
 extends:
   - alint://bundled/oss-baseline@v1                  # 15 rules: license/readme/security/CoC + hygiene
-  - alint://bundled/compliance/apache-2@v1           # 3 rules: LICENSE, NOTICE, source-header (overridden below for the long ASF preamble)
+  - alint://bundled/compliance/apache-2@v1           # 3 rules: LICENSE, NOTICE, source-header (long ASF preamble is the bundled default since v0.9.18 A2; this config still extends the file-extension list locally)
   - alint://bundled/python@v1                        # 9 rules: pyproject.toml shape + py source hygiene scoped via has_ancestor pyproject.toml
   - alint://bundled/ci/github-actions@v1             # 3 rules: workflow contents-read + pin-to-sha + name (covers all 28)
   - alint://bundled/hygiene/no-tracked-artifacts@v1  # 11 rules: __pycache__, dist/, build/, etc.
   - alint://bundled/tooling/editorconfig@v1          # 3 rules: .editorconfig shape
 
 rules:
-  - id: apache-2-source-has-license-header           # OVERRIDE bundled — accept long ASF preamble
+  - id: apache-2-source-has-license-header           # extends bundled (long ASF preamble is now the default, v0.9.18 A2) with arrow-specific extensions
     kind: file_header
     paths:
       include:
@@ -492,16 +494,17 @@ rules:
   tooling/editorconfig − overlap = 42 effective rule IDs after
   dedup.
 
-**Validation:** `alint validate-config` reports `✓ Config valid:
+**Validation:** `alint validate-config` reports `Config valid:
 107 rule(s) loaded`. Pitfall checks: the magic comment is present
 (line 1); JSONPath uses `?match(@.uses, '...')` per the honourable
 mention; `?@['package-ecosystem']` uses bracket notation per pitfall
-#10; `scope_filter.has_ancestor:` uses basenames per pitfall #11;
+#10 (still authoring-gotcha-only); `scope_filter.has_ancestor:`
+uses basenames per pitfall #11 (still authoring-gotcha-only);
 `(?m)` is used on every `^`/`$` anchored regex; the `command:`
 rules use `command:` (not `argv:`) and integer `timeout:`; **no
-`pattern: |` block scalars** (no pitfall #22 candidates — the
-configured `apache-2-source-has-license-header` override uses a
-single-line single-quoted scalar; the bundled rule uses single-line
+`pattern: |` block scalars** (pitfall #22's `|` → `|-` fix is moot
+here — the configured `apache-2-source-has-license-header` override
+uses a single-line single-quoted scalar; the bundled rule does
 too).
 
 ---
@@ -511,9 +514,12 @@ too).
 Methodology: `hyperfine -i --warmup 1 --runs 5` on the same
 `/tmp/arrow` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`. Where the upstream toolchain isn't
-installed locally, the row is `pending — needs <toolchain>` with
-the exact reproduction command.
+`target/release/alint v0.9.17` (numbers below were captured against
+v0.9.17; v0.9.18 added bundled-rule refinements that eliminate FPs
+but do not change wall-clock; v0.9.19/v0.9.20 added width-aware
+human output, also no wall-clock impact). Where the upstream
+toolchain isn't installed locally, the row is `pending — needs
+<toolchain>` with the exact reproduction command.
 
 ### 5.1 Measured
 
@@ -641,9 +647,11 @@ auto-applied here per the brief.
   and drop the 8 `arrow-asf-*` / `arrow-rat-*` / `arrow-check-rat-*`
   / `arrow-release-verify-*` rules. **v0.10 ship-target.**
 - **Bundled `apache-2-source-has-license-header` long-form pattern
-  default** — same flag as the airflow + spark configs. Cross-
-  saturation: arrow + spark + airflow all override the bundled rule
-  with the same long-form pattern; the bundle should default to it.
+  default** — **landed in v0.9.18 A2.** arrow + spark + airflow
+  configs no longer need to ship the per-TLP override; this
+  config's pattern override is preserved here mainly because the
+  arrow file-extension extension list (`.cs`, `.m`, `.mm`, etc.)
+  is still arrow-specific.
 - **`fanout: {scope_filter: ..., command: ...}` mode for `command:`
   rule** — covers the pre-commit per-scope hook repetition (4×
   `clang-format`, 2× `cpplint`). Single-source so far (arrow);
@@ -679,33 +687,50 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (current: alint v0.9.20, 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20 (2026-05-10)`. The §6 violation-count
+  breakdown was captured against v0.9.17 + the 2026-05-07 arrow
+  SHA; categories are stable, absolute counts drift with upstream
+  tip
 - **Rule count:** **107** (65 custom + 6 bundled rulesets —
   `oss-baseline` 15, `compliance/apache-2` 3, `python` 9,
   `ci/github-actions` 3, `hygiene/no-tracked-artifacts` 11,
   `tooling/editorconfig` 3; some rule IDs overlap, which is why the
   grand total is 107 rather than the arithmetic sum of 109)
-- **`alint validate-config`:** ✓ Config valid: 107 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for
-  the 255-violation breakdown (failing rules 29 / passing 58; ~178
-  real findings + ~33 cosmetic + ~16 tool-not-on-PATH per-tool
-  spawn-fail counts + 23 RAT-excluded false positives that
-  `registry_paths_resolve` would resolve cleanly)
-- **Pitfall fixes (v0.9.17):** none directly cited in this config
+- **`alint validate-config`:** Config valid: 107 rule(s) loaded
+- **Live-tree recheck:** performed against v0.9.17 — see §6 for the
+  255-violation breakdown (failing rules 29 / passing 58; ~178 real
+  findings + ~33 cosmetic + ~16 tool-not-on-PATH per-tool spawn-fail
+  counts + 23 RAT-excluded false positives that
+  `registry_paths_resolve` would resolve cleanly). Not re-run
+  against v0.9.20; expectations are essentially unchanged because
+  arrow had already shipped a per-TLP `apache-2-source-has-license-header`
+  pattern override prior to v0.9.18, so A2 is a no-op against arrow
+- **Pitfall fixes (engine, v0.9.17):** Pitfall #18 (per-rule
+  `respect_gitignore: false`) and #19 (`literal_is_nested`) shipped
+  in engine; not directly cited in this config
+- **Pitfall fixes (bundled rules, v0.9.18):** A2 (long-form ASF
+  preamble in bundled `apache-2-source-has-license-header` default)
+  obsoletes this config's pattern override; only the arrow-specific
+  file-extension extension list still needs to be expressed
+  locally. A5 (`oss-license-exists` recognises LICENSE.TXT) covers
+  arrow's `LICENSE.txt`
 - **Pitfall #22 status:** No `pattern: |` block scalars in this
-  config — not a candidate. The `apache-2-source-has-license-header`
-  override pattern uses a single-line single-quoted scalar (correct
-  form per pitfall #14)
-- **Open gaps (unchanged):** `registry_paths_resolve` (v0.10
-  ship-target, 8 sources), `cross_language_implementation_complete`
-  (v0.11+ ship-target, 5 sources), `ordered_block` (v0.10
-  ship-target, 7 sources), `apache/governance@v1` (v0.10
-  ship-target, 3 Apache TLPs converging). No new rule-kind gaps
-  surfaced
+  config — not a candidate (pitfall #22 fix is `|-` instead of `|`;
+  this config uses single-line single-quoted scalars throughout)
+- **Open gaps (still pending v0.10):** `registry_paths_resolve`
+  (v0.10 ship-target — would resolve the 23 source-header FPs that
+  trace back to `dev/release/rat_exclude_files.txt` entries),
+  `cross_language_implementation_complete` (v0.11+ ship-target —
+  format/Schema.fbs ↔ per-language test-fixture coverage),
+  `ordered_block` (v0.10 ship-target — covers
+  `rat_exclude_files.txt` sortedness + the long
+  `.pre-commit-config.yaml` `files:` alternation lists),
+  `apache/governance@v1` (v0.10 ship-target — bundled ruleset
+  consolidating arrow + spark + airflow Apache governance overlap)
 - **Open suspected bugs in this directory's `.alint.yml`:** none.
   The 23 Apache-header false positives are RAT-exclude
   coordinations that require `registry_paths_resolve` (v0.10
   ship-target) to resolve declaratively; a one-line `paths.exclude:`
-  extension is the available workaround
+  extension remains the available workaround

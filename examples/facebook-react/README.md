@@ -20,7 +20,13 @@ The `compiler/` subtree alone ships **3,836 files including 1,719
 info-level gap discovery class (whitespace + final-newline cosmetics on
 fixtures).
 
-**alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`.
+**alint version:** `0.9.20` (2026-05-10). **Counts in §6 are v0.9.17-era;**
+the live tree was not re-walked under v0.9.20 for this revision (the
+pre-launch fix wave A1-A6 in v0.9.18 reduced cosmetic / hygiene FP
+counts across all 30 case-study trees, but react's structural findings
+in §6.1 — repository.directory copy-paste regression, "and its
+affiliates" header drift, supply-chain hardening — are stable
+classifications that A1-A6 do not affect).
 
 ---
 
@@ -295,7 +301,9 @@ rules:
 **Validation:** `alint validate-config` reports `✓ Config valid: 87
 rule(s) loaded`. The `pattern: |-` (strip-final-newline block scalar)
 on `react-copyright-header-{src,scripts}` is a **pitfall #22 hardening
-fix landed in this batch** — see §6.
+fix landed in the v0.9.17-era batch** (the engine still doesn't
+auto-strip; configs must use `|-` instead of `|` — pitfall #22 is
+authoring-only, not engine-fixed).
 
 ---
 
@@ -304,7 +312,10 @@ fix landed in this batch** — see §6.
 Methodology: `hyperfine -i --warmup 1 --runs 3` against the same
 `/tmp/react` working tree captured 2026-05-08. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores. alint binary `target/release/alint
-v0.9.17`. The `-i` flag (ignore non-zero exit) is necessary because
+v0.9.17` (numbers re-validated against the same v0.9.17 snapshot — the
+v0.9.17 → v0.9.20 deltas are width-aware human output and bundled-rule
+message audits, neither of which materially affects walk timing on
+react's tree). The `-i` flag (ignore non-zero exit) is necessary because
 several `command:` shellouts fail when their tool isn't on PATH (yarn,
 bash); the alint walk + JSON serialisation timing is independent of
 their exit code.
@@ -353,8 +364,16 @@ classes of regression that the existing pipeline doesn't cover at all.
 ## 6. Gap discovery — what alint surfaces against the live tree
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/facebook-react/.alint.yml /tmp/react` (live, JSON-format).
+**Counts in this section are v0.9.17-era;** v0.9.18's pre-launch fix
+wave (A1 hygiene-no-js-build-outputs sibling-package.json gate, A2
+ASF preamble bundle, A3 python@v1 default-excludes, A5 LICENSE
+case-insensitivity) materially reduced cosmetic / hygiene FPs across
+all 30 case-study trees, but the structural findings below
+(repository.directory copy-paste regression, "and its affiliates"
+header drift, supply-chain hardening signals) are stable
+classifications that A1-A6 do not affect.
 
-**Headline:** alint surfaces **3,907 violations** across 18 failing
+**Headline (v0.9.17 snapshot):** alint surfaces **3,907 violations** across 18 failing
 rules. **3,457 are info-level cosmetics (1,731 missing-final-newline +
 1,726 trailing-whitespace) overwhelmingly in the `compiler/` test
 fixtures** (see compiler subtree note above — 1,719 `.expect.md`
@@ -400,27 +419,17 @@ expected (third-party origin); a `paths.exclude:
 packages/eslint-plugin-react-hooks/src/code-path-analysis/**` entry on
 the rule would cleanly suppress them.
 
-### 6.3 Suspected `.alint.yml` bug attention (pitfall #22 candidates)
+### 6.3 Pitfall #22 — past-tense
 
-The brief flagged TWO `pattern: |` instances in the config — line 164
-(`react-copyright-header-src`) and line 189 (`react-copyright-header-scripts`).
-
-**Investigation:** Both rules use YAML `|` (literal block scalar), which
-**does** append a trailing `\n` to the pattern string per pitfall #22.
-However, the trailing `\n` is **benign in this case** because real
-Meta-headered React files always continue with ` * LICENSE file in the
-root directory of this source tree.\n` — the `\n` after `the` IS
-present in real files, so the regex's trailing `\n` matches. Manual
-verification with Python's `re.match` confirms both pattern variants
-(with and without trailing `\n`) match the canonical Meta header.
-
-**Hardening fix landed in this batch:** Both rules updated from
-`pattern: |` to `pattern: |-` (strip-final-newline block scalar) for
-canonical-correct semantics per pitfall #22 guidance — this prevents
-future drift if the pattern is ever extended past the current last
-line. **Validated:** `alint validate-config` still reports `✓ Config
-valid: 87 rule(s) loaded`. The 111 + 75 violation counts were re-verified
-unchanged after the fix (real findings, not pitfall-induced false positives).
+The v0.9.17-era audit flagged TWO `pattern: |` instances in the config
+— line 164 (`react-copyright-header-src`) and line 189
+(`react-copyright-header-scripts`). Both were hardened to `pattern: |-`
+(strip-final-newline block scalar) for canonical-correct semantics per
+pitfall #22 guidance. **Verified:** the live `.alint.yml` ships
+`pattern: |-` on both rules; `alint validate-config` still reports `✓
+Config valid: 87 rule(s) loaded`. **Pitfall #22 remains
+authoring-only** in v0.9.20 (engine does not auto-strip the trailing
+newline; configs must use `|-`).
 
 ### 6.4 No silent-failure-mode bugs in this config
 
@@ -475,26 +484,37 @@ Three concrete unanalyzed angles for a future revalidation pass:
 
 ---
 
-## 9. Validation status (2026-05-08)
+## 9. Validation status (2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (2026-05-10)
 - **Rule count:** **87** (33 react-specific + 54 from 8 bundled
   rulesets — `oss-baseline=15`, `node=9`, `monorepo=4`,
   `monorepo/yarn-workspace=4`, `ci/github-actions=3`,
   `hygiene/no-tracked-artifacts=11`, `tooling/editorconfig=3`,
   `agent-context=5`; rule IDs overlap, total dedups to 54)
 - **`alint validate-config`:** ✓ Config valid: 87 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  3,907-violation breakdown (450 structural + 3,457 cosmetic)
-- **Pitfall fixes (this batch):** Pitfall #22 hardening — both
-  `react-copyright-header-{src,scripts}` patterns changed from
-  `pattern: |` to `pattern: |-` for canonical-correct
-  strip-final-newline semantics. Trivial 1-line fix per rule;
-  zero behaviour change on the live tree (verified)
-- **Open gaps:**
-  - `cross_file_value_equals` (v0.10 ship-target, 10 sources) —
-    react's `version-check.js` is the JS-side data point
-  - `registry_append_only` (v0.10 design candidate, single-source —
-    react's `codes.json`)
+- **Live-tree recheck:** v0.9.17-era counts in §6 carried forward; not
+  re-walked under v0.9.20. The v0.9.18 pre-launch fix wave (A1-A6:
+  hygiene-no-js-build-outputs sibling-package.json gate, ASF preamble
+  bundle, python@v1 default-excludes, monorepo cargo-workspace selector
+  fix, oss-license-exists case-insensitivity, rust-sources-snake-case
+  allow_compiler_naming knob) reduced cosmetic / hygiene FP counts
+  across all 30 case-study trees. react's structural findings (the
+  `react-refresh` repository.directory copy-paste regression, the 7
+  "and its affiliates" header drift, the supply-chain hardening
+  signals) are stable classifications unaffected by A1-A6.
+- **Pitfall fixes (engine):** none in v0.9.18-v0.9.20. Engine fixes
+  shipped in v0.9.17: pitfall #18 (`respect_gitignore: false` per-rule
+  knob) and pitfall #19 (`literal_is_nested` runtime guard); neither
+  surfaces in this config. Pitfall #22 hardening (both
+  `react-copyright-header-{src,scripts}` patterns at `|-`) remains
+  authoring-only — the engine does not auto-strip.
+- **Open gaps (v0.10 ship-targets):**
+  - `cross_file_value_equals` (10 sources) — react's `version-check.js`
+    is the JS-side data point
+  - `registry_append_only` (design candidate, single-source — react's
+    `codes.json`)
 - **Bench numbers:** 114 ms (full 87-rule pass), 62 ms (lite
-  bundled-only pass) on `/tmp/react`'s 6,878-file tree
+  bundled-only pass) on `/tmp/react`'s 6,878-file tree (v0.9.17 numbers;
+  v0.9.20's width-aware human output and message audits do not
+  materially affect walk timing)

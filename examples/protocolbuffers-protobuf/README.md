@@ -23,7 +23,13 @@ test_*.yml workflows** under `.github/workflows/`, **9 in-tree
 language bindings** declared in `version.json.languages`, **6 versions
 in `protobuf_version.bzl`**.
 
-**alint version:** 0.9.17 (built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). Originally
+captured at v0.9.17 on 2026-05-07; reconciled forward across the
+v0.9.18 fix wave (A1-A6 bundled-rule refinements + B1-B4 cross-cutting
+revalidation + `dir_absent` `scope_filter` engine extension) and the
+v0.9.19/v0.9.20 width-aware-output + bundled-rule message audit pair.
+Pitfalls #18 and #19 engine-fixed in v0.9.17. Per-binding parity
+counts cited below are v0.9.17-era unless annotated otherwise.
 
 ---
 
@@ -449,7 +455,10 @@ rule(s) loaded`. Pitfall checks:
 Methodology: `hyperfine --warmup 1 --runs 3 -i` against the same
 `/tmp/protobuf` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`.
+`target/release/alint v0.9.17` (numbers below are the v0.9.17-era
+measurements; not re-run for v0.9.20 — the v0.9.18-v0.9.20 changes
+are bundled-rule refinements + output-formatting + message-audit and
+do not change throughput characteristics).
 
 ### 5.1 Measured
 
@@ -490,21 +499,22 @@ correctness.
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/protocolbuffers-protobuf/.alint.yml /tmp/protobuf` (live run).
 
-**Headline:** alint surfaces **150 violations across 14 failing files**
-(2 errors + 127 warnings + 21 info; **72 rules pass silently**); the
-bulk is the expected ~50 GHA SHA-pin warnings on unpinned third-party
-actions + the expected "tool not on PATH" warnings for `bazel` /
-`buildifier` / `clang-format` / `flake8` / `rubocop` not being
-installed in the alint test environment + ~21 OSS-baseline
-final-newline / trailing-whitespace info-level findings + 1 false-
-positive `oss-no-merge-conflict-markers` error on `csharp/README.md`
-(pre-existing bundled-rule issue, not from this case study).
+**Headline (v0.9.17-era):** alint surfaced **150 violations across
+14 failing files** (2 errors + 127 warnings + 21 info; **72 rules
+pass silently**); the bulk was the expected ~50 GHA SHA-pin warnings
+on unpinned third-party actions + the expected "tool not on PATH"
+warnings for `bazel` / `buildifier` / `clang-format` / `flake8` /
+`rubocop` not being installed in the alint test environment + ~21
+OSS-baseline final-newline / trailing-whitespace info-level findings
++ 1 false-positive `oss-no-merge-conflict-markers` error on
+`csharp/README.md` (pre-existing bundled-rule issue, not from this
+case study). **Counts not re-run for v0.9.20.**
 
 ### 6.1 Real findings
 
 | Finding | Path | Severity | Rule | Triage |
 |---|---|---|---|---|
-| `=======` markdown-section underline misread as merge-conflict marker | `csharp/README.md` | error | `oss-no-merge-conflict-markers` | **False positive (pre-existing bundled-rule issue).** The `=======` regex is too eager — it matches the ASCII underline used for markdown h2 sections (one of two valid Setext-style heading delimiters). Verified still present at v0.9.17; **filed under the bundled-ruleset refinement queue** (the rule should additionally require ANY of `<<<<<<< `, `>>>>>>> `, or 7+ `=` followed by a label; pure 7-`=` lines are too common in markdown). |
+| `=======` markdown-section underline misread as merge-conflict marker | `csharp/README.md` | error | `oss-no-merge-conflict-markers` | **False positive (pre-existing bundled-rule issue).** The `=======` regex is too eager — it matches the ASCII underline used for markdown h2 sections (one of two valid Setext-style heading delimiters). Verified at v0.9.17; the v0.9.18 cross-cutting revalidation (B4) did NOT pull this rule into its A1-A6 refinement scope, so the FP **is still present in v0.9.20**. Filed under the bundled-ruleset refinement queue (the rule should additionally require ANY of `<<<<<<< `, `>>>>>>> `, or 7+ `=` followed by a label; pure 7-`=` lines are too common in markdown). |
 | ~50 GHA SHA-pin warnings | `.github/workflows/{scorecard,test_runner,…}.yml` | warning | `gha-pin-actions-to-sha` (bundled) | **Real but expected upstream issue.** protobuf has 22 workflows; many third-party actions still use floating tags. The bundled rule surfaces them at PR time; OpenSSF Scorecard surfaces the same nightly. Aligns with protobuf's existing Scorecard hygiene posture. |
 | ~21 info-level final-newline + trailing-whitespace | various | info | `oss-final-newline`, `oss-no-trailing-whitespace` | Real but unweighted — protobuf doesn't gate on these cosmetic items. **All auto-fixable** via `alint fix`. |
 | 6 "tool not on PATH" warnings | `MODULE.bazel`, `python/BUILD.bazel`, `ruby/google-protobuf.gemspec`, `go/BUILD.bazel`, `src/google/protobuf/BUILD.bazel` | warning | `protobuf-{buildifier,bazel-build-target,cpp-clang-format,python-flake8,ruby-rubocop,go-fmt}-check` | Expected — the tools are not installed in this test env. In production CI these would resolve cleanly. |
@@ -606,30 +616,43 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (originally 2026-05-07; reconciled 2026-05-10)
 
-- **alint version:** `0.9.17` (built 2026-05-07)
+- **alint version:** `0.9.20` (current as of 2026-05-10). Originally
+  validated against `0.9.17` (2026-05-07).
 - **Rule count:** **108** (79 custom + 3 bundled rulesets — 15 + 3 + 11
-  = 29 bundled, no overlap)
+  = 29 bundled, no overlap). v0.9.18-v0.9.20 did not change this count
+  (A1-A6 are bundled-side refinements that do not add/remove rule IDs;
+  v0.9.19/v0.9.20 changed only output width handling + bundled-rule
+  message text).
 - **`alint validate-config`:** ✓ Config valid: 108 rule(s) loaded
-- **Live-tree recheck:** **performed** against `/tmp/protobuf` —
-  150 violations across 14 failing files (72 rules pass silently);
-  see §6 for the breakdown. Engine behaviour stable v0.9.16 → v0.9.17.
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule
-  `respect_gitignore: false`) and #19 (literal-path runtime guard for
-  `root_only: true` + multi-component literals) both shipped in
-  engine; **this config does not need either workaround** (no
+  (v0.9.17-era; not re-run for v0.9.20).
+- **Live-tree recheck:** **performed at v0.9.17** against
+  `/tmp/protobuf` — 150 violations across 14 failing files (72 rules
+  pass silently); see §6 for the breakdown. Engine behaviour stable
+  v0.9.16 → v0.9.17 → v0.9.20. Not re-run for v0.9.20.
+- **Pitfall fixes:** Pitfall #18 (per-rule `respect_gitignore: false`)
+  and #19 (literal-path runtime guard for `root_only: true` +
+  multi-component literals) **were engine-fixed in v0.9.17** — this
+  config has not needed either workaround in any version since (no
   `respect_gitignore: false` or `root_only: true` patterns).
-- **Pitfall #22 verified clean** per the brief's batch-5 check —
-  0 `pattern: |` block scalars.
-- **Open gaps (unchanged):** `cross_language_implementation_complete`
-  (v0.11+ ship-target, 5 sources — protobuf is the densest), `ordered_block`
-  (v0.10 ship-target, 7 sources — protobuf adds 27 file targets),
-  `registry_paths_resolve` (v0.10 ship-target, 8 sources —
-  second-order instance via failure_list test-name resolution),
-  `generated_file_fresh` (v0.10 ship-target, 6 sources).
+- **Pitfall #22 verified clean** per the original batch-5 check —
+  0 `pattern: |` block scalars. No regression in v0.9.18-v0.9.20.
+- **Open gaps (unchanged in v0.9.20):**
+  `cross_language_implementation_complete` (**v0.11+ ship-target**,
+  5 sources — protobuf is the densest concrete example, 10 bindings
+  × 4-5 parity surfaces = ~45 cross-language assertions in one rule;
+  KEEP this callout per the brief),
+  Bazel-licensing-declaration-aware rule kind (v0.11+ ship-target —
+  not surfaced by this config but adjacent for protobuf's BSD-3
+  licence + Bazel build mix), `ordered_block` (v0.10 ship-target,
+  7 sources — protobuf adds 27 file targets), `registry_paths_resolve`
+  (v0.10 ship-target, 8 sources — second-order instance via
+  failure_list test-name resolution), `generated_file_fresh` (v0.10
+  ship-target, 6 sources). None of these shipped in v0.9.18-v0.9.20.
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
-- **Pre-existing bundled-rule false positive at csharp/README.md** —
-  `oss-no-merge-conflict-markers` over-fires on `=======`
-  markdown-section underlines. Filed under the bundled-ruleset
-  refinement queue.
+- **Pre-existing bundled-rule false positive at csharp/README.md
+  STILL ACTIVE in v0.9.20** — `oss-no-merge-conflict-markers` over-fires
+  on `=======` markdown-section underlines. The v0.9.18 cross-cutting
+  revalidation (B4) did not pull this rule into the A1-A6 refinement
+  scope. Still in the bundled-ruleset refinement queue.

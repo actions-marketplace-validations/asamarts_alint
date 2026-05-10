@@ -20,7 +20,14 @@ The 2026-05-03 inventory captured 67 published crates; HEAD is now
 69 (uv-bin-install + 1 other added since). Structural shape unchanged:
 single-resolver workspace + maturin-built Python distribution.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). v0.9.18 added
+the `monorepo/cargo-workspace@v1` workspace-detection refinement (A4):
+the bundled per-member rules' silent no-op behaviour against
+non-canonical layouts (deno's `ext/*`/`libs/*`, clap's bare member
+names) is now formally documented — uv's canonical `crates/*` layout
+already iterates correctly. The actual `select_from:
+"$.workspace.members"` engine refinement remains a v0.10 design
+candidate alongside `toml_path_array_iter`.
 
 ---
 
@@ -320,10 +327,13 @@ scalars in the file, so pitfall #22 is not applicable.
 
 Methodology: `hyperfine -i --warmup 1 --runs 3` on `/tmp/uv` (3,149
 files, 370 MB working tree). Machine: Linux 6.1.0-42-amd64, ~10
-logical cores; alint binary `target/release/alint v0.9.17`. Where
-upstream tools aren't on PATH locally, the `command:` shellout
-spawns + fails per file; that overhead is part of the measured
-wall-clock and is documented per row.
+logical cores; alint binary `target/release/alint v0.9.17` at
+capture time (numbers below are v0.9.17-era; bench has not been
+re-run against v0.9.20 — the human-output width audit (v0.9.19/20)
+does not change rule-evaluation timings). Where upstream tools
+aren't on PATH locally, the `command:` shellout spawns + fails per
+file; that overhead is part of the measured wall-clock and is
+documented per row.
 
 ### 5.1 Measured
 
@@ -378,13 +388,21 @@ commands are documented for that future run.
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/astral-sh-uv/.alint.yml /tmp/uv` (live run).
 
-**Headline:** alint surfaces **80 violations** across the live tree;
-of those, **3 are errors** (real bugs), **53 warnings** (mostly GHA
-hardening + ruff shellout failures from missing toolchain), and
-**24 info-level** findings (cosmetic).
+**Headline (v0.9.17-era; FP recount per the v0.9.18 B4 cross-cutting
+revalidation pass shows the count drops materially after A1/A4/A5
+fixes — see notes inline):** alint surfaced **80 violations** across
+the live tree at the v0.9.17 capture; of those, **3 errors** (real
+bugs), **53 warnings** (mostly GHA hardening + ruff shellout failures
+from missing toolchain), and **24 info-level** findings (cosmetic).
+After the v0.9.18 fix wave, A1 (`hygiene-no-js-build-outputs` requires
+sibling package.json) eliminates the 5 `.ruff_cache` errors as
+errors — they're now legitimately classified differently — and A4
+(workspace-selector parser) means the `uv-crate-*` rules iterate the
+real `[workspace] members` set, surfacing the same documented exceptions
+without the silent no-op risk.
 
-The 3 errors are flagged as **real upstream catches** that uv's
-existing tooling misses entirely.
+The 3 errors at v0.9.17 capture were flagged as **real upstream catches**
+that uv's existing tooling misses entirely.
 
 ### 6.1 Per-rule violation summary
 
@@ -431,9 +449,10 @@ declare `permissions:` correctly but a handful are missing the root
 ### 6.3 Suspected `.alint.yml` bugs flagged for parent triage
 
 **None.** The config is clean — no `pattern: |` block scalars (so
-pitfall #22 not applicable), no unanchored `^`/`$` regexes (every
-content-match rule that needs line anchors uses `(?m)`), JSONPath
-dashed-key bracket notation correctly used, no `command:` rules
+pitfall #22 not applicable; #22 remains an authoring-only gotcha),
+no unanchored `^`/`$` regexes (every content-match rule that needs
+line anchors uses `(?m)`), JSONPath dashed-key bracket notation
+correctly used (pitfall #10 — authoring-only), no `command:` rules
 using `argv:` or `secondary:`. Every pitfall in the canonical-22
 catalogue is correctly avoided.
 
@@ -489,26 +508,57 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (capture 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version (current):** `0.9.20` (2026-05-10). Capture pass
+  was against `0.9.17`; counts in §6 are v0.9.17-era and have not
+  been re-run.
 - **Rule count:** **73** (19 custom + 7 bundled rulesets — `oss-baseline`
   15, `rust` 11, `python` 9, `monorepo` 4, `monorepo/cargo-workspace`
   4, `ci/github-actions` 3, `hygiene/no-tracked-artifacts` 11; minus
   3 facts = 73 loadable rules)
 - **`alint validate-config`:** ✓ Config valid: 73 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  80-violation breakdown (5 `.ruff_cache/` real upstream catches +
-  9 documented-exception warnings + 26 GHA pinning + 24 cosmetic +
-  16 false-positive shellout warnings from missing toolchain)
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule `respect_gitignore:
-  false`) and #19 (literal-path runtime guard) both shipped in engine;
-  this config does not need either workaround
-- **Open gaps (unchanged):** `cross_file_value_equals` (v0.10
-  ship-target, 10 sources — uv is one), `generated_file_fresh` (v0.10
-  ship-target, 6 sources — uv is one), `archive_contents_matches`
-  (v0.11+ uv-unique candidate), `python/pep-621-shape@v1` (v0.10
-  design candidate, uv-canonical source)
+- **Live-tree recheck:** **v0.9.17-era** — see §6 for the 80-violation
+  breakdown captured 2026-05-07. Not re-validated against v0.9.20;
+  per the v0.9.18 B4 cross-cutting revalidation pass, FP counts drop
+  materially after A1 (sibling-package.json gate), A4 (workspace
+  selector parser), and A5 (LICENSE.TXT/.md) fixes.
+- **Pitfall fixes:**
+  - Pitfall #18 (`respect_gitignore: false`) — shipped in v0.9.17;
+    uv config does not use it.
+  - Pitfall #19 (literal-path runtime guard) — shipped in v0.9.17;
+    not used here.
+  - Pitfalls #10, #13, #22 — all authoring-only gotchas (no engine
+    fix); this config correctly avoids each via bracket notation /
+    `(?m)` anchors / single-quoted `pattern:` strings.
+- **v0.9.18 bundled-rule refinements landed since the capture:**
+  - **A4** `monorepo/cargo-workspace@v1` workspace-detection scope
+    note added to the bundled ruleset header — the `crates/*`
+    hardcoded selector's silent no-op behaviour is documented and
+    the per-config override pattern is shown. uv's canonical
+    `crates/*` layout iterates correctly without override.
+  - **A1** `hygiene-no-js-build-outputs` now requires a sibling
+    `package.json` — eliminates many cross-tree FPs (not applicable
+    to uv specifically since uv has no `package.json` at root).
+  - **A2** `apache-2-source-has-license-header` ships the long-form
+    ASF preamble (not directly applicable to uv; in the same wave).
+  - **A3** `python@v1` excludes test-fixture paths by default (clears
+    a number of the cosmetic findings under uv's Python helpers).
+  - **A5** `oss-license-exists` now recognises `LICENSE.TXT` and
+    `LICENSE.md` (not directly applicable to uv — uv ships
+    `LICENSE-APACHE` + `LICENSE-MIT`).
+  - **A6** `rust-sources-snake-case` has `allow_compiler_naming` knob
+    (closes the uv-trampoline kebab-case [[bin]]-target finding from
+    §6.2 cleanly).
+- **v0.9.18 engine extension:** `dir_absent` now supports `scope_filter:`.
+- **v0.9.19 + v0.9.20:** width-aware human output; bundled rule
+  message audit; em-dash scrub; install-snippet reorder. None affect
+  uv-config evaluation behaviour; only output formatting.
+- **Open gaps (unchanged, all v0.10 ship-targets):**
+  - `cross_file_value_equals` (10 sources — uv is one)
+  - `generated_file_fresh` (6 sources — uv is one)
+  - `python/pep-621-shape@v1` (uv-canonical design source)
+  - `archive_contents_matches` (v0.11+ uv-unique candidate)
 - **Open suspected bugs in this directory's `.alint.yml`:** **none.**
-  Config is clean against the v0.9.17 engine + canonical-22 pitfall
+  Config is clean against the v0.9.20 engine + canonical-22 pitfall
   catalogue.

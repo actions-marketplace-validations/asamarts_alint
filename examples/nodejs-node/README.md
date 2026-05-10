@@ -20,7 +20,18 @@ ICU, nghttp2, etc.), `test/parallel/` and `test/sequential/` — the
 bulk of the test corpus, ~30k files; not material to the structural
 inventory). 132 MB working-tree.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). The original
+walk was performed against v0.9.17; intermediate v0.9.18 shipped
+bundled-rule refinements **A1** (hygiene-no-js-build-outputs requires
+sibling `package.json` — eliminates the 3 directory-name FPs documented
+in §6.1 in non-JS subtrees) and **A3** (python@v1 default test-fixture
+excludes — relevant context for the test/fixtures/ class of FPs but
+node uses node@v1 not python@v1, so the bundled refinement doesn't
+directly apply; the per-rule scope refinements in §6.2 are still
+recommended). v0.9.19/v0.9.20 added width-aware human output and the
+bundled-rule message audit. The node `.alint.yml` itself is clean of
+regex pitfalls (no `pattern: |` block scalars); no edits were needed
+in batch B1.
 
 ---
 
@@ -555,7 +566,9 @@ scalars).
 Methodology: `hyperfine --warmup 1 --runs 3` on the same
 `/tmp/nodejs-node` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary `target/release/alint
-v0.9.17`.
+v0.9.17` (numbers re-verified-equivalent in v0.9.20 — engine
+optimisations in the v0.9.x line affect cold-start, not steady-state
+walk throughput).
 
 ### 5.1 Measured
 
@@ -617,17 +630,29 @@ the editorial-review-only flow that catches these issues today.
 Run: `alint check --config /tmp/node-alint-lite.yml /tmp/nodejs-node`
 (live run, JSON-format, lite config without the 9 `command:` rules
 since `eslint`/`cpplint`/`lint-md`/`ruff`/`yamllint`/`shellcheck`
-aren't installed). Sparse-checkout excludes `deps/`, `test/parallel/`,
-`test/sequential/` — the bulk of the test corpus.
+aren't installed; counts captured against alint v0.9.17 + the 2026-05-07
+SHA — absolute counts drift with upstream tip). Sparse-checkout excludes
+`deps/`, `test/parallel/`, `test/sequential/` — the bulk of the test
+corpus.
 
-**Headline:** alint surfaces **147 violations** across the live tree
-— **mostly real findings.** Findings break down to: 22 real test-helper
-files matched by the test-filename-grammar rule (need broader exclude
-list), 1 bidi-control finding in WPT test fixture (intentional), 43
-real `node_modules/` test-fixture commits, 3 real `.env` test fixtures,
-~16 cosmetic newline / trailing-whitespace / heuristic findings, and
-~62 GHA hardening warnings (Scorecard catches the same on its
-nightly run).
+**Headline (v0.9.17 walk, historical).** alint surfaced **147 violations**
+across the live tree — **mostly real findings.** Findings break down to:
+22 real test-helper files matched by the test-filename-grammar rule
+(need broader exclude list), 1 bidi-control finding in WPT test fixture
+(intentional), 43 real `node_modules/` test-fixture commits, 3 real
+`.env` test fixtures, ~16 cosmetic newline / trailing-whitespace /
+heuristic findings, and ~62 GHA hardening warnings (Scorecard catches
+the same on its nightly run).
+
+**Status as of v0.9.20.** The 3 `hygiene-no-js-build-outputs`
+directory-name FPs documented in §6.1 are **resolved in v0.9.18 via
+bundled-rule refinement A1** — the rule now requires a sibling
+`package.json` to fire, so non-JS subtrees that happen to have a
+`build/` directory no longer match. The `test/fixtures/**/node_modules`,
+`test/fixtures/**/.env`, and `test/fixtures/wpt/**` per-rule scope
+refinements documented in §6.2 are still pending (config-side, not
+engine-side); these are the recommended `.alint.yml` updates a real
+adopter would make.
 
 ### 6.1 Real findings
 
@@ -640,7 +665,7 @@ nightly run).
 | 1 file > 10 MiB | (single occurrence) | warning | `hygiene-no-huge-files` | Reviewable. |
 | 9 workflows lack the `contents: read` minimum permission | (across `.github/workflows/`) | warning | `gha-workflow-contents-read` | **Real bugs** — Scorecard catches the same on its nightly run. |
 | 2 workflows lack `permissions:` block | (across `.github/workflows/`) | warning | `gha-pin-actions-to-sha` | Same class. |
-| 3 forbidden directory-name matches | `pkgs/development/python-modules/build` (etc.) | warning | `hygiene-no-js-build-outputs` | **Same false-positive class as kubernetes / vscode / nixpkgs** — directories literally named `build` in non-JS contexts. Cross-cutting bundled-rule refinement (see §7) |
+| 3 forbidden directory-name matches | (paths in non-JS subtrees with no sibling `package.json`) | warning | `hygiene-no-js-build-outputs` | **Was a false-positive class against v0.9.17; FIXED in v0.9.18 via bundled-rule refinement A1** — `hygiene-no-js-build-outputs` now requires a sibling `package.json`, eliminating directory-name matches in non-JS subtrees. Same fix benefits k8s, vscode, and nixpkgs simultaneously. |
 | 10 markdown / 3 source files lack final newline | (across the tree) | info | `oss-final-newline` + `oss-no-trailing-whitespace` | Real but unweighted by the existing tooling. |
 | 1 `node-package-json-exists` failure | (related to root config layering) | error | `node-package-json-exists` | **False positive in spirit** — node has multiple `package.json` files (root, tools/lint-md/, tools/eslint/, etc.); the rule fires when scope doesn't unambiguously identify the canonical one. **Recommended fix:** scope the rule to `root_only: true` for the `node@v1` ruleset's package.json check. |
 | 1 `node-has-lockfile` warning | repo root | warning | `node-has-lockfile` | node's root has no `package-lock.json` (the project uses `npm` only for `tools/`-internal deps; the build is GYP/configure). **Expected**; rule's expected scope is npm projects. |
@@ -697,14 +722,16 @@ dashed keys (`$.dependencies['remark-preset-lint-node']`).
   C++ EOL-banner convention. Niche; the cleaner outcome is editorial
   cleanup. **NEW v0.10+ candidate; single-source (node-only);
   low-priority**.
-- **Cross-cutting bundled-ruleset refinement** for
-  `hygiene-no-js-build-outputs` (k8s, vscode, nixpkgs, node all hit
-  the same false positive on directories literally named `build`).
-  Filed under bundled-ruleset refinement queue.
+- ~~**Cross-cutting bundled-ruleset refinement** for
+  `hygiene-no-js-build-outputs`~~ — RESOLVED in v0.9.18 (refinement
+  A1). The rule now requires a sibling `package.json` to fire,
+  eliminating the directory-name false positives across k8s, vscode,
+  nixpkgs, and node simultaneously.
 - **Cross-cutting bundled-ruleset refinement** for
   `hygiene-no-env-files` and `node-no-tracked-node-modules`
-  (test-fixture exclusions for `test/fixtures/**`). Same class — file
-  under bundled-ruleset refinement queue.
+  (test-fixture exclusions for `test/fixtures/**`). **Still pending**
+  in the bundled-ruleset refinement queue; the config-side workaround
+  (per-rule `paths.exclude`) is documented in §6.2.
 
 ---
 
@@ -738,36 +765,51 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (2026-05-10, alint v0.9.20)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (current). The §6 walk and absolute counts
+  were captured against `0.9.17 (1dbd9b218a0e, built 2026-05-07)`;
+  intermediate v0.9.18 shipped bundled-rule refinement **A1**
+  (hygiene-no-js-build-outputs requires sibling `package.json` —
+  resolves the 3 directory-name FPs in §6.1 in non-JS subtrees).
+  v0.9.19/v0.9.20 added width-aware human output and the bundled-rule
+  message audit. The node `.alint.yml` itself was not modified in batch
+  B1 (it never carried pitfall #22 — no `pattern: |` block scalars).
 - **Rule count:** **86** (40 custom + 5 bundled rulesets — `oss-baseline`
   15, `node` 9, `ci/github-actions` 3, `hygiene/no-tracked-artifacts`
   11, `tooling/editorconfig` 3; rule IDs may overlap)
 - **`alint validate-config`:** ✓ Config valid: 86 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  147-violation breakdown (22 test-helper false positives + 47
-  test-fixture false positives + 62 real GHA hardening + 16
-  cosmetic + 0 NEW real bugs caught beyond what the existing eslint
-  stack would catch)
+- **Live-tree recheck status:** Counts in §6 reflect the 2026-05-07
+  v0.9.17 walk; the 3 `hygiene-no-js-build-outputs` directory-name FPs
+  are RESOLVED in v0.9.18 (bundled-rule refinement A1). The 6 P1/P2
+  scope refinements documented in §6.2 (broader test-helper exclude,
+  test-fixture node_modules/.env/wpt excludes, root_only on
+  package.json check) remain config-side recommendations not yet
+  applied to this `.alint.yml`.
 - **Pitfall instances flagged:** **0 instances of pitfall #22** in
   this config (no `pattern: |` block scalars). Config is clean.
-- **Pitfall fixes (v0.9.17):** Pitfalls #18 + #19 do not apply here.
+- **Pitfall fixes:**
+  - Pitfall **#18** (`respect_gitignore: false` per-rule) — engine-fixed
+    in v0.9.17; not needed here.
+  - Pitfall **#19** (literal-path runtime guard) — engine-fixed in
+    v0.9.17; not needed here.
+  - Pitfall **#22** — codified in v0.9.18; not present in this config.
 - **Open gaps:** `cross_file_value_equals` (v0.10 ship-target, 10
   sources — node's `tools/eslint-rules/*` ↔ `eslint.config.mjs` is
   one of the most-adopter-visible instances), `registry_paths_resolve`
   (v0.10 ship-target, 8 sources — node's `tools/dep_updaters/` ↔
   `deps/` is one of the canonical sources), `file_header_consistency`
   (NEW low-priority, node-only).
-- **Cross-cutting bundled-rule refinements surfaced:**
-  `hygiene-no-js-build-outputs` (k8s + vscode + nixpkgs + node —
-  4 sources hitting the same directory-name false positive),
-  `hygiene-no-env-files` + `node-no-tracked-node-modules` (TS + node —
-  2 sources for test-fixture exclusion). Both filed under
-  bundled-ruleset refinement queue.
+- **Cross-cutting bundled-rule refinements:**
+  `hygiene-no-js-build-outputs` cross-cutting refinement (k8s + vscode
+  + nixpkgs + node) was **resolved in v0.9.18 (A1)**.
+  `hygiene-no-env-files` + `node-no-tracked-node-modules` test-fixture
+  exclusion (TS + node) is **still pending** in the bundled-ruleset
+  refinement queue; config-side workaround documented in §6.2.
 - **Open suspected bugs in this directory's `.alint.yml`:** None
   (regex / schema). 6 P1/P2 scope refinements recommended for the
-  current rule set (see §6.2).
+  current rule set (see §6.2); the cross-cutting `hygiene-no-js-build-outputs`
+  one is now fixed engine-side via A1.
 - **Framing correction for the case-study claim** ("15-year-old
   conventions enforced via human review only"): **partially incorrect**.
   27 in-tree eslint visitors under `tools/eslint-rules/` enforce most

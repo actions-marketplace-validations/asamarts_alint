@@ -16,8 +16,9 @@ primitives.
 workflows, **1162 lines of `.pre-commit-config.yaml` declaring 110
 hook instances across 97 distinct hook ids** (90 of them `repo:
 local` calls into `scripts/ci/prek/`'s 126 Python validation
-scripts). **alint version:** 0.9.17 (`1dbd9b218a0e`, built
-2026-05-07).
+scripts). **alint version:** 0.9.20 (2026-05-10). Categories below
+were validated against alint v0.9.17 + the 2026-05-07 airflow SHA;
+categories are stable, absolute counts drift with upstream tip.
 
 ---
 
@@ -195,7 +196,7 @@ Mapped by category from §1.1:
 |---|---|---|
 | `LICENSE` | alint-today | `apache-2-license-text-present` (bundled `compliance/apache-2@v1`) |
 | `NOTICE` | alint-today | `apache-2-notice-file-exists` (bundled) |
-| Source-header on every Python/YAML/SQL/etc. file | alint-today (with caveat) | `apache-2-source-has-license-header` (bundled). **CAVEAT — see §6 for the bundled-pattern misalignment**: airflow uses the longer ASF-preamble form on every source file, but the bundled rule's pattern (`Licensed under the Apache License,?\s*Version 2`) only catches the SHORT form. Result: the rule fires on every source file (8228 violations against the live tree). **Fix flagged for parent triage** — see §6.2 |
+| Source-header on every Python/YAML/SQL/etc. file | alint-today | `apache-2-source-has-license-header` (bundled). v0.9.17 surfaced 8,228 FPs against airflow because the bundled pattern (`Licensed under the Apache License,?\s*Version 2`) only matched the SHORT form, while airflow uses the longer ASF preamble (`Licensed to the Apache Software Foundation...to you under the Apache License`). v0.9.18 A2 fix bundled the long-form ASF preamble into the default pattern; arrow + spark + airflow no longer need the per-TLP override. **Status: fixed in v0.9.18.** |
 | `NOTICE` declares current copyright year | alint-today | `airflow-asf-notice-current-year` (`file_content_matches` with year-templated pattern) |
 | No `*.zip` files | alint-today | `airflow-no-zip-files` (`file_absent`) |
 | `LICENSE-binary` / `NOTICE-binary` (binary distribution discipline) | alint-future | NOT enforced today; would adopt via the proposed `apache/governance@v1` v0.10 ship-target (3 sources: arrow + spark + airflow) |
@@ -368,13 +369,14 @@ rules:
   from hygiene/lockfiles − overlap = 47 effective rule IDs after
   dedup.
 
-**Validation:** `alint validate-config` reports `✓ Config valid: 75
+**Validation:** `alint validate-config` reports `Config valid: 75
 rule(s) loaded`. Pitfall checks: the magic comment is present (line
 1); JSONPath uses bracket notation for `package-name` per pitfall
-#10; `scope_filter.has_ancestor:` uses basenames per pitfall #11;
-the `command:` rules use `command:` (not `argv:`) and integer
-`timeout:`; no `pattern: |` block scalars (no pitfall #22
-candidates).
+#10 (still authoring-gotcha-only); `scope_filter.has_ancestor:`
+uses basenames per pitfall #11 (still authoring-gotcha-only — the
+field accepts a single basename, not a path); the `command:` rules
+use `command:` (not `argv:`) and integer `timeout:`; no `pattern: |`
+block scalars (pitfall #22's `|` → `|-` fix is moot here).
 
 ---
 
@@ -383,9 +385,12 @@ candidates).
 Methodology: `hyperfine -i --warmup 1 --runs 3` on the same
 `/tmp/airflow` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`. Where the upstream toolchain isn't
-installed locally, the row is `pending — needs <toolchain>` with
-the exact reproduction command.
+`target/release/alint v0.9.17` (numbers below were captured against
+v0.9.17; v0.9.18 added bundled-rule refinements that eliminate FPs
+but do not change wall-clock; v0.9.19/v0.9.20 added width-aware
+human output, also no wall-clock impact). Where the upstream
+toolchain isn't installed locally, the row is `pending — needs
+<toolchain>` with the exact reproduction command.
 
 ### 5.1 Measured
 
@@ -441,14 +446,14 @@ documented for a future run on a CI-class image.
 
 Run: `alint check --config examples/apache-airflow/.alint.yml /tmp/airflow` (live run, JSON-format).
 
-**Headline:** alint surfaces **33,451 violations** across the live
-tree; **failing rules: 19 / passing: 33** (52 declarative + 23
-shellouts). Per-rule violation counts:
+**Headline (v0.9.17 capture):** alint surfaced **33,451 violations**
+across the live tree; **failing rules: 19 / passing: 33** (52
+declarative + 23 shellouts). Per-rule violation counts:
 
 | Count | Rule | Class |
 |---|---|---|
 | 9322 | `airflow-codespell` | False positive (tool not on PATH — per-file spawn-fail) |
-| **8228** | **`apache-2-source-has-license-header`** | **Bundled-pattern misalignment — see §6.2 Bug 1** |
+| **8228** | **`apache-2-source-has-license-header`** | **Was a v0.9.17 FP class (bundled-pattern misalignment); fixed in v0.9.18 A2** |
 | 7195 | `airflow-ruff-format` | False positive (tool not on PATH) |
 | 7195 | `airflow-ruff-check` | False positive (tool not on PATH) |
 | 660 | `airflow-bandit` | False positive (tool not on PATH) |
@@ -468,11 +473,15 @@ shellouts). Per-rule violation counts:
 | 1 | `airflow-no-deprecation-warning-categories-in-core` | Real (one file using built-in DeprecationWarning) |
 
 **The 8228 + 9322 + 7195 + 7195 + 660 + 312 + 195 + 52 = 33,159
-violations are P0 false positives:** 8,228 traceable to a
-bundled-pattern misalignment with airflow's longer ASF preamble;
-the rest (24,931) traceable to "tool not on PATH" per-file
-spawn-fails (expected in this test environment; would clear with
-the actual toolchain installed).
+violations were P0 false positives at v0.9.17:** 8,228 traceable to
+a bundled-pattern misalignment with airflow's longer ASF preamble
+(**fixed in v0.9.18 A2** — bundled `apache-2-source-has-license-header`
+now defaults to the long-form preamble); the remaining 24,931 are
+"tool not on PATH" per-file spawn-fails (expected in this test
+environment; would clear with the actual toolchain installed).
+Under v0.9.20, expected violation total drops by ~8,228 to ~25,200
+(of which ~24,931 still trace to per-file spawn-fail and ~292 are
+real findings).
 
 ### 6.1 Real findings — the catches that beat existing tooling
 
@@ -493,12 +502,12 @@ persist-credentials gaps, 73 GHA SHA-pin gaps, 1 deprecation-class
 misuse, ~160 inclusive-language drifts. Plus the 33,159 false
 positives flagged in §6.2 below for parent triage.**
 
-### 6.2 Suspected `.alint.yml` bugs flagged for parent triage
+### 6.2 Bundled-rule pattern misalignments — historical, fixed in v0.9.18
 
-#### Bug 1: bundled `apache-2-source-has-license-header` fires 8228 false positives
+#### Bug 1 (HISTORICAL — fixed in v0.9.18 A2): bundled `apache-2-source-has-license-header` fired 8228 false positives at v0.9.17
 
-**Cause.** The bundled `compliance/apache-2@v1` ruleset's
-`apache-2-source-has-license-header` rule pattern is `'Licensed
+**Cause (v0.9.17).** The bundled `compliance/apache-2@v1` ruleset's
+`apache-2-source-has-license-header` rule pattern was `'Licensed
 under the Apache License,?\s*Version 2'`. Airflow uses the longer
 ASF preamble form on every source file: `Licensed to the Apache
 Software Foundation (ASF) under one or more contributor license
@@ -507,53 +516,19 @@ substring `Licensed under the Apache License` does NOT appear in
 the ASF preamble form (it says `Licensed to the Apache` and `to
 you under the Apache License`, but never `Licensed under`).
 
-**Demonstration:**
-```python
-import re
-header = '# Licensed to the Apache Software Foundation (ASF) under one\n# or more contributor license agreements.  See the NOTICE file\n# distributed with this work for additional information\n# regarding copyright ownership.  The ASF licenses this file\n# to you under the Apache License, Version 2.0 (the\n# "License")...'
-re.search(r'Licensed under the Apache License,?\s*Version 2', header)  # None — false positive
-re.search(r'Licensed (to the Apache Software Foundation|under the Apache License,?\s*Version 2)', header)  # match
-```
+**Status: fixed in v0.9.18 (commit A2 of the pre-launch fix wave).**
+The bundled `apache-2-source-has-license-header` rule now defaults
+to the alternation pattern that matches BOTH forms:
+`Licensed (to the Apache Software Foundation|under the Apache License,?\s*Version 2)`.
+Effect: the 8,228 v0.9.17 FPs against airflow drop to ~0 under
+v0.9.18 (modulo any source files genuinely missing the header).
+arrow + spark + airflow no longer need to ship the per-TLP
+override; this case study's `.alint.yml` is simpler than the
+v0.9.17 era required.
 
-**Fix.** Add an override in this directory's `.alint.yml` using the
-same pattern as `examples/apache-arrow/.alint.yml` and
-`examples/apache-spark/.alint.yml` (which both ship the override):
-
-```yaml
-rules:
-  - id: apache-2-source-has-license-header
-    kind: file_header
-    paths:
-      include:
-        ["**/*.{rs,py,js,jsx,ts,tsx,go,java,kt,c,cc,cpp,h,hpp,hh,sh,rb,swift,scala,yaml,yml,sql,rst}"]
-      exclude:
-        - "**/vendor/**"
-        - "**/node_modules/**"
-        - "**/__pycache__/**"
-        - "**/_vendor/**"
-        - "**/dist/**"
-        - "**/generated/**"
-        - "**/_generated/**"
-        - "scripts/ci/license-templates/**"
-        - "**/openapi-gen/**"
-        - "**/v2*.yaml"
-        - ".github/**"
-    lines: 30
-    pattern: 'Licensed (to the Apache Software Foundation|under the Apache License,?\s*Version 2)'
-    level: warning
-```
-
-This is **not a regex anchor pitfall (#13) or YAML scalar pitfall
-(#14)** — it's a **bundled-rule design issue**. The bundled
-`apache-2-source-has-license-header` rule should default to the
-longer pattern (which catches BOTH forms) since every Apache TLP
-examined (arrow, spark, airflow) uses the long form. Recommended:
-update `crates/alint-dsl/rulesets/v1/compliance/apache-2.yml` to
-default to the longer pattern, dropping the per-TLP override
-boilerplate from arrow + spark + airflow configs simultaneously.
-
-**Cross-cutting candidate for the proposed `apache/governance@v1`
-v0.10 ship-target bundled ruleset.**
+**Cross-cutting context:** the long-form default is also one of the
+three Apache-TLP convergences underlying the proposed
+`apache/governance@v1` v0.10 ship-target bundled ruleset.
 
 #### Bug 2 (informational, not a P0): per-file `command:` shellout overhead
 
@@ -599,12 +574,11 @@ shellout rule. **Filed as design candidate.**
 - **`apache/governance@v1` bundled ruleset** — airflow is one of 3
   Apache TLPs converging on 9 of 12 governance artefacts (alongside
   arrow + spark). Once shipped, this config could `extends:` it
-  and adopt the canonical ASF preamble pattern (Bug 1 fix shipped
-  as the bundle's default). **v0.10 ship-target.**
+  and drop the airflow-specific Apache governance rules. **v0.10
+  ship-target.**
 - **Bundled `apache-2-source-has-license-header` long-form pattern
-  default** — flagged in §6.2 Bug 1. Cross-saturation: arrow + spark
-  + airflow all override the bundled rule with the same long-form
-  pattern; the bundle should default to it.
+  default** — **landed in v0.9.18 (A2).** arrow + spark + airflow
+  no longer need to ship the per-TLP override.
 
 ---
 
@@ -634,31 +608,45 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (current: alint v0.9.20, 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20 (2026-05-10)`. The §6 violation-count
+  breakdown was captured against v0.9.17 + the 2026-05-07 airflow
+  SHA; categories are stable, absolute counts drift with upstream
+  tip
 - **Rule count:** **75** (28 custom + 6 bundled rulesets —
   `oss-baseline` 15, `python` 9, `ci/github-actions` 3,
   `compliance/apache-2` 3, `hygiene/no-tracked-artifacts` 11,
   `hygiene/lockfiles` 7; some rule IDs overlap, which is why the
   grand total is 75 rather than the arithmetic sum of 76)
-- **`alint validate-config`:** ✓ Config valid: 75 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for
-  the 33,451-violation breakdown (failing rules 19 / passing 33;
-  ~292 real findings + ~33,159 false positives across 1
+- **`alint validate-config`:** Config valid: 75 rule(s) loaded
+- **Live-tree recheck:** performed against v0.9.17 — see §6 for the
+  33,451-violation breakdown (failing rules 19 / passing 33; ~292
+  real findings + ~33,159 false positives at v0.9.17 across 1
   bundled-pattern misalignment + 7 tool-not-on-PATH per-file
-  spawn-fail counts)
-- **Pitfall fixes (v0.9.17):** none directly cited in this config
+  spawn-fail counts). Not re-run against v0.9.20; under v0.9.18+
+  the 8,228 bundled-pattern FPs disappear (A2 fix)
+- **Pitfall fixes (engine, v0.9.17):** Pitfall #18 (per-rule
+  `respect_gitignore: false`) and #19 (`literal_is_nested`) shipped
+  in engine; not directly cited in this config
+- **Pitfall fixes (bundled rules, v0.9.18):** A2 (long-form ASF
+  preamble in `apache-2-source-has-license-header` default) clears
+  the §6.2 Bug 1 FPs against airflow. A3 (python@v1
+  default-excludes test fixtures) does not affect airflow
+  significantly — airflow's test fixtures are not the same shape as
+  ruff/cpython
 - **Pitfall #22 status:** No `pattern: |` block scalars in this
-  config — not a candidate
-- **Open gaps (unchanged):** `cross_file_value_equals` (v0.10
-  ship-target, 10 sources — airflow has 11 instances of this single
-  shape), `import_gate` (v0.10 ship-target, 4 sources),
-  `ordered_block` (v0.10 ship-target, 7 sources),
-  `generated_file_fresh` (v0.10 ship-target, 6 sources). No new
+  config — not a candidate (pitfall #22 fix is `|-` instead of `|`)
+- **Pitfall #11 (`scope_filter.has_ancestor` is a basename only):**
+  authoring-only gotcha; this config respects the constraint
+- **Open gaps (still pending v0.10):** `cross_file_value_equals`
+  (v0.10 ship-target — airflow has 11 instances of this single shape,
+  the densest concentration in the case-study set; spec adds
+  `value_extractor:` for non-trivial JSON/YAML extraction),
+  `import_gate` (v0.10 ship-target), `ordered_block` (v0.10
+  ship-target), `generated_file_fresh` (v0.10 ship-target). No new
   rule-kind gaps surfaced
-- **Open suspected bugs in this directory's `.alint.yml`:** 1
-  bundled-pattern misalignment (§6.2 Bug 1) producing 8,228 false
-  positives. **Not auto-fixed in this pass — flagged for parent-agent
-  triage.** Recommended fix: add the canonical long-form override
-  (template provided in §6.2)
+- **Open suspected bugs in this directory's `.alint.yml`:** none
+  remain. The §6.2 Bug 1 (bundled `apache-2-source-has-license-header`
+  pattern misalignment) was fixed in v0.9.18 A2 — no per-TLP
+  override needed

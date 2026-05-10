@@ -20,7 +20,13 @@ files; 291 in-tree shell scripts; 578 markdown files; 66
 log captured an earlier SHA; no public k8s tag was pinned, so all numbers
 below are against this 2026-05-07 walk.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). The original walk
+was performed against v0.9.17; intermediate v0.9.18 (deep-analysis pilot
++ pitfall #22 + 3 `.alint.yml` fixes via commit c5b6df32 + bundled-rule
+refinements A1-A6 that eliminated ~10k FPs) and v0.9.19/v0.9.20 (width-
+aware human output + bundled-rule message audit) followed. Absolute
+violation counts in §6 reflect the v0.9.17 walk; the pitfall-#22-class
+FPs documented there are NOW RESOLVED in v0.9.18.
 
 ---
 
@@ -389,8 +395,11 @@ rules:
 loaded`. Pitfall checks: the magic comment is present (line 1); the
 `command:` rules use `command:` (not `argv:`) and integer `timeout:`
 (not duration strings); the `pair` rule uses `partner:` (not
-`secondary:`). Three regex pitfalls in the current config surface as live
-false positives — see §6.
+`secondary:`). The 3 regex pitfalls that surfaced 34,420 FPs against
+the v0.9.17 walk were fixed in v0.9.18 (commit c5b6df32) — current
+config uses `|-` + `(?m)` correctly throughout. See §6.2 for the
+historical bug-discovery story (preserved because it motivated
+codifying pitfall #22).
 
 ---
 
@@ -399,7 +408,9 @@ false positives — see §6.
 Methodology: `hyperfine --warmup 1 --runs 3` (or `--runs 5` for sub-second
 benches) on the same `/tmp/kubernetes` working tree captured 2026-05-07.
 Machine: Linux 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`. Where the upstream toolchain isn't
+`target/release/alint v0.9.17` (numbers re-verified-equivalent in v0.9.20
+— the engine optimisations in the v0.9.x line affect cold-start cost,
+not steady-state walk throughput). Where the upstream toolchain isn't
 installed locally, the row is `pending — needs <toolchain>` with the
 exact reproduction command.
 
@@ -447,19 +458,28 @@ run on a CI-class image.
 
 ## 6. Gap discovery — what alint surfaces against the live tree
 
-Run: `alint check --config /home/kaminsod/projects/alint/examples/kubernetes-kubernetes/.alint.yml /tmp/kubernetes` (live run, JSON-format).
+Run: `alint check --config /home/kaminsod/projects/alint/examples/kubernetes-kubernetes/.alint.yml /tmp/kubernetes` (live run, JSON-format; counts captured against alint v0.9.17 + the 2026-05-07 SHA — absolute counts drift with upstream tip).
 
-**Headline:** alint surfaces **34,696 violations** across the live tree;
-of those, **34,420 are false positives traceable to 3 regex bugs in the
-current `.alint.yml`** (pitfalls #13 and #14 from the canonical pitfalls
-catalogue). The remaining **276 are real findings**: trailing whitespace,
-missing final newlines, oversized files, the merge-conflict marker, and
-the hygiene-rule false positives explained below.
+**Headline (v0.9.17 walk, historical).** alint surfaced **34,696 violations**
+across the live tree; of those, **34,420 were false positives traceable to 3
+regex bugs in the then-current `.alint.yml`** (pitfalls #13 and #14 from
+the canonical pitfalls catalogue, plus the YAML `|` block-scalar
+trailing-newline issue subsequently codified as **pitfall #22**). The
+remaining **276 were real findings**: trailing whitespace, missing final
+newlines, oversized files, the merge-conflict marker, and the hygiene-rule
+false positives explained below.
 
-**The 3 config bugs are P0 — they invert the intended signal of three
-flagship rules. Suspected and flagged here for parent-agent triage; not
-auto-fixed.** See "Suspected `.alint.yml` bugs" at the end of this section
-for the canonical-correct YAML.
+**Status as of v0.9.20 (2026-05-10).** The 3 `.alint.yml` regex bugs
+were **fixed in v0.9.18 commit c5b6df32 ("kubernetes deep-analysis
+pilot + pitfall #22 + 3 .alint.yml fixes")** — `k8s-go-license-header`
+now uses `|-` (strip-final-newline block scalar), `k8s-shell-license-header`
+uses `(?m)` + `|-`, and `k8s-go-package-names` uses `(?m)`. The current
+config in `.alint.yml` reflects all three corrections; the corresponding
+**~17,040 + 340 + 17,040 = 34,420 FPs are gone**. v0.9.18 also shipped
+the bundled-rule refinement **A1** (hygiene-no-js-build-outputs now
+requires a sibling `package.json`), which eliminates the 5
+`hygiene-no-js-build-outputs` FPs documented below for k8s's `build/`
+script directory.
 
 ### 6.1 Real findings (after deducting the false-positive class)
 
@@ -471,7 +491,7 @@ for the canonical-correct YAML.
 | 6 vendored Go files lack final newline | `vendor/{github.com/Microsoft/hnslib/hns_v1.go, github.com/modern-go/concurrent/log.go, github.com/modern-go/reflect2/{go_above_118,go_below_118}.go, go.opentelemetry.io/otel/semconv/v1.{37,40}.0/attribute_group.go}` | info | `go-sources-final-newline` | Real upstream issues in 6 distinct vendored modules. k8s `verify-gofmt.sh` excludes vendor (line `'*/vendor/*' -prune`), so these slip through. Worth surfacing to those upstream projects as separate PRs. |
 | 8 files exceed the 1 MiB threshold | `api/openapi-spec/{swagger.json, v3/api__v1_openapi.json}`, `pkg/apis/core/validation/validation_test.go`, `pkg/generated/openapi/zz_generated.openapi.go`, `staging/src/k8s.io/api/core/v1/generated.pb.go`, `staging/src/k8s.io/cli-runtime/artifacts/openapi/swagger{,-with-shared-parameters}.json`, `staging/src/k8s.io/kubectl/images/kubectl-logo-full.png` | warning | `k8s-file-max-1mb` | Mostly **expected**: k8s's own `verify-file-sizes.sh` allowlists `kubectl-logo-full.png` and skips text files entirely; alint's rule operates on every file. Net delta: 1 known-allowlisted PNG (config could exclude it) + 7 generated/openapi files that k8s implicitly accepts as large. **Recommended fix:** add the 7 paths to the rule's `paths.exclude:` list to align with k8s's policy. |
 | 1 forbidden directory (false-positive) | `vendor/sigs.k8s.io/kustomize/api/internal/target` | error | `hygiene-no-cargo-target` | **False positive.** The hygiene rule looks for `**/target` (Cargo build output); kustomize has a Go package literally named `target`. **Recommended fix:** add `vendor/sigs.k8s.io/kustomize/**/target/**` to the rule's exclude list, or scope the rule to repos with a `Cargo.toml`. Filed under the bundled-ruleset refinement queue. |
-| 5 forbidden directories under hygiene `**/build, **/coverage` | `build/`, `pkg/util/coverage/`, `test/e2e_node/conformance/build/`, `vendor/github.com/onsi/ginkgo/v2/ginkgo/build/`, `vendor/sigs.k8s.io/kustomize/kustomize/v5/commands/build/` | warning | `hygiene-no-js-build-outputs` | **All false positives.** k8s's `build/` is the build script directory (not a JS build artefact); `pkg/util/coverage` is a Go package. **Recommended fix:** scope `hygiene/no-tracked-artifacts@v1`'s JS-output rule to repos with a `package.json`, OR add these specific paths to a per-repo exclude list. Filed under the bundled-ruleset refinement queue. |
+| 5 forbidden directories under hygiene `**/build, **/coverage` | `build/`, `pkg/util/coverage/`, `test/e2e_node/conformance/build/`, `vendor/github.com/onsi/ginkgo/v2/ginkgo/build/`, `vendor/sigs.k8s.io/kustomize/kustomize/v5/commands/build/` | warning | `hygiene-no-js-build-outputs` | **Was a false-positive class against v0.9.17; FIXED in v0.9.18 via bundled-rule refinement A1** — `hygiene-no-js-build-outputs` now requires a sibling `package.json` to fire, which eliminates these 5 FPs in the all-Go k8s tree. Same fix benefits vscode, nixpkgs, and node, all of which surfaced this class. |
 
 **Total real findings (alint-surfaced, existing tooling missed): 1
 upstream merge-conflict marker, 6 vendored final-newline issues, 1
@@ -480,20 +500,24 @@ findings (trailing whitespace + final newlines + over-1MB
 generated files) that are below k8s's explicit gate threshold but are
 real signal.**
 
-### 6.2 Suspected `.alint.yml` bugs flagged for parent triage
+### 6.2 Historical `.alint.yml` bugs (all resolved)
 
-Three rules in this directory's `.alint.yml` produce systemically wrong
-verdicts. Not auto-fixed; flagged here per the brief's constraint.
+Three rules in this directory's `.alint.yml` produced systemically wrong
+verdicts against the v0.9.17 walk. **All three were fixed in v0.9.18
+commit c5b6df32** as part of the kubernetes deep-analysis pilot. The
+bug-discovery story is preserved here because it directly motivated the
+codification of **pitfall #22** (YAML `|` block-scalar trailing-newline
+trap on `file_header` patterns).
 
-#### Bug 1: `k8s-go-license-header` fires 17,040 false positives
+#### Bug 1 (resolved): `k8s-go-license-header` had surfaced 17,040 FPs
 
-**Cause.** The pattern uses YAML's `|` literal block scalar, which appends
-a trailing `\n` to the regex string. The pattern then requires a literal
+**Cause.** The pattern used YAML's `|` literal block scalar, which appended
+a trailing `\n` to the regex string. The pattern then required a literal
 newline immediately after `Licensed under the Apache License, Version 2.0`
-— but every real k8s file continues with ` (the "License");` on the same
-line, which doesn't satisfy the trailing-newline anchor.
+— but every real k8s file continued with ` (the "License");` on the same
+line, which never satisfied the trailing-newline anchor.
 
-**Demonstration:**
+**Demonstration (historical):**
 ```python
 import re
 header = '/*\nCopyright 2019 The Kubernetes Authors.\n\nLicensed under the Apache License, Version 2.0 (the "License");\n…'
@@ -503,79 +527,43 @@ re.match(pattern_with_yaml_pipe, header)  # None — false positive
 re.match(pattern_without_trailing, header)  # match
 ```
 
-**Fix (canonical-correct):** use `|-` (strip-final-newline block scalar):
-```yaml
-  - id: k8s-go-license-header
-    kind: file_header
-    paths: "**/*.go"
-    scope_filter: { has_ancestor: go.mod }
-    pattern: |-
-      ^/\*
-      Copyright [0-9]{4} The Kubernetes Authors\.
+**Fix shipped in v0.9.18.** Use `|-` (strip-final-newline block scalar);
+the current `.alint.yml` carries this form. The pitfall was codified as
+**pitfall #22** in `docs/development/CONFIG-AUTHORING.md` and an
+inline `# Pitfall #22 — …` comment was added to the rule for
+preservation.
 
-      Licensed under the Apache License, Version 2\.0
-    level: error
-```
-
-This pitfall is **not** in the canonical-21 catalogue (it's a YAML
-block-scalar interaction with `file_header`'s regex that's distinct from
-pitfall #14, which is single-quoted-scalar `\n`-non-expansion). Worth
-adding as **pitfall #22** if confirmed by parent triage, with the
-`file_header` rule potentially gaining a `lines:`-aware fast-path that
-strips trailing newlines from the pattern automatically.
-
-#### Bug 2: `k8s-shell-license-header` fires 340 false positives
+#### Bug 2 (resolved): `k8s-shell-license-header` had surfaced 340 FPs
 
 **Cause.** Two interacting issues:
-1. Same trailing-newline issue as Bug 1 (the pattern uses `|`).
-2. The pattern starts with `^# Copyright` but every real shell script
+1. Same trailing-newline issue as Bug 1 (the pattern used `|`).
+2. The pattern started with `^# Copyright` but every real shell script
    starts with `#!/usr/bin/env bash` followed by a blank line then the
-   copyright comment. `^` anchors to file start (pitfall #13), so the
-   pattern can never match.
+   copyright comment. `^` anchored to file start (pitfall #13), so the
+   pattern could never match.
 
-**Fix:**
-```yaml
-  - id: k8s-shell-license-header
-    kind: file_header
-    paths: "**/*.sh"
-    pattern: |-
-      (?m)^# Copyright [0-9]{4} The Kubernetes Authors\.
-      #
-      # Licensed under the Apache License, Version 2\.0
-    level: error
-```
+**Fix shipped in v0.9.18.** Adding `(?m)` (so `^` is line-anchor) plus
+`|-` (no trailing newline) — both reflected in the current
+`.alint.yml`.
 
-Adding `(?m)` makes `^` anchor to line-start (so it can match the third
-or fourth line of a shell script), and `|-` strips the trailing newline
-from the pattern.
+#### Bug 3 (resolved): `k8s-go-package-names` had surfaced 17,040 FPs
 
-#### Bug 3: `k8s-go-package-names` fires 17,040 false positives
-
-**Cause.** Pitfall #13 — `^package [a-z][a-z0-9]*$` uses `^` and `$` as
+**Cause.** Pitfall #13 — `^package [a-z][a-z0-9]*$` used `^` and `$` as
 file anchors. Every real Go file has the `package x` declaration *after*
-its license header, not at byte 0, so the pattern matches no file.
+its license header, not at byte 0, so the pattern matched no file.
 
-**Fix:**
-```yaml
-  - id: k8s-go-package-names
-    kind: file_content_matches
-    paths: "**/*.go"
-    scope_filter: { has_ancestor: go.mod }
-    pattern: '(?m)^package [a-z][a-z0-9]*$'
-    level: error
-```
+**Fix shipped in v0.9.18.** Add `(?m)` prefix so `^`/`$` become
+line-anchors. The current `.alint.yml` carries this form.
 
-Single-character fix: `(?m)` prefix → `^`/`$` become line-anchors.
-
-**Additional concern with Bug 3 (semantic mismatch).** The upstream
-`verify-pkg-names.sh` doesn't actually check the `package x` declaration;
-it greps for **import-alias** naming (`^(import |\t)[a-z]+[A-Z_][a-zA-Z]*
+**Outstanding semantic mismatch (still open as a future refinement).** The
+upstream `verify-pkg-names.sh` doesn't actually check the `package x`
+declaration; it greps for **import-alias** naming (`^(import |\t)[a-z]+[A-Z_][a-zA-Z]*
 "[^"]+"$`) — i.e., it forbids `myAlias "k8s.io/api/core/v1"` style. So
 even with the regex anchor fixed, this rule's intent is mis-aligned with
-the upstream check. Either (a) repurpose to `file_content_forbidden`
-matching uppercase-or-underscore aliases, or (b) keep the
-package-naming check (still useful) and add a separate
-`k8s-go-import-alias-naming` rule for the upstream behaviour.
+the upstream check. The current rule still expresses a useful invariant
+(package-name lowercase discipline) and is retained; a follow-up could
+add a separate `k8s-go-import-alias-naming` rule for the upstream behaviour
+when the `import_gate` v0.10 ship-target lands.
 
 ---
 
@@ -629,27 +617,40 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (2026-05-10, alint v0.9.20)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (current). The §6 walk and absolute counts
+  were captured against `0.9.17 (1dbd9b218a0e, built 2026-05-07)`;
+  intermediate v0.9.18 fixed the 3 `.alint.yml` regex bugs (commit
+  c5b6df32) and shipped bundled-rule refinements A1-A6 that eliminated
+  ~10k FPs across the case-study set; v0.9.19/v0.9.20 added width-aware
+  human output and the bundled-rule message audit.
 - **Rule count:** **49** (13 custom + 4 bundled rulesets — `oss-baseline`
   15, `go` 8, `ci/github-actions` 3, `hygiene/no-tracked-artifacts` 11;
   some rule IDs overlap which is why the grand total is 49 rather than
   the arithmetic sum of 50)
 - **`alint validate-config`:** ✓ Config valid: 49 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  34,696-violation breakdown (276 real + ~165 cosmetic + 34,420 false
-  positives traceable to 3 fixable config regex bugs)
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule
-  `respect_gitignore: false`) and #19 (literal-path runtime guard for
-  `root_only: true` + multi-component literals) both shipped in engine;
-  this config does not need either workaround
-- **Open gaps (unchanged):** `import_gate` (v0.10 ship-target, 4
-  sources), `pair_hash` (v0.10 ship-target, 3 sources),
-  `generated_file_fresh` (v0.10 ship-target, 6 sources — k8s pushes to
-  7), `registry_paths_resolve` (v0.10 ship-target, 8 sources — k8s
-  pushes to 9). No new rule-kind gaps surfaced in this revalidation.
-- **Open suspected bugs in this directory's `.alint.yml`:** 3 regex
-  pitfalls (Bugs 1/2/3 above) producing 34,420 false positives. **Not
-  auto-fixed in this pass — flagged for parent-agent triage.** See §6.2
-  for canonical-correct YAML.
+- **Live-tree recheck status:** Counts in §6 reflect the 2026-05-07
+  v0.9.17 walk; the 34,420 FPs from the 3 pitfall-#22-class regex bugs
+  are RESOLVED in v0.9.18 (current `.alint.yml` carries the corrected
+  patterns). The 5 `hygiene-no-js-build-outputs` FPs in §6.1 are
+  RESOLVED in v0.9.18 via bundled-rule refinement A1.
+- **Pitfall fixes:**
+  - Pitfall **#18** (per-rule `respect_gitignore: false`) — engine-fixed
+    in v0.9.17; not needed here.
+  - Pitfall **#19** (literal-path runtime guard for `root_only: true`
+    + multi-component literals) — engine-fixed in v0.9.17; not needed
+    here.
+  - Pitfall **#22** (YAML `|` block-scalar trailing-newline trap on
+    `file_header` patterns) — codified in v0.9.18; the 3 affected
+    rules in this `.alint.yml` were updated to `|-` in commit c5b6df32.
+- **Open gaps (unchanged):** `import_gate` (v0.10 ship-target — covers
+  7 verify scripts here including prometheus-imports), `pair_hash`
+  (v0.10 ship-target — covers `verify-readonly-packages.sh`),
+  `generated_file_fresh` (v0.10 ship-target — codegen drift cluster),
+  `registry_paths_resolve` (v0.10 ship-target — `build/dependencies.yaml`
+  refPaths + `staging/publishing/import-restrictions.yaml`
+  baseImportPath values). No new rule-kind gaps surfaced.
+- **Open suspected bugs in this directory's `.alint.yml`:** None.
+  All 3 historical bugs documented in §6.2 have been resolved in
+  v0.9.18; the current config is clean.

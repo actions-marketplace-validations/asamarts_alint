@@ -26,7 +26,14 @@ the Gerrit migration), **2 deep Makefiles** (`lib/fips140/Makefile`
 `module std`, `src/cmd/go.mod` = `module cmd`; plus `misc/go.mod` for
 the demo tree).
 
-**alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`.
+**alint version:** `0.9.20` (2026-05-10). **Counts in §6 are
+v0.9.17-era;** the live tree was not re-walked under v0.9.20 for this
+revision (the pre-launch fix wave A1-A6 in v0.9.18 reduced cosmetic /
+hygiene FP counts across all 30 case-study trees, but the structural
+findings in §6.1 — the merge-conflict marker in `HACKING.md`, the 2
+zero-width Trojan-Source catches, the 25 shellcheck findings, the 31
+BSD-header drifts — are stable classifications that A1-A6 do not
+affect).
 
 ---
 
@@ -408,7 +415,9 @@ strip-final-newline form. Pitfalls #13/#14/#16/#17 all clean.
 Methodology: `hyperfine --warmup 1 --runs 3 -i` against the same
 `/tmp/golang-go` working tree captured 2026-05-08. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary `target/release/alint
-v0.9.17`.
+v0.9.17` (numbers carried forward; v0.9.20's width-aware human output
+and bundled-rule message audits do not materially affect walk timing
+on golang-go's tree).
 
 ### 5.1 Measured
 
@@ -460,8 +469,13 @@ discipline; alint makes it diff-reviewable in 83 ms.
 ## 6. Gap discovery — what alint surfaces against the live tree
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/golang-go/.alint.yml /tmp/golang-go` (live, JSON-format).
+**Counts in this section are v0.9.17-era;** v0.9.18's pre-launch fix
+wave (A1 hygiene-no-js-build-outputs sibling-package.json gate) closed
+the 6 hygiene false-positives flagged below. The other findings
+(merge-conflict marker, zero-width Trojan-Source, shellcheck, BSD-header
+drifts) are stable classifications unaffected by A1-A6.
 
-**Headline:** alint surfaces **286 violations** across 17 failing
+**Headline (v0.9.17 snapshot):** alint surfaces **286 violations** across 17 failing
 rules. Of those, **205 are cosmetic** (120 missing-final-newline + 71
 trailing-whitespace + 14 source-final-newline); the remaining **81 are
 real** (23 BSD source-header drifts + 5 `.bat` BSD-header drifts + 3
@@ -479,7 +493,7 @@ false-positives + 2 zero-width Trojan-Source catches + 17 misc).
 | 25 shellcheck findings | 25 | warning | `go-shellcheck` | **Real findings.** Defensive shellout — golang/go itself doesn't run shellcheck. Findings include SC2046/SC2086 (quoting), SC3014 (POSIX `==`), SC2006 (legacy backticks), SC2166/SC2155 — across `src/{all,bootstrap,buildall,clean,cmp,make,race,run}.bash` + `lib/time/update.bash` + `misc/ios/clangwrap.sh`. **All 25 are bugs in golang/go's own .bash bootstraps.** |
 | 1 merge-conflict marker committed | 1 | error | `oss-no-merge-conflict-markers` | **Real bug.** `src/runtime/HACKING.md:182` ships a `<<<<<<<` / `=======` / `>>>>>>>` block. Golang/go's existing tooling (`gofmt`, `go vet`, the Gerrit hook) doesn't scan markdown for marker patterns. **Worth filing upstream.** |
 | 2 zero-width Unicode characters in Go sources (Trojan-Source) | 2 | error | `go-sources-no-zero-width` | **Real Trojan-Source / CVE-2021-42574 findings.** `src/cmd/compile/internal/ssa/prove.go:1408:31` and `src/cmd/vendor/golang.org/x/tools/go/cfg/cfg.go:245:38`. The Gerrit hook rejects bidi controls but golang/go's bundled go-ruleset rule additionally catches zero-width characters (U+200B/U+200C/U+200D/U+FEFF). Both look like regression-test fixtures embedded in the source; alint surfaces them so they can be reviewed for legitimate intent vs supply-chain risk |
-| 6 forbidden directories under hygiene `**/build`, `**/coverage`, `**/dist` | 6 | warning | `hygiene-no-js-build-outputs` | **All false positives.** golang/go's `src/{cmd/dist,go/build,internal/coverage,runtime/coverage}` are Go packages literally named `dist`/`build`/`coverage`. The hygiene rule looks for JS build outputs; golang/go has Go packages with the same names. **Recommended fix:** scope the rule to repos with a `package.json`, OR add these 6 paths to a per-repo exclude list |
+| 6 forbidden directories under hygiene `**/build`, `**/coverage`, `**/dist` | 6 | warning | `hygiene-no-js-build-outputs` | **Past-tense — fixed in v0.9.18 (A1).** The bundled `hygiene-no-js-build-outputs` rule now requires a sibling `package.json` to fire, eliminating golang/go's 6 FPs (`src/{cmd/dist,go/build,internal/coverage,runtime/coverage}` are Go packages literally named `dist`/`build`/`coverage`). The v0.9.17-era recommendation ("scope to repos with a package.json") landed as engine fix A1. |
 | `oss-codeowners-exists` info | 1 | info | `oss-codeowners-exists` (bundled) | golang/go uses Gerrit reviewers, not CODEOWNERS — info-only |
 | `oss-dependency-update-tool` info | 1 | info | `oss-dependency-update-tool` (bundled) | Suggests Dependabot/Renovate; golang/go uses Google internal deps tooling |
 | `go-mod-exists` (inverted) | 1 | warning | `go-mod-exists` (bundled) | The bundled go ruleset asserts `go.mod` at root; golang/go inverts via `go-no-toplevel-go.mod`. Expected — info-level. The inversion is a known overlap (the `go-no-toplevel-go.mod` rule documents it) |
@@ -580,22 +594,27 @@ Three concrete unanalyzed angles for a future revalidation pass:
 
 ---
 
-## 9. Validation status (2026-05-08)
+## 9. Validation status (2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (2026-05-10)
 - **Rule count:** **64** (31 golang/go-specific + 33 from 3 bundled
   rulesets — `oss-baseline=15`, `go=8`,
   `hygiene/no-tracked-artifacts=11`, with one rule deduplicated)
 - **`alint validate-config`:** ✓ Config valid: 64 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for
-  the 286-violation breakdown (81 real + 205 cosmetic; including 1
-  merge-conflict marker in `HACKING.md` and 2 zero-width
-  Trojan-Source catches that golang/go's existing tooling never
-  surfaces)
-- **Pitfall fixes (this batch):** none needed — all
-  `file_header` patterns use bare or `|-` patterns; no `pattern: |`
-  instances; pitfalls #13/#14/#16/#17 all clean
-- **Open gaps:**
+- **Live-tree recheck:** v0.9.17-era counts in §6 carried forward; not
+  re-walked under v0.9.20. The v0.9.18 pre-launch fix wave (A1
+  hygiene-no-js-build-outputs sibling-package.json gate) closed the 6
+  hygiene FPs in §6.1. golang/go's structural findings (the merge-conflict
+  marker in `HACKING.md`, the 2 zero-width Trojan-Source catches in
+  `prove.go` + `cfg.go`, the 25 shellcheck findings, the 31 BSD-header
+  drifts) are stable classifications unaffected by A1-A6.
+- **Pitfall fixes (engine):** none in v0.9.18-v0.9.20. Engine fixes
+  shipped in v0.9.17: pitfall #18 (`respect_gitignore: false` per-rule
+  knob) and pitfall #19 (`literal_is_nested` runtime guard); neither
+  surfaces in this config. All `file_header` patterns use bare or `|-`
+  patterns; no `pattern: |` instances; pitfalls #13/#14/#16/#17/#22 all
+  clean (authoring-only; not surfaced).
+- **Open gaps (still pending):**
   - `pair_hash` (v0.10 ship-target, 3 sources — golang/go FIPS is
     the highest-stakes use case)
   - `import_gate` (v0.10 ship-target, 4 sources)
@@ -605,4 +624,6 @@ Three concrete unanalyzed angles for a future revalidation pass:
 - **Bench numbers:** 83 ms (lite bundled-only pass); 65.7 s (full
   pass dominated by `go-shellcheck` walking 12 .bash files + the
   defensive `go vet` shellouts on 11,262 .go files) on
-  `/tmp/golang-go`'s ~12,000-file in-scope tree
+  `/tmp/golang-go`'s ~12,000-file in-scope tree (v0.9.17 numbers;
+  v0.9.20's width-aware human output and message audits do not
+  materially affect walk timing)

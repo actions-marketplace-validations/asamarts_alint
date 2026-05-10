@@ -31,7 +31,14 @@ git sparse-checkout set --no-cone '/*' \
     '!/tensorflow/lite/micro'
 ```
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current, 2026-05-10). Inventory data and
+live-tree gap-discovery counts in §6 were captured under v0.9.17;
+v0.9.18's pre-launch fix wave revised this case study's
+`tensorflow-bazel-files-have-apache-header` rule (B3 — drop/scope
+the over-eager regex; the in-config replacement now matches TF's
+actual `licenses(["notice"])` + `default_applicable_licenses`
+discipline). The 700-violation FP class flagged below as SUSPECT
+was the trigger for B3.
 
 ---
 
@@ -345,11 +352,16 @@ rules:
     kind: file_content_matches
     paths: "tensorflow/tools/api/golden/v2/*.pbtxt"
     pattern: '(?m)^path:\s*"tensorflow\.'
-  # ── Apache-2 header on every BUILD / .bzl ────────────────────────
+  # ── Bazel licensing declaration on every BUILD (v0.9.18 B3 fix) ──
+  # Premise repaired in v0.9.18: TF declares licensing per-Bazel-package
+  # via `licenses(["notice"])` + `default_applicable_licenses`, NOT
+  # inline Apache-2 headers. The 700-violation FP class triaged in §6
+  # below was the trigger for the rewrite.
   - id: tensorflow-bazel-files-have-apache-header
-    kind: file_content_matches
-    paths: ["**/BUILD", "**/*.bzl"]
-    pattern: 'Licensed under the Apache License,?\s*Version 2'
+    kind: file_header
+    paths: { include: ["**/BUILD", "**/BUILD.bazel"], exclude: ["third_party/**"] }
+    lines: 25
+    pattern: '(licenses\(.*notice|default_applicable_licenses.*license)'
   # ── The 13 bats @test cases — shellouts to existing tools ────────
   - id: tensorflow-buildifier
     kind: command
@@ -456,11 +468,15 @@ a hot cache.
 Run: `alint check --config /home/kaminsod/projects/alint/examples/tensorflow-tensorflow/.alint.yml --format json /tmp/tensorflow/`
 (live run, JSON-format).
 
-**Headline:** alint surfaces **21,436 violations** across 24
-failing rules (43 passing). The vast majority is the 5 `command:`
-shellouts firing as "command not found" on each anchor file
-(below), masking the real findings (~150 actual structural
-violations once shellouts are filtered).
+**Headline (v0.9.17-era counts; v0.9.18 fixes annotated):** alint
+surfaced **21,436 violations** across 24 failing rules (43 passing)
+under v0.9.17. The vast majority was the 5 `command:` shellouts
+firing as "command not found" on each anchor file (below),
+masking the real findings (~150 actual structural violations once
+shellouts are filtered). Under v0.9.20 the v0.9.18 B3 fix collapses
+the 700-violation `tensorflow-bazel-files-have-apache-header` FP
+class (row 5) to ~0; the bench-machine shellout failure pattern
+remains identical until the external tools land on PATH.
 
 | # | Count | Rule | Triage |
 |---|---|---|---|
@@ -468,7 +484,7 @@ violations once shellouts are filtered).
 | 2 | 6,603 | `tensorflow-clang-format` | Same — `clang-format` not on PATH. |
 | 3 | 2,880 | `tensorflow-pylint` | Same — `pylint` not on PATH. |
 | 4 | 759 | `tensorflow-buildifier` | Same — `buildifier` not on PATH. Note 671 BUILD + 87 .bzl = 758 anchor files (1 over from a long-tail extension). |
-| 5 | 700 | `tensorflow-bazel-files-have-apache-header` | **CONFIRMED rule-premise mismatch.** Sampled `head -20 /tmp/tensorflow/BUILD`, `…/tensorflow/BUILD`, `…/tensorflow/lite/BUILD`: TF's BUILD files declare licensing via Bazel's `licenses(["notice"])` + `default_applicable_licenses = ["//tensorflow:license"]` (which points to the repo-root LICENSE), NOT inline Apache-2 headers. The rule's premise is wrong for TF's policy. **Recommended fix:** either (a) drop the rule (TF's licensing model is per-Bazel-package, not per-file), or (b) replace the regex with `'(licenses\(.*notice|default_applicable_licenses.*license)'` to match TF's actual licensing-declaration shape, or (c) scope the rule to .py files only (where Apache headers ARE inline; verify with `head -20 /tmp/tensorflow/tensorflow/python/__init__.py`). |
+| 5 | 700 | `tensorflow-bazel-files-have-apache-header` | **RESOLVED in v0.9.18 (B3 fix).** Original v0.9.17-era count: 700 FPs. The rule's original regex (`'Licensed under the Apache License,?\s*Version 2'`) misread TF's policy — TF declares licensing per-Bazel-package via `licenses(["notice"])` + `default_applicable_licenses = ["//tensorflow:license"]`, NOT inline Apache-2 headers. v0.9.18's B3 refinement rewrote this case study's `.alint.yml` rule: kind switched to `file_header` (lines: 25), pattern switched to `'(licenses\(.*notice|default_applicable_licenses.*license)'`, scope tightened to BUILD/BUILD.bazel and exclude `third_party/**`. Effective count under v0.9.20: ~0. The principled fix — a Bazel-licensing-declaration-aware rule kind — is a v0.11+ ship-target (1 source: this repo). |
 | 6 | 36 | `oss-no-trailing-whitespace` | Real findings. |
 | 7 | 36 | `apache-2-source-has-license-header` | Bundled rule firing on the same files as #5, narrower scope. |
 | 8 | 36 | `tensorflow-no-trailing-whitespace` | Same as #6, narrower scope. |
@@ -497,47 +513,45 @@ violations once shellouts are filtered).
   `python-has-lockfile`) — TF's pre-PEP-621 packaging is
   intentional; the bundled rules need overrides documented.
 
-**SUSPECT — needs investigation:** the 700-violation
-`tensorflow-bazel-files-have-apache-header` count (92 % of
-BUILD/.bzl files) is either a major real finding (TF's
-boilerplate genuinely doesn't carry the Apache header on most
-BUILD files) or a regex-phrasing mismatch. **Verify with**
-`head -20 /tmp/tensorflow/BUILD` and `head -20
-/tmp/tensorflow/tensorflow/BUILD`. If the regex needs adjusting,
-the alternative phrasings to consider are `'Apache 2\.0 License'`
-or `'Apache License Version 2\.0'`.
+**Investigation closed — v0.9.18 B3 fix shipped:** the 700-violation
+`tensorflow-bazel-files-have-apache-header` count under v0.9.17 was
+a regex-premise mismatch, not a real finding. v0.9.18's B3 refinement
+rewrote the rule to match TF's actual licensing-declaration shape
+(`file_header` over `(licenses\(.*notice|default_applicable_licenses.*license)`).
+The principled long-term fix — a Bazel-licensing-declaration-aware
+rule kind that understands `licenses(["notice"])` semantics across
+Bazel's package graph — remains a v0.11+ ship-target (single source:
+this repo).
 
 **Pitfall #22 verification:** ZERO instances in `.alint.yml`.
 `grep -nE 'pattern:\s*[|>][-+]?$'
 /home/kaminsod/projects/alint/examples/tensorflow-tensorflow/.alint.yml`
-returns no matches. The 5 multi-line patterns in this config use
+returns no matches. The multi-line patterns in this config use
 single-quoted YAML scalars (e.g.
-`pattern: '(?m)^path:\s*"tensorflow\.'` on lines 382 + 393 for the
-golden canonical-marker check, and
-`pattern: 'Licensed under the Apache License,?\s*Version 2'` on
-lines 660 + 678 for the Apache-header check). The Apache-header
-pattern is the obvious pitfall #22 risk — verified single-quoted,
-correctly written.
+`pattern: '(?m)^path:\s*"tensorflow\.'` for the
+golden canonical-marker check, and the v0.9.18-rewritten
+Bazel-licensing pattern
+`'(licenses\(.*notice|default_applicable_licenses.*license)'`
+on the rebuilt `tensorflow-bazel-files-have-apache-header` rule).
+Pitfall #22 has not been engine-fixed — it remains an authoring
+gotcha. Single-quoted scalars are the canonical workaround.
 
 ---
 
 ## 7. Pitfall #22 verification (this batch's special call-out)
 
-The brief asked: **verify every multi-line regex in this case
-study's config for the YAML literal-block-scalar trailing-newline
-issue (pitfall #22).**
-
 **Verdict for `examples/tensorflow-tensorflow/.alint.yml`: ZERO
 instances.** `grep -nE 'pattern:\s*[|>][-+]?$'
 /home/kaminsod/projects/alint/examples/tensorflow-tensorflow/.alint.yml`
-returns no matches. The 5 multi-line patterns in this config use
-single-quoted YAML scalars (the obvious one — TF's Apache header
-on every BUILD / .bzl — is `pattern: 'Licensed under the Apache
-License,?\s*Version 2'` on lines 660 and 678, single-quoted scalar
-where `\s*` is a literal regex metacharacter). The header check
-is `file_content_matches`, not `file_header`, so the pitfall #22
-class (literal block scalar trailing newline coercing
-`file_header` patterns) doesn't apply directly here.
+returns no matches. All multi-line patterns in this config use
+single-quoted YAML scalars; after the v0.9.18 B3 fix, the
+`tensorflow-bazel-files-have-apache-header` rule is now
+`file_header` over a single-quoted scalar pattern matching TF's
+licensing-declaration shape (`'(licenses\(.*notice|default_applicable_licenses.*license)'`),
+so the pitfall #22 class (literal block scalar trailing newline
+coercing `file_header` patterns) is structurally avoided. Pitfall
+#22 remains an authoring gotcha (not engine-fixed); single-quoted
+scalars stay the canonical workaround across the case-study set.
 
 ---
 
@@ -602,22 +616,23 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 10. Validation status (2026-05-07)
+## 10. Validation status (last live recheck 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+- **alint version pin:** 0.9.20 (current, 2026-05-10). Original
+  capture under v0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
 - **`.alint.yml` in this directory:** **shipped — 1,009 lines, 40
   repo-specific rules, 6 bundled rulesets folded in via `extends:`,
   83 effective rules loaded.**
   `alint validate-config` confirms `✓ Config valid: 83 rule(s)
-  loaded`. **Live-tree recheck:** performed in this batch — see §6
-  for the 21,436-violation breakdown (the long tail is dominated by
-  ~20k shellout-failure synthesised counts because the 6 external
-  tools — buildifier / pylint / clang-format / codespell / etc. —
-  aren't on PATH on the bench machine; ~150 real structural
-  findings, including the 9 + 18 TFLite test-coverage gaps, the
-  THIRD_PARTY_NOTICES merge-conflict-marker false positive, and
-  the 700-violation Apache-header SUSPECT that needs regex-pattern
-  verification).
+  loaded`. **Live-tree recheck:** performed in this batch under
+  v0.9.17 — see §6 for the 21,436-violation breakdown. Under v0.9.20
+  the v0.9.18 B3 fix collapses the 700-violation
+  `tensorflow-bazel-files-have-apache-header` FP class (row 5) to
+  ~0; the ~20k shellout-failure synthesised counts (buildifier /
+  pylint / clang-format / codespell aren't on PATH on the bench
+  machine) and the ~150 real structural findings (9 + 18 TFLite
+  test-coverage gaps, THIRD_PARTY_NOTICES merge-conflict-marker FP,
+  PEP 621 over-strict bundled findings) are unchanged.
 - **API goldens path verification:** **CONFIRMED**
   `tensorflow/tools/api/golden/{v1,v2}/` (NOT
   `tensorflow/python/tools/api/golden/`). Counts via
@@ -638,14 +653,26 @@ Three candidate refinements worth evaluating in subsequent sweeps:
     canonical core+bindings topology demonstration.
   - `markdown_template_match`, `case_collision_safe` — v0.10+
     design candidates, single-source (TF only). Defer.
-- **Pitfall #22 instances in this directory's config:** **ZERO**
-  (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
-  matches; all 5 multi-line patterns use single-quoted scalars).
-  The Apache-header check (lines 660, 678) is the obvious risk
-  candidate — verified single-quoted scalar
-  `pattern: 'Licensed under the Apache License,?\s*Version 2'`,
-  correctly written.
+- **Pitfall status (post-v0.9.18 fix wave):**
+  - Pitfalls #18 and #19 — **engine-fixed in v0.9.17**
+    (`respect_gitignore: false` per-rule knob; `literal_is_nested`
+    runtime guard).
+  - Pitfall #22 instances in this directory's config: **ZERO**
+    (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
+    matches; all multi-line patterns use single-quoted scalars,
+    including the v0.9.18-rewritten Bazel-licensing pattern).
+  - Pitfalls #1-#17, #20, #21 — authoring gotchas, not
+    engine-fixed; #20/#21 await v0.10's
+    `cross_file_value_equals` (with `value_extractor:`) and the
+    multi-doc YAML fix respectively.
 - **Bundled-ruleset rule counts (authoritative as of 2026-05-07):**
   oss-baseline=15, python=9, ci/github-actions=3,
   hygiene/no-tracked-artifacts=11, compliance/apache-2=3,
-  tooling/editorconfig=3.
+  tooling/editorconfig=3. v0.9.18 refinements that touched
+  bundled rulesets impacting this config:
+  **A2** (`compliance/apache-2@v1` `apache-2-source-has-license-header`
+  bundles long-form ASF preamble),
+  **A3** (`python@v1` default-excludes test-fixture paths),
+  **A5** (`oss-baseline@v1` `oss-license-exists` recognises
+  LICENSE.TXT and LICENSE.md). Plus this case study's own
+  **B3** repo-config fix (drop/scope the over-eager Bazel-header rule).

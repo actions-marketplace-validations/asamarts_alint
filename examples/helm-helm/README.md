@@ -25,7 +25,13 @@ top-level governance/convention files** (`AGENTS.md`, `ADOPTERS.md`,
 `KEYS`, `code-of-conduct.md`, `CONTRIBUTING.md`, `README.md`,
 `LICENSE`, `SECURITY.md`).
 
-**alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`.
+**alint version:** `0.9.20` (2026-05-10). **Counts in §6 are
+v0.9.17-era;** the live tree was not re-walked under v0.9.20 for this
+revision (the pre-launch fix wave A1-A6 in v0.9.18 reduced cosmetic /
+hygiene FP counts across all 30 case-study trees, but the structural
+findings in §6.1 — the zero-width Trojan-Source catch in `plugin.go`,
+the 5 supply-chain GHA hardening signals — are stable classifications
+that A1-A6 do not affect).
 
 ---
 
@@ -341,10 +347,12 @@ rules:
 - **34 bundled rules** from the 4 extended rulesets
 
 **Validation:** `alint validate-config` reports `✓ Config valid: 58
-rule(s) loaded`. The license-header rule was hardened in this batch
-to use `pattern: |-` (strip-final-newline block scalar) per pitfall
-#22 guidance — no behaviour change on the live tree (verified). No
-pitfall #13/#14/#16/#17 instances.
+rule(s) loaded`. The shell-license-header rule uses `pattern: |-`
+(strip-final-newline block scalar) per pitfall #22 guidance — landed
+in the v0.9.17-era hardening pass; verified clean in v0.9.20. The Go
+license-header rule uses a single-quote string (no block scalar; not
+subject to pitfall #22). No pitfall #13/#14/#16/#17 instances. **Pitfall
+#22 remains authoring-only** in v0.9.20 (engine does not auto-strip).
 
 ---
 
@@ -353,7 +361,9 @@ pitfall #13/#14/#16/#17 instances.
 Methodology: `hyperfine --warmup 1 --runs 3 -i` against the same
 `/tmp/helm` working tree captured 2026-05-08. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary `target/release/alint
-v0.9.17`.
+v0.9.17` (numbers carried forward; v0.9.20's width-aware human output
+and bundled-rule message audits do not materially affect walk timing
+on helm's tree).
 
 ### 5.1 Measured
 
@@ -400,8 +410,15 @@ files, the hygiene baseline, etc.).
 ## 6. Gap discovery — what alint surfaces against the live tree
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/helm-helm/.alint.yml /tmp/helm` (live, JSON-format).
+**Counts in this section are v0.9.17-era;** v0.9.18's pre-launch fix
+wave (A1-A6) does not materially change the helm tree's findings —
+helm has no JS build outputs, no Apache headers needing the long-form
+preamble, no rust naming caveat, etc. The 537 spawn-failure noise is
+an environmental artefact of `misspell` not being on PATH; the
+structural findings (zero-width Trojan-Source catch, GHA hardening
+signals) are stable classifications unaffected by A1-A6.
 
-**Headline:** alint surfaces **643 violations** across 9 failing
+**Headline (v0.9.17 snapshot):** alint surfaces **643 violations** across 9 failing
 rules. **537 are `helm-spelling` shellout-failure noise** (`misspell`
 not on PATH in this validation env, fires once per file the rule
 walks); the remaining **106 are real**: 50 trailing-whitespace + 46
@@ -463,7 +480,12 @@ flags it; the contributor decides if it's intentional.
 
 No instances of pitfalls #13/#14/#16/#17 surfaced. The pitfall #22
 fix (`pattern: |-` instead of `pattern: |`) was applied to
-`helm-go-license-header` in this batch — verified clean.
+`helm-shell-license-header` in the v0.9.17-era hardening pass; the
+`helm-go-license-header` rule uses a single-quote string and is
+unaffected. **Pitfall #22 remains authoring-only** in v0.9.20 (engine
+does not auto-strip; configs must use `|-`). Pitfalls #13/#14/#16/#17
+remain authoring-only as well; pitfalls #18/#19 were engine-fixed in
+v0.9.17 (neither surfaces in helm's config).
 
 ---
 
@@ -513,23 +535,29 @@ Three concrete unanalyzed angles for a future revalidation pass:
 
 ---
 
-## 9. Validation status (2026-05-08)
+## 9. Validation status (2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (2026-05-10)
 - **Rule count:** **58** (24 helm-specific + 34 from 4 bundled
   rulesets — `oss-baseline=15`, `go=8`, `ci/github-actions=3`,
   `hygiene/no-tracked-artifacts=11`, with rule-id deduplication)
 - **`alint validate-config`:** ✓ Config valid: 58 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for
-  the 643-violation breakdown (537 spawn-failure noise + 96 cosmetic
-  + 6 real structural + 1 Trojan-Source zero-width catch + 3 governance
-  info-level)
-- **Pitfall fixes (this batch):** **Pitfall #22 hardening** —
-  `helm-go-license-header` pattern changed from `pattern: |` to
-  `pattern: |-` for canonical-correct strip-final-newline semantics.
-  Trivial 1-line fix; zero behaviour change on the live tree
-  (verified — same violation counts before/after)
-- **Open gaps:**
+- **Live-tree recheck:** v0.9.17-era counts in §6 carried forward; not
+  re-walked under v0.9.20. The v0.9.18 pre-launch fix wave (A1-A6) does
+  not materially change helm's findings (no JS build outputs, no Apache
+  long-form preamble drift, no rust naming caveat). The 537 spawn-failure
+  noise is environmental (`misspell` missing on PATH); the structural
+  findings (zero-width Trojan-Source catch in `plugin.go`, 5 GHA hardening
+  signals) are stable classifications unaffected by A1-A6.
+- **Pitfall fixes (engine):** none in v0.9.18-v0.9.20. Engine fixes
+  shipped in v0.9.17: pitfall #18 (`respect_gitignore: false` per-rule
+  knob) and pitfall #19 (`literal_is_nested` runtime guard); neither
+  surfaces in this config. **Pitfall #22 hardening** (the
+  `helm-shell-license-header` `pattern: |-` form) was applied in the
+  v0.9.17-era pass — verified clean in v0.9.20; pitfall #22 remains
+  authoring-only, the engine does not auto-strip the trailing newline.
+  Pitfalls #13/#14/#16/#17 not surfaced.
+- **Open gaps (still pending):**
   - `cross_file_value_equals` (v0.10 ship-target, 10 sources)
   - `import_gate` (v0.10 ship-target, 4 sources)
   - `command_idempotent` (v0.10 design candidate, 3 sources)
@@ -537,4 +565,5 @@ Three concrete unanalyzed angles for a future revalidation pass:
 - **Bench numbers:** 18 ms (lite bundled-only pass); 5.94 s (full
   pass dominated by the `helm-spelling` shellout's 537 spawn-failure
   messages on the validation env without `misspell` installed) on
-  `/tmp/helm`'s 1,990-file tree
+  `/tmp/helm`'s 1,990-file tree (v0.9.17 numbers; v0.9.20's width-aware
+  human output and message audits do not materially affect walk timing)

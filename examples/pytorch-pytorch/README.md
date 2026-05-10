@@ -22,7 +22,16 @@ Actions workflows** (25 callable `_*.yml` + 8 generated
 linter configs (`.clang-format`, `.clang-tidy`, `.cmakelintrc`,
 `pyrefly.toml`).
 
-**alint version:** 0.9.17 (built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). Originally
+captured at v0.9.17 on 2026-05-07; reconciled forward across the
+v0.9.18 fix wave (A1-A6 bundled-rule refinements + B1-B4 cross-cutting
+revalidation + `dir_absent` `scope_filter` engine extension) and the
+v0.9.19/v0.9.20 width-aware-output + bundled-rule message audit pair.
+Pitfalls #18 and #19 engine-fixed in v0.9.17 (this config retains 3
+intentional `root_only: true` + multi-segment-literal rules — the
+v0.9.17 `literal_is_nested` runtime guard has been correct since
+landing). FP counts cited below are v0.9.17-era unless annotated
+otherwise.
 
 ---
 
@@ -375,15 +384,16 @@ rule(s) loaded`. Pitfall checks:
   `timeout:` (not duration strings).
 - `(?m)` flag on the multi-line `file_content_matches` regexes
   (pitfall #13-aware).
-- 8 rules use `root_only: true`; **3 use multi-segment literal
-  paths** (`pytorch-lintrunner-adapter-dir-present` line 938,
-  `pytorch-grep-linter-shim-present` line 950,
-  `pytorch-ci-pytorch-tree-present` line 975). **Pitfall #19 was
-  FIXED in v0.9.17 engine** (the `literal_is_nested` runtime guard
-  produces "no-match-for-this-pattern" rather than silently passing).
-  The `root_only:` flag is no-op for multi-segment literals and
-  could be dropped for clarity (the config explicitly notes this in
-  comments at lines 938-945).
+- 5 rules use `root_only: true`; **all 5 target single-segment
+  literal paths** at root (`pytorch-toplevel-build-system`,
+  `pytorch-bazel-files-present`, `pytorch-claude-md-present`,
+  `pytorch-linter-configs-present`, `pytorch-docker-and-devcontainer-present`).
+  Pitfall #19 was engine-fixed in v0.9.17; the previously-flagged 3
+  multi-segment-literal rules (`pytorch-lintrunner-adapter-dir-present`,
+  `pytorch-grep-linter-shim-present`, `pytorch-ci-pytorch-tree-present`)
+  have had their `root_only:` flag dropped and now rely on plain
+  `file_exists` lookup — see the explanatory comments at the
+  corresponding rules in `.alint.yml` (lines 939-945, 957, 982).
 - No `respect_gitignore: false` patterns. Pitfall #18 N/A.
 - **Pitfall #22 verified clean** — no `pattern: |` block scalars
   per the brief's batch-5 special-attention check.
@@ -395,7 +405,10 @@ rule(s) loaded`. Pitfall checks:
 Methodology: `hyperfine --warmup 1 --runs 3 -i` against the same
 `/tmp/pytorch` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`.
+`target/release/alint v0.9.17` (numbers below are the v0.9.17-era
+measurements; not re-run for v0.9.20 — the v0.9.18-v0.9.20 changes
+are bundled-rule refinements + output-formatting + message-audit and
+do not change throughput characteristics).
 
 ### 5.1 Measured
 
@@ -460,12 +473,21 @@ here:
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/pytorch-pytorch/.alint.yml /tmp/pytorch` (live run).
 
-**Headline:** alint surfaces **23,113 violations** across the live
-tree (7 errors + 23,065 warnings + 41 info; **32 rules pass silently;
-27 fail; 65 are auto-fixable**). The bulk is the broad-tree
-no-trailing-whitespace + final-newline rules + the per-file `command:`
-shellouts that no-op when tools aren't installed (codespell, flake8,
-ruff, pyrefly).
+**Headline (v0.9.17-era):** alint surfaced **23,113 violations**
+across the live tree (7 errors + 23,065 warnings + 41 info; **32
+rules pass silently; 27 fail; 65 are auto-fixable**). The bulk was
+the broad-tree no-trailing-whitespace + final-newline rules + the
+per-file `command:` shellouts that no-op when tools aren't installed
+(codespell, flake8, ruff, pyrefly).
+
+**v0.9.18 follow-on note:** A3 (`python@v1` test-fixture default
+excludes) reduces FP noise from the bundled-side rules on
+`test/dynamo/cpython/**` and other Python test-fixture trees, but the
+explicit `test/**` excludes already in this config (see `pytorch-*`
+rules) caught most of these at the repo-rule layer. The 23,113-count
+post-v0.9.18 would be lower, but the dominant share is the broad
+hygiene-rule on-disk + tool-not-on-PATH shellout pattern, which
+v0.9.18-v0.9.20 did not change. **Counts not re-run for v0.9.20.**
 
 ### 6.1 Real findings
 
@@ -494,23 +516,19 @@ The config uses:
 
 ### 6.3 Pitfall #19 — root_only with multi-component literals (3 instances, INTENTIONALLY)
 
-The pytorch config has **3 rules deliberately using `root_only: true`
-with multi-component literals** (`tools/linter/adapters`,
-`.lintrunner.toml`, etc.):
+**As of v0.9.20**, the pytorch config has been simplified so the 3
+rules previously using `root_only: true` with multi-component literals
+(`pytorch-lintrunner-adapter-dir-present`, `pytorch-grep-linter-shim-present`,
+`pytorch-ci-pytorch-tree-present`) **no longer carry the `root_only:`
+flag** — see the `.alint.yml` comments at the corresponding rules.
+Pitfall #19 was engine-fixed in v0.9.17 (the `literal_is_nested`
+runtime guard produces correct "no-match-for-this-pattern" rather
+than silently passing); the v0.9.20 config simply drops the no-op
+flag for clarity, no behaviour change for the existence check itself.
 
-- `pytorch-lintrunner-adapter-dir-present` (line 938)
-- `pytorch-grep-linter-shim-present` (line 950)
-- `pytorch-ci-pytorch-tree-present` (line 975)
-
-**Engine v0.9.17 produces correct "no match" errors when files
-don't exist** (verified against /tmp/protobuf in the parent
-case-study run), but the `root_only:` flag is no-op for multi-
-segment literals and could be dropped for clarity (the config
-explicitly comments this — see lines 938-945, 957, 982).
-
-**Recommended cleanup:** drop `root_only: true` from these 3 rules.
-No behaviour change for the existence check itself; just removes
-the misleading flag. Filed as a doc/comment-only nit.
+(Historical note retained for context: at v0.9.17-era this section
+flagged the 3 rules as a "doc/comment-only nit" cleanup. The cleanup
+was applied; this section is now informational.)
 
 ### 6.4 Suspected `.alint.yml` bugs
 
@@ -589,37 +607,49 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (originally 2026-05-07; reconciled 2026-05-10)
 
-- **alint version:** `0.9.17` (built 2026-05-07)
+- **alint version:** `0.9.20` (current as of 2026-05-10). Originally
+  validated against `0.9.17` (2026-05-07).
 - **Rule count:** **87** (40 custom + 6 bundled rulesets — `oss-baseline`
   15, `python` 9, `ci/github-actions` 3, `hygiene/no-tracked-artifacts`
   11, `agent-hygiene` 6, `tooling/editorconfig` 3 = 47 bundled, no
-  overlap)
+  overlap). v0.9.18-v0.9.20 did not change this count (A1-A6 are
+  bundled-side refinements that do not add/remove rule IDs;
+  v0.9.19/v0.9.20 changed only output width handling + bundled-rule
+  message text).
 - **`alint validate-config`:** ✓ Config valid: 87 rule(s) loaded
-- **Live-tree recheck:** **performed** against `/tmp/pytorch` —
-  23,113 violations, 32 rules pass silently; see §6 for the
-  breakdown. 6.2 s wall-clock (vs lintrunner's ~30-60 s for the
-  comparable subset).
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule
-  `respect_gitignore: false`) and #19 (literal-path runtime guard
-  for `root_only: true` + multi-component literals) both shipped in
-  engine; **3 rules deliberately use the v0.19-guarded shape** with
-  comments explaining the choice.
-- **Pitfall #22 verified clean** per the brief's batch-5 check —
-  0 `pattern: |` block scalars.
-- **Per-adapter classification verified:** the brief's "~86%" claim
-  resolved to **75% present-tense** (43/57 fully or partially mapped
-  today) + **11% v0.10-future** (6/57 candidates) = **86%** when
-  v0.10 ships. The exact 57-row tagging is in §1.1.
-- **Open gaps (unchanged):** `cross_file_value_equals` (v0.10
-  ship-target, 10 sources — pytorch is the densest), `registry_paths_resolve`
-  (v0.10 ship-target, 8 sources — pytorch's symbol-list-→-test-coverage
-  is the cleanest example), `import_gate` (v0.10 ship-target, 4
-  sources — pytorch is one of the 4), `generated_file_fresh` (v0.10
-  ship-target, 6 sources — pytorch is one of the 6), `line_spacing`
+  (v0.9.17-era; not re-run for v0.9.20).
+- **Live-tree recheck:** **performed at v0.9.17** against
+  `/tmp/pytorch` — 23,113 violations, 32 rules pass silently; see §6
+  for the breakdown. 6.2 s wall-clock (vs lintrunner's ~30-60 s for
+  the comparable subset). Not re-run for v0.9.20; A3 (test-fixture
+  default-excludes in `python@v1`) likely reduces FP count modestly.
+- **Pitfall fixes:** Pitfall #18 (per-rule `respect_gitignore: false`)
+  and #19 (literal-path runtime guard for `root_only: true` +
+  multi-component literals) **were engine-fixed in v0.9.17**. The
+  previously-flagged 3 rules using `root_only: true` with
+  multi-segment literals have had their `root_only:` flag dropped
+  for clarity (see §6.3 + the .alint.yml inline comments).
+- **Pitfall #22 verified clean** per the original batch-5 check —
+  0 `pattern: |` block scalars. No regression in v0.9.18-v0.9.20.
+- **Per-adapter classification verified (v0.9.17-era):** the
+  original "~86%" claim resolved to **75% present-tense** (43/57
+  fully or partially mapped) + **11% v0.10-future** (6/57 candidates)
+  = **86%** when v0.10 ships. None of the 6 v0.10-future candidates
+  shipped in v0.9.18-v0.9.20, so the present-tense number is
+  unchanged at v0.9.20. The exact 57-row tagging is in §1.1.
+- **Open gaps (unchanged in v0.9.20):** `cross_file_value_equals`
+  (**v0.10 ship-target**, 10 sources — pytorch is the densest;
+  WORKFLOWSYNC across 144 workflow files is the cleanest concrete
+  example), `registry_paths_resolve` (**v0.10 ship-target**, 8
+  sources — pytorch's symbol-list-→-test-coverage is the cleanest
+  example), `import_gate` (**v0.10 ship-target**, 4 sources —
+  pytorch IMPORT_LINTER is one of the 4), `generated_file_fresh`
+  (**v0.10 ship-target**, 6 sources — pytorch has TWO freshness
+  gates: NATIVEFUNCTIONS + GENERATED_SHIMS_VERSION), `line_spacing`
   + `not_executable` + `directory_hash` (NEW, single source —
-  pytorch).
-- **Open suspected bugs in this directory's `.alint.yml`:** None;
-  cleanup recommended on 3 `root_only: true` + multi-component
-  rules (no behaviour change, just clarity).
+  pytorch). None shipped in v0.9.18-v0.9.20.
+- **Open suspected bugs in this directory's `.alint.yml`:** None.
+  The previously-flagged `root_only: true` + multi-component-literal
+  cleanup has been applied.

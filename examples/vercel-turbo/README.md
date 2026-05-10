@@ -15,7 +15,15 @@ today, plus a catalogue of the rules that need new alint primitives.
 `git rev-parse HEAD` (per the original capture) =
 `9f7039546ca0d78a424bdae41f80ec290154f57e`.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current, 2026-05-10). Inventory data and
+live-tree gap-discovery counts in §6 were captured under v0.9.17;
+v0.9.18's A4 fix (`monorepo/cargo-workspace@v1` selector parses
+`[workspace]` members) is relevant — the bundled cargo-workspace
+rules now iterate per-crate across all 61 crates instead of just
+the workspace-root manifest. v0.9.18's A1 fix
+(`hygiene-no-js-build-outputs` requires sibling package.json)
+also collapses the row-10 FP class on Rust source `build/`
+directories called out in §6.
 
 ---
 
@@ -384,10 +392,17 @@ that the husky chain doesn't enforce at all.
 Run: `alint check --config /home/kaminsod/projects/alint/examples/vercel-turbo/.alint.yml --format json /tmp/turborepo/`
 (live run, JSON-format).
 
-**Headline:** alint surfaces **307 violations** across 30 failing
-rules (37 passing). Validates the prior-validation-pass real
-findings (60 of 61 crates drift on `publish=false`; 9 of 52 crates
-lack READMEs; 8 of 17 packages lack LICENSE).
+**Headline (v0.9.17-era counts; v0.9.18 fixes annotated):** alint
+surfaced **307 violations** across 30 failing rules (37 passing)
+under v0.9.17. Validates the prior-validation-pass real findings
+(60 of 61 crates drift on `publish=false`; 9 of 52 crates lack
+READMEs; 8 of 17 packages lack LICENSE). Under v0.9.20 the v0.9.18
+A1 fix (`hygiene-no-js-build-outputs` requires sibling
+package.json) collapses the row-10 6-violation FP class to ~0;
+A4 (cargo-workspace selector) means the bundled rules now iterate
+per-crate across all 61 crates (the per-crate finding cardinalities
+in rows 1, 2, 7, 8, 12 are unchanged; the iteration mechanism is
+the cleanup).
 
 | # | Count | Rule | Triage |
 |---|---|---|---|
@@ -400,7 +415,7 @@ lack READMEs; 8 of 17 packages lack LICENSE).
 | 7 | 9 | `cargo-workspace-member-has-readme` (bundled) | Validates §6's "9 of 52 crates lack READMEs". |
 | 8 | 9 | `turbo-crate-has-readme` (the per-rule restate at error-level) | Same crate set as #7; alint emits both because the per-rule one is `error` level vs the bundled `warning`. |
 | 9 | 8 | `turbo-package-has-license` | Validates §6's "8 of 17 packages lack per-package LICENSE". |
-| 10 | 6 | `hygiene-no-js-build-outputs` | False positive — likely `crates/turborepo-paths/src/lib/build/` or similar Rust source dirs named `build/`. Need scope override. |
+| 10 | 6 | `hygiene-no-js-build-outputs` | **RESOLVED in v0.9.18 (A1 fix).** v0.9.17-era count: 6 FPs on `crates/turborepo-paths/src/lib/build/` and similar Rust source dirs named `build/`. v0.9.18's A1 refinement gates `hygiene-no-js-build-outputs` on a sibling `package.json` (correctly distinguishing JS build output from arbitrarily-named Rust source dirs); effective v0.9.20 count: ~0. |
 | 11 | 6 | `hygiene-no-env-files` (bundled) | Likely `examples/*/.env.example` or `crates/*/test-fixtures/.env`. Need allowlist. |
 | 12 | 6 | `turbo-crate-inherits-workspace-lints` | **All real findings.** Validates the "6 of 61 crates currently drift" §4 figure. |
 | 13 | 5 | `turbo-package-declares-repository-directory` | Real — packages without `repository.directory` field. |
@@ -508,17 +523,22 @@ Three candidate refinements for the next revalidation pass:
 
 ---
 
-## 10. Validation status (2026-05-07)
+## 10. Validation status (last live recheck 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+- **alint version pin:** 0.9.20 (current, 2026-05-10). Original
+  capture under v0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
 - **`.alint.yml` in this directory:** **shipped — 434 lines, 28
   repo-specific rules, 9 bundled rulesets folded in via `extends:`,
   88 effective rules loaded.**
   `alint validate-config` confirms `✓ Config valid: 88 rule(s)
-  loaded`. **Live-tree recheck:** performed in this batch — see §6
-  for the 307-violation breakdown (61 publish=false drift + 61
-  edition-inheritance drift + 9 missing-README + 8 missing-LICENSE
-  + 6 lints-inheritance drift + the long tail).
+  loaded`. **Live-tree recheck:** performed in this batch under
+  v0.9.17 — see §6 for the 307-violation breakdown (61
+  publish=false drift + 61 edition-inheritance drift + 9
+  missing-README + 8 missing-LICENSE + 6 lints-inheritance drift +
+  the long tail). Under v0.9.20 the v0.9.18 A1 fix collapses the
+  6-violation `hygiene-no-js-build-outputs` FP class to ~0; A4
+  iterates the bundled cargo-workspace rules per-crate across all
+  61 crates.
 - **Workspace-shape verification:** **CONFIRMED.** 61 crates under
   `crates/`; 17 packages under `packages/`; 13 workflows under
   `.github/workflows/`.
@@ -536,13 +556,34 @@ Three candidate refinements for the next revalidation pass:
   - `json_schema_passes` — v0.10 design candidate (2 sources: k8s +
     turbo).
   - `alint pr-diff-check` — sibling-binary candidate, single-source.
-- **Pitfall #22 instances in this directory's config:** **ZERO**
-  (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
-  matches; all 7 multi-line patterns use single-quoted scalars).
-  No per-crate license-header `file_header` rule exists; license
-  enforcement is via file-presence rules.
+- **Pitfall status (post-v0.9.18 fix wave):**
+  - Pitfalls #18 and #19 — **engine-fixed in v0.9.17**
+    (`respect_gitignore: false` per-rule knob; `literal_is_nested`
+    runtime guard).
+  - Pitfall #22 instances in this directory's config: **ZERO**
+    (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
+    matches; all 7 multi-line patterns use single-quoted scalars).
+    No per-crate license-header `file_header` rule exists;
+    license enforcement is via file-presence rules.
+  - **Pitfall #16 worked around in 1 place**:
+    `turbo-example-meta-declares-maintenance` uses
+    `file_content_matches` against the JSON text rather than
+    `json_path_matches` against the bool; in-line comment cites
+    CONFIG-AUTHORING.md. #16 is an authoring gotcha, not
+    engine-fixed.
+  - Pitfalls #1-#17, #20, #21 — authoring gotchas, not
+    engine-fixed; #20/#21 await v0.10's
+    `cross_file_value_equals` (with `value_extractor:`) and the
+    multi-doc YAML fix respectively.
 - **Bundled-ruleset rule counts (authoritative as of 2026-05-07):**
   oss-baseline=15, rust=11, node=9, monorepo=4,
   monorepo/cargo-workspace=4, monorepo/pnpm-workspace=4,
   ci/github-actions=3, hygiene/no-tracked-artifacts=11,
-  tooling/editorconfig=3.
+  tooling/editorconfig=3. v0.9.18 refinements that touched
+  bundled rulesets impacting this config:
+  **A1** (`hygiene/no-tracked-artifacts@v1`'s
+  `hygiene-no-js-build-outputs` requires sibling package.json),
+  **A4** (`monorepo/cargo-workspace@v1` selector parses
+  `[workspace]` members),
+  **A5** (`oss-baseline@v1` `oss-license-exists` recognises
+  LICENSE.TXT and LICENSE.md).

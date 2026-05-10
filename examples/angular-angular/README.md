@@ -11,8 +11,10 @@ catalogue of the rules that need new alint primitives.
 `packages/<name>/` directories, 693 `BUILD.bazel` files, 110
 `tsconfig*.json` files (per-package + per-target), 50 `*.api.md`
 golden files under `goldens/public-api/<pkg>/`, 12 GitHub Actions
-workflows, 3 husky hooks. **alint version:** 0.9.17 (`1dbd9b218a0e`,
-built 2026-05-07).
+workflows, 3 husky hooks. **alint version:** 0.9.20 (2026-05-10).
+Categories below were validated against alint v0.9.17 + the
+2026-05-07 angular SHA; categories are stable, absolute counts drift
+with upstream tip.
 
 ---
 
@@ -446,15 +448,19 @@ rules:
   tooling/editorconfig + 5 from agent-context − overlap = 57
   effective rule IDs after dedup.
 
-**Validation:** `alint validate-config` reports `✓ Config valid: 131
+**Validation:** `alint validate-config` reports `Config valid: 131
 rule(s) loaded`. Pitfall checks: the magic comment is present (line
 1); the `command:` rules use `command:` (not `argv:`) and integer
 `timeout:` (not duration strings); the `dir_contains` rules use
 `select:`/`require:` (not `paths:`/`pattern:`); `(?m)` is used on
 every `^`/`$` anchored regex; the `tsconfig-build.json` JSONC file
 uses `file_content_matches` per pitfall #16 option B (not
-`*_path_*`); no pitfall #22 candidates (no `pattern: |` block
-scalars).
+`*_path_*`) — pitfall #16 remains an authoring gotcha; no pitfall
+#22 candidates (no `pattern: |` block scalars; pitfall #22 is the
+trailing-newline trap fixed by writing `|-` instead). Pitfalls
+#18 and #19 were engine-fixed in v0.9.17 (per-rule
+`respect_gitignore: false` knob and `literal_is_nested` runtime
+guard); this config does not need either workaround.
 
 ---
 
@@ -463,9 +469,12 @@ scalars).
 Methodology: `hyperfine -i --warmup 1 --runs 3` on the same
 `/tmp/angular` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`. Where the upstream toolchain isn't
-installed locally, the row is `pending — needs <toolchain>` with the
-exact reproduction command.
+`target/release/alint v0.9.17` (numbers below were captured against
+v0.9.17; v0.9.18 added bundled-rule refinements that eliminate FPs
+but do not change wall-clock; v0.9.19/v0.9.20 added width-aware
+human output, also no wall-clock impact). Where the upstream
+toolchain isn't installed locally, the row is `pending — needs
+<toolchain>` with the exact reproduction command.
 
 ### 5.1 Measured
 
@@ -564,7 +573,7 @@ scope-filter bugs apparent):
 | 13 packages without `README.md` (pnpm-workspace variant) | Same | warning | `pnpm-workspace-member-has-readme` | Same fix |
 | 6 GHA workflows missing explicit `permissions: contents: read` | `cross-repo-adev-docs.yml`, `dev-infra.yml`, `google-internal-tests.yml`, `merge-ready-status.yml`, `perf.yml`, `pr.yml` | warning | `gha-workflow-contents-read` | **Real findings** — angular's workflow set is mostly hardened but these 6 still lack the explicit permissions block. OpenSSF Scorecard would catch this nightly; alint surfaces it at PR time |
 | 3 third-party action invocations not pinned to a SHA | `.github/workflows/{ci,pr}.yml` | warning | `gha-pin-actions-to-sha` + `angular-workflow-actions-pinned-by-sha` | **Real findings** — supply-chain drift; small upstream cleanup |
-| 3 hygiene `**/build, **/coverage` directories | `bazel-out/`, `dev-infra/...build/`, similar | warning | `hygiene-no-js-build-outputs` | **False positives** — angular uses `dev-infra/.../build/` for non-JS output (Bazel-managed). **Recommended fix:** scope `hygiene/no-tracked-artifacts@v1`'s JS-output rule to repos with a `package.json` AND a hint that they're a JS build (e.g. `tsconfig.json` ancestor), OR add per-repo exclude list. Filed under bundled-ruleset refinement queue |
+| 3 hygiene `**/build, **/coverage` directories | `bazel-out/`, `dev-infra/...build/`, similar | warning | `hygiene-no-js-build-outputs` | **Was a v0.9.17 FP class.** v0.9.18 A1 fix narrowed `hygiene-no-js-build-outputs` to require a sibling `package.json` (so `bazel-out/` and other non-JS `build/` paths no longer trip the rule). The angular numbers above are pre-v0.9.18 captures; under v0.9.18+ this row should drop close to zero |
 | 1 `agent-context-no-stale-paths` | (varies) | warning | bundled `agent-context@v1` | Real (an AGENTS.md or .agent doc references a path that no longer exists) |
 | 1 forbidden `node-no-tracked-dist` | (varies) | warning | bundled `node@v1` | Real |
 
@@ -578,6 +587,11 @@ release substitution, 2 `repository.directory` 404s, ~14
 The headline catch is the BOM byte: no existing tool sees it
 because tslint's `file-header` regex matches the BOM-prefixed
 license block.**
+
+(Counts above were validated against alint v0.9.17 + the 2026-05-07
+angular SHA. v0.9.18's A1 fix to `hygiene-no-js-build-outputs`
+eliminates the 3 hygiene-build-outputs FPs documented in the table;
+absolute counts otherwise drift with upstream tip.)
 
 ### 6.2 Suspected `.alint.yml` bugs flagged for parent triage
 
@@ -618,13 +632,11 @@ bundled-ruleset-design issues, not config bugs.
   README distinct from the contributor README. Bundled-ruleset
   refinement candidate.
 - **`hygiene/no-tracked-artifacts@v1` ancestor-manifest scoping** —
-  `hygiene-no-js-build-outputs` and `hygiene-no-cargo-target`
-  fire on directories named `build/` and `target/` regardless of
-  whether the repo has a JS or Rust build. Adding an
-  `ancestor_manifest:` knob (only fire under a `package.json` or
-  `Cargo.toml` ancestor) would deduplicate the false positives
-  observed in 3+ case studies (kubernetes, angular, others).
-  Bundled-ruleset refinement candidate.
+  `hygiene-no-js-build-outputs` was narrowed in v0.9.18 (A1 fix)
+  to require a sibling `package.json` so `bazel-out/` and other
+  non-JS `build/` paths no longer trip the rule. The same shape
+  for `hygiene-no-cargo-target` (require a sibling `Cargo.toml`)
+  is the open follow-up.
 
 ---
 
@@ -655,9 +667,12 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (current: alint v0.9.20, 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20 (2026-05-10)`. The §6 violation-count
+  breakdown was captured against v0.9.17 + the 2026-05-07 angular
+  SHA; categories are stable, absolute counts drift with upstream
+  tip
 - **Rule count:** **131** loaded per `validate-config` (73 custom
   + 9 bundled rulesets — `oss-baseline` 15, `node` 9, `monorepo` 4,
   `monorepo/pnpm-workspace` 4, `ci/github-actions` 3,
@@ -665,21 +680,34 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   `tooling/editorconfig` 3, `agent-context` 5; runtime emits 110
   result entries because some rule IDs are shared/deduped across
   overlays at runtime)
-- **`alint validate-config`:** ✓ Config valid: 131 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for
-  the 144-violation breakdown (failing rules 36 / passing 74)
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule
-  `respect_gitignore: false`) and #19 (literal-path runtime guard
-  for `root_only: true` + multi-component literals) both shipped in
-  engine; this config does not need either workaround
+- **`alint validate-config`:** Config valid: 131 rule(s) loaded
+- **Live-tree recheck:** performed against v0.9.17 — see §6 for the
+  144-violation breakdown (failing rules 36 / passing 74). Not
+  re-run against v0.9.20 in this pass; the 3 `hygiene-no-js-build-outputs`
+  FPs documented in §6.1 should disappear under v0.9.18+ (A1 fix)
+- **Pitfall fixes (engine, v0.9.17):** Pitfall #18 (per-rule
+  `respect_gitignore: false`) and #19 (`literal_is_nested` runtime
+  guard) both shipped in engine; this config does not need either
+  workaround
+- **Pitfall fixes (bundled rules, v0.9.18):** A1 (`hygiene-no-js-build-outputs`
+  requires sibling `package.json`) clears the bazel-out FPs
+  observed against angular at v0.9.17. Pitfall #16 remains an
+  authoring gotcha (this config uses `file_content_matches` for
+  the `tsconfig-build.json` JSONC `strict: true` check per
+  pitfall #16 option B)
 - **Pitfall #22 status:** No `pattern: |` block scalars in this
-  config — not a candidate
-- **Open gaps (unchanged):** `cross_file_value_equals` (v0.10
-  ship-target, 11 sources after this validation),
-  `pair_inverse` (v0.10 design candidate, 2 sources),
-  `cross_language_implementation_complete` (v0.11+ ship-target, 5
-  sources). No new rule-kind gaps surfaced
+  config — not a candidate (pitfall #22 fix is `|-` instead of
+  `|`)
+- **Open gaps (still pending v0.10):** `cross_file_value_equals`
+  (v0.10 ship-target — covers the
+  `.ng-dev/commit-message.mjs scopes` ↔ `packages/` registry
+  alignment), `pair_inverse` (v0.10 design candidate — covers the
+  goldens/public-api/<name>/ ↔ packages/<name>/ inverse
+  direction), `cross_language_implementation_complete` (v0.11+
+  ship-target — packages/<name>/ ↔ goldens/public-api/<name>/
+  parity)
 - **Open suspected bugs in this directory's `.alint.yml`:** none
   detected. Bundled-ruleset misalignments (PACKAGE.md vs README.md;
-  `hygiene-no-js-build-outputs` over-broad scope) are
-  bundled-ruleset refinement candidates, not config bugs
+  `hygiene-no-js-build-outputs` over-broad scope) — the latter was
+  fixed in v0.9.18 (A1); the former remains a bundled-ruleset
+  refinement candidate

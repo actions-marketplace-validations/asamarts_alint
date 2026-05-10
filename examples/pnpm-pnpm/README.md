@@ -22,7 +22,13 @@ TypeScript driving 13 cross-package field invariants), 1 canonical
 `engineStrict: true`, `nodeVersion: 22.13.0`, `minimumReleaseAge: 1440`,
 `trustPolicy: no-downgrade`).
 
-**alint version:** 0.9.17 (built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). Originally
+captured at v0.9.17 on 2026-05-07; reconciled forward across the
+v0.9.18 fix wave (A1-A6 bundled-rule refinements + B1-B4 cross-cutting
+revalidation + `dir_absent` `scope_filter` engine extension) and the
+v0.9.19/v0.9.20 width-aware-output + bundled-rule message audit pair.
+Pitfalls #18 and #19 engine-fixed in v0.9.17. FP counts cited below
+are v0.9.17-era unless annotated otherwise.
 
 ---
 
@@ -435,13 +441,16 @@ rule(s) loaded`. Pitfall checks:
 Methodology: `hyperfine --warmup 1 --runs 3` against the same
 `/tmp/pnpm` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`.
+`target/release/alint v0.9.17` (numbers below are the v0.9.17-era
+measurements; not re-run for v0.9.20 — the v0.9.18-v0.9.20 changes
+are bundled-rule refinements + output-formatting + message-audit and
+do not change throughput characteristics).
 
 ### 5.1 Measured
 
 | Check | Existing tool | Existing wall-clock | alint wall-clock | Ratio |
 |---|---|---|---|---|
-| **alint full pass** (112 rules; mostly declarative + 4 `command:` shellouts) | n/a | n/a | **walk error — pnpm has 2 broken-symlink test fixtures**, see §6.2 | — |
+| **alint full pass** (112 rules; mostly declarative + 4 `command:` shellouts) | n/a | n/a | **walk error — pnpm has 2 broken-symlink test fixtures** at v0.9.17, see §6.2 | — |
 | `pn lint:meta` (meta-updater test mode, 169 manifests) | Node + meta-updater | **~3-5 s** (per pnpm CI logs) | included in declarative pass once the symlink issue is sidestepped | n/a |
 | `pn lint` (eslint + cspell + lint:meta chained sequentially) | Node + eslint + cspell + meta-updater | **~30-90 s** cold cache | n/a — alint shells out via `command:` for the eslint+cspell+lint:meta chain | 1× — alint orchestrates |
 
@@ -581,27 +590,39 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (originally 2026-05-07; reconciled 2026-05-10)
 
-- **alint version:** `0.9.17` (built 2026-05-07)
+- **alint version:** `0.9.20` (current as of 2026-05-10). Originally
+  validated against `0.9.17` (2026-05-07).
 - **Rule count:** **112** (51 custom + 9 bundled rulesets — 15 + 9 + 4
   + 4 + 3 + 11 + 7 + 3 + 5 = 61, minus overlap = 61 effective bundled
-  rule IDs)
+  rule IDs). v0.9.18 bundled-rule refinements (A1-A6) did not change
+  the rule count for this config; v0.9.19/v0.9.20 changed only output
+  width handling + bundled-rule message text.
 - **`alint validate-config`:** ✓ Config valid: 112 rule(s) loaded
-- **Live-tree recheck:** **partial** — walk-error on the broken-symlink
-  test fixtures aborts the walk; rule-firing observations are based on
-  static analysis of the tree shape + the working sub-walks before the
-  symlinks are encountered. Workaround documented in §6.2.
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule
-  `respect_gitignore: false`) and #19 (literal-path runtime guard for
-  `root_only: true` + multi-component literals) both shipped in engine;
-  **this config does not need either workaround** (no `respect_gitignore:
-  false` or `root_only: true` patterns).
-- **Pitfall #22 verified clean** per the brief's batch-5 special-attention
-  check — no `pattern: |` block scalars.
-- **Open gaps (unchanged):** `cross_file_value_equals` (v0.10
-  ship-target, 10 sources — pnpm reinforces from Tier-1),
+  (v0.9.17-era; not re-run for v0.9.20).
+- **Live-tree recheck:** **partial** at v0.9.17 — walk-error on the
+  broken-symlink test fixtures aborts the walk. The walk-error class
+  is unchanged in v0.9.18-v0.9.20 (no `walk_error_policy:` shipped
+  yet — still v0.11+ ship-target). Workaround documented in §6.2.
+- **Pitfall fixes:** Pitfall #18 (per-rule `respect_gitignore: false`)
+  and #19 (literal-path runtime guard for `root_only: true` +
+  multi-component literals) **were engine-fixed in v0.9.17** — this
+  config has not needed either workaround in any version since.
+- **Pitfall #22 verified clean** per the original batch-5 check —
+  no `pattern: |` block scalars. No regression in v0.9.18-v0.9.20.
+- **Open gaps (unchanged in v0.9.20):** `cross_file_value_equals`
+  (v0.10 ship-target, 10 sources — pnpm reinforces from Tier-1),
   `registry_paths_resolve` (v0.10 ship-target, 8 sources — pnpm adds
   3 sub-cases), `json_key_sort_order` (NEW candidate, single-source
-  pnpm), `walk_error_policy:` engine knob (NEW, single-source pnpm).
+  pnpm), `walk_error_policy:` engine knob (now classified v0.11+
+  ship-target alongside `cross_language_implementation_complete`,
+  Bazel-licensing-declaration-aware rule kind).
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
+- **v0.9.18 bundled-rule refinements relevant to this config:** none
+  fired for this tree — A1 (hygiene-no-js-build-outputs sibling
+  package.json) is on the bundled side of `node@v1`/`monorepo@v1` and
+  is silently more accurate without changing the surface count;
+  A4 (`cargo-workspace` selector) does not apply (pnpm is JS); A5
+  (LICENSE.TXT/LICENSE.md recognition) didn't change anything (pnpm's
+  LICENSE was already canonical-cased).

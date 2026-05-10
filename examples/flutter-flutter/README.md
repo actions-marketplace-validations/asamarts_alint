@@ -32,7 +32,13 @@ windows/fuchsia/glfw/embedder/common), **7 `flutter create` template
 subdirs**, **13 root governance files** (LICENSE, PATENT_GRANT,
 AUTHORS, CODEOWNERS, TESTOWNERS, .ci.yaml, etc.).
 
-**alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`.
+**alint version:** `0.9.20` (2026-05-10). **Counts in §6 are
+v0.9.17-era;** the live tree was not re-walked under v0.9.20 for this
+revision (the pre-launch fix wave A1-A6 in v0.9.18 reduced hygiene FP
+counts across all 30 case-study trees, but the structural findings in
+§6.1 — 5 Trojan-Source CVE-2021-42574 catches, the polyglot BSD header
+drifts, the package homepage drifts — are stable classifications that
+A1-A6 do not affect).
 
 ---
 
@@ -401,7 +407,9 @@ boolean/number paths.
 Methodology: `hyperfine --warmup 1 --runs 3 -i` against the same
 `/tmp/flutter` working tree captured 2026-05-08. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary `target/release/alint
-v0.9.17`. The `-i` flag (ignore non-zero exit) is necessary because
+v0.9.17` (numbers carried forward; v0.9.20's width-aware human output
+and bundled-rule message audits do not materially affect walk timing on
+flutter's tree). The `-i` flag (ignore non-zero exit) is necessary because
 several `command:` shellouts fail when their tool environment isn't
 fully bootstrapped (engine `vpython3` / `gclient sync`-prepared
 `licenses_cpp` binary).
@@ -453,8 +461,15 @@ only knows the Dart tree).
 ## 6. Gap discovery — what alint surfaces against the live tree
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/flutter-flutter/.alint.yml /tmp/flutter` (live, JSON-format).
+**Counts in this section are v0.9.17-era;** v0.9.18's pre-launch fix
+wave (A1 hygiene-no-js-build-outputs sibling-package.json gate, A2 ASF
+preamble bundle, A5 oss-license-exists case-insensitivity) materially
+reduced cosmetic / hygiene FPs across all 30 case-study trees, but the
+structural findings below (5 Trojan-Source / CVE-2021-42574 catches,
+the polyglot BSD-header drifts, the missing pub.dev homepages) are
+stable classifications that A1-A6 do not affect.
 
-**Headline:** alint surfaces **335 violations** across 18 failing
+**Headline (v0.9.17 snapshot):** alint surfaces **335 violations** across 18 failing
 rules. Of those, **149 are cosmetic** (137 missing-final-newline + 12
 trailing-whitespace, mostly under archived release-notes); **150 are
 real header / structural findings** (51 BSD source-header violations
@@ -475,7 +490,7 @@ and a handful of supply-chain hardening signals.
 | Workflows missing `permissions: contents: read` | 13 | warning | `gha-workflow-contents-read` (bundled) | Real findings across 13 of 16 workflows. The OpenSSF Token-Permissions check |
 | Third-party actions not pinned to SHA | 4 | warning | `gha-pin-actions-to-sha` + `flutter-workflow-actions-pinned-by-sha` | Real findings — flutter uses `actions/checkout@v4` style throughout |
 | Workflow missing `name:` declaration | 1 | warning | `gha-workflow-has-name` | Real — minor hygiene |
-| Forbidden directories under `**/build` | 4 | warning | `hygiene-no-js-build-outputs` (bundled) | **All false positives.** flutter's `build/` is the build script directory (not a JS build artefact), and 3 deep `build/` subdirs are under integration-test scaffolds. **Recommended fix:** scope `hygiene/no-tracked-artifacts@v1`'s JS-output rule to repos with a `package.json`, OR add these specific paths to a per-repo exclude list |
+| Forbidden directories under `**/build` | 4 | warning | `hygiene-no-js-build-outputs` (bundled) | **Past-tense — fixed in v0.9.18 (A1).** The bundled `hygiene-no-js-build-outputs` rule now requires a sibling `package.json` to fire, eliminating these 4 flutter-side FPs (and analogous cases across other polyglot non-JS trees). The v0.9.17-era recommendation ("scope to repos with a package.json") landed as engine fix A1. |
 | `oss-security-policy-exists` info | 1 | info | `oss-security-policy-exists` (bundled) | flutter ships SECURITY.md under `docs/security/` rather than at repo root; bundled rule emits info finding |
 
 **Real net-new findings alint surfaces that existing tooling misses:**
@@ -558,10 +573,10 @@ without YAML block-scalar tricks.
   by `name:` within OS group. **v0.10 ship-target** (7 sources;
   saturated).
 - **`respect_gitignore: false` per-rule knob** — **DELIVERED in
-  v0.9.17** (per-rule knob ships in the engine). `pubspec.lock`
-  (tracked-but-gitignored via `!/pubspec.lock` in `.gitignore`) is
-  now addressable with a one-line config edit; flutter is the second
-  demand source after bazel.
+  v0.9.17** (per-rule knob shipped in the engine; pitfall #18 closed).
+  `pubspec.lock` (tracked-but-gitignored via `!/pubspec.lock` in
+  `.gitignore`) is now addressable with a one-line config edit;
+  flutter was the second demand source after bazel.
 - **`flutter create` template fix candidate** (config-side, not
   engine-side): the desktop Linux/Windows `CMakeLists.txt` templates
   under `packages/flutter_tools/templates/app/{linux,windows}.tmpl/`
@@ -599,25 +614,36 @@ Three concrete unanalyzed angles for a future revalidation pass:
 
 ---
 
-## 9. Validation status (2026-05-08)
+## 9. Validation status (2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (2026-05-10)
 - **Rule count:** **68** (39 flutter-specific + 29 from 3 bundled
   rulesets — `oss-baseline=15`, `ci/github-actions=3`,
   `hygiene/no-tracked-artifacts=11`)
 - **`alint validate-config`:** ✓ Config valid: 68 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for
-  the 335-violation breakdown (150 real header + 5 Trojan-Source +
-  18 GHA hardening + 149 cosmetic + 13 expected shellout-failure
-  noise)
-- **Pitfall fixes (this batch):** none needed — no `pattern: |`
-  instances; pitfalls #13/#14/#16/#17 all clean
-- **Open gaps:**
+- **Live-tree recheck:** v0.9.17-era counts in §6 carried forward; not
+  re-walked under v0.9.20. The v0.9.18 pre-launch fix wave (A1
+  hygiene-no-js-build-outputs sibling-package.json gate) closed the 4
+  `**/build` FPs flagged in §6.1. flutter's structural findings (5
+  Trojan-Source CVE-2021-42574 catches in archived release-notes,
+  150 polyglot BSD-header drifts, 2 missing pub.dev homepages, 18 GHA
+  hardening signals) are stable classifications unaffected by A1-A6.
+- **Pitfall fixes (engine):**
+  - **Pitfall #18 — past-tense.** Engine-fixed in v0.9.17 via the
+    `respect_gitignore: false` per-rule knob. flutter's `pubspec.lock`
+    (tracked-AND-gitignored via `!/pubspec.lock`) was the second demand
+    source after bazel; addressable with a one-line config edit today.
+  - **Pitfall #19 — past-tense.** Engine-fixed in v0.9.17 via
+    `literal_is_nested` runtime guard; not surfaced in this config.
+  - Pitfalls #13/#14/#16/#17/#22 all clean (authoring-only; not
+    surfaced).
+- **Open gaps (still pending):**
   - `cross_language_implementation_complete` (v0.11+ ship-target,
     5 sources — flutter is the platform-driven variant)
   - `registry_paths_resolve` (v0.10 ship-target, 8 sources —
     flutter pushes to 9)
   - `ordered_block` (v0.10 ship-target, 7 sources)
 - **Bench numbers:** 60 ms (lite bundled-only pass) on `/tmp/flutter`'s
-  15,860-file tree; full pass times out the validation env's `dart
-  analyze` shellout
+  15,860-file tree (v0.9.17 numbers; v0.9.20's width-aware human output
+  and message audits do not materially affect walk timing); full pass
+  times out the validation env's `dart analyze` shellout

@@ -20,7 +20,16 @@ validation), **35 distinct pre-commit hook IDs** across 11 repos, **10
 **11 `Misc/NEWS.d/next/` category subdirectories**, **25 GitHub
 Actions workflows**.
 
-**alint version:** 0.9.17 (built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). Originally
+captured at v0.9.17 on 2026-05-07; reconciled forward across the
+v0.9.18 fix wave (A1-A6 bundled-rule refinements + B1-B4 cross-cutting
+revalidation + `dir_absent` `scope_filter` engine extension) and the
+v0.9.19/v0.9.20 width-aware-output + bundled-rule message audit pair.
+Pitfalls #18 and #19 engine-fixed in v0.9.17. **A3 fix landed in
+v0.9.18:** `python@v1` default-excludes test-fixture paths (this
+fixes the cpython FPs that previously fired on `Lib/test/` corpus
+contents — see §6 for the post-A3 implications). FP counts cited
+below are v0.9.17-era unless annotated otherwise.
 
 ---
 
@@ -506,7 +515,10 @@ rule(s) loaded`. Pitfall checks:
 Methodology: `hyperfine --warmup 1 --runs 3 -i` against the same
 `/tmp/cpython` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`.
+`target/release/alint v0.9.17` (numbers below are the v0.9.17-era
+measurements; not re-run for v0.9.20 — the v0.9.18-v0.9.20 changes
+are bundled-rule refinements + output-formatting + message-audit and
+do not change throughput characteristics significantly).
 
 ### 5.1 Measured
 
@@ -550,12 +562,20 @@ checks that fit alint's grammar today. The deep tools
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/python-cpython/.alint.yml /tmp/cpython` (live run).
 
-**Headline:** alint surfaces **920 violations** across the live tree
-(5 errors + 857 warnings + 58 info; 28 rules pass; 24 fail; 62 are
-auto-fixable). The bulk is the expected "tool not on PATH" warnings
-(ruff / actionlint / zizmor / sphinx-lint / check-jsonschema / black
-not installed) + cosmetic trailing-whitespace / final-newline + a
-small handful of real findings detailed below.
+**Headline (v0.9.17-era):** alint surfaced **920 violations** across
+the live tree (5 errors + 857 warnings + 58 info; 28 rules pass; 24
+fail; 62 are auto-fixable). The bulk was the expected "tool not on
+PATH" warnings (ruff / actionlint / zizmor / sphinx-lint /
+check-jsonschema / black not installed) + cosmetic trailing-whitespace
+/ final-newline + a small handful of real findings detailed below.
+
+**v0.9.18 follow-on note:** A3 added test-fixture default-excludes to
+`python@v1`, which **eliminated cpython-side FPs that previously fired
+on `Lib/test/` corpus contents** (chiefly test inputs intentionally
+shaped to violate hygiene rules). The 920-violation count is
+v0.9.17-era; the post-A3 number on this tree would be lower (the
+explicit `Lib/test/**` excludes in this config already caught most of
+those, so the delta is bounded). **Counts not re-run for v0.9.20.**
 
 ### 6.1 Real findings
 
@@ -658,29 +678,51 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (originally 2026-05-07; reconciled 2026-05-10)
 
-- **alint version:** `0.9.17` (built 2026-05-07)
+- **alint version:** `0.9.20` (current as of 2026-05-10). Originally
+  validated against `0.9.17` (2026-05-07).
 - **Rule count:** **72** (34 custom + 4 bundled rulesets — `oss-baseline`
   15, `python` 9, `ci/github-actions` 3, `hygiene/no-tracked-artifacts`
-  11 = 38 bundled, no overlap)
+  11 = 38 bundled, no overlap). v0.9.18-v0.9.20 did not change this
+  count (A3 changed `python@v1`'s default excludes, not its rule
+  count; v0.9.19/v0.9.20 changed only output width handling +
+  bundled-rule message text).
 - **`alint validate-config`:** ✓ Config valid: 72 rule(s) loaded
-- **Live-tree recheck:** **performed** — see §6 for the 920-violation
-  breakdown (most are expected "tool not on PATH" + cosmetic;
-  structural floor healthy).
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule
-  `respect_gitignore: false`) and #19 (literal-path runtime guard for
-  `root_only: true` + multi-component literals) both shipped in
-  engine; **this config does not need either workaround** (no
+  (v0.9.17-era; not re-run for v0.9.20).
+- **Live-tree recheck:** **performed at v0.9.17** — see §6 for the
+  920-violation breakdown (most expected "tool not on PATH" +
+  cosmetic; structural floor healthy). Post-A3 (v0.9.18) the
+  `Lib/test/`-fixture FPs are also default-excluded by `python@v1`;
+  the explicit `Lib/test/**` excludes in this config already caught
+  most of those. Not re-run for v0.9.20.
+- **Pitfall fixes:** Pitfall #18 (per-rule `respect_gitignore: false`)
+  and #19 (literal-path runtime guard for `root_only: true` +
+  multi-component literals) **were engine-fixed in v0.9.17** — this
+  config has not needed either workaround in any version since (no
   `respect_gitignore: false`; the one `root_only: true` rule uses
   single-segment literals only).
-- **Pitfall #22 verified clean** per the brief's batch-5 check —
-  0 `pattern: |` block scalars.
-- **Open gaps (unchanged):** `balanced_delimiters` +
+- **Pitfall #22 verified clean** per the original batch-5 check —
+  0 `pattern: |` block scalars. No regression in v0.9.18-v0.9.20.
+- **A3 (v0.9.18) impact on this config:** `python@v1` now
+  default-excludes test-fixture paths. Reduces FP noise from the
+  bundled-side rules (the explicit `Lib/test/**` excludes in this
+  config still apply on top, so the change is largely a belt-and-
+  suspenders improvement here). A6 (`rust@v1` `allow_compiler_naming`)
+  and A4 (`cargo-workspace` selector) do not apply (cpython is C+Python).
+- **`dir_absent` `scope_filter` engine extension (v0.9.18):** the
+  `cpython-news-no-spaces-in-path` rule still uses simple `dir_absent`
+  with a literal path array (no `scope_filter` needed); the engine
+  extension is available if a future rule needs it.
+- **Open gaps (unchanged in v0.9.20):** `balanced_delimiters` +
   `file_pair_block_match` (v0.10 design candidate, 3 sources),
-  `registry_paths_resolve` (v0.10 ship-target, 8 sources — cpython
-  contributes 2 of the 8), `generated_file_fresh` (v0.10 ship-target,
-  6 sources — cpython is one of the 6), `ordered_block` (v0.10
-  ship-target, 7 sources — cpython is one of the 7), `column_alignment`
-  (NEW, single source — cpython CODEOWNERS).
+  `registry_paths_resolve` (**v0.10 ship-target**, 8 sources —
+  cpython contributes 2 of the 8: `.gitattributes` 51 generated
+  markers + `check-c-api-docs` symbol↔docs cross-ref),
+  `generated_file_fresh` (**v0.10 ship-target**, 6 sources —
+  cpython's `cases_generator` + `generate_sbom.py --check` are
+  canonical examples), `ordered_block` (**v0.10 ship-target**,
+  7 sources — cpython is one of the 7), `column_alignment` (NEW,
+  single source — cpython CODEOWNERS). None shipped in
+  v0.9.18-v0.9.20.
 - **Open suspected bugs in this directory's `.alint.yml`:** None.

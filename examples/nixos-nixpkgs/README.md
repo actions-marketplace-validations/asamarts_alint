@@ -25,7 +25,17 @@ tree has those re-included**, hence 52,354 vs the prior 39,101 file
 count. Both numbers are correct; the SHA-drift caveat applies — all
 benches below are against the 2026-05-07 walk at `e68f629e`.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). The original
+walk and 332 ms / 376 ms perf numbers were captured against v0.9.17;
+intermediate v0.9.18 shipped bundled-rule refinement **A1**
+(hygiene-no-js-build-outputs requires sibling `package.json` —
+eliminates the 3 Python `build/`/`coverage/` FPs documented in §6.1
+since nixpkgs's tree has no JS package.json siblings near those
+directories) plus the `dir_absent` engine extension that now supports
+`scope_filter`. v0.9.19/v0.9.20 added width-aware human output and the
+bundled-rule message audit. The nixpkgs `.alint.yml` itself is and
+always was clean of regex pitfalls (no `pattern: |` block scalars);
+no edits were needed in batch B1.
 
 ---
 
@@ -449,7 +459,11 @@ single-quoted scalars.
 Methodology: `hyperfine --warmup 1 --runs 3` on the actual sparse
 working tree at `/tmp/nixpkgs/` captured 2026-05-07 (52,354 files,
 535 MB). Machine: Linux 6.1.0-42-amd64, ~10 logical cores; alint
-binary `target/release/alint v0.9.17`.
+binary `target/release/alint v0.9.17` (numbers re-verified-equivalent
+in v0.9.20 — engine optimisations in the v0.9.x line affect cold-start,
+not steady-state walk throughput). The 273 ms wall-clock from the
+prior v0.9.6 case-study log against the smaller 39,101-file sparse
+checkout is preserved as a reference data point.
 
 ### 5.1 Measured
 
@@ -541,13 +555,12 @@ packages literally named `build`/`coverage`).
 
 **scope_filter discipline did NOT prove necessary at this scale**;
 the bundled rules' default scoping holds up cleanly. The 3 directory-
-name false positives are the same class as kubernetes pilot's
+name false positives were the same class as the kubernetes pilot's
 finding (k8s `build/` is the Kubernetes hack/-equivalent; nixpkgs
-has Python packages named `build`/`coverage`). **Recommended fix
-to the bundled ruleset:** scope `hygiene-no-js-build-outputs` to
-repos with a sibling `package.json` AND no source-code subtree
-under `build/` — or add explicit excludes for the canonical false-
-positive locations.
+has Python packages named `build`/`coverage`). **Resolved in v0.9.18
+via bundled-rule refinement A1**: `hygiene-no-js-build-outputs` now
+requires a sibling `package.json` to fire, which excludes the
+all-Nix nixpkgs tree from the rule's match set entirely.
 
 #### Top-level `paths: "**/*"` content rules — DELIBERATELY AVOIDED
 
@@ -602,22 +615,34 @@ without surprise.
 
 Run: `alint check --config /tmp/nixpkgs-alint-lite.yml /tmp/nixpkgs`
 (live run, JSON-format, lite config without the 7 `command:` rules
-since `nix-build`/`actionlint`/`zizmor` aren't on PATH).
+since `nix-build`/`actionlint`/`zizmor` aren't on PATH; counts captured
+against alint v0.9.17 + the 2026-05-07 SHA — absolute counts drift with
+upstream tip).
 
-**Headline:** alint surfaces **33 violations** across the live tree
-(52,354 files, 79 rules) — **the cleanest result of any case study
-in this batch.** Findings break down to: 2 real bundler-cache
-violations + 3 hygiene-rule false positives on directory names + 1
-known-large-file size warning + 24 GHA hardening warnings + 3
-governance-info findings. **No false-positive class exceeds 30
+**Headline (v0.9.17 walk, historical).** alint surfaced **33 violations**
+across the live tree (52,354 files, 79 rules) — **the cleanest result
+of any case study in this batch.** Findings break down to: 2 real
+bundler-cache violations + 3 hygiene-rule false positives on directory
+names + 1 known-large-file size warning + 24 GHA hardening warnings + 3
+governance-info findings. **No false-positive class exceeded 30
 violations; the structural floor is sound.**
+
+**Status as of v0.9.20.** The 3 `hygiene-no-js-build-outputs` FPs on
+`pkgs/development/python-modules/{bootstrap/build,build,coverage}` are
+**resolved in v0.9.18 via bundled-rule refinement A1** — the rule now
+requires a sibling `package.json` to fire, which excludes nixpkgs's
+all-Nix tree entirely. Net: the post-v0.9.18 surface drops to ~30
+violations against the same SHA, of which 24 are GHA hardening
+warnings (Scorecard-class, surfaced at PR time vs nightly), 2 are
+real bundler-cache bugs, 1 is the known hackage-packages.nix size
+warning, and 3 are governance-info findings.
 
 ### 6.1 Findings (all reviewed)
 
 | Finding | Path | Severity | Rule | Triage |
 |---|---|---|---|---|
 | 2 Ruby bundler-cache directories committed | `pkgs/by-name/pt/pt/.bundle`, `pkgs/by-name/re/redis-dump/.bundle` | warning | `hygiene-no-ruby-bundler-cache` | **Real bugs** — `.bundle/` is bundler's per-package cache that should never be committed. Worth filing a janitorial PR to add to `.gitignore` and `git rm -r` from the affected packages. |
-| 3 directories matching `**/build` / `**/coverage` heuristic | `pkgs/development/python-modules/{bootstrap/build,build,coverage}` | warning | `hygiene-no-js-build-outputs` | **All false positives.** `build` and `coverage` are Python packages literally named that. **Recommended fix:** scope the rule to repos with a `package.json` (excluding nixpkgs's all-Nix tree), OR add explicit excludes. Filed under bundled-ruleset refinement queue. |
+| 3 directories matching `**/build` / `**/coverage` heuristic | `pkgs/development/python-modules/{bootstrap/build,build,coverage}` | warning | `hygiene-no-js-build-outputs` | **Was a false-positive class against v0.9.17; FIXED in v0.9.18 via bundled-rule refinement A1** — `hygiene-no-js-build-outputs` now requires a sibling `package.json` to fire, which excludes nixpkgs's all-Nix tree entirely. Same fix benefits k8s, vscode, and node. |
 | 1 file > 10 MiB | `pkgs/development/haskell-modules/hackage-packages.nix` (~36 MiB) | warning | `hygiene-no-huge-files` | **Real but expected.** This is the Haskell ecosystem registry — a generated ~30 MiB Nix expression listing every Hackage package. The `linguist-generated` marker in `.gitattributes` flags it for git stats; alint flags it as a size sentry. **Recommended fix:** add `pkgs/development/haskell-modules/hackage-packages.nix` to the rule's exclude list (it's intentionally generated). |
 | 16 workflows lack `permissions.contents: read` | `.github/workflows/{bot,build,check,…}.yml` | warning | `gha-workflow-contents-read` | **Real bugs** — least-privilege workflow defaults are best practice. nixpkgs's bot workflows could benefit from declaring this explicitly. The OpenSSF Scorecard surfaces the same finding. |
 | 8 workflows have third-party actions not pinned to a 40-char SHA | (across `.github/workflows/`) | warning | `gha-pin-actions-to-sha` | **Same as kubernetes / vscode** — most third-party actions in nixpkgs use floating tags rather than SHA pins; OpenSSF Scorecard surfaces the same finding. alint surfaces it at PR time. |
@@ -663,13 +688,11 @@ by-name layout is fully consistent.
   `pkgs/by-name/<2-letter>/<pkg>/` ↔ `<pkg>` basename invariant.
   **Demand: turbo + next.js + nixpkgs (3 sources)** — promotes from
   "v0.10 single-source" to "v0.10 if-cheap".
-- **Scoping refinement for bundled `hygiene/no-tracked-artifacts@v1`'s
-  `hygiene-no-js-build-outputs` rule** (cross-cutting finding: same
-  class of false positives in kubernetes, vscode, nixpkgs). **Recommended
-  fix:** the rule should require a sibling `package.json` AND check
-  for source-code presence under `build/{azure-pipelines,lib,checker,…}`
-  to distinguish source from artefact. Filed under bundled-ruleset
-  refinement queue.
+- ~~**Scoping refinement for bundled `hygiene/no-tracked-artifacts@v1`'s
+  `hygiene-no-js-build-outputs` rule**~~ — RESOLVED in v0.9.18
+  (refinement A1). The rule now requires a sibling `package.json` to
+  fire, eliminating the directory-name false positives in kubernetes,
+  vscode, nixpkgs, and node simultaneously.
 
 No NEW rule-kind candidates surfaced — consistent with the P2b
 saturation hypothesis from launch-evidence.md.
@@ -706,9 +729,18 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (2026-05-10, alint v0.9.20)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (current). The §6 walk and 332 ms / 376 ms
+  perf numbers were captured against `0.9.17 (1dbd9b218a0e, built
+  2026-05-07)`; intermediate v0.9.18 shipped bundled-rule refinement
+  **A1** (hygiene-no-js-build-outputs requires sibling `package.json` —
+  resolves the 3 Python `build/`/`coverage/` FPs in §6.1) plus the
+  `dir_absent` engine extension that now supports `scope_filter`.
+  v0.9.19/v0.9.20 added width-aware human output and the bundled-rule
+  message audit. The nixpkgs `.alint.yml` itself was not modified in
+  batch B1 (it never carried pitfall #22 — no `pattern: |` block
+  scalars).
 - **Rule count:** **79** (46 custom + 4 bundled rulesets — `oss-baseline`
   15, `ci/github-actions` 3, `hygiene/no-tracked-artifacts` 11,
   `tooling/editorconfig` 3; rule IDs may overlap)
@@ -718,18 +750,23 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   (lite pass, no command rules) / **376 ms** (full pass with 7
   command-rule shellouts that fail-fast since toolchain not present),
   full 79-rule pass over the captured tree, including the **20,698-
-  iteration `for_each_dir` over `pkgs/by-name/*/*`**
+  iteration `for_each_dir` over `pkgs/by-name/*/*`**. Numbers captured
+  against v0.9.17 binary; re-verified equivalent in v0.9.20.
 - **Pitfall instances flagged:** **0 instances of pitfall #22** in
   this config (no `pattern: |` block scalars). Config is clean.
-- **Pitfall fixes (v0.9.17):** Pitfalls #18 + #19 do not apply here.
-  No tracked-but-gitignored files; the only `root_only: true` rules
-  use single-segment literals.
+- **Pitfall fixes:**
+  - Pitfall **#18** (`respect_gitignore: false` per-rule) — engine-fixed
+    in v0.9.17; not needed here.
+  - Pitfall **#19** (literal-path runtime guard) — engine-fixed in
+    v0.9.17; the only `root_only: true` rules use single-segment
+    literals, so the guard's path was never exercised.
+  - Pitfall **#22** — codified in v0.9.18; not present in this config.
 - **Open gaps (status changes):** `registry_paths_resolve` remains
   the strongest demand signal (8 distinct sources past saturation;
   v0.10 must-ship); `dir_name_matches_field` at 3 sources (turbo +
   next.js + nixpkgs); both unchanged from prior P2b Wave 1 surfacing.
-  Cross-cutting bundled-rule scoping refinement for
-  `hygiene-no-js-build-outputs` filed against the bundled-ruleset
-  refinement queue.
+  The cross-cutting bundled-rule scoping refinement for
+  `hygiene-no-js-build-outputs` was **resolved in v0.9.18 (A1)** — the
+  rule now requires a sibling `package.json`.
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
   Config is clean.

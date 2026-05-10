@@ -25,7 +25,12 @@ sparse pattern; this batch's pull is broader (the difference is
 ~4,800 csprojs under `src/tests/` + `src/installer/pkg/` +
 `src/coreclr/tools/aot/` re-included).
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). Capture pass
+was against v0.9.17. The bundled-rule LICENSE.TXT recognition gap
+flagged in this case study (A5) shipped in v0.9.18 — see §6 and §9.
+The `xml_path_matches` / `xml_path_equals` and `dotnet@v1` ship-targets
+demand-validated by this case study remain pending in the v0.10
+release-train.
 
 ---
 
@@ -78,7 +83,7 @@ ci-failure-scan, code-review, locker, stale, etc.
 | `Directory.Build.rsp` | MSBuild | Response-file with default args for `dotnet build` | (transitively covered) |
 | `Directory.Solution.props` | MSBuild | Solution-level props | (transitively covered) |
 | `Build.proj` | MSBuild | Top-level build entry-point | (transitively covered) |
-| `LICENSE.TXT` | dotnet | MIT license text | bundled `oss-baseline@v1` covers presence — but the bundled rule looks for `LICENSE` (no extension); **gap: `LICENSE.TXT` not recognised**, see §6 |
+| `LICENSE.TXT` | dotnet | MIT license text | bundled `oss-baseline@v1` covers presence. **v0.9.18 (A5) added LICENSE.TXT and LICENSE.md to the bundled rule's recognised set** — the original gap is now closed. |
 | `PATENTS.TXT` | Microsoft | .NET patent grant (distinct from MIT copyright grant) | `file_exists` (root_only) |
 | `THIRD-PARTY-NOTICES.TXT` | Microsoft | Every transitively-bundled native dep + license | `file_exists` (root_only) |
 | `.markdownlint.json` | markdownlint | Markdown lint config | `file_exists` (root_only) |
@@ -184,7 +189,7 @@ Each row from §1 tagged with one of **alint-today** / **alint-future**
 | `NuGet.config` clears fallback folders | alint-today | `dotnet-runtime-nuget-config-clears-fallback-folders` (`file_content_matches`) |
 | Root `Directory.Build.props` exists | alint-today | `dotnet-runtime-root-directory-build-props-present` (`file_exists`, `root_only`) |
 | Root `Directory.Build.targets` exists | alint-today | `dotnet-runtime-root-directory-build-targets-present` |
-| `LICENSE.TXT` exists | alint-today (with caveat) | bundled `oss-license-exists` looks for `LICENSE` (no extension); dotnet ships `LICENSE.TXT`. **Gap: `LICENSE.TXT` not recognised** by `oss-license-exists`. v0.10 housekeeping fix to the bundled rule. |
+| `LICENSE.TXT` exists | alint-today | bundled `oss-license-exists` originally looked for `LICENSE` (no extension); dotnet ships `LICENSE.TXT`. **Resolved in v0.9.18 (A5)** — the bundled rule now accepts `LICENSE.TXT` and `LICENSE.md` directly. |
 | `PATENTS.TXT` exists | alint-today | `dotnet-runtime-patents-txt-present` |
 | `THIRD-PARTY-NOTICES.TXT` exists | alint-today | `dotnet-runtime-third-party-notices-present` |
 | `.markdownlint.json` exists | alint-today | `dotnet-runtime-markdownlint-config-present` |
@@ -287,7 +292,7 @@ Azure DevOps pipelines (4 surfaces):
   alint-today: 4 / 4 = 100%
 
 Root config files (15 surfaces):
-  alint-today: 15 / 15 = 100%   (with the LICENSE.TXT caveat — bundled rule needs to accept the .TXT extension)
+  alint-today: 15 / 15 = 100%   (LICENSE.TXT recognition shipped in v0.9.18 A5)
 
 eng/ build orchestration (9 surfaces):
   alint-today:  6 / 9 = 67%
@@ -432,13 +437,14 @@ rules:
 
 **Validation:** `alint validate-config` reports `✓ Config valid: 60
 rule(s) loaded`. Pitfall checks: the magic comment is present (line 1);
-no `pattern: |` block scalars (pitfall #22 not applicable); the
-JSONPath dashed/dotted-key bracket notation is correctly used
-(`$['msbuild-sdks']['Microsoft.DotNet.Arcade.Sdk']` per pitfall #10);
-the per-csproj `<Project(...)>` regex uses no `^` line anchor to
-accept both comment-block-prefixed and BOM-prefixed XML files
-(pitfall #13 avoided — discovered during this case study's draft per
-the original commit log).
+no `pattern: |` block scalars (pitfall #22 — authoring-only — not
+applicable); the JSONPath dashed/dotted-key bracket notation is
+correctly used (`$['msbuild-sdks']['Microsoft.DotNet.Arcade.Sdk']`
+per pitfall #10 — authoring-only); the per-csproj `<Project(...)>`
+regex uses no `^` line anchor to accept both comment-block-prefixed
+and BOM-prefixed XML files (pitfall #13 — authoring-only — avoided;
+discovered during this case study's draft per the original commit
+log).
 
 ---
 
@@ -446,7 +452,10 @@ the original commit log).
 
 Methodology: `hyperfine -i --warmup 1 --runs 3` on `/tmp/runtime`
 (57,695 files, 937 MB working tree). Machine: Linux 6.1.0-42-amd64,
-~10 logical cores; alint binary `target/release/alint v0.9.17`.
+~10 logical cores; alint binary `target/release/alint v0.9.17` at
+capture time. Numbers below are v0.9.17-era; bench has not been
+re-run against v0.9.20 — the human-output width audit (v0.9.19/20)
+does not change rule-evaluation timings.
 
 ### 5.1 Measured
 
@@ -503,10 +512,18 @@ the build/format/api-compat): **~9 s warm**.
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/dotnet-runtime/.alint.yml /tmp/runtime` (live run).
 
-**Headline:** alint surfaces **7,769 violations** across the live tree;
-of those, **5 errors** (real bugs), **7,164 warnings**, and **600
-info-level** findings. The warnings are dominated by **two suspect
-high-count rules** — analysed in detail below.
+**Headline (v0.9.17-era; not re-run against v0.9.20):** alint
+surfaced **7,769 violations** across the live tree at the v0.9.17
+capture; of those, **5 errors** (real bugs), **7,164 warnings**,
+and **600 info-level** findings. The warnings are dominated by
+**two suspect high-count rules** — analysed in detail below. Per
+the v0.9.18 B4 cross-cutting revalidation pass, A1
+(`hygiene-no-js-build-outputs` requires sibling `package.json`)
+clears the 21 false-positive `bin/` warnings — dotnet/runtime has no
+root `package.json`, so the rule no longer fires; A5 closes the
+LICENSE.TXT real-catch warning. The two high-count
+`csproj-declares-target-framework` and `source-has-mit-header`
+warnings remain pending v0.10 `xml_path_*` (not v0.9.x material).
 
 ### 6.1 Per-rule violation summary
 
@@ -559,26 +576,27 @@ high-count rules** — analysed in detail below.
 
 | Finding | Path | Severity | Rule | Triage |
 |---|---|---|---|---|
-| `LICENSE.TXT` not recognised | repo root | warning | `oss-license-exists` (bundled) | **Real bug in `oss-baseline@v1`.** The bundled rule's pattern list looks for `LICENSE` (no extension); dotnet/runtime ships `LICENSE.TXT` (uppercase + .TXT extension). Microsoft + many older OSS projects use this form. **v0.10 housekeeping fix to the bundled rule** to accept `LICENSE.TXT` and `LICENSE.md`. Same fix benefits deno (`LICENSE.md`). |
+| `LICENSE.TXT` not recognised | repo root | warning | `oss-license-exists` (bundled) | **Resolved in v0.9.18 (A5).** The bundled rule originally looked for `LICENSE` (no extension); dotnet/runtime ships `LICENSE.TXT` (uppercase + .TXT extension). Microsoft + many older OSS projects use this form. v0.9.18 added `LICENSE.TXT` and `LICENSE.md` to the recognised set; this 1-warning catch clears post-v0.9.18 (deno gets the same benefit). |
 | 1 csproj is non-Sdk-style | `src/native/managed/cdac/mscordaccore_universal/mscordaccore_universal.csproj` (likely; from the original 2026-05-06 inventory) | error | `dotnet-runtime-csproj-uses-net-sdk` | **Real but expected** — genuinely non-Sdk-style, intentionally evaluated only via parent traversal. Worth documenting in dotnet/runtime's contributor guide as the legitimate exception (already done in the 2026-05-06 inventory's notes). |
 | 2 merge-conflict markers in test fixtures | `src/tests/Loader/binding/...` (likely) | error | `oss-no-merge-conflict-markers` | **False positives** — test fixtures intentionally embed conflict-marker syntax to test resolution code. Add `paths.exclude: ["src/tests/**"]` to the bundled rule. |
 | 2 bidi-control characters in test fixtures | likely under `src/libraries/System.Text.Encodings/` or `src/tests/...` | error | `oss-no-bidi-controls` | **False positives** — Unicode test fixtures. Same triage. |
 | 20 GHA actions not pinned to 40-char SHA | `.github/workflows/*.yml` | warning | `gha-pin-actions-to-sha` | **Real** — small lift to convert tag pins to SHA pins. OpenSSF Scorecard signal. |
 | 18 GHA workflows missing `permissions: contents: read` | `.github/workflows/*.yml` | warning | `gha-workflow-contents-read` | **Real** — small lift. |
-| 21 false-positive JS-build-output flagged | `**/bin/**` (e.g. `Microsoft.NET.Sdk/Sdk/Sdk.props` paths after a partial build leaked into the working tree) | warning | `hygiene-no-js-build-outputs` | **All false positives** — `bin/` is dotnet's build-output convention, not a JS bundler artefact. The bundled rule should scope to repos with `package.json`. |
+| 21 false-positive JS-build-output flagged | `**/bin/**` (e.g. `Microsoft.NET.Sdk/Sdk/Sdk.props` paths after a partial build leaked into the working tree) | warning | `hygiene-no-js-build-outputs` | **Resolved in v0.9.18 (A1).** All 21 were false positives — `bin/` is dotnet's build-output convention, not a JS bundler artefact. The bundled rule now requires a sibling `package.json` to fire; dotnet/runtime has no root `package.json`, so these clear cleanly. |
 | 3 oversized files | possibly `eng/Versions.props` snapshots, vendored `external/`, or generated `*.cs` blobs | warning | `hygiene-no-huge-files` | Worth eyeballing; some may be legitimately large (autogenerated reference assemblies, large fixture data). |
 | 351 / 248 cosmetic findings | various | info | `oss-no-trailing-whitespace` + `oss-final-newline` | Real but unweighted. dotnet doesn't gate on these; markdownlint catches the .md subset. Below the team's threshold of attention. |
 
 ### 6.3 Suspected `.alint.yml` bugs flagged for parent triage
 
 **None.** The config is clean — no `pattern: |` block scalars (so
-pitfall #22 not applicable), correctly-anchored content patterns
-(pitfall #13 explicitly handled — see the `<Project(\s|>|/)` regex
-that intentionally has no line anchor to accept BOM-prefixed XML),
-JSONPath bracket notation for dotted-key sub-keys
-(`$['msbuild-sdks']['Microsoft.DotNet.Arcade.Sdk']`, pitfall #10),
-and `command:` not `argv:` on the (absent) shellouts. Every pitfall
-in the canonical-22 catalogue is correctly avoided.
+pitfall #22 — authoring-only — not applicable), correctly-anchored
+content patterns (pitfall #13 — authoring-only — explicitly handled,
+see the `<Project(\s|>|/)` regex that intentionally has no line
+anchor to accept BOM-prefixed XML), JSONPath bracket notation for
+dotted-key sub-keys (`$['msbuild-sdks']['Microsoft.DotNet.Arcade.Sdk']`,
+pitfall #10 — authoring-only), and `command:` not `argv:` on the
+(absent) shellouts. Every pitfall in the canonical-22 catalogue
+is correctly avoided.
 
 The two high-count warnings (4,843 + 2,243) are **expected behaviour
 of the regex fallback against the broader sparse-checkout** — they
@@ -608,10 +626,10 @@ path.
 - **`cross_file_value_equals`** — dotnet/runtime adds a 9th source via
   the `dotnet-tools.json` ↔ `global.json` Arcade SDK coherence pattern.
   Already v0.10 (past-saturation, 10 sources).
-- **`oss-license-exists` housekeeping** — bundled rule should accept
+- **`oss-license-exists` housekeeping** — bundled rule now accepts
   `LICENSE.TXT` (Microsoft convention) and `LICENSE.md` (Deno
-  convention) in addition to the canonical `LICENSE`. v0.10
-  housekeeping fix, documented above.
+  convention) in addition to the canonical `LICENSE`. **Shipped in
+  v0.9.18 (A5).**
 - **`azure-pipelines@v1` bundled ruleset** — for the
   `eng/pipelines/` Azure DevOps yml shape (workflow permissions,
   container-image SHA pinning, parameter-required defaulting).
@@ -645,41 +663,78 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (capture 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version (current):** `0.9.20` (2026-05-10). Capture pass
+  was against `0.9.17`; counts in §6 are v0.9.17-era and have not
+  been re-run.
 - **Rule count:** **60** (31 custom + 3 bundled rulesets — `oss-baseline`
   15, `ci/github-actions` 3, `hygiene/no-tracked-artifacts` 11; none
   of the three extended rulesets ships a fact, so no fact-subtraction
   needed = 60 loadable rules)
 - **`alint validate-config`:** ✓ Config valid: 60 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  7,769-violation breakdown (5 real errors, 7,164 warnings dominated
-  by two MSBuild-inheritance + test-fixture suspect rules, 600
-  info-level cosmetic findings)
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule `respect_gitignore:
-  false`) and #19 (literal-path runtime guard) shipped in engine; this
-  config does not need either workaround (no tracked-but-gitignored
-  files; no `root_only:` with multi-component literals)
-- **v0.10 ship-target candidates referenced here that are now firm:**
-  - `xml_path_matches` / `xml_path_equals` — **v0.10 ship-target via
-    spark + dotnet/runtime; this case study is the second source,
-    confirmed at production scale (~7,100 XML manifests in this checkout)**
-  - `dotnet@v1` bundled ruleset — **v0.10 ship-target uniquely
-    surfaced here**
-  - `registry_paths_resolve` — 8 sources including dotnet/runtime's
-    `eng/Subsets.props` and .slnx project lists
-  - `cross_file_value_equals` — 10 sources, past-saturation, includes
-    dotnet/runtime's `dotnet-tools.json` ↔ `global.json` Arcade
-    pattern
-- **Open gaps:**
-  - `oss-license-exists` not recognising `LICENSE.TXT` (real catch
-    against this repo, also affects deno's `LICENSE.md`); v0.10
-    housekeeping fix to the bundled rule
-  - `azure-pipelines@v1` bundled ruleset (single-source today; defer
-    to v0.11+)
+- **Live-tree recheck:** **v0.9.17-era** — see §6 for the
+  7,769-violation breakdown captured 2026-05-07. Per the v0.9.18 B4
+  cross-cutting revalidation pass, A1 (sibling-package.json gate)
+  clears the 21 `bin/` warnings and A5 (LICENSE.TXT recognition)
+  clears the 1 `oss-license-exists` warning; the two high-count
+  csproj/MIT-header warnings remain pending v0.10 `xml_path_*` /
+  test-fixture-exclude refinement.
+- **Pitfall fixes:**
+  - Pitfall #18 (per-rule `respect_gitignore: false`) — engine-fixed
+    in v0.9.17; this config does not need it (no
+    tracked-but-gitignored files).
+  - Pitfall #19 (literal-path runtime guard) — engine-fixed in
+    v0.9.17; this config does not need it (no `root_only:` with
+    multi-component literals).
+  - Pitfalls #10, #13, #22 — authoring-only gotchas (no engine
+    fix); this config correctly avoids each.
+- **v0.9.18 bundled-rule refinements landed since the capture:**
+  - **A5** `oss-license-exists` recognises `LICENSE.TXT` and
+    `LICENSE.md` — directly closes the LICENSE.TXT gap surfaced by
+    this case study.
+  - **A1** `hygiene-no-js-build-outputs` requires sibling
+    `package.json` — clears the 21 false-positive `bin/` warnings.
+  - **A2** `apache-2-source-has-license-header` long-form ASF
+    preamble (not in this config's `extends:` set; dotnet ships its
+    own MIT preamble rule).
+  - **A3** `python@v1` test-fixture default-excludes (not applicable;
+    no `python@v1` in extends).
+  - **A4** `monorepo/cargo-workspace@v1` workspace-detection scope
+    note (not a Cargo workspace).
+  - **A6** `rust-sources-snake-case` `allow_compiler_naming` (not
+    a Rust repo).
+- **v0.9.18 engine extension:** `dir_absent` now supports
+  `scope_filter:` — **directly applicable to dotnet/runtime's 4
+  hygiene rules** (`dotnet-runtime-no-tracked-{bin,obj,artifacts,vs-folder}`).
+  Existing config uses `git_tracked_only: true`; future config
+  refinements could narrow scope further via `scope_filter:`.
+- **v0.9.19 + v0.9.20:** width-aware human output; bundled rule
+  message audit; em-dash scrub; install-snippet reorder. None affect
+  dotnet-config evaluation behaviour.
+- **v0.10 ship-target candidates referenced here (still pending):**
+  - **`xml_path_matches` / `xml_path_equals`** — confirmed at
+    production scale here (~7,100 XML manifests). Spark + dotnet/runtime
+    are the 2 sources. **Still v0.10 ship-target.**
+  - **`dotnet@v1` bundled ruleset** — uniquely surfaced here. **Still
+    v0.10 ship-target.**
+  - **`registry_paths_resolve`** — 8+ sources including dotnet/runtime's
+    `eng/Subsets.props` and `.slnx` project lists. Still v0.10 ship-target.
+  - **`cross_file_value_equals`** (with `value_extractor:` per the
+    v0.10 design) — 10 sources past-saturation; includes
+    dotnet/runtime's `.config/dotnet-tools.json` ↔ `global.json`
+    Arcade pattern.
+- **Open gaps still pending:**
+  - `xml_path_matches` / `xml_path_equals` (v0.10 ship-target,
+    2 sources confirmed)
+  - `dotnet@v1` bundled ruleset (v0.10 ship-target)
+  - `registry_paths_resolve` (v0.10 ship-target, 8+ sources)
+  - `cross_file_value_equals` with `value_extractor:` (v0.10
+    ship-target, past-saturation)
+  - `azure-pipelines@v1` bundled ruleset (single-source today;
+    defer to v0.11+)
 - **Open suspected bugs in this directory's `.alint.yml`:** **none.**
-  Config is clean against the v0.9.17 engine + canonical-22 pitfall
-  catalogue. The two high-count warnings (4,843 + 2,243) are the
+  Config is clean against the v0.9.20 engine + canonical-22 pitfall
+  catalogue. The two high-count warnings (4,843 + 2,243) remain the
   expected behaviour of the regex fallback at scale until `xml_path_*`
-  ships.
+  ships in v0.10.

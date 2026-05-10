@@ -20,7 +20,10 @@ working-tree (most volume in `tests/testdata/` + `tests/specs/` +
 2026-05-03 inventory captured ~75 workspace members; structural
 shape (Rust core + JS/TS tooling) unchanged.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). Capture pass
+was against v0.9.17. The defensive pitfall #22 `|` → `|-` swap
+flagged in this case study (B2 in the v0.9.18 fix wave) has been
+applied to this directory's `.alint.yml` — see §4 and §6.3.
 
 ---
 
@@ -147,7 +150,7 @@ Each row from §1 tagged with one of **alint-today** / **alint-future**
 
 | Surface | Coverage | Rule |
 |---|---|---|
-| `LICENSE.md` exists (NOT `LICENSE`) | alint-today (with caveat) | bundled `oss-license-exists` looks for `LICENSE` (no extension); deno ships `LICENSE.md` so the rule fires. **Worth fixing in oss-baseline@v1** to accept `LICENSE.md` (also affects dotnet-runtime which ships `LICENSE.TXT`). |
+| `LICENSE.md` exists (NOT `LICENSE`) | alint-today | bundled `oss-license-exists` originally looked for `LICENSE` (no extension); deno ships `LICENSE.md` so the rule fired. **Resolved in v0.9.18 (A5)** — the bundled rule now accepts `LICENSE.md` and `LICENSE.TXT` directly. |
 | `README.md`, `CONTRIBUTING.md` | alint-today | bundled `oss-baseline@v1` |
 | `Cargo.toml` workspace shape | alint-today | bundled `rust@v1` (11 rules) |
 | `Cargo.lock` committed | alint-today | bundled `rust@v1`'s `cargo-lock-exists` |
@@ -312,16 +315,18 @@ rules:
 
 **Validation:** `alint validate-config` reports `✓ Config valid: 76
 rule(s) loaded`. Pitfall checks: the magic comment is present (line 1);
-the `pair` rule uses `partner:` (not `secondary:`) per pitfall #4;
-the `command:` rules use `command:` (not `argv:`) per pitfall #1;
-the `dir_only_contains` is correctly aware that the rule is
-file-children-only (per pitfall not catalogued — the limitation is
-documented in the rule's source, not the pitfall list). **The one
-`pattern: |` block scalar (line 120 — `deno-copyright-js-ts`) is
-the pitfall #22 candidate flagged in this batch's brief. See §6
-for the latency analysis: it does NOT fire today because every
-Deno copyright-line ends with `\n` naturally, but it's a fragile
-match.**
+the `pair` rule uses `partner:` (not `secondary:`) per pitfall #4
+(authoring-only); the `command:` rules use `command:` (not `argv:`)
+per pitfall #1 (authoring-only); the `dir_only_contains` is
+correctly aware that the rule is file-children-only (per pitfall not
+catalogued — the limitation is documented in the rule's source, not
+the pitfall list). **The pitfall #22 candidate flagged in this
+case study's first capture (`pattern: |` on `deno-copyright-js-ts`,
+line ~126) was resolved in v0.9.18 (B2): the block scalar is now
+`pattern: |-` (chomp indicator), removing the trailing-newline
+fragility. Verified in `.alint.yml`. See §6 for the latency analysis
+that established the fix was defensive (not bug-fixing — the rule
+already passed at v0.9.17 capture).**
 
 ---
 
@@ -329,7 +334,10 @@ match.**
 
 Methodology: `hyperfine -i --warmup 1 --runs 3` on `/tmp/deno`
 (35,422 files, 8.0 GB working tree). Machine: Linux 6.1.0-42-amd64,
-~10 logical cores; alint binary `target/release/alint v0.9.17`.
+~10 logical cores; alint binary `target/release/alint v0.9.17` at
+capture time. Numbers below are v0.9.17-era; bench has not been
+re-run against v0.9.20 — the human-output width audit (v0.9.19/20)
+does not change rule-evaluation timings.
 
 ### 5.1 Measured
 
@@ -382,23 +390,33 @@ commands are documented for that future run.
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/denoland-deno/.alint.yml /tmp/deno` (live run).
 
-**Headline:** alint surfaces **230 violations** across the live tree;
-of those, **117 errors** (mostly `node_modules/` test fixtures —
-expected and gated below), **58 warnings** (mostly GHA hardening +
-hygiene false positives on `tests/testdata/dist/`), and **55
-info-level** findings (cosmetic).
+**Headline (v0.9.17-era; not re-run against v0.9.20):** alint
+surfaced **230 violations** across the live tree at the v0.9.17
+capture; of those, **117 errors** (mostly `node_modules/` test
+fixtures — expected and gated below), **58 warnings** (mostly GHA
+hardening + hygiene false positives on `tests/testdata/dist/`),
+and **55 info-level** findings (cosmetic). Per the v0.9.18 B4
+cross-cutting revalidation pass, A1
+(`hygiene-no-js-build-outputs` requires sibling `package.json`)
+clears the 16 `tests/testdata/dist/` warnings for trees without a
+sibling `package.json`; the `node_modules` errors remain (the
+`node-no-tracked-node-modules` and `hygiene-no-node-modules` rules
+fire on the actual presence pattern and rightly need scope refinement
+in this config).
 
-**Pitfall #22 latency analysis:** the `deno-copyright-js-ts` rule uses
-`pattern: |` (YAML literal block scalar), which appends a trailing
-`\n` to the regex. **The rule does NOT fire today** because every
-Deno copyright-line ends with `\n` naturally (verified by hand against
-`/tmp/deno/cli/main.rs`, `/tmp/deno/runtime/lib.rs`,
+**Pitfall #22 latency analysis (resolved in v0.9.18 B2 — past
+tense):** the `deno-copyright-js-ts` rule originally used `pattern: |`
+(YAML literal block scalar), which appends a trailing `\n` to the
+regex. The rule did NOT fire false positives at v0.9.17 capture
+because every Deno copyright-line ends with `\n` naturally (verified
+by hand against `/tmp/deno/cli/main.rs`, `/tmp/deno/runtime/lib.rs`,
 `/tmp/deno/cli/tsc/99_main_compiler.js`). **0 false positives**
-against the live tree. **However the pattern is fragile**: any TS
-source whose final line is `// Copyright 2018-2026 the Deno authors.
-MIT license.` (no trailing newline) would silently skip the check.
-The defensive fix is to switch to `pattern: |-` (chomp indicator) —
-flagged for one-line patch in §6.3 below.
+against the live tree at v0.9.17. **However the pattern was fragile**:
+any TS source whose final line was `// Copyright 2018-2026 the Deno
+authors. MIT license.` (no trailing newline) would silently skip
+the check. **The defensive `|` → `|-` swap (chomp indicator) was
+applied in v0.9.18 (B2) and is in this directory's `.alint.yml`
+today** — see §6.3 for the post-swap status.
 
 ### 6.1 Per-rule violation summary
 
@@ -439,7 +457,7 @@ distinguish "test fixture" from "real prod commit"; **add `paths.exclude:
 | 1 Cargo.toml file lacks the TOML-style copyright comment | likely a vendored dep manifest or a workspace-internal manifest | error | `deno-copyright-cargo-toml` | **Real upstream gap.** One Cargo.toml is missing the `# Copyright 2018-2026 the Deno authors. MIT license.` line at the top. Two-line fix. |
 | 1 `libs/<crate>/clippy.toml` missing | likely `libs/dotenv/clippy.toml` | error | `deno-libs-crate-has-clippy-toml` | **Real upstream gap** — every `libs/*` crate is supposed to ship a `clippy.toml` that bans the libs-extra method set. One crate is missing one. |
 | 54 `node_modules/` directories committed (test fixtures) | `tests/node_compat/.../node_modules/`, `tests/specs/...`, etc. | error | `node-no-tracked-node-modules` + `hygiene-no-node-modules` | **All false positives.** Deno's tests/* trees deliberately ship vendored fixtures including `node_modules/`. Add `paths.exclude: ["tests/**"]` to the bundled rule overrides, or set `level: warning` for the test-fixture subtree. |
-| 16 `tests/testdata/dist/` JS-build-output false positives | `tests/testdata/...` | warning | `hygiene-no-js-build-outputs` | **All false positives.** Same root cause — Deno's testdata trees ship pre-built JS bundles for the test runner. Same fix as above. |
+| 16 `tests/testdata/dist/` JS-build-output false positives | `tests/testdata/...` | warning | `hygiene-no-js-build-outputs` | **Resolved in v0.9.18 (A1).** All 16 were false positives — Deno's testdata trees ship pre-built JS bundles for the test runner. The bundled rule now requires a sibling `package.json` to fire; deno's `tests/testdata/dist/` paths typically lack one and clear cleanly. |
 | 1 `tests/wpt/runner/expectations/url.json` has bidi control characters | (path shown above) | error | `oss-no-bidi-controls` | **False positive** — WPT (Web Platform Tests) intentionally embed Trojan-Source-defense fixtures. Add to the bundled rule's exclude list. |
 | 30 GHA action references not pinned to 40-char SHA | `.github/workflows/*.{yml,generated.yml}` | warning | `gha-pin-actions-to-sha` | **Real** — Deno's workflows mix tag pins and SHA pins. OpenSSF Scorecard signal. |
 | 11 GHA workflows missing `permissions: contents: read` | `.github/workflows/*.yml` | warning | `gha-workflow-contents-read` | **Real** — small lift. |
@@ -451,38 +469,36 @@ distinguish "test fixture" from "real prod commit"; **add `paths.exclude:
 
 ### 6.3 Suspected `.alint.yml` bugs flagged for parent triage
 
-**Pitfall #22 candidate (defensive fix recommended; not auto-applied
-per the brief's constraint):** `deno-copyright-js-ts` (line 120 of
-`.alint.yml`) uses `pattern: |` (YAML literal block scalar). This
-appends a trailing `\n` to the regex string, requiring a literal
-newline immediately after `MIT license.`. Today the rule passes
-because every Deno copyright-line in `/tmp/deno` ends with `\n`
-naturally — verified against representative .rs/.js/.ts files —
-**so 0 false positives fire today**. However the pattern is fragile:
-a TS source whose last line is the copyright (no trailing newline)
-would silently skip the check.
+**Pitfall #22 candidate — RESOLVED in v0.9.18 (B2):** the
+`deno-copyright-js-ts` rule (now line ~126 of `.alint.yml`)
+originally used `pattern: |` (YAML literal block scalar), which
+appends a trailing `\n` to the regex string. The rule passed at
+v0.9.17 capture because every Deno copyright-line in `/tmp/deno`
+ends with `\n` naturally — verified against representative
+.rs/.js/.ts files — **so 0 false positives fired**. However the
+pattern was fragile: a TS source whose last line was the copyright
+(no trailing newline) would silently skip the check.
 
-**Defensive fix:**
+**Applied fix (in `.alint.yml` since v0.9.18):**
 ```yaml
   - id: deno-copyright-js-ts
     kind: file_header
     paths: ...
-    pattern: |-              # ← change | to |- (chomp indicator)
+    pattern: |-              # ← | → |- (chomp indicator), B2 v0.9.18
       ^(?:#!.*\n)?(?:// (?:deno-lint-|Ported|Copyright).*\n|\s*\n)*// Copyright 2018-2026 the Deno authors\. MIT license\.
     level: error
 ```
 
-Single-character fix: `|` → `|-` strips the trailing newline from the
-pattern. **Status: flagged, not applied** — the rule passes 100% in
-the captured tree, and the brief's constraint scopes auto-fixes to
-1-line `.alint.yml` changes; documenting the latent risk here is the
-deliverable.
+Single-character fix: `|` → `|-` strips the trailing newline from
+the pattern. **Status: applied; pitfall #22 remains an authoring-only
+gotcha (no engine fix in the v0.9.x line).** The defensive swap
+removes the dependency on regex luck.
 
 **No other `.alint.yml` bugs surfaced.** The remaining `pattern:` /
 `pattern: '...'` rules use single-quoted scalars (no `\n` issues per
-pitfall #14), the JSONPath rules use bracket notation for dashed keys
-(pitfall #10 avoided), and the `pair` rule uses `partner:` (pitfall
-#4 avoided).
+pitfall #14 — authoring-only), the JSONPath rules use bracket
+notation for dashed keys (pitfall #10 — authoring-only), and the
+`pair` rule uses `partner:` (pitfall #4 — authoring-only).
 
 ---
 
@@ -548,34 +564,67 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (capture 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version (current):** `0.9.20` (2026-05-10). Capture pass
+  was against `0.9.17`; counts in §6 are v0.9.17-era and have not
+  been re-run.
 - **Rule count:** **76** (20 custom + 8 bundled rulesets — `oss-baseline`
   15, `rust` 11, `node` 9, `ci/github-actions` 3, `monorepo/cargo-workspace`
   4, `tooling/editorconfig` 3, `hygiene/no-tracked-artifacts` 11,
   `agent-context` 5; minus 5 facts = 76 loadable rules)
 - **`alint validate-config`:** ✓ Config valid: 76 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  230-violation breakdown (117 errors mostly false-positive node_modules
-  test fixtures + 5 real catches, 58 warnings, 55 info-level)
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule `respect_gitignore:
-  false`) and #19 (literal-path runtime guard) shipped in engine; this
-  config does not need either workaround
-- **Pitfall #22 latency:** the `deno-copyright-js-ts` rule uses
-  `pattern: |` (block scalar — appends trailing `\n` to regex).
-  **Verified NOT firing today** because every Deno copyright-line is
-  `\n`-terminated. **Defensive one-character fix recommended:**
-  change `pattern: |` → `pattern: |-`. Flagged for parent triage,
-  not auto-applied.
-- **Open gaps (unchanged):** `referenced_files_match_filesystem`
-  (NEW v0.10+ deno-unique), `violation_baseline` (NEW v0.10+
-  deno-unique), `dir_contents_match_allowlist` (NEW v0.10+),
-  `disallowed_methods_in_file` (2 sources — deno + k8s),
-  `*_path_contains` (3 sources — helm, deno, bazel; v0.10 design),
-  `generated_file_fresh` (6 sources; v0.10 ship-target),
-  `monorepo/cargo-workspace` member-discovery refinement
-- **Open suspected bugs in this directory's `.alint.yml`:** **1
-  fragile-but-passing pattern** (pitfall #22 candidate on
-  `deno-copyright-js-ts`, line 120). See §6.3 for the canonical-correct
-  YAML.
+- **Live-tree recheck:** **v0.9.17-era** — see §6 for the 230-violation
+  breakdown captured 2026-05-07. Per the v0.9.18 B4 cross-cutting
+  revalidation pass, A1 (sibling-package.json gate) clears the
+  16 `tests/testdata/dist/` warnings; the `node_modules` errors
+  remain pending in-config exclude refinement.
+- **Pitfall fixes:**
+  - Pitfall #18 (per-rule `respect_gitignore: false`) — engine-fixed
+    in v0.9.17; this config does not need it.
+  - Pitfall #19 (literal-path runtime guard) — engine-fixed in
+    v0.9.17; this config does not need it.
+  - Pitfalls #1, #4, #10, #14, #22 — authoring-only gotchas (no
+    engine fix); this config correctly avoids each.
+- **Pitfall #22 (B2 — applied):** the `deno-copyright-js-ts` rule's
+  `pattern: |` (block scalar — appends trailing `\n` to regex) was
+  swapped to `pattern: |-` in v0.9.18 (B2). **Defensive fix landed**;
+  the rule already passed at v0.9.17 capture but the swap removes
+  the regex-luck dependency.
+- **v0.9.18 bundled-rule refinements landed since the capture:**
+  - **A1** `hygiene-no-js-build-outputs` requires sibling
+    `package.json` — clears the 16 `tests/testdata/dist/` warnings.
+  - **A2** `apache-2-source-has-license-header` long-form ASF
+    preamble (not in this config's extends).
+  - **A3** `python@v1` test-fixture default-excludes (not in this
+    config's extends).
+  - **A4** `monorepo/cargo-workspace@v1` workspace-detection scope
+    note — deno's `ext/`/`libs/`/`runtime/`/`cli/` layout requires
+    per-config selector override (this config defines a per-rule
+    override, so the per-member checks fire correctly).
+  - **A5** `oss-license-exists` recognises `LICENSE.md` — directly
+    benefits deno (which ships `LICENSE.md`, not canonical `LICENSE`).
+    Closes the §2.5 caveat.
+  - **A6** `rust-sources-snake-case` `allow_compiler_naming` knob.
+  - **B2** `pattern: |` → `pattern: |-` defensive swap on
+    `deno-copyright-js-ts` (this config).
+- **v0.9.18 engine extension:** `dir_absent` now supports
+  `scope_filter:`.
+- **v0.9.19 + v0.9.20:** width-aware human output; bundled rule
+  message audit; em-dash scrub; install-snippet reorder. None affect
+  deno-config evaluation behaviour.
+- **Open gaps (unchanged, all v0.10+ ship-targets):**
+  - `referenced_files_match_filesystem` (v0.10+ deno-unique)
+  - `violation_baseline` (v0.10+ deno-unique)
+  - `dir_contents_match_allowlist` (v0.10+)
+  - `disallowed_methods_in_file` (2 sources — deno + k8s)
+  - `*_path_contains` (3 sources — helm, deno, bazel; v0.10 design)
+  - `generated_file_fresh` (6 sources; v0.10 ship-target)
+  - `cross_file_value_equals` (with `value_extractor:`) — v0.10
+    ship-target (formal v0.10 name from launch-evidence)
+  - `monorepo/cargo-workspace` member-discovery refinement
+    (`select_from: "$.workspace.members"`) remains a v0.10 design
+    candidate
+- **Open suspected bugs in this directory's `.alint.yml`:** **none.**
+  The B2 fix landed in v0.9.18; config is clean against the v0.9.20
+  engine + canonical-22 pitfall catalogue.

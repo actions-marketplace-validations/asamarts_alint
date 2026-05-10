@@ -16,7 +16,9 @@ test fixtures** under `crates/ruff_linter/resources/test/fixtures/`
 (deliberately-malformed Python code that ruff tests itself on),
 **154-line `.pre-commit-config.yaml` declaring 15 hook instances**
 across 14 distinct hook ids, **19 GitHub Actions workflows**.
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (2026-05-10). Categories below were
+validated against alint v0.9.17 + the 2026-05-07 ruff SHA;
+categories are stable, absolute counts drift with upstream tip.
 
 ---
 
@@ -416,14 +418,16 @@ rules:
   agent-context + 11 from hygiene/no-tracked-artifacts − overlap =
   54 effective rule IDs after dedup.
 
-**Validation:** `alint validate-config` reports `✓ Config valid: 75
+**Validation:** `alint validate-config` reports `Config valid: 75
 rule(s) loaded`. Pitfall checks: the magic comment is present (line
-1); `['requires-python']` uses bracket notation per pitfall #10;
-`ruff-internal-crates-unpublished` uses `toml_path_equals` (not
-`*_matches`) for the bool field per pitfall #16; the `command:`
-rules use `command:` (not `argv:`) and integer `timeout:`; **no
-`pattern: |` block scalars** (no pitfall #22 candidates — all regex
-patterns are single-quoted single-line scalars).
+1); `['requires-python']` uses bracket notation per pitfall #10
+(still authoring-gotcha-only); `ruff-internal-crates-unpublished`
+uses `toml_path_equals` (not `*_matches`) for the bool field per
+pitfall #16 (also authoring-gotcha-only — `*_path_matches` cannot
+match against bool/null in `*_path_*` rules); the `command:` rules
+use `command:` (not `argv:`) and integer `timeout:`; **no
+`pattern: |` block scalars** (pitfall #22's `|` → `|-` fix is moot
+here — all regex patterns are single-quoted single-line scalars).
 
 ---
 
@@ -432,9 +436,12 @@ patterns are single-quoted single-line scalars).
 Methodology: `hyperfine -i --warmup 1 --runs 5` on the same
 `/tmp/ruff` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`. Where the upstream toolchain isn't
-installed locally, the row is `pending — needs <toolchain>` with
-the exact reproduction command.
+`target/release/alint v0.9.17` (numbers below were captured against
+v0.9.17; v0.9.18 added bundled-rule refinements that eliminate FPs
+but do not change wall-clock; v0.9.19/v0.9.20 added width-aware
+human output, also no wall-clock impact). Where the upstream
+toolchain isn't installed locally, the row is `pending — needs
+<toolchain>` with the exact reproduction command.
 
 ### 5.1 Measured
 
@@ -502,9 +509,9 @@ documented for a future run on a CI-class image.
 
 Run: `alint check --config examples/astral-sh-ruff/.alint.yml /tmp/ruff` (live run, JSON-format).
 
-**Headline:** alint surfaces **7,018 violations** across the live
-tree; **failing rules: 27 / passing: 31** (58 declarative + 13
-shellouts). Per-rule violation counts (top 12):
+**Headline (v0.9.17 capture):** alint surfaced **7,018 violations**
+across the live tree; **failing rules: 27 / passing: 31** (58
+declarative + 13 shellouts). Per-rule violation counts (top 12):
 
 | Count | Rule | Class |
 |---|---|---|
@@ -512,8 +519,8 @@ shellouts). Per-rule violation counts (top 12):
 | 2922 | `ruff-self-format` | False positive (tool not on PATH) |
 | 413 | `ruff-mdformat` | False positive (tool not on PATH) |
 | 413 | `ruff-markdownlint` | False positive (tool not on PATH) |
-| **176** | **`python-sources-final-newline`** | **Bundled-rule over-reach into test fixtures — see §6.2 Bug 1** |
-| **59** | **`python-sources-no-trailing-whitespace`** | **Same bundled-rule over-reach — see §6.2 Bug 1** |
+| **176** | **`python-sources-final-newline`** | **Was a v0.9.17 FP class (bundled python@v1 over-reach into test fixtures); fixed in v0.9.18 A3** |
+| **59** | **`python-sources-no-trailing-whitespace`** | **Same v0.9.17 FP class; fixed in v0.9.18 A3** |
 | 36 | `cargo-workspace-member-has-readme` | Real (36 of 51 crates lack README.md) |
 | 29 | `ruff-prettier-yaml` | False positive (tool not on PATH) |
 | 16 | `gha-workflow-contents-read` | Real (16 of 19 workflows missing explicit permissions) |
@@ -522,13 +529,16 @@ shellouts). Per-rule violation counts (top 12):
 | 3 | `rust-sources-no-trailing-whitespace` | Real (3 Rust source files with trailing whitespace) |
 | 1 each | several | Various single findings |
 
-**The 6,693 violations from the 4 `command:` shellouts (`ruff-self-lint`,
-`-self-format`, `ruff-mdformat`, `ruff-markdownlint`) are P0 false
-positives traceable to "tool not on PATH" per-file spawn-fails**
-(expected in this test environment; would clear with the actual
-toolchain installed). With the actual toolchain, the shellouts
-would each dominate the runtime (ruff is fast — a few seconds; the
-others 10-60 s each).
+**At v0.9.17, the 6,693 violations from the 4 `command:` shellouts
+(`ruff-self-lint`, `-self-format`, `ruff-mdformat`, `ruff-markdownlint`)
+were P0 false positives traceable to "tool not on PATH" per-file
+spawn-fails** (expected in this test environment; would clear with
+the actual toolchain installed). The 235 `python-sources-*` FPs
+above are also gone under v0.9.18+ thanks to A3 (python@v1
+default-excludes test-fixture paths). With the actual toolchain
+installed and v0.9.18+ engine, the shellouts would each dominate
+the runtime (ruff is fast — a few seconds; the others 10-60 s
+each).
 
 ### 6.1 Real findings — the catches that beat existing tooling
 
@@ -557,52 +567,37 @@ SECURITY.md / CoC. Plus ~6,693 false positives traceable to the
 `command:` tool-not-on-PATH spawn-fail count + ~235 bundled-rule
 over-reach into test fixtures (see §6.2).**
 
-### 6.2 Suspected `.alint.yml` bugs flagged for parent triage
+### 6.2 Bundled-rule pattern misalignments — historical, fixed in v0.9.18
 
-#### Bug 1: bundled `python@v1` over-reaches into ruff's test-fixture tree (235 false positives)
+#### Bug 1 (HISTORICAL — fixed in v0.9.18 A3): bundled `python@v1` over-reached into ruff's test-fixture tree (235 false positives at v0.9.17)
 
-**Cause.** The bundled `python@v1` ruleset's
+**Cause (v0.9.17).** The bundled `python@v1` ruleset's
 `python-sources-final-newline` and
-`python-sources-no-trailing-whitespace` rules fire on every `.py`
+`python-sources-no-trailing-whitespace` rules fired on every `.py`
 file under a tree containing `pyproject.toml`. ruff has 1,597
 deliberately-malformed `.py` test fixtures under
 `crates/ruff_linter/resources/test/fixtures/<linter>/` (ruff tests
 itself by detecting bad formatting in these files). The bundled
-rules can't distinguish "real Python source" from "deliberately-malformed
-test fixture".
+rules couldn't distinguish "real Python source" from
+"deliberately-malformed test fixture".
 
-**Sample finding:**
+**Sample finding (v0.9.17):**
 ```
 crates/ruff_linter/resources/test/fixtures/flake8_async/ASYNC115.py
-  → "file does not end with a newline"  (this IS the test — ruff
-                                          checks that ASYNC115 fires
-                                          on this file)
+  -> "file does not end with a newline"  (this IS the test — ruff
+                                           checks that ASYNC115 fires
+                                           on this file)
 ```
 
-**Fix.** Two options:
-
-1. **Per-rule exclude (workspace-specific):** add the test-fixtures
-   path to a `paths.exclude:` block on the bundled rules via an
-   override in this directory's `.alint.yml`. Trivial fix:
-```yaml
-rules:
-  - id: python-sources-final-newline
-    paths: { include: ["**/*.py"], exclude: ["crates/ruff_linter/resources/**", "crates/ruff_linter/src/rules/**/snapshots/**"] }
-  - id: python-sources-no-trailing-whitespace
-    paths: { include: ["**/*.py"], exclude: ["crates/ruff_linter/resources/**", "crates/ruff_linter/src/rules/**/snapshots/**"] }
-```
-
-2. **Bundled-ruleset improvement (cross-cutting):** the
-   `python@v1` ruleset should narrow its `paths:` from `**/*.py` to
-   `**/*.py` excluding common test-fixture/snapshot patterns
-   (`**/test_fixtures/**`, `**/resources/test/**`, `**/snapshots/**`,
-   `**/__snapshots__/**`). Same shape would help any project
-   that ships deliberately-malformed test fixtures (any linter
-   project — ruff, prettier, eslint, clippy, etc.). **Bundled-ruleset
-   refinement candidate.**
-
-This is **not a regex anchor pitfall (#13) or YAML scalar pitfall
-(#14)** — it's a **bundled-rule scope-too-broad issue**.
+**Status: fixed in v0.9.18 (commit A3 of the pre-launch fix wave).**
+The bundled `python@v1` ruleset now default-excludes common
+test-fixture and snapshot paths (`**/test_fixtures/**`,
+`**/resources/test/**`, `**/snapshots/**`, `**/__snapshots__/**`)
+on the source-hygiene rules. ruff (and any other linter project
+that ships deliberately-malformed test fixtures — prettier,
+eslint, clippy, cpython, etc.) gets these FPs eliminated by
+default; no per-config override needed. Effect: the 235 FPs
+documented above drop to ~0 under v0.9.18+.
 
 #### Bug 2 (informational, not a P0): 4 `command:` shellouts spawn-fail per file
 
@@ -635,12 +630,12 @@ invocations dominates wall-clock if naively done.
   reduce process-spawn overhead for the per-file shellout pattern
   (this case study + airflow). **v0.10 design candidate** at 2
   sources (ruff + airflow).
-- **Bundled `python@v1` ruleset scope refinement** — narrow the
-  `paths:` for `python-sources-final-newline` and
-  `python-sources-no-trailing-whitespace` to exclude common
-  test-fixture/snapshot patterns. Cross-saturation: any linter
-  project (ruff, prettier, eslint, clippy) ships deliberately-malformed
-  test fixtures. **Bundled-ruleset refinement candidate.**
+- **Bundled `python@v1` ruleset scope refinement** — **landed in
+  v0.9.18 A3.** `python-sources-final-newline` and
+  `python-sources-no-trailing-whitespace` now default-exclude
+  common test-fixture/snapshot patterns. Cross-saturation: any
+  linter project (ruff, prettier, eslint, clippy, cpython) ships
+  deliberately-malformed test fixtures and benefits.
 - **Vendoring published schemas under `.alint/schemas/`** as a
   first-class workflow — the GitHub workflow schema, the PEP 621
   schema, and others recur across configs and would benefit from a
@@ -674,32 +669,51 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (current: alint v0.9.20, 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20 (2026-05-10)`. The §6 violation-count
+  breakdown was captured against v0.9.17 + the 2026-05-07 ruff
+  SHA; categories are stable, absolute counts drift with upstream
+  tip
 - **Rule count:** **75** (21 custom + 7 bundled rulesets —
   `oss-baseline` 15, `rust` 11, `python` 9,
   `monorepo/cargo-workspace` 4, `ci/github-actions` 3,
   `agent-context` 5, `hygiene/no-tracked-artifacts` 11; some rule
   IDs overlap, which is why the grand total is 75 rather than the
   arithmetic sum of 79)
-- **`alint validate-config`:** ✓ Config valid: 75 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for
+- **`alint validate-config`:** Config valid: 75 rule(s) loaded
+- **Live-tree recheck:** performed against v0.9.17 — see §6 for
   the 7,018-violation breakdown (failing rules 27 / passing 31;
   ~75 real findings + ~235 bundled-rule over-reach into ruff's
   test fixtures + ~6,693 tool-not-on-PATH per-file spawn-fail
-  counts)
-- **Pitfall fixes (v0.9.17):** none directly cited in this config
+  counts). Not re-run against v0.9.20; under v0.9.18+ the 235
+  python@v1 FPs disappear (A3 fix), bringing the headline down
+  from 7,018 to ~6,768 (still dominated by tool-not-on-PATH
+  spawn-fails)
+- **Pitfall fixes (engine, v0.9.17):** Pitfall #18 (per-rule
+  `respect_gitignore: false`) and #19 (`literal_is_nested`)
+  shipped in engine; not directly cited in this config
+- **Pitfall fixes (bundled rules, v0.9.18):** A3 (python@v1
+  default-excludes test-fixture paths) clears the §6.2 Bug 1 FPs
+  against ruff. A6 (rust@v1 `rust-sources-snake-case` has
+  `allow_compiler_naming` knob) is rust-lang/rust-targeted and
+  doesn't surface against ruff's tree
+- **Pitfall #16 (`*_path_matches` cannot match against bool/null):**
+  authoring-only gotcha; this config respects the constraint via
+  `ruff-internal-crates-unpublished` using `toml_path_equals` (not
+  `*_matches`)
 - **Pitfall #22 status:** No `pattern: |` block scalars in this
-  config — not a candidate
-- **Open gaps (unchanged):** `pair_inverse` (v0.10 design candidate,
-  2 sources: ruff + angular), `command_idempotent` (v0.10 design
-  candidate, 2 sources: ruff + prettier), `command_per_repo`
-  (v0.10 design candidate, 2 sources: ruff + airflow). No new
-  rule-kind gaps surfaced
-- **Open suspected bugs in this directory's `.alint.yml`:** 1
-  bundled-ruleset over-reach (§6.2 Bug 1) producing 235 false
-  positives against ruff's test fixtures. **Not auto-fixed in this
-  pass — flagged for parent-agent triage.** Recommended fix:
-  per-rule `paths.exclude:` extension (template provided in §6.2)
-  OR bundled-ruleset refinement to narrow the default scope
+  config — not a candidate (pitfall #22 fix is `|-` instead of
+  `|`)
+- **Open gaps (still pending v0.10):** `pair_inverse` (v0.10 design
+  candidate — covers `cargo insta --unreferenced=reject`-style
+  snapshot/source pair check, 2 sources: ruff + angular),
+  `command_idempotent` (v0.10 design candidate — covers
+  fixer-in-check-mode pattern, 2 sources: ruff + prettier),
+  `command_per_repo` (v0.10 design candidate — covers per-file
+  shellout fan-out, 2 sources: ruff + airflow). No new rule-kind
+  gaps surfaced
+- **Open suspected bugs in this directory's `.alint.yml`:** none
+  remain. The §6.2 Bug 1 (bundled python@v1 over-reach into test
+  fixtures) was fixed in v0.9.18 A3 — no per-rule
+  `paths.exclude:` workaround needed

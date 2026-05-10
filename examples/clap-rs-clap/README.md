@@ -21,7 +21,12 @@ plus the same auxiliary policy files; SHA drift caveat applies but
 the structural shape (5 published members + 1 facade + 1 bench) is
 stable.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). Capture pass
+was against v0.9.17. v0.9.18 added the `monorepo/cargo-workspace@v1`
+non-canonical-layout scope note (A4) — clap's bare-name members
+(`clap_builder`, `clap_derive`, etc.) require per-config selector
+override; the per-member rules in this directory's `.alint.yml`
+already supply that override and continue to work.
 
 ---
 
@@ -333,10 +338,12 @@ applicable here).
 
 Methodology: `hyperfine -i --warmup 1 --runs 3` on `/tmp/clap` (637
 files, 6.4 MB working tree). Machine: Linux 6.1.0-42-amd64, ~10
-logical cores; alint binary `target/release/alint v0.9.17`. The
-small working tree means measured wall-clocks are dominated by
-process-startup overhead; per-rule timings are hundreds of microseconds
-each.
+logical cores; alint binary `target/release/alint v0.9.17` at capture
+time. Numbers below are v0.9.17-era; bench has not been re-run
+against v0.9.20 — the human-output width audit (v0.9.19/20) does
+not change rule-evaluation timings. The small working tree means
+measured wall-clocks are dominated by process-startup overhead;
+per-rule timings are hundreds of microseconds each.
 
 ### 5.1 Measured
 
@@ -389,11 +396,16 @@ commands are documented for that future run.
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/clap-rs-clap/.alint.yml /tmp/clap` (live run).
 
-**Headline:** alint surfaces **132 violations** across the live tree;
-of those, **2 are errors** (real bugs), **59 warnings** (mostly
-GHA-pinning + trailing-whitespace style issues), and **71 info-level**
-findings (mostly `oss-no-trailing-whitespace` + `rust-sources-no-trailing-whitespace`
-on docs/changelog files).
+**Headline (v0.9.17-era; not re-run against v0.9.20):** alint
+surfaced **132 violations** across the live tree at the v0.9.17
+capture; of those, **2 errors** (real bugs in test fixtures),
+**59 warnings** (mostly GHA-pinning + trailing-whitespace style
+issues), and **71 info-level** findings (mostly
+`oss-no-trailing-whitespace` + `rust-sources-no-trailing-whitespace`
+on docs/changelog files). Per the v0.9.18 B4 cross-cutting
+revalidation pass, A6 (`rust-sources-snake-case` `allow_compiler_naming`
+knob) eliminates the 1 snake-case error in clap's test fixtures
+without further config tweaks.
 
 The 2 errors are flagged for triage; both are in test fixtures.
 
@@ -423,7 +435,7 @@ SHA-pinned actions. Each finding is 1 actionable change.
 
 | Finding | Path | Severity | Rule | Triage |
 |---|---|---|---|---|
-| Snake-case naming violation | `tests/builder/main.rs` (or similar) | error | `rust-sources-snake-case` | **Real but expected** — clap's tests use `snake_case_with_numbers` and a few `PascalCase` test fixture names. Likely a per-test-file allowlist would close this; not a launch-blocker. |
+| Snake-case naming violation | `tests/builder/main.rs` (or similar) | error | `rust-sources-snake-case` | **Resolved in v0.9.18 (A6).** clap's tests used `snake_case_with_numbers` / `PascalCase` test fixture names; the `allow_compiler_naming` knob added in v0.9.18 closes this without per-test-file allowlist work. |
 | Zero-width Unicode character in source | `tests/derive_ui/`-style fixture | error | `rust-sources-no-zero-width` | **Test fixture** — the Trojan-Source defense rule fires on a file that intentionally embeds zero-width Unicode to test clap's flag-parsing against confusables. Add `paths.exclude: ["tests/derive_ui/**"]` to the bundled rule's scope, or add an inline `# alint-skip:` directive once that's available. |
 | 56 GHA action references not pinned to 40-char SHA | `.github/workflows/*.yml` | warning | `gha-pin-actions-to-sha` | **Real** — 56 references mix tag pins (`actions/checkout@v6`) and SHA pins. The bundled rule wants every `uses:` to be SHA-pinned (OpenSSF Scorecard signal). Worth filing upstream as a single dependabot config update PR. |
 | 11 GHA workflows missing `permissions: contents: read` default | `.github/workflows/*.yml` | warning | `gha-workflow-contents-read` (1 finding shown; possibly aggregated) | **Real** — small lift to add `permissions: contents: read` at the workflow root. |
@@ -440,13 +452,23 @@ SHA-pinned actions. Each finding is 1 actionable change.
 **None.** The config is clean — no `pattern: |` block scalars, no
 unanchored `^`/`$` regexes, no JSONPath dashed-key bare-dot
 notation, no `command:` rules using `argv:` or `secondary:`. Every
-pitfall in the canonical-22 catalogue is correctly avoided.
+pitfall in the canonical-22 catalogue (all authoring-only or
+engine-fixed) is correctly avoided.
 
-**Pitfall #22 (YAML `|` block-scalar trailing newline):** not
+**Pitfall #22 (YAML `|` block-scalar trailing newline; remains
+authoring-only in v0.9.20 — fix is `|-` instead of `|`):** not
 applicable — clap's `.alint.yml` uses `pattern: '...'` (single-quoted)
 or no pattern (for `toml_path_equals` rules). The only `|` block
 scalars in the file are `message: |` (multi-line message text — not
 regex), which are pitfall-free.
+
+**Pitfall #10 (JSONPath dashed-key bracket notation; authoring-only):**
+correctly handled — `$.workspace.package['rust-version']` uses
+bracket notation for the dashed key.
+
+**Pitfall #17 (regex workaround for set-membership; authoring-only,
+awaiting v0.10 `*_path_contains`):** correctly worked around in
+`clap-member-has-cli-keyword` via `file_content_matches`.
 
 ---
 
@@ -500,25 +522,48 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (capture 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version (current):** `0.9.20` (2026-05-10). Capture pass
+  was against `0.9.17`; counts in §6 are v0.9.17-era and have not
+  been re-run.
 - **Rule count:** **70** (28 custom + 5 bundled rulesets — `oss-baseline`
   15, `rust` 11, `monorepo/cargo-workspace` 4, `ci/github-actions` 3,
   `hygiene/no-tracked-artifacts` 11; minus 2 facts = 70 loadable rules)
 - **`alint validate-config`:** ✓ Config valid: 70 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  132-violation breakdown (2 real errors in test fixtures, 56 GHA
-  pinning warnings, 71 cosmetic info-level findings)
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule `respect_gitignore:
-  false`) and #19 (literal-path runtime guard for `root_only: true` +
-  multi-component literals) both shipped in engine; this config does
-  not need either workaround
-- **Open gaps (unchanged):** `cross_file_value_equals` (v0.10
-  ship-target, 10 sources — clap is one), `regex_resolves_in_file`
-  (v0.11+ single-source candidate via clap's
-  `release.toml.pre-release-replacements`), `*_path_contains` (v0.10
-  design candidate, 3+ sources)
+- **Live-tree recheck:** **v0.9.17-era** — see §6 for the 132-violation
+  breakdown captured 2026-05-07. Per the v0.9.18 B4 cross-cutting
+  revalidation pass, A6 (`allow_compiler_naming`) eliminates the
+  1 snake-case error; remaining counts stable.
+- **Pitfall fixes:**
+  - Pitfall #18 (per-rule `respect_gitignore: false`) — engine-fixed
+    in v0.9.17; this config does not need it.
+  - Pitfall #19 (literal-path runtime guard) — engine-fixed in
+    v0.9.17; this config does not need it.
+  - Pitfalls #10, #17, #22 — authoring-only gotchas (no engine
+    fix); this config correctly avoids each.
+- **v0.9.18 bundled-rule refinements landed since the capture:**
+  - **A6** `rust-sources-snake-case` `allow_compiler_naming` knob
+    — closes the test-fixture snake-case error from §6.2 cleanly.
+  - **A4** `monorepo/cargo-workspace@v1` workspace-detection scope
+    note — clap's bare-name members require per-config selector
+    override (already present in this config).
+  - **A1** `hygiene-no-js-build-outputs` requires sibling
+    `package.json` (not applicable to clap — no `package.json`).
+  - **A5** `oss-license-exists` recognises `LICENSE.TXT` /
+    `LICENSE.md` (not applicable — clap ships canonical
+    `LICENSE-APACHE` + `LICENSE-MIT`).
+- **v0.9.18 engine extension:** `dir_absent` now supports
+  `scope_filter:`.
+- **v0.9.19 + v0.9.20:** width-aware human output; bundled rule
+  message audit; em-dash scrub; install-snippet reorder. None affect
+  clap-config evaluation behaviour.
+- **Open gaps (unchanged, all v0.10/v0.11+ ship-targets):**
+  - `cross_file_value_equals` (v0.10 ship-target, 10 sources — clap
+    is one)
+  - `*_path_contains` (v0.10 design candidate, 3+ sources)
+  - `regex_resolves_in_file` (v0.11+ single-source candidate via
+    clap's `release.toml.pre-release-replacements`)
 - **Open suspected bugs in this directory's `.alint.yml`:** **none.**
-  Config is clean against the v0.9.17 engine + canonical-22 pitfall
+  Config is clean against the v0.9.20 engine + canonical-22 pitfall
   catalogue.

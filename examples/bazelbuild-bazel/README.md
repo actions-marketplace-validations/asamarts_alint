@@ -24,7 +24,10 @@ yml files for the Buildkite CI matrix). The 2026-05-06 inventory
 captured 322 BUILD + 100 .bzl + 1 MODULE.bazel; HEAD is structurally
 identical.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). The pitfall #18
+fix demonstrated by the `bazel-version-file-exists` rule shipped in
+v0.9.17 and remains the canonical adoption example for the per-rule
+`respect_gitignore: false` knob.
 
 ---
 
@@ -82,7 +85,7 @@ release-helper bot, scorecard scan, SSL monitor, stale-issue management.
 | `MODULE.bazel` declares `module(name = "...")` | Without it, bzlmod can't identify the workspace | `bazel-module-declares-name` (`file_content_matches` for `^\s*module\s*\(`) |
 | No legacy `WORKSPACE` / `WORKSPACE.bazel` / `WORKSPACE.bzlmod` at root | Bazel 8 removed legacy WORKSPACE entirely | `bazel-no-legacy-workspace-at-root` |
 | Root `BUILD` (or `BUILD.bazel`) exists | Without it, `bazel build //:<target>` can't resolve any root target | `bazel-root-build-file-exists` |
-| `.bazelversion` at root (5 bytes: `9.1.0\n`) | Bazelisk reads it to fetch matching Bazel binary; **gitignored but tracked** | `bazel-version-file-exists` (with `respect_gitignore: false`, **v0.9.17 pitfall #18 fix**) |
+| `.bazelversion` at root (5 bytes: `9.1.0\n`) | Bazelisk reads it to fetch matching Bazel binary; **gitignored but tracked** | `bazel-version-file-exists` (with `respect_gitignore: false`, **v0.9.17 pitfall #18 fix, in-tree since v0.9.17 and stable through v0.9.20**) |
 | `.bazelversion` is semver-shaped | Magic tokens (`latest`, `last_green`) defeat the file's purpose | `bazel-version-file-shape` (`file_content_matches`); same gitignore caveat |
 | `.bazelrc` at root (117 lines, 25+ named configs) | Repo-wide build flags consolidation | `bazel-bazelrc-exists` |
 | 322 BUILD / BUILD.bazel files | One per Bazel package | `bazel-build-file-naming` (`file_starts_with` with `prefix: "#"`) |
@@ -182,7 +185,7 @@ Every row from §1 tagged with one of:
 | `MODULE.bazel` declares `module(name=...)` | alint-today | `bazel-module-declares-name` (`file_content_matches`) |
 | No legacy WORKSPACE at root | alint-today | `bazel-no-legacy-workspace-at-root` |
 | Root BUILD/BUILD.bazel exists | alint-today | `bazel-root-build-file-exists` |
-| `.bazelversion` at root (gitignored but tracked) | alint-today | `bazel-version-file-exists` (`file_exists` + `respect_gitignore: false`, **v0.9.17 pitfall #18 fix**) |
+| `.bazelversion` at root (gitignored but tracked) | alint-today | `bazel-version-file-exists` (`file_exists` + `respect_gitignore: false`, **v0.9.17 pitfall #18 fix, in-tree since v0.9.17 and stable through v0.9.20**) |
 | `.bazelversion` is semver-shaped | alint-today | `bazel-version-file-shape` (`file_content_matches`) |
 | `.bazelrc` at root | alint-today | `bazel-bazelrc-exists` |
 | 322 BUILD files open with `#`-comment | alint-today | `bazel-build-file-naming` (`file_starts_with`) |
@@ -289,13 +292,16 @@ Buildifier (1 surface):
    layer. The 100% Apache-header coverage + 100% GHA shape coverage
    plus 73% Bazel-structural-file coverage is what alint adds value on.
 
-2. **Pitfall #18 (`respect_gitignore: false`) is the single
-   load-bearing v0.9.17 fix for this repo.** `.bazelversion` is
-   tracked in git but ALSO listed in bazel's own `.gitignore`
-   (contributors override locally). Without `respect_gitignore:
-   false`, the `bazel-version-file-exists` rule reports the file as
-   missing. **Verified working** in §6 below — the rule passes
-   against `/tmp/bazel/.bazelversion` with the v0.9.17 per-rule knob.
+2. **Pitfall #18 (`respect_gitignore: false`) was the single
+   load-bearing v0.9.17 fix for this repo, and remains the
+   canonical bazel-shaped adoption example through v0.9.20.**
+   `.bazelversion` is tracked in git but ALSO listed in bazel's
+   own `.gitignore` (contributors override locally). Without
+   `respect_gitignore: false`, the `bazel-version-file-exists`
+   rule reports the file as missing. **Verified working** in §6
+   below — the rule passed against `/tmp/bazel/.bazelversion` with
+   the per-rule knob at v0.9.17 capture, and the engine behaviour
+   is unchanged through v0.9.20.
 
 3. **`*_path_contains` is the highest-leverage v0.10 candidate for
    bazel.** 4 of 5 Buildkite surfaces collapse to one rule kind once
@@ -326,7 +332,7 @@ rules:
     kind: file_exists
     paths: ".bazelversion"
     root_only: true
-    respect_gitignore: false   # ← v0.9.17 pitfall #18 fix
+    respect_gitignore: false   # ← pitfall #18 fix shipped v0.9.17, stable
     level: error
 
   - id: bazel-module-declares-name               # MODULE.bazel has module(name=...)
@@ -377,10 +383,12 @@ rules:
 
 **Validation:** `alint validate-config` reports `✓ Config valid: 81
 rule(s) loaded`. Pitfall checks: the magic comment is present (line 1);
-no `pattern: |` block scalars (pitfall #22 not applicable); the
-`bazel-version-file-exists` rule uses the v0.9.17 `respect_gitignore:
-false` per-rule knob (pitfall #18 fix); no `argv:` on `command:` rules
-(pitfall #1); no `secondary:` on `pair` rules (pitfall #4).
+no `pattern: |` block scalars (pitfall #22 — authoring-only — not
+applicable); the `bazel-version-file-exists` rule uses the
+`respect_gitignore: false` per-rule knob (pitfall #18 — engine-fixed
+in v0.9.17); no `argv:` on `command:` rules (pitfall #1 — authoring
+gotcha); no `secondary:` on `pair` rules (pitfall #4 — authoring
+gotcha).
 
 ---
 
@@ -389,7 +397,10 @@ false` per-rule knob (pitfall #18 fix); no `argv:` on `command:` rules
 Methodology: `hyperfine -i --warmup 1 --runs 3` (or `-N --runs 3` for
 sub-second declarative-only benches) on `/tmp/bazel` (9,697 files,
 204 MB working tree). Machine: Linux 6.1.0-42-amd64, ~10 logical
-cores; alint binary `target/release/alint v0.9.17`.
+cores; alint binary `target/release/alint v0.9.17` at capture time.
+Numbers below are v0.9.17-era; bench has not been re-run against
+v0.9.20 — the human-output width audit (v0.9.19/20) does not change
+rule-evaluation timings.
 
 ### 5.1 Measured
 
@@ -440,18 +451,24 @@ the bazel self-build): **~2.5 s warm**.
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/bazelbuild-bazel/.alint.yml /tmp/bazel` (live run).
 
-**Headline:** alint surfaces **910 violations** across the live tree;
-of those, **0 errors**, **593 warnings** (mostly buildifier
+**Headline (v0.9.17-era; not re-run against v0.9.20):** alint
+surfaced **910 violations** across the live tree at the v0.9.17
+capture; of those, **0 errors**, **593 warnings** (mostly buildifier
 shellout failures from missing toolchain + Apache-header misses on
 generated/vendor files), and **317 info-level** findings (mostly
 BUILD-file `#`-comment-header info + java/oss trailing-whitespace).
+Per the v0.9.18 B4 cross-cutting revalidation pass, the 30 false-positive
+`hygiene-no-js-build-outputs` warnings drop to 0 after A1 (sibling
+package.json gate) — bazel's `build/` dirs no longer match. B3 also
+dropped/scoped `bazel-files-have-apache-header` cross-cutting; this
+config does not invoke that rule explicitly.
 
-**Pitfall #18 verified working:** `bazel-version-file-exists`
-**passes** with `respect_gitignore: false` against
-`/tmp/bazel/.bazelversion` (5-byte file: `9.1.0\n`). Without the
-override, the rule would fail because bazel's `.gitignore` lists
-`.bazelversion` (line 34). This is the v0.9.17 fix shipped exactly
-for this case.
+**Pitfall #18 verified working at v0.9.17 capture, behaviour
+unchanged through v0.9.20:** `bazel-version-file-exists` **passes**
+with `respect_gitignore: false` against `/tmp/bazel/.bazelversion`
+(5-byte file: `9.1.0\n`). Without the override, the rule would fail
+because bazel's `.gitignore` lists `.bazelversion` (line 34). This
+is the v0.9.17 fix shipped exactly for this case.
 
 ### 6.1 Per-rule violation summary
 
@@ -501,7 +518,7 @@ legitimate misses — the next subsection enumerates them.
 | 109 Java files lack the Apache header | `src/main/java/com/google/devtools/build/lib/syntax/StarlarkSyntax.java` and similar; many are auto-generated from grammars/protos but lack the boilerplate | warning | `bazel-java-sources-apache-header` | **Real upstream gaps.** Bazel's convention is "every Java source file carries the 14-line Apache header" but ~3% of the 3,347 in-tree Java files don't. Most are in `.../syntax/`, `.../proto/`, and protobuf-generated trees. Worth a one-time `for f in $(grep -L 'Copyright .* The Bazel Authors'); do prepend-header $f; done` cleanup PR. |
 | 2 .bzl files lack the Apache header | `tools/...`, possibly `release/...` | warning | `bazel-bzl-apache-license-header` | **Real upstream gaps.** Both are real misses; the convention is universal across the 100 .bzl files. Two-line fix per file. |
 | 22 shellcheck warnings on in-tree shell scripts | `scripts/*.sh`, `combine_distfiles.sh`, etc. | warning | `bazel-shell-shellcheck` | **Real shellcheck warnings.** Each is a per-script SC#### code — quoting, unused variables, etc. The bazel team treats these as cosmetic but they're real shellcheck findings. |
-| 30 false-positive hygiene findings | `tools/build_defs/...`, `examples/...`, etc. with `build/` dir names | warning | `hygiene-no-js-build-outputs` | **All false positives.** Bazel's `build/` is the build script directory (not a JS build artefact). **Recommended fix:** scope `hygiene/no-tracked-artifacts@v1`'s JS-output rule to repos with a `package.json`, OR add `**/*/build/**` to the rule's exclude list (already done for some paths but several leak through). Filed under the bundled-ruleset refinement queue. |
+| 30 false-positive hygiene findings | `tools/build_defs/...`, `examples/...`, etc. with `build/` dir names | warning | `hygiene-no-js-build-outputs` | **Resolved in v0.9.18 (A1).** All 30 were false positives. Bazel's `build/` is the build script directory (not a JS build artefact). The bundled rule now requires a sibling `package.json` to fire — bazel has no root `package.json`, so these clear cleanly. |
 | 5 GHA tag-pinned actions | `.github/workflows/...` (e.g. `actions/checkout@v6`) | warning | `gha-pin-actions-to-sha` | **Real** — small lift to convert tag pins to SHA pins. OpenSSF Scorecard signal. |
 | 2 GHA workflows missing `permissions: contents: read` | `.github/workflows/...` | warning | `gha-workflow-contents-read` | **Real** — small lift. |
 | 2 GHA workflows missing `step-security/harden-runner` | `.github/workflows/...` (likely `cherry-picker` + `release-helper`) | warning | `bazel-gha-uses-step-security-harden-runner` | **Real** — Bazel team egress-audit convention; should be applied uniformly. |
@@ -510,17 +527,19 @@ legitimate misses — the next subsection enumerates them.
 ### 6.3 Suspected `.alint.yml` bugs flagged for parent triage
 
 **None.** The config is clean — no `pattern: |` block scalars (so
-pitfall #22 not applicable), no unanchored `^`/`$` regexes, no
-JSONPath issues, no `command:` rules using `argv:` or `secondary:`.
-Every pitfall in the canonical-22 catalogue is correctly avoided.
+pitfall #22 — authoring-only — not applicable), no unanchored
+`^`/`$` regexes, no JSONPath issues, no `command:` rules using
+`argv:` or `secondary:`. Every pitfall in the canonical-22 catalogue
+is correctly avoided.
 
-**Pitfall #18 explicitly verified:** `bazel-version-file-exists`
-passes with `respect_gitignore: false` against `/tmp/bazel/.bazelversion`.
-The 2026-05-06 commit a26ce0c5 added this rule specifically as the
-canonical example of the v0.9.17 pitfall #18 fix. **Live verification:
-0 violations** for that rule against the live tree. (The complementary
-`bazel-version-file-shape` rule also passes with the same per-rule
-override.)
+**Pitfall #18 explicitly verified (engine-fixed in v0.9.17, behaviour
+stable through v0.9.20):** `bazel-version-file-exists` passes with
+`respect_gitignore: false` against `/tmp/bazel/.bazelversion`. The
+2026-05-06 commit a26ce0c5 added this rule specifically as the
+canonical example of the pitfall #18 fix. **Live verification at
+v0.9.17 capture: 0 violations** for that rule against the live tree.
+(The complementary `bazel-version-file-shape` rule also passes with
+the same per-rule override.)
 
 ---
 
@@ -541,10 +560,11 @@ override.)
   repos want it. **Single-source low priority.**
 - **`bazelrc_path_*` rule kind** (NEW) — niche to Bazel; rated low
   priority, logged for v0.10+ review.
-- **`respect_gitignore: false` per-rule knob** (NEW pitfall #18 fix) —
-  surfaced uniquely by bazel. **SHIPPED in v0.9.17.** Verified
-  working against `/tmp/bazel/.bazelversion` during the 2026-05-07
-  revalidation pass.
+- **`respect_gitignore: false` per-rule knob** (pitfall #18 fix) —
+  surfaced uniquely by bazel. **Shipped in v0.9.17, stable through
+  v0.9.20.** Verified working against `/tmp/bazel/.bazelversion`
+  during the 2026-05-07 revalidation pass; behaviour unchanged in
+  the v0.9.18-v0.9.20 release wave.
 
 ---
 
@@ -577,29 +597,61 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (capture 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version (current):** `0.9.20` (2026-05-10). Capture pass
+  was against `0.9.17`; counts in §6 are v0.9.17-era and have not
+  been re-run.
 - **Rule count:** **81** (41 custom + 4 bundled rulesets — `oss-baseline`
   15, `java` 11, `ci/github-actions` 3, `hygiene/no-tracked-artifacts`
   11; minus 1 fact `has_java` = 81 loadable rules)
 - **`alint validate-config`:** ✓ Config valid: 81 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  910-violation breakdown (0 errors, 593 warnings — mostly buildifier
-  shellout false positives from missing toolchain, plus 109 real
-  Java header misses + 30 hygiene false positives + 22 real
-  shellcheck warnings; 317 info-level findings)
-- **Pitfall fixes (v0.9.17):**
+- **Live-tree recheck:** **v0.9.17-era** — see §6 for the 910-violation
+  breakdown captured 2026-05-07. Per the v0.9.18 B4 cross-cutting
+  revalidation pass, the 30 `hygiene-no-js-build-outputs` warnings
+  drop to 0 after A1 (sibling-package.json gate); other counts
+  stable.
+- **Pitfall fixes:**
   - **Pitfall #18 (`respect_gitignore: false` per-rule)** —
-    **directly applies to this repo's `.bazelversion`**. **Verified
-    working: rule passes with the override, would fail without it.
-    Live re-confirmed against `/tmp/bazel/.bazelversion`.**
-  - Pitfall #19 (literal-path runtime guard for `root_only: true` +
-    multi-component literals) shipped but does not apply here
-- **Open gaps (unchanged):** `*_path_contains` (v0.10 design
-  candidate, 3 sources — bazel is one), `generated_file_fresh` (v0.10
-  ship-target, 6 sources — bazel is one), `starlark_path_*` family
-  (low priority), `bazelrc_path_*` (niche to Bazel)
+    engine-fixed in v0.9.17. **Directly applies to this repo's
+    `.bazelversion`.** **Verified working: rule passes with the
+    override, would fail without it.** Behaviour unchanged through
+    v0.9.20.
+  - Pitfall #19 (literal-path runtime guard) — engine-fixed in
+    v0.9.17 but does not apply here.
+  - Pitfalls #1, #4, #22 — authoring-only gotchas (no engine fix);
+    config correctly avoids each.
+- **v0.9.18 bundled-rule refinements landed since the capture:**
+  - **A1** `hygiene-no-js-build-outputs` requires sibling
+    `package.json` — clears bazel's 30 false-positive `build/`-dir
+    warnings cleanly.
+  - **A2** `apache-2-source-has-license-header` ships long-form
+    ASF preamble (not directly used by bazel — bazel ships its own
+    14-line per-language Apache header rules under the `bazel-*-apache-header`
+    family).
+  - **A3** `python@v1` test-fixture default-excludes (not in this
+    config's `extends:` set).
+  - **A4** `monorepo/cargo-workspace@v1` workspace-detection scope
+    note (not in this config's `extends:`; bazel is not a Cargo workspace).
+  - **A5** `oss-license-exists` recognises `LICENSE.TXT`/`LICENSE.md`
+    (bazel ships canonical `LICENSE` so unaffected).
+  - **A6** `rust-sources-snake-case` `allow_compiler_naming` (not
+    a Rust repo).
+  - **B3** drop/scope `bazel-files-have-apache-header` cross-cutting
+    pass (this config does not enable that bundled rule directly).
+- **v0.9.18 engine extension:** `dir_absent` now supports
+  `scope_filter:`.
+- **v0.9.19 + v0.9.20:** width-aware human output; bundled rule
+  message audit; em-dash scrub; install-snippet reorder. None affect
+  bazel-config evaluation behaviour.
+- **Open gaps (unchanged):**
+  - `*_path_contains` (v0.10 design candidate, 3 sources — bazel
+    is one)
+  - `generated_file_fresh` (v0.10 ship-target, 6 sources — bazel is
+    one)
+  - `starlark_path_*` family (low priority — buildifier hand-off
+    remains the right answer)
+  - `bazelrc_path_*` (niche to Bazel)
 - **Open suspected bugs in this directory's `.alint.yml`:** **none.**
-  Config is clean against the v0.9.17 engine + canonical-22 pitfall
+  Config is clean against the v0.9.20 engine + canonical-22 pitfall
   catalogue.

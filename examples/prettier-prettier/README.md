@@ -19,7 +19,13 @@ plugins under `src/language-*/` (angular not separate — handled in
 language-js), 20 changelog category dirs + 2 template files under
 `changelog_unreleased/`, 2 plugin packages under `packages/`.
 
-**alint version:** 0.9.17 (built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). Originally
+captured at v0.9.17 on 2026-05-07; reconciled forward across the
+v0.9.18 fix wave (A1-A6 bundled-rule refinements + B1-B4 cross-cutting
+revalidation + `dir_absent` `scope_filter` engine extension) and the
+v0.9.19/v0.9.20 width-aware-output + bundled-rule message audit pair.
+Pitfalls #18 and #19 engine-fixed in v0.9.17. FP counts cited below
+are v0.9.17-era unless annotated otherwise.
 
 ---
 
@@ -393,7 +399,10 @@ rule(s) loaded`. Pitfall checks:
 Methodology: `hyperfine --warmup 1 --runs 3 -i` against the same
 `/tmp/prettier` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`.
+`target/release/alint v0.9.17` (numbers below are the v0.9.17-era
+measurements; not re-run for v0.9.20 — the v0.9.18-v0.9.20 changes
+are bundled-rule refinements + output-formatting + message-audit and
+do not change throughput characteristics).
 
 ### 5.1 Measured
 
@@ -437,15 +446,27 @@ invocation.
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/prettier-prettier/.alint.yml /tmp/prettier` (live run, human format).
 
-**Headline:** alint surfaces **111 violations** across the live tree
-(23 errors + 13 warnings + 75 info; 31 passing; 17 failing rules; 69
-auto-fixable). Of those, the bulk is committed `node_modules/` test
-fixtures (intentional — see §6.1) + cosmetic trailing-whitespace +
-final-newline findings. **The 5 net-new gates pass** — every
-`src/language-*/` exports both `index.js` and
+**Headline (v0.9.17-era):** alint surfaced **111 violations** across
+the live tree (23 errors + 13 warnings + 75 info; 31 passing; 17
+failing rules; 69 auto-fixable). Of those, the bulk was committed
+`node_modules/` test fixtures (intentional — see §6.1) + cosmetic
+trailing-whitespace + final-newline findings. **The 5 net-new gates
+pass** — every `src/language-*/` exports both `index.js` and
 `languages.evaluate.js`; every `packages/plugin-*` has the full
 shape; every changelog category has its `.gitkeep`. **No real bug
-surfaced; the structural floor is healthy at HEAD.**
+surfaced; the structural floor was healthy at HEAD.**
+
+**v0.9.18 follow-on note:** the 2 false-positive `node_modules/`
+findings under `tests/integration/**/node_modules/**` would still
+fire today — A1's hygiene-no-js-build-outputs requires a sibling
+package.json (which these test fixtures DO have, since they're
+intentional npm-resolution test cases). The bundled-rule refinement
+queue still has the prettier-specific scoping fix open: skip paths
+under any directory containing a `tests/integration/` ancestor.
+**Counts not re-run for v0.9.20** — the v0.9.18-v0.9.20 deltas affect
+A2-A6 bundled-rule refinements (none of which match prettier's
+fingerprint) + output formatting + message text, not violation
+counts on this tree.
 
 ### 6.1 Real findings (after deducting the test-fixtures class)
 
@@ -538,33 +559,43 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (originally 2026-05-07; reconciled 2026-05-10)
 
-- **alint version:** `0.9.17` (built 2026-05-07)
+- **alint version:** `0.9.20` (current as of 2026-05-10). Originally
+  validated against `0.9.17` (2026-05-07).
 - **Rule count:** **68** (22 custom + 6 bundled rulesets — `oss-baseline`
   15, `node` 9, `ci/github-actions` 3, `hygiene/no-tracked-artifacts`
-  11, `agent-context` 5, `tooling/editorconfig` 3 = 46 bundled)
+  11, `agent-context` 5, `tooling/editorconfig` 3 = 46 bundled). The
+  v0.9.18 fix wave (A1-A6) did not change this count; v0.9.19/v0.9.20
+  changed only output width handling + bundled-rule message text.
 - **`alint validate-config`:** ✓ Config valid: 68 rule(s) loaded
-- **Live-tree recheck:** **performed** — see §6 for the 111-violation
-  breakdown (2 false-positive `node_modules/` test fixtures + ~13
-  warnings + 75 cosmetic info-level findings; **5 net-new gates all
-  pass — structural floor healthy**).
-- **Pitfall fixes (v0.9.17):** Pitfall #18 (per-rule
-  `respect_gitignore: false`) and #19 (literal-path runtime guard for
-  `root_only: true` + multi-component literals) both shipped in
-  engine; this config does not need either workaround.
-- **Pitfall #22 verified clean** per the brief's batch-5 check —
-  0 `pattern: |` block scalars.
-- **Open gaps (unchanged):** `command_idempotent` (v0.10+ candidate,
-  5+ sources), `for_each_leaf_dir` (v0.10+ candidate, 3 sources),
-  `json_key_value_forbidden` (v0.10+ candidate, 3 sources),
+  (v0.9.17-era; not re-run for v0.9.20).
+- **Live-tree recheck:** **performed at v0.9.17** — see §6 for the
+  111-violation breakdown (2 false-positive `node_modules/` test
+  fixtures + ~13 warnings + 75 cosmetic info-level findings; **5
+  net-new gates all pass — structural floor healthy**). Not re-run
+  for v0.9.20.
+- **Pitfall fixes:** Pitfall #18 (per-rule `respect_gitignore: false`)
+  and #19 (literal-path runtime guard for `root_only: true` +
+  multi-component literals) **were engine-fixed in v0.9.17** — this
+  config has not needed either workaround in any version since.
+- **Pitfall #22 verified clean** per the original batch-5 check —
+  0 `pattern: |` block scalars. No regression in v0.9.18-v0.9.20.
+- **Open gaps (unchanged in v0.9.20):** `command_idempotent` (v0.10
+  ship-target, 5+ sources), `for_each_leaf_dir` (v0.10 candidate,
+  3 sources), `json_key_value_forbidden` (v0.10 candidate, 3 sources),
   `unique_by` cross-dir (single source, defer), env-injection on
-  `command:` rule (single source, defer).
+  `command:` rule (single source, defer). All still v0.10/v0.10+;
+  none shipped in v0.9.18-v0.9.20.
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
-- **Bundled-ruleset refinement candidate:** the `node-no-tracked-node-modules`
-  + `hygiene-no-node-modules` rules over-fire on `tests/integration/**/node_modules/**`
-  test fixtures (intentional in prettier). Recommended scoping: skip
-  paths under any directory containing a `tests/integration/` ancestor.
+- **Bundled-ruleset refinement still active:** `node-no-tracked-node-modules`
+  + `hygiene-no-node-modules` continue to over-fire on
+  `tests/integration/**/node_modules/**` test fixtures. v0.9.18's A1
+  refinement (require sibling package.json) does NOT close this case
+  because the prettier test fixtures intentionally ship a sibling
+  package.json (they're npm-resolution test cases). The recommended
+  scoping (skip under any `tests/integration/` ancestor) is still
+  open in the bundled-rule refinement queue.
 
 ---
 

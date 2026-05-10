@@ -19,8 +19,10 @@ scripts under `dev/`** (lint orchestration + release tooling), 6
 `dev/`, **`dev/.rat-excludes` = 145 patterns**, **two-tier
 LICENSE/NOTICE discipline** (`LICENSE` + `LICENSE-binary` 548
 lines + `NOTICE` + `NOTICE-binary` 1171 lines + `licenses/` +
-`licenses-binary/`). **alint version:** 0.9.17 (`1dbd9b218a0e`,
-built 2026-05-07).
+`licenses-binary/`). **alint version:** 0.9.20 (2026-05-10).
+Categories below were validated against alint v0.9.17 + the
+2026-05-07 spark SHA; categories are stable, absolute counts drift
+with upstream tip.
 
 ---
 
@@ -258,7 +260,7 @@ Every row from §1 tagged with one of:
 |---|---|---|
 | `LICENSE` | alint-today | bundled `apache-2-license-text-present` |
 | `NOTICE` | alint-today | bundled `apache-2-notice-file-exists` |
-| Source-header on every Scala/Java/Python/R/XML/proto file | alint-today (with override) | `apache-2-source-has-license-header` (this directory's override widens the bundled pattern to accept the longer ASF preamble + extends file-extension list to `.scala`, `.r/.R`, `.proto`) |
+| Source-header on every Scala/Java/Python/R/XML/proto file | alint-today | `apache-2-source-has-license-header`. v0.9.17 required this directory to ship an override widening the bundled pattern to accept the longer ASF preamble; v0.9.18 A2 fix landed the long-form preamble as the bundled default, so the pattern override is no longer needed. The file-extension extension (`.scala`, `.r/.R`, `.proto`) remains spark-specific |
 | `.asf.yaml` | alint-today | `spark-asf-yaml-present` + 2 yaml-path checks (`-declares-homepage`, `-declares-commits-list`) |
 | `LICENSE-binary` (binary-distribution license) | alint-today | `spark-license-binary-present` (`file_exists` with `root_only: true`) |
 | `NOTICE-binary` (binary-distribution NOTICE) | alint-today | `spark-notice-binary-present` |
@@ -394,14 +396,14 @@ config in `.alint.yml`):
 ```yaml
 extends:
   - alint://bundled/oss-baseline@v1                  # 15 rules: license/readme/security/CoC + hygiene
-  - alint://bundled/compliance/apache-2@v1           # 3 rules: LICENSE, NOTICE, source-header (overridden below for the long ASF preamble)
+  - alint://bundled/compliance/apache-2@v1           # 3 rules: LICENSE, NOTICE, source-header (long ASF preamble is the bundled default since v0.9.18 A2; this config still extends the file-extension list locally)
   - alint://bundled/java@v1                          # 11 rules: pom.xml, build wrapper, target/, *.class, java sources scoped via has_ancestor pom.xml
   - alint://bundled/python@v1                        # 9 rules: pyproject.toml + py source hygiene scoped via has_ancestor pyproject.toml
   - alint://bundled/ci/github-actions@v1             # 3 rules: workflow contents-read + pin-to-sha + name (covers all 72)
   - alint://bundled/hygiene/no-tracked-artifacts@v1  # 11 rules: __pycache__, dist/, build/, etc.
 
 rules:
-  - id: apache-2-source-has-license-header           # OVERRIDE bundled — accept long ASF preamble + extend extensions to .scala/.r/.R/.proto
+  - id: apache-2-source-has-license-header           # extends bundled (long ASF preamble is now the default, v0.9.18 A2) with spark-specific file extensions .scala/.r/.R/.proto
     kind: file_header
     paths:
       include: ["**/*.{scala,java,py,r,R,js,jsx,ts,tsx,sh,xml,proto}"]
@@ -458,15 +460,16 @@ rules:
   hygiene/no-tracked-artifacts − overlap = 52 effective rule IDs
   after dedup.
 
-**Validation:** `alint validate-config` reports `✓ Config valid:
+**Validation:** `alint validate-config` reports `Config valid:
 110 rule(s) loaded`. Pitfall checks: the magic comment is present
 (line 1); JSONPath uses `?match(@.uses, '...')` per the honourable
-mention; `?@['package-ecosystem']` uses bracket notation per pitfall
-#10; `(?m)` is used on `^`/`$` anchored regex; the `command:`
-rules use `command:` (not `argv:`) and integer `timeout:`; the
+mention; `?@['package-ecosystem']` uses bracket notation per
+pitfall #10 (still authoring-gotcha-only); `(?m)` is used on
+`^`/`$` anchored regex; the `command:` rules use `command:` (not
+`argv:`) and integer `timeout:`; the
 `spark-python-pyproject-declares-ruff-config` rule uses
 `['line-length']` bracket notation per pitfall #10; **no `pattern: |`
-block scalars** (no pitfall #22 candidates — the
+block scalars** (pitfall #22's `|` → `|-` fix is moot here — the
 `apache-2-source-has-license-header` override uses a single-line
 single-quoted scalar).
 
@@ -477,9 +480,12 @@ single-quoted scalar).
 Methodology: `hyperfine -i --warmup 1 --runs 3` on the same
 `/tmp/spark` working tree captured 2026-05-07. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary
-`target/release/alint v0.9.17`. Where the upstream toolchain isn't
-installed locally, the row is `pending — needs <toolchain>` with
-the exact reproduction command.
+`target/release/alint v0.9.17` (numbers below were captured against
+v0.9.17; v0.9.18 added bundled-rule refinements that eliminate FPs
+but do not change wall-clock; v0.9.19/v0.9.20 added width-aware
+human output, also no wall-clock impact). Where the upstream
+toolchain isn't installed locally, the row is `pending — needs
+<toolchain>` with the exact reproduction command.
 
 ### 5.1 Measured
 
@@ -644,9 +650,11 @@ the marketable number.
   (v0.11+ ship-target with 5 sources); spark's modules.py ↔ pom.xml
   shape is a refinement worth folding into the design.
 - **Bundled `apache-2-source-has-license-header` long-form pattern
-  default** — flagged in §6.1. Cross-saturation: arrow + spark +
-  airflow all override the bundled rule with the same long-form
-  pattern; the bundle should default to it.
+  default** — **landed in v0.9.18 A2.** arrow + spark + airflow
+  configs no longer need to ship the per-TLP pattern override; this
+  config's pattern override is preserved here mainly because the
+  spark file-extension extension list (`.scala`, `.r/.R`, `.proto`)
+  is still spark-specific.
 
 ---
 
@@ -676,37 +684,59 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (current: alint v0.9.20, 2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20 (2026-05-10)`. The §6 violation-count
+  breakdown was captured against v0.9.17 + the 2026-05-07 spark
+  SHA; categories are stable, absolute counts drift with upstream
+  tip
 - **Rule count:** **110** (61 custom + 6 bundled rulesets —
   `oss-baseline` 15, `compliance/apache-2` 3, `java` 11, `python` 9,
   `ci/github-actions` 3, `hygiene/no-tracked-artifacts` 11; some
   rule IDs overlap, which is why the grand total is 110 rather than
   the arithmetic sum of 113)
-- **`alint validate-config`:** ✓ Config valid: 110 rule(s) loaded
-- **Live-tree recheck:** **performed** (declarative-only) — see §6
-  for the 683-violation breakdown (failing rules 25 / passing 57;
-  ~340 real findings + ~294 cosmetic + 78 RAT-excluded false
-  positives that `registry_paths_resolve` would resolve cleanly +
-  ~21 macOS Finder metadata files for upstream cleanup)
-- **Pitfall fixes (v0.9.17):** none directly cited in this config
+- **`alint validate-config`:** Config valid: 110 rule(s) loaded
+- **Live-tree recheck:** performed (declarative-only) against
+  v0.9.17 — see §6 for the 683-violation breakdown (failing rules
+  25 / passing 57; ~340 real findings + ~294 cosmetic + 78
+  RAT-excluded false positives that `registry_paths_resolve` would
+  resolve cleanly + ~21 macOS Finder metadata files for upstream
+  cleanup). Not re-run against v0.9.20; expectations are unchanged
+  because spark had already shipped a per-TLP
+  `apache-2-source-has-license-header` pattern override prior to
+  v0.9.18, so A2 is a no-op against spark's count
+- **Pitfall fixes (engine, v0.9.17):** Pitfall #18 (per-rule
+  `respect_gitignore: false`) and #19 (`literal_is_nested`) shipped
+  in engine; not directly cited in this config
+- **Pitfall fixes (bundled rules, v0.9.18):** A2 (long-form ASF
+  preamble in bundled `apache-2-source-has-license-header` default)
+  obsoletes this config's pattern override; only the spark-specific
+  file-extension extension list still needs to be expressed
+  locally. A4 (`monorepo/cargo-workspace` selector parses
+  `[workspace]` members) is rust-only and does not affect spark.
+  A5 (`oss-license-exists` recognises LICENSE.TXT/LICENSE.md) is
+  unaffected — spark uses bare `LICENSE`
 - **Pitfall #22 status:** No `pattern: |` block scalars in this
-  config — not a candidate. The `apache-2-source-has-license-header`
-  override pattern uses a single-line single-quoted scalar (correct
-  form per pitfall #14)
-- **Open gaps (unchanged):** `xml_path_*` (v0.10 ship-target, 2
-  sources), `registry_paths_resolve` (v0.10 ship-target, 8 sources),
-  `generated_file_fresh` (v0.10 ship-target, 6 sources),
-  `apache/governance@v1` (v0.10 ship-target, 3 Apache TLPs
-  converging),
+  config — not a candidate (pitfall #22 fix is `|-` instead of `|`;
+  this config uses single-line single-quoted scalars throughout)
+- **Open gaps (still pending v0.10):** `xml_path_matches` +
+  `xml_path_equals` (v0.10 ship-target — covers spark's 49 pom.xml
+  multi-module integrity; the highest-leverage v0.10 ship-target
+  for spark, since the config currently falls back to
+  `file_content_matches` regex against raw XML),
+  `registry_paths_resolve` (v0.10 ship-target — covers
+  `dev/.rat-excludes`), `generated_file_fresh` (v0.10 ship-target
+  — covers `dev/check-protos.py` + `dev/test-dependencies.sh`),
+  `apache/governance@v1` (v0.10 ship-target — bundled ruleset
+  consolidating spark + arrow + airflow Apache governance overlap;
+  spark is the headline driver),
   `cross_language_registry_consistency` (refinement of v0.11+
   `cross_language_implementation_complete`)
 - **Open suspected bugs in this directory's `.alint.yml`:** none.
   The 78 Apache-header false positives are RAT-exclude
   coordinations that require `registry_paths_resolve` (v0.10
   ship-target) to resolve declaratively; a one-line `paths.exclude:`
-  extension is the available workaround. The full-pass with
+  extension remains the available workaround. The full-pass with
   `command:` shellouts hangs because the per-file `dev/lint-*`
   shellouts spawn-fail-fast (tools not on PATH); declarative-only
   timing of 1.35 s is the marketable number until the toolchain is

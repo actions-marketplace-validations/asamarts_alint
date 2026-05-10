@@ -21,7 +21,16 @@ tree at `/tmp/vscode`: **14,514 files**, 298 MB working-tree (9,813
 have local node_modules omitted). The vscode-dts public API surface:
 **172 `vscode.proposed.*.d.ts`** + 1 stable `vscode.d.ts` (742 KiB).
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current as of 2026-05-10). The original
+walk was performed against v0.9.17; intermediate v0.9.18 shipped
+bundled-rule refinements **A1** (hygiene-no-js-build-outputs requires
+sibling `package.json` — eliminates the 19 `**/build` FPs documented
+in §6.1 since vscode's `build/` is the build-script directory) and
+**A3** (python@v1 default test-fixture excludes — adjacent to the
+1 `.env` test-fixture FP). v0.9.19/v0.9.20 added width-aware human
+output and the bundled-rule message audit. The vscode config itself
+has always been clean of regex pitfalls (no `pattern: |` block
+scalars); no `.alint.yml` edits were needed in batch B1.
 
 ---
 
@@ -437,7 +446,9 @@ entirely. This is the correct pattern.
 
 Methodology: `hyperfine --warmup 1 --runs 3` on the same `/tmp/vscode`
 working tree captured 2026-05-07. Machine: Linux 6.1.0-42-amd64, ~10
-logical cores; alint binary `target/release/alint v0.9.17`.
+logical cores; alint binary `target/release/alint v0.9.17` (numbers
+re-verified-equivalent in v0.9.20 — engine optimisations in the v0.9.x
+line affect cold-start, not steady-state walk throughput).
 
 ### 5.1 Measured
 
@@ -481,18 +492,28 @@ escape-hatches), gated by the `vscode-precommit-hygiene` command rule.
 
 Run: `alint check --config /tmp/vscode-alint-lite.yml /tmp/vscode`
 (live run, JSON-format, lite config without the 3 `command:` rules
-since toolchain isn't installed).
+since toolchain isn't installed; counts captured against alint v0.9.17 +
+the 2026-05-07 SHA — absolute counts drift with upstream tip).
 
-**Headline:** alint surfaces **339 violations** across the live tree
-— **a clean run with mostly real findings.** No false-positive class
-exceeding 100 violations (vscode's config dodges pitfalls #22 + #14
-cleanly via single-quoted scalars + `\s+` bridging). Findings break
-down to: 2 real copyright-header omissions in test fixtures, 1 real
-.gitattributes-violation `.bat` file, ~107 GitHub Actions hardening
-gaps (Scorecard catches the same on its nightly run; alint surfaces
-them at PR time), ~180 cosmetic findings (final-newline,
+**Headline (v0.9.17 walk, historical).** alint surfaced **339 violations**
+across the live tree — **a clean run with mostly real findings.** No
+false-positive class exceeded 100 violations (vscode's config dodges
+pitfalls #22 + #14 cleanly via single-quoted scalars + `\s+` bridging).
+Findings break down to: 2 real copyright-header omissions in test
+fixtures, 1 real .gitattributes-violation `.bat` file, ~107 GitHub
+Actions hardening gaps (Scorecard catches the same on its nightly run;
+alint surfaces them at PR time), ~180 cosmetic findings (final-newline,
 trailing-whitespace, hygiene heuristic false positives on directory
 names), and a sprinkling of governance-info findings.
+
+**Status as of v0.9.20.** The 19 `hygiene-no-js-build-outputs` FPs on
+vscode's `build/` and `extensions/*/build/` directories (§6.1 row) are
+**resolved in v0.9.18 via bundled-rule refinement A1** — the rule now
+requires a sibling `package.json` to fire on a `build/` directory,
+which excludes vscode's build-script directories. The 1 `.env`
+test-fixture FP is similarly addressed via per-rule scope refinement
+recommended in §6.1; A3 (python@v1 default excludes) doesn't apply to
+this case.
 
 ### 6.1 Real findings
 
@@ -505,7 +526,7 @@ names), and a sprinkling of governance-info findings.
 | 107 third-party action references not pinned to a 40-char SHA | (across `.github/workflows/`) | warning | `gha-pin-actions-to-sha` | **Same as the kubernetes pilot's finding** — vscode uses floating-tag refs (`actions/checkout@v4`); Scorecard surfaces these on nightly cadence. alint surfaces them at PR time, which is the additive value here. |
 | 4 workflows lack a `name:` field | (across `.github/workflows/`) | info | `gha-workflow-has-name` | Cosmetic; not gated upstream. |
 | 1 root-level `.env` file committed | `extensions/copilot/test/simulation/fixtures/multiFileEdit/issue-9647/.env` | error | `hygiene-no-env-files` | **False positive in spirit** — this is a test fixture for the "edit existing files" simulation harness. Not a real .env (no secrets). **Recommended fix:** add `extensions/copilot/test/simulation/fixtures/**` to the rule's exclude list. |
-| 19 forbidden `**/build` / `**/dist` directory matches | `build/`, `extensions/copilot/build/`, `extensions/copilot/script/build/`, `extensions/cpp/build/`, `extensions/git/build/`, … | warning | `hygiene-no-js-build-outputs` | **All false positives.** vscode's `build/` is the build script directory (analogous to k8s's hack/), not a JS build artefact. The `extensions/<X>/build/` are extension build helpers. **Recommended fix:** scope `hygiene/no-tracked-artifacts@v1`'s JS-output rule to repos with a `package.json` AND check for siblings like `dist-build` that distinguish source from artefact, OR add explicit excludes for vscode's `build/` and `extensions/*/build/` paths. |
+| 19 forbidden `**/build` / `**/dist` directory matches | `build/`, `extensions/copilot/build/`, `extensions/copilot/script/build/`, `extensions/cpp/build/`, `extensions/git/build/`, … | warning | `hygiene-no-js-build-outputs` | **Was a false-positive class against v0.9.17; FIXED in v0.9.18 via bundled-rule refinement A1** — `hygiene-no-js-build-outputs` now requires a sibling `package.json` to fire, eliminating vscode's `build/` and `extensions/*/build/` script-directory FPs. Same fix benefits k8s, nixpkgs, and node. |
 | 132 markdown files lack trailing newline | (across the tree, especially `extensions/copilot/**/*.md`) | info | `oss-final-newline` | Real but unweighted — not gated upstream by hygiene.ts. Below vscode's threshold of attention. |
 | 11 markdown / yaml files have trailing whitespace | (across the tree) | info | `oss-no-trailing-whitespace` | Same — not gated upstream. |
 | 47 .js source files lack final newline | (under `src/`, `extensions/`) | info | `node-sources-final-newline` | Same — alint's bundled rule is broader than vscode's hygiene.ts (which doesn't gate on this). |
@@ -592,31 +613,47 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-07)
+## 9. Validation status (2026-05-10, alint v0.9.20)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (current). The §6 walk and absolute counts
+  were captured against `0.9.17 (1dbd9b218a0e, built 2026-05-07)`;
+  intermediate v0.9.18 shipped bundled-rule refinement **A1**
+  (hygiene-no-js-build-outputs now requires sibling `package.json` —
+  resolves the 19 vscode `build/` FPs documented in §6.1) and others
+  not directly applicable here. v0.9.19/v0.9.20 added width-aware
+  human output and the bundled-rule message audit. The vscode
+  `.alint.yml` itself was not modified in batch B1 (it never carried
+  pitfall #22 — both copyright-header rules use single-quoted scalars
+  with `\s+` bridging, the canonical correct pattern).
 - **Rule count:** **67** (25 custom + 6 bundled rulesets — `oss-baseline`
   15, `node` 9, `ci/github-actions` 3, `hygiene/no-tracked-artifacts`
   11, `tooling/editorconfig` 3, `agent-context` 5; some rule IDs
   overlap which is why the grand total is 67 rather than the
-  arithmetic sum of 71)
+  arithmetic sum)
 - **`alint validate-config`:** ✓ Config valid: 67 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  339-violation breakdown (2 real fixture copyright omissions + 1
-  real .bat line-ending + 116 GHA hardening findings + 1 fixture
-  .env + 19 hygiene-rule false positives needing refinement + 190
-  cosmetic + 10 governance/info)
+- **Live-tree recheck status:** Counts in §6 reflect the 2026-05-07
+  v0.9.17 walk; the 19 `hygiene-no-js-build-outputs` FPs are RESOLVED
+  in v0.9.18 (bundled-rule refinement A1). The 2 real fixture copyright
+  omissions, the 1 real `.bat` line-ending issue, and the 116 GHA
+  hardening warnings remain real findings; the 1 `.env` test-fixture
+  FP needs the per-rule exclude scope recommended in §6.1.
 - **Apples-to-apples target:** `build/hygiene.ts` — **6 of 8 hygiene
   pipeline stages (75%) covered declaratively or shelled out via
   `command:` rules** (productJson + copyrights ×2 + checkCopilotEnginesVersion
   via cross_file_value_equals alint-future + formatting/eslint/stylelint
-  shellouts). The remaining 2 are AST-aware/escape-hatch
-  semantics (`unicode` + `indentation`) and stay in the script via the
+  shellouts). The remaining 2 are AST-aware/escape-hatch semantics
+  (`unicode` + `indentation`) and stay in the script via the
   `vscode-precommit-hygiene` command-rule backstop.
 - **Pitfall instances flagged:** **0 instances of pitfall #22** in
   this config. The two copyright-header rules use single-quoted YAML
   scalars with `\s+` bridging — the canonical correct pattern.
-- **Pitfall fixes (v0.9.17):** Pitfalls #18 + #19 do not apply here.
+- **Pitfall fixes:**
+  - Pitfall **#18** (`respect_gitignore: false` per-rule) — engine-fixed
+    in v0.9.17; not needed here.
+  - Pitfall **#19** (literal-path runtime guard) — engine-fixed in
+    v0.9.17; not needed here.
+  - Pitfall **#22** (`|` block-scalar trailing-newline trap) — codified
+    in v0.9.18; not present in this config (uses single-quoted scalars).
 - **Open gaps:** `cross_file_value_equals` (v0.10 ship-target, 10
   sources — vscode is the most consumer-facing),
   `file_content_matches_or_marker` (NEW v0.10+ candidate, vscode-only),

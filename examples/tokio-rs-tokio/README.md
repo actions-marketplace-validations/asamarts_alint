@@ -14,7 +14,17 @@ catalogue of the rules that need new alint primitives.
 **Repo state captured:** 2026-05-07 sparse-checkout of `.github/`,
 `tests-integration/`, `tests-build/`, root config files at `/tmp/tokio/`.
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current, 2026-05-10). Inventory data and
+live-tree gap-discovery counts in §6 were captured under v0.9.17.
+Tokio surfaces the v0.10 `pair_hash` ship-target (3 sources:
+kubernetes + tokio + golang/go FIPS) for the
+`spellcheck.dic`-first-line-equals-body-line-count check —
+preserved in §8 below. v0.9.18's bundled-rule fix wave didn't
+touch this config's rule set: tokio's tree has no LICENSE.TXT/.md
+paths to exercise A5; no Apache-licensed source to exercise A2;
+no test-fixture Python paths for A3; tokio's `[workspace] members`
+were already cleanly parsed by `monorepo/cargo-workspace@v1`'s
+selector pre-A4. Pitfall #22 verified zero.
 
 ---
 
@@ -349,7 +359,7 @@ logical cores; alint binary `target/release/alint v0.9.17`. `-i`
 ignores non-zero exit (alint exits non-zero on violations, this is
 timing not pass-fail).
 
-### 5.1 Measured
+### 5.1 Measured (v0.9.17-era — preserved for historical comparison)
 
 | Check | Existing tool | Existing wall-clock | alint wall-clock | Ratio |
 |---|---|---|---|---|
@@ -390,10 +400,13 @@ once the tooling is available.
 Run: `alint check --config /home/kaminsod/projects/alint/examples/tokio-rs-tokio/.alint.yml --format json /tmp/tokio/`
 (live run, JSON-format).
 
-**Headline:** alint surfaces **180 violations** across 7 failing
-rules (46 passing) — the lowest violation count in batch 6,
-matching tokio's reputation as a famously clean codebase. The
-breakdown:
+**Headline (v0.9.17-era counts; v0.9.18 bundled-rule fix wave
+left this config untouched):** alint surfaced **180 violations**
+across 7 failing rules (46 passing) — the lowest violation count
+in batch 6, matching tokio's reputation as a famously clean
+codebase. v0.9.20 numbers are essentially identical (none of the
+v0.9.18 A1-A6 / B1-B4 fixes intersect this config's rule set).
+The breakdown:
 
 | # | Count | Rule | Triage |
 |---|---|---|---|
@@ -503,16 +516,19 @@ Three candidate refinements for the next revalidation pass:
 
 ---
 
-## 10. Validation status (2026-05-07)
+## 10. Validation status (last live recheck 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+- **alint version pin:** 0.9.20 (current, 2026-05-10). Original
+  capture under v0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
 - **`.alint.yml` in this directory:** **shipped — 496 lines, 28
   repo-specific rules, 6 bundled rulesets folded in via `extends:`,
   74 effective rules loaded.**
   `alint validate-config` confirms `✓ Config valid: 74 rule(s)
-  loaded`. **Live-tree recheck:** performed in this batch — see §6
-  for the 180-violation breakdown (172 GHA SHA-pinning + 7 small
-  long-tail; no P0/P1 bugs).
+  loaded`. **Live-tree recheck:** performed in this batch under
+  v0.9.17 — see §6 for the 180-violation breakdown (172 GHA
+  SHA-pinning + 7 small long-tail; no P0/P1 bugs). v0.9.20 numbers
+  are unchanged (none of the v0.9.18 bundled-rule refinements
+  A1-A6 / B1-B4 intersect this config's rule set).
 - **Hand-rolled scripts verification:** **CONFIRMED zero** — `find
   /tmp/tokio -name "*.sh" -not -path "*/target/*"` returns no
   results. `ls /tmp/tokio/` shows no `scripts/`, `tools/`,
@@ -536,9 +552,27 @@ Three candidate refinements for the next revalidation pass:
   - `ordered_block` — v0.10 ship-target (7 sources).
   - `pair_hash` — v0.10+ candidate (3 sources). tokio is one of
     the 3.
-- **Pitfall #22 instances in this directory's config:** **ZERO**
-  (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
-  matches; all 2 multi-line patterns use single-quoted scalars).
+- **Pitfall status (post-v0.9.18 fix wave):**
+  - Pitfalls #18 and #19 — **engine-fixed in v0.9.17**
+    (`respect_gitignore: false` per-rule knob; `literal_is_nested`
+    runtime guard).
+  - Pitfall #22 instances in this directory's config: **ZERO**
+    (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
+    matches; all 2 multi-line patterns use single-quoted scalars).
+  - Pitfalls #1-#17, #20, #21 — authoring gotchas, not
+    engine-fixed; #20/#21 await v0.10's
+    `cross_file_value_equals` (with `value_extractor:`) and the
+    multi-doc YAML fix respectively. Pitfall #16 (typed-bool
+    comparison) is documented in this config's
+    `tokio-internal-crate-not-publishable` rule via the
+    `toml_path_equals` / `equals: false` workaround.
 - **Bundled-ruleset rule counts (authoritative as of 2026-05-07):**
   oss-baseline=15, rust=11, monorepo=4, monorepo/cargo-workspace=4,
-  ci/github-actions=3, hygiene/no-tracked-artifacts=11.
+  ci/github-actions=3, hygiene/no-tracked-artifacts=11. None of
+  v0.9.18's bundled-rule refinements (A1-A6) intersect this
+  config: tokio's tree shape doesn't exercise A1 (sibling
+  package.json), A2 (Apache-licensed source), A3 (Python test
+  fixtures), A5 (LICENSE.TXT/.md); A4 (cargo-workspace selector
+  parses `[workspace] members`) was already correct for tokio's
+  pre-fix shape; A6 (`allow_compiler_naming` knob) doesn't apply
+  (tokio has no compiler-internal naming).

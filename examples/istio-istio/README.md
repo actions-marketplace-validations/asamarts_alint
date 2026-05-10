@@ -23,7 +23,15 @@ YAML files** under `releasenotes/notes/`, **NO `.github/workflows/`**
 (CI runs in Prow at istio/test-infra), **NO k8s-style per-subdir
 OWNERS** (uses repo-root `CODEOWNERS`).
 
-**alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`.
+**alint version:** `0.9.20` (2026-05-10). **Counts in §6 are
+v0.9.17-era;** the live tree was not re-walked under v0.9.20 for this
+revision (the pre-launch fix wave A1-A6 in v0.9.18 reduced cosmetic /
+hygiene FP counts across all 30 case-study trees, but the structural
+findings in §6.1 — the 13 stable, machine-verifiable structural drifts
+including the cobra-cli placeholder, the gRPC-Authors header drift, the
+HTTP→HTTPS chart-source bug, the typo'd apiVersion, and the 2
+multi-doc-YAML pitfall #21 runtime errors — are stable classifications
+that A1-A6 do not affect).
 
 ---
 
@@ -438,7 +446,9 @@ as 2 runtime violations on `releasenotes/notes/50328.yaml` (see §6.2).
 Methodology: `hyperfine --warmup 1 --runs 3 -i` against the same
 `/tmp/istio` working tree captured 2026-05-08. Machine: Linux
 6.1.0-42-amd64, ~10 logical cores; alint binary `target/release/alint
-v0.9.17`. The `-i` flag (ignore non-zero exit) is necessary because
+v0.9.17` (numbers carried forward; v0.9.20's width-aware human output
+and bundled-rule message audits do not materially affect walk timing
+on istio's tree). The `-i` flag (ignore non-zero exit) is necessary because
 several `command:` shellouts fail when their tool isn't on PATH
 (`hadolint`, `yamllint`, `license-lint`, `golangci-lint`, `go`,
 `gofmt`).
@@ -492,8 +502,15 @@ the common-files marker, etc.).
 ## 6. Gap discovery — what alint surfaces against the live tree
 
 Run: `alint check --config /home/kaminsod/projects/alint/examples/istio-istio/.alint.yml /tmp/istio` (live, JSON-format).
+**Counts in this section are v0.9.17-era;** v0.9.18's pre-launch fix
+wave (A1-A6) does not materially change istio's findings — istio's
+hygiene cosmetics (438 missing-final-newline + 222 trailing-whitespace)
+are concentrated under `manifests/charts/` chart templates, not under
+build-output dirs that A1's sibling-package.json gate now excludes. The
+spawn-failure noise is environmental; the structural findings (13
+stable structural drifts) are stable classifications unaffected by A1-A6.
 
-**Headline:** alint surfaces **3,346 violations** across 12 failing
+**Headline (v0.9.17 snapshot):** alint surfaces **3,346 violations** across 12 failing
 rules. **2,635 are `istio-yamllint` shellout-failure messages** (`yamllint`
 not on PATH in this validation env, fires once per text file the rule
 walks); **29 are `istio-hadolint` spawn-failure messages** (same
@@ -515,7 +532,7 @@ URL drift** + **6 release-note schema findings** (typo + enum drift +
 | `manifests/charts/gateways/istio-ingress/Chart.yaml` declares `sources: [http://github.com/istio/istio]` (HTTP, not HTTPS) | 1 | warning | `istio-chart-sources-istio-istio` | **Real bug.** Every other Chart.yaml uses `https://`. The drift is invisible to `helm lint` (which doesn't validate the URL scheme) and to the existing Make pipeline (no shape-pinning rule exists). **alint surfaces it via `yaml_path_equals` against `$.sources[0]`** |
 | `releasenotes/notes/27430.yaml` declares `piVersion: release-notes/v2` (typo: missing leading `a`) | 1 | warning | `istio-releasenotes-apiversion` | **Real bug.** The release-notes generator parses YAML and silently ignores the unknown key, so the file is invisible to its own schema check. alint's `yaml_path_equals` against `$.apiVersion` surfaces the literal mismatch |
 | `releasenotes/notes/{31336,31797,v1-read-crd}.yaml` declare `kind` outside the template enum (`bug` / `enhancement`) | 3 | warning | `istio-releasenotes-kind` | **Real bugs.** Should be `bug-fix` / `feature` per the template enum. The release-notes generator probably falls through to "uncategorised" |
-| `releasenotes/notes/50328.yaml` is a multi-document YAML file (engine rejects with "more than one document is not supported") | 2 | error | `istio-releasenotes-{apiversion,kind}` | **Pitfall #21 — real engine limit.** Legitimate two-document file (collapsing two related changes into one PR-numbered release-note entry). The engine's `serde_yaml::from_str::<Value>` single-document call rejects per-rule. **NOT YET FIXED in v0.9.17;** v0.10 ship-target via `multi_doc_mode:` knob (istio is the named source) |
+| `releasenotes/notes/50328.yaml` is a multi-document YAML file (engine rejects with "more than one document is not supported") | 2 | error | `istio-releasenotes-{apiversion,kind}` | **Pitfall #21 — still pending in v0.9.20.** Legitimate two-document file (collapsing two related changes into one PR-numbered release-note entry). The engine's `serde_yaml::from_str::<Value>` single-document call rejects per-rule. **NOT YET FIXED in v0.9.20;** v0.10 ship-target via `multi_doc_mode:` knob on `*_path_*` rules (or the broader `yaml_path_*` multi-doc-YAML fix; istio is the named source). |
 | 6 shellcheck findings on `prow/{benchtest,coverage,integ-suite-kind,…}.sh` | 6 | warning | `istio-shellcheck` | **Real findings.** SC1091 source-file-not-followed (the prow scripts source `prow/lib.sh` via dynamic path), SC2034 unused-variable, SC2153 possible-misspelling. All in `prow/` — not gated by istio's existing `lint-scripts` Make target because Prow-side shellcheck invocations are out-of-tree |
 | 4 `common/` files info-level marker findings | 4 | info | `istio-common-files-marker` | Info-level escalation path; helps contributors editing common/ directly. Real signal, not blocker |
 | 438 missing-final-newline + 222 trailing-whitespace | 660 | info | `oss-final-newline` + `oss-no-trailing-whitespace` (bundled) | Overwhelmingly under `manifests/charts/` chart templates and `releasenotes/notes/`. istio's `yamllint` config disables both rules (`new-line-at-end-of-file: disable`, `trailing-spaces: disable`) — the entire long tail of "below yamllint's signal floor but caught by alint's hygiene baseline". Mechanical, but resolvable in one `fix:` block pass |
@@ -573,7 +590,7 @@ The engine's `serde_yaml::from_str::<Value>` rejects with
 `deserializing from YAML containing more than one document is not
 supported`. alint surfaces this as **2 violations** (one per affected
 rule: `istio-releasenotes-apiversion` + `istio-releasenotes-kind`).
-**NOT YET FIXED in v0.9.17;** the v0.10 `multi_doc_mode:` knob (`error
+**NOT YET FIXED in v0.9.20;** the v0.10 `multi_doc_mode:` knob (`error
 | first | every`) closes the gap. istio is the **named source** in
 launch-evidence.md.
 
@@ -594,11 +611,12 @@ v0.10 engine fixes.
   `hub:` lives at a different JSONPath; the v0.10 refinement allows
   per-file extraction patterns). **v0.10 ship-target** (10 sources;
   istio adds the value-extractor sub-design).
-- **`multi_doc_mode:` knob on `*_path_*` rules** — istio is the
-  **named source** for this v0.10 design candidate
-  (`releasenotes/notes/50328.yaml` is a legitimate multi-document
-  YAML file; engine's single-doc `from_str::<Value>` rejects). **NOT
-  YET FIXED in v0.9.17;** v0.10 ship target.
+- **`multi_doc_mode:` knob on `*_path_*` rules** (or the broader
+  `yaml_path_*` multi-doc-YAML fix) — istio is the **named source**
+  for this v0.10 design candidate (`releasenotes/notes/50328.yaml` is
+  a legitimate multi-document YAML file; engine's single-doc
+  `from_str::<Value>` rejects). **NOT YET FIXED in v0.9.20;** v0.10
+  ship target.
 - **`import_gate` rule kind** — covers `.golangci.yml` depguard 16+
   banned packages + DenyOperatorAndIstioctl per-directory boundaries.
   **v0.10 ship-target** (4 sources; saturated; istio is the 5th
@@ -636,28 +654,38 @@ Three concrete unanalyzed angles for a future revalidation pass:
 
 ---
 
-## 9. Validation status (2026-05-08)
+## 9. Validation status (2026-05-10)
 
-- **alint version:** `0.9.17 (1dbd9b218a0e, built 2026-05-07)`
+- **alint version:** `0.9.20` (2026-05-10)
 - **Rule count:** **65** (28 istio-specific + 37 from 4 bundled
   rulesets — `oss-baseline=15`, `go=8`, `ci/github-actions=3`,
   `hygiene/no-tracked-artifacts=11`)
 - **`alint validate-config`:** ✓ Config valid: 65 rule(s) loaded
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  3,346-violation breakdown (2,665 spawn-failure noise + 660 cosmetic
-  + 13 real structural + 2 multi-doc runtime errors + 4 common-files
-  info + 1 oss-code-of-conduct info + 1 chart-source HTTP→HTTPS)
-- **Pitfall fixes (this batch):** none needed — no `pattern: |`
-  instances; pitfalls #13/#14/#16/#17 all clean
-- **Open gaps with active workarounds (NOT YET FIXED in v0.9.17):**
-  - **Pitfall #20** — cross-file value-equality across structurally-
-    different files. Workaround: 5 separate `file_content_matches`
-    rules. Engine fix targeted for v0.10 via `value_extractor:` block
-    on `cross_file_value_equals` (istio is the named source)
-  - **Pitfall #21** — `yaml_path_*` multi-document YAML failure.
-    Workaround: pre-split or accept per-file runtime violation.
-    Engine fix targeted for v0.10 via `multi_doc_mode:` knob (istio
-    is the named source)
+- **Live-tree recheck:** v0.9.17-era counts in §6 carried forward; not
+  re-walked under v0.9.20. The v0.9.18 pre-launch fix wave (A1-A6) does
+  not materially change istio's findings — istio's hygiene cosmetics are
+  concentrated under chart templates (not build-output dirs gated by
+  A1's sibling-package.json fix), and the structural findings (13
+  stable structural drifts + the 2 pitfall #21 multi-doc-YAML runtime
+  errors) are stable classifications unaffected by A1-A6.
+- **Pitfall fixes (engine):** none in v0.9.18-v0.9.20. Engine fixes
+  shipped in v0.9.17: pitfall #18 (`respect_gitignore: false` per-rule
+  knob) and pitfall #19 (`literal_is_nested` runtime guard); neither
+  surfaces in this config. No `pattern: |` instances; pitfalls
+  #13/#14/#16/#17/#22 all clean.
+- **Open gaps with active workarounds (still pending in v0.9.20):**
+  - **Pitfall #20** — DOC-only; cross-file value-equality across
+    structurally-different files. Workaround: 5 separate
+    `file_content_matches` rules. Engine fix targeted for v0.10 via
+    `cross_file_value_equals` rule kind with `value_extractor:` block
+    (istio is the named source).
+  - **Pitfall #21** — DOC-only; `yaml_path_*` multi-document YAML
+    failure. Workaround: pre-split or accept per-file runtime
+    violation. Engine fix targeted for v0.10 via the `yaml_path_*`
+    multi-doc-YAML fix (`multi_doc_mode:` knob — `error | first |
+    every`); istio is the named source.
 - **Bench numbers:** 51 ms (lite bundled-only pass) on `/tmp/istio`'s
-  6,384-file tree; full pass dominated by `istio-yamllint` shellout
-  spawn-failures (2,635 messages) when `yamllint` is missing
+  6,384-file tree (v0.9.17 numbers; v0.9.20's width-aware human output
+  and message audits do not materially affect walk timing); full pass
+  dominated by `istio-yamllint` shellout spawn-failures (2,635 messages)
+  when `yamllint` is missing

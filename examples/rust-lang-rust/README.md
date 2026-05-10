@@ -16,7 +16,12 @@ catalogue of the rules that need new alint primitives.
 `/tmp/rust-lang-rust/`. Sub-trees `src/llvm-project/` and `src/gcc/`
 intentionally elided (vendored upstream projects with their own gating).
 
-**alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+**alint version:** 0.9.20 (current, 2026-05-10). Inventory data and
+live-tree gap-discovery counts in §6 were captured under v0.9.17;
+v0.9.18's pre-launch fix wave eliminated several FP classes called
+out below (notably the bundled-rust@v1 `allow_compiler_naming` knob,
+which collapsed the 1,091 `rust-sources-snake-case` FPs on
+`compiler/rustc_*` modules — see §6 triage line 1).
 
 ---
 
@@ -354,7 +359,7 @@ Methodology: `hyperfine --warmup 1 --runs 3 -i` against the live
 `-i` ignores non-zero exit (alint exits non-zero on violations,
 this is timing not pass-fail).
 
-### 5.1 Measured
+### 5.1 Measured (v0.9.17-era — preserved for historical comparison)
 
 | Check | Existing tool | Existing wall-clock | alint wall-clock | Ratio |
 |---|---|---|---|---|
@@ -397,14 +402,20 @@ removing the tidy binary).
 Run: `alint check --config /home/kaminsod/projects/alint/examples/rust-lang-rust/.alint.yml --format json /tmp/rust-lang-rust/`
 (live run, JSON-format).
 
-**Headline:** alint surfaces **2,698 violations** across 30 failing
-rules (24 passing); below the 34k-violation pilot bug class because
-**no regex-anchor false positives are present in this config** —
-all patterns are correctly anchored. The top per-rule counts are:
+**Headline (v0.9.17-era counts; v0.9.18 fixes annotated):** alint
+surfaced **2,698 violations** across 30 failing rules (24 passing)
+under v0.9.17; below the 34k-violation pilot bug class because **no
+regex-anchor false positives are present in this config** — all
+patterns are correctly anchored. v0.9.18's A6 refinement
+(`allow_compiler_naming` knob on bundled
+`rust-sources-snake-case`) eliminated the 1,091-violation FP class
+called out in row 1, taking the effective v0.9.20 surface to
+~1,600 violations (mostly the long-tail TODO, line-length, and GHA
+SHA-pinning rows). The top per-rule counts are:
 
 | # | Count | Rule | Triage |
 |---|---|---|---|
-| 1 | 1,091 | `rust-sources-snake-case` (bundled rust@v1) | **SUSPECT — high cardinality.** This bundled rule fires on every `compiler/rustc_*` module + acronym-y crate names (`rustc_errors`, `RustcSession`, etc.). The Rust workspace has a **deliberate exception** for compiler-internal naming. **Recommended fix:** add `paths.exclude: ["compiler/**", "library/std/src/sys/**"]` to override the bundled rule, OR file an upstream alint issue to scope `rust-sources-snake-case` away from compiler crates by default. |
+| 1 | 1,091 | `rust-sources-snake-case` (bundled rust@v1) | **RESOLVED in v0.9.18 (A6 fix).** This v0.9.17-era count fired on every `compiler/rustc_*` module + acronym-y crate names (`rustc_errors`, `RustcSession`, etc.); the Rust workspace has a deliberate exception for compiler-internal naming. v0.9.18's bundled-rule refinement A6 added an `allow_compiler_naming` knob to `rust@v1`'s `rust-sources-snake-case`, which scopes the rule away from compiler crates by default — eliminating the entire 1,091-violation class without per-repo override. |
 | 2 | 668 | `rust-tidy-line-100-cols` | Real findings — `compiler/rustc_error_codes/src/error_codes/*.md` (long URL refs), some `library/**/*.toml` long dep specs, a handful of `tests/**/*.{md,sh}` over-100-col wrapping. Most are tolerable; the rule is `warning`. Match upstream tidy's threshold-vs-allowlist policy. |
 | 3 | 237 | `rust-tidy-no-todo-marker` | **Mixed.** Real `// TODO` markers in compiler source (some valid — paired with tracking issues). Upstream tidy has the same complaint pattern; this is the long-tail TODO de-noise queue. |
 | 4 | 149 | `rust-sources-final-newline` (bundled rust@v1) | Real findings — vendored `**/auto-generated/**` files. **Recommended:** add `paths.exclude` for `**/auto-generated/**` and the LLVM-project / GCC mirror trees. |
@@ -431,14 +442,18 @@ all patterns are correctly anchored. The top per-rule counts are:
   scope-exclude needed).
 
 **False-positive class (the 1,091 `rust-sources-snake-case`
-hits):** the single largest violation count is the bundled
+hits) — RESOLVED in v0.9.18.** Under v0.9.17 (the original
+capture) the single largest violation count was the bundled
 `rust@v1` snake-case rule firing on compiler internals where
-`rustc_*` naming is deliberate. **Not a config bug** (the rule
-fires correctly per its definition); it's a bundled-rule
-**scope mismatch** for the rust-lang/rust monorepo. **Recommended
-fix:** override the rule with a `paths.exclude` for
-`compiler/**` + `library/std/src/sys/**`, OR file an upstream
-alint feature request for an `allow_compiler_naming` knob.
+`rustc_*` naming is deliberate. v0.9.18 shipped the
+`allow_compiler_naming` knob on `rust-sources-snake-case` (the
+A6 refinement from the pre-launch fix wave), which scopes the
+rule away from compiler crates by default — collapsing this
+1,091-violation class to zero with no per-repo override
+required. The README's gap-discovery numbers are kept for
+historical comparison; a fresh v0.9.20 run would surface the
+remaining real findings (the line-length, TODO-marker, and
+GHA-SHA-pinning long tail) without this synthesised noise.
 
 **Pitfall #22 verification:** ZERO instances in `.alint.yml`.
 `grep -nE 'pattern:\s*[|>]' /home/kaminsod/projects/alint/examples/rust-lang-rust/.alint.yml`
@@ -523,21 +538,26 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 10. Validation status (2026-05-07)
+## 10. Validation status (last live recheck 2026-05-07; reconciled to v0.9.20 on 2026-05-10)
 
-- **alint version:** 0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
+- **alint version pin:** 0.9.20 (current, 2026-05-10). Original
+  capture under v0.9.17 (`1dbd9b218a0e`, built 2026-05-07).
 - **`.alint.yml` in this directory:** **shipped — 283 lines, 20
   repo-specific rules, 5 bundled rulesets folded in via `extends:`,
   62 effective rules loaded.**
   `alint validate-config` confirms `✓ Config valid: 62 rule(s)
-  loaded`.
-- **Live-tree recheck:** **performed** in this batch — see §6 for the
-  2,698-violation breakdown (the long tail is dominated by 1,091
-  bundled `rust-sources-snake-case` hits on compiler-internal
-  `rustc_*` naming, a bundled-rule scope mismatch rather than a
-  config bug; 668 line-length warnings on the long-tail of
-  `compiler/`+`tests/` markdown / yaml; and 237 real `// TODO`
-  marker findings).
+  loaded`. v0.9.18 also extended `dir_absent` with `scope_filter`
+  support (relevant to this config's `rust-tidy-no-src-test-dir`
+  rule if it later wants per-subtree scoping).
+- **Live-tree recheck:** **performed** in this batch under v0.9.17
+  — see §6 for the 2,698-violation breakdown. Under v0.9.20 the
+  effective surface drops by ~1,091 because v0.9.18's A6 fix
+  (`allow_compiler_naming` knob on bundled
+  `rust-sources-snake-case`) eliminates the entire compiler-naming
+  FP class. Remaining long tail: 668 line-length warnings on
+  `compiler/`+`tests/` markdown/yaml, 237 real `// TODO` marker
+  findings, 149 `rust-sources-final-newline` on auto-generated
+  files, and the GHA-SHA-pinning long tail.
 - **Rule-kind candidate status:**
   - `ordered_block` — v0.10 ship-target (7 sources). Rust monorepo
     is the canonical demand-driver (6 invocations of `alphabetical`
@@ -550,10 +570,23 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   - `file_pair_block_match`, `balanced_delimiters` — v0.10 design
     candidates (rust monorepo is one of the demand-drivers for
     each).
-- **Pitfall #22 instances in this directory's config:** **ZERO**
-  (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
-  matches; all patterns are single-quoted YAML scalars).
+- **Pitfall status (post-v0.9.18 fix wave):**
+  - Pitfalls #18 and #19 — **engine-fixed in v0.9.17**
+    (`respect_gitignore: false` per-rule knob; `literal_is_nested`
+    runtime guard).
+  - Pitfall #22 instances in this directory's config: **ZERO**
+    (`grep -nE 'pattern:\s*[|>][-+]?$' .alint.yml` returns no
+    matches; all patterns are single-quoted YAML scalars).
+  - Pitfalls #1-#17, #20, #21 — authoring gotchas, not
+    engine-fixed; #20/#21 await v0.10's
+    `cross_file_value_equals` (with `value_extractor:`) and the
+    multi-doc YAML fix respectively.
 - **Bundled-ruleset rule counts (authoritative as of 2026-05-07):**
   oss-baseline=15, rust=11, monorepo=4, monorepo/cargo-workspace=4,
   ci/github-actions=3, hygiene/no-tracked-artifacts=11,
-  compliance/apache-2=3.
+  compliance/apache-2=3. v0.9.18 refinements that touched
+  bundled rulesets impacting this config:
+  **A6** (`rust@v1` `rust-sources-snake-case` `allow_compiler_naming`),
+  **A4** (`monorepo/cargo-workspace@v1` selector parses
+  `[workspace]` members), **A5** (`oss-baseline@v1`
+  `oss-license-exists` recognises LICENSE.TXT and LICENSE.md).

@@ -10,6 +10,46 @@ and compared.
 > https://alint.org/examples/. This index is the engineering reference:
 > directory layout, factual one-liner per repo, contribution workflow.
 
+## v0.9.20 reconciliation pass (2026-05-10)
+
+The 30 per-example READMEs were last walked against alint v0.9.17
+(2026-05-06). Since then:
+
+- **v0.9.17 engine fixes** — pitfall #18 (per-rule
+  `respect_gitignore: false` knob; demoed in `bazel`, `flutter`),
+  pitfall #19 (`literal_is_nested` runtime guard).
+- **v0.9.18 fix wave** (~10k false-positive eliminations across all
+  30 trees):
+  - **A1** `hygiene-no-js-build-outputs` requires sibling
+    `package.json` — closes FP classes in 9 case studies (kubernetes,
+    deno, flutter, golang-go, vscode, nixpkgs, node, next.js, turbo).
+  - **A2** `apache-2-source-has-license-header` bundles the long-form
+    ASF preamble — closes FPs in 4 (airflow, arrow, spark, tensorflow).
+  - **A3** `python@v1` default-excludes test-fixture paths — closes
+    FPs in 2 (ruff, cpython).
+  - **A4** `monorepo/cargo-workspace` selector parses `[workspace]`
+    members — applies to 6 (uv, clap, deno, next.js, turbo, dotnet).
+  - **A5** `oss-license-exists` recognises `LICENSE.TXT` / `LICENSE.md`
+    — closes FPs in 4 (arrow, deno, dotnet, tensorflow).
+  - **A6** `rust@v1 rust-sources-snake-case` gains
+    `allow_compiler_naming` knob — closes FPs in 2 (clap, rust-lang/rust).
+  - **B1 / B2 / B3** pitfall #22 (YAML `|` → `|-`) fixes in
+    TypeScript / deno / tensorflow configs.
+  - **kubernetes deep-analysis pilot** (commit `c5b6df32`) — 3
+    `.alint.yml` regex bugs fixed (pitfalls #13 / #14 / #22),
+    eliminating ~34,000 false positives that the v0.9.17 walk had
+    flagged as "P0 for parent-agent triage."
+  - `dir_absent` engine extension — now supports `scope_filter`.
+- **v0.9.19 / v0.9.20** — width-aware human output across every
+  command; bundled rule message audit; em-dash scrub; install-snippet
+  reorder (curl + bash now leads everywhere).
+
+Each per-example README now tags v0.9.17 capture counts as historical
+and names which fix resolved which previously-flagged FP. Counts have
+not been re-walked under v0.9.20 (per-tree clones are expensive and
+absolute counts drift with upstream tip); category-level findings are
+stable.
+
 ## Layout
 
 ```
@@ -59,6 +99,75 @@ from `alint validate-config` against the case study's `.alint.yml`.
 - [`tokio-rs-tokio/`](tokio-rs-tokio/) — zero hand-rolled scripts; alint catches 15 conventions tokio's pipeline assumes.
 - [`vercel-next.js/`](vercel-next.js/) — first hybrid pnpm + Cargo dual-workspace case in the corpus; drift no per-language linter catches because each linter only sees half the tree.
 - [`vercel-turbo/`](vercel-turbo/) — Rust monorepo orchestrator; alint adds 22 gates that don't exist.
+
+## Primitive demand tracker
+
+Aggregated from the per-case-study gap analysis (the "primitives still
+needed" call-outs in §9 of each per-example README). Status: ⏳ pending
+v0.10 ship · 💭 v0.10 design candidate · 🛣️ v0.11+ ship.
+
+### Core rule kinds — v0.10 ship targets
+
+| Primitive | Status | Demand sources |
+|---|---|---|
+| `cross_file_value_equals` (incl. `value_extractor:`) | ⏳ | angular, airflow, helm, istio, vscode, node, pnpm, pytorch, tensorflow, tokio, next.js, turbo |
+| `xml_path_matches` + `xml_path_equals` | ⏳ | spark, dotnet-runtime |
+| `registry_paths_resolve` | ⏳ | arrow, spark, dotnet, flutter, kubernetes, nixpkgs, node, protobuf, cpython, pytorch, rust-lang/rust, tensorflow, next.js |
+| `ordered_block` | ⏳ | airflow, spark, flutter, golang-go, protobuf, cpython, rust-lang/rust, tokio |
+| `generated_file_fresh` | ⏳ | airflow, spark, kubernetes, nixpkgs, protobuf, cpython, pytorch, tensorflow |
+| `import_gate` | ⏳ | airflow, golang-go, helm, kubernetes, pytorch |
+| `pair_hash` | ⏳ | golang-go, kubernetes, tokio |
+| `command_idempotent` | ⏳ | ruff, helm, prettier |
+
+### Bundled rulesets — v0.10 ship targets
+
+| Ruleset | Status | Demand sources |
+|---|---|---|
+| `apache/governance@v1` | ⏳ | airflow, arrow, spark |
+| `dotnet@v1` | ⏳ | dotnet-runtime |
+
+### v0.10 design candidates
+
+| Primitive | Status | Demand sources |
+|---|---|---|
+| `*_path_contains` shorthand for "value X in array at JSONPath Y" | 💭 | bazel, clap, helm |
+| `pair_inverse` (every partner traces back to a primary) | 💭 | angular, ruff |
+| `command_per_repo` mode | 💭 | ruff |
+| `json_schema_passes` config-shape mode | 💭 | kubernetes, turbo |
+| `*_path_array_iter` (toml/json/yaml) for workspace iteration | 💭 | uv |
+
+### v0.11+ ship targets
+
+| Primitive | Status | Demand sources |
+|---|---|---|
+| `cross_language_implementation_complete` | 🛣️ | flutter, protobuf, tensorflow |
+| Bazel-licensing-declaration-aware rule kind | 🛣️ | tensorflow |
+| `walk_error_policy:` knob | 🛣️ | pnpm |
+
+### Emerging gaps (surfaced this audit; not yet on roadmap)
+
+Engine refinements pulled from per-case-study §9s, all single-source or
+two-source so far. Listed for completeness; promotion to v0.10 / v0.11
+ship targets pending second demand source:
+
+- **Engine knobs:** `select_from:` for monorepo/cargo-workspace (uv,
+  deno), `multi_doc_mode:` for `yaml_path_*` (istio), `{stem_all}`
+  template token (typescript), `Format::Jsonc` for structured-query
+  rules (typescript).
+- **New rule kinds:** `dir_name_matches_field` (turbo, next.js),
+  `file_pair_block_match` (cpython, rust-lang/rust), `balanced_delimiters`
+  (cpython, rust-lang/rust), `archive_contents_matches` (uv),
+  `referenced_files_match_filesystem` (deno), `violation_baseline`
+  (deno), `dir_contents_match_allowlist` (deno),
+  `disallowed_methods_in_file` (deno), `regex_resolves_in_file` (clap),
+  `file_content_matches_or_marker` (vscode), `file_header_consistency`
+  (node), `column_alignment` (cpython), `line_spacing` /
+  `not_executable` / `directory_hash` (pytorch), `markdown_template_match`
+  / `case_collision_safe` (tensorflow), `for_each_leaf_dir` (prettier),
+  `json_key_value_forbidden` (prettier), `json_key_sort_order` (pnpm).
+- **New bundled rulesets:** `azure-pipelines@v1` (dotnet),
+  `python/pep-621-shape@v1` (uv), `rust/cargo-release-conventions@v1`
+  (clap).
 
 ## Using these as starting points
 
