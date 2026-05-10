@@ -87,6 +87,20 @@ struct Cli {
     #[arg(long, global = true)]
     compact: bool,
 
+    /// Override the human-output column width. Default: detected
+    /// terminal width (TTY only) or 80. Useful for reproducible
+    /// captures (asciinema/screen recordings) and for piping into
+    /// fixed-width log viewers. Clamped to [40, 120].
+    #[arg(long, global = true, value_name = "COLS")]
+    width: Option<usize>,
+
+    /// Suppress per-violation `docs:` URLs in human output. Useful
+    /// for narrow terminals, screen recordings, and CI logs where
+    /// long URLs disrupt visual alignment. URLs remain in JSON /
+    /// SARIF / GitHub / markdown output regardless.
+    #[arg(long, global = true)]
+    no_docs: bool,
+
     /// When to render progress on stderr for slow operations
     /// (currently `alint suggest`). `auto` (the default)
     /// renders when stderr is a TTY; `always` forces; `never`
@@ -849,18 +863,22 @@ fn render_env(
 
     // Only ask the kernel for columns when we know we're on a TTY.
     // Pipes have no useful width; let the formatter fall back to
-    // its DEFAULT_WIDTH constant.
-    let width = if is_tty {
-        terminal_size::terminal_size().map(|(w, _)| usize::from(w.0))
-    } else {
-        None
-    };
+    // its DEFAULT_WIDTH constant. `--width` always wins when set
+    // (reproducible captures, narrow CI, manual overrides).
+    let width = cli.width.or_else(|| {
+        if is_tty {
+            terminal_size::terminal_size().map(|(w, _)| usize::from(w.0))
+        } else {
+            None
+        }
+    });
 
     let opts = HumanOptions {
         glyphs: GlyphSet::detect(cli.ascii),
         hyperlinks,
         width,
         compact: cli.compact,
+        show_docs: !cli.no_docs,
     };
     Ok((stream, opts))
 }

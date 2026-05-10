@@ -282,10 +282,12 @@ pub fn write_hyperlink(
 /// Kept as a struct so new knobs (`--compact`, timing, etc.) can
 /// be added without touching every call site.
 ///
-/// The `Default` impl gives Unicode glyphs, no hyperlinks, and
-/// `None` for width — the formatter then falls back to
-/// [`HumanOptions::DEFAULT_WIDTH`] columns.
-#[derive(Debug, Clone, Copy, Default)]
+/// The `Default` impl gives Unicode glyphs, no hyperlinks,
+/// `None` for width (formatter falls back to
+/// [`HumanOptions::DEFAULT_WIDTH`]), `compact = false`, and
+/// `show_docs = true` — i.e. the same shape the CLI produces
+/// when no flags are passed.
+#[derive(Debug, Clone, Copy)]
 pub struct HumanOptions {
     pub glyphs: GlyphSet,
     /// Whether the output sink supports OSC 8 hyperlinks. Detected
@@ -302,6 +304,28 @@ pub struct HumanOptions {
     /// grep / `wc -l`. When this is `true`, the full-layout
     /// formatter delegates to the internal compact writer.
     pub compact: bool,
+    /// Whether to print per-violation `docs:` URLs in the grouped
+    /// full layout. Defaults to `true` (current behaviour). Set
+    /// `false` for narrow terminals, screen recordings, or CI
+    /// logs where long URLs disrupt visual alignment. Has no
+    /// effect on JSON / SARIF / GitHub / markdown output (URLs
+    /// always present in machine-readable formats).
+    pub show_docs: bool,
+}
+
+impl Default for HumanOptions {
+    fn default() -> Self {
+        Self {
+            glyphs: GlyphSet::default(),
+            hyperlinks: false,
+            width: None,
+            compact: false,
+            // Default `true` so library callers (and the no-flags
+            // CLI invocation) get the same shape they got pre-v0.9.19.
+            // The CLI's `--no-docs` flag flips this to `false`.
+            show_docs: true,
+        }
+    }
 }
 
 impl HumanOptions {

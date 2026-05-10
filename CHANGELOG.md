@@ -6,6 +6,69 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.19] — 2026-05-09 (output polish)
+
+Quality-of-life patch focused on the human formatter's behaviour
+in narrow terminals, screen recordings, and CI logs — surfaced
+while polishing the alint.org landing-page CLI demo (long
+`docs:` URLs and 200+ char rule messages were wrapping
+unpredictably inside the asciinema-player frame).
+
+### Engine
+
+- **Width-aware message wrapping** in the grouped human formatter.
+  Long violation messages now wrap at `effective_width()` cols
+  with continuation lines re-indented to `MSG_INDENT` (14 cols).
+  Word-aware on whitespace; long unbreakable tokens (URLs,
+  hashed identifiers) get their own line and are allowed to
+  overflow rather than being broken mid-token. Embedded `\n` in
+  message text honoured as paragraph breaks. Width detection
+  unchanged (TTY → kernel-reported cols, non-TTY → DEFAULT_WIDTH
+  = 80, both clamped [40, 120]).
+
+### CLI
+
+- **`--width <COLS>`** (global) — explicit override of the
+  detected width. Required for reproducible captures
+  (asciinema, screencasts) and useful for piping into fixed-width
+  log viewers / narrow CI dashboards.
+- **`--no-docs`** (global) — suppress per-violation `docs:` URL
+  lines in human output. URLs remain in JSON / SARIF / GitHub /
+  markdown formats. Designed for narrow terminals + screen
+  recordings where long URLs disrupt visual alignment.
+- **`HumanOptions::Default::show_docs = true`** (library API).
+  Manual Default impl preserved current behaviour for library
+  callers. The CLI's `--no-docs` flag flips it to `false`.
+
+### Bundled rulesets — verbose-message tightening
+
+Three of the longest-message bundled rules tightened to fit
+within ~80 cols on a single wrapped line at 14-col indent. No
+behavioural change; just tighter copy.
+
+- `oss-baseline@v1::node-engine-or-nvmrc`: 196 → 95 chars.
+  ("Pin the Node.js version with `.nvmrc`, `.node-version`, or
+  `.tool-versions` so local and CI installs match.")
+- `node@v1::node-no-tracked-dist`: 137 → 84 chars.
+  ("Build-output directories shouldn't be tracked. Set `level:
+  off` if this one is intentionally shipped.")
+- `agent-context@v1::agent-context-recommended`: 112 → 78 chars.
+  ("Add AGENTS.md / CLAUDE.md / .cursorrules so coding agents
+  share versioned instructions.")
+
+Quality bar going forward for new bundled-rule messages: aim for
+≤ 80 chars on a single wrapped line. Verbose-but-useful detail
+goes in the policy URL or the rule's docs page.
+
+### Tests
+
+- 6 new `wrap_message` unit tests covering: short text, word-
+  boundary wrap, long unbreakable tokens, embedded newlines,
+  empty input, tiny-width clamp.
+- 9 trycmd `help-*.stdout` snapshots regenerated for the 2 new
+  global flags.
+- 1 `cli_flag_inventory` snapshot regenerated.
+
 ## [0.9.18] — 2026-05-08 (pre-launch fixes)
 
 Findings from the v0.9.17 deep-analysis pass (30 case studies — see

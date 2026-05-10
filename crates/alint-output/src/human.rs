@@ -152,32 +152,42 @@ fn write_violation(
 
     // Message line. `MSG_INDENT` spaces align under the rule_id
     // (col 2 indent + 1 sigil + 2 spacer + 7 level + 2 spacer = 14).
+    // Long messages wrap at `effective_width()` with continuation
+    // lines re-indented to MSG_INDENT (v0.9.19+). Wrapping is
+    // word-aware and falls back gracefully on long unbreakable
+    // tokens (URLs, hashed identifiers, etc. emit on their own
+    // line and let the terminal handle any overflow).
     let dim = style::DIM;
+    let total_width = opts.effective_width();
+    let lines = wrap_message(&violation.message, MSG_INDENT.len(), total_width);
+    let (first_line, rest) = lines
+        .split_first()
+        .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
     match (violation.line, violation.column) {
         (Some(line), Some(col)) => {
-            writeln!(
-                w,
-                "{MSG_INDENT}{dim}{line}:{col}{dim:#}  {}",
-                violation.message
-            )?;
+            writeln!(w, "{MSG_INDENT}{dim}{line}:{col}{dim:#}  {first_line}")?;
         }
         (Some(line), None) => {
-            writeln!(
-                w,
-                "{MSG_INDENT}{dim}line {line}{dim:#}  {}",
-                violation.message
-            )?;
+            writeln!(w, "{MSG_INDENT}{dim}line {line}{dim:#}  {first_line}")?;
         }
         _ => {
-            writeln!(w, "{MSG_INDENT}{}", violation.message)?;
+            writeln!(w, "{MSG_INDENT}{first_line}")?;
         }
+    }
+    for line in rest {
+        writeln!(w, "{MSG_INDENT}{line}")?;
     }
 
     // Policy URL, if present. Printed once per violation to stay
     // near the relevant message (not once per rule as before —
     // that hid the link below the list). When the terminal
     // supports OSC 8, we wrap the URL as a clickable hyperlink.
-    if let Some(url) = &result.policy_url {
+    // Suppressed entirely when `opts.show_docs` is `false`
+    // (`--no-docs`) so narrow terminals + screen recordings stay
+    // visually clean.
+    if opts.show_docs
+        && let Some(url) = &result.policy_url
+    {
         let docs = style::DOCS;
         write!(w, "{MSG_INDENT}{dim}docs:{dim:#} {docs}")?;
         write_hyperlink(w, url, url, opts.hyperlinks)?;
@@ -454,6 +464,45 @@ pub fn write_fix_human(
 /// Aligns message text under the `rule_id` on the first line.
 const MSG_INDENT: &str = "              ";
 
+/// Word-wrap `text` to fit within `total_width` columns, with
+/// continuation lines indented by `indent` cols. Returns one
+/// String per output line, **content only** (the caller emits the
+/// indent itself before each line — keeps the styling/indent
+/// concerns in one place per render path).
+///
+/// Whitespace-aware: breaks on ASCII spaces. Long unbreakable
+/// tokens (URLs, hashed identifiers) get their own line and are
+/// allowed to overflow rather than being broken mid-token.
+/// Embedded newlines in `text` are honoured as paragraph breaks
+/// and force a new line (each paragraph is wrapped independently).
+///
+/// Designed for the violation-message path; not exposed publicly
+/// because the indent-vs-content split is rendering-specific.
+fn wrap_message(text: &str, indent: usize, total_width: usize) -> Vec<String> {
+    let avail = total_width.saturating_sub(indent).max(20);
+    let mut out: Vec<String> = Vec::new();
+    if text.is_empty() {
+        out.push(String::new());
+        return out;
+    }
+    for paragraph in text.split('\n') {
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            if current.is_empty() {
+                current.push_str(word);
+            } else if current.len() + 1 + word.len() <= avail {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                out.push(std::mem::take(&mut current));
+                current.push_str(word);
+            }
+        }
+        out.push(current);
+    }
+    out
+}
+
 /// Pick the sigil, style, and padded level name for a [`Level`].
 /// Level names are padded to 7 chars so the `rule_id` column aligns
 /// across errors / warnings / infos.
@@ -468,5 +517,71 @@ fn level_presentation(
         // `off` rules never reach the renderer — they're filtered
         // at config load — but map to something sane for test use.
         Level::Off => (glyphs.bullet, style::DIM, "off    "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_message_short_text_emits_one_line() {
+        let out = wrap_message("hello world", 14, 80);
+        assert_eq!(out, vec!["hello world".to_string()]);
+    }
+
+    #[test]
+    fn wrap_message_wraps_on_word_boundary_at_avail_width() {
+        // avail = 80 - 14 = 66 cols. Choose text that fits 65 chars
+        // on the first line and a tail word that pushes past.
+        let text = "a b c d e f g h i j k l m n o p q r s t u v w x y z aa bb cc dd ee ff gg";
+        let out = wrap_message(text, 14, 80);
+        assert!(out.len() >= 2, "expected wrap; got {out:?}");
+        for line in &out {
+            assert!(line.len() <= 66, "line over avail width: {line:?}");
+        }
+    }
+
+    #[test]
+    fn wrap_message_long_unbreakable_token_emits_on_own_line() {
+        // A long URL has no spaces; it should land on its own line
+        // and be allowed to overflow.
+        let url = "https://example.com/very/long/path/with/many/segments/that/exceeds/the/wrap";
+        let text = format!("see {url} for details");
+        let out = wrap_message(&text, 14, 60);
+        // First line: "see"
+        // Then the URL on its own line (overflowing past 46-col avail
+        // because no whitespace inside it)
+        // Then "for details"
+        assert!(
+            out.iter().any(|l| l == url),
+            "expected URL on its own line; got {out:?}",
+        );
+    }
+
+    #[test]
+    fn wrap_message_honours_explicit_newlines_as_paragraph_breaks() {
+        let out = wrap_message("first paragraph\nsecond paragraph", 14, 80);
+        assert_eq!(
+            out,
+            vec![
+                "first paragraph".to_string(),
+                "second paragraph".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn wrap_message_empty_input_emits_one_empty_line() {
+        let out = wrap_message("", 14, 80);
+        assert_eq!(out, vec![String::new()]);
+    }
+
+    #[test]
+    fn wrap_message_tiny_width_falls_back_to_min_avail() {
+        // Even at width 10 (< indent 14), avail clamps to 20
+        // so tokens up to 20 chars fit on one line.
+        let out = wrap_message("twenty-char-token-ok", 14, 10);
+        assert_eq!(out, vec!["twenty-char-token-ok".to_string()]);
     }
 }
