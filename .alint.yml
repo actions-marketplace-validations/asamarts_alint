@@ -9,6 +9,14 @@ ignore:
   # rules (PascalCase stems, backup extensions, non-text files); we
   # don't want to lint alint against them.
   - "crates/alint/tests/cli/**"
+  # Smoke + scenario fixtures under alint-e2e exercise bundled-rule
+  # exclusions (e.g. v0.9.18 A6's `compiler/**` snake-case exclude
+  # for rust@v1). The fixtures deliberately ship non-snake-case
+  # filenames inside synthesized `compiler/` / `library/std/src/sys/`
+  # subtrees; dogfooding alint over them would re-fire the very
+  # rules they're meant to test the exclusion of. Surfaced when
+  # the v0.9.20 Dogfood CI job tripped on 4 such fixture files.
+  - "crates/alint-e2e/fixtures/**"
 
 facts:
   - id: has_rust
