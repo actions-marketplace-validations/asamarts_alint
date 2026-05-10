@@ -510,6 +510,7 @@ fn cmd_suggest(path: &Path, opts: &SuggestOptions, cli: &Cli) -> Result<ExitCode
             include_bundled: opts.include_bundled,
             explain: opts.explain,
             quiet: cli.quiet,
+            width: cli.width,
         },
         &progress,
     )
@@ -822,13 +823,22 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     let rule = &entry.rule;
     println!("id:         {}", rule.id());
     println!("level:      {}", rule.level().as_str());
-    if let Some(url) = rule.policy_url() {
+    // v0.9.20: honour --no-docs by suppressing the policy_url line.
+    // URLs remain in machine-readable formats regardless.
+    if !cli.no_docs
+        && let Some(url) = rule.policy_url()
+    {
         println!("policy_url: {url}");
     }
     if let Some(when) = &entry.when {
         println!("when:       {when:?}");
     }
-    println!("debug:      {rule:?}");
+    // v0.9.20: dropped the `debug: {rule:?}` line. The internal Debug
+    // repr dumped per-rule-kind state (regex automaton, compiled
+    // matchers, etc.) — useful for alint developers, noise for end
+    // users (24+ KB for some rule kinds). Use `--format json` on
+    // `alint check` if you need the wire-shape, or read the rule's
+    // YAML config block.
     Ok(ExitCode::SUCCESS)
 }
 

@@ -395,12 +395,22 @@ fn write_human_compact(
 // Fix report
 // ---------------------------------------------------------------
 
+/// Continuation indent for `write_fix_human` wrap output.
+/// 4 cols sits under the `· `/`✓ ` glyph so wrapped lines align.
+const FIX_INDENT: &str = "    ";
+
 pub fn write_fix_human(
     report: &FixReport,
     w: &mut dyn Write,
     opts: HumanOptions,
 ) -> std::io::Result<()> {
     let dim = style::DIM;
+    // v0.9.20: width-aware wrap for fix output. Status-suffix prose
+    // ("(no fixer)", "(skipped: <reason>)") stays attached to the
+    // message text — wrapped together so it never lands on a line
+    // by itself looking orphaned.
+    let total_width = opts.effective_width();
+
     for rule in &report.results {
         // Fix output uses un-padded level names — it's a flat
         // header per rule, no tabular alignment needed.
@@ -417,31 +427,48 @@ pub fn write_fix_human(
             rule.rule_id
         )?;
         for item in &rule.items {
-            let path = item
+            let path_prefix = item
                 .violation
                 .path
                 .as_ref()
                 .map(|p| format!("{} — ", p.display()))
                 .unwrap_or_default();
-            match &item.status {
+            let (glyph, line_style_open, line_style_close, content) = match &item.status {
                 FixStatus::Applied(summary) => {
                     let s = style::SUCCESS;
-                    writeln!(w, "  {s}{} {path}{summary}{s:#}", opts.glyphs.success)?;
+                    (
+                        opts.glyphs.success,
+                        format!("{s}"),
+                        format!("{s:#}"),
+                        format!("{path_prefix}{summary}"),
+                    )
                 }
-                FixStatus::Skipped(reason) => {
-                    writeln!(
-                        w,
-                        "  {dim}{} {path}{} (skipped: {reason}){dim:#}",
-                        opts.glyphs.bullet, item.violation.message
-                    )?;
-                }
-                FixStatus::Unfixable => {
-                    writeln!(
-                        w,
-                        "  {dim}{} {path}{} (no fixer){dim:#}",
-                        opts.glyphs.bullet, item.violation.message
-                    )?;
-                }
+                FixStatus::Skipped(reason) => (
+                    opts.glyphs.bullet,
+                    format!("{dim}"),
+                    format!("{dim:#}"),
+                    format!(
+                        "{path_prefix}{} (skipped: {reason})",
+                        item.violation.message
+                    ),
+                ),
+                FixStatus::Unfixable => (
+                    opts.glyphs.bullet,
+                    format!("{dim}"),
+                    format!("{dim:#}"),
+                    format!("{path_prefix}{} (no fixer)", item.violation.message),
+                ),
+            };
+            let lines = wrap_message(&content, FIX_INDENT.len(), total_width);
+            let (first_line, rest) = lines
+                .split_first()
+                .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
+            writeln!(
+                w,
+                "  {line_style_open}{glyph} {first_line}{line_style_close}"
+            )?;
+            for line in rest {
+                writeln!(w, "{FIX_INDENT}{line_style_open}{line}{line_style_close}")?;
             }
         }
     }
@@ -476,9 +503,10 @@ const MSG_INDENT: &str = "              ";
 /// Embedded newlines in `text` are honoured as paragraph breaks
 /// and force a new line (each paragraph is wrapped independently).
 ///
-/// Designed for the violation-message path; not exposed publicly
-/// because the indent-vs-content split is rendering-specific.
-fn wrap_message(text: &str, indent: usize, total_width: usize) -> Vec<String> {
+/// Public since v0.9.20 so other commands' renderers (`alint
+/// suggest`, `alint explain`, etc.) can apply consistent wrap
+/// semantics to their own message-style output.
+pub fn wrap_message(text: &str, indent: usize, total_width: usize) -> Vec<String> {
     let avail = total_width.saturating_sub(indent).max(20);
     let mut out: Vec<String> = Vec::new();
     if text.is_empty() {

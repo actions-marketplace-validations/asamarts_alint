@@ -38,6 +38,10 @@ pub struct RunOptions {
     pub include_bundled: bool,
     pub explain: bool,
     pub quiet: bool,
+    /// Effective render width for human output. `None` → fall back
+    /// to the alint-output `HumanOptions::DEFAULT_WIDTH` (80 cols).
+    /// Wired from the global `--width` flag in v0.9.20.
+    pub width: Option<usize>,
 }
 
 impl FromStr for Confidence {

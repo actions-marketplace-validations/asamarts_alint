@@ -12,6 +12,7 @@
 
 use std::io::Write;
 
+use alint_output::{HumanOptions, wrap_message};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
@@ -50,6 +51,15 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
         if proposals.len() == 1 { "" } else { "s" },
     )?;
     writeln!(out)?;
+    // v0.9.20: width-aware wrap for summary + evidence text.
+    // Continuation indents differ per line type:
+    //   - summary: 4-col indent (under the headline glyph)
+    //   - evidence: 9-col indent (under the └─ tree marker)
+    let total_width = HumanOptions {
+        width: opts.width,
+        ..HumanOptions::default()
+    }
+    .effective_width();
     for p in proposals {
         let glyph = match p.confidence {
             Confidence::High => "✓",
@@ -62,10 +72,20 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
             conf = p.confidence.label(),
             label = headline_for(p),
         )?;
-        writeln!(out, "    {}", p.summary)?;
+        let summary_lines = wrap_message(&p.summary, 4, total_width);
+        for line in &summary_lines {
+            writeln!(out, "    {line}")?;
+        }
         if opts.explain {
             for e in &p.evidence {
-                writeln!(out, "      └─ {}", e.message)?;
+                let ev_lines = wrap_message(&e.message, 9, total_width);
+                let (first, rest) = ev_lines
+                    .split_first()
+                    .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
+                writeln!(out, "      └─ {first}")?;
+                for line in rest {
+                    writeln!(out, "         {line}")?;
+                }
             }
         }
         writeln!(out)?;
@@ -237,6 +257,7 @@ mod tests {
             include_bundled: false,
             explain,
             quiet: false,
+            width: None,
         }
     }
 

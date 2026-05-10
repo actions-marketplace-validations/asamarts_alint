@@ -19,7 +19,7 @@ use alint_core::{FixReport, Report};
 pub use agent::write_agent;
 pub use github::write_github;
 pub use gitlab::write_gitlab;
-pub use human::{write_fix_human, write_human};
+pub use human::{wrap_message, write_fix_human, write_human};
 pub use json::{write_fix_json, write_json};
 pub use junit::write_junit;
 pub use markdown::{write_fix_markdown, write_markdown};
