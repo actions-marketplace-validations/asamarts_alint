@@ -54,19 +54,41 @@ cargo run -p alint -- check       # dogfood: alint lints itself
 
 Rust 1.95+ required (see `rust-toolchain.toml`).
 
-### Pre-commit checklist
+### Pre-push checklist
 
-The release.yml preflight gate runs the same checks CI runs:
+`ci/scripts/preflight.sh` bundles the gates CI's `ci.yml` workflow runs
+against pushes to `main`:
 
 ```sh
-ci/scripts/fmt.sh    # cargo fmt --check
-ci/scripts/clippy.sh # cargo clippy --workspace --all-targets -- -D warnings
-ci/scripts/test.sh   # cargo test --workspace + bash CLI tests
-ci/scripts/docs.sh   # cargo doc -D warnings + xtask docs-export --check
+ci/scripts/preflight.sh   # fmt + clippy + test + docs + dogfood
 ```
 
-All four must pass before opening a PR. If clippy gates seem aggressive,
-that's intentional — `-D warnings` keeps the codebase quiet by default.
+Under the hood it runs:
+
+```sh
+ci/scripts/fmt.sh     # cargo fmt --check
+ci/scripts/clippy.sh  # cargo clippy --workspace --all-targets -- -D warnings
+ci/scripts/test.sh    # cargo test --workspace + bash CLI tests
+ci/scripts/docs.sh    # cargo doc -D warnings + xtask docs-export --check
+ci/scripts/dogfood.sh # cargo build --release + alint check on this repo
+```
+
+All five must pass before opening a PR. The wrapper falls through on
+failure (rather than fast-exiting on the first one) so a single run shows
+the full set of things to fix instead of fix-rerun-fix-rerun. Skip a
+specific check while debugging: `PREFLIGHT_SKIP=clippy bash ci/scripts/preflight.sh`.
+
+To wire preflight into a `git push` hook so an unformatted block bounces
+locally instead of consuming a CI minute:
+
+```sh
+git config core.hooksPath ci/githooks
+```
+
+Skip the hook for one push (e.g. WIP branch): `git push --no-verify`.
+
+If clippy gates seem aggressive, that's intentional — `-D warnings` plus
+pedantic clippy keeps the codebase quiet by default.
 
 ### Where the code lives
 

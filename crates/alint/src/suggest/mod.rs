@@ -82,7 +82,7 @@ impl FromStr for OutputFormat {
 /// writer through the public surface (rather than constructing
 /// stdout here) keeps suggest in lockstep with check / fix /
 /// list / explain / facts on the color contract — see the
-/// styling_uniform integration test.
+/// `styling_uniform` integration test.
 pub fn run(
     root: &Path,
     opts: &RunOptions,

@@ -109,11 +109,11 @@ fn assert_no_ansi(label: &str, args: &[&str], stdout: &[u8]) {
 /// Add it here too — the test will catch any regression.
 fn human_output_subcommands() -> Vec<(&'static str, Vec<&'static str>)> {
     vec![
-        ("check",   vec!["check"]),
-        ("list",    vec!["list"]),
+        ("check", vec!["check"]),
+        ("list", vec!["list"]),
         ("explain", vec!["explain", "must-have-license"]),
-        ("fix",     vec!["fix", "--dry-run"]),
-        ("facts",   vec!["facts"]),
+        ("fix", vec!["fix", "--dry-run"]),
+        ("facts", vec!["facts"]),
         // `suggest --quiet` suppresses the stderr summary line so
         // any failure speaks for itself; --include-bundled lets
         // the bundled suggester emit even if the fixture already

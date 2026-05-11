@@ -709,11 +709,17 @@ fn cmd_list(cli: &Cli) -> Result<ExitCode> {
         // Pad to 8 cols *after* the SGR reset so the alignment
         // is on visible glyph count, not byte count.
         let pad = " ".repeat(8usize.saturating_sub(label.len()));
-        write!(out, "{level_style}{label}{level_style:#}{pad} {}", rule.id())?;
+        write!(
+            out,
+            "{level_style}{label}{level_style:#}{pad} {}",
+            rule.id()
+        )?;
         if entry.when.is_some() {
             write!(out, " {dim}[when]{dim:#}")?;
         }
-        if opts.show_docs && let Some(url) = rule.policy_url() {
+        if opts.show_docs
+            && let Some(url) = rule.policy_url()
+        {
             write!(out, "  {dim}({dim:#}{docs}{url}{docs:#}{dim}){dim:#}")?;
         }
         writeln!(out)?;
