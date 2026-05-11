@@ -502,6 +502,7 @@ fn cmd_suggest(path: &Path, opts: &SuggestOptions, cli: &Cli) -> Result<ExitCode
             .map_err(|e: String| anyhow::anyhow!(e))?
     };
     let progress = progress::Progress::new(progress_mode);
+    let (mut out, _opts) = render_env(cli)?;
     suggest::run(
         path,
         &suggest::RunOptions {
@@ -513,6 +514,7 @@ fn cmd_suggest(path: &Path, opts: &SuggestOptions, cli: &Cli) -> Result<ExitCode
             width: cli.width,
         },
         &progress,
+        &mut out,
     )
 }
 
@@ -683,24 +685,40 @@ fn cmd_fix(path: &Path, dry_run: bool, changed: &ChangedMode, cli: &Cli) -> Resu
 }
 
 fn cmd_list(cli: &Cli) -> Result<ExitCode> {
+    use alint_core::Level;
+    use alint_output::style;
+
     let loaded = load_rules(Path::new("."), cli)?;
+    let (mut out, opts) = render_env(cli)?;
     if loaded.entries.is_empty() {
-        println!("(no rules loaded from config)");
-    } else {
-        for entry in &loaded.entries {
-            let rule = &entry.rule;
-            let gated = if entry.when.is_some() { " [when]" } else { "" };
-            println!(
-                "{:<8} {}{}{}",
-                rule.level().as_str(),
-                rule.id(),
-                gated,
-                rule.policy_url()
-                    .map(|u| format!("  ({u})"))
-                    .unwrap_or_default()
-            );
-        }
+        writeln!(out, "(no rules loaded from config)")?;
+        out.flush().ok();
+        return Ok(ExitCode::SUCCESS);
     }
+    let dim = style::DIM;
+    let docs = style::DOCS;
+    for entry in &loaded.entries {
+        let rule = &entry.rule;
+        let level_style = match rule.level() {
+            Level::Error => style::ERROR,
+            Level::Warning => style::WARNING,
+            Level::Info => style::INFO,
+            Level::Off => style::DIM,
+        };
+        let label = rule.level().as_str();
+        // Pad to 8 cols *after* the SGR reset so the alignment
+        // is on visible glyph count, not byte count.
+        let pad = " ".repeat(8usize.saturating_sub(label.len()));
+        write!(out, "{level_style}{label}{level_style:#}{pad} {}", rule.id())?;
+        if entry.when.is_some() {
+            write!(out, " {dim}[when]{dim:#}")?;
+        }
+        if opts.show_docs && let Some(url) = rule.policy_url() {
+            write!(out, "  {dim}({dim:#}{docs}{url}{docs:#}{dim}){dim:#}")?;
+        }
+        writeln!(out)?;
+    }
+    out.flush().ok();
     Ok(ExitCode::SUCCESS)
 }
 
@@ -720,8 +738,7 @@ fn cmd_facts(path: &Path, cli: &Cli) -> Result<ExitCode> {
         alint_core::evaluate_facts(&loaded.facts, path, &index).context("evaluating facts")?;
 
     let format: Format = cli.format.parse().map_err(|e: String| anyhow::anyhow!(e))?;
-    let stdout = io::stdout();
-    let mut out = stdout.lock();
+    let (mut out, _opts) = render_env(cli)?;
     render_facts(&loaded.facts, &values, format, &mut out)?;
     out.flush().ok();
     Ok(ExitCode::SUCCESS)
@@ -750,22 +767,33 @@ fn render_facts_human(
     values: &alint_core::FactValues,
     out: &mut dyn Write,
 ) -> Result<()> {
+    use alint_output::style;
+
     if facts.is_empty() {
         writeln!(out, "(no facts declared in config)")?;
         return Ok(());
     }
     let id_width = facts.iter().map(|f| f.id.len()).max().unwrap_or(0);
     let kind_width = facts.iter().map(|f| f.kind.name().len()).max().unwrap_or(0);
+    let dim = style::DIM;
     for spec in facts {
         let value_str = values
             .get(&spec.id)
             .map_or_else(|| "(unresolved)".to_string(), fact_value_display);
+        // The kind column is the schema/type label (always
+        // dimmed); value gets a tonal cue too — `true` reads
+        // as success, `false` / `(unresolved)` as muted.
+        let value_style = match value_str.as_str() {
+            "true" => style::SUCCESS,
+            "false" | "(unresolved)" => style::DIM,
+            _ => style::PATH, // typed values like strings/numbers — bold but uncolored
+        };
+        let kind_name = spec.kind.name();
+        let kind_pad = " ".repeat(kind_width.saturating_sub(kind_name.len()));
         writeln!(
             out,
-            "{:<id_width$}  {:<kind_width$}  {}",
+            "{:<id_width$}  {dim}{kind_name}{dim:#}{kind_pad}  {value_style}{value_str}{value_style:#}",
             spec.id,
-            spec.kind.name(),
-            value_str,
         )?;
     }
     Ok(())
@@ -816,23 +844,40 @@ fn fact_value_json(v: &alint_core::FactValue) -> serde_json::Value {
 }
 
 fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
+    use alint_core::Level;
+    use alint_output::style;
+
     let loaded = load_rules(Path::new("."), cli)?;
     let Some(entry) = loaded.entries.iter().find(|e| e.rule.id() == rule_id) else {
         bail!("no rule with id {rule_id:?} found in the effective config");
     };
     let rule = &entry.rule;
-    println!("id:         {}", rule.id());
-    println!("level:      {}", rule.level().as_str());
+    let (mut out, opts) = render_env(cli)?;
+    let dim = style::DIM;
+    let docs = style::DOCS;
+    let level_style = match rule.level() {
+        Level::Error => style::ERROR,
+        Level::Warning => style::WARNING,
+        Level::Info => style::INFO,
+        Level::Off => style::DIM,
+    };
+    writeln!(out, "{dim}id:        {dim:#} {}", rule.id())?;
+    writeln!(
+        out,
+        "{dim}level:     {dim:#} {level_style}{}{level_style:#}",
+        rule.level().as_str(),
+    )?;
     // v0.9.20: honour --no-docs by suppressing the policy_url line.
     // URLs remain in machine-readable formats regardless.
-    if !cli.no_docs
+    if opts.show_docs
         && let Some(url) = rule.policy_url()
     {
-        println!("policy_url: {url}");
+        writeln!(out, "{dim}policy_url:{dim:#} {docs}{url}{docs:#}")?;
     }
     if let Some(when) = &entry.when {
-        println!("when:       {when:?}");
+        writeln!(out, "{dim}when:      {dim:#} {when:?}")?;
     }
+    out.flush().ok();
     // v0.9.20: dropped the `debug: {rule:?}` line. The internal Debug
     // repr dumped per-rule-kind state (regex automaton, compiled
     // matchers, etc.) — useful for alint developers, noise for end

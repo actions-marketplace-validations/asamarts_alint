@@ -12,7 +12,7 @@
 
 use std::io::Write;
 
-use alint_output::{HumanOptions, wrap_message};
+use alint_output::{HumanOptions, style, wrap_message};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
@@ -38,9 +38,10 @@ pub fn render(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) ->
 
 fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) -> Result<()> {
     if proposals.is_empty() {
+        let success = style::SUCCESS;
         writeln!(
             out,
-            "No proposals — your existing config already covers what we'd suggest."
+            "{success}No proposals{success:#} — your existing config already covers what we'd suggest."
         )?;
         return Ok(());
     }
@@ -60,15 +61,19 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
         ..HumanOptions::default()
     }
     .effective_width();
+    let dim = style::DIM;
     for p in proposals {
-        let glyph = match p.confidence {
-            Confidence::High => "✓",
-            Confidence::Medium => "·",
-            Confidence::Low => "?",
+        // High confidence reads as a green checkmark (success
+        // semantics); medium maps to the cyan `info` style; low
+        // is dimmed since it's the most uncertain.
+        let (glyph, conf_style) = match p.confidence {
+            Confidence::High => ("✓", style::SUCCESS),
+            Confidence::Medium => ("·", style::INFO),
+            Confidence::Low => ("?", style::DIM),
         };
         writeln!(
             out,
-            "  {glyph} [{conf:>6}] {label}",
+            "  {conf_style}{glyph}{conf_style:#} {dim}[{dim:#}{conf_style}{conf:>6}{conf_style:#}{dim}]{dim:#} {label}",
             conf = p.confidence.label(),
             label = headline_for(p),
         )?;
@@ -82,7 +87,7 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
                 let (first, rest) = ev_lines
                     .split_first()
                     .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
-                writeln!(out, "      └─ {first}")?;
+                writeln!(out, "      {dim}└─{dim:#} {first}")?;
                 for line in rest {
                     writeln!(out, "         {line}")?;
                 }
@@ -90,9 +95,15 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
         }
         writeln!(out)?;
     }
-    writeln!(out, "Run with --format yaml to print as a config snippet.")?;
+    writeln!(
+        out,
+        "{dim}Run with --format yaml to print as a config snippet.{dim:#}"
+    )?;
     if !opts.explain {
-        writeln!(out, "Run with --explain to see file-level evidence.")?;
+        writeln!(
+            out,
+            "{dim}Run with --explain to see file-level evidence.{dim:#}"
+        )?;
     }
     out.flush().context("flush stdout")?;
     Ok(())

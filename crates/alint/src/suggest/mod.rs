@@ -73,8 +73,22 @@ impl FromStr for OutputFormat {
 }
 
 /// Top-level dispatch. Builds the scan, runs every suggester,
-/// filters by confidence + already-covered, renders.
-pub fn run(root: &Path, opts: &RunOptions, progress: &Progress) -> Result<ExitCode> {
+/// filters by confidence + already-covered, renders to the
+/// caller-supplied writer.
+///
+/// The caller is responsible for wrapping stdout in an
+/// `anstream::AutoStream` so the renderer's ANSI escapes get
+/// stripped on `--color=never` and piped output. Threading the
+/// writer through the public surface (rather than constructing
+/// stdout here) keeps suggest in lockstep with check / fix /
+/// list / explain / facts on the color contract — see the
+/// styling_uniform integration test.
+pub fn run(
+    root: &Path,
+    opts: &RunOptions,
+    progress: &Progress,
+    out: &mut dyn std::io::Write,
+) -> Result<ExitCode> {
     let started = Instant::now();
     progress.status("Scanning repository");
     let scan = Scan::collect(root, progress)?;
@@ -95,7 +109,7 @@ pub fn run(root: &Path, opts: &RunOptions, progress: &Progress) -> Result<ExitCo
             .then_with(|| a.rule_id().cmp(b.rule_id()))
     });
 
-    output::render(&proposals, opts, &mut std::io::stdout())?;
+    output::render(&proposals, opts, out)?;
 
     if !opts.quiet {
         let elapsed = started.elapsed();
