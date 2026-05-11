@@ -271,3 +271,23 @@ rules:
       Bundled ruleset YAMLs must start with `# alint://bundled/<name>@v<rev>`
       on line 1, a blank `#` on line 2, and a prose description starting on
       line 3 (parsed by xtask docs-export as the page overview).
+
+  # Dogfood: ensure user-facing install-snippet version pins
+  # (README, SECURITY, docs/site/integrations,
+  # docs/site/getting-started) all match Cargo.toml's
+  # [workspace.package].version. The script does the actual
+  # cross-file comparison; this rule surfaces any drift in
+  # `alint check` output and in CI's Dogfood job.
+  #
+  # `root_only: true` so the script runs exactly once per
+  # `alint check` (the script ignores the path argument and
+  # reads Cargo.toml itself).
+  - id: install-snippets-match-workspace-version
+    kind: command
+    paths: Cargo.toml
+    command: ["bash", "ci/scripts/check-version-pins.sh"]
+    level: error
+    message: >-
+      Install-snippet version pins drifted from Cargo.toml's
+      `[workspace.package].version`. Run `bash ci/scripts/bump-version.sh
+      <new-version>` to sync, then re-run `alint check`.

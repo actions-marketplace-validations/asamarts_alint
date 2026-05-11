@@ -66,12 +66,33 @@ ci/scripts/preflight.sh   # fmt + clippy + test + docs + dogfood
 Under the hood it runs:
 
 ```sh
-ci/scripts/fmt.sh     # cargo fmt --check
-ci/scripts/clippy.sh  # cargo clippy --workspace --all-targets -- -D warnings
-ci/scripts/test.sh    # cargo test --workspace + bash CLI tests
-ci/scripts/docs.sh    # cargo doc -D warnings + xtask docs-export --check
-ci/scripts/dogfood.sh # cargo build --release + alint check on this repo
+ci/scripts/fmt.sh                # cargo fmt --check
+ci/scripts/clippy.sh             # cargo clippy --workspace --all-targets -- -D warnings
+ci/scripts/test.sh               # cargo test --workspace + bash CLI tests
+ci/scripts/docs.sh               # cargo doc -D warnings + xtask docs-export --check
+ci/scripts/check-version-pins.sh # README/SECURITY/docs/site install snippets pin to workspace version
+ci/scripts/dogfood.sh            # cargo build --release + alint check on this repo
 ```
+
+### Bumping the workspace version
+
+Single source of truth: `[workspace.package].version` in `Cargo.toml`. The
+README, SECURITY.md, and `docs/site/integrations/**` install snippets must
+pin to the same value. To bump in one pass:
+
+```sh
+bash ci/scripts/bump-version.sh 0.9.21   # NEW workspace version
+```
+
+That updates Cargo.toml, every install snippet, and inserts a stub CHANGELOG
+entry. Manual followups it doesn't do (printed at the end of the run): fill in
+the CHANGELOG body, and bump the matching string in alint.org's
+`src/pages/index.astro` JSON-LD `softwareVersion` and
+`src/pages/roadmap.astro` "Latest release" line (cross-repo).
+
+`ci/scripts/check-version-pins.sh` runs in preflight and as a dogfood alint
+rule (`install-snippets-match-workspace-version` in `.alint.yml`), so any
+drift fails CI before publish.
 
 All five must pass before opening a PR. The wrapper falls through on
 failure (rather than fast-exiting on the first one) so a single run shows
