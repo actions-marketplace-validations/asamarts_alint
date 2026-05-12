@@ -233,11 +233,14 @@ impl FileIndex {
     /// short-circuit cleanly via `take_while` / `find` / etc.
     ///
     /// Cycle defense: a stack-based walk with no per-iteration
-    /// cycle check. The walker (`crate::walk`) excludes symlinks
-    /// by default, so the entries vec is acyclic by construction;
-    /// adding a per-step cycle check would cost ~10 ns per yielded
-    /// entry for a guarantee that's already established at
-    /// walker time.
+    /// cycle check. The walker (`crate::walk`) calls
+    /// `WalkBuilder::follow_links(true)` to traverse through
+    /// symlinks, and the underlying `ignore` crate carries
+    /// cycle detection — an ancestor-self symlink emits an error
+    /// and the walker continues without recursing. The entries
+    /// vec is therefore acyclic by construction; adding a per-
+    /// step cycle check would cost ~10 ns per yielded entry for
+    /// a guarantee that's already established at walker time.
     pub fn descendants_of<'a>(&'a self, dir: &'a Path) -> impl Iterator<Item = &'a FileEntry> + 'a {
         DescendantsIter {
             index: self,
