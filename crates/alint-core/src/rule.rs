@@ -179,6 +179,42 @@ pub enum GitTrackedMode {
     DirAware,
 }
 
+/// Stamp out the three boilerplate `Rule` impl methods every rule
+/// kind ships: `id`, `level`, `policy_url`. Expects the impl'ing
+/// struct to have fields named `id: String`, `level: Level`, and
+/// `policy_url: Option<String>` (the universal shape every rule
+/// builder hands back).
+///
+/// Usage inside an `impl Rule for SomeRule` block:
+///
+/// ```ignore
+/// impl Rule for FileExistsRule {
+///     alint_core::rule_common_impl!();
+///
+///     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> { ... }
+///     // ... other trait methods specific to this rule
+/// }
+/// ```
+///
+/// The macro only covers the three universal methods. `fixer()` /
+/// `as_per_file()` / `evaluate()` / `requires_full_index()` etc.
+/// stay explicit per-rule because they encode the rule's actual
+/// behaviour, not boilerplate.
+#[macro_export]
+macro_rules! rule_common_impl {
+    () => {
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn level(&self) -> $crate::Level {
+            self.level
+        }
+        fn policy_url(&self) -> Option<&str> {
+            self.policy_url.as_deref()
+        }
+    };
+}
+
 /// Trait every built-in and plugin rule implements.
 pub trait Rule: Send + Sync + std::fmt::Debug {
     fn id(&self) -> &str;

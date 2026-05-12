@@ -55,15 +55,7 @@ pub struct DirOnlyContainsRule {
 }
 
 impl Rule for DirOnlyContainsRule {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn level(&self) -> Level {
-        self.level
-    }
-    fn policy_url(&self) -> Option<&str> {
-        self.policy_url.as_deref()
-    }
+    alint_core::rule_common_impl!();
 
     fn requires_full_index(&self) -> bool {
         // Cross-file: every selected dir's verdict depends on

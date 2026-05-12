@@ -24,15 +24,7 @@ pub struct NoMergeConflictMarkersRule {
 }
 
 impl Rule for NoMergeConflictMarkersRule {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn level(&self) -> Level {
-        self.level
-    }
-    fn policy_url(&self) -> Option<&str> {
-        self.policy_url.as_deref()
-    }
+    alint_core::rule_common_impl!();
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         eval_per_file(self, ctx)

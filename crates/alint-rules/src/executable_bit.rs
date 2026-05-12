@@ -35,15 +35,7 @@ pub struct ExecutableBitRule {
 }
 
 impl Rule for ExecutableBitRule {
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn level(&self) -> Level {
-        self.level
-    }
-    fn policy_url(&self) -> Option<&str> {
-        self.policy_url.as_deref()
-    }
+    alint_core::rule_common_impl!();
 
     #[cfg(unix)]
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
