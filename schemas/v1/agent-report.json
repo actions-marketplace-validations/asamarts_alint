@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/agent-report.json",
+  "title": "alint agent report (v1)",
+  "description": "Output schema emitted by `alint check --format agent`. Optimised for AI coding agents that consume alint inside their own self-correction loops. Differs from `--format json` by (1) flattening rule-results into a single `violations` array, (2) adding a templated `agent_instruction` per violation, and (3) reporting `severity` as a lowercase string rather than the SARIF mapping. The format is stable behind `schema_version: 1`; field additions are non-breaking, removals or semantic changes bump the version.",
+  "type": "object",
+  "required": ["schema_version", "format", "summary", "violations"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Report schema version. Always 1 for this schema."
+    },
+    "format": {
+      "const": "agent",
+      "description": "Format discriminator. Always the literal string \"agent\" for this schema; lets a multi-format consumer route on a single field."
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "total_violations",
+        "by_severity",
+        "fixable_violations",
+        "passing_rules",
+        "failing_rules"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "total_violations": { "type": "integer", "minimum": 0 },
+        "by_severity": {
+          "type": "object",
+          "required": ["error", "warning", "info"],
+          "additionalProperties": false,
+          "properties": {
+            "error": { "type": "integer", "minimum": 0 },
+            "warning": { "type": "integer", "minimum": 0 },
+            "info": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "fixable_violations": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Subset of total_violations whose source rule declares an autofix; an agent can use this to decide whether to suggest `alint fix`."
+        },
+        "passing_rules": { "type": "integer", "minimum": 0 },
+        "failing_rules": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "violations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/violation" }
+    }
+  },
+  "$defs": {
+    "severity": {
+      "type": "string",
+      "enum": ["error", "warning", "info"],
+      "description": "Lowercase severity string. `off` rules don't produce violations and never appear here."
+    },
+    "violation": {
+      "type": "object",
+      "required": ["rule_id", "severity", "human_message", "agent_instruction", "fix_available"],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": {
+          "type": "string",
+          "description": "Rule id, matches the `id:` field of a rule in the config."
+        },
+        "severity": { "$ref": "#/$defs/severity" },
+        "file": {
+          "type": "string",
+          "description": "Repo-relative path; absent for tree-wide violations."
+        },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "human_message": {
+          "type": "string",
+          "description": "The rule's violation message verbatim, suitable for human review. Mirror of `message` in `--format json`."
+        },
+        "agent_instruction": {
+          "type": "string",
+          "description": "Templated remediation phrasing optimised for an LLM to act on. Composed from severity, message, location, fix availability, and policy URL."
+        },
+        "fix_available": {
+          "type": "boolean",
+          "description": "True when the source rule declares an autofix. Mirrors `fix_available: true` callout in `agent_instruction`."
+        },
+        "policy_url": {
+          "type": "string",
+          "description": "Optional documentation URL provided by the rule.",
+          "format": "uri"
+        }
+      }
+    }
+  }
+}
