@@ -385,6 +385,81 @@ def render(
     return "\n".join(out) + "\n"
 
 
+def render_trajectory_json(
+    data: Dict[Cell, Stat],
+    changelog_headlines: Dict[str, Tuple[str, str]] | None,
+    arch: str,
+) -> str:
+    """Produce a machine-readable trajectory.json mirroring the
+    cross-version headline table at the top of HISTORY.md.
+
+    Consumed by alint.org's `/benchmarks/` page (see
+    `src/pages/benchmarks.astro` over in the site repo) so the
+    trajectory table refreshes automatically on every main push
+    instead of drifting until a maintainer hand-edits HTML rows.
+    Schema is locked behind `schema_version: 1`; field additions
+    are non-breaking, removals/semantic changes bump the version.
+
+    The four cell columns mirror the markdown table: 1M S3/S6/S7/S9
+    in `full` mode — the headline "1M cells across the most-stressed
+    scenarios" view, not the full per-scenario matrix. Consumers
+    that want the full matrix render HISTORY.md directly.
+    """
+    fallback_headlines = {
+        "v0.5.7": ("2026-03", "First publish-grade `bench-scale` matrix at 1k/10k/100k."),
+        "v0.5.6": ("2026-03", "Prep run that captured the only pre-v0.9 1M S3 numbers."),
+    }
+    headlines = dict(fallback_headlines)
+    if changelog_headlines:
+        headlines.update(changelog_headlines)
+
+    versions_present = sorted({k[0] for k in data}, key=semver_key, reverse=True)
+    rows = []
+    cell_keys = [
+        ("s3_1m_full", "S3"),
+        ("s6_1m_full", "S6"),
+        ("s7_1m_full", "S7"),
+        ("s9_1m_full", "S9"),
+    ]
+    for v in versions_present:
+        date, headline = headlines.get(v, ("?", "—"))
+        cells = {}
+        for json_key, scenario in cell_keys:
+            stat = data.get((v, scenario, "1m", "full"))
+            if stat is None:
+                # Scenarios didn't exist at older tags. Mirror
+                # render()'s fmt() rules so the JSON and the
+                # markdown agree byte-for-byte on those cells.
+                if scenario == "S9" and v in ("v0.9.5", "v0.9.4", "v0.5.7", "v0.5.6"):
+                    cells[json_key] = None
+                elif scenario == "S10" and v in (
+                    "v0.9.8", "v0.9.7", "v0.9.6", "v0.9.5",
+                    "v0.9.4", "v0.5.7", "v0.5.6",
+                ):
+                    cells[json_key] = None
+                else:
+                    cells[json_key] = None
+                continue
+            mean_ms, stddev_ms = stat
+            cells[json_key] = {
+                "mean_ms": mean_ms,
+                "stddev_ms": stddev_ms,
+                "display": fmt(data, v, scenario, "1m", "full"),
+            }
+        rows.append({
+            "version": v,
+            "date": date,
+            "headline": headline,
+            "cells": cells,
+        })
+    payload = {
+        "schema_version": 1,
+        "arch": arch,
+        "rows": rows,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--arch", default="linux-x86_64")
@@ -403,6 +478,15 @@ def main() -> int:
         ),
         help="CHANGELOG.md path; release date + headline blurb come from here",
     )
+    p.add_argument(
+        "--json-out",
+        default=None,
+        help=(
+            "Optional: also write a JSON trajectory file to this path. "
+            "Consumed by alint.org's /benchmarks/ page so the table doesn't "
+            "drift. Stdout markdown is unaffected."
+        ),
+    )
     args = p.parse_args()
 
     data = load_arch(args.base, args.arch)
@@ -410,6 +494,10 @@ def main() -> int:
     if not data:
         return 1
     sys.stdout.write(render(data, changelog_headlines))
+    if args.json_out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.json_out)) or ".", exist_ok=True)
+        with open(args.json_out, "w") as f:
+            f.write(render_trajectory_json(data, changelog_headlines, args.arch))
     return 0
 
 

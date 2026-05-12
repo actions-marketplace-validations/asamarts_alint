@@ -770,7 +770,15 @@ fn docs_export(out: Option<PathBuf>, check: bool) -> Result<()> {
     // 5. CLI reference, captured from the alint binary's --help.
     generate_cli_reference(&workspace, &target_dir)?;
 
-    // 6. Manifest. Any consumer (alint.org sync script, audit
+    // 6. Benchmark trajectory JSON. Re-renders the cross-version
+    //    headline table from the per-version results.json files
+    //    under `docs/benchmarks/macro/results/<arch>/` plus the
+    //    CHANGELOG headlines. Consumed by alint.org's /benchmarks/
+    //    page so the trajectory table refreshes on every main push
+    //    instead of drifting until a maintainer hand-edits HTML.
+    generate_benchmarks_trajectory(&workspace, &target_dir)?;
+
+    // 7. Manifest. Any consumer (alint.org sync script, audit
     //    tooling) reads this to know what's in the bundle.
     write_manifest(&target_dir)?;
 
@@ -1932,6 +1940,45 @@ fn run_help(bin: &Path, subcmd_args: &[&str]) -> Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// Run `xtask/scripts/render-history.py --json-out <bundle>/benchmarks-trajectory.json`
+/// so the bundle ships the cross-version headline-trajectory data as
+/// machine-readable JSON. The script discards stdout (where the
+/// regular markdown render goes) to keep this side-effect-only;
+/// `bench-record.yml` is the workflow that owns HISTORY.md updates.
+///
+/// Python is a soft dependency — the renderer is Python because it
+/// pre-dates the xtask binary. ubuntu-latest CI runners ship
+/// python3 by default; if a contributor's local env lacks it, this
+/// step is allowed to fail with a clear diagnostic rather than
+/// silently skip.
+fn generate_benchmarks_trajectory(workspace: &Path, target_dir: &Path) -> Result<()> {
+    let script = workspace.join("xtask/scripts/render-history.py");
+    if !script.is_file() {
+        bail!("expected renderer at {}", script.display());
+    }
+    let out_path = target_dir.join("benchmarks-trajectory.json");
+    let status = Command::new("python3")
+        .arg(&script)
+        .arg("--json-out")
+        .arg(&out_path)
+        // Discard the markdown render; HISTORY.md is updated by
+        // bench-record.yml on tag pushes, not by docs-export.
+        .stdout(std::process::Stdio::null())
+        .current_dir(workspace)
+        .status()
+        .with_context(|| format!("running {}", script.display()))?;
+    if !status.success() {
+        bail!("{} exited {:?}", script.display(), status.code());
+    }
+    if !out_path.exists() {
+        bail!(
+            "expected JSON at {} but renderer did not write it",
+            out_path.display()
+        );
+    }
+    Ok(())
 }
 
 fn write_manifest(target_dir: &Path) -> Result<()> {
