@@ -11,6 +11,7 @@ is the authoritative source for option types.
 
 - [Existence](#existence)
 - [Content](#content)
+- [Structured query](#structured-query)
 - [Naming](#naming)
 - [Text hygiene](#text-hygiene)
 - [Security / Unicode sanity](#security--unicode-sanity)
@@ -20,6 +21,7 @@ is the authoritative source for option types.
 - [Unix metadata](#unix-metadata)
 - [Git hygiene](#git-hygiene)
 - [Cross-file](#cross-file)
+- [Plugin (tier 1)](#plugin-tier-1)
 - [Fix operations](#fix-operations)
 - [Bundled rulesets](#bundled-rulesets)
 - [Nested `.alint.yml` (monorepo layering)](#nested-alintyml-monorepo-layering)
@@ -253,9 +255,37 @@ First line of each file in scope must match the `shebang` regex. Pairs with `exe
 
 Default `shebang:` is `^#!`, which only enforces presence; almost every useful config supplies a tighter regex pinning the interpreter.
 
+### `file_is_text` (alias: `is_text`)
+
+Content is detected as text (magic bytes + UTF-8 validity check) — fails on binary files matched by `paths`.
+
+```yaml
+- id: configs-are-text
+  kind: file_is_text
+  paths: ".github/**/*.{yml,yaml}"
+  level: error
+```
+
+### `file_is_ascii`
+
+Every byte in the file must be < 0x80. Strict variant of `is_text` for configs that must round-trip through strictly-ASCII tools.
+
+```yaml
+- id: licences-are-ascii
+  kind: file_is_ascii
+  paths: "LICENSE*"
+  level: error
+```
+
+---
+
+## Structured query
+
+JSONPath queries over structured documents per [RFC 9535](https://datatracker.ietf.org/doc/html/rfc9535). JSON / YAML / TOML targets coerce through serde into the same `serde_json::Value` tree, so a single rule works across all three formats — Kubernetes manifests, GitHub Actions workflows, `package.json`, `Cargo.toml`, `pyproject.toml`.
+
 ### `json_path_equals`, `yaml_path_equals`, `toml_path_equals`
 
-Query a structured document (JSON / YAML / TOML) with a [JSONPath](https://datatracker.ietf.org/doc/html/rfc9535) expression and assert every match deep-equals the supplied value. YAML and TOML are parsed through serde and then treated as JSON-shaped trees, so the same JSONPath engine handles all three formats.
+Query a structured document with a JSONPath expression and assert every match deep-equals the supplied value.
 
 ```yaml
 - id: require-mit-license
@@ -327,28 +357,6 @@ Each schema-validation error becomes one violation, with the failing instance pa
 ```
 
 Check-only — fixing schema violations is a "the user knows what value belongs there" problem, not alint's.
-
-### `file_is_text` (alias: `is_text`)
-
-Content is detected as text (magic bytes + UTF-8 validity check) — fails on binary files matched by `paths`.
-
-```yaml
-- id: configs-are-text
-  kind: file_is_text
-  paths: ".github/**/*.{yml,yaml}"
-  level: error
-```
-
-### `file_is_ascii`
-
-Every byte in the file must be < 0x80. Strict variant of `is_text` for configs that must round-trip through strictly-ASCII tools.
-
-```yaml
-- id: licences-are-ascii
-  kind: file_is_ascii
-  paths: "LICENSE*"
-  level: error
-```
 
 ---
 
