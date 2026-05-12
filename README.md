@@ -160,8 +160,8 @@ For an existing repo with prior debt, follow up with `alint suggest`. It scans f
 
 ```bash
 alint suggest                       # human-readable proposal table
-alint suggest --format=yaml         # paste-ready config snippet
-alint suggest --format=json         # stable shape for agent consumption
+alint suggest --format yaml         # paste-ready config snippet
+alint suggest --format json         # stable shape for agent consumption
 alint suggest --explain             # show file-level evidence per proposal
 ```
 
