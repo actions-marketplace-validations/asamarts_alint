@@ -9,10 +9,19 @@ points are explicit.
 1. **Bump the workspace version.**
 
    ```sh
-   # Edit Cargo.toml: workspace.package.version + workspace.dependencies.alint-*
-   # Edit npm/package.json: version (release.yml rewrites at publish time
-   #   but the source-of-truth should match).
+   bash ci/scripts/bump-version.sh <new-version>   # e.g. 0.9.21
    ```
+
+   The script edits `Cargo.toml [workspace.package].version` + every
+   user-facing install snippet (README, SECURITY, docs/site/**) +
+   inserts a CHANGELOG stub.
+
+   Deliberately **not** touched:
+   - `Cargo.toml [workspace.dependencies].alint-* version` —
+     intra-workspace API-compat floor. Bump by hand only when an
+     inter-crate API actually breaks.
+   - `npm/package.json` version — `release.yml` rewrites it to the
+     release tag at publish time, so the committed value can lag.
 
 2. **Update CHANGELOG.md.**
 
