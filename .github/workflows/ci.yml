@@ -126,15 +126,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ci-docs
-      # xtask docs-export shells out to `python3` to generate the
-      # benchmarks-trajectory.json bundled for alint.org. The
-      # self-hosted [linux, alint] runner doesn't ship python3 on
-      # PATH (bench-record installs its own pinned interpreter),
-      # so add a standard one here. ubuntu-latest (used by
-      # docs-bundle.yml) already has python3.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
       - run: ci/scripts/docs.sh
 
   dogfood:

@@ -1949,17 +1949,25 @@ fn run_help(bin: &Path, subcmd_args: &[&str]) -> Result<String> {
 /// `bench-record.yml` is the workflow that owns HISTORY.md updates.
 ///
 /// Python is a soft dependency — the renderer is Python because it
-/// pre-dates the xtask binary. ubuntu-latest CI runners ship
-/// python3 by default; if a contributor's local env lacks it, this
-/// step is allowed to fail with a clear diagnostic rather than
-/// silently skip.
+/// pre-dates the xtask binary. Two callers are in play:
+///
+/// - `docs-bundle.yml` runs on `ubuntu-latest` which ships python3
+///   by default. This is the workflow that ACTUALLY ships the
+///   bundle alint.org consumes, so the trajectory always lands in
+///   production via this path.
+/// - `ci.yml`'s Docs job runs `docs-export --check` on the
+///   self-hosted `[linux, alint]` runner which lacks python3
+///   (bench-record installs its own pinned interpreter rather than
+///   relying on a system one). On that path we skip with a warning
+///   instead of failing — the trajectory check belongs to the
+///   `coverage_audit_benchmarks_trajectory` test, not docs-export.
 fn generate_benchmarks_trajectory(workspace: &Path, target_dir: &Path) -> Result<()> {
     let script = workspace.join("xtask/scripts/render-history.py");
     if !script.is_file() {
         bail!("expected renderer at {}", script.display());
     }
     let out_path = target_dir.join("benchmarks-trajectory.json");
-    let status = Command::new("python3")
+    let attempt = Command::new("python3")
         .arg(&script)
         .arg("--json-out")
         .arg(&out_path)
@@ -1967,8 +1975,22 @@ fn generate_benchmarks_trajectory(workspace: &Path, target_dir: &Path) -> Result
         // bench-record.yml on tag pushes, not by docs-export.
         .stdout(std::process::Stdio::null())
         .current_dir(workspace)
-        .status()
-        .with_context(|| format!("running {}", script.display()))?;
+        .status();
+    let status = match attempt {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "[xtask] warning: python3 not on PATH; \
+                 skipping benchmarks-trajectory.json. \
+                 The docs-bundle.yml workflow runs on ubuntu-latest \
+                 (which has python3) so production bundles still ship it."
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(anyhow::Error::new(e).context(format!("running {}", script.display())));
+        }
+    };
     if !status.success() {
         bail!("{} exited {:?}", script.display(), status.code());
     }
