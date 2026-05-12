@@ -489,6 +489,15 @@ def main() -> int:
     )
     args = p.parse_args()
 
+    # The markdown render contains em dashes (—) and other Unicode
+    # characters. Windows' default stdout codepage is cp1252 and
+    # would raise UnicodeEncodeError on `sys.stdout.write(...)`.
+    # Force UTF-8 so the script works the same on Linux (CI / dev),
+    # macOS (CI), and Windows (cross-platform CI). reconfigure() is
+    # Python 3.7+ which is below alint's MSRV expectations anyway.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     data = load_arch(args.base, args.arch)
     changelog_headlines = parse_changelog(args.changelog)
     if not data:
@@ -496,7 +505,7 @@ def main() -> int:
     sys.stdout.write(render(data, changelog_headlines))
     if args.json_out:
         os.makedirs(os.path.dirname(os.path.abspath(args.json_out)) or ".", exist_ok=True)
-        with open(args.json_out, "w") as f:
+        with open(args.json_out, "w", encoding="utf-8") as f:
             f.write(render_trajectory_json(data, changelog_headlines, args.arch))
     return 0
 
