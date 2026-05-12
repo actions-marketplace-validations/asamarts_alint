@@ -6,6 +6,44 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Post-v0.9.20 polish accumulating toward the next tag. No user-facing
+behavior change; CLI output, docs, and CI hygiene only.
+
+### Changed
+
+- **CLI color + AutoStream parity** for `list`, `explain`, `facts`,
+  `suggest` — matches `check`/`fix` color discipline.
+- **Em dashes** dropped from `README.md`, bundled rule messages, and
+  the synced `docs/site/` tree.
+- **Install snippets** lead with `curl | bash` in `README.md` and
+  `docs/site/getting-started/installation.md`.
+
+### Added
+
+- `GOVERNANCE.md` + `.github/FUNDING.yml` (pre-launch repo polish).
+- `ci/scripts/preflight.sh` wrapper + git `pre-push` hook
+  enforcing fmt / clippy / doc / pin-sync.
+- `ci/scripts/check-version-pins.sh` + `.alint.yml` dogfood rule
+  `install-snippets-match-workspace-version` for automated
+  version-string drift detection.
+- Usage examples for 7 under-documented rule kinds + an
+  `xtask docs-coverage` audit to enforce per-kind doc presence.
+
+### Fixed
+
+- Broken alint.org links to `docs/development/rule-authoring.md`
+  (changelog + roadmap had uppercase `RULE-AUTHORING.md` references;
+  source file renamed to match the synced lowercase slug).
+- `fix(dogfood)`: exclude `alint-e2e/fixtures/**` from self-lint
+  (test fixtures legitimately violate hygiene rules).
+- `chore(privacy)`: replace personal email with alint.org aliases
+  across CONTRIBUTING / SECURITY / README contact lines.
+
+### Bench
+
+- v0.9.18 / v0.9.19 / v0.9.20 macro-bench + criterion results
+  published under `docs/benchmarks/`.
+
 ## [0.9.20] — 2026-05-10 (cross-command output polish)
 
 Extends v0.9.19's width-aware-output / `--no-docs` / message-wrap
