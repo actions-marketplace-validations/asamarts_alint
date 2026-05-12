@@ -32,6 +32,14 @@ on:
         required: false
         default: "edge"
 
+concurrency:
+  # Coalesce rapid pushes — only one image build in flight per ref,
+  # and a newer push cancels an older one. Prevents two builds
+  # racing to push `:edge` (or the same release tag) and the loser
+  # silently overwriting the winner's manifest.
+  group: bench-docker-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: build + push image
