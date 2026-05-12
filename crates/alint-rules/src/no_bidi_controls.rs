@@ -20,7 +20,8 @@
 use std::path::Path;
 
 use alint_core::{
-    Context, Error, FixSpec, Fixer, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation, eval_per_file,
+    Context, Error, FixSpec, Fixer, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation,
+    eval_per_file,
 };
 
 use crate::fixers::FileStripBidiFixer;

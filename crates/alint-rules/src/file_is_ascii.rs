@@ -12,7 +12,9 @@
 
 use std::path::Path;
 
-use alint_core::{Context, Error, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation, eval_per_file};
+use alint_core::{
+    Context, Error, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation, eval_per_file,
+};
 
 #[derive(Debug)]
 pub struct FileIsAsciiRule {
