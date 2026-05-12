@@ -1,1 +1,1 @@
-alint: no .alint.yml found (searched from [..])
+alint: no .alint.yml found (searched from [..]) (run `alint init` to scaffold one)

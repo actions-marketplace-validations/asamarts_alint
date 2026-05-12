@@ -984,7 +984,11 @@ fn cmd_validate_config(path: Option<PathBuf>, format: &str, cli: &Cli) -> Result
             if let Some(found) = alint_dsl::discover(&p) {
                 found
             } else {
-                let err = anyhow::anyhow!("no .alint.yml found under directory {}", p.display());
+                let err = anyhow::anyhow!(
+                    "no .alint.yml found under directory {} \
+                     (run `alint init` there to scaffold one)",
+                    p.display()
+                );
                 return emit_validate_failure(&err, None, format);
             }
         } else {
@@ -996,7 +1000,8 @@ fn cmd_validate_config(path: Option<PathBuf>, format: &str, cli: &Cli) -> Result
         p
     } else {
         let err = anyhow::anyhow!(
-            "no .alint.yml found (searched from {})",
+            "no .alint.yml found (searched from {}) \
+             (run `alint init` to scaffold one)",
             Path::new(".").display()
         );
         return emit_validate_failure(&err, None, format);
@@ -1086,7 +1091,11 @@ fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
         first.clone()
     } else {
         alint_dsl::discover(cwd).ok_or_else(|| {
-            anyhow::anyhow!("no .alint.yml found (searched from {})", cwd.display())
+            anyhow::anyhow!(
+                "no .alint.yml found (searched from {}) \
+                 (run `alint init` to scaffold one)",
+                cwd.display()
+            )
         })?
     };
     tracing::debug!(?config_path, "loading config");
