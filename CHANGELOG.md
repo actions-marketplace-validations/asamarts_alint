@@ -7,7 +7,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 Post-v0.9.20 polish accumulating toward the next tag. No user-facing
-behavior change; CLI output, docs, and CI hygiene only.
+behavior change; CLI output, docs, schema completeness, dependency
+bumps, and CI hygiene only. The bulk of this entry is automated
+drift-prevention scaffolding so the same class of "live site
+silently goes stale" gap can't reopen post-launch.
 
 ### Changed
 
@@ -17,6 +20,17 @@ behavior change; CLI output, docs, and CI hygiene only.
   the synced `docs/site/` tree.
 - **Install snippets** lead with `curl | bash` in `README.md` and
   `docs/site/getting-started/installation.md`.
+- **`--format` style** normalized to space form (`--format json`,
+  not `--format=json`) across README + cookbook; clap accepts both,
+  this is style consistency only.
+- **Structured query** is now its own family-level H2 in
+  `docs/rules.md` (was nested under Content). 13 families per the
+  README claim now matches the doc structure + alint.org sidebar.
+- **Docker GitHub Actions** bumped via Dependabot — `setup-qemu`,
+  `setup-buildx`, `login` to v4; `build-push` to v7. `release.yml`
+  and `bench-docker.yml` now on the same major versions.
+- **`toml`** crate bumped 0.9 → 1.1 (Dependabot major). API stable
+  on `from_str`; all tests pass.
 
 ### Added
 
@@ -28,16 +42,48 @@ behavior change; CLI output, docs, and CI hygiene only.
   version-string drift detection.
 - Usage examples for 7 under-documented rule kinds + an
   `xtask docs-coverage` audit to enforce per-kind doc presence.
+- **`schemas/v1/agent-report.json`** — published JSON Schema for
+  the `--format agent` output, closing the gap behind the
+  `schema_version: 1` stability promise.
+- **Benchmarks trajectory pipeline** — `render-history.py
+  --json-out` emits `benchmarks-trajectory.json` from per-version
+  `results.json` files + CHANGELOG headlines; `xtask docs-export`
+  bundles it; alint.org's `/benchmarks/` page reads it at build
+  time. Replaces a hand-edited HTML table that had drifted six
+  releases behind. `coverage_audit_benchmarks_trajectory` test
+  guards the data flow.
+- **`bench-docker.yml` concurrency group** so two rapid pushes
+  don't race the `:edge` image tag.
 
 ### Fixed
 
 - Broken alint.org links to `docs/development/rule-authoring.md`
   (changelog + roadmap had uppercase `RULE-AUTHORING.md` references;
   source file renamed to match the synced lowercase slug).
+- `alint init` is now suggested from the "no .alint.yml found"
+  error paths (first-time-user dead-end resolved).
+- `walker.rs::descendants_of` doc comment now correctly describes
+  the cycle-defense rationale (was inaccurate about symlink
+  exclusion; the actual guarantee comes from the `ignore` crate's
+  ancestor-loop detection).
+- `render-history.py` forces UTF-8 stdout so Windows CI doesn't
+  trip on em dashes in the markdown render.
+- `xtask docs-export` treats `python3` as a soft dependency: emits
+  a warning + skips trajectory generation on hosts without it
+  (the self-hosted CI runner case). `docs-bundle.yml` runs on
+  ubuntu-latest which always has python3, so production bundles
+  are unaffected.
 - `fix(dogfood)`: exclude `alint-e2e/fixtures/**` from self-lint
   (test fixtures legitimately violate hygiene rules).
 - `chore(privacy)`: replace personal email with alint.org aliases
   across CONTRIBUTING / SECURITY / README contact lines.
+
+### Docs
+
+- `RELEASING.md` step 1 now points at `bump-version.sh` and
+  documents the two deliberate exclusions (`[workspace.dependencies]`
+  intra-workspace API floor + `npm/package.json` which the release
+  workflow rewrites at publish time).
 
 ### Bench
 
