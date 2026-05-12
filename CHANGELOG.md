@@ -1359,7 +1359,7 @@ monorepos.
   `alint_bench::tree::generate_nested_polyglot_monorepo` helper.
   100k S9 = 688 ms ± 13 ms on the published baseline machine.
 - **Rule-authoring docs**: `scope_filter:` section in
-  [`RULE-AUTHORING.md`](docs/development/RULE-AUTHORING.md) with
+  [`rule-authoring.md`](docs/development/rule-authoring.md) with
   the bundled-ruleset migration recipe.
 
 ### Changed
@@ -1420,7 +1420,7 @@ byte-identical to v0.9.4 across all 8 formatters.
 
 Full design:
 [`docs/design/v0.9/coverage-and-dogfood.md`](docs/design/v0.9/coverage-and-dogfood.md).
-Workflow: [`docs/development/RULE-AUTHORING.md`](docs/development/RULE-AUTHORING.md).
+Workflow: [`docs/development/rule-authoring.md`](docs/development/rule-authoring.md).
 Bench layout: [`docs/benchmarks/README.md`](docs/benchmarks/README.md).
 
 ### Performance (.5)
@@ -1542,7 +1542,7 @@ materialised monorepo tree. `xtask` enum extends to
 
 ### Workflow doc + dogfood scope (.9)
 
-- New `docs/development/RULE-AUTHORING.md` — the four-step
+- New `docs/development/rule-authoring.md` — the four-step
   process every new rule / bundled ruleset / alias goes
   through; documents the two-layer enforcement (alint
   check . + Rust audits), family conventions, scenario

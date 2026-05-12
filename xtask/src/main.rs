@@ -695,7 +695,7 @@ mod docs_paths {
     pub const RULES_DOC: &str = "docs/rules.md";
     pub const ARCHITECTURE_DOC: &str = "docs/design/ARCHITECTURE.md";
     pub const ROADMAP_DOC: &str = "docs/design/ROADMAP.md";
-    pub const RULE_AUTHORING_DOC: &str = "docs/development/RULE-AUTHORING.md";
+    pub const RULE_AUTHORING_DOC: &str = "docs/development/rule-authoring.md";
     pub const CHANGELOG: &str = "CHANGELOG.md";
     pub const SCHEMA_JSON: &str = "schemas/v1/config.json";
     pub const RULESETS_DIR: &str = "crates/alint-dsl/rulesets/v1";

@@ -124,7 +124,7 @@ pedantic clippy keeps the codebase quiet by default.
 - `crates/alint-testkit/` — proptest strategies + shared test fixtures.
 - `xtask/` — meta-tooling (bench-scale, docs-export, publish-benches).
 
-See [`docs/development/RULE-AUTHORING.md`](docs/development/RULE-AUTHORING.md)
+See [`docs/development/rule-authoring.md`](docs/development/rule-authoring.md)
 for the rule-author workflow (4 steps: parse → build → evaluate → e2e).
 
 ### Testing requirements

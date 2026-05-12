@@ -30,7 +30,7 @@ doesn't add user-visible rule kinds, formatters, or subcommands
 | [`parallel_walker.md`](./parallel_walker.md) ✅ | Replace the sequential `WalkBuilder::build` with `WalkBuilder::build_parallel` + a deterministic post-sort. *(Shipped v0.9.1.)* |
 | [`memory_pass.md`](./memory_pass.md) ✅ (partial) | `Arc<Path>` / `Arc<str>` / `Cow<'static, str>` on the Violation / RuleResult hot path. *(Shipped v0.9.2; per-rule byte-slice scanning + bounded prefix/suffix reads moved to v0.9.3 — see the doc for context.)* |
 | [`dispatch_flip.md`](./dispatch_flip.md) ✅ | Per-file rules run under a file-major outer loop via a new `PerFileRule` sub-trait; cross-file rules (`requires_full_index() == true`) keep the rule-major path. *(Shipped v0.9.3 with engine restructure + 8-rule reference migration; remaining content rules migrated in v0.9.4.)* |
-| [`coverage-and-dogfood.md`](./coverage-and-dogfood.md) ✅ | v0.9.5.5 cross-file dispatch fast paths, v0.9.5.6 coverage audits, v0.9.5.7 coverage scenarios, v0.9.5.8 bench-scale S6/S7/S8, v0.9.5.9 RULE-AUTHORING.md, v0.9.5.reorg bench layout reorganisation. *(Shipped across v0.9.5.5 – v0.9.5.reorg.)* |
+| [`coverage-and-dogfood.md`](./coverage-and-dogfood.md) ✅ | v0.9.5.5 cross-file dispatch fast paths, v0.9.5.6 coverage audits, v0.9.5.7 coverage scenarios, v0.9.5.8 bench-scale S6/S7/S8, v0.9.5.9 rule-authoring.md, v0.9.5.reorg bench layout reorganisation. *(Shipped across v0.9.5.5 – v0.9.5.reorg.)* |
 | [`scope-filter.md`](./scope-filter.md) ✅ | `scope_filter: { has_ancestor: <manifest> }` per-file gate + bundled-ecosystem-ruleset migration (`is_*` → `has_*` rename + per-language `has_*` rulesets). *(Shipped v0.9.6.)* |
 
 ## Cross-cutting decisions

@@ -187,7 +187,7 @@ the v0.9.5 baseline (frozen at the path-index fix landing).
 > What v0.9.9 actually ships:
 > - The two-layer enforcement framing (file-presence + Rust
 >   audits) is documented in
->   `docs/development/RULE-AUTHORING.md` (new) so future
+>   `docs/development/rule-authoring.md` (new) so future
 >   contributors land scenarios alongside their rules.
 > - The existing `.alint.yml` already lints alint on every
 >   push via `.github/workflows/action-selftest.yml`. Layer 1
@@ -290,7 +290,7 @@ rules:
 "alint lints itself" is a credible quality signal. The
 `.alint.yml` doubles as a worked example of the agent-tier
 rule-authoring workflow we've been converging toward
-(shipped behind `RULE-AUTHORING.md`, drafted in v0.9.6).
+(shipped behind `rule-authoring.md`, drafted in v0.9.6).
 
 ## Out of scope for v0.9.5–.9
 
