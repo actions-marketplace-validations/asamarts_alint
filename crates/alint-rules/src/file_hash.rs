@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use alint_core::{Context, Error, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{Context, Error, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation, eval_per_file};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -44,18 +44,7 @@ impl Rule for FileHashRule {
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let mut violations = Vec::new();
-        for entry in ctx.index.files() {
-            if !self.scope.matches(&entry.path, ctx.index) {
-                continue;
-            }
-            let full = ctx.root.join(&entry.path);
-            let Ok(bytes) = std::fs::read(&full) else {
-                continue;
-            };
-            violations.extend(self.evaluate_file(ctx, &entry.path, &bytes)?);
-        }
-        Ok(violations)
+        eval_per_file(self, ctx)
     }
 
     fn as_per_file(&self) -> Option<&dyn PerFileRule> {

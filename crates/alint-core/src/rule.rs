@@ -325,6 +325,48 @@ pub trait PerFileRule: Send + Sync + std::fmt::Debug {
     }
 }
 
+/// Rule-major fallback for [`PerFileRule`] implementors.
+///
+/// Every per-file rule needs a [`Rule::evaluate`] body — the engine's
+/// file-major fast path uses [`PerFileRule::evaluate_file`] directly,
+/// but `alint fix` (sequential filesystem mutation) and a handful of
+/// test harnesses still drive rules through [`Rule::evaluate`]. The
+/// loop is mechanical:
+///
+/// ```text
+/// for entry in ctx.index.files() {
+///     if scope doesn't match { continue }
+///     let bytes = std::fs::read(full)?  // continue on read failure
+///     violations.extend(self.evaluate_file(ctx, path, &bytes)?)
+/// }
+/// ```
+///
+/// Twenty-five rules ship the same loop verbatim. Calling
+/// `eval_per_file(self, ctx)` from `Rule::evaluate` collapses each
+/// of them to a one-liner. The helper takes `&R: PerFileRule` so
+/// it inlines for static dispatch.
+///
+/// Read failures (file deleted mid-walk, permission flake) skip the
+/// file silently to match the engine's file-major behaviour at
+/// `crate::engine` line ~506.
+pub fn eval_per_file<R: PerFileRule + ?Sized>(
+    rule: &R,
+    ctx: &Context<'_>,
+) -> Result<Vec<Violation>> {
+    let mut violations = Vec::new();
+    for entry in ctx.index.files() {
+        if !rule.path_scope().matches(&entry.path, ctx.index) {
+            continue;
+        }
+        let full = ctx.root.join(&entry.path);
+        let Ok(bytes) = std::fs::read(&full) else {
+            continue;
+        };
+        violations.extend(rule.evaluate_file(ctx, &entry.path, &bytes)?);
+    }
+    Ok(violations)
+}
+
 /// Runtime context for applying a fix.
 #[derive(Debug)]
 pub struct FixContext<'a> {

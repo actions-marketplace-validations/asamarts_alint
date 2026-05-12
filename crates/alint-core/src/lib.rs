@@ -36,7 +36,7 @@ pub use registry::{RuleBuilder, RuleRegistry};
 pub use report::{FixItem, FixReport, FixRuleResult, FixStatus, Report};
 pub use rule::{
     Context, FixContext, FixOutcome, Fixer, GitTrackedMode, PerFileRule, ReadForFix, Rule,
-    RuleResult, Violation, check_fix_size, read_for_fix,
+    RuleResult, Violation, check_fix_size, eval_per_file, read_for_fix,
 };
 pub use scope::Scope;
 pub use scope_filter::{

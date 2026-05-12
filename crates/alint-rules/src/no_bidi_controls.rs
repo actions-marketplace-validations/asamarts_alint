@@ -20,7 +20,7 @@
 use std::path::Path;
 
 use alint_core::{
-    Context, Error, FixSpec, Fixer, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation,
+    Context, Error, FixSpec, Fixer, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation, eval_per_file,
 };
 
 use crate::fixers::FileStripBidiFixer;
@@ -53,18 +53,7 @@ impl Rule for NoBidiControlsRule {
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let mut violations = Vec::new();
-        for entry in ctx.index.files() {
-            if !self.scope.matches(&entry.path, ctx.index) {
-                continue;
-            }
-            let full = ctx.root.join(&entry.path);
-            let Ok(bytes) = std::fs::read(&full) else {
-                continue;
-            };
-            violations.extend(self.evaluate_file(ctx, &entry.path, &bytes)?);
-        }
-        Ok(violations)
+        eval_per_file(self, ctx)
     }
 
     fn fixer(&self) -> Option<&dyn Fixer> {
