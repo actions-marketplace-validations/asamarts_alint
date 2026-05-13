@@ -33,7 +33,7 @@ the same email address.
 - **Public disclosure**: 90 days from initial report, or earlier if a fix
   ships and we agree on a coordinated disclosure date
 
-If you don't hear back within 72 hours, please re-send — email is best-effort
+If you don't hear back within 72 hours, please re-send; email is best-effort
 and edge cases happen.
 
 ## Scope
@@ -66,7 +66,7 @@ No advisories published as of the v0.9.20 release.
 
 ## Threat model
 
-alint is designed to be safe to run against untrusted repositories — it walks
+alint is designed to be safe to run against untrusted repositories. It walks
 the filesystem, reads file contents, optionally calls `git` and `sh`-via-the-
 `command` rule kind. The defensive posture is:
 

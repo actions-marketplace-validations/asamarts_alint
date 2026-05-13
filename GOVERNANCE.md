@@ -1,6 +1,6 @@
 # Governance
 
-This is a one-page setup-of-expectations doc — pre-1.0 alint is small
+This is a one-page setup-of-expectations doc; pre-1.0 alint is small
 enough to govern from a single file. As the project grows, this doc
 will too.
 
@@ -10,7 +10,7 @@ will too.
   public API are not yet committed to semver-major stability. Minor
   releases (`0.9.X` → `0.9.Y`) may include breaking changes; patch
   releases (`0.9.X.Y` → `0.9.X.Z`) preserve compat. v1.0 ships when
-  the surface stops moving — see [`docs/design/ROADMAP.md`](docs/design/ROADMAP.md).
+  the surface stops moving; see [`docs/design/ROADMAP.md`](docs/design/ROADMAP.md).
 - **Maintainership:** single-maintainer
   ([asamarts](https://github.com/asamarts)). The maintainer reviews
   every PR and cuts every release. Multi-maintainer governance arrives
@@ -25,7 +25,7 @@ will too.
 - **Maintainer veto:** the maintainer reserves the right to decline
   any change at any time. Reasons will be stated in the PR or issue
   thread. Common ones: scope creep beyond the project's deliberate
-  non-goals (AST-aware linting, IaC scanning, secret scanning — see
+  non-goals (AST-aware linting, IaC scanning, secret scanning; see
   [`README.md`](README.md) "When alint is NOT the right tool"); a
   rule kind without 3 demand sources from the case-study corpus
   (the saturation bar is documented in
@@ -45,7 +45,7 @@ will too.
   template. The bar is documented at
   [`CONTRIBUTING.md` § Proposing a new rule kind](CONTRIBUTING.md).
   Two real-repo demand sources is the floor; three is preferred.
-- **New bundled rulesets:** same bar — three or more real repos
+- **New bundled rulesets:** same bar of three or more real repos
   converging on the same set of conventions.
 - **DSL or schema changes:** issue first; these affect every
   adopter's `.alint.yml` and need a deprecation path. The maintainer
@@ -74,5 +74,5 @@ licensed under the same terms (no separate CLA required).
 
 GitHub Sponsors is enabled (see the "Sponsor" button at the top of
 the repo). Sponsorship is greatly appreciated but does not buy
-prioritisation, roadmap influence, or private support — feature
+prioritisation, roadmap influence, or private support. Feature
 ordering is driven by case-study demand signal, full stop.

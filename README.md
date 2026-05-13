@@ -190,7 +190,7 @@ alint fix --dry-run   # preview the auto-fixes that would be applied
 alint fix             # apply every fixable violation in place
 alint list            # list effective rules (useful after extends / overrides)
 alint explain <id>    # show a rule's full, resolved definition
-alint facts           # evaluate facts against the repo — debug `when:` clauses
+alint facts           # evaluate facts against the repo; debug `when:` clauses
 alint init [--monorepo]  # scaffold a `.alint.yml` based on detected ecosystem + workspace shape
 alint suggest            # scan for known antipatterns and propose rules to catch them
 alint export-agents-md   # render the active rule set as an AGENTS.md directive section

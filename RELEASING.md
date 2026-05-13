@@ -1,7 +1,7 @@
 # Releasing alint
 
 This file documents the contributor-side release flow. Most steps are
-automated by the CI workflows referenced below — the human review
+automated by the CI workflows referenced below; the human review
 points are explicit.
 
 ## Cut a release
@@ -17,15 +17,15 @@ points are explicit.
    inserts a CHANGELOG stub.
 
    Deliberately **not** touched:
-   - `Cargo.toml [workspace.dependencies].alint-* version` —
-     intra-workspace API-compat floor. Bump by hand only when an
+   - `Cargo.toml [workspace.dependencies].alint-* version`,
+     the intra-workspace API-compat floor. Bump by hand only when an
      inter-crate API actually breaks.
-   - `npm/package.json` version — `release.yml` rewrites it to the
+   - `npm/package.json` version. `release.yml` rewrites it to the
      release tag at publish time, so the committed value can lag.
 
 2. **Update CHANGELOG.md.**
 
-   Move entries from `## [Unreleased]` to a new `## [<x.y.z>] — YYYY-MM-DD`
+   Move entries from `## [Unreleased]` to a new `## [<x.y.z>], YYYY-MM-DD`
    section. Add a one-paragraph summary at the top of the new section
    capturing the headline change. Keep the per-section shape (`### Added /
    Changed / Fixed / Removed / Deprecated / Security`) used throughout
@@ -75,7 +75,7 @@ when its run completes. Review checklist:
    workflow with `workflow_dispatch` and `--ref` set to the tagged commit)
    before merging. The 1M cells use reduced warmup/runs (`(min(warmup, 1),
    min(runs, 3))` per `xtask/src/bench/mod.rs`) and are inherently noisier
-   — review the per-1M-cell stddev separately from the smaller sizes.
+   so review the per-1M-cell stddev separately from the smaller sizes.
 
 2. **Fingerprint check.** Open `results.json` and verify
    `fingerprint.alint_version` matches the tag, `fingerprint.cpu_model`
@@ -126,7 +126,7 @@ contains a critical bug:
    (and the workspace member crates: `alint-core`, `alint-dsl`,
    `alint-rules`, `alint-output`).
 2. Mark the npm package as `npm deprecate "@asamarts/alint@<x.y.z>"
-   "Yanked: <reason> — upgrade to <x.y.z+1>"`.
+   "Yanked: <reason>; upgrade to <x.y.z+1>"`.
 3. Delete the GitHub Release (the asset tarballs stay accessible via
    the tag, but the Release page disappears so install.sh can fail
    loud rather than silently downloading the broken version).
