@@ -512,6 +512,7 @@ pub(crate) fn walkdir_plain(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+#[cfg(test)]
 mod tests {
     use super::docs_export::{first_overview_sentence, render_overview_from_comments};
 

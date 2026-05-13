@@ -1,4 +1,4 @@
-//! Shared [`Fixer`] implementations, grouped by family.
+//! Shared [`Fixer`](alint_core::Fixer) implementations, grouped by family.
 //!
 //! Each fixer is a small, rule-agnostic helper: rule builders (e.g.
 //! `file_exists`, `file_absent`) decide whether the configured `fix:`

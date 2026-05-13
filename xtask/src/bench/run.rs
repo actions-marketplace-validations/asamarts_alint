@@ -5,6 +5,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use super::output::write_outputs;
+#[allow(clippy::wildcard_imports)]
 use super::*;
 
 // ─── Entry point ─────────────────────────────────────────────────────

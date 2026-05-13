@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::fingerprint;
+#[allow(clippy::wildcard_imports)]
 use super::*;
 
 // ─── Output ──────────────────────────────────────────────────────────
