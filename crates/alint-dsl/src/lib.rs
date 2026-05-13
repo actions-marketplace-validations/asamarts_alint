@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 
 pub mod bundled;
 pub mod extends;
+mod loader;
 mod nested;
 
 use alint_core::{Config, Error, FactSpec, Result};
@@ -76,7 +77,7 @@ pub fn load(path: &Path) -> Result<Config> {
 /// fetcher.
 pub fn load_with(path: &Path, opts: &LoadOptions) -> Result<Config> {
     let mut visiting = std::collections::HashSet::new();
-    let mut raw = load_recursive(path, &mut visiting, opts)?;
+    let mut raw = loader::load_recursive(path, &mut visiting, opts)?;
 
     // `.alint.d/*.yml` drop-ins — auto-discovered next to the
     // top-level config and merged in alphabetical order. The
@@ -98,7 +99,7 @@ pub fn load_with(path: &Path, opts: &LoadOptions) -> Result<Config> {
         .unwrap_or_else(|| Path::new("."))
         .join(".alint.d");
     for drop_in_path in collect_drop_ins(&drop_in_dir)? {
-        let drop_in = load_recursive(&drop_in_path, &mut visiting, opts)?;
+        let drop_in = loader::load_recursive(&drop_in_path, &mut visiting, opts)?;
         raw = merge(raw, drop_in);
     }
 
@@ -416,163 +417,6 @@ pub fn parse(yaml: &str) -> Result<Config> {
     Ok(config)
 }
 
-/// Recursively load `path`, resolving its `extends:` chain
-/// left-to-right. Later entries in the chain override earlier
-/// ones; the current file's own definitions override everything
-/// it extends. Rules are field-merged at the YAML-Mapping layer
-/// so children can override individual fields without re-stating
-/// the entire rule.
-fn load_recursive(
-    path: &Path,
-    visiting: &mut std::collections::HashSet<PathBuf>,
-    opts: &LoadOptions,
-) -> Result<RawConfig> {
-    let canonical = path.canonicalize().map_err(|source| Error::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if !visiting.insert(canonical.clone()) {
-        return Err(Error::Other(format!(
-            "cycle in `extends` chain at {}",
-            canonical.display()
-        )));
-    }
-
-    let contents = fs::read_to_string(&canonical).map_err(|source| Error::Io {
-        path: canonical.clone(),
-        source,
-    })?;
-    let mut config: RawConfig = serde_yaml_ng::from_str(&contents)?;
-
-    let extends = std::mem::take(&mut config.extends);
-    if extends.is_empty() {
-        visiting.remove(&canonical);
-        return Ok(config);
-    }
-
-    let source_dir = canonical
-        .parent()
-        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-
-    let mut merged = RawConfig {
-        version: config.version,
-        ..RawConfig::default()
-    };
-    for entry in &extends {
-        let url = entry.url();
-        let mut parent = if url.starts_with("http://") {
-            return Err(Error::Other(format!(
-                "plain http:// is not allowed in `extends:` (entry {url:?}); \
-                 use https:// with an SRI hash instead"
-            )));
-        } else if url.starts_with("https://") {
-            load_remote(url, opts, visiting)?
-        } else if let Some(spec) = url.strip_prefix("alint://bundled/") {
-            load_bundled(spec)?
-        } else {
-            let target = resolve_relative(&source_dir, url);
-            load_recursive(&target, visiting, opts)?
-        };
-        // Extended configs cannot introduce `custom:` facts or
-        // `kind: command` rules — both spawn arbitrary processes
-        // on behalf of a ruleset whose code the user didn't
-        // write. Same trust model on both sides.
-        alint_core::facts::reject_custom_facts_in(&parent.facts, url)?;
-        reject_command_rules_in(&parent.rules, url)?;
-        parent.rules = apply_rule_filter(parent.rules, entry)?;
-        merged = merge(merged, parent);
-    }
-    merged = merge(merged, config);
-    visiting.remove(&canonical);
-    Ok(merged)
-}
-
-fn load_remote(
-    entry: &str,
-    opts: &LoadOptions,
-    visiting: &mut std::collections::HashSet<PathBuf>,
-) -> Result<RawConfig> {
-    let (url, sri) = extends::split_url_and_sri(entry).map_err(|e| Error::Other(e.to_string()))?;
-    let Some(sri) = sri else {
-        return Err(Error::Other(format!(
-            "remote `extends` entry {entry:?} has no integrity hash; \
-             HTTPS extends require `#sha256-<hex>` in the URL fragment"
-        )));
-    };
-
-    let cache = match opts.cache.clone() {
-        Some(c) => c,
-        None => extends::Cache::user_default()
-            .map_err(|e| Error::Other(format!("could not open cache: {e}")))?,
-    };
-    let fetcher = opts.fetcher.clone().unwrap_or_default();
-    let body = extends::resolve_remote(&url, &sri, &fetcher, &cache)
-        .map_err(|e| Error::Other(format!("resolving {url}: {e}")))?;
-
-    // Remote entries may themselves extend other things (local
-    // paths relative to… what, exactly?). For v0.2 we forbid
-    // nested extends in a remote body to dodge that ambiguity.
-    // When we lift this restriction, the base for relative
-    // resolution needs a deliberate decision.
-    let config: RawConfig = serde_yaml_ng::from_str(
-        std::str::from_utf8(&body)
-            .map_err(|e| Error::Other(format!("remote body from {url} is not UTF-8: {e}")))?,
-    )?;
-    if !config.extends.is_empty() {
-        return Err(Error::Other(format!(
-            "remote config at {url} contains its own `extends:`; \
-             nested remote extends are not supported in this build"
-        )));
-    }
-    // Cycle guard token for the URL itself so a self-referencing
-    // fetched config can't loop.
-    let token = std::path::PathBuf::from(format!("remote://{}", sri.encoded()));
-    if !visiting.insert(token.clone()) {
-        return Err(Error::Other(format!("cycle on remote extends: {url}")));
-    }
-    visiting.remove(&token);
-    Ok(config)
-}
-
-/// Load an `alint://bundled/<name>@<rev>` ruleset from the
-/// in-binary registry. Bundled rulesets can't themselves extend
-/// anything — they're static, leaf-only fragments.
-fn load_bundled(spec: &str) -> Result<RawConfig> {
-    let body = bundled::resolve(spec).ok_or_else(|| {
-        let shipped: Vec<String> = bundled::catalog()
-            .map(|(n, r)| format!("alint://bundled/{n}@{r}"))
-            .collect();
-        Error::Other(format!(
-            "unknown bundled ruleset 'alint://bundled/{spec}'; \
-             this build ships: [{}]",
-            shipped.join(", "),
-        ))
-    })?;
-
-    let config: RawConfig = serde_yaml_ng::from_str(body).map_err(|e| {
-        Error::Other(format!(
-            "built-in ruleset '{spec}' failed to parse: {e}; \
-             this is a bug in alint — please file an issue"
-        ))
-    })?;
-    if !config.extends.is_empty() {
-        return Err(Error::Other(format!(
-            "bundled ruleset '{spec}' declares its own `extends:`; \
-             this is a bug in alint"
-        )));
-    }
-    Ok(config)
-}
-
-fn resolve_relative(source_dir: &Path, entry: &str) -> PathBuf {
-    let candidate = Path::new(entry);
-    if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        source_dir.join(candidate)
-    }
-}
-
 /// Apply an `extends:` entry's `only:` / `except:` filters to the
 /// fully-resolved rule set of the extended config. Validates that
 /// the two filters are mutually exclusive, that the filter list is
@@ -604,7 +448,7 @@ pub fn reject_command_rules_in(rules: &[Mapping], source: &str) -> Result<()> {
     Ok(())
 }
 
-fn apply_rule_filter(
+pub(crate) fn apply_rule_filter(
     rules: Vec<serde_yaml_ng::Mapping>,
     entry: &alint_core::ExtendsEntry,
 ) -> Result<Vec<serde_yaml_ng::Mapping>> {
@@ -702,7 +546,7 @@ impl FilterMode {
 ///   unset" caveat as `respect_gitignore`).
 /// - `extends` is always left empty on the merged result;
 ///   resolved already.
-fn merge(a: RawConfig, b: RawConfig) -> RawConfig {
+pub(crate) fn merge(a: RawConfig, b: RawConfig) -> RawConfig {
     let version = b.version;
     let respect_gitignore = b.respect_gitignore;
     let fix_size_limit = b.fix_size_limit;
