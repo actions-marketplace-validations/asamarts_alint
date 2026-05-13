@@ -163,6 +163,19 @@ rules:
     paths: "crates/**/src/**/*.rs"
     level: warning
 
+  - id: rust-file-max-lines
+    # File-size budget for Rust source. 2000 is a soft ceiling
+    # — files past this size are usually doing more than one
+    # thing and a per-concern split (one file per family / phase
+    # / command) is almost always cleaner. Re-baseline upward
+    # if a single coherent module legitimately needs more
+    # headroom, but justify it in the commit message.
+    kind: file_max_lines
+    paths:
+      include: ["crates/**/src/**/*.rs", "xtask/src/**/*.rs"]
+    max_lines: 2000
+    level: warning
+
   - id: all-sources-lf-endings
     # Repo is Linux-native; CRLF on a tracked source file almost
     # always means a Windows editor / drag-and-drop artifact.
