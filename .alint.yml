@@ -304,3 +304,40 @@ rules:
       Install-snippet version pins drifted from Cargo.toml's
       `[workspace.package].version`. Run `bash ci/scripts/bump-version.sh
       <new-version>` to sync, then re-run `alint check`.
+
+  # --- AI-content markers in user-facing docs -----------------------------
+  # Mirrors the alint.org rules. Scoped to the top-level user-facing
+  # markdown docs (README + contributor/governance/security/release
+  # docs); CHANGELOG is intentionally exempt because it's a 500-em-dash
+  # historical record that we don't rewrite. PROPOSAL*.md is local-only
+  # (gitignored) and unaffected.
+  - id: top-level-docs-no-em-dash
+    kind: file_content_forbidden
+    paths:
+      - README.md
+      - CONTRIBUTING.md
+      - GOVERNANCE.md
+      - SECURITY.md
+      - CODE_OF_CONDUCT.md
+      - RELEASING.md
+    pattern: '(—|&mdash;)'
+    level: error
+    message: >-
+      Em dashes (U+2014) and &mdash; on top-level user-facing docs
+      read as AI-generated boilerplate. Replace with a period+sentence,
+      comma, colon, semicolon, parentheses, or rewrite.
+
+  - id: top-level-docs-no-smart-quotes
+    kind: file_content_forbidden
+    paths:
+      - README.md
+      - CONTRIBUTING.md
+      - GOVERNANCE.md
+      - SECURITY.md
+      - CODE_OF_CONDUCT.md
+      - RELEASING.md
+    pattern: '[‘’“”]'
+    level: error
+    message: >-
+      Smart / curly quotes on top-level user-facing docs are a
+      "pasted from a chat window" tell. Use straight quotes.
