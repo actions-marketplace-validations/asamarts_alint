@@ -1,0 +1,479 @@
+use std::io::Write;
+
+use alint_core::{Error, FixContext, FixOutcome, Fixer, Result, Violation};
+
+/// Strips trailing space/tab on every line of each violating
+/// file. Preserves original line endings (LF stays LF, CRLF
+/// stays CRLF).
+#[derive(Debug)]
+pub struct FileTrimTrailingWhitespaceFixer;
+
+impl Fixer for FileTrimTrailingWhitespaceFixer {
+    fn describe(&self) -> String {
+        "strip trailing whitespace on every line".to_string()
+    }
+
+    fn apply(&self, violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome> {
+        let Some(path) = &violation.path else {
+            return Ok(FixOutcome::Skipped(
+                "violation did not carry a path".to_string(),
+            ));
+        };
+        let abs = ctx.root.join(path);
+        if ctx.dry_run {
+            return Ok(FixOutcome::Applied(format!(
+                "would trim trailing whitespace in {}",
+                path.display()
+            )));
+        }
+        let existing = match alint_core::read_for_fix(&abs, path, ctx)? {
+            alint_core::ReadForFix::Bytes(b) => b,
+            alint_core::ReadForFix::Skipped(outcome) => return Ok(outcome),
+        };
+        let Ok(text) = std::str::from_utf8(&existing) else {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} is not UTF-8; cannot trim",
+                path.display()
+            )));
+        };
+        let trimmed = strip_trailing_whitespace(text);
+        if trimmed.as_bytes() == existing {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} already clean",
+                path.display()
+            )));
+        }
+        std::fs::write(&abs, trimmed.as_bytes()).map_err(|source| Error::Io {
+            path: abs.clone(),
+            source,
+        })?;
+        Ok(FixOutcome::Applied(format!(
+            "trimmed trailing whitespace in {}",
+            path.display()
+        )))
+    }
+}
+
+fn strip_trailing_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut first = true;
+    for line in text.split('\n') {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        // Preserve CR before the (upcoming) LF so CRLF endings survive.
+        let (body, cr) = match line.strip_suffix('\r') {
+            Some(stripped) => (stripped, "\r"),
+            None => (line, ""),
+        };
+        out.push_str(body.trim_end_matches([' ', '\t']));
+        out.push_str(cr);
+    }
+    out
+}
+
+/// Appends a single `\n` byte when a file has content but
+/// doesn't end with one.
+#[derive(Debug)]
+pub struct FileAppendFinalNewlineFixer;
+
+impl Fixer for FileAppendFinalNewlineFixer {
+    fn describe(&self) -> String {
+        "append final newline when missing".to_string()
+    }
+
+    fn apply(&self, violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome> {
+        let Some(path) = &violation.path else {
+            return Ok(FixOutcome::Skipped(
+                "violation did not carry a path".to_string(),
+            ));
+        };
+        let abs = ctx.root.join(path);
+        if ctx.dry_run {
+            return Ok(FixOutcome::Applied(format!(
+                "would append final newline to {}",
+                path.display()
+            )));
+        }
+        if let Some(skip) = alint_core::check_fix_size(&abs, path, ctx)? {
+            return Ok(skip);
+        }
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&abs)
+            .map_err(|source| Error::Io {
+                path: abs.clone(),
+                source,
+            })?;
+        f.write_all(b"\n").map_err(|source| Error::Io {
+            path: abs.clone(),
+            source,
+        })?;
+        Ok(FixOutcome::Applied(format!(
+            "appended final newline to {}",
+            path.display()
+        )))
+    }
+}
+
+/// Which line ending [`FileNormalizeLineEndingsFixer`] rewrites to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineEndingTarget {
+    Lf,
+    Crlf,
+}
+
+impl LineEndingTarget {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Lf => "lf",
+            Self::Crlf => "crlf",
+        }
+    }
+
+    fn bytes(self) -> &'static [u8] {
+        match self {
+            Self::Lf => b"\n",
+            Self::Crlf => b"\r\n",
+        }
+    }
+}
+
+/// Rewrites every line ending in a file to the target (`lf` or `crlf`).
+#[derive(Debug)]
+pub struct FileNormalizeLineEndingsFixer {
+    target: LineEndingTarget,
+}
+
+impl FileNormalizeLineEndingsFixer {
+    pub fn new(target: LineEndingTarget) -> Self {
+        Self { target }
+    }
+}
+
+impl Fixer for FileNormalizeLineEndingsFixer {
+    fn describe(&self) -> String {
+        format!("normalize line endings to {}", self.target.name())
+    }
+
+    fn apply(&self, violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome> {
+        let Some(path) = &violation.path else {
+            return Ok(FixOutcome::Skipped(
+                "violation did not carry a path".to_string(),
+            ));
+        };
+        let abs = ctx.root.join(path);
+        if ctx.dry_run {
+            return Ok(FixOutcome::Applied(format!(
+                "would normalize line endings in {} to {}",
+                path.display(),
+                self.target.name()
+            )));
+        }
+        let existing = match alint_core::read_for_fix(&abs, path, ctx)? {
+            alint_core::ReadForFix::Bytes(b) => b,
+            alint_core::ReadForFix::Skipped(outcome) => return Ok(outcome),
+        };
+        let normalized = normalize_line_endings(&existing, self.target);
+        if normalized == existing {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} already {}",
+                path.display(),
+                self.target.name()
+            )));
+        }
+        std::fs::write(&abs, &normalized).map_err(|source| Error::Io {
+            path: abs.clone(),
+            source,
+        })?;
+        Ok(FixOutcome::Applied(format!(
+            "normalized {} to {}",
+            path.display(),
+            self.target.name()
+        )))
+    }
+}
+
+fn normalize_line_endings(bytes: &[u8], target: LineEndingTarget) -> Vec<u8> {
+    let target_bytes = target.bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            // Drop a preceding CR so `\r\n` collapses to `\n` before
+            // we emit the target.
+            if out.last().copied() == Some(b'\r') {
+                out.pop();
+            }
+            out.extend_from_slice(target_bytes);
+        } else {
+            out.push(bytes[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Collapses runs of blank lines longer than `max` down to exactly
+/// `max` blank lines. A blank line is one whose content between
+/// line endings is empty or only spaces/tabs. Preserves the file's
+/// line endings (LF vs. CRLF) by operating on byte-level newlines.
+#[derive(Debug)]
+pub struct FileCollapseBlankLinesFixer {
+    max: u32,
+}
+
+impl FileCollapseBlankLinesFixer {
+    pub fn new(max: u32) -> Self {
+        Self { max }
+    }
+}
+
+impl Fixer for FileCollapseBlankLinesFixer {
+    fn describe(&self) -> String {
+        format!("collapse runs of blank lines to at most {}", self.max)
+    }
+
+    fn apply(&self, violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome> {
+        let Some(path) = &violation.path else {
+            return Ok(FixOutcome::Skipped(
+                "violation did not carry a path".to_string(),
+            ));
+        };
+        let abs = ctx.root.join(path);
+        if ctx.dry_run {
+            return Ok(FixOutcome::Applied(format!(
+                "would collapse blank lines in {} to at most {}",
+                path.display(),
+                self.max,
+            )));
+        }
+        let existing = match alint_core::read_for_fix(&abs, path, ctx)? {
+            alint_core::ReadForFix::Bytes(b) => b,
+            alint_core::ReadForFix::Skipped(outcome) => return Ok(outcome),
+        };
+        let Ok(text) = std::str::from_utf8(&existing) else {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} is not UTF-8; cannot collapse",
+                path.display()
+            )));
+        };
+        let collapsed = collapse_blank_lines(text, self.max);
+        if collapsed.as_bytes() == existing {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} already clean",
+                path.display()
+            )));
+        }
+        std::fs::write(&abs, collapsed.as_bytes()).map_err(|source| Error::Io {
+            path: abs.clone(),
+            source,
+        })?;
+        Ok(FixOutcome::Applied(format!(
+            "collapsed blank-line runs in {} to at most {}",
+            path.display(),
+            self.max,
+        )))
+    }
+}
+
+/// A "blank" line has content consisting only of spaces or tabs.
+pub(crate) fn line_is_blank(body: &str) -> bool {
+    body.bytes().all(|b| b == b' ' || b == b'\t')
+}
+
+/// Walk the file in (body, ending) pairs so the final slot after the
+/// last newline doesn't get double-counted as an extra blank line.
+/// Preserves CRLF vs LF verbatim.
+pub(crate) fn collapse_blank_lines(text: &str, max: u32) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank_run: u32 = 0;
+    let mut remaining = text;
+    loop {
+        let (body, ending, rest) = match remaining.find('\n') {
+            Some(i) => {
+                let before = &remaining[..i];
+                let (body, cr) = match before.strip_suffix('\r') {
+                    Some(s) => (s, "\r\n"),
+                    None => (before, "\n"),
+                };
+                (body, cr, &remaining[i + 1..])
+            }
+            None => (remaining, "", ""),
+        };
+        let blank = line_is_blank(body);
+        if blank {
+            blank_run += 1;
+            if blank_run > max {
+                if ending.is_empty() {
+                    break;
+                }
+                remaining = rest;
+                continue;
+            }
+        } else {
+            blank_run = 0;
+        }
+        out.push_str(body);
+        out.push_str(ending);
+        if ending.is_empty() {
+            break;
+        }
+        remaining = rest;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_ctx(tmp: &TempDir, dry_run: bool) -> FixContext<'_> {
+        FixContext {
+            root: tmp.path(),
+            dry_run,
+            fix_size_limit: None,
+        }
+    }
+
+    #[test]
+    fn strip_trailing_whitespace_preserves_lf_and_crlf() {
+        assert_eq!(strip_trailing_whitespace("a  \nb\t\n"), "a\nb\n");
+        assert_eq!(strip_trailing_whitespace("a  \r\nb\t\r\n"), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn file_trim_trailing_whitespace_rewrites_in_place() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("x.rs"), "let _ = 1;   \n").unwrap();
+        let outcome = FileTrimTrailingWhitespaceFixer
+            .apply(
+                &Violation::new("ws").with_path(std::path::Path::new("x.rs")),
+                &make_ctx(&tmp, false),
+            )
+            .unwrap();
+        assert!(matches!(outcome, FixOutcome::Applied(_)));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("x.rs")).unwrap(),
+            "let _ = 1;\n"
+        );
+    }
+
+    #[test]
+    fn file_trim_trailing_whitespace_honors_size_limit() {
+        let tmp = TempDir::new().unwrap();
+        let big = "x   \n".repeat(2_000);
+        std::fs::write(tmp.path().join("big.txt"), &big).unwrap();
+        let ctx = FixContext {
+            root: tmp.path(),
+            dry_run: false,
+            fix_size_limit: Some(100),
+        };
+        let outcome = FileTrimTrailingWhitespaceFixer
+            .apply(
+                &Violation::new("ws").with_path(std::path::Path::new("big.txt")),
+                &ctx,
+            )
+            .unwrap();
+        match outcome {
+            FixOutcome::Skipped(reason) => {
+                assert!(reason.contains("fix_size_limit"), "{reason}");
+            }
+            FixOutcome::Applied(_) => panic!("expected Skipped on oversized file"),
+        }
+        // Disk unchanged.
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("big.txt")).unwrap(),
+            big
+        );
+    }
+
+    #[test]
+    fn file_append_final_newline_adds_missing_newline() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("x.txt"), "hello").unwrap();
+        FileAppendFinalNewlineFixer
+            .apply(
+                &Violation::new("eof").with_path(std::path::Path::new("x.txt")),
+                &make_ctx(&tmp, false),
+            )
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("x.txt")).unwrap(),
+            "hello\n"
+        );
+    }
+
+    #[test]
+    fn normalize_line_endings_lf_target() {
+        let mixed = b"a\r\nb\nc\r\nd".to_vec();
+        let out = normalize_line_endings(&mixed, LineEndingTarget::Lf);
+        assert_eq!(out, b"a\nb\nc\nd");
+    }
+
+    #[test]
+    fn normalize_line_endings_crlf_target() {
+        let mixed = b"a\r\nb\nc\r\nd".to_vec();
+        let out = normalize_line_endings(&mixed, LineEndingTarget::Crlf);
+        assert_eq!(out, b"a\r\nb\r\nc\r\nd");
+    }
+
+    #[test]
+    fn file_normalize_line_endings_rewrites_to_lf() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.md"), "one\r\ntwo\r\n").unwrap();
+        FileNormalizeLineEndingsFixer::new(LineEndingTarget::Lf)
+            .apply(
+                &Violation::new("le").with_path(std::path::Path::new("a.md")),
+                &make_ctx(&tmp, false),
+            )
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("a.md")).unwrap(),
+            "one\ntwo\n"
+        );
+    }
+
+    #[test]
+    fn collapse_blank_lines_keeps_up_to_max() {
+        assert_eq!(collapse_blank_lines("a\n\n\nb\n", 1), "a\n\nb\n");
+        assert_eq!(collapse_blank_lines("a\n\n\n\nb\n", 2), "a\n\n\nb\n");
+        assert_eq!(collapse_blank_lines("a\nb\n", 1), "a\nb\n");
+    }
+
+    #[test]
+    fn collapse_blank_lines_preserves_trailing_newline() {
+        // One existing blank line, max=1 → file must still end with "\n\n"
+        // (i.e. the blank line plus the EOF newline).
+        assert_eq!(collapse_blank_lines("a\n\n", 1), "a\n\n");
+    }
+
+    #[test]
+    fn collapse_blank_lines_max_zero_drops_all_blanks() {
+        assert_eq!(collapse_blank_lines("a\n\n\nb\n", 0), "a\nb\n");
+        assert_eq!(collapse_blank_lines("\n", 0), "");
+        assert_eq!(collapse_blank_lines("a\n\n", 0), "a\n");
+    }
+
+    #[test]
+    fn collapse_blank_lines_preserves_crlf() {
+        assert_eq!(
+            collapse_blank_lines("a\r\n\r\n\r\n\r\nb\r\n", 1),
+            "a\r\n\r\nb\r\n"
+        );
+    }
+
+    #[test]
+    fn collapse_blank_lines_treats_whitespace_only_as_blank() {
+        // Lines with only spaces/tabs count as blank, and dropped
+        // copies disappear entirely (their whitespace goes too).
+        assert_eq!(collapse_blank_lines("a\n  \n\t\n\nb\n", 1), "a\n  \nb\n");
+    }
+
+    #[test]
+    fn collapse_blank_lines_no_op_on_empty_file() {
+        assert_eq!(collapse_blank_lines("", 2), "");
+    }
+}
