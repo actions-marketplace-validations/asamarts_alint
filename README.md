@@ -11,8 +11,6 @@
 - 🧰 **Powerful + extensible.** 60 rule kinds across 13 families, 19 bundled ecosystem rulesets, 12 auto-fix ops, 8 output formats, structured-query rules with full RFC 9535 JSONPath, cross-file relational rules, conditional `when:` gates over per-run facts, and `extends:` composition with SRI-pinned URLs.
 - 📦 **One static Rust binary.** Any language, any repo. No plugin install, no Node/JVM/Python runtime needed.
 
-alint fills the active-maintenance gap left when [Repolinter](https://github.com/todogroup/repolinter) was archived in early 2026, with a superset of its rule catalogue plus first-class cross-file, conditional-rule, structured-query, and agent-aware primitives.
-
 Working `.alint.yml` configs for 30 OSS repos (single-language workspaces, polyglot monorepos, scale stress-tests) live under [`examples/`](examples/README.md), each with a writeup of what alint catches that the repo's existing tooling misses.
 
 ## 60-second quickstart
@@ -43,7 +41,7 @@ Bundled rulesets are gated by ecosystem facts (`has_rust`, `has_node`, `has_pyth
 ## Core capabilities
 
 - **60 rule kinds** across 13 families: existence, content, naming, structured query (RFC 9535 JSONPath over JSON/YAML/TOML), text hygiene, security/unicode, encoding, structure, portable metadata, Unix metadata, git hygiene, cross-file relations, plugin (`command` shellout). Full reference: [`docs/rules.md`](docs/rules.md).
-- **19 bundled rulesets**: `oss-baseline`, language sets (`rust`, `node`, `python`, `go`, `java`), `ci/github-actions`, monorepo overlays (`cargo-workspace`, `pnpm-workspace`, `yarn-workspace`), hygiene (`no-tracked-artifacts`, `lockfiles`), tooling (`editorconfig`), docs (`adr`), compliance (`reuse`, `apache-2`), agent (`hygiene`, `context`). Built into the binary, no network round-trip; ecosystem-gated, so listing one for an absent ecosystem is a silent no-op.
+- **19 bundled rulesets**: `oss-baseline` (a strict superset of [Repolinter](https://github.com/todogroup/repolinter)'s default ruleset for users migrating from that tool, archived 2026-02), language sets (`rust`, `node`, `python`, `go`, `java`), `ci/github-actions`, monorepo overlays (`cargo-workspace`, `pnpm-workspace`, `yarn-workspace`), hygiene (`no-tracked-artifacts`, `lockfiles`), tooling (`editorconfig`), docs (`adr`), compliance (`reuse`, `apache-2`), agent (`hygiene`, `context`). Built into the binary, no network round-trip; ecosystem-gated, so listing one for an absent ecosystem is a silent no-op.
 - **Auto-fix**: 12 ops covering content edits (whitespace, newlines, line endings, BOM/bidi/zero-width strip, blank-line collapse) and path ops (create/remove/rename/prepend/append). Preview with `alint fix --dry-run`. Configurable `fix_size_limit` (default 1 MiB) skips oversize files rather than rewriting them.
 - **Conditional rules**: a bounded `when:` expression language (boolean logic, comparisons, `matches`, `in`) gates rules on *facts* evaluated once per run (`any_file_exists`, `all_files_exist`, `count_files`).
 - **Composition**: `extends:` pulls in other configs by local path, HTTPS URL (SRI-pinned), or `alint://bundled/<name>@<rev>`. Children override field-by-field. Monorepos can opt into `nested_configs: true` for auto-discovered subtree-scoped `.alint.yml` files.
