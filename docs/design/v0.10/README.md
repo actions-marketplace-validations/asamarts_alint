@@ -1,108 +1,95 @@
-# v0.10 — Design pass
+# v0.10 — Case-study coverage push
 
-Status: Working drafts, written 2026-05-02 immediately after the v0.9 cut
-closed (v0.9.6 + the post-release `scope_filter:` runtime fix). Each file
-in this directory is a per-feature design that should be reviewed and
-revised before implementation starts.
+Status: Scope-only README. Per-feature design docs land
+opportunistically as each rule kind moves from "demand-validated"
+to "implementation imminent" — same shape as the v0.7 design pass
+(one design doc per primitive, written before code). When
+implementation begins, the doc gets a `Status: Implemented in
+<commit>` header.
 
 ## What v0.10 ships
 
-The first user-visible IDE / agent integration. v0.9 was engine-internal
-performance work; v0.10 turns the per-file dispatch hot path into a
-single-file re-evaluation contract that an LSP server can drive cheaply.
+The eight rule kinds and two bundled rulesets the case-study
+aggregation ([`docs/development/launch-evidence.md`](../../development/launch-evidence.md),
+30 OSS repos) demand-validated against the working catalogue.
 
-| File | Sub-theme |
-|---|---|
-| [`lsp_server.md`](./lsp_server.md) | New crate `alint-lsp` implementing the Language Server Protocol — diagnostics on save / on change, hover with rule documentation, code actions for "apply fix" and "add rule to ignore". |
-| [`single_file_reevaluation.md`](./single_file_reevaluation.md) | Engine-side contract: given an unchanged `FileIndex` and a single edited file, evaluate only the rules whose `path_scope` (and `scope_filter`, post-v0.9.6) match that file. Reuses the per-file dispatch path from v0.9.3. |
-| [`vscode_extension.md`](./vscode_extension.md) | Thin VS Code extension that ships the bundled `alint-lsp` binary, registers the LSP client, and surfaces alint's eight output formats inline. |
+The original v0.10 framing was "LSP + developer experience"; that
+work moved to v0.11 when the case-study aggregation surfaced
+enough rule-kind demand to justify a coverage-focused cut first.
+LSP design pass artefacts that landed in v0.9.7 originally under
+this directory (`lsp_server.md`, `vscode_extension.md`,
+`single_file_reevaluation.md`) physically relocated to
+[`../v0.11/`](../v0.11/) in v0.9.22 to match the scope flip. The
+`tower-lsp` workspace dep is still parked, awaiting the v0.11
+`crates/alint-lsp/` crate scaffold.
+
+| # | Primitive / ruleset                                  | Demand sources |
+|---:|-----------------------------------------------------|---------------:|
+| 1 | `registry_paths_resolve`                             | 13 |
+| 2 | `cross_file_value_equals` (incl. `value_extractor:`) | 12 |
+| 3 | `ordered_block`                                      | 8 |
+| 4 | `generated_file_fresh`                               | 8 |
+| 5 | `import_gate`                                        | 5 |
+| 6 | `command_idempotent` mode                            | 5 |
+| 7 | `xml_path_matches` + `xml_path_equals`               | 2 |
+| 8 | `pair_hash`                                          | 3 |
+| 9 | `apache/governance@v1` (bundled ruleset)             | 3 |
+| 10 | `dotnet@v1` (bundled ruleset)                       | 1 |
+
+Order by demand × adopter surface. Per-repo citations + per-
+primitive evidence in [`../../development/launch-evidence.md`](../../development/launch-evidence.md);
+canonical scope reference in [`../ROADMAP.md`](../ROADMAP.md#v010--case-study-coverage-push).
+
+## How to use this directory
+
+When a rule kind moves from "demand-validated" to "implementation
+imminent", add `<kind>.md` here. Follow the v0.7 / v0.9 design-
+pass shape:
+
+1. **Problem** — what user pain this addresses, sourced from the
+   case studies linked above.
+2. **Surface area** — what changes inside the engine / DSL /
+   schema.
+3. **Semantics** — what the engine does on each evaluation path.
+4. **False-positive surface** — what could go wrong and the
+   planned mitigations.
+5. **Implementation notes** — module location, dependencies,
+   complexity estimate.
+6. **Tests** — coverage plan including the bench-compare
+   thresholds the phase commits to.
+7. **Open questions** — decisions to make before implementation.
+
+Resolve open questions in the doc itself when implementation
+lands; add a `Status: Implemented in <commit>` header on merge.
 
 ## Cross-cutting decisions
 
-A few questions touch multiple sub-themes and benefit from being settled
-once.
-
-### LSP crate choice
-
-Two candidates:
-
-- **[`tower-lsp`](https://crates.io/crates/tower-lsp)** — async, Tower-based,
-  the most popular choice in the Rust LSP ecosystem (rust-analyzer, taplo,
-  ruff-server, biome). Brings a tokio runtime dep.
-- **[`lsp-server`](https://crates.io/crates/lsp-server)** — sync,
-  stdio-only, used by rust-analyzer's lower layers. Smaller surface, no
-  tokio.
-
-Recommendation: **`tower-lsp`**. The async runtime cost is small (~5 MiB
-binary), the ecosystem is more active, and the Tower middleware story
-makes adding tracing / metrics / cancellation later much cheaper.
-Workspace dep is added in the same commit as this design pass:
-`tower-lsp = "0.20"`.
-
-If profile data later shows tokio overhead is unacceptable for the
-file-change-throttling hot path, the engine wrapper is small enough to
-swap to `lsp-server`. Worth measuring; not worth pre-optimising.
-
-### Single-file re-evaluation contract
-
-The LSP server cannot afford a full repo scan on every keystroke. v0.9.6
-already gave us most of the primitives:
-
-- `FileIndex::contains_file` is O(1) (v0.9.5 lazy path-index).
-- Per-file rules are the file-major dispatch path (v0.9.3).
-- `ScopeFilter::matches` walks ancestors via O(1) lookups (v0.9.6, plus
-  the post-release fix that actually wires it through `Rule::scope_filter()`).
-
-What's missing: a `Engine::run_for_file(root, index, file_path)` method
-that evaluates the changed file against rules whose `path_scope` matches,
-ignoring cross-file rules that need a full re-walk. Cross-file rules
-re-evaluate only on save (and even then, only when the file's directory
-membership in their `paths:` glob matters).
-
-`single_file_reevaluation.md` settles the cross-file boundary policy.
-
-### Heuristic vs. precise
-
-LSP server work is precise — the LSP protocol has well-defined
-diagnostic / hover / code-action shapes. No heuristic surface in v0.10.
-
-### Schema versioning
-
-No `.alint.yml` schema changes. Every v0.9.6 config runs unchanged on
-v0.10. `version: 1` covers the entire v0.10 cut.
+- **Heuristic vs. precise.** Every rule kind in v0.10's scope is
+  precise (path resolution, value equality, ordered comparison,
+  hash equality, regex on declared import scopes, code-generator
+  determinism). No heuristic surface in v0.10; heuristics stay in
+  `commented_out_code` / `git_blame_age` / `markdown_paths_resolve`
+  (v0.7 territory).
+- **Schema versioning.** Every v0.9.21 config runs unchanged on
+  v0.10. `version: 1` covers the entire v0.10 cut. New rule kinds
+  add optional fields to existing top-level shapes.
+- **Design candidates landing opportunistically** when a second
+  demand source materialises: `*_path_contains`, `pair_inverse`,
+  `command_per_repo`, `json_schema_passes` config-shape mode,
+  `*_path_array_iter`, `multi_doc_mode:` on `yaml_path_*`.
+  Tracked in the canonical ROADMAP under "design candidates".
 
 ## Out of scope for v0.10
 
-Explicitly held back to keep the cut tight:
+Held back to keep the cut tight:
 
-- **WASM plugin tier** — v0.11. PROPOSAL §4.9 anticipates this; the
-  `command` plugin (tier 1, shell out per matched file) shipped in
-  v0.5.1 and has been the only plugin tier so far.
-- **`detect: linguist` and `detect: askalono` facts** — PROPOSAL §4.6
-  items still open. They're orthogonal to LSP work; can ship in a
-  v0.10.x point release if a contributor picks them up.
-- **Live `xtask docs-export` from inside the LSP** (so an editor can
-  surface the same hover content the docs site renders). Tempting but
-  out of proportion — the docs site is the canonical surface.
-
-## How to use these docs
-
-Each design doc has the same shape as the v0.7 / v0.9 design passes:
-
-1. **Problem** — what user pain this addresses, sourced from the v0.9
-   field test (scope_filter feedback, polyglot-monorepo onboarding, agent
-   integration loops).
-2. **Surface area** — what changes inside the engine / new crate.
-3. **Semantics** — what the engine / LSP server does on each request.
-4. **False-positive surface** — what could go wrong (LSP cancellation
-   races, single-file re-eval missing cross-file dependencies, VS Code
-   extension UX gaps) and the planned mitigations.
-5. **Implementation notes** — crate location, dependencies, complexity
-   estimate.
-6. **Tests** — what to cover, including the bench-compare thresholds the
-   phase commits to.
-7. **Open questions** — decisions to make before implementation.
-
-When implementation starts, the doc gets a `Status: Implemented in
-<commit>` header line and any open questions get resolved in the doc
-itself, mirroring the v0.7 / v0.9 convention.
+- **LSP + editor integration** — moved to v0.11 (the
+  `lsp_server.md`, `vscode_extension.md`, and
+  `single_file_reevaluation.md` design docs now live in
+  [`../v0.11/`](../v0.11/)).
+- **WASM plugin tier** — v0.12 (was v0.11 before the scope flip).
+- **`detect: linguist` and `detect: askalono` facts** — PROPOSAL
+  §4.6 items still open; orthogonal to rule-kind coverage.
+- **Bazel-licensing-declaration-aware rule kind** — single-source
+  demand (tensorflow); held for v0.11+ unless another adopter
+  surfaces.

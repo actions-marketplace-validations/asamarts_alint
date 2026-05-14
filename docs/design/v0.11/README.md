@@ -29,8 +29,9 @@ actually do in their current environment.
 
 | File | Sub-theme |
 |---|---|
-| [`lsp_server.md`](../v0.10/lsp_server.md) | LSP server design (carried over from v0.10 design pass). |
-| [`vscode_extension.md`](../v0.10/vscode_extension.md) | VS Code extension design (carried over). |
+| [`lsp_server.md`](./lsp_server.md) | LSP server design. Originally landed in v0.9.7 under `docs/design/v0.10/`; relocated here in v0.9.22 when v0.10's scope flipped to case-study coverage. |
+| [`vscode_extension.md`](./vscode_extension.md) | VS Code extension design. Same origin as `lsp_server.md`. |
+| [`single_file_reevaluation.md`](./single_file_reevaluation.md) | Engine contract for LSP per-edit re-evaluation; reuses the v0.9.3 per-file dispatch path so a keystroke doesn't trigger a full repo walk. |
 | [`scope_filter_changed_since.md`](./scope_filter_changed_since.md) | New `scope_filter.changed_since:` predicate. Per-rule diff-scope; composable with `has_ancestor`. Also covers the `git_no_denied_paths` `since:` option. |
 | [`commit_validation_rules.md`](./commit_validation_rules.md) | Family of four new commit-validation rule kinds (`git_commit_signed_off`, `git_commit_no_fixup`, `git_commit_author_allowlist`, `git_commit_gpg_signed`). All ship with `since:` from day one. |
 | [`variable_interpolation.md`](./variable_interpolation.md) | `{{env.X}}` interpolation across every string-typed config field. `\| default(...)` filter for fallbacks. `env.X` namespace in the `when:` expression language. Deprecation path for the v0.9.21 `${VAR}` syntax. |

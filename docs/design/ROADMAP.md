@@ -753,9 +753,10 @@ that hit ~5 B glob-match ops at 1M with 5,000 packages.
   10 cross-file `reject_scope_filter_on_cross_file` unit
   tests, the release.yml preflight gate (fmt + clippy + test
   + `cargo doc -D warnings`), and the v0.10 LSP design pass
-  (`docs/design/v0.10/{lsp_server,single_file_reevaluation,vscode_extension}.md`)
-  with `tower-lsp = "0.20"` added as a dormant workspace
-  dependency.
+  (`docs/design/v0.10/{lsp_server,single_file_reevaluation,vscode_extension}.md`
+  at the time; files moved to `v0.11/` in v0.9.22 when v0.10
+  scope flipped to case-study coverage) with `tower-lsp = "0.20"`
+  added as a dormant workspace dependency.
 - ✅ **Cross-file dispatch fast paths round 2**
   (v0.9.8, released 2026-05-02). `FileIndex::children_of`,
   `file_basenames_of`, `descendants_of` lazy `OnceLock`
@@ -960,12 +961,12 @@ what their rules actually do in their current environment.
 ### LSP + editor support
 
 - LSP server (`alint lsp`). Design pass landed in v0.9.7
-  (`docs/design/v0.10/lsp_server.md`); `tower-lsp = "0.20"`
-  is already in `[workspace.dependencies]` as a dormant dep.
-  Crate scaffold (`crates/alint-lsp/`) is the only structural
-  lift remaining.
+  ([`docs/design/v0.11/lsp_server.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.11/lsp_server.md));
+  `tower-lsp = "0.20"` is already in `[workspace.dependencies]`
+  as a dormant dep. Crate scaffold (`crates/alint-lsp/`) is the
+  only structural lift remaining.
 - VS Code extension that bundles the LSP. Design in v0.9.7
-  (`docs/design/v0.10/vscode_extension.md`).
+  ([`docs/design/v0.11/vscode_extension.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.11/vscode_extension.md)).
 
 ### Scope generalisation (v0.9.21 #26 follow-up)
 
