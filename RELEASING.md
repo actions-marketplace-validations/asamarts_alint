@@ -41,15 +41,26 @@ points are explicit.
 3. **Verify locally.**
 
    ```sh
-   cargo fmt --all -- --check
-   cargo clippy --workspace --all-targets
-   cargo test --workspace
-   RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace
-   ./target/release/alint check        # dogfood
+   bash ci/scripts/preflight.sh
    ```
 
-   The `release.yml` `preflight` job re-runs all four; this is the
-   pre-push sanity gate.
+   Runs the full preflight bundle: fmt + clippy + test + doc +
+   version-pins + dep-floors + dogfood. The
+   `release.yml` `preflight` job runs the same gates remotely; this
+   is the pre-push sanity gate.
+
+   Two recurrence guards bundled into `test` / `dep-floors`:
+   - README-count claims (rule kinds, families, bundled rulesets,
+     fix ops, output formats, subcommands) are asserted against
+     the workspace truth by
+     `crates/alint-e2e/tests/coverage_audit_readme_claims.rs`.
+   - `[workspace.dependencies]` API-compat floors are asserted
+     `<= workspace.package.version` by
+     `ci/scripts/check-workspace-dep-floors.sh`.
+
+   The pre-push git hook at `ci/githooks/pre-push` runs the same
+   script automatically once opted in via
+   `git config core.hooksPath ci/githooks`.
 
 4. **Commit and tag.**
 
@@ -67,7 +78,7 @@ points are explicit.
 |---|---|---|---|
 | `ci.yml` | tag + main pushes | fmt + clippy + test + doc + dogfood. Self-hosted Linux. | ~5 min |
 | `release.yml` | tag push only | preflight gate → cross-platform build matrix → GitHub Release → ghcr.io Docker → npm → Homebrew tap → crates.io. | ~15-25 min |
-| `docs-bundle.yml` | tag + main pushes | `xtask docs-export` → push refreshed bundle to `docs-bundle` branch → Cloudflare deploy hook → alint.org rebuilds. | ~3-5 min |
+| `docs-bundle.yml` | tag + main pushes | `xtask docs-export` → push refreshed bundle to `docs-bundle` branch → Cloudflare deploy hook → alint.org rebuilds. The sibling `check-pins.yml` workflow in the alint.org repo (PR + push + daily cron) asserts alint.org's three install-pin sites reference the latest tag from this release; fires automatically. | ~3-5 min |
 | `bench-docker.yml` | tag pushes | Build + push `ghcr.io/asamarts/alint-bench:<tag>` (the reproducible competitive-bench environment). | ~5 min |
 | **`bench-record.yml`** | tag push only | **Self-hosted full publish-grade `xtask bench-scale` matrix (S1-S9 × {1k, 10k, 100k, 1m} × {full, changed}) at `--warmup 3 --runs 10`. Opens a PR adding the new per-version macro/results dir + criterion micro snapshot.** | **~3.5 hr** |
 
