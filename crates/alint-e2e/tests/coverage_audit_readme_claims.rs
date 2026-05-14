@@ -56,7 +56,7 @@ fn num_before(text: &str, marker: &str) -> Option<usize> {
     let digits: String = trimmed
         .chars()
         .rev()
-        .take_while(|c| c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
         .collect::<String>()
         .chars()
         .rev()
@@ -70,7 +70,7 @@ fn num_before(text: &str, marker: &str) -> Option<usize> {
 
 /// Distinct `kind:` values in a YAML fixture. Walks line-by-line so
 /// nested rules under `require:` count their kinds too. Duplicates
-/// across nested invocations collapse via the HashSet.
+/// across nested invocations collapse via the `HashSet`.
 fn count_distinct_kinds(yaml: &str) -> usize {
     let mut kinds = HashSet::new();
     for raw in yaml.lines() {
@@ -205,11 +205,7 @@ fn strip_nested_braces(s: &str) -> String {
     for c in s.chars() {
         match c {
             '{' => {
-                if depth == 0 {
-                    out.push(' ');
-                } else {
-                    out.push(' ');
-                }
+                out.push(' ');
                 depth += 1;
             }
             '}' => {
@@ -238,7 +234,8 @@ fn readme_rule_kinds_count_matches_fixture() {
     let actual = count_distinct_kinds(&fixture);
 
     assert_eq!(
-        claimed, actual,
+        claimed,
+        actual,
         "README claims {claimed} rule kinds; all_kinds.yaml has {actual} distinct kinds.\n\
          Either bump the README claim or update the fixture.\n\
          (Source: README.md '...N rule kinds across...', fixture: {})",
@@ -257,7 +254,7 @@ fn readme_families_count_matches_docs_rules_md() {
         .find(marker)
         .expect("README must contain 'N rule kinds across M families'");
     let after = &readme[pos + marker.len()..];
-    let m_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let m_str: String = after.chars().take_while(char::is_ascii_digit).collect();
     let claimed: usize = m_str
         .parse()
         .expect("expected an integer immediately after 'rule kinds across '");
@@ -285,7 +282,8 @@ fn readme_bundled_rulesets_count_matches_filesystem() {
     let actual = count_yml_files_recursive(&dir);
 
     assert_eq!(
-        claimed, actual,
+        claimed,
+        actual,
         "README claims {claimed} bundled rulesets; {} has {actual} .yml files.\n\
          Update README.md (lines 11, 44, 221, plus the bullet list in 'Bundled rulesets').",
         dir.display()
@@ -295,14 +293,15 @@ fn readme_bundled_rulesets_count_matches_filesystem() {
 #[test]
 fn readme_auto_fix_ops_count_matches_fixers() {
     let readme = read_readme();
-    let claimed = num_before(&readme, "auto-fix ops")
-        .expect("README must contain 'N auto-fix ops'");
+    let claimed =
+        num_before(&readme, "auto-fix ops").expect("README must contain 'N auto-fix ops'");
 
     let dir = workspace_root().join("crates/alint-rules/src/fixers");
     let actual = count_fixer_structs(&dir);
 
     assert_eq!(
-        claimed, actual,
+        claimed,
+        actual,
         "README claims {claimed} auto-fix ops; {actual} `pub struct *Fixer` declarations in {}.\n\
          Update README.md or check whether a new fixer was added without bumping the count.",
         dir.display()
@@ -312,16 +311,16 @@ fn readme_auto_fix_ops_count_matches_fixers() {
 #[test]
 fn readme_output_formats_count_matches_format_enum() {
     let readme = read_readme();
-    let claimed = num_before(&readme, "output formats")
-        .expect("README must contain 'N output formats'");
+    let claimed =
+        num_before(&readme, "output formats").expect("README must contain 'N output formats'");
 
     let path = workspace_root().join("crates/alint-output/src/lib.rs");
-    let src = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let actual = count_enum_variants(&src, "Format");
 
     assert_eq!(
-        claimed, actual,
+        claimed,
+        actual,
         "README claims {claimed} output formats; `enum Format` in {} has {actual} variants.\n\
          Update README.md or check that a new formatter wasn't added without bumping the count.",
         path.display()
@@ -331,16 +330,15 @@ fn readme_output_formats_count_matches_format_enum() {
 #[test]
 fn readme_subcommands_count_matches_command_enum() {
     let readme = read_readme();
-    let claimed = num_before(&readme, "subcommands")
-        .expect("README must contain 'N subcommands'");
+    let claimed = num_before(&readme, "subcommands").expect("README must contain 'N subcommands'");
 
     let path = workspace_root().join("crates/alint/src/main.rs");
-    let src = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let actual = count_enum_variants(&src, "Command");
 
     assert_eq!(
-        claimed, actual,
+        claimed,
+        actual,
         "README claims {claimed} subcommands; `enum Command` in {} has {actual} variants.\n\
          Update README.md or check that a new subcommand wasn't added without bumping the count.",
         path.display()
@@ -356,7 +354,10 @@ fn readme_subcommands_count_matches_command_enum() {
 
 #[test]
 fn num_before_handles_plain_and_bold_markdown() {
-    assert_eq!(num_before("70 rule kinds across", "rule kinds across"), Some(70));
+    assert_eq!(
+        num_before("70 rule kinds across", "rule kinds across"),
+        Some(70)
+    );
     assert_eq!(num_before("**70 rule kinds**", "rule kinds"), Some(70));
     assert_eq!(num_before(", 12 auto-fix ops, ", "auto-fix ops"), Some(12));
     assert_eq!(num_before("xx 8 output formats", "output formats"), Some(8));
