@@ -19,9 +19,16 @@ points are explicit.
    Deliberately **not** touched:
    - `Cargo.toml [workspace.dependencies].alint-* version`,
      the intra-workspace API-compat floor. Bump by hand only when an
-     inter-crate API actually breaks.
-   - `npm/package.json` version. `release.yml` rewrites it to the
-     release tag at publish time, so the committed value can lag.
+     inter-crate API actually breaks. Preflight asserts each floor
+     is `<= workspace.package.version` via
+     `ci/scripts/check-workspace-dep-floors.sh`; an over-pinned floor
+     would publish-fail, so the check catches it before push.
+
+   `npm/package.json` version was previously left lagging
+   (rewritten by `release.yml` at publish time). As of v0.9.22 the
+   bump script tracks it alongside the install snippets, so the
+   committed value at HEAD matches what users will see post-publish.
+   Preflight asserts this via `ci/scripts/check-version-pins.sh`.
 
 2. **Update CHANGELOG.md.**
 

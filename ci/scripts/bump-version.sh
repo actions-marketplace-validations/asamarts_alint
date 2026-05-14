@@ -76,6 +76,17 @@ for f in "${SNIPPET_FILES[@]}"; do
   fi
 done
 
+# 2b. npm shim version. The package itself ships zero JS behaviour
+#     — it downloads the matching binary at install time — but
+#     `npm view @asamarts/alint version` reports whatever is in
+#     this file at HEAD, so it should track the workspace version.
+#     release.yml also rewrites this at publish time (belt-and-
+#     suspenders); the bump here makes the committed value at HEAD
+#     match what users see post-publish.
+if [[ -f npm/package.json ]]; then
+  sed -i -E "s/^([[:space:]]*\"version\":[[:space:]]+)\"${CUR_ESCAPED}\"/\1\"${NEW}\"/" npm/package.json
+fi
+
 # 3. CHANGELOG stub at top so the release date is captured.
 #    The new entry is "TBD" — the author fills in what changed.
 #    We do NOT touch any existing `## [...]` entries (history).
