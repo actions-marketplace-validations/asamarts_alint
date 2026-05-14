@@ -4,16 +4,18 @@
 > closed cut — work that doesn't fit moves to a later version. See
 > [ARCHITECTURE.md](./ARCHITECTURE.md) for the design these phases build out.
 
-**Latest release: v0.9.20** (2026-05-10). Cross-command
-output-polish capstone for the v0.9 cut: width-aware human
-output across every alint command (`check` / `fix` / `list` /
-`explain` / `facts` / `suggest`), `--no-docs` and `--width N`
-honored uniformly, bundled-rule message audit, em-dash scrub on
-first-impression marketing surfaces, install-snippet pin sweep
-(curl + bash now leads everywhere), polyglot demo rebuilt with
-5 auto-fixable seeds. See [CHANGELOG.md](../../CHANGELOG.md) for
-v0.9.12 - v0.9.20 details and
-[`docs/development/launch-evidence.md`](../development/launch-evidence.md)
+**Latest release: v0.9.21** (2026-05-14). Commit-range mode
+for `git_commit_message`: optional `since:` accepts a refspec
+(`origin/main..HEAD`) or env-var (`${BASE_SHA}`); the rule
+validates every commit in the range instead of just HEAD, with
+optional `include_merges:` and merge-commit env-default
+fallback (closes #26). v0.9.12 - v0.9.20 brought the launch-
+readiness capstone: width-aware output across every command,
+`--no-docs` and `--width N` honored uniformly, bundled-rule
+message audit, em-dash scrub on first-impression marketing
+surfaces, install-snippet pin sweep, polyglot demo with 5 auto-
+fixable seeds. See [CHANGELOG.md](../../CHANGELOG.md) for v0.9.12
+- v0.9.21 details and [`docs/development/launch-evidence.md`](../development/launch-evidence.md)
 for the case-study corpus + rule-kind demand aggregation.
 
 **Launch readiness: clean.** Pre-flight gates wired:
@@ -24,7 +26,7 @@ consistency + dogfood, all bundled into
 -version` rule in the dogfood `.alint.yml` flags drift between
 Cargo.toml's workspace version and any user-facing install
 snippet, so a release with stale `v0.9.X` README/Docker/GHA pins
-fails CI before it ships. v0.9.20 is the version we expect to
+fails CI before it ships. v0.9.21 is the version we expect to
 launch on.
 
 **v0.9 cut closed (2026-05-02).** A scaling-profile
