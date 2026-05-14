@@ -967,7 +967,7 @@ what their rules actually do in their current environment.
 
 ### Scope generalisation (v0.9.21 #26 follow-up)
 
-Design pass: [`docs/design/v0.11/scope_filter_changed_since.md`](v0.11/scope_filter_changed_since.md).
+Design pass: [`docs/design/v0.11/scope_filter_changed_since.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.11/scope_filter_changed_since.md).
 
 - **`ScopeFilter.changed_since:`** predicate. Restricts a per-file
   rule to files modified in `<since>..HEAD`. Composable with the
@@ -991,7 +991,7 @@ Design pass: [`docs/design/v0.11/scope_filter_changed_since.md`](v0.11/scope_fil
 
 ### Commit-validation rule family (v0.9.21 #26 follow-up)
 
-Design pass: [`docs/design/v0.11/commit_validation_rules.md`](v0.11/commit_validation_rules.md).
+Design pass: [`docs/design/v0.11/commit_validation_rules.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.11/commit_validation_rules.md).
 
 Four new rule kinds that share v0.9.21's `git_commit_message`
 shape (`since:`, `include_merges:`, env-var interpolation,
@@ -1020,7 +1020,7 @@ cheap to reuse.
 
 ### Variable expansion across the DSL (v0.9.21 #26 follow-up)
 
-Design pass: [`docs/design/v0.11/variable_interpolation.md`](v0.11/variable_interpolation.md).
+Design pass: [`docs/design/v0.11/variable_interpolation.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.11/variable_interpolation.md).
 
 - **`{{env.X}}` interpolation** at config-load time across every
   string-typed value field: `extends:` URLs, `paths:`, `pattern:`,
