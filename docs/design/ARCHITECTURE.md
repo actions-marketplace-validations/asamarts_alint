@@ -66,6 +66,65 @@ pub trait Rule: Send + Sync + std::fmt::Debug {
 
 Rules produce `Violation`s; the engine aggregates them into a `Report`.
 
+### Dispatch flip + `PerFileRule` (v0.9.3)
+
+Since v0.9.3 the engine partitions rules into two dispatch shapes for
+hot-path performance. The `Rule` trait above describes the rule-major
+shape — each rule scans the file index and reads the files it needs.
+That fits **cross-file rules** (`pair`, `for_each_dir`, `unique_by`,
+`dir_contains`, `dir_only_contains`, `every_matching_has`,
+`file_exists`, `file_absent`, …) whose verdict spans the whole tree.
+
+**Per-file rules** — those that read each matched file's content
+individually — opt into a sibling `PerFileRule` trait, and the engine
+drives a *file-major* outer loop on their behalf: each matched file is
+read at most once, then dispatched to every applicable per-file rule.
+The trait hands a pre-loaded byte slice to `evaluate_file` rather than
+having the rule re-read inside `evaluate`:
+
+```rust
+pub trait PerFileRule: Send + Sync + std::fmt::Debug {
+    fn id(&self) -> &str;
+    fn level(&self) -> Level;
+    fn path_scope(&self) -> &Scope;
+    fn max_bytes_needed(&self) -> Option<usize> { None }
+    fn evaluate_file(&self, file: &FileEntry, content: &[u8])
+        -> Result<Vec<Violation>>;
+}
+```
+
+Engine discrimination happens once at registry time: rules that
+override `requires_full_index() = true` stay rule-major; the rest opt
+into per-file dispatch. Currently ~22 rules across the content,
+text-hygiene, security-unicode, encoding, and byte-fingerprint
+families take the per-file path. Two metadata-driven Unix rules
+(`executable_has_shebang`, `shebang_has_executable`) stay rule-major
+so they can short-circuit on `metadata().permissions()` before any
+read. Full design + the rules that did / did not migrate:
+[`v0.9/dispatch_flip.md`](./v0.9/dispatch_flip.md).
+
+### Memory layout on the hot path (v0.9.2)
+
+Path and string clones across the violation hot path were a
+substantial allocator pressure source at the 100k-violation
+benchmarks. v0.9.2 retyped the affected fields to share allocations
+across every violation of a rule:
+
+- `FileEntry::path: Arc<Path>` — shared across all rules touching one
+  file.
+- `Violation::path: Option<Arc<Path>>` — refcount bump per violation
+  instead of `PathBuf::clone`.
+- `Violation::message: Cow<'static, str>` — `Borrowed` for the rule's
+  static `message:` field; `Owned` for templated per-match strings
+  via `format!`.
+- `RuleResult::rule_id: Arc<str>`, `RuleResult::policy_url:
+  Option<Arc<str>>` — one allocation per rule run, shared across all
+  violations of that rule.
+
+Behavioural invariants verified via the cross-formatter snapshot
+test: byte-identical output before/after the type pass. Full design:
+[`v0.9/memory_pass.md`](./v0.9/memory_pass.md).
+
 ## DSL
 
 YAML, with a JSON Schema (draft 2020-12) maintained at [`schemas/v1/config.json`](../../schemas/v1/config.json) in this repository and embedded into `alint-dsl` at build time via `include_str!` (exposed as `alint_dsl::CONFIG_SCHEMA_V1`). Integration tests round-trip representative configs through a compliant validator so the schema and the engine's actual DSL stay in sync.
@@ -335,9 +394,17 @@ A second per-file gate orthogonal to `when:` and `paths:`. Per-file rules can de
 
 The composition order is: 1. Tree-level `when:` (skip rule entirely if false), 2. Per-file `paths:` glob, 3. Per-file `scope_filter:` ancestor walk, 4. Per-file `git_tracked_only:` consult, 5. Rule-specific evaluate body.
 
-Cross-file rules (`pair`, `for_each_dir`, `file_exists`, …) reject `scope_filter:` at build time and direct authors to `for_each_dir + when_iter:`. Rule-major rules like `filename_case` silently ignore the field — gate via the rule's `paths:` glob instead.
+Cross-file rules (`pair`, `for_each_dir`, `file_exists`, …) reject `scope_filter:` at build time and direct authors to `for_each_dir + when_iter:`. Per-file rules — both `PerFileRule` and the remaining rule-major ones — honour the filter through the shared `Scope::matches` call (see v0.9.10 structural fix below).
 
 Used by the five bundled ecosystem rulesets (`rust@v1`, `node@v1`, `python@v1`, `go@v1`, `java@v1`) so their per-file content rules narrow to files inside their ecosystem's package subtree in polyglot monorepos. Full design: [`v0.9/scope-filter.md`](./v0.9/scope-filter.md).
+
+**Structural fix in v0.9.10**: `Scope` owns its `Option<ScopeFilter>` and `Scope::matches(&Path, &FileIndex)` consults both predicates in one call. The signature change is compile-enforced — every per-rule path check must thread the index — so the silent-drop bug class that produced sweeps in v0.9.7 and v0.9.9 is structurally closed. No rule has a separate `scope_filter` field to forget about. Full design: [`v0.9/scope-owns-scope-filter.md`](./v0.9/scope-owns-scope-filter.md).
+
+### Git-tracked filtered index (v0.9.11)
+
+`git_tracked_only: true` on a rule narrows it to paths in `git ls-files` output, skipping locally-built but untracked artefacts (`target/`, `node_modules/`, …). Through v0.9.10 each rule consulted `ctx.is_git_tracked(path)` inline — the same silent-drop bug class that hit `scope_filter:`.
+
+v0.9.11 builds two filtered `FileIndex` views once per run when any rule opts in: a file-tracked subset (entries where `git_tracked.contains(path)`) and a dir-aware subset (dirs that recursively contain at least one tracked file). The engine substitutes the pre-filtered index via `pick_ctx`; the rule's `evaluate` body never sees an untracked path, and the runtime `is_git_tracked()` check disappears from per-rule code. Full design: [`v0.9/git-tracked-filtered-index.md`](./v0.9/git-tracked-filtered-index.md).
 
 ### Composition
 
@@ -350,10 +417,10 @@ Bundled rulesets are referenced via `alint://bundled/<name>@v<major>`.
 1. **Config load.** Read `.alint.yml`; follow `extends` with caching and cycle detection; validate against JSON Schema.
 2. **Facts.** Evaluate facts in parallel. Cache keyed on input hashes.
 3. **Rule filter.** Evaluate `when` clauses; drop disabled rules.
-4. **Walk.** One pass over the filesystem via the `ignore` crate. Build a `FileIndex` of path → metadata (size, is-text heuristic, extension, parent).
-5. **Match.** For each rule, resolve matching files/dirs from the index via compiled `GlobSet`.
-6. **Read cache.** Files requested by multiple content rules are read once; bytes cached for the run.
-7. **Evaluate.** Rule evaluation fans out via `rayon`.
+4. **Walk.** One *parallel* pass over the filesystem via the `ignore` crate's `WalkBuilder::build_parallel` (v0.9.1). Each worker thread accumulates `FileEntry`s in a thread-local `Vec`; the engine merges them and runs a deterministic `sort_unstable_by` post-sort so downstream output is byte-identical to the pre-v0.9.1 sequential walker. The resulting `FileIndex` exposes lazy `OnceLock` indexes (`contains_file`, `children_of`, `descendants_of`, `file_basenames_of`) that turn common cross-file queries from linear scans into O(1) hash lookups (v0.9.5 + v0.9.8).
+5. **Dispatch partition.** Rules with `requires_full_index() = true` (cross-file) stay rule-major; the rest implement `PerFileRule` and join the file-major dispatch (v0.9.3, see [Rule model](#dispatch-flip--perfilerule-v093)).
+6. **Match.** Per rule, resolve matching files/dirs through `Scope::matches(&Path, &FileIndex)` (v0.9.10) — globs *and* `scope_filter:` ancestor predicates evaluate in one call. For `git_tracked_only:` rules the engine substitutes a pre-filtered `FileIndex` so out-of-scope paths never reach `evaluate` (v0.9.11).
+7. **Evaluate.** Per-file rules receive a pre-loaded `&[u8]` slice via `evaluate_file` (read once per file regardless of how many per-file rules match it); cross-file rules read what they need from the index. Both fan out via `rayon`.
 8. **Aggregate.** Collect `RuleResult`s into a `Report`.
 9. **Fix (optional).** Apply fixers serially; re-run checks.
 10. **Emit.** Format via selected output.
@@ -394,9 +461,9 @@ alint/
 
 **Planned additions (see [ROADMAP.md](./ROADMAP.md)):**
 
-- `crates/alint-lsp/` — language-server implementation (v0.10)
-- `crates/alint-plugin/` — WASM plugin host (v0.11; the tier-1 `command` plugin already lives in `alint-rules` since v0.5.1)
-- `editors/` — VS Code, Zed, Helix extensions (paired with v0.10)
+- `crates/alint-lsp/` — language-server implementation (v0.11; v0.10 is the case-study coverage push of 8 rule kinds + 2 bundled rulesets, no new crate. `tower-lsp = "0.20"` is already in `[workspace.dependencies]` as a dormant dep)
+- `crates/alint-plugin/` — WASM plugin host (v0.12; the tier-1 `command` plugin already lives in `alint-rules` since v0.5.1)
+- `editors/` — VS Code, Zed, Helix extensions (paired with v0.11)
 - `crates/alint-facts/` — currently subsumed by `alint-core::facts`; promotion to its own crate is deferred until language and license detectors (PROPOSAL §4.6 `detect: linguist`, `detect: askalono`) actually land
 
 ### Publishing intent (crates.io)
@@ -431,7 +498,7 @@ Selected via `--format`:
 - `gitlab` — GitLab Code Quality JSON.
 - `junit` — JUnit XML for generic CI reporting.
 - `markdown` — report with TOC, suitable for posting as a GitHub issue body.
-- `summary` — one-line status per rule.
+- `agent` — LLM-shaped JSON sibling of `json`, with per-violation `agent_instruction` strings templated from each rule's `message` + `fix` block. Closes the "agents already consume our JSON but the SARIF shape is awkward in their context" gap (v0.6).
 
 ## Full example
 
