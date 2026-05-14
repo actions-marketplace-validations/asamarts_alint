@@ -6,6 +6,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **GitHub Action manifest `name:`** renamed from `alint` to
+  `alint - A Repo Linter` to satisfy GitHub Marketplace's
+  display-name uniqueness rule (the bare `alint` name collides
+  with an existing GitHub user/org account, which Marketplace
+  rejects). Repo slug, install paths, and the
+  `uses: asamarts/alint@vX.Y.Z` workflow syntax are unchanged;
+  the rename only affects the Marketplace listing title and the
+  Action step label in workflow run UIs.
+
 ## [0.9.21] — 2026-05-14 (commit-range mode for git_commit_message)
 
 Headline feature: the `git_commit_message` rule's new `since:`

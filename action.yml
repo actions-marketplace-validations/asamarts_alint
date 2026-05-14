@@ -1,4 +1,4 @@
-name: alint
+name: alint - A Repo Linter
 description: Lint repository structure, filenames, and file content with alint.
 author: asamarts
 branding:
