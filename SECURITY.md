@@ -62,7 +62,7 @@ Out of scope (report directly to upstream):
 Published advisories live at
 https://github.com/asamarts/alint/security/advisories.
 
-No advisories published as of the v0.9.20 release.
+No advisories published as of the v0.9.21 release.
 
 ## Threat model
 

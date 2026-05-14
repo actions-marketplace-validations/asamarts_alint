@@ -6,11 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Post-v0.9.20 polish accumulating toward the next tag. No user-facing
-behavior change; CLI output, docs, schema completeness, dependency
-bumps, and CI hygiene only. The bulk of this entry is automated
-drift-prevention scaffolding so the same class of "live site
-silently goes stale" gap can't reopen post-launch.
+## [0.9.21] — 2026-05-14 (commit-range mode for git_commit_message)
+
+Headline feature: the `git_commit_message` rule's new `since:`
+option ([#26](https://github.com/asamarts/alint/issues/26)), which
+makes the rule usable on `pull_request`-trigger CI for the first
+time. Plus the v0.9.20 polish backlog: CLI color parity across the
+non-`check`/`fix` subcommands, em-dashes scrubbed from user-facing
+prose, install-snippet ordering normalised, schema + docs
+drift-prevention scaffolding, and a benchmarks-trajectory pipeline
+that replaces a hand-edited table.
 
 ### Changed
 
