@@ -59,12 +59,13 @@ run() {
 # We deliberately fall through on failure (rather than `set -e`-
 # exit on the first run) so a developer sees the FULL set of
 # things broken in one pass instead of fix-rerun-fix-rerun.
-run fmt           bash ci/scripts/fmt.sh                  || true
-run clippy        bash ci/scripts/clippy.sh               || true
-run test          bash ci/scripts/test.sh                 || true
-run doc           bash ci/scripts/docs.sh                 || true
-run version-pins  bash ci/scripts/check-version-pins.sh   || true
-run dogfood       bash ci/scripts/dogfood.sh              || true
+run fmt           bash ci/scripts/fmt.sh                          || true
+run clippy        bash ci/scripts/clippy.sh                       || true
+run test          bash ci/scripts/test.sh                         || true
+run doc           bash ci/scripts/docs.sh                         || true
+run version-pins  bash ci/scripts/check-version-pins.sh           || true
+run dep-floors    bash ci/scripts/check-workspace-dep-floors.sh   || true
+run dogfood       bash ci/scripts/dogfood.sh                      || true
 
 if [[ "$failed" -ne 0 ]]; then
   echo

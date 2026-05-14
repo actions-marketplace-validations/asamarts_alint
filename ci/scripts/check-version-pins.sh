@@ -57,6 +57,10 @@ SCOPE=(
   docs/site/getting-started/installation.md
 )
 
+# npm/package.json is checked separately below — its version field
+# is JSON-shaped, not a vX.Y.Z / :X.Y.Z pin embedded in prose, so the
+# regex used for the SCOPE files doesn't fit.
+
 # Match any vX.Y.Z or :X.Y.Z (bare-semver-after-colon, e.g. a
 # docker tag without the `v` prefix) in scope. Exclude anything
 # that matches the workspace version exactly — what's left is
@@ -86,10 +90,21 @@ for f in "${SCOPE[@]}"; do
   fi
 done
 
+if [[ -f npm/package.json ]]; then
+  NPM_VER=$(awk -F'"' '/^[[:space:]]*"version":/ { print $4; exit }' npm/package.json)
+  if [[ -z "$NPM_VER" ]]; then
+    echo "[version-pin] npm/package.json: could not parse version field" >&2
+    failed=1
+  elif [[ "$NPM_VER" != "$WORKSPACE_VER" ]]; then
+    echo "[version-pin] npm/package.json: version $NPM_VER != workspace $WORKSPACE_VER" >&2
+    failed=1
+  fi
+fi
+
 if [[ "$failed" -ne 0 ]]; then
   echo "" >&2
   echo "Fix: bash ci/scripts/bump-version.sh $WORKSPACE_VER" >&2
   exit 1
 fi
 
-echo "[version-pin] OK — all ${#SCOPE[@]} in-scope files pin to $WORKSPACE_VER"
+echo "[version-pin] OK — all ${#SCOPE[@]} install-snippet files + npm/package.json pin to $WORKSPACE_VER"
