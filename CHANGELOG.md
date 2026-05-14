@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.22] — 2026-05-14 (doc-drift cleanup + prevention automation)
+
 Doc + prevention-automation cleanup release. A 2026-05-14 audit of
 the alint and alint.org repos surfaced 10 categories of drift
 between them; this release lands the fixes plus the automated guards
