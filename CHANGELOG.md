@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Doc + prevention-automation cleanup release. A 2026-05-14 audit of
+the alint and alint.org repos surfaced 10 categories of drift
+between them; this release lands the fixes plus the automated guards
+(`check-workspace-dep-floors.sh`, extended `check-version-pins.sh`,
+`coverage_audit_readme_claims`, roadmap-generator with section
+markers) that prevent recurrence. No schema, output-format, or
+rule-engine changes; safe upgrade for every consumer. Bundled in:
+the GitHub Action manifest's display name is renamed (the bare
+`alint` collides with an existing GitHub user/org account, which
+Marketplace rejects) so the Action can be published to the GitHub
+Marketplace on this release.
+
 ### Changed
 
 - **GitHub Action manifest `name:`** renamed from `alint` to
@@ -16,6 +28,71 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `uses: asamarts/alint@vX.Y.Z` workflow syntax are unchanged;
   the rename only affects the Marketplace listing title and the
   Action step label in workflow run UIs.
+- **Rule-count claim** in `README.md` corrected to 70 rule kinds
+  across 13 families (was 60 / 13). The 70 figure matches the
+  `all_kinds.yaml` audit fixture and `coverage_audit_readme_claims`
+  (60 distinct behaviours + 10 short-name aliases such as
+  `content_matches` → `file_content_matches`).
+- **`Cargo.toml` internal-dep + `npm/package.json` versions** now
+  track `workspace.package.version` in lockstep. The npm shim was
+  six versions behind (0.9.8 → 0.9.21); the workspace internal-dep
+  floors stay at 0.9.8 as the intentional API-compat floor (per
+  `RELEASING.md`), and a new preflight check asserts every
+  path-having floor stays `<= workspace.package.version`.
+- **LSP design docs** moved from `docs/design/v0.10/` to
+  `docs/design/v0.11/` to match the locked v0.11 scope ("LSP + DSL
+  polish"). `docs/design/v0.10/README.md` rewritten as case-study
+  coverage scope.
+- **`ARCHITECTURE.md`** refreshed for v0.9 engine changes that had
+  accrued: `PerFileRule` trait + dispatch flip (v0.9.3); memory
+  layout with `Arc<Path>` / `Arc<str>` / `Cow<'static, str>`
+  (v0.9.2); `FileIndex` lazy indexes (v0.9.5 + v0.9.8);
+  `scope_filter` Scope ownership (v0.9.10); git-tracked filtered
+  index (v0.9.11). v0.10 → v0.11 LSP off-by-one corrected;
+  output-format example `summary` → `agent`.
+- **`RELEASING.md` step 3** now calls `bash ci/scripts/preflight.sh`
+  (the new 7-gate superset) instead of listing the four-command
+  subset, and cross-refs the README-claims test + workspace-dep-
+  floor check that live inside it. `CONTRIBUTING.md` points at the
+  same preflight script.
+
+### Added
+
+- **`xtask gen-public-roadmap`** subcommand + roadmap-generator
+  module (`xtask/src/roadmap_generator.rs`, ~180 LOC, 13 unit
+  tests). Strips sections wrapped in
+  `<!-- alint:internal-start -->` / `<!-- alint:internal-end -->`
+  markers when generating the alint.org-bound copy of
+  `docs/design/ROADMAP.md`. Byte-deterministic output; wired into
+  `xtask docs-export` so the public roadmap is generated rather
+  than hand-copied. Canonical ROADMAP now uses the markers around
+  two engineering-process sections; the marker convention is
+  documented in `ROADMAP.md` + `CONTRIBUTING.md`.
+- **`ci/scripts/check-workspace-dep-floors.sh`** asserts every
+  path-having `[workspace.dependencies]` pin is `<=
+  workspace.package.version`. Wired into `preflight.sh`.
+- **`ci/scripts/check-version-pins.sh`** extended to cover
+  `npm/package.json`'s `version` field.
+- **`crates/alint-e2e/tests/coverage_audit_readme_claims.rs`** —
+  6 README count claims (rule kinds, families, bundled rulesets,
+  auto-fix ops, output formats, subcommands) asserted against
+  canonical source per claim; plus 4 unit tests on the parser
+  helpers. Runs in `cargo test --workspace`, so picked up by
+  preflight automatically.
+- **`docs/development/README.md`** with per-file audience labels
+  (public / synced via `xtask docs-export` vs internal /
+  tracked-for-context). Documents the file-classification
+  convention so future additions self-classify.
+
+### Fixed
+
+- **Canonical `docs/design/ROADMAP.md`** v0.11 section title +
+  forward-refs rewritten to match the locked v0.11 scope; "Latest
+  release" header line corrected v0.9.20 → v0.9.21.
+- **alint.org synced surfaces** (blog draft, landing page,
+  language-agnostic / compare / roadmap pages, llms-full.txt
+  comment) refreshed for v0.9.21 + 70 rule kinds + 13 families
+  consistency.
 
 ## [0.9.21] — 2026-05-14 (commit-range mode for git_commit_message)
 
