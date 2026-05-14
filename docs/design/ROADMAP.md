@@ -688,6 +688,7 @@ design pass.)
 - v0.8.5's `bench-compare` gate catches any regression
   from the engine restructure for free.
 
+<!-- alint:internal-start -->
 ### Reopened sub-phases (2026-05-01)
 
 A scaling-profile investigation surfaced that the v0.9.4 1M
@@ -807,6 +808,7 @@ that hit ~5 B glob-match ops at 1M with 5,000 packages.
   [`docs/design/v0.9/scope-owns-scope-filter.md`](./v0.9/scope-owns-scope-filter.md).
 
 Full v0.9.5 design: [`docs/design/v0.9/coverage-and-dogfood.md`](./v0.9/coverage-and-dogfood.md).
+<!-- alint:internal-end -->
 
 ## v0.9.11 — `git_tracked_only` structural fix + held v0.9 follow-ups
 
@@ -844,6 +846,7 @@ pollutes `Scope`'s path-predicate model.
   opting in); `coverage_audit_git_tracked_only.rs` audit
   retained as backstop.
 
+<!-- alint:internal-start -->
 Held v0.9 follow-ups also captured in v0.9.11 (smaller
 items, may slip if engine refactor takes longer than
 expected):
@@ -859,6 +862,7 @@ expected):
 - **`when:` ownership** — explicitly NOT included.
   Different semantics (eval-env, not a path predicate);
   no shared silent-no-op shape.
+<!-- alint:internal-end -->
 
 ## v0.9.12 - v0.9.20 (shipped)
 
