@@ -21,6 +21,7 @@ use clap::{Parser, Subcommand};
 mod bench;
 mod bench_release;
 mod docs_export;
+mod roadmap_generator;
 
 pub(crate) use bench_release::{build_release_binary, git_sha, now_iso, workspace_root};
 
@@ -187,6 +188,25 @@ enum Commands {
         #[arg(long)]
         check: bool,
     },
+    /// Render the public roadmap from canonical `docs/design/ROADMAP.md`,
+    /// stripping `<!-- alint:internal-start -->` /
+    /// `<!-- alint:internal-end -->` blocks. See
+    /// `docs/design/v0.11/roadmap_generator.md`. Also invoked
+    /// internally by `docs-export` during the docs-bundle build;
+    /// this standalone form is for ad-hoc debugging.
+    GenPublicRoadmap {
+        /// Canonical ROADMAP to read. Resolved against the workspace
+        /// root when relative.
+        #[arg(long, default_value = "docs/design/ROADMAP.md")]
+        input: PathBuf,
+        /// Output path for the rendered public roadmap. Resolved
+        /// against the workspace root when relative.
+        #[arg(long, default_value = "target/docs-bundle/about/roadmap.md")]
+        output: PathBuf,
+        /// Frontmatter `title:` value injected into the output.
+        #[arg(long, default_value = "Roadmap")]
+        title: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -227,6 +247,24 @@ fn main() -> Result<()> {
             threshold,
         } => bench::compare::run(&before, &after, threshold),
         Commands::DocsExport { out, check } => docs_export::docs_export(out, check),
+        Commands::GenPublicRoadmap {
+            input,
+            output,
+            title,
+        } => {
+            let workspace = workspace_root()?;
+            let input = if input.is_absolute() {
+                input
+            } else {
+                workspace.join(&input)
+            };
+            let output = if output.is_absolute() {
+                output
+            } else {
+                workspace.join(&output)
+            };
+            roadmap_generator::generate_public_roadmap(&input, &output, &title)
+        }
     }
 }
 

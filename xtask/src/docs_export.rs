@@ -70,10 +70,10 @@ pub(crate) fn docs_export(out: Option<PathBuf>, check: bool) -> Result<()> {
         &target_dir.join("about/architecture.md"),
         Some("Architecture"),
     )?;
-    copy_one(
+    crate::roadmap_generator::generate_public_roadmap(
         &workspace.join(docs_paths::ROADMAP_DOC),
         &target_dir.join("about/roadmap.md"),
-        Some("Roadmap"),
+        "Roadmap",
     )?;
     copy_one(
         &workspace.join(docs_paths::RULE_AUTHORING_DOC),
