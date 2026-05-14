@@ -115,6 +115,37 @@ Skip the hook for one push (e.g. WIP branch): `git push --no-verify`.
 If clippy gates seem aggressive, that's intentional. `-D warnings` plus
 pedantic clippy keeps the codebase quiet by default.
 
+### Editing the roadmap
+
+`docs/design/ROADMAP.md` is the canonical roadmap. The generated public
+version at alint.org/docs/about/roadmap/ is produced by `xtask
+gen-public-roadmap`, invoked automatically by the `docs-bundle`
+workflow on every push to `main`. To elide engineering-process notes,
+holding-bay backlogs, or any other content that belongs only in the
+internal source, wrap the section in paired HTML-comment markers:
+
+```text
+<!-- alint:internal-start -->
+... content visible only in canonical ROADMAP.md ...
+<!-- alint:internal-end -->
+```
+
+The markers are code-fence-aware (example markers inside ```` ``` ```` blocks
+are literal, not parsed as block delimiters). Nested, orphan, and
+unclosed markers fail at generator time with a line-numbered error.
+Full convention in [`docs/design/v0.11/roadmap_generator.md`](docs/design/v0.11/roadmap_generator.md).
+
+Verify locally before pushing:
+
+```sh
+cargo run -p xtask --release -- gen-public-roadmap --output /tmp/public-roadmap.md
+diff docs/design/ROADMAP.md /tmp/public-roadmap.md   # shows what got elided
+```
+
+The `docs-bundle.yml` workflow runs the same generator on every push to
+`main`, so a malformed marker pair (nested / orphan / unclosed) fails CI
+there before alint.org rebuilds.
+
 ### Where the code lives
 
 - `crates/alint-core/`: engine, walker, rule trait, config AST. The structural

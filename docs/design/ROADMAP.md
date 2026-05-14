@@ -4,6 +4,12 @@
 > closed cut — work that doesn't fit moves to a later version. See
 > [ARCHITECTURE.md](./ARCHITECTURE.md) for the design these phases build out.
 
+> **Source convention**: this file is the canonical roadmap. The generated
+> public version at alint.org is produced by `xtask gen-public-roadmap`,
+> which elides sections wrapped in paired `alint:internal-*` HTML-comment
+> markers. See [`v0.11/roadmap_generator.md`](./v0.11/roadmap_generator.md)
+> for the marker syntax and the v0.9.22 migration plan.
+
 **Latest release: v0.9.21** (2026-05-14). Commit-range mode
 for `git_commit_message`: optional `since:` accepts a refspec
 (`origin/main..HEAD`) or env-var (`${BASE_SHA}`); the rule
