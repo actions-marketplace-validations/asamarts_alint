@@ -936,15 +936,26 @@ Per-repo coverage tables + per-primitive demand citations live
 in [`examples/README.md`](../../examples/README.md#primitive-demand-tracker)
 and [`docs/development/launch-evidence.md`](../development/launch-evidence.md).
 
-## v0.11 — LSP + developer experience
+## v0.11 — LSP + DSL polish
 
-What was originally the v0.10 cut, deferred one slot. Inline
-diagnostics, hover-on-rule docs, code actions, VS Code
-extension. The per-file dispatch shape from v0.9.3 powers the
-per-file-edit re-eval hot path; v0.9.5's
-`FileIndex::contains_file` makes single-file path-scope
-re-tests O(1). Plus the v0.11+ ship-targets the case-study
-aggregation surfaced for the smaller-demand long tail.
+Originally framed as "LSP + developer experience"; renamed to
+capture the DSL-level work that lands alongside LSP. The trigger
+was v0.9.21's #26 fix, which added `since:` to `git_commit_message`
+and surfaced two natural generalisations: the scope-narrowing
+pattern wants to extend to other rule kinds, and the env-var
+interpolation in `since:` wants to extend to every string-typed
+config field. The per-file dispatch shape from v0.9.3 powers the
+per-file-edit re-eval hot path; v0.9.5's `FileIndex::contains_file`
+makes single-file path-scope re-tests O(1). Plus the v0.11+ ship-
+targets the case-study aggregation surfaced for the smaller-demand
+long tail.
+
+LSP becomes the demonstration vehicle for the new interpolation
+system: hover-on-rule renders the resolved value of every
+`{{env.X}}` site in the user's config, so adopters see at a glance
+what their rules actually do in their current environment.
+
+### LSP + editor support
 
 - LSP server (`alint lsp`). Design pass landed in v0.9.7
   (`docs/design/v0.10/lsp_server.md`); `tower-lsp = "0.20"`
@@ -953,10 +964,89 @@ aggregation surfaced for the smaller-demand long tail.
   lift remaining.
 - VS Code extension that bundles the LSP. Design in v0.9.7
   (`docs/design/v0.10/vscode_extension.md`).
-- **`ScopeFilter` generalisation beyond `has_ancestor`** —
-  candidates include `has_sibling`, `has_descendant`, custom
-  predicates. v0.9.10's `Scope::from_spec` makes additions
-  purely additive (no API churn).
+
+### Scope generalisation (v0.9.21 #26 follow-up)
+
+Design pass: [`docs/design/v0.11/scope_filter_changed_since.md`](v0.11/scope_filter_changed_since.md).
+
+- **`ScopeFilter.changed_since:`** predicate. Restricts a per-file
+  rule to files modified in `<since>..HEAD`. Composable with the
+  existing `has_ancestor` (AND semantics) and with the rule's
+  `paths:` glob. Equivalent to the existing CLI `--changed --base
+  <ref>` but expressible per-rule rather than run-wide, so
+  mixed-mode configs ("SPDX-header rule on new files only;
+  filename-case rule always") become expressible — the first
+  example that's not expressible today. Reuses v0.9.5's path-
+  index for cheap per-file gating.
+- **`has_sibling`, `has_descendant`** predicates (carried over
+  from the original v0.11 plan). v0.9.10's `Scope::from_spec`
+  makes additions purely additive (no API churn).
+- **`git_no_denied_paths` `since:` option.** Path-listing analog
+  of v0.9.21's `git_commit_message.since:`. Fires on tracked
+  paths *added* in `<since>..HEAD`, not on all currently-tracked
+  paths. Closes the secrets-introduced-in-PR gap cleanly.
+  Conceptually a sibling to `scope_filter.changed_since:`, kept
+  as a rule-level option because the rule's semantics already
+  enumerate paths from git rather than walking the tree.
+
+### Commit-validation rule family (v0.9.21 #26 follow-up)
+
+Design pass: [`docs/design/v0.11/commit_validation_rules.md`](v0.11/commit_validation_rules.md).
+
+Four new rule kinds that share v0.9.21's `git_commit_message`
+shape (`since:`, `include_merges:`, env-var interpolation,
+per-commit violations with abbreviated SHAs). Designed as a
+family so the shared infrastructure cost amortises across all
+four.
+
+- **`git_commit_signed_off`** — DCO-style `Signed-off-by:`
+  trailer in commit footer. Maps to the kernel / Linux
+  Foundation contribution convention; demand surface includes
+  every CNCF / LF-hosted project that requires DCO.
+- **`git_commit_no_fixup`** — fail on residual `fixup!` /
+  `squash!` / `amend!` commits left after rebase. Catches the
+  "I forgot to rebase before push" PR shape.
+- **`git_commit_author_allowlist`** — author email or name
+  matches a pattern. Use cases: enforce committer identity
+  against an org domain, exclude bot accounts, gate against
+  unverified contributors.
+- **`git_commit_gpg_signed`** — `git verify-commit` succeeds
+  on every commit in range. Sister to `git_commit_signed_off`
+  for projects requiring signature attestation.
+
+All four ship with `since:` from day one. No HEAD-only-then-
+retrofit shape; the issue-26 work made the shared infrastructure
+cheap to reuse.
+
+### Variable expansion across the DSL (v0.9.21 #26 follow-up)
+
+Design pass: [`docs/design/v0.11/variable_interpolation.md`](v0.11/variable_interpolation.md).
+
+- **`{{env.X}}` interpolation** at config-load time across every
+  string-typed value field: `extends:` URLs, `paths:`, `pattern:`,
+  `policy_url:`, `since:`, `changed_since:`, `content:`,
+  `content_from:`, and the `vars:` value side. Type-like and
+  identifier-like fields (`id:`, `kind:`, `level:`) are skipped
+  by design — env-driven rule IDs would break audit trails.
+- **`| default(...)` filter** for fallbacks. Jinja-conventional;
+  future filter additions cost nothing (`| upper`, `| lower`).
+  Example: `since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"`.
+- **`env.X` in the `when:` expression language** as a third
+  namespace alongside `vars.X` and `facts.X`. Symmetric with how
+  vars/facts surface today.
+- **Deprecate `${VAR}` in `git_commit_message.since:`**. Emit a
+  load-time warning recommending `{{env.X}}`; remove the legacy
+  path in v1.0 (clean break at the version-stability gate).
+- **LSP integration**: hover-on-rule renders the resolved value
+  of every `{{env.X}}` site so users see what their config
+  actually does in the current environment. The single concrete
+  example of LSP × DSL synergy this release.
+
+### Long-tail rule kinds (opportunistic)
+
+Carried over unchanged from the original v0.11 plan; not gating
+the release.
+
 - **`cross_language_implementation_complete`** (5 sources:
   arrow, tensorflow, protobuf, angular, flutter). Densest
   demand: protobuf's 10 in-tree language bindings + 1 spun-out
@@ -976,7 +1066,11 @@ aggregation surfaced for the smaller-demand long tail.
 Per the previous v0.11 scope, bumped one slot.
 
 - `wasm` plugin kind with a `wasmtime` host, stable WIT
-  interface.
+  interface. Plugins receive their config *post-interpolation*
+  per the v0.11 variable-expansion work — the host resolves
+  `{{env.X}}` references before passing the config dict to the
+  guest, so plugins never see (and can't accidentally exfiltrate)
+  the raw env namespace.
 - Plugin registry scaffolding with signature verification.
 - Bless a few canonical agent-aware semantic plugins
   (mock-ratio checker, file-similarity / near-dup detector,
@@ -989,3 +1083,9 @@ Per the previous v0.11 scope, bumped one slot.
 - Plugin ABI committed.
 - `alint-core` public API frozen; breaking changes follow semver-major.
 - Documentation site.
+- **Remove the deprecated `${VAR}` interpolation path** in
+  `git_commit_message.since:` (replaced by `{{env.X}}` in v0.11).
+  Clean break at the version-stability gate; the
+  deprecation-warning overlap window of one minor release is
+  enough for a feature that shipped four days before its
+  successor.
