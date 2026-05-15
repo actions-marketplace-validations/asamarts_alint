@@ -8,6 +8,12 @@
 # Out of scope (must be updated manually if relevant):
 #   - alint.org repo: src/pages/index.astro JSON-LD softwareVersion
 #   - alint.org repo: src/pages/roadmap.astro "Latest release" line
+#   - alint.org repo: src/content/docs/docs/index.mdx version badge
+#     (the only hand-written page in the synced docs subtree)
+#   - docs/design/ROADMAP.md "Latest release: vX.Y.Z" line — the
+#     canonical source for `xtask gen-public-roadmap`; the prose
+#     after the version describes what shipped, so it can't be
+#     mechanically sed-replaced (must be hand-written)
 #   - CHANGELOG.md body for the new entry (a stub is inserted; you
 #     fill in what changed)
 #   - docs/benchmarks/HISTORY.md (per-release perf rows — added
@@ -117,13 +123,39 @@ if [[ -f CHANGELOG.md ]]; then
     }
     { print }
   ' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+
+  # 3b. CHANGELOG link-reference footer. Two operations:
+  #     a) Repoint [Unreleased] from v$CUR...HEAD to v$NEW...HEAD
+  #        so the compare link at the top of the footer reflects
+  #        the new floor.
+  #     b) Insert a `[$NEW]: compare/v$CUR...v$NEW` row right after
+  #        the [Unreleased] row so GitHub renders the [x.y.z] link
+  #        references inside the new release entry.
+  #     Both are idempotent: re-running with the same $NEW leaves
+  #     the footer untouched (sed match misses; awk insert guards
+  #     against an existing $NEW row).
+  if grep -q "^\[Unreleased\]:" CHANGELOG.md; then
+    sed -i -E "s#^(\[Unreleased\]:[[:space:]]+https://github\.com/asamarts/alint/compare/v)${CUR_ESCAPED}(\.\.\.HEAD)\$#\1${NEW}\2#" CHANGELOG.md
+    if ! grep -q "^\[${NEW}\]:" CHANGELOG.md; then
+      awk -v new="$NEW" -v cur="$CUR" '
+        /^\[Unreleased\]:/ {
+          print
+          printf("[%s]: https://github.com/asamarts/alint/compare/v%s...v%s\n", new, cur, new)
+          next
+        }
+        { print }
+      ' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+    fi
+  fi
 fi
 
 echo
 echo "==> manual followups"
 echo "  1. fill in CHANGELOG.md [$NEW] body"
-echo "  2. alint.org repo (separate): bump src/pages/index.astro JSON-LD softwareVersion"
-echo "  3. alint.org repo (separate): bump src/pages/roadmap.astro 'Latest release: vX.Y.Z'"
-echo "  4. verify: bash ci/scripts/check-version-pins.sh"
+echo "  2. update docs/design/ROADMAP.md 'Latest release' line (prose, not just the version)"
+echo "  3. alint.org repo (separate): bump src/pages/index.astro JSON-LD softwareVersion"
+echo "  4. alint.org repo (separate): bump src/pages/roadmap.astro 'Latest release: vX.Y.Z'"
+echo "  5. alint.org repo (separate): bump src/content/docs/docs/index.mdx 'vX.Y.Z latest' badge"
+echo "  6. verify (alint.org): bash scripts/check-version-pins.sh"
 echo
 echo "==> ok to commit + release"
