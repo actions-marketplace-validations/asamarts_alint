@@ -29,6 +29,8 @@ jobs:
     name: preflight (fmt + clippy + test + doc)
     runs-on: ubuntu-latest
     env:
+      # Mirrored verbatim across ci.yml / coverage.yml / release.yml
+      # / cross-platform.yml — keep identical (see ci.yml rationale).
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
       RUSTFLAGS: "-D warnings"
