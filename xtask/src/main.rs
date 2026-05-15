@@ -1,16 +1,26 @@
 //! `xtask` — ancillary helpers for alint that don't belong in the shipped binary.
 //!
-//! Current commands:
+//! Current commands (kept in sync with the `Commands` enum below):
 //!
-//! - `bench-release` — builds alint in release mode, generates deterministic
-//!   synthetic trees, runs `hyperfine` across a tree-size × rule-count
-//!   matrix, and emits a platform-fingerprinted markdown report. Used to
-//!   produce the numbers published in `docs/benchmarks/<version>/`.
-//! - `gen-fixture`   — materialize a synthetic tree for ad-hoc experimentation.
-//! - `docs-export`   — emit a `docs-bundle/` directory consumed by the
+//! - `bench-release`     — legacy v0.1 single-config hyperfine harness across a
+//!   tree-size × rule-count matrix. Superseded by `bench-scale` for the
+//!   scenario × size × mode matrix; retained for back-compat.
+//! - `bench-scale`       — the v0.5+ benchmark matrix (scenario × size × mode)
+//!   with hardware-fingerprint capture and JSON + Markdown publication.
+//! - `gen-fixture`       — materialize a synthetic tree (persistent) for
+//!   ad-hoc experimentation.
+//! - `gen-monorepo`      — materialize a reusable 1k/10k/100k/1m monorepo
+//!   tree so profiling iterations skip per-run tree-gen.
+//! - `bench-compare`     — diff two criterion runs and fail when a paired
+//!   bench's mean time regressed past a threshold (PR-CI perf gate).
+//! - `publish-benches`   — snapshot a criterion run into
+//!   `docs/benchmarks/micro/results/<os>-<arch>/<version>/` for `git add`.
+//! - `docs-export`       — emit a `docs-bundle/` directory consumed by the
 //!   `asamarts/alint.org` site at build time. The bundle is the canonical
 //!   handoff format between the alint repo (source of truth for technical
 //!   docs) and the site repo (presentation).
+//! - `gen-public-roadmap` — render the public roadmap from the canonical
+//!   `docs/design/ROADMAP.md` (also invoked internally by `docs-export`).
 
 use std::fs;
 use std::path::{Path, PathBuf};

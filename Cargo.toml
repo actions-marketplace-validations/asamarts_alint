@@ -64,12 +64,17 @@ portable-pty = "0.9"
 serde_json_path = "0.7"
 toml = "1.1"
 
-# v0.11 — LSP server. See `docs/design/v0.11/lsp_server.md` for the
-# crate-choice rationale (`tower-lsp` over `lsp-server`). Design pass
-# landed in v0.9.7 originally under `docs/design/v0.10/`; files
-# relocated to `v0.11/` in v0.9.22 when v0.10's scope flipped to
-# case-study coverage. The dep is dormant until `crates/alint-lsp/`
-# lands; `cargo build` won't pull it.
+# LSP server, slated for v0.11. Crate-choice rationale (`tower-lsp`
+# over `lsp-server`) is in `docs/design/v0.11/lsp_server.md`.
+# Dormant until `crates/alint-lsp/` lands — listed here so the
+# version pin is reviewed with the rest of the workspace deps, but
+# `cargo build` won't pull it (no crate depends on it yet).
+#
+# History (in case the doc paths look odd): the design pass landed
+# in v0.9.7 under `docs/design/v0.10/`. When v0.10's scope was
+# re-cut to case-study coverage, the LSP work moved to v0.11 and
+# the design docs were relocated to `docs/design/v0.11/` (the
+# move itself shipped in v0.9.22).
 tower-lsp = "0.20"
 
 [workspace.lints.rust]

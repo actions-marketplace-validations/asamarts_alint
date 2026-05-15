@@ -12,6 +12,11 @@
 #
 # Exit 0 always (informational by default). Pass --fail-over <N> to
 # fail with non-zero when any message exceeds <N> chars (CI gate).
+#
+# Status: manual maintainer helper — intentionally NOT wired into
+# ci.yml or preflight.sh. Run it (optionally with --fail-over) when
+# adding or editing bundled-ruleset `message:` strings; auto-gating
+# would false-fail on messages that deliberately accept a wrap.
 
 set -euo pipefail
 

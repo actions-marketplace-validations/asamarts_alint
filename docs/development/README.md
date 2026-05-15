@@ -29,7 +29,7 @@ This directory mixes two audiences:
 | `case-study-revalidation-log.md` | Internal | Master tracker for the 2026-05-07 30-case-study revalidation pass against v0.9.17. |
 | `case-study-revalidation-batch-{1..6}.md` | Internal | Per-batch findings from the same pass (5 case studies each, alphabetical). |
 | `marketing-extraction-batch-{1..6}.md` | Internal | Per-batch marketing / optics / positioning extraction from the case studies. Source material for landing-page copy + the launch blog post. |
-| `v0.9.22-cleanup-plan.md` | Internal (in-flight tracker) | Living tracker for the v0.9.22 doc + prevention-automation cleanup cycle; becomes a historical record once the last in-scope batch closes. |
+| `archive/v0.9.22-cleanup-plan.md` | Internal (archived) | Closed tracker for the v0.9.22 doc + prevention-automation cleanup cycle (all 14 items done). Moved to `archive/` at cycle-close per the one-shot-tracker convention below. |
 
 ## Conventions
 
@@ -45,9 +45,10 @@ When adding a new file:
   row with a `{1..N}` glob in the filename column.
 - **One-shot tracker** (cleanup cycle, refactor plan): mark
   **Internal (in-flight tracker)** so a future reader knows the
-  file's lifecycle is bounded. Decide at cycle-close whether the
-  file should be kept as a historical record (the current
-  convention), moved to an `archive/` subdir, or deleted.
+  file's lifecycle is bounded. At cycle-close, move it to the
+  `archive/` subdir and re-mark the row **Internal (archived)**.
+  (Established with `archive/v0.9.22-cleanup-plan.md` — the first
+  closed cycle; supersedes the older "keep in place" convention.)
 
 ## Historical retention
 
