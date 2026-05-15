@@ -6,6 +6,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`ci/scripts/bump-version.sh`** now refreshes `Cargo.lock`
+  after bumping `[workspace.package].version` (via
+  `cargo metadata --offline --format-version 1`), so the workspace
+  internal-crate version entries in the lockfile track the bump
+  automatically. Previously the lockfile was refreshed as a side
+  effect of the next `cargo build` during pre-push preflight; if
+  the maintainer didn't notice + stage the change, the release
+  pushed a stale `Cargo.lock` that mismatched the bumped
+  `Cargo.toml`, and CI's `cargo build --locked` in
+  `release-binary.sh` failed at the cross-platform build matrix.
+  Caught the hard way on v0.9.22 (`release.yml` run
+  `25890555488`); recovered via tag-move after amending the bump
+  commit to include `Cargo.lock`.
+- **`RELEASING.md`** step 1 description updated to mention the
+  `Cargo.lock` refresh; step 4 stage list now includes
+  `Cargo.lock` explicitly; new "Why `Cargo.lock` is in the stage
+  list" note under step 4 captures the recurrence rationale.
+
 ## [0.9.22] — 2026-05-14 (doc-drift cleanup + prevention automation)
 
 Doc + prevention-automation cleanup release. A 2026-05-14 audit of

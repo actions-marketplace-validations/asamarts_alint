@@ -14,7 +14,9 @@ points are explicit.
 
    The script edits `Cargo.toml [workspace.package].version` + every
    user-facing install snippet (README, SECURITY, docs/site/**) +
-   inserts a CHANGELOG stub.
+   inserts a CHANGELOG stub + refreshes `Cargo.lock` via
+   `cargo metadata --offline` (so the workspace internal-crate
+   version entries in the lockfile track the bump).
 
    Deliberately **not** touched:
    - `Cargo.toml [workspace.dependencies].alint-* version`,
@@ -65,12 +67,25 @@ points are explicit.
 4. **Commit and tag.**
 
    ```sh
-   git add Cargo.toml npm/package.json CHANGELOG.md
+   git add Cargo.toml Cargo.lock npm/package.json CHANGELOG.md
    git commit -m "chore(release): bump workspace to <x.y.z>"
    git tag v<x.y.z>
    git push origin main
    git push origin v<x.y.z>
    ```
+
+   **Why `Cargo.lock` is in the stage list.** When
+   `[workspace.package].version` bumps, the workspace internal-crate
+   entries in `Cargo.lock` (`alint`, `alint-core`, `alint-dsl`,
+   `alint-rules`, `alint-output`, `alint-bench`, `alint-e2e`,
+   `alint-testkit`) need to track. `bump-version.sh` refreshes the
+   lockfile via `cargo metadata --offline` as part of the bump; the
+   refresh must be committed alongside `Cargo.toml`, or CI's
+   `cargo build --locked` in `release-binary.sh` fails with "cannot
+   update the lock file because --locked was passed". This was
+   caught on v0.9.22 (`release.yml` run `25890555488` failed at the
+   cross-platform build matrix; recovered via tag-move after
+   amending the bump commit to include `Cargo.lock`).
 
 ## What fires on the tag push
 

@@ -53,6 +53,22 @@ echo "==> bump: $CUR -> $NEW"
 #    inter-crate API breaks).
 sed -i "s|^version = \"$CUR\"$|version = \"$NEW\"|" Cargo.toml
 
+# 1b. Refresh Cargo.lock workspace-crate version entries to match
+#     the new workspace.package.version. Without this explicit
+#     refresh, the first `cargo build` in the next preflight does
+#     it as a side effect — but if the maintainer doesn't notice
+#     and stage the change, the release pushes a stale Cargo.lock
+#     that mismatches the bumped Cargo.toml. CI's
+#     `cargo build --locked` then fails with "cannot update the
+#     lock file because --locked was passed". Caught the hard way
+#     on v0.9.22 (release.yml run 25890555488).
+#
+#     `cargo metadata` resolves the workspace dep graph and writes
+#     out an updated Cargo.lock as a side effect, without
+#     compiling. `--offline` keeps it from hitting the network.
+echo "==> refreshing Cargo.lock (cargo metadata --offline)"
+cargo metadata --offline --format-version 1 > /dev/null
+
 # 2. Install snippets across user-facing files. The version
 #    appears as `vX.Y.Z` (GHA ref, pre-commit rev, docker tag with
 #    'v'), `:X.Y.Z` (docker tag, bare semver), and once in the
