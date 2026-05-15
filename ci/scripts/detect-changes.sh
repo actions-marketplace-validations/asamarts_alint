@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Detect which components changed to enable conditional CI pipelines.
-# Outputs: rust=true/false, docs=true/false, bench=true/false
+# Outputs: rust=true/false, docs=true/false, bench=true/false,
+#          examples=true/false
 #
 # Environment variables (set by the workflow):
 #   GH_EVENT         - github.event_name (push | pull_request)
@@ -43,6 +44,7 @@ fi
 RUST=false
 DOCS=false
 BENCH=false
+EXAMPLES=false
 
 # CI infrastructure or workspace manifest changes trigger all pipelines.
 if echo "$CHANGED" | grep -qE '^(\.github/workflows/|ci/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$)'; then
@@ -50,6 +52,7 @@ if echo "$CHANGED" | grep -qE '^(\.github/workflows/|ci/|Cargo\.toml$|Cargo\.loc
   RUST=true
   DOCS=true
   BENCH=true
+  EXAMPLES=true
 fi
 
 if echo "$CHANGED" | grep -qE '^(crates/|xtask/|schemas/|\.alint\.yml$)'; then
@@ -65,8 +68,16 @@ if echo "$CHANGED" | grep -qE '^(docs/|PROPOSAL\.md$|[A-Z_]+\.md$)'; then
   DOCS=true
 fi
 
+# Examples-validate covers schema regressions in the 30 pinned
+# case-study configs. Trigger on examples/ edits, on schema /
+# rules / DSL edits that could change accepted shapes, and on
+# config-parser edits.
+if echo "$CHANGED" | grep -qE '^(examples/|schemas/|crates/alint-rules/|crates/alint-dsl/|crates/alint-core/src/config/)'; then
+  EXAMPLES=true
+fi
+
 echo ""
-echo "==> rust=${RUST}  docs=${DOCS}  bench=${BENCH}"
+echo "==> rust=${RUST}  docs=${DOCS}  bench=${BENCH}  examples=${EXAMPLES}"
 
 # ── Write GitHub Actions outputs ─────────────────────────────────────
 
@@ -75,5 +86,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "rust=${RUST}"
     echo "docs=${DOCS}"
     echo "bench=${BENCH}"
+    echo "examples=${EXAMPLES}"
   } >> "$GITHUB_OUTPUT"
 fi

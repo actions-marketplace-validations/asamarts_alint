@@ -12,6 +12,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # These three are mirrored verbatim across ci.yml, coverage.yml,
+  # release.yml, cross-platform.yml. GitHub Actions has no clean
+  # cross-workflow env mechanism (a composite action can't set env
+  # for sibling steps), so they're duplicated by necessity — keep
+  # them identical when editing any one.
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   RUSTFLAGS: "-D warnings"
@@ -27,6 +32,7 @@ jobs:
       rust: ${{ steps.detect.outputs.rust }}
       docs: ${{ steps.detect.outputs.docs }}
       bench: ${{ steps.detect.outputs.bench }}
+      examples: ${{ steps.detect.outputs.examples }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -159,6 +165,41 @@ jobs:
           key: ci-bench-smoke
       - run: ci/scripts/bench-smoke.sh
 
+  # ── Examples validate ────────────────────────────────────────────
+  # Run `alint validate-config` against every examples/*/.alint.yml.
+  # Catches schema regressions in the 30 case-study configs (visible
+  # at alint.org/examples/) that would otherwise only surface when a
+  # contributor copy-pasted one as a starting point.
+  examples:
+    name: Examples
+    needs: [changes, build]
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.examples == 'true'
+    runs-on: [self-hosted, linux, alint]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-examples
+      - run: ci/scripts/examples-validate.sh
+
+  # ── Shell tests ───────────────────────────────────────────────────
+  # Run shell-script test harnesses (test-*.sh under ci/scripts/) in
+  # their own job. Split out from the Rust `Test` job so a homebrew-
+  # formula golden drift doesn't blame the Rust test suite.
+  shell-tests:
+    name: Shell Tests
+    needs: changes
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.rust == 'true'
+    runs-on: [self-hosted, linux, alint]
+    steps:
+      - uses: actions/checkout@v6
+      - run: ci/scripts/shell-tests.sh
+
   # ── Summary report ───────────────────────────────────────────────
   summary:
     name: Summary
@@ -173,6 +214,8 @@ jobs:
       - docs
       - dogfood
       - bench-smoke
+      - examples
+      - shell-tests
     runs-on: [self-hosted, linux, alint]
     steps:
       - uses: actions/checkout@v6
@@ -180,6 +223,7 @@ jobs:
           RUST_CHANGED: ${{ needs.changes.outputs.rust }}
           DOCS_CHANGED: ${{ needs.changes.outputs.docs }}
           BENCH_CHANGED: ${{ needs.changes.outputs.bench }}
+          EXAMPLES_CHANGED: ${{ needs.changes.outputs.examples }}
           FMT_RESULT: ${{ needs.fmt.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
@@ -188,4 +232,6 @@ jobs:
           DOCS_JOB_RESULT: ${{ needs.docs.result }}
           DOGFOOD_RESULT: ${{ needs.dogfood.result }}
           BENCH_SMOKE_RESULT: ${{ needs.bench-smoke.result }}
+          EXAMPLES_RESULT: ${{ needs.examples.result }}
+          SHELL_TESTS_RESULT: ${{ needs.shell-tests.result }}
         run: ci/scripts/summary.sh

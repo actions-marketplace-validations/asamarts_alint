@@ -51,24 +51,32 @@ row() {
   echo "| Rust (crates + xtask) | ${RUST_CHANGED} |"
   echo "| Docs                  | ${DOCS_CHANGED} |"
   echo "| Bench                 | ${BENCH_CHANGED} |"
+  echo "| Examples              | ${EXAMPLES_CHANGED} |"
   echo ""
 
   echo "### Rust Pipeline"
   echo "| Check | Result |"
   echo "|-------|--------|"
-  row "Format"    "$FMT_RESULT"     "$RUST_CHANGED"
-  row "Clippy"    "$CLIPPY_RESULT"  "$RUST_CHANGED"
-  row "Test"      "$TEST_RESULT"    "$RUST_CHANGED"
-  row "Audit"     "$AUDIT_RESULT"   "$RUST_CHANGED"
-  row "Build"     "$BUILD_RESULT"   "$RUST_CHANGED"
-  row "Docs"      "$DOCS_JOB_RESULT" "$RUST_CHANGED"
-  row "Dogfood"   "$DOGFOOD_RESULT" "$RUST_CHANGED"
+  row "Format"       "$FMT_RESULT"         "$RUST_CHANGED"
+  row "Clippy"       "$CLIPPY_RESULT"      "$RUST_CHANGED"
+  row "Test"         "$TEST_RESULT"        "$RUST_CHANGED"
+  row "Audit"        "$AUDIT_RESULT"       "$RUST_CHANGED"
+  row "Build"        "$BUILD_RESULT"       "$RUST_CHANGED"
+  row "Docs"         "$DOCS_JOB_RESULT"    "$RUST_CHANGED"
+  row "Dogfood"      "$DOGFOOD_RESULT"     "$RUST_CHANGED"
+  row "Shell tests"  "$SHELL_TESTS_RESULT" "$RUST_CHANGED"
   echo ""
 
   echo "### Bench Pipeline"
   echo "| Check | Result |"
   echo "|-------|--------|"
   row "Bench smoke" "$BENCH_SMOKE_RESULT" "$BENCH_CHANGED"
+  echo ""
+
+  echo "### Examples Pipeline"
+  echo "| Check | Result |"
+  echo "|-------|--------|"
+  row "Examples validate" "$EXAMPLES_RESULT" "$EXAMPLES_CHANGED"
   echo ""
 } | tee "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
@@ -77,7 +85,8 @@ row() {
 FAILED=false
 for result in \
   "$FMT_RESULT" "$CLIPPY_RESULT" "$TEST_RESULT" "$AUDIT_RESULT" \
-  "$BUILD_RESULT" "$DOCS_JOB_RESULT" "$DOGFOOD_RESULT" "$BENCH_SMOKE_RESULT"; do
+  "$BUILD_RESULT" "$DOCS_JOB_RESULT" "$DOGFOOD_RESULT" \
+  "$BENCH_SMOKE_RESULT" "$EXAMPLES_RESULT" "$SHELL_TESTS_RESULT"; do
   if [[ "$result" == "failure" ]]; then
     FAILED=true
   fi

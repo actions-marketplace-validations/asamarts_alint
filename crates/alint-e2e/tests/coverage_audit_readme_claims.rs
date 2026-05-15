@@ -22,6 +22,12 @@
 //! | subcommands            | variants of `Command` enum in `crates/alint/src/main.rs`    |
 //!
 //! Failures point the maintainer at exactly which side drifted.
+//!
+//! `about_page_surface_claims_match_readme` additionally pins
+//! `docs/site/about/index.md` (a separate file on the docs-bundle
+//! path to alint.org that repeats the README's surface-area
+//! sentence) to the README, so the same drift can't slip through
+//! the docs site.
 
 use std::collections::HashSet;
 use std::fs;
@@ -39,6 +45,16 @@ fn workspace_root() -> PathBuf {
 
 fn read_readme() -> String {
     let path = workspace_root().join("README.md");
+    fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// The synced docs landing (`docs/site/about/index.md`) repeats the
+/// same surface-area sentence the README leads with. It's a separate
+/// file on the docs-bundle path to alint.org, so it drifts
+/// independently — the v0.9.22 audit found it would have escaped this
+/// test entirely. Pin it to the same truth via the README.
+fn read_about_page() -> String {
+    let path = workspace_root().join("docs/site/about/index.md");
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
@@ -342,6 +358,59 @@ fn readme_subcommands_count_matches_command_enum() {
         "README claims {claimed} subcommands; `enum Command` in {} has {actual} variants.\n\
          Update README.md or check that a new subcommand wasn't added without bumping the count.",
         path.display()
+    );
+}
+
+/// Extract the "N rule kinds across M families" pair from a doc body.
+/// Returns `(rule_kinds, families)`.
+fn rule_kinds_and_families(text: &str) -> (usize, usize) {
+    let kinds = num_before(text, "rule kinds across")
+        .expect("text must contain 'N rule kinds across M families'");
+    let marker = "rule kinds across ";
+    let pos = text.find(marker).expect("marker present (checked above)");
+    let after = &text[pos + marker.len()..];
+    let m_str: String = after.chars().take_while(char::is_ascii_digit).collect();
+    let families: usize = m_str
+        .parse()
+        .expect("expected an integer immediately after 'rule kinds across '");
+    (kinds, families)
+}
+
+#[test]
+fn about_page_surface_claims_match_readme() {
+    // docs/site/about/index.md leads with the same surface-area
+    // sentence as README.md but is a distinct file on the
+    // docs-bundle path to alint.org. The README claims are pinned
+    // to truth by the tests above; asserting the about page equals
+    // the README transitively pins the about page too — and closes
+    // the drift gap the v0.9.22 audit flagged (the about page was
+    // not covered by any test).
+    let readme = read_readme();
+    let about = read_about_page();
+
+    let (readme_kinds, readme_families) = rule_kinds_and_families(&readme);
+    let (about_kinds, about_families) = rule_kinds_and_families(&about);
+
+    assert_eq!(
+        about_kinds, readme_kinds,
+        "docs/site/about/index.md claims {about_kinds} rule kinds; README.md claims \
+         {readme_kinds}. They must agree (README is pinned to the all_kinds.yaml fixture \
+         by readme_rule_kinds_count_matches_fixture)."
+    );
+    assert_eq!(
+        about_families, readme_families,
+        "docs/site/about/index.md claims {about_families} families; README.md claims \
+         {readme_families}. They must agree (README is pinned to docs/rules.md)."
+    );
+
+    let readme_rulesets = num_before(&readme, "bundled ecosystem rulesets")
+        .expect("README must contain 'N bundled ecosystem rulesets'");
+    let about_rulesets = num_before(&about, "bundled ecosystem rulesets")
+        .expect("about page must contain 'N bundled ecosystem rulesets'");
+    assert_eq!(
+        about_rulesets, readme_rulesets,
+        "docs/site/about/index.md claims {about_rulesets} bundled rulesets; README.md \
+         claims {readme_rulesets}. They must agree."
     );
 }
 
