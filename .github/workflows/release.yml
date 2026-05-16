@@ -27,12 +27,15 @@ jobs:
   # but a release must verify the whole tree regardless of the diff.
   #
   # Parity with ci.yml correctness jobs: fmt, clippy, test, build,
-  # docs, dogfood, examples, shell-tests. Deliberately NOT here:
+  # docs, dogfood, examples, shell-tests, deny. deny.sh bootstraps
+  # cargo-deny on demand so the license / supply-chain gate works on
+  # ubuntu-latest too. Deliberately NOT here:
   #   audit       — audit.sh is advisory-only by design (never fails
   #                 the pipeline) and cargo-audit is absent on
   #                 ubuntu-latest; ci.yml's dedicated Audit job
   #                 (self-hosted) also runs on tag-push and still
-  #                 surfaces the advisory.
+  #                 surfaces the advisory. (deny.sh runs its own
+  #                 advisory pass too, likewise non-blocking.)
   #   bench-smoke — a perf smoke check, not a correctness gate.
   # `cargo doc` warnings bypass cargo check/test/clippy, so the
   # rustdoc gate (docs.sh) must run in every release preflight.
@@ -40,7 +43,7 @@ jobs:
   # homebrew, publish-crates) `needs:` this job; if it fails, no
   # artefacts are published.
   preflight:
-    name: preflight (fmt/clippy/test/build/docs/dogfood/examples/shell)
+    name: preflight (fmt/clippy/test/build/docs/dogfood/examples/shell/deny)
     runs-on: ubuntu-latest
     env:
       # Mirrored verbatim across ci.yml / coverage.yml / release.yml
@@ -72,6 +75,8 @@ jobs:
         run: ci/scripts/examples-validate.sh
       - name: shell-tests (test-*.sh harnesses incl. homebrew golden)
         run: ci/scripts/shell-tests.sh
+      - name: deny (licenses + bans + sources; advisories advisory)
+        run: ci/scripts/deny.sh
 
   build:
     name: build (${{ matrix.target }})

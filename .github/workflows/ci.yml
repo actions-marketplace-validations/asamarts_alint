@@ -103,6 +103,21 @@ jobs:
           key: ci-audit
       - run: ci/scripts/audit.sh
 
+  deny:
+    name: Deny
+    needs: [changes, fmt]
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.rust == 'true'
+    runs-on: [self-hosted, linux, alint]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-deny
+      - run: ci/scripts/deny.sh
+
   build:
     name: Build
     needs: [changes, clippy, test]
@@ -210,6 +225,7 @@ jobs:
       - clippy
       - test
       - audit
+      - deny
       - build
       - docs
       - dogfood
@@ -228,6 +244,7 @@ jobs:
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
           AUDIT_RESULT: ${{ needs.audit.result }}
+          DENY_RESULT: ${{ needs.deny.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           DOCS_JOB_RESULT: ${{ needs.docs.result }}
           DOGFOOD_RESULT: ${{ needs.dogfood.result }}

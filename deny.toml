@@ -1,0 +1,79 @@
+# cargo-deny policy for the alint workspace.
+#
+# Closes the v0.9.22-audit finding "no deny.toml": without this file
+# `cargo deny check` runs with strict defaults that allowlist NO
+# licenses and reject even the project's own `Apache-2.0 OR MIT` and
+# every permissive dependency. Run via ci/scripts/deny.sh.
+#
+# Enforcement split (see ci/scripts/deny.sh):
+#   - licenses / bans / sources : BLOCKING — license compliance is
+#     the gap the audit flagged; bans + sources are cheap
+#     supply-chain gates.
+#   - advisories                : ADVISORY only, run separately, to
+#     mirror ci/scripts/audit.sh's existing non-blocking RustSec
+#     stance and avoid a duplicate hard gate over the same database.
+#
+# The allow-list is the EXACT set of permissive licenses present in
+# the dependency graph (enumerate with `cargo deny list`), not a
+# blanket allow — a dependency under any other license fails the
+# check and forces a conscious policy decision.
+
+[graph]
+all-features = true
+
+[licenses]
+# Every entry below is actually present in the graph as of v0.9.22.
+# Copyleft handling:
+#   - r-efi is `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; satisfied by
+#     MIT/Apache, so LGPL-2.1 is deliberately NOT allowed.
+#   - option-ext is MPL-2.0-only — a scoped exception below, not a
+#     global allow, so a future MPL-2.0 dep is flagged for review.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "BSL-1.0",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+# MPL-2.0 is weak (file-level) copyleft. `option-ext` (pulled in
+# transitively via directories -> dirs-sys) is MPL-2.0-only; alint
+# uses it unmodified as a dependency, which MPL-2.0 permits without
+# affecting alint's own licensing. Scoped to this one crate on
+# purpose: a different MPL-2.0 dependency will fail the check.
+[[licenses.exceptions]]
+allow = ["MPL-2.0"]
+crate = "option-ext"
+
+[bans]
+# The graph legitimately carries duplicate major versions of several
+# common crates (getrandom 0.2/0.3/0.4, rand 0.9/0.10, hashbrown
+# 0.16/0.17, windows-sys 0.52/0.61, ...). Surface them, don't block.
+multiple-versions = "warn"
+# Real `*` / wildcard version requirements are forbidden; intra-
+# workspace path deps (which also pin an explicit version) are fine.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# alint depends only on crates.io. Anything from an unknown registry
+# or a git source is a supply-chain red flag and must be reviewed.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[advisories]
+# Advisory enforcement is intentionally NOT made blocking here —
+# ci/scripts/deny.sh runs `cargo deny check advisories` in advisory
+# mode, matching ci/scripts/audit.sh. `cargo audit` remains the
+# primary RustSec surface. Yanked crates are still worth a warning.
+yanked = "warn"
