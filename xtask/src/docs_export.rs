@@ -334,7 +334,7 @@ fn generate_rules_pages(
         );
     }
 
-    emit_rules_master_index(&rules_dir, &all_kinds, &family_summaries)?;
+    emit_rules_master_index(&rules_dir, &all_kinds, &family_summaries, aliases.len())?;
     Ok(kind_to_family)
 }
 
@@ -675,6 +675,7 @@ fn emit_rules_master_index(
     rules_dir: &Path,
     all_kinds: &[KindEntry],
     families: &[FamilySummary],
+    alias_count: usize,
 ) -> Result<()> {
     let mut sorted: Vec<&KindEntry> = all_kinds.iter().collect();
     sorted.sort_by(|a, b| a.kind.cmp(&b.kind));
@@ -691,11 +692,23 @@ fn emit_rules_master_index(
     let _ = writeln!(&mut page, "  label: 'Index'");
     let _ = writeln!(&mut page, "---");
     let _ = writeln!(&mut page);
+    // Headline count is the canonical "70 rule kinds" figure used
+    // across README / docs/site/about / schema / alint.org: the
+    // {behaviors} documented rule behaviors plus {alias_count}
+    // short-name aliases that ride inline on their canonical page.
+    // Deriving the total from those two components keeps the
+    // sentence self-consistent even if the registry/docs ever drift
+    // (that drift is independently caught by the WARN loop above).
     let _ = writeln!(
         &mut page,
-        "alint ships {kc} rule kinds across {fc} families. Each rule is one entry in your `.alint.yml` under `rules:`.",
-        kc = all_kinds.len(),
-        fc = families.len()
+        "alint ships {total} rule kinds across {fc} families \
+         ({behaviors} distinct rule behaviors plus {alias_count} short-name \
+         aliases like `content_matches` → `file_content_matches`). Each \
+         rule is one entry in your `.alint.yml` under `rules:`.",
+        total = all_kinds.len() + alias_count,
+        fc = families.len(),
+        behaviors = all_kinds.len(),
+        alias_count = alias_count
     );
     let _ = writeln!(&mut page);
     let _ = writeln!(&mut page, "## By family");
