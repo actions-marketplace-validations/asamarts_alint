@@ -14,19 +14,33 @@ concurrency:
 
 jobs:
   # ── Preflight gate ──────────────────────────────────────────────
-  # Self-contained verification that the tagged commit passes the
-  # same fmt + clippy + test + doctest + `cargo doc -D warnings`
-  # gates that ci.yml enforces. Required because release.yml fires
-  # on tag-push in parallel with ci.yml (both watch tags: ["v*"])
-  # — without this dependency, a failing CI run does not stop a
-  # release. See also feedback note in CLAUDE memory:
-  # `cargo doc` warnings bypass cargo check / test / clippy, so
-  # the rustdoc gate must run as part of every release preflight.
+  # Self-contained re-verification that the tagged commit passes the
+  # SAME correctness gates ci.yml enforces, by running the same
+  # ci/scripts/*.sh — the scripts, not the YAML, are the single
+  # source of truth. Required because release.yml fires on tag-push
+  # in PARALLEL with ci.yml (both watch tags: ["v*"]); without this,
+  # a failing CI run does not stop a release, and ci.yml's own
+  # dogfood / examples / shell-tests jobs would not gate publishing.
+  #
+  # Unlike ci.yml, every gate here runs UNCONDITIONALLY: ci.yml
+  # change-gates jobs (needs.changes.outputs.*) to keep PRs fast,
+  # but a release must verify the whole tree regardless of the diff.
+  #
+  # Parity with ci.yml correctness jobs: fmt, clippy, test, build,
+  # docs, dogfood, examples, shell-tests. Deliberately NOT here:
+  #   audit       — audit.sh is advisory-only by design (never fails
+  #                 the pipeline) and cargo-audit is absent on
+  #                 ubuntu-latest; ci.yml's dedicated Audit job
+  #                 (self-hosted) also runs on tag-push and still
+  #                 surfaces the advisory.
+  #   bench-smoke — a perf smoke check, not a correctness gate.
+  # `cargo doc` warnings bypass cargo check/test/clippy, so the
+  # rustdoc gate (docs.sh) must run in every release preflight.
   # All publishing jobs (build matrix, release, docker, npm,
   # homebrew, publish-crates) `needs:` this job; if it fails, no
   # artefacts are published.
   preflight:
-    name: preflight (fmt + clippy + test + doc)
+    name: preflight (fmt/clippy/test/build/docs/dogfood/examples/shell)
     runs-on: ubuntu-latest
     env:
       # Mirrored verbatim across ci.yml / coverage.yml / release.yml
@@ -48,8 +62,16 @@ jobs:
         run: ci/scripts/clippy.sh
       - name: test
         run: ci/scripts/test.sh
+      - name: build (cargo build --workspace --locked)
+        run: ci/scripts/build.sh
       - name: docs (cargo doc with -D warnings)
         run: ci/scripts/docs.sh
+      - name: dogfood (alint check on its own repo)
+        run: ci/scripts/dogfood.sh
+      - name: examples-validate (every examples/*/.alint.yml)
+        run: ci/scripts/examples-validate.sh
+      - name: shell-tests (test-*.sh harnesses incl. homebrew golden)
+        run: ci/scripts/shell-tests.sh
 
   build:
     name: build (${{ matrix.target }})
