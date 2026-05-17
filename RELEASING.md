@@ -102,13 +102,39 @@ points are explicit.
 `bench-record.yml` opens a PR titled `docs(bench): <tag> bench-scale results`
 when its run completes. Review checklist:
 
-1. **CV check.** Skim the per-cell summary in the PR body for any cell with
-   `stddev_ms / mean_ms > 0.10` (CV > 10 %). Re-run those on a quieter
-   system (close other workloads on the bench runner; relaunch the
-   workflow with `workflow_dispatch` and `--ref` set to the tagged commit)
-   before merging. The 1M cells use reduced warmup/runs (`(min(warmup, 1),
-   min(runs, 3))` per `xtask/src/bench/mod.rs`) and are inherently noisier
-   so review the per-1M-cell stddev separately from the smaller sizes.
+1. **Run the gate.** `xtask bench-gate` is the publish
+   criterion. It supersedes the old "skim the PR body for any
+   cell with `stddev_ms / mean_ms > 0.10`" eyeball: that flat
+   per-cell CV rule was never met by any shipped release (chronic
+   small/10k measurement-floor noise) and was never enforced in
+   code. Evidence + the validated thresholds:
+   [`docs/benchmarks/investigations/2026-05-bench-runner-instability/`](docs/benchmarks/investigations/2026-05-bench-runner-instability/).
+
+   ```sh
+   tag=v<x.y.z>; prev=v<x.y.z-1>
+   git fetch origin "bench-record/$tag"
+   git show "origin/bench-record/$tag:docs/benchmarks/macro/results/linux-x86_64/$tag/results.json" > /tmp/new.json
+   cargo run -q -p xtask -- bench-gate \
+     --results /tmp/new.json \
+     --baseline "docs/benchmarks/macro/results/linux-x86_64/$prev/results.json"
+   ```
+
+   - **Quality**: per-cell within-run CV `<= 10%`, applied only
+     to 100k and 1m cells. 1k/10k are advisory (chronic
+     measurement-floor noise; reported, never blocking). A gating
+     failure (a 100k+ cell over 10%) means a genuinely bad run:
+     re-run via `workflow_dispatch` (`-f ref=v<x.y.z> -f
+     label=v<x.y.z>`) on an idle runner.
+   - **Regression**: `min_ms` delta vs the previous release's
+     `results.json` `<= +15%` on cells of size `>= 10k` (`min_ms`
+     is the reproducible cross-version statistic; `1k` excluded).
+     A failure here is a real perf regression: open an
+     investigation (step 4) before merging.
+
+   Non-zero exit means do not merge. Advisory lines never block.
+   The published `HISTORY.md` table still shows `mean +/- stddev`
+   (the gate uses `min_ms`; the table keeps the full distribution
+   for continuity, see `docs/benchmarks/METHODOLOGY.md`).
 
 2. **Fingerprint check.** Open `results.json` and verify
    `fingerprint.alint_version` matches the tag, `fingerprint.cpu_model`

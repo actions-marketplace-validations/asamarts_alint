@@ -76,15 +76,35 @@ jobs:
         with:
           key: bench-record
 
-      - name: install hyperfine
+      - name: install hyperfine (pinned, unconditional)
         run: |
           set -euo pipefail
-          if ! command -v hyperfine >/dev/null 2>&1; then
-            curl -fsSL -o /tmp/hyperfine.deb \
-              https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine_1.20.0_amd64.deb
-            sudo dpkg -i /tmp/hyperfine.deb
-          fi
+          # Pin hyperfine for fingerprint reproducibility. The old
+          # `if ! command -v hyperfine` skipped this whenever ANY
+          # hyperfine was already on PATH — the self-hosted runner
+          # has a stale 1.15.0, so the "pinned" 1.20.0 was never
+          # actually used (every published results.json
+          # fingerprints hyperfine 1.15.0). The runner has no sudo
+          # (see the gh / python steps), so the old `sudo dpkg`
+          # path was also dead. Install the prebuilt binary into
+          # $HOME/.local/bin and front it on PATH — same pattern
+          # as the gh / python steps — then assert the version so
+          # a silent pin miss fails the run loudly.
+          hf_ver="1.20.0"
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/hf.tar.gz \
+            "https://github.com/sharkdp/hyperfine/releases/download/v${hf_ver}/hyperfine-v${hf_ver}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/hf.tar.gz -C /tmp
+          cp "/tmp/hyperfine-v${hf_ver}-x86_64-unknown-linux-gnu/hyperfine" \
+            "$HOME/.local/bin/hyperfine"
+          chmod +x "$HOME/.local/bin/hyperfine"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
           hyperfine --version
+          case "$(hyperfine --version)" in
+            *"$hf_ver"*) ;;
+            *) echo "::error::hyperfine $hf_ver pin not applied (resolved: $(command -v hyperfine))"; exit 1 ;;
+          esac
 
       - name: install gh CLI
         run: |

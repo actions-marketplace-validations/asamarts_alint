@@ -70,7 +70,35 @@ the published `results.json`. The harness:
 6. **Writes** per-size `results.md` plus an aggregated
    `index.md` and the machine-readable `results.json`.
 
-Three macro-specific design choices worth flagging:
+Macro-specific design choices worth flagging:
+
+### Why the publish gate uses min_ms (1k/10k advisory)
+
+A full cross-version corpus analysis (v0.5.7 -> v0.9.22; see
+[`investigations/2026-05-bench-runner-instability/`](investigations/2026-05-bench-runner-instability/))
+showed per-cell within-run CV is a fixed absolute jitter floor
+(~1 ms median, ~12-19 ms tail on 1k/10k) over a tiny mean: every
+shipped v0.9.x release had 7-16 cells over the old "CV > 10 %"
+line, so that flat gate was never met and never enforced.
+Cross-version reproducibility tells the real story:
+
+| statistic | 1k | 10k | 100k | 1m |
+|---|--:|--:|--:|--:|
+| `mean_ms` | 13.4% | 8.8% | 2.7% | 3.4% |
+| `min_ms` | 11.9% | 2.7% | 2.7% | 2.8% |
+
+So `xtask bench-gate` (the publish criterion; `RELEASING.md`
+step 1) gates within-run CV only on 100k/1m (1k/10k are advisory
+measurement-floor noise) and gates cross-version regression on
+`min_ms` for `>= 10k` (`1k` is unreliable at every statistic).
+The published `HISTORY.md` tables and the alint.org trajectory
+deliberately stay `mean +/- stddev`: every historical row and the
+hardcoded v0.5.6 baseline are mean-based, and restating the
+public corpus on `min_ms` is a separable, externally-visible
+change held out of scope. Standard split: gate on the robust
+statistic, publish the full distribution. Cross-machine and
+cross-hyperfine-version comparisons still require a like-for-like
+fingerprint.
 
 ### Why hyperfine and not a custom Rust harness
 
