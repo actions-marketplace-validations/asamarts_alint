@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Rounded-square mark in alint indigo, white "a" lowercase inset.
+       Designed to read at 16×16; the rounded square stays solid even
+       when the glyph collapses to a few pixels. -->
+  <rect x="0" y="0" width="128" height="128" rx="24" fill="#4338ca"/>
+  <text
+    x="64"
+    y="91"
+    text-anchor="middle"
+    font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+    font-size="84"
+    font-weight="800"
+    letter-spacing="-0.06em"
+    fill="#ffffff"
+  >a</text>
+</svg>

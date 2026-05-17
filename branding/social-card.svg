@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <!-- Open Graph + Twitter card image. SVG so it's tiny on the
+       wire; most modern social previewers support SVG og:image,
+       and the ones that don't fall back to fetching the page's
+       text. -->
+
+  <!-- Background — split: indigo wash on left, dark on right. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e0e10"/>
+      <stop offset="1" stop-color="#1e1b4b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- Subtle grid texture suggesting a tree of files. Just lines
+       at gentle angles so it reads as repository-ish without being
+       literal. -->
+  <g stroke="#a5b4fc" stroke-width="1.5" opacity="0.10">
+    <line x1="0" y1="120" x2="1200" y2="120"/>
+    <line x1="0" y1="200" x2="1200" y2="200"/>
+    <line x1="0" y1="430" x2="1200" y2="430"/>
+    <line x1="0" y1="510" x2="1200" y2="510"/>
+  </g>
+
+  <!-- Wordmark -->
+  <g transform="translate(80, 230)">
+    <text
+      x="0"
+      y="120"
+      font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+      font-size="180"
+      font-weight="800"
+      letter-spacing="-0.04em"
+      fill="#ffffff"
+    >alint</text>
+
+    <!-- Tagline -->
+    <text
+      x="6"
+      y="200"
+      font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif"
+      font-size="42"
+      font-weight="500"
+      fill="#a5b4fc"
+    >Lint the shape of your repo.</text>
+
+    <!-- Footer line -->
+    <text
+      x="6"
+      y="280"
+      font-family="ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Monaco, monospace"
+      font-size="26"
+      fill="#6b7280"
+    >alint.org · github.com/asamarts/alint</text>
+  </g>
+</svg>
