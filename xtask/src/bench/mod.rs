@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 pub mod compare;
 pub mod docker;
 mod fingerprint;
+pub mod gate;
 pub mod tools;
 
 pub use tools::Tool;

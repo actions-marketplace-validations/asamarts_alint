@@ -166,6 +166,23 @@ enum Commands {
         #[arg(long, default_value_t = 10.0)]
         threshold: f64,
     },
+    /// Gate a macro `results.json` for publish. Quality: per-cell
+    /// within-run CV ≤ 10 % on 100k/1m only (1k/10k advisory).
+    /// Regression (with `--baseline`): `min_ms` delta vs the prior
+    /// release ≤ +15 % on ≥10k cells. Exits non-zero on a gating
+    /// failure. Replaces the unenforced human CV eyeball in
+    /// `RELEASING.md`; thresholds validated against the full
+    /// corpus — see
+    /// `docs/benchmarks/investigations/2026-05-bench-runner-instability/`.
+    BenchGate {
+        /// The run to gate (a `bench-scale` `results.json`).
+        #[arg(long)]
+        results: PathBuf,
+        /// Prior release's `results.json` for the `min_ms`
+        /// regression check. Omit to run quality-only.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+    },
     /// Snapshot `target/criterion/` into the per-version
     /// committable location under
     /// `docs/benchmarks/micro/results/<os>-<arch>/<workspace-version>/criterion/`.
@@ -256,6 +273,9 @@ fn main() -> Result<()> {
             after,
             threshold,
         } => bench::compare::run(&before, &after, threshold),
+        Commands::BenchGate { results, baseline } => {
+            bench::gate::run(&results, baseline.as_deref())
+        }
         Commands::DocsExport { out, check } => docs_export::docs_export(out, check),
         Commands::GenPublicRoadmap {
             input,
