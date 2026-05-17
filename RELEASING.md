@@ -188,3 +188,22 @@ Major (`<x+1>.0.0`):
   relevant once external plugin authors exist; today the trait is
   effectively crate-private).
 - `Engine` API breaking changes for `alint-core` consumers.
+
+Scope:
+- The contract covers the **observable product surface** only: the
+  `.alint.yml` schema, the CLI (flags, subcommands, exit codes),
+  and the machine-readable output formats. The `alint-core` public
+  API joins at v1.0 (pre-1.0 the engine API + `Rule` trait are
+  effectively crate-private; see the `publish = false` members).
+- The GitHub Action wrapper (`action.yml`, incl. its input
+  defaults and ref/binary-pin behaviour), `install.sh`, the
+  npm / Homebrew / Docker shims, benchmark numbers, and the docs
+  site are **integration surface, not the contract**: changes
+  there are **patch** even when they warrant an "Action required
+  only if ..." edge-case caveat (e.g. the v0.9.23 `version:`-default
+  shift: a patch with a caveat, not a minor).
+- Tie-breaker when unsure: does an unchanged `.alint.yml`, run
+  with the same CLI invocation, still produce the same findings
+  and the same machine-readable output? Only a "no" forces
+  minor/major; an integration-default shift with an upgrade note
+  stays patch.
