@@ -1,10 +1,13 @@
 # `generated_file_fresh` — a committed file must match its generator's output
 
-Status: Design draft, written 2026-05-18. v0.10 demand #4 (8
-sources, ROADMAP-canonical). Per
-[`docs/design/v0.10/README.md`](./README.md), this doc lands
-before code; on merge it gets a `Status: Implemented in <commit>`
-header and its open questions are resolved inline.
+Status: **Implemented** — lands with the rule in v0.10 (this
+commit; rule kind #4 of the case-study coverage push). Was a
+design draft (2026-05-18). v0.10 demand #4 (8 sources,
+ROADMAP-canonical). Open questions resolved on implementation:
+stdout-only, in-place/temp-sandbox deferred (Q1); blocking
+`.output()`, opt-in `timeout:` deferred (Q2); one `file` per
+rule (Q3); sibling of `command_idempotent` #6, docs cross-link
+(Q4); first-differing-line hint, unified-diff deferred (Q5).
 
 Demand evidence:
 [`docs/development/launch-evidence.md`](../../development/launch-evidence.md)

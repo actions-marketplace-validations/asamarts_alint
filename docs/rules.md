@@ -917,6 +917,20 @@ The lines between a `start` / `end` marker pair must stay sorted (and, with `uni
   level: warning
 ```
 
+### `generated_file_fresh`
+
+A committed `file` must equal the stdout of a declared `command` generator — a non-mutating freshness check. **alint does not run codegen as a build step**; this only *verifies* that the committed artefact matches what the user-declared, maintainer-trusted generator produces (stdout captured; the tree is never written — same trust tier as the `command` rule). Single-shot, opt-in. Spawn-failure / non-zero exit / a missing committed file are each a clear, distinct violation. `normalize` (`none` / `trim` / `final-newline`) absorbs trailing-newline churn.
+
+```yaml
+- id: bindings-fresh
+  kind: generated_file_fresh
+  file: crates/ffi/include/core.h
+  command: ["cbindgen", "--config", "cbindgen.toml", "crates/core"]
+  workdir: "."
+  normalize: final-newline
+  level: error
+```
+
 ### `for_each_dir` / `for_each_file`
 
 For every matching directory / file, evaluate a nested `require:` block with the entry as context. Template tokens (`{dir}`, `{stem}`, `{ext}`, `{basename}`, `{path}`, `{parent_name}`) expand against each match.

@@ -155,6 +155,14 @@ rules:
     unique: false
     level: warning
 
+  - id: bindings-fresh
+    kind: generated_file_fresh
+    file: docs/rules.md
+    command: ["true"]
+    workdir: "."
+    normalize: final-newline
+    level: error
+
   - id: every-module-has-mod
     kind: for_each_dir
     select: "src/*"

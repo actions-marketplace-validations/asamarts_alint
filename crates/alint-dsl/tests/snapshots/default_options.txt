@@ -650,6 +650,20 @@ ForEachFileRule {
     ],
 }
 
+=== kind: generated_file_fresh | id: bindings-fresh ===
+GeneratedFileFreshRule {
+    id: "bindings-fresh",
+    level: Error,
+    policy_url: None,
+    message: None,
+    file: "docs/rules.md",
+    command: [
+        "true",
+    ],
+    workdir: ".",
+    normalize: FinalNewline,
+}
+
 === kind: git_blame_age | id: stale-todos ===
 GitBlameAgeRule {
     id: "stale-todos",

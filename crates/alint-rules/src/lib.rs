@@ -39,6 +39,7 @@ pub mod final_newline;
 pub mod fixers;
 pub mod for_each_dir;
 pub mod for_each_file;
+pub mod generated_file_fresh;
 pub mod git_blame_age;
 pub mod git_commit_message;
 pub mod git_no_denied_paths;
@@ -141,6 +142,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("registry_paths_resolve", registry_paths_resolve::build);
     registry.register("cross_file_value_equals", cross_file_value_equals::build);
     registry.register("ordered_block", ordered_block::build);
+    registry.register("generated_file_fresh", generated_file_fresh::build);
 
     // Text-hygiene family (short names — no `file_` prefix).
     registry.register("no_trailing_whitespace", no_trailing_whitespace::build);
@@ -259,6 +261,7 @@ mod registry_tests {
             "registry_paths_resolve",
             "cross_file_value_equals",
             "ordered_block",
+            "generated_file_fresh",
             // Text-hygiene family.
             "no_trailing_whitespace",
             "final_newline",

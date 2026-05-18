@@ -1,0 +1,23 @@
+name: generated_file_fresh is silent when the committed file matches the generator
+tags: [check, generated_file_fresh, plugin, passing]
+
+given:
+  tree:
+    gen/list.txt: |
+      alpha
+      bravo
+      charlie
+  config: |
+    version: 1
+    rules:
+      - id: list-fresh
+        kind: generated_file_fresh
+        file: gen/list.txt
+        command: ["sh", "-c", "printf 'alpha\\nbravo\\ncharlie\\n'"]
+        normalize: none
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

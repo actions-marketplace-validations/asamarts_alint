@@ -1,0 +1,24 @@
+name: generated_file_fresh fires when the committed file is stale
+tags: [check, generated_file_fresh, plugin]
+
+given:
+  tree:
+    gen/list.txt: |
+      alpha
+      STALE
+      charlie
+  config: |
+    version: 1
+    rules:
+      - id: list-fresh
+        kind: generated_file_fresh
+        file: gen/list.txt
+        command: ["sh", "-c", "printf 'alpha\\nbravo\\ncharlie\\n'"]
+        normalize: none
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: list-fresh, level: error, path: gen/list.txt}
