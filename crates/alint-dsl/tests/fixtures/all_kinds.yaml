@@ -163,6 +163,14 @@ rules:
     normalize: final-newline
     level: error
 
+  - id: no-internal-imports
+    kind: import_gate
+    paths: "src/**/*.rs"
+    language: rust
+    forbid: "^crate::secrets"
+    allow: ["src/secrets/**"]
+    level: error
+
   - id: every-module-has-mod
     kind: for_each_dir
     select: "src/*"

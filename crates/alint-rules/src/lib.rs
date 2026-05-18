@@ -43,6 +43,7 @@ pub mod generated_file_fresh;
 pub mod git_blame_age;
 pub mod git_commit_message;
 pub mod git_no_denied_paths;
+pub mod import_gate;
 pub mod indent_style;
 pub mod io;
 pub mod json_schema_passes;
@@ -143,6 +144,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("cross_file_value_equals", cross_file_value_equals::build);
     registry.register("ordered_block", ordered_block::build);
     registry.register("generated_file_fresh", generated_file_fresh::build);
+    registry.register("import_gate", import_gate::build);
 
     // Text-hygiene family (short names — no `file_` prefix).
     registry.register("no_trailing_whitespace", no_trailing_whitespace::build);
@@ -262,6 +264,7 @@ mod registry_tests {
             "cross_file_value_equals",
             "ordered_block",
             "generated_file_fresh",
+            "import_gate",
             // Text-hygiene family.
             "no_trailing_whitespace",
             "final_newline",

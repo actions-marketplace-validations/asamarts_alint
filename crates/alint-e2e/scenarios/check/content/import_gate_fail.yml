@@ -1,0 +1,27 @@
+name: import_gate fires when a scoped file imports a forbidden module
+tags: [check, import_gate, content]
+
+given:
+  tree:
+    staging/src/k8s.io/api/types.go: |
+      package api
+
+      import (
+      	"fmt"
+      	"k8s.io/kubernetes/pkg/apis/core"
+      )
+  config: |
+    version: 1
+    rules:
+      - id: staging-no-main-module
+        kind: import_gate
+        paths: "staging/src/k8s.io/**/*.go"
+        language: go
+        forbid: "^k8s\\.io/kubernetes/"
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: staging-no-main-module, level: error, path: staging/src/k8s.io/api/types.go}

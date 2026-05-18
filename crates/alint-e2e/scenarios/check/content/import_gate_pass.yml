@@ -1,0 +1,26 @@
+name: import_gate is silent when no forbidden import is present
+tags: [check, import_gate, content, passing]
+
+given:
+  tree:
+    staging/src/k8s.io/api/types.go: |
+      package api
+
+      import (
+      	"fmt"
+      	"k8s.io/apimachinery/pkg/runtime"
+      )
+  config: |
+    version: 1
+    rules:
+      - id: staging-no-main-module
+        kind: import_gate
+        paths: "staging/src/k8s.io/**/*.go"
+        language: go
+        forbid: "^k8s\\.io/kubernetes/"
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

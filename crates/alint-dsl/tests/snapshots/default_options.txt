@@ -723,6 +723,25 @@ FileHeaderRule {
     fixer: None,
 }
 
+=== kind: import_gate | id: no-internal-imports ===
+ImportGateRule {
+    id: "no-internal-imports",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    forbid_src: "^crate::secrets",
+    forbid: Regex(
+        "^crate::secrets",
+    ),
+    import_re: Regex(
+        "^\\s*(?:pub\\s+)?use\\s+([\\w:]+)",
+    ),
+    allow: Some(
+        Scope { ... },
+    ),
+}
+
 === kind: indent_style | id: indent-style ===
 IndentStyleRule {
     id: "indent-style",

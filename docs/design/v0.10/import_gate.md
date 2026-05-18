@@ -1,10 +1,15 @@
 # `import_gate` — forbid imports matching a pattern within a path scope
 
-Status: Design draft, written 2026-05-18. v0.10 demand #5 (5
-sources, ROADMAP-canonical). Per
-[`docs/design/v0.10/README.md`](./README.md), this doc lands
-before code; on merge it gets a `Status: Implemented in <commit>`
-header and its open questions are resolved inline. Per-file
+Status: **Implemented** — lands with the rule in v0.10 (this
+commit; rule kind #5 of the case-study coverage push). Was a
+design draft (2026-05-18). v0.10 demand #5 (5 sources,
+ROADMAP-canonical). Open questions resolved on implementation:
+line-based presets only, language-AST mode deferred (Q1);
+`require:` inverse deferred (Q2); per-target allow via the
+`forbid` regex's own negative-lookahead, structured list
+deferred (Q3); common preset forms shipped + `import_pattern`
+escape hatch (Q4); sibling of `file_content_forbidden`, docs
+cross-link (Q5). Per-file
 rule (the `PerFileRule` fast path).
 
 Demand evidence:
