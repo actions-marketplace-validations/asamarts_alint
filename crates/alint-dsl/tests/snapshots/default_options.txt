@@ -53,6 +53,26 @@ FileContentMatchesRule {
     fixer: None,
 }
 
+=== kind: cross_file_value_equals | id: workspace-versions-coherent ===
+CrossFileValueEqualsRule {
+    id: "workspace-versions-coherent",
+    level: Error,
+    policy_url: None,
+    message: None,
+    source_file: "Cargo.toml",
+    source_extract: Toml(
+        "$.workspace.package.version",
+    ),
+    targets: Glob {
+        scope: Scope { ... },
+        extract: Toml(
+            "$.package.version",
+        ),
+    },
+    normalize: None,
+    allow_missing: false,
+}
+
 === kind: dir_absent | id: no-target ===
 DirAbsentRule {
     id: "no-target",

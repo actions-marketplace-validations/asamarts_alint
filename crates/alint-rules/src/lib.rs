@@ -8,6 +8,7 @@ use alint_core::RuleRegistry;
 pub mod case;
 pub mod command;
 pub mod commented_out_code;
+pub mod cross_file_value_equals;
 pub mod dir_absent;
 pub mod dir_contains;
 pub mod dir_exists;
@@ -15,6 +16,7 @@ pub mod dir_only_contains;
 pub mod every_matching_has;
 pub mod executable_bit;
 pub mod executable_has_shebang;
+mod extract;
 pub mod file_absent;
 pub mod file_content_forbidden;
 pub mod file_content_matches;
@@ -136,6 +138,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("dir_contains", dir_contains::build);
     registry.register("every_matching_has", every_matching_has::build);
     registry.register("registry_paths_resolve", registry_paths_resolve::build);
+    registry.register("cross_file_value_equals", cross_file_value_equals::build);
 
     // Text-hygiene family (short names — no `file_` prefix).
     registry.register("no_trailing_whitespace", no_trailing_whitespace::build);
@@ -252,6 +255,7 @@ mod registry_tests {
             "dir_contains",
             "every_matching_has",
             "registry_paths_resolve",
+            "cross_file_value_equals",
             // Text-hygiene family.
             "no_trailing_whitespace",
             "final_newline",

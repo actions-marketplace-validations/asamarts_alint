@@ -1,10 +1,17 @@
 # `cross_file_value_equals` — a value in one file must equal a value in others
 
-Status: Design draft, written 2026-05-18. v0.10 demand #2 (12
-sources, ROADMAP-canonical). Per
-[`docs/design/v0.10/README.md`](./README.md), this doc lands
-before code; on merge it gets a `Status: Implemented in <commit>`
-header and its open questions are resolved inline. Sibling of
+Status: **Implemented** — lands with the rule in v0.10 (this
+commit; rule kind #2 of the case-study coverage push). Was a
+design draft (2026-05-18). v0.10 demand #2 (12 sources,
+ROADMAP-canonical). Open questions resolved on implementation:
+`cross_file_field_equals` subsumed — a "field" is a query path,
+so it is this kind with a structured `extract`, not a separate
+primitive (Q1); shared `crate::extract` helper extracted and
+`registry_paths_resolve` refactored onto it (Q2); `normalize` =
+`none`/`trim`/`lower`/`semver-major` (Q3); canonical-source-only,
+all-equal deferred (Q4); stringify-then-compare scalars (Q5);
+violation anchored at the target-file path, byte-span SARIF
+deferred (Q6). Sibling of
 the shipped [`registry_paths_resolve`](./registry_paths_resolve.md)
 (path-existence); this is the value-equality cross-file
 primitive on the same infrastructure.

@@ -134,6 +134,18 @@ rules:
     orphans: { space: "crates/*/Cargo.toml", unreferenced: warn }
     level: error
 
+  - id: workspace-versions-coherent
+    kind: cross_file_value_equals
+    source:
+      file: Cargo.toml
+      extract: { toml: "$.workspace.package.version" }
+    targets:
+      files: "crates/*/Cargo.toml"
+      extract: { toml: "$.package.version" }
+    normalize: none
+    allow_missing_target: false
+    level: error
+
   - id: every-module-has-mod
     kind: for_each_dir
     select: "src/*"

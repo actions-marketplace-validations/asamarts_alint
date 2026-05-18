@@ -1,0 +1,35 @@
+name: cross_file_value_equals fires when a member version drifts
+tags: [check, cross_file_value_equals, cross_file]
+
+given:
+  tree:
+    Cargo.toml: |
+      [workspace.package]
+      version = "1.4.0"
+    crates:
+      a:
+        Cargo.toml: |
+          [package]
+          version = "1.4.0"
+      b:
+        Cargo.toml: |
+          [package]
+          version = "1.3.0"
+  config: |
+    version: 1
+    rules:
+      - id: workspace-versions-coherent
+        kind: cross_file_value_equals
+        source:
+          file: Cargo.toml
+          extract: { toml: "$.workspace.package.version" }
+        targets:
+          files: "crates/*/Cargo.toml"
+          extract: { toml: "$.package.version" }
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: workspace-versions-coherent, level: error, path: crates/b/Cargo.toml}
