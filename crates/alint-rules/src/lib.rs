@@ -123,6 +123,8 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
         "toml_path_matches",
         structured_path::toml_path_matches_build,
     );
+    registry.register("xml_path_equals", structured_path::xml_path_equals_build);
+    registry.register("xml_path_matches", structured_path::xml_path_matches_build);
     registry.register("json_schema_passes", json_schema_passes::build);
     registry.register("markdown_paths_resolve", markdown_paths_resolve::build);
     registry.register("commented_out_code", commented_out_code::build);
@@ -246,6 +248,8 @@ mod registry_tests {
             "yaml_path_matches",
             "toml_path_equals",
             "toml_path_matches",
+            "xml_path_equals",
+            "xml_path_matches",
             "json_schema_passes",
             "git_no_denied_paths",
             "git_commit_message",

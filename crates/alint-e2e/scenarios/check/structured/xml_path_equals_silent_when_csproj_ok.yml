@@ -1,0 +1,23 @@
+name: xml_path_equals stays silent when the .csproj TargetFramework is correct
+tags: [check, xml_path_equals, structured, passing]
+
+given:
+  tree:
+    src:
+      App:
+        "App.csproj": |
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>
+  config: |
+    version: 1
+    rules:
+      - id: csproj-net8
+        kind: xml_path_equals
+        paths: "src/*/*.csproj"
+        path: "$.Project.PropertyGroup.TargetFramework"
+        equals: "net8.0"
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

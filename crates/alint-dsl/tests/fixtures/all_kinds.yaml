@@ -382,6 +382,20 @@ rules:
     matches: "^1\\.\\d+$"
     level: warning
     if_present: true
+  - id: csproj-targets-net8
+    kind: xml_path_equals
+    paths: "**/*.csproj"
+    path: "$.Project.PropertyGroup.TargetFramework"
+    equals: "net8.0"
+    level: error
+    if_present: true
+  - id: packageref-has-version
+    kind: xml_path_matches
+    paths: "**/*.csproj"
+    path: "$.Project.ItemGroup.PackageReference[*]['@Version']"
+    matches: "^\\d"
+    level: warning
+    if_present: true
   - id: package-conforms-to-schema
     kind: json_schema_passes
     paths: "package.json"

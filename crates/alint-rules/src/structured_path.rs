@@ -1,12 +1,18 @@
-//! Structured-query rule family: `{json,yaml,toml}_path_{equals,matches}`.
+//! Structured-query rule family:
+//! `{json,yaml,toml,xml}_path_{equals,matches}`.
 //!
-//! Six rule kinds share a single implementation that varies
+//! Eight rule kinds share a single implementation that varies
 //! along two axes:
 //!
-//! - **Format** — `Json`, `Yaml`, or `Toml`. The file is parsed
-//!   into a `serde_json::Value` tree regardless (YAML and TOML
-//!   values coerce through serde), so the `JSONPath` engine only
-//!   has to reason about one tree shape.
+//! - **Format** — `Json`, `Yaml`, `Toml`, or `Xml`. The file is
+//!   parsed into a `serde_json::Value` tree regardless (YAML and
+//!   TOML coerce through serde; XML maps via the xmltodict-style
+//!   convention in `xml_to_value` — `@attr` / `#text` /
+//!   repeated-element→array, leaf elements collapse to their
+//!   text string, namespaces flatten to local names, every leaf
+//!   is a string), so the `JSONPath` engine only has to reason
+//!   about one tree shape. XML design + open-question
+//!   resolutions: `docs/design/v0.10/xml_path.md`.
 //! - **Op** — `Equals(value)` for exact equality or
 //!   `Matches(regex)` for regex on string values.
 //!
@@ -34,10 +40,10 @@
 //! pinned to a commit SHA" (a workflow with only `run:` steps
 //! has no `uses:` at all and shouldn't be flagged).
 //!
-//! Unparseable files (bad JSON / YAML / TOML) produce one
-//! violation per file. An unparseable file is a documentation
-//! problem, not the structured rule's concern — but better to
-//! surface it than silently skip.
+//! Unparseable files (bad JSON / YAML / TOML, not-well-formed
+//! XML) produce one violation per file. An unparseable file is a
+//! documentation problem, not the structured rule's concern —
+//! but better to surface it than silently skip.
 
 use std::path::{Path, PathBuf};
 
@@ -86,6 +92,7 @@ pub enum Format {
     Json,
     Yaml,
     Toml,
+    Xml,
 }
 
 impl Format {
@@ -94,6 +101,7 @@ impl Format {
             Self::Json => serde_json::from_str(text).map_err(|e| e.to_string()),
             Self::Yaml => serde_yaml_ng::from_str(text).map_err(|e| e.to_string()),
             Self::Toml => toml::from_str(text).map_err(|e| e.to_string()),
+            Self::Xml => xml_to_value(text),
         }
     }
 
@@ -102,6 +110,7 @@ impl Format {
             Self::Json => "JSON",
             Self::Yaml => "YAML",
             Self::Toml => "TOML",
+            Self::Xml => "XML",
         }
     }
 
@@ -114,6 +123,9 @@ impl Format {
             "json" => Some(Self::Json),
             "yaml" | "yml" => Some(Self::Yaml),
             "toml" => Some(Self::Toml),
+            "xml" | "csproj" | "props" | "targets" | "vbproj" | "fsproj" | "nuspec" => {
+                Some(Self::Xml)
+            }
             _ => None,
         }
     }
@@ -356,9 +368,79 @@ fn kind_name(v: &Value) -> &'static str {
 }
 
 // ---------------------------------------------------------------
+// XML → serde_json::Value
+//
+// xmltodict-style convention so the JSONPath a user writes reads
+// like the XML they see. Full rationale + false-positive surface:
+// `docs/design/v0.10/xml_path.md`.
+// ---------------------------------------------------------------
+
+/// Parse XML into the same `serde_json::Value` tree the rest of
+/// the family queries. The document maps to
+/// `{ <root-element-name>: <root value> }` so the root element is
+/// the first `JSONPath` segment (`$.Project…`, `$.project…`).
+fn xml_to_value(text: &str) -> std::result::Result<Value, String> {
+    let doc = roxmltree::Document::parse(text).map_err(|e| e.to_string())?;
+    let root = doc.root_element();
+    let mut obj = serde_json::Map::new();
+    obj.insert(root.tag_name().name().to_owned(), element_to_value(root));
+    Ok(Value::Object(obj))
+}
+
+/// One element → its `Value`. Attributes become `@name` keys;
+/// repeated child elements of the same (local) name become a JSON
+/// array in document order; loose text becomes `#text` when the
+/// element also has attributes/children, or *is* the value when
+/// the element is a pure leaf. Empty element → `null`. Namespaces
+/// are flattened to the local name (Open question 1 in the design
+/// doc).
+fn element_to_value(node: roxmltree::Node) -> Value {
+    let mut obj = serde_json::Map::new();
+    for attr in node.attributes() {
+        obj.insert(
+            format!("@{}", attr.name()),
+            Value::String(attr.value().to_owned()),
+        );
+    }
+    let mut has_child_elem = false;
+    for child in node.children().filter(roxmltree::Node::is_element) {
+        has_child_elem = true;
+        let name = child.tag_name().name().to_owned();
+        let val = element_to_value(child);
+        match obj.get_mut(&name) {
+            Some(Value::Array(arr)) => arr.push(val),
+            Some(slot) => {
+                let prev = slot.take();
+                *slot = Value::Array(vec![prev, val]);
+            }
+            None => {
+                obj.insert(name, val);
+            }
+        }
+    }
+    let text: String = node
+        .children()
+        .filter(roxmltree::Node::is_text)
+        .filter_map(|n| n.text())
+        .collect();
+    let text = text.trim();
+    if obj.is_empty() && !has_child_elem {
+        return if text.is_empty() {
+            Value::Null
+        } else {
+            Value::String(text.to_owned())
+        };
+    }
+    if !text.is_empty() {
+        obj.insert("#text".to_owned(), Value::String(text.to_owned()));
+    }
+    Value::Object(obj)
+}
+
+// ---------------------------------------------------------------
 // Builders
 //
-// Six thin wrappers per (Format, Op) combination. Each consumes
+// Eight thin wrappers per (Format, Op) combination. Each consumes
 // the spec, validates the structured-query options, and
 // constructs the shared `StructuredPathRule`.
 // ---------------------------------------------------------------
@@ -385,6 +467,14 @@ pub fn toml_path_equals_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 
 pub fn toml_path_matches_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     build_matches(spec, Format::Toml, "toml_path_matches")
+}
+
+pub fn xml_path_equals_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_equals(spec, Format::Xml, "xml_path_equals")
+}
+
+pub fn xml_path_matches_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_matches(spec, Format::Xml, "xml_path_matches")
 }
 
 fn build_equals(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Box<dyn Rule>> {
@@ -674,6 +764,180 @@ mod tests {
         )]);
         let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert_eq!(v.len(), 1, "floating `serde = \"1\"` should fire");
+    }
+
+    // ─── xml_path_* ──────────────────────────────────────────
+
+    #[test]
+    fn xml_path_equals_passes_on_csproj_leaf() {
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: xml_path_equals\n\
+             paths: \"App.csproj\"\n\
+             path: \"$.Project.PropertyGroup.TargetFramework\"\n\
+             equals: \"net8.0\"\n\
+             level: error\n",
+        );
+        let rule = xml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[(
+            "App.csproj",
+            br#"<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>"#,
+        )]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(v.is_empty(), "leaf element should match: {v:?}");
+    }
+
+    #[test]
+    fn xml_path_equals_fires_on_csproj_mismatch() {
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: xml_path_equals\n\
+             paths: \"App.csproj\"\n\
+             path: \"$.Project.PropertyGroup.TargetFramework\"\n\
+             equals: \"net8.0\"\n\
+             level: error\n",
+        );
+        let rule = xml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[(
+            "App.csproj",
+            br"<Project><PropertyGroup><TargetFramework>net6.0</TargetFramework></PropertyGroup></Project>",
+        )]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn xml_path_matches_on_packageref_attribute_array() {
+        // Repeated <PackageReference> → array; `@Version`
+        // attribute reached via bracket notation; every match
+        // must be a non-empty version-ish string.
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: xml_path_matches\n\
+             paths: \"App.csproj\"\n\
+             path: \"$.Project.ItemGroup.PackageReference[*]['@Version']\"\n\
+             matches: \"^\\\\d\"\n\
+             level: error\n",
+        );
+        let rule = xml_path_matches_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[(
+            "App.csproj",
+            br#"<Project><ItemGroup><PackageReference Include="A" Version="1.2.3"/><PackageReference Include="B" Version="4.0.0"/></ItemGroup></Project>"#,
+        )]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(v.is_empty(), "both @Version attrs should match: {v:?}");
+    }
+
+    #[test]
+    fn xml_pom_namespace_flattened_and_repeated_dependency_array() {
+        // Maven default namespace must not leak into the query;
+        // repeated <dependency> must be an array.
+        let pom = br#"<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><dependencies><dependency><artifactId>guava</artifactId></dependency><dependency><artifactId>junit</artifactId></dependency></dependencies></project>"#;
+        let eq = spec_yaml(
+            "id: t\n\
+             kind: xml_path_equals\n\
+             paths: \"pom.xml\"\n\
+             path: \"$.project.modelVersion\"\n\
+             equals: \"4.0.0\"\n\
+             level: error\n",
+        );
+        let (tmp, idx) = tempdir_with_files(&[("pom.xml", pom)]);
+        assert!(
+            xml_path_equals_build(&eq)
+                .unwrap()
+                .evaluate(&ctx(tmp.path(), &idx))
+                .unwrap()
+                .is_empty(),
+            "namespace-flattened modelVersion should match"
+        );
+        let m = spec_yaml(
+            "id: t\n\
+             kind: xml_path_matches\n\
+             paths: \"pom.xml\"\n\
+             path: \"$.project.dependencies.dependency[*].artifactId\"\n\
+             matches: \"^[a-z]+$\"\n\
+             level: error\n",
+        );
+        let v = xml_path_matches_build(&m)
+            .unwrap()
+            .evaluate(&ctx(tmp.path(), &idx))
+            .unwrap();
+        assert!(v.is_empty(), "both deps' artifactId should match: {v:?}");
+    }
+
+    #[test]
+    fn xml_path_if_present_silences_missing() {
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: xml_path_equals\n\
+             paths: \"App.csproj\"\n\
+             path: \"$.Project.PropertyGroup.Nullable\"\n\
+             equals: \"enable\"\n\
+             if_present: true\n\
+             level: error\n",
+        );
+        let rule = xml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[(
+            "App.csproj",
+            br"<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>",
+        )]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(v.is_empty(), "if_present should silence missing: {v:?}");
+    }
+
+    #[test]
+    fn xml_malformed_fires_one_violation() {
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: xml_path_equals\n\
+             paths: \"App.csproj\"\n\
+             path: \"$.Project\"\n\
+             equals: \"x\"\n\
+             level: error\n",
+        );
+        let rule = xml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[("App.csproj", b"<Project><Unclosed></Project>")]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1, "not-well-formed XML should fire once");
+        assert!(v[0].message.contains("XML"), "{:?}", v[0].message);
+    }
+
+    #[test]
+    fn xml_leaf_values_are_string_typed() {
+        // Documented gotcha: every XML leaf is a string. A
+        // quoted `equals: "8"` matches; a bare `equals: 8`
+        // (a YAML integer) does not.
+        let xml: &[u8] = b"<Config><n>8</n></Config>";
+        let as_str = spec_yaml(
+            "id: t\n\
+             kind: xml_path_equals\n\
+             paths: \"c.xml\"\n\
+             path: \"$.Config.n\"\n\
+             equals: \"8\"\n\
+             level: error\n",
+        );
+        let (tmp, idx) = tempdir_with_files(&[("c.xml", xml)]);
+        assert!(
+            xml_path_equals_build(&as_str)
+                .unwrap()
+                .evaluate(&ctx(tmp.path(), &idx))
+                .unwrap()
+                .is_empty(),
+            "string 8 should match the string-typed leaf"
+        );
+        let as_int = spec_yaml(
+            "id: t\n\
+             kind: xml_path_equals\n\
+             paths: \"c.xml\"\n\
+             path: \"$.Config.n\"\n\
+             equals: 8\n\
+             level: error\n",
+        );
+        let v = xml_path_equals_build(&as_int)
+            .unwrap()
+            .evaluate(&ctx(tmp.path(), &idx))
+            .unwrap();
+        assert_eq!(v.len(), 1, "integer 8 must NOT equal string \"8\"");
     }
 
     // ─── parse error path ─────────────────────────────────────

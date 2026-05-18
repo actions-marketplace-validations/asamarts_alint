@@ -1,0 +1,31 @@
+name: xml_path_matches queries a namespaced Maven pom.xml (silent when satisfied)
+tags: [check, xml_path_matches, structured, passing]
+
+# Maven's default namespace must not leak into the JSONPath
+# (names flatten to the local part), and repeated <dependency>
+# elements must be an array so `dependency[*]` reaches each one.
+
+given:
+  tree:
+    "pom.xml": |
+      <project xmlns="http://maven.apache.org/POM/4.0.0">
+        <modelVersion>4.0.0</modelVersion>
+        <dependencies>
+          <dependency><groupId>com.google.guava</groupId><artifactId>guava</artifactId><version>33.0.0-jre</version></dependency>
+          <dependency><groupId>junit</groupId><artifactId>junit</artifactId><version>4.13.2</version></dependency>
+        </dependencies>
+      </project>
+  config: |
+    version: 1
+    rules:
+      - id: pom-deps-versioned
+        kind: xml_path_matches
+        paths: "pom.xml"
+        path: "$.project.dependencies.dependency[*].version"
+        matches: '^\d'
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

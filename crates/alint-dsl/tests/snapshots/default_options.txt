@@ -1241,6 +1241,110 @@ UniqueByRule {
     key_template: "{stem}",
 }
 
+=== kind: xml_path_equals | id: csproj-targets-net8 ===
+StructuredPathRule {
+    id: "csproj-targets-net8",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: None,
+    format: Xml,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "Project",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "PropertyGroup",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "TargetFramework",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.Project.PropertyGroup.TargetFramework",
+    op: Equals(
+        String("net8.0"),
+    ),
+    if_present: true,
+}
+
+=== kind: xml_path_matches | id: packageref-has-version ===
+StructuredPathRule {
+    id: "packageref-has-version",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: None,
+    format: Xml,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "Project",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "ItemGroup",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "PackageReference",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Wildcard,
+                        ],
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "@Version",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.Project.ItemGroup.PackageReference[*]['@Version']",
+    op: Matches(
+        Regex(
+            "^\\d",
+        ),
+    ),
+    if_present: true,
+}
+
 === kind: yaml_path_equals | id: workflow-uses-checkout ===
 StructuredPathRule {
     id: "workflow-uses-checkout",

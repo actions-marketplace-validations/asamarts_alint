@@ -1,0 +1,27 @@
+name: xml_path_equals catches a .csproj with the wrong TargetFramework
+tags: [check, xml_path_equals, structured]
+
+given:
+  tree:
+    src:
+      Ok:
+        "Ok.csproj": |
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>
+      Bad:
+        "Bad.csproj": |
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net6.0</TargetFramework></PropertyGroup></Project>
+  config: |
+    version: 1
+    rules:
+      - id: csproj-net8
+        kind: xml_path_equals
+        paths: "src/*/*.csproj"
+        path: "$.Project.PropertyGroup.TargetFramework"
+        equals: "net8.0"
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: csproj-net8, level: error, path: src/Bad/Bad.csproj}

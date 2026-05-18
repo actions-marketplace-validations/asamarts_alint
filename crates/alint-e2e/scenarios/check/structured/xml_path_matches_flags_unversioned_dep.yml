@@ -1,0 +1,28 @@
+name: xml_path_matches flags a pom.xml dependency whose version is not a release
+tags: [check, xml_path_matches, structured]
+
+given:
+  tree:
+    "pom.xml": |
+      <project xmlns="http://maven.apache.org/POM/4.0.0">
+        <modelVersion>4.0.0</modelVersion>
+        <dependencies>
+          <dependency><artifactId>guava</artifactId><version>33.0.0-jre</version></dependency>
+          <dependency><artifactId>internal</artifactId><version>${revision}</version></dependency>
+        </dependencies>
+      </project>
+  config: |
+    version: 1
+    rules:
+      - id: pom-deps-pinned
+        kind: xml_path_matches
+        paths: "pom.xml"
+        path: "$.project.dependencies.dependency[*].version"
+        matches: '^\d'
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: pom-deps-pinned, level: error, path: pom.xml}
