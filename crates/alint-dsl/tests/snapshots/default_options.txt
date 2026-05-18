@@ -13,6 +13,24 @@ CommandRule {
     timeout: 30s,
 }
 
+=== kind: command_idempotent | id: fmt-is-idempotent ===
+CommandIdempotentRule {
+    id: "fmt-is-idempotent",
+    level: Error,
+    policy_url: None,
+    message: None,
+    command: [
+        "true",
+    ],
+    workdir: ".",
+    files_from: Stderr,
+    files_pattern: Some(
+        Regex(
+            "Diff in (.+) at",
+        ),
+    ),
+}
+
 === kind: commented_out_code | id: no-commented-code ===
 CommentedOutCodeRule {
     id: "no-commented-code",

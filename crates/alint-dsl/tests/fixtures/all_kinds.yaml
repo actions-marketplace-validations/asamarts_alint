@@ -171,6 +171,14 @@ rules:
     allow: ["src/secrets/**"]
     level: error
 
+  - id: fmt-is-idempotent
+    kind: command_idempotent
+    command: ["true"]
+    workdir: "."
+    files_from: stderr
+    files_pattern: "Diff in (.+) at"
+    level: error
+
   - id: every-module-has-mod
     kind: for_each_dir
     select: "src/*"

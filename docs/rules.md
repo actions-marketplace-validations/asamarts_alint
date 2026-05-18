@@ -945,6 +945,35 @@ Forbid imports whose **extracted target** matches a `forbid` regex, within the `
   level: error
 ```
 
+### `command_idempotent`
+
+Run a user-declared formatter/checker in its **`--check`
+(idempotence) mode** once: exit `0` ⇒ the tree is
+formatter-clean (silent); non-zero ⇒ violation(s). The sibling
+of `generated_file_fresh` — that rule diffs a *generator's*
+captured stdout against a committed file; this trusts a
+*checker's* own `--check` exit code. **alint never runs a
+mutating formatter and never writes the tree.** With
+`files_from` (`stdout`/`stderr`) the tool's own offender list is
+parsed into one violation **per file** (optional `files_pattern`
+regex, capture group 1 = path, for tools that wrap the path in a
+message like `cargo fmt`'s `Diff in <path> at line N`); without
+it, one violation for the whole invocation. A non-zero exit is
+never swallowed into a pass. Single-shot, opt-in. Trust-gated
+like `command` (see below): declarable only in your own
+top-level config.
+
+```yaml
+- id: code-is-formatted
+  kind: command_idempotent
+  command: ["cargo", "fmt", "--all", "--", "--check"]
+  workdir: "."
+  files_from: stderr
+  files_pattern: "Diff in (.+) at"
+  level: error
+  message: "run `cargo fmt` — code is not formatter-clean"
+```
+
 ### `for_each_dir` / `for_each_file`
 
 For every matching directory / file, evaluate a nested `require:` block with the entry as context. Template tokens (`{dir}`, `{stem}`, `{ext}`, `{basename}`, `{path}`, `{parent_name}`) expand against each match.
@@ -1066,7 +1095,7 @@ Environment threaded into the child:
 
 `timeout: <seconds>` (default 30) bounds each invocation; past the limit the child is killed and a violation reports the timeout.
 
-**Trust gate.** `command` rules are only allowed in the user's own top-level config. A `kind: command` rule introduced via `extends:` (local file, HTTPS URL, or `alint://bundled/`) is a load-time error — the same gate that protects `custom:` facts. Adopting a published ruleset must never imply granting it arbitrary process execution.
+**Trust gate.** Every process-spawning rule kind — `command`, `generated_file_fresh`, and `command_idempotent` — is allowed only in the user's own top-level config. Any of them introduced via `extends:` (local file, HTTPS URL, or `alint://bundled/`) is a load-time error — the same gate that protects `custom:` facts. Adopting a published ruleset must never imply granting it arbitrary code execution.
 
 `--changed` interaction: `command` is a per-file rule, so under `alint check --changed` it spawns only for files in the diff. The expensive check is automatically incremental in CI.
 

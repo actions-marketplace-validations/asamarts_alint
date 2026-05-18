@@ -4,8 +4,14 @@
 //! only *verifies* that the committed artefact equals what the
 //! user-declared, maintainer-trusted generator produces, by
 //! capturing its stdout — it never writes the working tree.
-//! Same trust tier as the `command` rule (which already shells
-//! out). Single-shot (one spawn, one declared file), not
+//!
+//! It spawns a user-supplied process, so it is trust-gated at
+//! config load by `alint_dsl::reject_command_rules_in` (same tier
+//! as the `command` / `command_idempotent` rules): only the
+//! user's own top-level config may declare it; an `extends:`'d
+//! ruleset (local / HTTPS / `alint://bundled/`) declaring it is
+//! refused — adopting a ruleset must never imply arbitrary code
+//! execution. Single-shot (one spawn, one declared file), not
 //! per-file. Design + open-question resolutions:
 //! `docs/design/v0.10/generated_file_fresh.md`.
 //!

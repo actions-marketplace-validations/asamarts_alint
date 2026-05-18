@@ -423,25 +423,40 @@ pub fn parse(yaml: &str) -> Result<Config> {
 /// non-empty, and that every listed id actually exists in the
 /// ruleset (unknown ids are almost always typos worth catching at
 /// load time).
-/// Reject `kind: command` rules in the given mapping list. Used
-/// by the `extends:` resolver to enforce that only the user's
-/// own top-level config can declare process-spawning rules. Same
-/// trust model as `alint_core::facts::reject_custom_facts_in` —
+/// Rule kinds that spawn an arbitrary user-supplied process.
+/// Every one is trust-gated identically by
+/// [`reject_command_rules_in`]: it may only be declared in the
+/// user's own top-level config, never introduced via `extends:`.
+/// Keep in sync with the rule implementations in `alint-rules`
+/// that shell out — `command` (per-file CLI),
+/// `generated_file_fresh` (runs a generator), `command_idempotent`
+/// (runs a checker). Adding a spawn-capable rule kind without
+/// adding it here is a code-execution gap.
+pub const SPAWNING_RULE_KINDS: &[&str] = &["command", "generated_file_fresh", "command_idempotent"];
+
+/// Reject any process-spawning rule kind (see
+/// [`SPAWNING_RULE_KINDS`]) in the given mapping list. Used by the
+/// `extends:` resolver to enforce that only the user's own
+/// top-level config can declare a rule that shells out. Same trust
+/// model as `alint_core::facts::reject_custom_facts_in` —
 /// extending a ruleset must never gain you arbitrary code
 /// execution. `source` is shown in the error to help the user
 /// identify which extended config introduced the violation.
+///
+/// (Kept its original name for API stability; it now gates the
+/// whole spawning-kind set, not only `kind: command`.)
 pub fn reject_command_rules_in(rules: &[Mapping], source: &str) -> Result<()> {
     for rule in rules {
         let kind = rule.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        if kind == "command" {
+        if SPAWNING_RULE_KINDS.contains(&kind) {
             let id = rule
                 .get("id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("(unknown)");
             return Err(Error::Other(format!(
-                "rule {id:?}: `kind: command` is only allowed in the user's top-level \
-                 config; declaring one in an extended config ({source}) is refused because \
-                 it would let a ruleset spawn arbitrary processes"
+                "rule {id:?}: `kind: {kind}` spawns a process and is only allowed in the \
+                 user's top-level config; declaring one in an extended config ({source}) \
+                 is refused because it would let a ruleset run arbitrary code"
             )));
         }
     }
@@ -1303,6 +1318,40 @@ rules:
         let err = load(&child).unwrap_err().to_string();
         assert!(err.contains("command"), "{err}");
         assert!(err.contains("base.yml"), "{err}");
+    }
+
+    #[test]
+    fn load_rejects_every_spawning_kind_in_extends_not_just_command() {
+        // Regression for the closed trust-gate gap:
+        // `generated_file_fresh` and `command_idempotent` shell
+        // out identically to `command`, so an extended config
+        // declaring either must be refused too — otherwise
+        // adopting a ruleset implies arbitrary code execution.
+        for (kind, body) in [
+            (
+                "generated_file_fresh",
+                "    file: out.txt\n    command: [\"sh\", \"-c\", \"echo pwn\"]\n",
+            ),
+            (
+                "command_idempotent",
+                "    command: [\"sh\", \"-c\", \"echo pwn\"]\n",
+            ),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let base = tmp.path().join("base.yml");
+            let child = tmp.path().join(".alint.yml");
+            std::fs::write(
+                &base,
+                format!(
+                    "version: 1\nrules:\n  - id: sneaky\n    kind: {kind}\n{body}    level: error\n"
+                ),
+            )
+            .unwrap();
+            std::fs::write(&child, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+            let err = load(&child).unwrap_err().to_string();
+            assert!(err.contains(kind), "{kind} not gated: {err}");
+            assert!(err.contains("arbitrary code"), "{kind}: {err}");
+        }
     }
 
     #[test]

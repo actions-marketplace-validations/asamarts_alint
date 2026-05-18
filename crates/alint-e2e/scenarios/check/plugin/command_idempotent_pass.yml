@@ -1,0 +1,19 @@
+name: command_idempotent is silent when the checker exits clean
+tags: [check, command_idempotent, plugin, passing]
+
+given:
+  tree:
+    src/main.rs: |
+      fn main() {}
+  config: |
+    version: 1
+    rules:
+      - id: fmt-clean
+        kind: command_idempotent
+        command: ["sh", "-c", "exit 0"]
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

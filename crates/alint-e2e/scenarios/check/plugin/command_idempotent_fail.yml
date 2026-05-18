@@ -1,0 +1,21 @@
+name: command_idempotent fires per offending file the checker lists
+tags: [check, command_idempotent, plugin]
+
+given:
+  tree:
+    src/main.rs: |
+      fn main() {}
+  config: |
+    version: 1
+    rules:
+      - id: fmt-clean
+        kind: command_idempotent
+        command: ["sh", "-c", "printf 'src/main.rs\\n'; exit 1"]
+        files_from: stdout
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: fmt-clean, level: error, path: src/main.rs}

@@ -7,6 +7,7 @@ use alint_core::RuleRegistry;
 
 pub mod case;
 pub mod command;
+pub mod command_idempotent;
 pub mod commented_out_code;
 pub mod cross_file_value_equals;
 pub mod dir_absent;
@@ -145,6 +146,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("ordered_block", ordered_block::build);
     registry.register("generated_file_fresh", generated_file_fresh::build);
     registry.register("import_gate", import_gate::build);
+    registry.register("command_idempotent", command_idempotent::build);
 
     // Text-hygiene family (short names — no `file_` prefix).
     registry.register("no_trailing_whitespace", no_trailing_whitespace::build);
@@ -265,6 +267,7 @@ mod registry_tests {
             "ordered_block",
             "generated_file_fresh",
             "import_gate",
+            "command_idempotent",
             // Text-hygiene family.
             "no_trailing_whitespace",
             "final_newline",
