@@ -61,6 +61,7 @@ pub mod no_submodules;
 pub mod no_symlinks;
 pub mod no_trailing_whitespace;
 pub mod no_zero_width_chars;
+pub mod ordered_block;
 pub mod pair;
 pub mod registry_paths_resolve;
 pub mod shebang_has_executable;
@@ -139,6 +140,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("every_matching_has", every_matching_has::build);
     registry.register("registry_paths_resolve", registry_paths_resolve::build);
     registry.register("cross_file_value_equals", cross_file_value_equals::build);
+    registry.register("ordered_block", ordered_block::build);
 
     // Text-hygiene family (short names — no `file_` prefix).
     registry.register("no_trailing_whitespace", no_trailing_whitespace::build);
@@ -256,6 +258,7 @@ mod registry_tests {
             "every_matching_has",
             "registry_paths_resolve",
             "cross_file_value_equals",
+            "ordered_block",
             // Text-hygiene family.
             "no_trailing_whitespace",
             "final_newline",

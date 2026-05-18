@@ -1,0 +1,28 @@
+name: ordered_block fires when a marked block is out of order
+tags: [check, ordered_block, content]
+
+given:
+  tree:
+    .gitignore: |
+      /target
+      # keep-sorted start
+      *.log
+      node_modules/
+      *.tmp
+      # keep-sorted end
+  config: |
+    version: 1
+    rules:
+      - id: keep-sorted
+        kind: ordered_block
+        paths: "**/.gitignore"
+        start: "# keep-sorted start"
+        end: "# keep-sorted end"
+        comparator: lexical
+        level: warning
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: keep-sorted, level: warning, path: .gitignore}

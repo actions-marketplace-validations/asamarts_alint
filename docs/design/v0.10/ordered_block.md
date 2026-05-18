@@ -1,11 +1,14 @@
 # `ordered_block` — lines between marker pairs stay sorted (and optionally unique)
 
-Status: Design draft, written 2026-05-18. v0.10 demand #3 (8
-sources, ROADMAP-canonical; ties with `registry_paths_resolve`
-at the top of the backlog). Per
-[`docs/design/v0.10/README.md`](./README.md), this doc lands
-before code; on merge it gets a `Status: Implemented in <commit>`
-header and its open questions are resolved inline. Unlike
+Status: **Implemented** — lands with the rule in v0.10 (this
+commit; rule kind #3 of the case-study coverage push). Was a
+design draft (2026-05-18). v0.10 demand #3 (8 sources,
+ROADMAP-canonical; tied with `registry_paths_resolve` at the top
+of the backlog). Open questions resolved on implementation:
+literal markers only — regex deferred (Q1); `numeric` shipped,
+`natural` deferred (Q2); detection-only, auto-fix is a follow-up
+(Q3); no nesting, blanks ignored not grouped (Q4); one violation
+per block (Q5). Unlike
 `registry_paths_resolve` / `cross_file_value_equals` this is a
 **per-file** rule (the `PerFileRule` fast path), not cross-file.
 

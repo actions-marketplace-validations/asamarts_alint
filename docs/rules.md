@@ -902,6 +902,21 @@ A value extracted from one authoritative `source` file must equal a value extrac
   level: error
 ```
 
+### `ordered_block`
+
+The lines between a `start` / `end` marker pair must stay sorted (and, with `unique: true`, free of duplicates) under `comparator` (`lexical` / `lexical-ci` / `numeric`). The generic form of per-project keep-sorted scripts (protobuf `failure_lists`, sorted `.gitignore` / `CODEOWNERS` / dependency lists). Per-file: a file with no `start` marker is silently fine; markers match the trimmed line; blank lines inside a block are ignored; one violation per out-of-order block.
+
+```yaml
+- id: keep-sorted
+  kind: ordered_block
+  paths: ["**/.gitignore", "CODEOWNERS"]
+  start: "# keep-sorted start"
+  end: "# keep-sorted end"
+  comparator: lexical
+  unique: false
+  level: warning
+```
+
 ### `for_each_dir` / `for_each_file`
 
 For every matching directory / file, evaluate a nested `require:` block with the entry as context. Template tokens (`{dir}`, `{stem}`, `{ext}`, `{basename}`, `{path}`, `{parent_name}`) expand against each match.

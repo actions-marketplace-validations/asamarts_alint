@@ -1017,6 +1017,19 @@ NoZeroWidthCharsRule {
     fixer: None,
 }
 
+=== kind: ordered_block | id: keep-sorted ===
+OrderedBlockRule {
+    id: "keep-sorted",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    start: "# keep-sorted start",
+    end: "# keep-sorted end",
+    comparator: Lexical,
+    unique: false,
+}
+
 === kind: pair | id: c-requires-h ===
 PairRule {
     id: "c-requires-h",

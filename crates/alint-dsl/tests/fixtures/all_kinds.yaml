@@ -146,6 +146,15 @@ rules:
     allow_missing_target: false
     level: error
 
+  - id: keep-sorted
+    kind: ordered_block
+    paths: ["**/.gitignore", "CODEOWNERS"]
+    start: "# keep-sorted start"
+    end: "# keep-sorted end"
+    comparator: lexical
+    unique: false
+    level: warning
+
   - id: every-module-has-mod
     kind: for_each_dir
     select: "src/*"
