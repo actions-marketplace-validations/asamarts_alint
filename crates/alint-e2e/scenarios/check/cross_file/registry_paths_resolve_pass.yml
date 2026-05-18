@@ -1,0 +1,32 @@
+name: registry_paths_resolve is silent when every workspace member resolves
+tags: [check, registry_paths_resolve, cross_file, passing]
+
+given:
+  tree:
+    Cargo.toml: |
+      [workspace]
+      members = ["crates/core", "crates/cli"]
+    crates:
+      core:
+        Cargo.toml: |
+          [package]
+          name = "core"
+      cli:
+        Cargo.toml: |
+          [package]
+          name = "cli"
+  config: |
+    version: 1
+    rules:
+      - id: workspace-members-resolve
+        kind: registry_paths_resolve
+        registry: Cargo.toml
+        extract: { toml: "$.workspace.members[*]" }
+        expect: dir
+        must_contain: Cargo.toml
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

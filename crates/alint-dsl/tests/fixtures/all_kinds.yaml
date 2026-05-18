@@ -122,6 +122,18 @@ rules:
     level: error
     message: "{{ctx.primary}} has no matching header at {{ctx.partner}}"
 
+  - id: workspace-members-resolve
+    kind: registry_paths_resolve
+    registry: Cargo.toml
+    extract: { toml: "$.workspace.members[*]" }
+    base: registry_dir
+    entries_are_globs: false
+    expect: dir
+    must_contain: Cargo.toml
+    exclude_query: "$.workspace.exclude[*]"
+    orphans: { space: "crates/*/Cargo.toml", unreferenced: warn }
+    level: error
+
   - id: every-module-has-mod
     kind: for_each_dir
     select: "src/*"

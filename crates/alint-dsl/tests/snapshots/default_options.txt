@@ -1009,6 +1009,34 @@ PairRule {
     partner_template: "{dir}/{stem}.h",
 }
 
+=== kind: registry_paths_resolve | id: workspace-members-resolve ===
+RegistryPathsResolveRule {
+    id: "workspace-members-resolve",
+    level: Error,
+    policy_url: None,
+    message: None,
+    registry: "Cargo.toml",
+    registry_scope: None,
+    extract: Toml(
+        "$.workspace.members[*]",
+    ),
+    base: RegistryDir,
+    entries_are_globs: false,
+    expect: Dir,
+    must_contain: Some(
+        "Cargo.toml",
+    ),
+    exclude_query: Some(
+        "$.workspace.exclude[*]",
+    ),
+    orphans: Some(
+        OrphansSpec {
+            space: "crates/*/Cargo.toml",
+            unreferenced: Warn,
+        },
+    ),
+}
+
 === kind: shebang | id: shebang-alias ===
 FileShebangRule {
     id: "shebang-alias",

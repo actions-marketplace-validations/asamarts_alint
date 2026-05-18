@@ -1,10 +1,14 @@
 # `registry_paths_resolve` — every path a manifest enumerates resolves on disk
 
-Status: Design draft, written 2026-05-17. Top of the v0.10 cut by
-demand (13 sources, ROADMAP-canonical). Per
-[`docs/design/v0.10/README.md`](./README.md), this doc lands
-before code; on merge it gets a `Status: Implemented in <commit>`
-header and its open questions are resolved inline.
+Status: **Implemented** — lands with the rule in v0.10 (this
+commit; first rule kind of the case-study coverage push). Was a
+design draft (2026-05-17). Top of the v0.10 cut by demand (13
+sources, ROADMAP-canonical). Open questions resolved on
+implementation: explicit `extract` only (Q1); `orphans` shipped
+opt-in (Q2); regex literal-subset for Nix non-literals,
+antiquoted entries skipped (Q3); additive, docs cross-link (Q4);
+violation anchored at the registry-file path, byte-span SARIF
+regions deferred (Q5).
 
 Demand evidence: [`docs/development/launch-evidence.md`](../../development/launch-evidence.md)
 (the P2a row counts it the "highest-leverage gap"; that line's

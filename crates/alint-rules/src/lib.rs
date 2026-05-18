@@ -60,6 +60,7 @@ pub mod no_symlinks;
 pub mod no_trailing_whitespace;
 pub mod no_zero_width_chars;
 pub mod pair;
+pub mod registry_paths_resolve;
 pub mod shebang_has_executable;
 pub mod structured_path;
 #[cfg(test)]
@@ -134,6 +135,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("unique_by", unique_by::build);
     registry.register("dir_contains", dir_contains::build);
     registry.register("every_matching_has", every_matching_has::build);
+    registry.register("registry_paths_resolve", registry_paths_resolve::build);
 
     // Text-hygiene family (short names — no `file_` prefix).
     registry.register("no_trailing_whitespace", no_trailing_whitespace::build);
@@ -249,6 +251,7 @@ mod registry_tests {
             "unique_by",
             "dir_contains",
             "every_matching_has",
+            "registry_paths_resolve",
             // Text-hygiene family.
             "no_trailing_whitespace",
             "final_newline",
