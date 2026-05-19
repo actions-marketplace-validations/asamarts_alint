@@ -175,8 +175,12 @@ impl Rule for RegistryPathsResolveRule {
                     continue;
                 }
             };
-            // Skipped (non-literal) entries never fail; surfaced
-            // for --explain via the message text only.
+            // Non-literal (computed/interpolated) entries are
+            // intentionally skipped, not failed. The skip is
+            // silent in v0.10 — `alint check` has no
+            // informational-finding / `--explain` channel;
+            // visibly surfacing the skip list is a tracked
+            // v0.11 item (see the design doc).
             let _ = skipped;
 
             let excluded = self.excluded_entries(&text);
@@ -575,7 +579,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("pkgs.nix"),
-            "callPackage ./pkgs/real {}\ncallPackage (./. + \"/pkgs/${name}\") {}\n",
+            "callPackage ./pkgs/real {}\ncallPackage ${pkgs.x}/lib {}\n",
         )
         .unwrap();
         let r = rule(opts(
@@ -583,7 +587,11 @@ mod tests {
             Extract::Regex(r"callPackage\s+(\S+)".into()),
         ));
         // Only the literal `./pkgs/real` is checked; the
-        // antiquoted entry is skipped (not a violation).
+        // genuinely interpolated `${pkgs.x}/lib` entry is
+        // skipped (not a violation). Narrowed is_non_literal:
+        // the captured token must carry a real `${`/`$(`/`{{`/
+        // `+ ` marker — a bare `(.`/`$` no longer over-skips a
+        // real literal path (v0.10 post-audit P2).
         let idx = index(&["pkgs.nix"], &["pkgs/real"]);
         let v = eval(&r, dir.path(), &idx);
         assert!(v.is_empty(), "non-literal must be skipped, got {v:?}");

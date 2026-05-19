@@ -116,18 +116,19 @@ impl Default for LinesOpts {
     }
 }
 
-/// An extracted entry the caller should skip rather than fail on:
-/// non-literal (interpolation / variables / antiquotation). The
-/// rules surface it (never silently drop) so `--explain` shows
-/// *why* a value was not checked, and it never fails the rule.
+/// True when `entry` is a *computed* value (interpolation /
+/// concatenation), which the caller skips rather than checks.
+/// Genuine markers only: shell/Nix `${var}` and `$(cmd)`,
+/// mustache/jinja `{{ … }}`, string concatenation `"a" + b`.
+/// A bare `$`, backtick, or `(.` is legal in a real filename, so
+/// it is **not** treated as non-literal — over-matching those
+/// silently dropped real literal paths (a false negative; v0.10
+/// post-audit P2). The skip never fails the rule and is
+/// intentionally silent; visibly surfacing skipped entries is a
+/// tracked v0.11 item (`alint check` has no `--explain` /
+/// informational-finding channel).
 pub(crate) fn is_non_literal(entry: &str) -> bool {
-    entry.contains("${")
-        || entry.contains("{{")
-        || entry.contains('$')
-        || entry.contains('`')
-        // Nix antiquotation / computed path expressions.
-        || entry.contains("+ ")
-        || entry.contains("(.")
+    entry.contains("${") || entry.contains("$(") || entry.contains("{{") || entry.contains("+ ")
 }
 
 /// Every string match for `extract` over `text`, raw (the caller
@@ -177,4 +178,37 @@ fn structured(fmt: Format, query: &str, text: &str) -> std::result::Result<Vec<S
         .iter()
         .filter_map(|v| v.as_str().map(ToString::to_string))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_non_literal;
+
+    #[test]
+    fn genuine_interpolation_is_non_literal() {
+        for e in [
+            "${pkgs.foo}/bin",
+            "$(date +%s)/x",
+            "{{ pkg }}/lib",
+            "crates/a + crates/b",
+        ] {
+            assert!(is_non_literal(e), "{e:?} must be non-literal");
+        }
+    }
+
+    #[test]
+    fn bare_dollar_backtick_dotparen_are_literal() {
+        // v0.10 post-audit P2 regression: all legal in real
+        // filenames — must be CHECKED, not silently skipped.
+        for e in [
+            "foo$bar.rs",
+            "weird`name`.txt",
+            "a/b (.c)/d",
+            "./relative/path",
+            "pkg-1.0",
+            "crates/serde_json",
+        ] {
+            assert!(!is_non_literal(e), "{e:?} must be literal");
+        }
+    }
 }
