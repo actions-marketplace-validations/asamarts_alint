@@ -108,6 +108,17 @@ const REGISTRY: &[(&str, &str, &str)] = &[
         "v1",
         include_str!("../rulesets/v1/compliance/apache-2.yml"),
     ),
+    // Apache TLP governance discipline — the governance /
+    // release-artefact superset (LICENSE + NOTICE incl. the ASF
+    // attribution line + KEYS + RAT source-header / no-binaries
+    // discipline), distinct from `compliance/apache-2@v1`'s
+    // license-redistribution focus. Namespaced `apache-gov-*`
+    // ids: safe to adopt alongside `compliance/apache-2@v1`.
+    (
+        "apache/governance",
+        "v1",
+        include_str!("../rulesets/v1/apache/governance.yml"),
+    ),
     // Agentic-era rulesets (v0.6). Composes with the existing
     // hygiene/* and tooling/* sets — `agent-hygiene@v1` covers
     // the patterns that are *distinctly* AI-shaped (versioned

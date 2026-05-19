@@ -1,0 +1,31 @@
+name: alint://bundled/apache/governance flags missing TLP governance artefacts
+tags: [check, extends, bundled, apache-governance]
+
+# A repo with a source file and a NOTICE that lacks the ASF
+# attribution line, and nothing else. The presence rules fire,
+# and the governance-specific `apache-gov-notice-asf-attribution`
+# fires (NOTICE exists but is not an ASF NOTICE). `notice-exists`
+# stays silent (a NOTICE *is* present); `no-binaries` stays
+# silent (no binaries in the tree).
+given:
+  tree:
+    src:
+      Main.java: "public class Main {}\n"
+    NOTICE: |
+      Some Project
+      Copyright 2026 the authors
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/apache/governance@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: apache-gov-license-exists, level: error}
+      - {rule: apache-gov-notice-asf-attribution, level: error}
+      - {rule: apache-gov-keys-exists, level: warning}
+      - {rule: apache-gov-source-license-header, level: warning}
+      - {rule: apache-gov-readme-exists, level: warning}
+      - {rule: apache-gov-changelog-exists, level: info}

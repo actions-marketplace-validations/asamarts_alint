@@ -1404,6 +1404,23 @@ License-compliance overlay for projects distributed under the Apache License, Ve
 
 Pattern-matches the canonical "Licensed under the Apache License, Version 2.0" substring rather than full bit-for-bit comparison so SPDX templates, apache.org's template, and GitHub's auto-init all parse as compliant. Dual-licensed projects (e.g. Apache-2.0 OR MIT) can extend this ruleset and use `level: off` on rules they don't want firing strictly.
 
+### `alint://bundled/apache/governance@v1`
+
+Apache **Top-Level Project (TLP) governance** discipline — the governance / release-artefact baseline an Apache TLP is expected to ship, that arrow + spark + airflow each re-implement by hand. The *governance* superset, distinct from `compliance/apache-2@v1`'s *license-redistribution* focus: it additionally asserts the NOTICE *content* (the ASF attribution line, not just existence), the release-signing `KEYS` file, the no-compiled-binaries source-release rule, and release-notes discipline. Eight rules:
+
+| Rule id | Kind | Default level | Fix |
+|---|---|---|---|
+| `apache-gov-license-exists` | `file_exists` | error | — |
+| `apache-gov-notice-exists` | `file_exists` | error | — |
+| `apache-gov-notice-asf-attribution` | `file_content_matches` | error | — |
+| `apache-gov-keys-exists` | `file_exists` | warning | — |
+| `apache-gov-source-license-header` | `file_header` | warning | — |
+| `apache-gov-no-binaries-in-source` | `file_absent` | warning | — |
+| `apache-gov-readme-exists` | `file_exists` | warning | — |
+| `apache-gov-changelog-exists` | `file_exists` | info | — |
+
+Rule ids are namespaced `apache-gov-*`, so it is safe to adopt **alongside** `compliance/apache-2@v1` (no id collision; the LICENSE/header overlap is intentional and each id is independently `level: off`-able). The `apache-gov-source-license-header` rule reuses `compliance/apache-2@v1`'s v0.9.18-broadened ASF-preamble pattern verbatim (short form **or** the long ASF-preamble form), so it does not reintroduce the short-form-only false positives. Targets graduated TLPs; incubating podlings additionally need a `DISCLAIMER` (layer that on yourself). No fact gate — adopting it is the signal that the repo is an Apache TLP.
+
 ### `alint://bundled/hygiene/no-tracked-artifacts@v1`
 
 The set of paths / files that essentially no repository should commit: build outputs, dependency caches, OS & editor junk, secret-shaped files, oversized blobs. Gitignored directories pass trivially — these rules catch the case where someone committed an artefact and forgot the `.gitignore` entry.
