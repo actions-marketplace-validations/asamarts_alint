@@ -1,0 +1,30 @@
+name: alint://bundled/dotnet - well-formed .NET repo has zero violations
+tags: [check, extends, bundled, dotnet, passing]
+
+given:
+  tree:
+    "global.json": |
+      {
+        "sdk": { "version": "8.0.100" }
+      }
+    "Directory.Packages.props": |
+      <Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup></Project>
+    ".editorconfig": |
+      root = true
+
+      [*.cs]
+      indent_style = space
+    src:
+      "App.csproj": |
+        <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>
+      "Program.cs": |
+        class Program { static void Main() {} }
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/dotnet@v1
+
+when: [check]
+
+expect:
+  - violations: []

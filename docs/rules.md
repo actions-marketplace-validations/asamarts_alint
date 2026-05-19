@@ -1301,6 +1301,22 @@ Hygiene checks for Java / Kotlin projects (Gradle or Maven). Tree-level gate: `w
 | `java-sources-no-bidi` | `no_bidi_controls` | error | `[pom.xml, build.gradle, build.gradle.kts]` | — |
 | `java-sources-no-zero-width` | `no_zero_width_chars` | error | `[pom.xml, build.gradle, build.gradle.kts]` | — |
 
+### `alint://bundled/dotnet@v1`
+
+Baseline conventions for .NET projects. Tree-level gate: `when: facts.has_dotnet` — any `*.sln` / `**/*.csproj` / `**/*.fsproj` / `**/*.vbproj` / `global.json`, so the ruleset is a silent no-op in non-.NET repos (and in the non-.NET parts of a polyglot monorepo). The structural checks use the structured-query family (`json_path_matches` on `global.json`, `xml_path_*` on the MSBuild XML) — the concrete payoff of the v0.10 `xml_path_*` rule kinds. Every structured-query rule is `if_present: true` (it flags a *misconfiguration*, never forces a property to exist) and levels are deliberately non-blocking (no `error`) given the adopter surface (every `dotnet/*` + every Azure SDK + every `microsoft/*` .NET project).
+
+| Rule id | Kind | Default level |
+|---|---|---|
+| `dotnet-global-json-exists` | `file_exists` | warning |
+| `dotnet-global-json-pins-sdk` | `json_path_matches` | warning |
+| `dotnet-csproj-sdk-style` | `xml_path_matches` | warning |
+| `dotnet-csproj-nullable-enabled` | `xml_path_equals` | info |
+| `dotnet-central-package-management` | `xml_path_equals` | info |
+| `dotnet-no-build-output-committed` | `dir_absent` | warning |
+| `dotnet-editorconfig-exists` | `file_exists` | info |
+
+**Central Package Management:** the ruleset deliberately does **not** require a `Version` on each `<PackageReference>` — CPM (`Directory.Packages.props`) makes that attribute absent by design, so enforcing it would false-positive across CPM repos (dotnet/runtime). It instead checks that, *if* a `Directory.Packages.props` exists, CPM is actually enabled. Composes with `hygiene/no-tracked-artifacts@v1` (namespaced `dotnet-*` ids; `dotnet-no-build-output-committed` is the .NET-gated `bin/`/`obj/` companion).
+
 ### `alint://bundled/ci/github-actions@v1`
 
 Hardening for `.github/workflows/*.y{,a}ml`, guided by the two OpenSSF Scorecard checks with the strongest supply-chain signal (Token-Permissions + Pinned-Dependencies) plus a readability nudge. Scoped to workflow files, so the ruleset is a safe no-op in repos that don't use GitHub Actions.

@@ -1,0 +1,29 @@
+name: alint://bundled/dotnet flags a misconfigured .NET project
+tags: [check, extends, bundled, dotnet]
+
+# A .NET repo (so facts.has_dotnet is true) with: no global.json,
+# a non-SDK-style .csproj that explicitly disables nullable, a
+# committed obj/ build dir, and no .editorconfig. global.json's
+# sdk-pin rule and the CPM rule stay silent (no such file →
+# nothing to query, plus if_present).
+given:
+  tree:
+    src:
+      "App.csproj": |
+        <Project Sdk="Legacy.Custom.Sdk"><PropertyGroup><Nullable>disable</Nullable></PropertyGroup></Project>
+      obj:
+        "App.dll": "compiled build output placeholder\n"
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/dotnet@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: dotnet-global-json-exists, level: warning}
+      - {rule: dotnet-csproj-sdk-style, level: warning}
+      - {rule: dotnet-csproj-nullable-enabled, level: info}
+      - {rule: dotnet-no-build-output-committed, level: warning}
+      - {rule: dotnet-editorconfig-exists, level: info}
