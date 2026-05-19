@@ -176,6 +176,13 @@ gets disabled.
   form); file content is read from disk via `ctx.root.join`
   (same as `registry_paths_resolve` — the index has paths, not
   contents). O(T) target files, one structured-parse each.
+- Source/target reads go through `crate::io::read_capped`
+  (256 MiB `MAX_ANALYZE_BYTES`, `metadata` stat-gated): an
+  over-cap file is one clear "too large to analyze" violation,
+  not an OOM (v0.10 post-audit P2, D4). The same helper bounds
+  the reads in `registry_paths_resolve` / `pair_hash` /
+  `generated_file_fresh`; a too-large target is *not* suppressed
+  by `allow_missing_target` (it is present, just unanalysable).
 - No `include_str!` data; nothing leaves the crate (keeps
   `cargo publish` clean — see the include_str memory).
 
