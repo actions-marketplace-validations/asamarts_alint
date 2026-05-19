@@ -143,9 +143,20 @@ single trailing `\n` — the most common generator/editor diff).
 - Module: `crates/alint-rules/src/generated_file_fresh.rs`.
   Spawn mirrors `command::run_one` (argv, `current_dir`,
   `Stdio::null()` stdin, piped stdout/stderr, the `ALINT_*`
-  env). v0.10 uses a blocking `.output()` — single spawn, no
-  timeout loop (Open question 2); `command`'s timeout loop is
-  for its *per-file* fan-out.
+  env). Spawn + capture goes through the shared
+  `crate::spawn::run_capturing` helper (added v0.10 post-audit
+  P2): one spawn, stdout/stderr drained **concurrently** on
+  reader threads (so the *full* generator stdout is captured for
+  the diff — never truncated) while a poll loop enforces an
+  opt-in `timeout:` (default 120 s — generous for a single-shot
+  whole-repo generator, bounded so a deadlocked child can't hang
+  CI forever; raise via `timeout:`). On timeout the child is
+  killed and one violation is emitted. This is **not** a literal
+  copy of `command::run_one`: that drains *after* exit with a
+  16 KB cap (right for command's error snippet, but it would
+  truncate this rule's full-stdout diff and risk a pipe-fill
+  deadlock). `command.rs` is left untouched (shipped rule, out
+  of this remediation's scope).
 - Single-shot rule: `impl Rule { rule_common_impl!();
   requires_full_index()->true; path_scope()->None;
   evaluate(ctx) }`. `evaluate` runs the generator and reads
@@ -189,9 +200,11 @@ Resolve inline when implementation lands.
    (keeps non-mutating). A future `regenerate_in: <tempdir>`
    mode (copy inputs to a temp tree, run, diff) covers the rest
    — deferred until a demand source needs it.
-2. **Timeout.** v0.10 uses blocking `.output()`. A hung
-   generator hangs the run. Add an opt-in `timeout:` (reuse
-   `command`'s wait loop) if a source needs it; deferred.
+2. **Timeout.** *Resolved (v0.10 post-audit P2).* Opt-in
+   `timeout:` (seconds, default 120) via the shared
+   `crate::spawn::run_capturing` helper (concurrent pipe-drain +
+   poll/kill); a hung generator now yields one timeout violation
+   instead of hanging the run. See Implementation notes.
 3. **Multi-file generators.** A generator producing several
    files (one `protoc` invocation → many stubs). v0.10: one
    `file` per rule (declare N rules, or one rule per output).

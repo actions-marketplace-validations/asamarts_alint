@@ -200,10 +200,15 @@ success set is Open question 1.
 - Module: `crates/alint-rules/src/command_idempotent.rs`. Spawn
   mirrors `generated_file_fresh` exactly (the twin):
   `StdCommand` argv split, `current_dir(ctx.root.join(workdir))`,
-  `Stdio::null()` stdin, piped stdout/stderr, the `ALINT_*` env,
-  blocking `.output()` — single spawn, no timeout loop (Open
-  question 2; `command`'s timeout loop is for its per-file
-  fan-out).
+  `Stdio::null()` stdin, piped stdout/stderr, the `ALINT_*` env.
+  Spawn + capture goes through the shared
+  `crate::spawn::run_capturing` helper (added v0.10 post-audit
+  P2): one spawn, stdout/stderr drained concurrently while a
+  poll loop enforces an opt-in `timeout:` (default 120 s;
+  override via `timeout:`). On timeout the checker is killed and
+  one violation is emitted. The shared helper preserves full
+  output (the `files_from` offender list must not be truncated);
+  `command.rs` is left untouched (shipped rule, out of scope).
 - Single-shot rule: `impl Rule { rule_common_impl!();
   requires_full_index()->true; path_scope()->None;
   evaluate(ctx) }`. `evaluate` runs the checker and parses its
@@ -268,10 +273,11 @@ Resolve inline when implementation lands.
    different levels via `error_exit:` / `success_exit:`. No
    demand source needs it (all are exit-0-clean); deferred,
    the tool's stderr already distinguishes them for the human.
-2. **Timeout.** v0.10 uses blocking `.output()` (mirrors
-   `generated_file_fresh`). A hung checker hangs the run. Add an
-   opt-in `timeout:` (reuse `command`'s wait loop) if a source
-   needs it; deferred.
+2. **Timeout.** *Resolved (v0.10 post-audit P2).* Opt-in
+   `timeout:` (seconds, default 120) via the shared
+   `crate::spawn::run_capturing` helper (concurrent pipe-drain +
+   poll/kill), mirroring `generated_file_fresh`. A hung checker
+   now yields one timeout violation instead of hanging the run.
 3. **Structured offender parsers.** `files_from` + regex covers
    the line-oriented tools (the entire demand set). A built-in
    `format: json` for tools with `--format json`
