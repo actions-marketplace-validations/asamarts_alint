@@ -135,10 +135,14 @@ generator's job; same posture as `file_hash`).
 ## False-positive surface
 
 - **Path base in `sums-line`.** The path token is compared to
-  A's repo-root-relative path (forward slashes). A manifest that
-  lists module-relative paths needs `source` scoped so the paths
-  line up, or `format: contains`. Documented; the go FIPS `.sum`
-  is repo-root-relative, matching the index.
+  A's repo-root-relative path (forward slashes) after stripping
+  a coreutils binary-mode `*` marker and a `find`-style `./`
+  prefix (`<hex>  ./path`, what `find … -exec sha256sum` and Go
+  tooling emit). Backslash path separators are **not** normalised
+  — the `.sum` formats in scope are forward-slash. A manifest
+  that lists module-relative paths needs `source` scoped so the
+  paths line up, or `format: contains`. The go FIPS `.sum` is
+  repo-root-relative, matching the index.
 - **Whitespace / binary marker.** `sums-line` splits on ASCII
   whitespace and tolerates the coreutils double space and a
   leading `*` on the path (binary mode). Anything more exotic ⇒

@@ -154,8 +154,16 @@ impl PairHashRule {
                     let (Some(hex), Some(path_tok)) = (tok.next(), tok.next()) else {
                         continue;
                     };
-                    // coreutils binary-mode marker: `<hex> *path`.
+                    // Normalise the coreutils binary-mode `*`
+                    // marker and a `find`-style `./` prefix
+                    // (`<hex>  ./path`, what `find … -exec
+                    // sha256sum` and Go tooling emit) so the
+                    // token compares against the source's
+                    // repo-root-relative index path. Backslash
+                    // separators are not normalised — the `.sum`
+                    // formats in scope are forward-slash.
                     let path_tok = path_tok.strip_prefix('*').unwrap_or(path_tok);
+                    let path_tok = path_tok.strip_prefix("./").unwrap_or(path_tok);
                     if path_tok != want {
                         continue;
                     }
@@ -299,6 +307,31 @@ mod tests {
         let (tmp, idx) =
             tempdir_with_files(&[("a.txt", b"hello"), ("SHA256SUMS", manifest.as_bytes())]);
         let r = rule("a.txt", "SHA256SUMS", Algorithm::Sha256, Format::SumsLine);
+        assert!(r.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn sums_line_tolerates_dot_slash_prefix() {
+        // `find … -exec sha256sum` / Go tooling emit
+        // `<hex>  ./path`; the `./` must not cause a false
+        // "not listed in manifest" on a correctly-pinned file.
+        let manifest = format!("{HELLO_SHA256}  ./a.txt\n");
+        let (tmp, idx) =
+            tempdir_with_files(&[("a.txt", b"hello"), ("SHA256SUMS", manifest.as_bytes())]);
+        let r = rule("a.txt", "SHA256SUMS", Algorithm::Sha256, Format::SumsLine);
+        assert!(
+            r.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty(),
+            "a ./-prefixed sums-line path must match the index path"
+        );
+    }
+
+    #[test]
+    fn sha512_sums_line_round_trips() {
+        let digest = Algorithm::Sha512.hex(b"hello");
+        let manifest = format!("{digest}  a.txt\n");
+        let (tmp, idx) =
+            tempdir_with_files(&[("a.txt", b"hello"), ("SHA512SUMS", manifest.as_bytes())]);
+        let r = rule("a.txt", "SHA512SUMS", Algorithm::Sha512, Format::SumsLine);
         assert!(r.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty());
     }
 
