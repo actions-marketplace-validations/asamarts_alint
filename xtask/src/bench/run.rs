@@ -147,6 +147,12 @@ pub fn bench_scale(mut args: ScaleArgs) -> Result<()> {
                     .expect("regular tree built when any non-S9 scenario in run")
             };
             let tree_root = tree_for_scenario.root().to_path_buf();
+            // Per-scenario fixture overlay (write tiny data files
+            // the scenario's rules reference; no-op for S1..S10).
+            // Paired with `teardown_overlay` after the inner loop
+            // so the overlay never leaks into the next scenario
+            // running on the same shared tree.
+            scenario.setup_overlay(&tree_root)?;
             for &tool in &args.tools {
                 // Tool decides whether to write a config; ls-lint's
                 // `.ls-lint.yml` and alint's `.alint.yml` coexist
@@ -167,6 +173,7 @@ pub fn bench_scale(mut args: ScaleArgs) -> Result<()> {
                     rows.push(row);
                 }
             }
+            scenario.teardown_overlay(&tree_root)?;
         }
     }
 

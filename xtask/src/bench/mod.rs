@@ -51,6 +51,9 @@ const SCENARIO_S7: &str = include_str!("scenarios/s7_cross_file_relational.yml")
 const SCENARIO_S8: &str = include_str!("scenarios/s8_git_overlay.yml");
 const SCENARIO_S9: &str = include_str!("scenarios/s9_nested_polyglot.yml");
 const SCENARIO_S10: &str = include_str!("scenarios/s10_scope_filter_outside_per_file.yml");
+const SCENARIO_S11: &str = include_str!("scenarios/s11_v010_cross_file.yml");
+const SCENARIO_S12: &str = include_str!("scenarios/s12_v010_per_file.yml");
+const SCENARIO_S13: &str = include_str!("scenarios/s13_v010_single_shot.yml");
 
 /// Parameters parsed from CLI flags. Defaults pick the
 /// "publish-grade run" — full size matrix (excluding 1m), all
@@ -147,6 +150,19 @@ pub enum Scenario {
     S8,
     S9,
     S10,
+    /// v0.10 cross-file dispatch class — `registry_paths_resolve`,
+    /// `cross_file_value_equals`, `pair_hash` on the regular tree
+    /// + a `manifest.sha256` overlay (see `setup_overlay`).
+    S11,
+    /// v0.10 per-file dispatch class — `ordered_block`,
+    /// `import_gate`, `xml_path_*` on the regular tree + one
+    /// root-level `.csproj` overlay (see `setup_overlay`).
+    S12,
+    /// v0.10 single-shot dispatch class — `generated_file_fresh`
+    /// + `command_idempotent` declared with `command: ["true"]`
+    ///   so the row measures `crate::spawn::run_capturing`, not
+    ///   the user's tool. Needs a `.gff_target` overlay file.
+    S13,
 }
 
 impl Scenario {
@@ -162,7 +178,10 @@ impl Scenario {
             "S8" => Ok(Self::S8),
             "S9" => Ok(Self::S9),
             "S10" => Ok(Self::S10),
-            other => bail!("unknown scenario {other:?}; expected one of S1..S10"),
+            "S11" => Ok(Self::S11),
+            "S12" => Ok(Self::S12),
+            "S13" => Ok(Self::S13),
+            other => bail!("unknown scenario {other:?}; expected one of S1..S13"),
         }
     }
 
@@ -178,6 +197,9 @@ impl Scenario {
             Self::S8 => "S8",
             Self::S9 => "S9",
             Self::S10 => "S10",
+            Self::S11 => "S11",
+            Self::S12 => "S12",
+            Self::S13 => "S13",
         }
     }
 
@@ -201,6 +223,13 @@ impl Scenario {
             Self::S10 => {
                 "scope_filter on rules outside the PerFileRule path (file_max_size / no_empty_files / no_symlinks / filename_case / filename_regex with has_ancestor narrowing)"
             }
+            Self::S11 => {
+                "v0.10 cross-file (registry_paths_resolve / cross_file_value_equals / pair_hash)"
+            }
+            Self::S12 => "v0.10 per-file (ordered_block / import_gate / xml_path_*)",
+            Self::S13 => {
+                "v0.10 single-shot (generated_file_fresh / command_idempotent, command=[\"true\"])"
+            }
         }
     }
 
@@ -216,6 +245,9 @@ impl Scenario {
             Self::S8 => SCENARIO_S8,
             Self::S9 => SCENARIO_S9,
             Self::S10 => SCENARIO_S10,
+            Self::S11 => SCENARIO_S11,
+            Self::S12 => SCENARIO_S12,
+            Self::S13 => SCENARIO_S13,
         }
     }
 
@@ -239,6 +271,89 @@ impl Scenario {
     /// dispatch shape they produce is invisible without one.
     pub fn requires_git_repo(self) -> bool {
         matches!(self, Self::S8)
+    }
+
+    /// Every value of the enum, in declaration order. Drives
+    /// the `xtask bench-scale` "all scenarios" default + the
+    /// parse-validation unit test in this module.
+    #[allow(dead_code)] // exercised by `#[cfg(test)]` only today; retained for the publish-grade default.
+    pub fn all() -> &'static [Scenario] {
+        &[
+            Self::S1,
+            Self::S2,
+            Self::S3,
+            Self::S4,
+            Self::S5,
+            Self::S6,
+            Self::S7,
+            Self::S8,
+            Self::S9,
+            Self::S10,
+            Self::S11,
+            Self::S12,
+            Self::S13,
+        ]
+    }
+
+    /// Materialise this scenario's fixture overlay into the
+    /// generated tree (a sibling of `tool.setup_config` — that
+    /// writes the per-tool config, this writes the per-scenario
+    /// data files the config references). Called once per
+    /// scenario per size, paired with [`Scenario::teardown_overlay`]
+    /// so the overlay never persists across scenarios that share
+    /// the regular tree. No-op for S1..S10; S11/S12/S13 each
+    /// write a tiny, deterministic fixture.
+    pub fn setup_overlay(self, root: &Path) -> Result<()> {
+        match self {
+            Self::S11 => std::fs::write(
+                root.join("manifest.sha256"),
+                // 64-char all-zeros sha256 + a path token that
+                // matches no real file in the synthetic tree;
+                // pair_hash (format: contains) finds every source's
+                // hash absent and flags it. Cost is deterministic
+                // per row.
+                "0000000000000000000000000000000000000000000000000000000000000000  fixture\n",
+            )
+            .with_context(|| format!("writing S11 manifest.sha256 to {}", root.display()))?,
+            Self::S12 => std::fs::write(
+                root.join("sample.csproj"),
+                concat!(
+                    "<Project Sdk=\"Microsoft.NET.Sdk\">",
+                    "<PropertyGroup>",
+                    "<TargetFramework>net8.0</TargetFramework>",
+                    "</PropertyGroup>",
+                    "</Project>\n",
+                ),
+            )
+            .with_context(|| format!("writing S12 sample.csproj to {}", root.display()))?,
+            Self::S13 => std::fs::write(root.join(".gff_target"), b"")
+                .with_context(|| format!("writing S13 .gff_target to {}", root.display()))?,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Remove this scenario's fixture overlay so the next
+    /// scenario on the shared tree sees a pristine state.
+    /// Missing files are ignored — calling teardown without a
+    /// matching setup must not error.
+    pub fn teardown_overlay(self, root: &Path) -> Result<()> {
+        let path = match self {
+            Self::S11 => Some(root.join("manifest.sha256")),
+            Self::S12 => Some(root.join("sample.csproj")),
+            Self::S13 => Some(root.join(".gff_target")),
+            _ => None,
+        };
+        if let Some(p) = path {
+            match std::fs::remove_file(&p) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(e).with_context(|| format!("removing overlay {}", p.display()));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -359,4 +474,72 @@ pub(crate) fn now_iso() -> String {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
     format!("unix:{secs}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every scenario's embedded YAML must load cleanly
+    /// through `alint-dsl::load` AND every rule it declares
+    /// must build through the alint-rules registry. A typo
+    /// in an `include_str!` path, in a rule kind name, or in a
+    /// per-kind option fails at `cargo test` time, BEFORE the
+    /// publish-grade `xtask bench-scale` invocation tries to
+    /// write the broken file as `.alint.yml` and hyperfine
+    /// reports a runtime error halfway through.
+    ///
+    /// Uses `load` rather than `parse` so `extends:` resolves
+    /// (S3 needs it); the registry-build pass is the same
+    /// chain `alint check` walks at startup.
+    #[test]
+    fn every_scenario_yaml_loads_and_every_rule_builds() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let registry = alint_rules::builtin_registry();
+        for &s in Scenario::all() {
+            let path = tmp.path().join(format!("{}.alint.yml", s.label()));
+            std::fs::write(&path, s.config_yaml())
+                .unwrap_or_else(|e| panic!("writing {}: {e}", s.label()));
+            let config = alint_dsl::load(&path)
+                .unwrap_or_else(|e| panic!("scenario {} failed to load: {e}", s.label()));
+            for spec in &config.rules {
+                registry.build(spec).unwrap_or_else(|e| {
+                    panic!(
+                        "scenario {} rule {:?} failed to build: {e}",
+                        s.label(),
+                        spec.id
+                    )
+                });
+            }
+        }
+    }
+
+    /// `Scenario::all()` must enumerate every variant — the
+    /// `parse` / `label` match arms cover S1..S13, so `all()`
+    /// must too. Detects "added an enum variant, forgot to
+    /// update `all()`".
+    #[test]
+    fn all_covers_every_parsed_label() {
+        for &s in Scenario::all() {
+            let parsed = Scenario::parse(s.label())
+                .unwrap_or_else(|e| panic!("label {} fails to round-trip: {e}", s.label()));
+            assert_eq!(parsed, s, "round-trip mismatch for {}", s.label());
+        }
+    }
+
+    /// Overlay setup / teardown must be tolerant of being
+    /// called on a no-op scenario AND of teardown running
+    /// without a prior setup (which is what happens if a run
+    /// is interrupted between the two).
+    #[test]
+    fn overlay_hooks_are_idempotent_and_no_op_for_legacy_scenarios() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        for &s in Scenario::all() {
+            s.setup_overlay(tmp.path()).expect("setup");
+            // calling teardown twice must succeed (the second
+            // call hits the NotFound branch).
+            s.teardown_overlay(tmp.path()).expect("first teardown");
+            s.teardown_overlay(tmp.path()).expect("second teardown");
+        }
+    }
 }

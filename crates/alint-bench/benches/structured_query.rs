@@ -78,6 +78,30 @@ fn make_toml_tree(n_files: usize) -> tempfile::TempDir {
     tmp
 }
 
+fn make_xml_tree(n_files: usize) -> tempfile::TempDir {
+    let tmp = tempfile::Builder::new()
+        .prefix("alint-bench-sq-xml-")
+        .tempdir()
+        .expect("tempdir");
+    for i in 0..n_files {
+        let path = tmp.path().join(format!("dotnet/p{i}/App.csproj"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let body = format!(
+            "<Project Sdk=\"Microsoft.NET.Sdk\">\
+             <PropertyGroup>\
+             <TargetFramework>net8.0</TargetFramework>\
+             <AssemblyName>App{i}</AssemblyName>\
+             </PropertyGroup>\
+             </Project>\n",
+        );
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(body.as_bytes())
+            .unwrap();
+    }
+    tmp
+}
+
 fn make_schema_tree(n_files: usize) -> tempfile::TempDir {
     let tmp = tempfile::Builder::new()
         .prefix("alint-bench-sq-schema-")
@@ -192,6 +216,50 @@ rules:
     }
 }
 
+fn xml_path_equals(c: &mut Criterion) {
+    for &n in &[100usize, 1000] {
+        let tmp = make_xml_tree(n);
+        bench_rule(
+            c,
+            "structured_query/xml_path_equals",
+            &tmp,
+            r#"
+version: 1
+rules:
+  - id: csproj-target-framework
+    kind: xml_path_equals
+    paths: "dotnet/**/App.csproj"
+    path: "$.Project.PropertyGroup.TargetFramework"
+    equals: "net8.0"
+    level: warning
+"#,
+            n,
+        );
+    }
+}
+
+fn xml_path_matches(c: &mut Criterion) {
+    for &n in &[100usize, 1000] {
+        let tmp = make_xml_tree(n);
+        bench_rule(
+            c,
+            "structured_query/xml_path_matches",
+            &tmp,
+            r#"
+version: 1
+rules:
+  - id: csproj-sdk-style
+    kind: xml_path_matches
+    paths: "dotnet/**/App.csproj"
+    path: "$.Project['@Sdk']"
+    matches: "^Microsoft\\.NET\\.Sdk$"
+    level: warning
+"#,
+            n,
+        );
+    }
+}
+
 fn json_schema_passes(c: &mut Criterion) {
     for &n in &[100usize, 1000] {
         let tmp = make_schema_tree(n);
@@ -218,6 +286,8 @@ criterion_group!(
     json_path_equals,
     yaml_path_matches,
     toml_path_equals,
+    xml_path_equals,
+    xml_path_matches,
     json_schema_passes,
 );
 criterion_main!(benches);

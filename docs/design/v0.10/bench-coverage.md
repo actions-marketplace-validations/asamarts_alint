@@ -1,8 +1,10 @@
 # v0.10 bench coverage — three scenarios for the publish gate
 
-Status: **Draft** — design for Phase 5 of the v0.10 post-audit
-remediation. Implementation lands as the next atomic commit; this
-header flips to `Status: Implemented in <sha>` then.
+Status: **Implemented** — lands with the atomic Phase 5 commit
+(this commit). Draft predecessor at `36638d51`. Three new
+scenarios (S11/S12/S13) + scenario-keyed overlay hooks +
+parse-and-build round-trip tests for every Scenario + xml-path
+micro-bench supplement, all as designed.
 
 D5 of the audit-decision set says **bench coverage GATES the
 v0.10 release**. `xtask bench gate` (the programmatic
