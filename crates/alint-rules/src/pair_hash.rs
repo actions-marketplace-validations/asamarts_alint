@@ -2,7 +2,7 @@
 //! file.
 //!
 //! The `algorithm` digest of every file matching `source` must
-//! appear in the single `in` target — either as an embedded hex
+//! appear in the single `target` — either as an embedded hex
 //! substring (`contains`) or a coreutils / go-`.sum`-style
 //! `<hex>  <path>` manifest line (`sums-line`). Cross-file rule
 //! (the `pair` dispatch class). alint never rewrites the manifest
@@ -13,7 +13,7 @@
 //! - id: fips-sum-pins-module
 //!   kind: pair_hash
 //!   source: "src/crypto/internal/fips140/v1.0.0/**/*.go"
-//!   in: "src/crypto/internal/fips140/fips140.sum"
+//!   target: "src/crypto/internal/fips140/fips140.sum"
 //!   algorithm: sha256          # sha256 (default) | sha512
 //!   format: sums-line          # contains (default) | sums-line
 //!   level: error
@@ -53,10 +53,10 @@ impl Algorithm {
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum Format {
-    /// The digest must appear as a substring anywhere in `in`.
+    /// The digest must appear as a substring anywhere in `target`.
     #[default]
     Contains,
-    /// `in` must carry a `sha256sum`-style `<hex> [*]<path>`
+    /// `target` must carry a `sha256sum`-style `<hex> [*]<path>`
     /// line whose path token is the source's path.
     SumsLine,
 }
@@ -65,10 +65,9 @@ enum Format {
 #[serde(deny_unknown_fields)]
 struct Options {
     source: String,
-    /// The target file B that must carry the digest. `in` is a
-    /// Rust keyword, hence the rename.
-    #[serde(rename = "in")]
-    in_file: String,
+    /// The single file that must carry the digest (a `.sum` /
+    /// `SHA256SUMS` / a file with an embedded hash).
+    target: String,
     #[serde(default)]
     algorithm: Algorithm,
     #[serde(default)]
@@ -82,7 +81,7 @@ pub struct PairHashRule {
     policy_url: Option<String>,
     message: Option<String>,
     source_scope: Scope,
-    in_file: String,
+    target: String,
     algorithm: Algorithm,
     format: Format,
 }
@@ -99,16 +98,16 @@ impl Rule for PairHashRule {
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let in_path = Path::new(&self.in_file);
-        let Ok(b_bytes) = std::fs::read(ctx.root.join(in_path)) else {
+        let target_path = Path::new(&self.target);
+        let Ok(b_bytes) = std::fs::read(ctx.root.join(target_path)) else {
             let msg = self.message.clone().unwrap_or_else(|| {
                 format!(
                     "pair_hash target {:?} does not exist or is unreadable",
-                    self.in_file
+                    self.target
                 )
             });
             return Ok(vec![
-                Violation::new(msg).with_path(std::sync::Arc::<Path>::from(in_path)),
+                Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)),
             ]);
         };
         let b_text = String::from_utf8_lossy(&b_bytes);
@@ -145,7 +144,7 @@ impl PairHashRule {
                     "{} of {} ({digest}) not found in {}",
                     self.algorithm.label(),
                     src.display(),
-                    self.in_file,
+                    self.target,
                 ))
             }
             Format::SumsLine => {
@@ -168,14 +167,14 @@ impl PairHashRule {
                              file hashes to {digest}",
                             self.algorithm.label(),
                             src.display(),
-                            self.in_file,
+                            self.target,
                         ))
                     };
                 }
                 Some(format!(
                     "{} is not listed in manifest {}",
                     src.display(),
-                    self.in_file,
+                    self.target,
                 ))
             }
         }
@@ -204,10 +203,10 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "pair_hash `source` must not be empty",
         ));
     }
-    if opts.in_file.trim().is_empty() {
+    if opts.target.trim().is_empty() {
         return Err(Error::rule_config(
             &spec.id,
-            "pair_hash `in` (the target that must carry the digest) must not be empty",
+            "pair_hash `target` (the file that must carry the digest) must not be empty",
         ));
     }
     if spec.fix.is_some() {
@@ -224,7 +223,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
         source_scope,
-        in_file: opts.in_file,
+        target: opts.target,
         algorithm: opts.algorithm,
         format: opts.format,
     }))
@@ -238,14 +237,14 @@ mod tests {
     // sha256("hello") — well-known vector.
     const HELLO_SHA256: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
-    fn rule(source: &str, in_file: &str, algorithm: Algorithm, format: Format) -> PairHashRule {
+    fn rule(source: &str, target: &str, algorithm: Algorithm, format: Format) -> PairHashRule {
         PairHashRule {
             id: "t".into(),
             level: Level::Error,
             policy_url: None,
             message: None,
             source_scope: Scope::from_patterns(&[source.to_string()]).unwrap(),
-            in_file: in_file.into(),
+            target: target.into(),
             algorithm,
             format,
         }
@@ -367,7 +366,7 @@ mod tests {
     #[test]
     fn build_rejects_empty_source_and_fix_block() {
         let spec = crate::test_support::spec_yaml(
-            "id: t\nkind: pair_hash\nsource: \"\"\nin: s.sum\nlevel: error\n",
+            "id: t\nkind: pair_hash\nsource: \"\"\ntarget: s.sum\nlevel: error\n",
         );
         assert!(
             build(&spec)
@@ -376,7 +375,7 @@ mod tests {
                 .contains("`source` must not be empty")
         );
         let spec = crate::test_support::spec_yaml(
-            "id: t\nkind: pair_hash\nsource: a.txt\nin: s.sum\nlevel: error\n\
+            "id: t\nkind: pair_hash\nsource: a.txt\ntarget: s.sum\nlevel: error\n\
              fix:\n  file_remove: {}\n",
         );
         assert!(build(&spec).unwrap_err().to_string().contains("no fix op"));

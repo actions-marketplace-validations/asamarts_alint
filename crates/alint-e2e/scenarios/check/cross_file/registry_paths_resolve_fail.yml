@@ -16,7 +16,7 @@ given:
     rules:
       - id: workspace-members-resolve
         kind: registry_paths_resolve
-        registry: Cargo.toml
+        source: Cargo.toml
         extract: { toml: "$.workspace.members[*]" }
         expect: dir
         must_contain: Cargo.toml

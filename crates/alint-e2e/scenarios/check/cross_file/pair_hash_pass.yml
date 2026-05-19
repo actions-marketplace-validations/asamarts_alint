@@ -12,7 +12,7 @@ given:
       - id: sums-pins-sources
         kind: pair_hash
         source: "hello.txt"
-        in: "SHA256SUMS"
+        target: "SHA256SUMS"
         algorithm: sha256
         format: sums-line
         level: error

@@ -125,14 +125,14 @@ rules:
   - id: fips-sum-pins-sources
     kind: pair_hash
     source: "src/fips/**/*.go"
-    in: "src/fips/fips140.sum"
+    target: "src/fips/fips140.sum"
     algorithm: sha256
     format: sums-line
     level: error
 
   - id: workspace-members-resolve
     kind: registry_paths_resolve
-    registry: Cargo.toml
+    source: Cargo.toml
     extract: { toml: "$.workspace.members[*]" }
     base: registry_dir
     entries_are_globs: false

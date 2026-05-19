@@ -11,7 +11,7 @@
 //! ```yaml
 //! - id: cargo-workspace-members-resolve
 //!   kind: registry_paths_resolve
-//!   registry: Cargo.toml
+//!   source: Cargo.toml
 //!   extract: { toml: "$.workspace.members[*]" }
 //!   base: registry_dir          # registry_dir (default) | lint_root | "<path>"
 //!   entries_are_globs: true
@@ -61,7 +61,7 @@ struct OrphansSpec {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    registry: String,
+    source: String,
     extract: ExtractSpec,
     #[serde(default)]
     base: Option<String>,
@@ -105,7 +105,7 @@ pub struct RegistryPathsResolveRule {
     level: Level,
     policy_url: Option<String>,
     message: Option<String>,
-    registry: String,
+    source: String,
     registry_scope: Option<Scope>,
     extract: Extract,
     base: Base,
@@ -229,7 +229,7 @@ impl RegistryPathsResolveRule {
     /// matching the glob.
     fn registry_files(&self, ctx: &Context<'_>) -> Vec<PathBuf> {
         match &self.registry_scope {
-            None => vec![PathBuf::from(&self.registry)],
+            None => vec![PathBuf::from(&self.source)],
             Some(scope) => ctx
                 .index
                 .files()
@@ -397,24 +397,23 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .deserialize_options()
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
 
-    if opts.registry.trim().is_empty() {
+    if opts.source.trim().is_empty() {
         return Err(Error::rule_config(
             &spec.id,
-            "registry_paths_resolve `registry` must not be empty",
+            "registry_paths_resolve `source` must not be empty",
         ));
     }
-    // A glob registry is resolved against the index; a literal one
+    // A glob source is resolved against the index; a literal one
     // is read directly. `is_glob` mirrors the structured-path /
     // file_exists literal test.
     let is_glob = opts
-        .registry
+        .source
         .chars()
         .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'));
     let registry_scope = if is_glob {
         Some(
-            Scope::from_patterns(std::slice::from_ref(&opts.registry)).map_err(|e| {
-                Error::rule_config(&spec.id, format!("invalid `registry` glob: {e}"))
-            })?,
+            Scope::from_patterns(std::slice::from_ref(&opts.source))
+                .map_err(|e| Error::rule_config(&spec.id, format!("invalid `source` glob: {e}")))?,
         )
     } else {
         None
@@ -433,7 +432,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         level: spec.level,
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
-        registry: opts.registry,
+        source: opts.source,
         registry_scope,
         extract,
         base: Base::parse(opts.base.as_deref()),
@@ -474,7 +473,7 @@ mod tests {
             level: Level::Error,
             policy_url: None,
             message: None,
-            registry: opts.registry,
+            source: opts.source,
             registry_scope: None,
             extract: opts.extract.resolve().expect("test extract valid"),
             base: Base::parse(opts.base.as_deref()),
@@ -486,9 +485,9 @@ mod tests {
         }
     }
 
-    fn opts(registry: &str, extract: Extract) -> Options {
+    fn opts(source: &str, extract: Extract) -> Options {
         Options {
-            registry: registry.into(),
+            source: source.into(),
             extract: extract.into(),
             base: None,
             entries_are_globs: false,

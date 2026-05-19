@@ -1100,7 +1100,7 @@ PairHashRule {
     policy_url: None,
     message: None,
     source_scope: Scope { ... },
-    in_file: "src/fips/fips140.sum",
+    target: "src/fips/fips140.sum",
     algorithm: Sha256,
     format: SumsLine,
 }
@@ -1111,7 +1111,7 @@ RegistryPathsResolveRule {
     level: Error,
     policy_url: None,
     message: None,
-    registry: "Cargo.toml",
+    source: "Cargo.toml",
     registry_scope: None,
     extract: Toml(
         "$.workspace.members[*]",
