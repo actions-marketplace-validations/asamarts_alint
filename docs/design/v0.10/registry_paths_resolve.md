@@ -124,9 +124,16 @@ key is `source:`.
 Per matched `registry` file:
 
 1. **Parse + extract** the entry list via the chosen `extract`
-   mode. Non-literal entries (string interpolation, variables,
-   `${…}`, Nix antiquotation, computed paths) are **skipped, not
-   failed** — recorded as `skipped: <reason>` for `--explain`.
+   mode. Non-literal entries — genuine interpolation /
+   concatenation: `${var}`, `$(cmd)`, `{{ tmpl }}`, `"a" + b`
+   (precise heuristic, v0.10 post-audit P2: bare `$` / `` ` `` /
+   `(.` are all legal in real filenames and no longer count as
+   non-literal — over-skipping them silently dropped real
+   literal paths, a false negative) — are **skipped, not
+   failed**: an *intentional silent skip*, the rationale
+   documented here. `alint check` has no informational-finding /
+   `--explain` channel, so *visibly* surfacing the skip list is
+   a tracked **v0.11** item; v0.10 skips silently by design.
 2. **Subtract** `exclude_query` entries if present.
 3. **Resolve** each entry against `base` (default: the registry
    file's own directory; matches Cargo/npm semantics and alint's
@@ -160,8 +167,9 @@ resolve-paths rule that cries wolf gets disabled.
 
 - **Non-literal entries.** `callPackage (./. + "/pkgs/${name}")`,
   `members = [env!("X")]`-style, Bazel `glob([...])`. → step 1
-  skips, never fails; surfaced in `--explain` so users see *why* a
-  path wasn't checked.
+  skips, never fails (intentionally silent in v0.10; visibly
+  surfacing the skip list is a tracked v0.11 item — `check` has
+  no notes/`--explain` channel).
 - **`exclude` / negation.** Cargo `exclude`, npm workspace `"!…"`
   negations, Bazel exclude globs → `exclude_query` + glob negation
   honored before the existence check.
@@ -221,7 +229,9 @@ resolve-paths rule that cries wolf gets disabled.
 - `expect` matrix: file vs dir vs any; `must_contain` present /
   absent dir.
 - `exclude_query` subtraction; non-literal-entry **skip** (assert
-  it does NOT fail and IS surfaced in `--explain`).
+  it does NOT fail); the narrowed `is_non_literal` boundary
+  (bare `$`/`` ` ``/`(.` are literal; `${`/`$(`/`{{`/`+ ` are
+  not). Visible surfacing deferred to v0.11.
 - Orphan detection: a dir in `space` missing from the registry →
   fires at configured severity; a glob-covered dir → does not.
 - False-positive guards each get a regression test (symlinked

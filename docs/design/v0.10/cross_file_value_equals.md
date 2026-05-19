@@ -118,10 +118,15 @@ serde_yaml cannot decode an externally-tagged enum from a
    value is `normalize`-d; a target whose value `!=` the source
    value is a per-target violation, anchored on the *target*
    file, message carrying both values.
-4. **Non-literal values** (interpolation / `${…}` / antiquotation
-   / template) are **skipped, not failed** — reuse
-   `registry_paths_resolve`'s `is_non_literal` rationale (a
-   computed pin can't be string-compared and isn't drift).
+4. **Non-literal values** (genuine interpolation: `${var}` /
+   `$(cmd)` / `{{ tmpl }}` / `"a" + b`) are **skipped, not
+   failed** — reuses the shared, v0.10-post-audit-narrowed
+   `is_non_literal` (bare `$` / `` ` `` / `(.` are legal in real
+   values and no longer over-skip — same false-negative fix as
+   `registry_paths_resolve`; a computed pin can't be
+   string-compared and isn't drift). The skip is intentionally
+   silent in v0.10; visibly surfacing it is a tracked v0.11 item
+   (`alint check` has no notes/`--explain` channel).
 5. **Missing.** A listed target file absent, a glob matching
    nothing, or a query yielding no value: violation by default;
    `allow_missing_target: true` downgrades to skip (optional
