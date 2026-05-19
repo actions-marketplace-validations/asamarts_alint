@@ -60,7 +60,7 @@ New cross-file rule kind `pair_hash` in `alint-rules`.
 - id: fips-sum-pins-module
   kind: pair_hash
   source: "src/crypto/internal/fips140/v1.0.0/**/*.go"  # file(s) A — literal or glob
-  in: "src/crypto/internal/fips140/fips140.sum"          # file B — must carry A's digest
+  target: "src/crypto/internal/fips140/fips140.sum"      # file B — must carry A's digest
   algorithm: sha256                                       # sha256 (default) | sha512
   format: sums-line                                       # contains (default) | sums-line
   level: error
@@ -69,9 +69,9 @@ New cross-file rule kind `pair_hash` in `alint-rules`.
 - `source` is a literal path or a glob. A glob runs **one check
   per matched file** (mirrors `pair`'s `primary`): zero matches
   ⇒ no violations (nothing to pin), same as `pair`.
-- `in` is the single target file B that must carry the digest.
-  **A missing `in` is always a violation** (the manifest is
-  mandatory) — anchored on `in`.
+- `target` is the single file B that must carry the digest.
+  **A missing `target` is always a violation** (the manifest is
+  mandatory) — anchored on `target`.
 - `algorithm`: `sha256` (default) or `sha512`. Both from the
   `sha2` crate already in the dependency graph (`file_hash` uses
   it) — **no new dependency**.
@@ -86,14 +86,32 @@ New cross-file rule kind `pair_hash` in `alint-rules`.
     `*` binary marker and the conventional double space are
     tolerated).
 
+### Option naming (v0.10 pre-release harmonization)
+
+`source:` is the authoritative input (the file/glob whose
+digest is taken); **`target:`** is the single file that must
+carry the digest. The checked-file option was `in:` through the
+v0.10 development cycle and was renamed to `target:` before the
+v0.10 release as part of the cross-file-family harmonization
+(aggressive decision: every cross-file rule's authoritative
+input is `source:` and its checked file(s) is `target`/
+`targets:`). All v0.10 work is on `[Unreleased]`, so no shipped
+release is affected. **`pair_hash` is not a sibling of the
+long-shipped `pair` rule** (which keeps `primary:` / `partner:`):
+it is a different relation — a checksum-presence check, not a
+file-pairing existence check — and the shared cross-file
+dispatch class is an implementation detail, not an interface
+kinship.
+
 ## Semantics
 
 Cross-file (`requires_full_index() == true`, `path_scope() ==
 None` — the `pair` dispatch class; `scope_filter` is rejected at
 build, like `pair`). One `evaluate`:
 
-1. Read `in` (B) once. Missing/unreadable ⇒ **one** violation
-   anchored on `in` ("manifest `B` does not exist").
+1. Read `target` (B) once. Missing/unreadable ⇒ **one**
+   violation anchored on `target` ("manifest `B` does not
+   exist").
 2. For every index file matching `source` (A):
    - compute `algorithm(A bytes)` → lowercase hex.
    - `contains`: hex is a case-insensitive substring of B ⇒
@@ -105,8 +123,8 @@ build, like `pair`). One `evaluate`:
      violation on A ("digest mismatch for `A`: manifest has X,
      file hashes to Y"). Found and equal ⇒ pass.
 3. One violation per offending source; anchored on the **source**
-   (the actionable file) except the missing-`in` case (anchored
-   on `in`).
+   (the actionable file) except the missing-`target` case
+   (anchored on `target`).
 
 Raw file bytes are hashed, no normalisation (matches
 `file_hash`) — a CRLF/LF change *is* a digest change, which is
@@ -131,9 +149,9 @@ generator's job; same posture as `file_hash`).
 - **`contains` substring collision.** A full sha256/sha512 hex
   string colliding by accident is cryptographically negligible —
   that is the entire premise of a hash; accepted, not mitigated.
-- **`source` glob matching `in`.** For `sums-line` a manifest
-  not listing itself is normal; scope `source` to exclude `in`
-  (go FIPS does). Documented, not an error.
+- **`source` glob matching `target`.** For `sums-line` a
+  manifest not listing itself is normal; scope `source` to
+  exclude `target` (go FIPS does). Documented, not an error.
 - **Byte-exactness.** Hashing the raw bytes means an autocrlf or
   trailing-newline change flips the digest. Intended (it is an
   integrity pin); called out so it is not surprising.
@@ -149,7 +167,7 @@ generator's job; same posture as `file_hash`).
   helper; hex via the same lowercase encoder shape as
   `file_hash::encode_hex`. No new crate.
 - `source` → `Scope::from_patterns` (glob over the index, like
-  `pair`'s `primary_scope`); `in` read via `ctx.root.join`.
+  `pair`'s `primary_scope`); `target` read via `ctx.root.join`.
 - Not spawn-capable (pure read + hash + substring) — the
   `SPAWNING_RULE_KINDS` trust gate is N/A; the "does this kind
   spawn?" checklist item was still evaluated (see

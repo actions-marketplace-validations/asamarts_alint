@@ -72,7 +72,7 @@ unchanged; every v0.9.x config still parses.
 ```yaml
 - id: cargo-workspace-members-resolve
   kind: registry_paths_resolve
-  registry: Cargo.toml                 # manifest path or glob, relative to lint root
+  source: Cargo.toml                   # the manifest/registry file (path or glob), relative to lint root
   extract:                             # how to pull the path list out
     toml: "$.workspace.members[*]"     # one of: toml/json/yaml (structured-query),
                                        # lines (line list), regex (capture group 1)
@@ -97,11 +97,27 @@ configurable). `regex` handles quasi-structured registries (Nix
 `callPackage\s+(\./\S+)`, Bazel `"\([^"]+\.cc\)"`): capture group
 1 is the path.
 
-`registry:` itself may be a glob (`**/Cargo.toml`) — the rule then
+`source:` itself may be a glob (`**/Cargo.toml`) — the rule then
 runs once per matching manifest, each resolving against its own
 dir. That makes one rule express "every nested workspace manifest
 in this monorepo is internally consistent", which is the
 monorepo-tier value proposition.
+
+### Option naming (v0.10 pre-release harmonization)
+
+The authoritative-input option is **`source:`** — the
+manifest/registry file that enumerates the path list. It was
+`registry:` through the v0.10 development cycle and was renamed
+to `source:` before the v0.10 release as part of the
+cross-file-family option-naming harmonization (aggressive
+decision: every cross-file rule's authoritative input is
+`source:`). All v0.10 work is on `[Unreleased]`, so this is not
+a breaking change to any shipped release. Sibling shapes:
+[`cross_file_value_equals`](./cross_file_value_equals.md) (the
+reference `source:` + `targets:` form) and
+[`pair_hash`](./pair_hash.md) (`source:` + `target:`). The
+*concept* is still a registry/manifest of paths; only the option
+key is `source:`.
 
 ## Semantics
 
