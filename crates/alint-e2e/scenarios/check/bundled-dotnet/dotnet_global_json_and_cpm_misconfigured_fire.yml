@@ -1,0 +1,37 @@
+name: alint://bundled/dotnet fires global-json-pins-sdk + central-package-management
+tags: [check, extends, bundled, dotnet]
+
+# Per-rule firing coverage (v0.10 post-audit Phase 4). Both
+# rules are `if_present: true`, so they fire only on a present-
+# but-wrong value: global.json has an `sdk.version` that is not
+# a concrete version, and Directory.Packages.props exists but
+# does NOT enable CPM. Every other dotnet rule stays silent.
+given:
+  tree:
+    "global.json": |
+      {
+        "sdk": { "version": "latest" }
+      }
+    "Directory.Packages.props": |
+      <Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>
+    ".editorconfig": |
+      root = true
+
+      [*.cs]
+      indent_style = space
+    src:
+      "App.csproj": |
+        <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>
+      "Program.cs": |
+        class Program { static void Main() {} }
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/dotnet@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: dotnet-global-json-pins-sdk, level: warning}
+      - {rule: dotnet-central-package-management, level: info}

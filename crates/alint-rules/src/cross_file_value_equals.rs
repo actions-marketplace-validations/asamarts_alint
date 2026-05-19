@@ -504,6 +504,36 @@ mod tests {
     }
 
     #[test]
+    fn lower_normalize_makes_case_insensitive() {
+        // Design-doc normalize matrix: `lower` was untested.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("src.txt"), "ABC\n").unwrap();
+        std::fs::write(root.join("tgt.txt"), "abc\n").unwrap();
+        let idx = index(&["src.txt", "tgt.txt"]);
+        let mk = |n| {
+            rule(
+                "src.txt",
+                Extract::Lines(crate::extract::LinesOpts::default()),
+                Targets::List(vec![(
+                    "tgt.txt".into(),
+                    Extract::Lines(crate::extract::LinesOpts::default()),
+                )]),
+                n,
+            )
+        };
+        assert_eq!(
+            eval(&mk(Normalize::None), root, &idx).len(),
+            1,
+            "ABC vs abc differ under None"
+        );
+        assert!(
+            eval(&mk(Normalize::Lower), root, &idx).is_empty(),
+            "lower normalize makes the compare case-insensitive"
+        );
+    }
+
+    #[test]
     fn multi_value_source_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();

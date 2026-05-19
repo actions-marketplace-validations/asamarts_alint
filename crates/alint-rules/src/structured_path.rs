@@ -597,10 +597,14 @@ mod tests {
              kind: json_path_matches\n\
              paths: \"package.json\"\n\
              path: \"$.version\"\n\
-             pattern: \"[unterminated\"\n\
+             matches: \"[unterminated\"\n\
              level: error\n",
         );
-        assert!(json_path_matches_build(&spec).is_err());
+        // Must fail in the regex-compile path (not via
+        // deny_unknown_fields on a typo'd `pattern:` key — the
+        // latent bug this previously had).
+        let e = json_path_matches_build(&spec).unwrap_err().to_string();
+        assert!(e.contains("regex"), "expected a regex error, got: {e}");
     }
 
     // ─── json_path_equals ─────────────────────────────────────
@@ -991,6 +995,40 @@ mod tests {
             .evaluate(&ctx(tmp.path(), &idx))
             .unwrap();
         assert_eq!(v.len(), 1, "integer 8 must NOT equal string \"8\"");
+    }
+
+    #[test]
+    fn xml_empty_element_is_null() {
+        // Design-doc promise (was untested): an empty element
+        // maps to JSON null — `equals: null` matches; `equals:
+        // ""` does not (it is null, not an empty string).
+        let xml: &[u8] = b"<Config><empty/></Config>";
+        let (tmp, idx) = tempdir_with_files(&[("c.xml", xml)]);
+        let as_null = spec_yaml(
+            "id: t\nkind: xml_path_equals\npaths: \"c.xml\"\n\
+             path: \"$.Config.empty\"\nequals: null\nlevel: error\n",
+        );
+        assert!(
+            xml_path_equals_build(&as_null)
+                .unwrap()
+                .evaluate(&ctx(tmp.path(), &idx))
+                .unwrap()
+                .is_empty(),
+            "an empty element must equal null"
+        );
+        let as_empty_str = spec_yaml(
+            "id: t\nkind: xml_path_equals\npaths: \"c.xml\"\n\
+             path: \"$.Config.empty\"\nequals: \"\"\nlevel: error\n",
+        );
+        assert_eq!(
+            xml_path_equals_build(&as_empty_str)
+                .unwrap()
+                .evaluate(&ctx(tmp.path(), &idx))
+                .unwrap()
+                .len(),
+            1,
+            "null must NOT equal the empty string"
+        );
     }
 
     // ─── parse error path ─────────────────────────────────────

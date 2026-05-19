@@ -1,0 +1,51 @@
+name: alint://bundled/apache/governance fires no-binaries-in-source + notice-exists
+tags: [check, extends, bundled, apache-governance]
+
+# Per-rule firing coverage (v0.10 post-audit Phase 4): a TLP
+# with every other artefact satisfied but (a) NO NOTICE at all
+# and (b) a committed binary outside the fixture-exclude dirs.
+# Only apache-gov-notice-exists and apache-gov-no-binaries-in-source
+# fire; notice-asf-attribution stays silent (no NOTICE file to
+# scan).
+given:
+  tree:
+    LICENSE: |
+      Apache License
+      Version 2.0, January 2004
+      http://www.apache.org/licenses/
+    KEYS: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+      (release managers' signing keys)
+      -----END PGP PUBLIC KEY BLOCK-----
+    README.md: |
+      # Apache Demo
+
+      A demonstration Apache TLP repository.
+    CHANGELOG.md: |
+      # Changes
+
+      ## 1.0.0
+      - Initial release.
+    lib:
+      "foo.jar": |
+        compiled build artefact placeholder (content irrelevant
+        to file_absent — only the path/extension matters)
+    src:
+      App.java: |
+        /*
+         * Licensed to the Apache Software Foundation (ASF) under one
+         * or more contributor license agreements. See the NOTICE file
+         * distributed with this work for additional information.
+         */
+        public class App {}
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/apache/governance@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: apache-gov-notice-exists, level: error}
+      - {rule: apache-gov-no-binaries-in-source, level: warning}

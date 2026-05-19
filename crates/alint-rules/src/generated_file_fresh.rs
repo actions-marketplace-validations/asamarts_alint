@@ -299,6 +299,24 @@ mod tests {
     }
 
     #[test]
+    fn trim_normalize_absorbs_surrounding_whitespace() {
+        // Design-doc normalize matrix promised none/trim/
+        // final-newline; `trim` was untested.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("out.txt"), "  hello\n\n").unwrap();
+        let g = ["sh", "-c", "printf hello"];
+        assert_eq!(
+            eval(&rule("out.txt", &g, Normalize::None), dir.path()).len(),
+            1,
+            "exact-byte compare sees the whitespace diff"
+        );
+        assert!(
+            eval(&rule("out.txt", &g, Normalize::Trim), dir.path()).is_empty(),
+            "trim normalize absorbs surrounding whitespace"
+        );
+    }
+
+    #[test]
     fn final_newline_normalize_absorbs_trailing_newline() {
         let dir = tempfile::tempdir().unwrap();
         // File has no trailing newline; generator emits one.
