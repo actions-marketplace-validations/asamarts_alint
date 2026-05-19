@@ -29,6 +29,7 @@ CommandIdempotentRule {
             "Diff in (.+) at",
         ),
     ),
+    timeout: 30,
 }
 
 === kind: commented_out_code | id: no-commented-code ===
@@ -680,6 +681,7 @@ GeneratedFileFreshRule {
     ],
     workdir: ".",
     normalize: FinalNewline,
+    timeout: 30,
 }
 
 === kind: git_blame_age | id: stale-todos ===

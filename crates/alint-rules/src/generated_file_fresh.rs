@@ -26,7 +26,7 @@
 //! ```
 
 use std::path::Path;
-use std::process::{Command as StdCommand, Stdio};
+use std::time::Duration;
 
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use serde::Deserialize;
@@ -63,6 +63,10 @@ struct Options {
     workdir: Option<String>,
     #[serde(default)]
     normalize: Normalize,
+    /// Child timeout in seconds. Default
+    /// [`crate::spawn::DEFAULT_SPAWN_TIMEOUT_SECS`].
+    #[serde(default)]
+    timeout: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -75,6 +79,7 @@ pub struct GeneratedFileFreshRule {
     command: Vec<String>,
     workdir: String,
     normalize: Normalize,
+    timeout: u64,
 }
 
 impl Rule for GeneratedFileFreshRule {
@@ -91,36 +96,44 @@ impl Rule for GeneratedFileFreshRule {
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let file = Path::new(&self.file);
-        let (program, rest) = self
-            .command
-            .split_first()
-            .expect("build() rejects an empty command");
-
-        let output = match StdCommand::new(program)
-            .args(rest)
-            .current_dir(ctx.root.join(&self.workdir))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("ALINT_ROOT", ctx.root.to_string_lossy().as_ref())
-            .env("ALINT_RULE_ID", &self.id)
-            .env("ALINT_LEVEL", self.level.as_str())
-            .output()
-        {
-            Ok(o) => o,
-            Err(e) => {
+        let env = [
+            ("ALINT_ROOT", ctx.root.to_string_lossy().into_owned()),
+            ("ALINT_RULE_ID", self.id.clone()),
+            ("ALINT_LEVEL", self.level.as_str().to_string()),
+        ];
+        let (status, stdout, stderr) = match crate::spawn::run_capturing(
+            &self.command,
+            &ctx.root.join(&self.workdir),
+            &env,
+            Duration::from_secs(self.timeout),
+        ) {
+            crate::spawn::SpawnOutcome::Exited {
+                status,
+                stdout,
+                stderr,
+            } => (status, stdout, stderr),
+            crate::spawn::SpawnOutcome::SpawnError(e) => {
+                let program = self.command.first().map_or("", String::as_str);
                 return Ok(vec![self.violation(
                     file,
                     &format!("generator `{program}` could not be spawned: {e}"),
                 )]);
             }
+            crate::spawn::SpawnOutcome::TimedOut { secs } => {
+                return Ok(vec![self.violation(
+                    file,
+                    &format!(
+                        "generator did not exit within {secs}s \
+                         (raise `timeout:` on the rule to extend)"
+                    ),
+                )]);
+            }
         };
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
+            let stderr = String::from_utf8_lossy(&stderr);
             let snippet: String = stderr.trim().chars().take(400).collect();
-            let code = output
-                .status
+            let code = status
                 .code()
                 .map_or_else(|| "a signal".to_string(), |c| c.to_string());
             return Ok(vec![self.violation(
@@ -137,11 +150,9 @@ impl Rule for GeneratedFileFreshRule {
         };
 
         let stale = if self.normalize == Normalize::None {
-            committed != output.stdout
+            committed != stdout
         } else {
-            let produced = self
-                .normalize
-                .apply(&String::from_utf8_lossy(&output.stdout));
+            let produced = self.normalize.apply(&String::from_utf8_lossy(&stdout));
             let on_disk = self.normalize.apply(&String::from_utf8_lossy(&committed));
             produced != on_disk
         };
@@ -151,7 +162,7 @@ impl Rule for GeneratedFileFreshRule {
                 &format!(
                     "is stale — its committed contents differ from `{}` output{}",
                     self.command.join(" "),
-                    first_diff_hint(&output.stdout, &committed),
+                    first_diff_hint(&stdout, &committed),
                 ),
             )]);
         }
@@ -213,6 +224,9 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         command: opts.command,
         workdir: opts.workdir.unwrap_or_else(|| ".".to_string()),
         normalize: opts.normalize,
+        timeout: opts
+            .timeout
+            .unwrap_or(crate::spawn::DEFAULT_SPAWN_TIMEOUT_SECS),
     }))
 }
 
@@ -230,6 +244,7 @@ mod tests {
             command: command.iter().map(ToString::to_string).collect(),
             workdir: ".".into(),
             normalize,
+            timeout: 60,
         }
     }
 
@@ -323,5 +338,21 @@ mod tests {
         let v = eval(&r, dir.path());
         assert_eq!(v.len(), 1);
         assert!(v[0].message.contains("could not be spawned"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hung_generator_times_out_with_one_violation() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("out.txt"), b"x").unwrap();
+        let mut r = rule("out.txt", &["sh", "-c", "sleep 5"], Normalize::None);
+        r.timeout = 1;
+        let v = eval(&r, dir.path());
+        assert_eq!(v.len(), 1, "a hung generator must yield one violation");
+        assert!(
+            v[0].message.contains("did not exit within 1s"),
+            "{:?}",
+            v[0].message
+        );
     }
 }

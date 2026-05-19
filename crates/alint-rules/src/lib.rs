@@ -69,6 +69,7 @@ pub mod pair;
 pub mod pair_hash;
 pub mod registry_paths_resolve;
 pub mod shebang_has_executable;
+mod spawn;
 pub mod structured_path;
 #[cfg(test)]
 mod test_support;

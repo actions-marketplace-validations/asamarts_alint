@@ -169,6 +169,7 @@ rules:
     command: ["true"]
     workdir: "."
     normalize: final-newline
+    timeout: 30
     level: error
 
   - id: no-internal-imports
@@ -185,6 +186,7 @@ rules:
     workdir: "."
     files_from: stderr
     files_pattern: "Diff in (.+) at"
+    timeout: 30
     level: error
 
   - id: every-module-has-mod

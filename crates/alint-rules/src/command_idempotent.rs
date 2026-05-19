@@ -26,7 +26,7 @@
 //! ```
 
 use std::path::PathBuf;
-use std::process::{Command as StdCommand, Stdio};
+use std::time::Duration;
 
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use regex::Regex;
@@ -61,6 +61,10 @@ struct Options {
     /// output line (only with `files_from`).
     #[serde(default)]
     files_pattern: Option<String>,
+    /// Child timeout in seconds. Default
+    /// [`crate::spawn::DEFAULT_SPAWN_TIMEOUT_SECS`].
+    #[serde(default)]
+    timeout: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -73,6 +77,7 @@ pub struct CommandIdempotentRule {
     workdir: String,
     files_from: FilesFrom,
     files_pattern: Option<Regex>,
+    timeout: u64,
 }
 
 impl Rule for CommandIdempotentRule {
@@ -88,40 +93,49 @@ impl Rule for CommandIdempotentRule {
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        let (program, rest) = self
-            .command
-            .split_first()
-            .expect("build() rejects an empty command");
-
-        let output = match StdCommand::new(program)
-            .args(rest)
-            .current_dir(ctx.root.join(&self.workdir))
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("ALINT_ROOT", ctx.root.to_string_lossy().as_ref())
-            .env("ALINT_RULE_ID", &self.id)
-            .env("ALINT_LEVEL", self.level.as_str())
-            .output()
-        {
-            Ok(o) => o,
-            Err(e) => {
+        let env = [
+            ("ALINT_ROOT", ctx.root.to_string_lossy().into_owned()),
+            ("ALINT_RULE_ID", self.id.clone()),
+            ("ALINT_LEVEL", self.level.as_str().to_string()),
+        ];
+        let (status, stdout_b, stderr_b) = match crate::spawn::run_capturing(
+            &self.command,
+            &ctx.root.join(&self.workdir),
+            &env,
+            Duration::from_secs(self.timeout),
+        ) {
+            crate::spawn::SpawnOutcome::Exited {
+                status,
+                stdout,
+                stderr,
+            } => (status, stdout, stderr),
+            crate::spawn::SpawnOutcome::SpawnError(e) => {
+                let program = self.command.first().map_or("", String::as_str);
                 return Ok(vec![self.violation(
                     &self.workdir,
                     &format!("checker `{program}` could not be spawned: {e}"),
                 )]);
             }
+            crate::spawn::SpawnOutcome::TimedOut { secs } => {
+                return Ok(vec![self.violation(
+                    &self.workdir,
+                    &format!(
+                        "`{}` did not exit within {secs}s \
+                         (raise `timeout:` on the rule to extend)",
+                        self.command.join(" ")
+                    ),
+                )]);
+            }
         };
 
-        if output.status.success() {
+        if status.success() {
             // The tree is idempotent / formatter-clean.
             return Ok(Vec::new());
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let code = output
-            .status
+        let stdout = String::from_utf8_lossy(&stdout_b);
+        let stderr = String::from_utf8_lossy(&stderr_b);
+        let code = status
             .code()
             .map_or_else(|| "a signal".to_string(), |c| c.to_string());
 
@@ -238,6 +252,9 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         workdir: opts.workdir.unwrap_or_else(|| ".".to_string()),
         files_from: opts.files_from,
         files_pattern,
+        timeout: opts
+            .timeout
+            .unwrap_or(crate::spawn::DEFAULT_SPAWN_TIMEOUT_SECS),
     }))
 }
 
@@ -264,6 +281,7 @@ mod tests {
             workdir: ".".into(),
             files_from,
             files_pattern: files_pattern.map(|p| Regex::new(p).unwrap()),
+            timeout: 60,
         }
     }
 
@@ -394,6 +412,20 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("invalid `files_pattern` regex")
+        );
+    }
+
+    #[test]
+    fn hung_checker_times_out_with_one_violation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut r = rule(&["sh", "-c", "sleep 5"], FilesFrom::None, None);
+        r.timeout = 1;
+        let v = eval(&r, dir.path());
+        assert_eq!(v.len(), 1, "a hung checker must yield one violation");
+        assert!(
+            v[0].message.contains("did not exit within 1s"),
+            "{:?}",
+            v[0].message
         );
     }
 }
