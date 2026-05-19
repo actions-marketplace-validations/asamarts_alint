@@ -1,0 +1,49 @@
+name: alint://bundled/apache/governance accepts the common bare-form NOTICE
+tags: [check, extends, bundled, apache-governance, passing]
+
+# Representative real-world case (P1 #44 / D1 regression): a
+# legitimate Apache TLP NOTICE that uses the COMMON bare form
+# "Copyright <year> The Apache Software Foundation" with NO
+# "(https://www.apache.org/)" parenthetical. This previously
+# false-positived at error level; it must now pass silently
+# (apache-gov-notice-asf-attribution matches the invariant
+# "The Apache Software Foundation" substring).
+given:
+  tree:
+    LICENSE: |
+      Apache License
+      Version 2.0, January 2004
+      http://www.apache.org/licenses/
+    NOTICE: |
+      Apache Demo
+      Copyright 2026 The Apache Software Foundation
+    KEYS: |
+      -----BEGIN PGP PUBLIC KEY BLOCK-----
+      (release managers' signing keys)
+      -----END PGP PUBLIC KEY BLOCK-----
+    README.md: |
+      # Apache Demo
+
+      A demonstration Apache TLP repository.
+    CHANGELOG.md: |
+      # Changes
+
+      ## 1.0.0
+      - Initial release.
+    src:
+      App.java: |
+        /*
+         * Licensed to the Apache Software Foundation (ASF) under one
+         * or more contributor license agreements. See the NOTICE file
+         * distributed with this work for additional information.
+         */
+        public class App {}
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/apache/governance@v1
+
+when: [check]
+
+expect:
+  - violations: []

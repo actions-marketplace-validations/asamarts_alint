@@ -1428,7 +1428,7 @@ Apache **Top-Level Project (TLP) governance** discipline — the governance / re
 |---|---|---|---|
 | `apache-gov-license-exists` | `file_exists` | error | — |
 | `apache-gov-notice-exists` | `file_exists` | error | — |
-| `apache-gov-notice-asf-attribution` | `file_content_matches` | error | — |
+| `apache-gov-notice-asf-attribution` | `file_content_matches` | warning | — |
 | `apache-gov-keys-exists` | `file_exists` | warning | — |
 | `apache-gov-source-license-header` | `file_header` | warning | — |
 | `apache-gov-no-binaries-in-source` | `file_absent` | warning | — |

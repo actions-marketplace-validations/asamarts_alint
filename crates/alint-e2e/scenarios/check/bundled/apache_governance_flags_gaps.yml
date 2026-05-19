@@ -24,7 +24,7 @@ when: [check]
 expect:
   - violations:
       - {rule: apache-gov-license-exists, level: error}
-      - {rule: apache-gov-notice-asf-attribution, level: error}
+      - {rule: apache-gov-notice-asf-attribution, level: warning}
       - {rule: apache-gov-keys-exists, level: warning}
       - {rule: apache-gov-source-license-header, level: warning}
       - {rule: apache-gov-readme-exists, level: warning}
