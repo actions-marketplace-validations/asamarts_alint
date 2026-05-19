@@ -66,6 +66,7 @@ pub mod no_trailing_whitespace;
 pub mod no_zero_width_chars;
 pub mod ordered_block;
 pub mod pair;
+pub mod pair_hash;
 pub mod registry_paths_resolve;
 pub mod shebang_has_executable;
 pub mod structured_path;
@@ -137,6 +138,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("filename_case", filename_case::build);
     registry.register("filename_regex", filename_regex::build);
     registry.register("pair", pair::build);
+    registry.register("pair_hash", pair_hash::build);
     registry.register("for_each_dir", for_each_dir::build);
     registry.register("for_each_file", for_each_file::build);
     registry.register("dir_only_contains", dir_only_contains::build);
@@ -260,6 +262,7 @@ mod registry_tests {
             "filename_case",
             "filename_regex",
             "pair",
+            "pair_hash",
             "for_each_dir",
             "for_each_file",
             "dir_only_contains",

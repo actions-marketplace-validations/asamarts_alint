@@ -1093,6 +1093,18 @@ PairRule {
     partner_template: "{dir}/{stem}.h",
 }
 
+=== kind: pair_hash | id: fips-sum-pins-sources ===
+PairHashRule {
+    id: "fips-sum-pins-sources",
+    level: Error,
+    policy_url: None,
+    message: None,
+    source_scope: Scope { ... },
+    in_file: "src/fips/fips140.sum",
+    algorithm: Sha256,
+    format: SumsLine,
+}
+
 === kind: registry_paths_resolve | id: workspace-members-resolve ===
 RegistryPathsResolveRule {
     id: "workspace-members-resolve",

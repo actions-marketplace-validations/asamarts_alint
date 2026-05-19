@@ -122,6 +122,14 @@ rules:
     level: error
     message: "{{ctx.primary}} has no matching header at {{ctx.partner}}"
 
+  - id: fips-sum-pins-sources
+    kind: pair_hash
+    source: "src/fips/**/*.go"
+    in: "src/fips/fips140.sum"
+    algorithm: sha256
+    format: sums-line
+    level: error
+
   - id: workspace-members-resolve
     kind: registry_paths_resolve
     registry: Cargo.toml

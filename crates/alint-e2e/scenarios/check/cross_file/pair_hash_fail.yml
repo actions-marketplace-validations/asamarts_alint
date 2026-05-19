@@ -1,0 +1,26 @@
+name: pair_hash fires when a source is not listed in the checksum manifest
+tags: [check, pair_hash, cross_file]
+
+# The manifest pins only other.txt, so hello.txt's digest is
+# unaccounted for — the "file added to the module but not the
+# .sum" drift the golang/go FIPS use case guards against.
+given:
+  tree:
+    "hello.txt": "hello\n"
+    "SHA256SUMS": "0000000000000000000000000000000000000000000000000000000000000000  other.txt\n"
+  config: |
+    version: 1
+    rules:
+      - id: sums-pins-sources
+        kind: pair_hash
+        source: "hello.txt"
+        in: "SHA256SUMS"
+        algorithm: sha256
+        format: sums-line
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: sums-pins-sources, level: error, path: hello.txt}

@@ -1,0 +1,23 @@
+name: pair_hash is silent when the .sum line matches the source digest
+tags: [check, pair_hash, cross_file, passing]
+
+# "hello\n" is the canonical `echo hello | sha256sum` vector.
+given:
+  tree:
+    "hello.txt": "hello\n"
+    "SHA256SUMS": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03  hello.txt\n"
+  config: |
+    version: 1
+    rules:
+      - id: sums-pins-sources
+        kind: pair_hash
+        source: "hello.txt"
+        in: "SHA256SUMS"
+        algorithm: sha256
+        format: sums-line
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []
