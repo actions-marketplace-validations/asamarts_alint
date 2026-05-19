@@ -11,7 +11,9 @@ namespace-insensitive mapping, namespace-aware mode deferred
 (Q1); `@attr` / `#text` / repeated→array (xmltodict-style)
 convention (Q2); all leaf values are strings, no type coercion
 (Q3); `roxmltree` chosen over `quick-xml` (Q4); empty element →
-`null` (Q5).
+`null` (Q5). v0.10 post-audit hardening (P1): an explicit
+`MAX_XML_DEPTH` recursion bound — see *Recursion bound
+(security)* below.
 
 Demand evidence:
 [`docs/development/launch-evidence.md`](../../development/launch-evidence.md)
@@ -141,6 +143,34 @@ event loop. Read-only, no codegen, no `unsafe` in our use,
 small dep tree. Added as a workspace dependency, consumed by
 `alint-rules` only.
 
+### Recursion bound (security)
+
+`xml_to_value` recurses once per nesting level. `roxmltree`'s
+default `ParsingOptions` bounds total node count but **not**
+nesting depth, and the other structured formats' parsers
+(`serde_json` / `serde_yaml` / `toml`) carry library-internal
+recursion limits that the XML arm would otherwise lack. A
+crafted or accidental deeply-nested document
+(`<a><a>…</a></a>` ×N, a few hundred KB) would overflow the
+stack and **abort the whole `alint` process** — an unrecoverable
+Rust `abort()`, not a catchable panic, with no per-file
+isolation — reachable from any passively-linted repo the moment
+an `xml_path_*` rule or the `dotnet@v1` ruleset (which targets
+`**/*.csproj`) is active. (XXE / billion-laughs is *not* a
+vector: `roxmltree` defaults `allow_dtd: false` + a loop
+detector; depth recursion is the only XML DoS.)
+
+**Resolved (v0.10 post-audit P1):** `element_to_value` carries
+an explicit `depth` and refuses to descend past
+`MAX_XML_DEPTH` (256 — orders of magnitude beyond any real
+`.csproj` / `pom.xml`, far below the overflow depth). Past the
+bound it returns an `Err` that flows through the **existing**
+parse-error path: one ordinary "not a valid XML document: XML
+nesting exceeds the maximum supported depth (256)" violation
+for that file, per-file contained, no abort. This brings the
+XML arm to the same hardening posture the other formats already
+have.
+
 ## Semantics
 
 Identical to the rest of the structured-query family (it *is*
@@ -223,6 +253,9 @@ the family, with one more `Format`):
 - `pom.xml` with the Maven default namespace: namespace-flattened
   query works (`$.project.modelVersion == "4.0.0"`); repeated
   `<dependency>` → array, `dependency[*].artifactId` matches.
+- **Recursion bound:** a deeply-nested document (nesting past
+  `MAX_XML_DEPTH`) ⇒ exactly one parse-error violation for that
+  file, **no process abort** (regression test for the P1).
 - `if_present: true` silences a missing path; not-well-formed
   XML ⇒ one parse-error violation; empty element ⇒ `null`
   (a non-string-match message under `xml_path_matches`).
