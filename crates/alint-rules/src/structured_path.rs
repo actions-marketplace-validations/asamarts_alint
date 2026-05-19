@@ -375,6 +375,18 @@ fn kind_name(v: &Value) -> &'static str {
 // `docs/design/v0.10/xml_path.md`.
 // ---------------------------------------------------------------
 
+/// Maximum XML element-nesting depth `xml_to_value` will
+/// descend. Real config/manifest XML (`.csproj`, `pom.xml`, …)
+/// is a handful of levels deep; 256 is far beyond any real
+/// manifest yet far below the recursion depth that would
+/// overflow the stack. A document nested deeper is rejected as a
+/// parse error (one per-file violation via the existing
+/// parse-error path) rather than recursed into — a crafted or
+/// accidental deeply-nested file must never abort the run. The
+/// other formats' parsers carry their own internal recursion
+/// limits; this is the XML arm's equivalent.
+const MAX_XML_DEPTH: usize = 256;
+
 /// Parse XML into the same `serde_json::Value` tree the rest of
 /// the family queries. The document maps to
 /// `{ <root-element-name>: <root value> }` so the root element is
@@ -383,7 +395,10 @@ fn xml_to_value(text: &str) -> std::result::Result<Value, String> {
     let doc = roxmltree::Document::parse(text).map_err(|e| e.to_string())?;
     let root = doc.root_element();
     let mut obj = serde_json::Map::new();
-    obj.insert(root.tag_name().name().to_owned(), element_to_value(root));
+    obj.insert(
+        root.tag_name().name().to_owned(),
+        element_to_value(root, 0)?,
+    );
     Ok(Value::Object(obj))
 }
 
@@ -393,8 +408,15 @@ fn xml_to_value(text: &str) -> std::result::Result<Value, String> {
 /// element also has attributes/children, or *is* the value when
 /// the element is a pure leaf. Empty element → `null`. Namespaces
 /// are flattened to the local name (Open question 1 in the design
-/// doc).
-fn element_to_value(node: roxmltree::Node) -> Value {
+/// doc). `depth` bounds recursion at `MAX_XML_DEPTH`: past the
+/// bound it returns `Err` (surfaced as one parse-error violation
+/// via the caller) instead of recursing into a stack abort.
+fn element_to_value(node: roxmltree::Node, depth: usize) -> std::result::Result<Value, String> {
+    if depth >= MAX_XML_DEPTH {
+        return Err(format!(
+            "XML nesting exceeds the maximum supported depth ({MAX_XML_DEPTH})"
+        ));
+    }
     let mut obj = serde_json::Map::new();
     for attr in node.attributes() {
         obj.insert(
@@ -406,7 +428,7 @@ fn element_to_value(node: roxmltree::Node) -> Value {
     for child in node.children().filter(roxmltree::Node::is_element) {
         has_child_elem = true;
         let name = child.tag_name().name().to_owned();
-        let val = element_to_value(child);
+        let val = element_to_value(child, depth + 1)?;
         match obj.get_mut(&name) {
             Some(Value::Array(arr)) => arr.push(val),
             Some(slot) => {
@@ -425,16 +447,16 @@ fn element_to_value(node: roxmltree::Node) -> Value {
         .collect();
     let text = text.trim();
     if obj.is_empty() && !has_child_elem {
-        return if text.is_empty() {
+        return Ok(if text.is_empty() {
             Value::Null
         } else {
             Value::String(text.to_owned())
-        };
+        });
     }
     if !text.is_empty() {
         obj.insert("#text".to_owned(), Value::String(text.to_owned()));
     }
-    Value::Object(obj)
+    Ok(Value::Object(obj))
 }
 
 // ---------------------------------------------------------------
@@ -900,6 +922,37 @@ mod tests {
         let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert_eq!(v.len(), 1, "not-well-formed XML should fire once");
         assert!(v[0].message.contains("XML"), "{:?}", v[0].message);
+    }
+
+    #[test]
+    fn xml_deeply_nested_is_a_parse_error_not_an_abort() {
+        // P1 regression: unbounded recursion would `abort()` the
+        // whole process. The `MAX_XML_DEPTH` guard must instead
+        // yield exactly one ordinary parse-error violation for
+        // the file (no panic, no abort, per-file contained).
+        let depth = MAX_XML_DEPTH + 50;
+        let xml = format!("{}deep{}", "<a>".repeat(depth), "</a>".repeat(depth));
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: xml_path_equals\n\
+             paths: \"deep.xml\"\n\
+             path: \"$.a\"\n\
+             equals: \"x\"\n\
+             level: error\n",
+        );
+        let rule = xml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[("deep.xml", xml.as_bytes())]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "deeply-nested XML must yield exactly one parse-error violation: {v:?}"
+        );
+        assert!(
+            v[0].message.contains("not a valid XML") && v[0].message.contains("depth"),
+            "expected a depth parse-error message, got: {}",
+            v[0].message
+        );
     }
 
     #[test]
