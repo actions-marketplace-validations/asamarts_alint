@@ -143,15 +143,20 @@ impl Rule for RegistryPathsResolveRule {
 
         for registry_rel in self.registry_files(ctx) {
             let abs = ctx.root.join(&registry_rel);
-            let text = match std::fs::read_to_string(&abs) {
-                Ok(t) => t,
+            let text = match crate::io::read_capped(&abs) {
+                Ok(b) => String::from_utf8_lossy(&b).into_owned(),
                 Err(e) => {
+                    let why = match e {
+                        crate::io::ReadCapError::TooLarge(n) => {
+                            format!("is too large to analyze ({n} bytes; 256 MiB cap)")
+                        }
+                        crate::io::ReadCapError::Io(e) => {
+                            format!("could not be read: {e}")
+                        }
+                    };
                     violations.push(
-                        Violation::new(format!(
-                            "registry file {} could not be read: {e}",
-                            registry_rel.display()
-                        ))
-                        .with_path(registry_rel.clone()),
+                        Violation::new(format!("registry file {} {why}", registry_rel.display()))
+                            .with_path(registry_rel.clone()),
                     );
                     continue;
                 }

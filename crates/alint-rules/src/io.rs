@@ -58,3 +58,76 @@ pub fn classify_bytes(bytes: &[u8]) -> Classification {
         _ => Classification::Text,
     }
 }
+
+/// Hard cap on a single whole-file read by the cross-file /
+/// structured rule kinds (`registry_paths_resolve`,
+/// `cross_file_value_equals`, `pair_hash`, `generated_file_fresh`).
+/// Generous — every realistic manifest / generated file is orders
+/// of magnitude smaller — yet bounded so a hostile or accidental
+/// multi-GB file in a linted repo yields a clear violation
+/// instead of OOM-ing the run.
+pub const MAX_ANALYZE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Failure of [`read_capped`]: the file exceeds
+/// [`MAX_ANALYZE_BYTES`] (carrying its size), or an ordinary I/O
+/// error (kept distinct so callers turn "too large" into a clear
+/// violation rather than reusing their not-found / skip path).
+#[derive(Debug)]
+pub enum ReadCapError {
+    TooLarge(u64),
+    Io(std::io::Error),
+}
+
+/// Read a whole file, refusing (via a cheap `metadata` stat, so
+/// the oversized bytes are never read) anything larger than
+/// `max`.
+fn read_capped_with(path: &Path, max: u64) -> Result<Vec<u8>, ReadCapError> {
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > max => Err(ReadCapError::TooLarge(m.len())),
+        Ok(_) => std::fs::read(path).map_err(ReadCapError::Io),
+        Err(e) => Err(ReadCapError::Io(e)),
+    }
+}
+
+/// Whole-file read bounded by [`MAX_ANALYZE_BYTES`]. Used by the
+/// cross-file / structured rules for the manifest / source /
+/// target / committed-file reads they do themselves.
+pub fn read_capped(path: &Path) -> Result<Vec<u8>, ReadCapError> {
+    read_capped_with(path, MAX_ANALYZE_BYTES)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_capped_returns_bytes_under_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("f");
+        std::fs::write(&p, b"hello").unwrap();
+        match read_capped(&p) {
+            Ok(b) => assert_eq!(b, b"hello"),
+            _ => panic!("expected Bytes under the cap"),
+        }
+    }
+
+    #[test]
+    fn read_capped_with_rejects_over_cap_without_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("big");
+        std::fs::write(&p, b"0123456789").unwrap();
+        match read_capped_with(&p, 4) {
+            Err(ReadCapError::TooLarge(n)) => assert_eq!(n, 10),
+            _ => panic!("a 10-byte file must exceed a 4-byte cap"),
+        }
+    }
+
+    #[test]
+    fn read_capped_missing_path_is_io_error() {
+        let dir = tempfile::tempdir().unwrap();
+        match read_capped(&dir.path().join("nope")) {
+            Err(ReadCapError::Io(_)) => {}
+            _ => panic!("a missing path must be an Io error"),
+        }
+    }
+}

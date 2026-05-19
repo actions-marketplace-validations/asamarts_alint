@@ -175,7 +175,14 @@ impl CrossFileValueEqualsRule {
         let src = Path::new(&self.source_file);
         let text = match read_rel(ctx, src) {
             Ok(t) => t,
-            Err(e) => {
+            Err(crate::io::ReadCapError::TooLarge(n)) => {
+                out.push(Self::violation(
+                    src,
+                    &format!("source file is too large to analyze ({n} bytes; 256 MiB cap)"),
+                ));
+                return None;
+            }
+            Err(crate::io::ReadCapError::Io(e)) => {
                 out.push(Self::violation(
                     src,
                     &format!("source file is unreadable: {e}"),
@@ -219,14 +226,27 @@ impl CrossFileValueEqualsRule {
         source_norm: &str,
         out: &mut Vec<Violation>,
     ) {
-        let Ok(text) = read_rel(ctx, target) else {
-            if !self.allow_missing {
+        let text = match read_rel(ctx, target) {
+            Ok(t) => t,
+            Err(crate::io::ReadCapError::TooLarge(n)) => {
+                // A too-large target is always a violation — never
+                // suppressed by `allow_missing` (it is present,
+                // just unanalysable).
                 out.push(Self::violation(
                     target,
-                    "target file is missing or unreadable",
+                    &format!("target file is too large to analyze ({n} bytes; 256 MiB cap)"),
                 ));
+                return;
             }
-            return;
+            Err(crate::io::ReadCapError::Io(_)) => {
+                if !self.allow_missing {
+                    out.push(Self::violation(
+                        target,
+                        "target file is missing or unreadable",
+                    ));
+                }
+                return;
+            }
         };
         let values = match extract_values(extract, &text) {
             Ok(v) => v,
@@ -273,8 +293,8 @@ impl CrossFileValueEqualsRule {
 
 /// Read a tree-relative path as text (the index stores paths, not
 /// contents, so the cross-file rules read the file themselves).
-fn read_rel(ctx: &Context<'_>, rel: &Path) -> std::io::Result<String> {
-    std::fs::read_to_string(ctx.root.join(rel))
+fn read_rel(ctx: &Context<'_>, rel: &Path) -> Result<String, crate::io::ReadCapError> {
+    crate::io::read_capped(&ctx.root.join(rel)).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {

@@ -99,16 +99,29 @@ impl Rule for PairHashRule {
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let target_path = Path::new(&self.target);
-        let Ok(b_bytes) = std::fs::read(ctx.root.join(target_path)) else {
-            let msg = self.message.clone().unwrap_or_else(|| {
-                format!(
-                    "pair_hash target {:?} does not exist or is unreadable",
-                    self.target
-                )
-            });
-            return Ok(vec![
-                Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)),
-            ]);
+        let b_bytes = match crate::io::read_capped(&ctx.root.join(target_path)) {
+            Ok(b) => b,
+            Err(crate::io::ReadCapError::TooLarge(n)) => {
+                return Ok(vec![
+                    Violation::new(format!(
+                        "pair_hash target {:?} is too large to analyze \
+                         ({n} bytes; 256 MiB cap)",
+                        self.target
+                    ))
+                    .with_path(std::sync::Arc::<Path>::from(target_path)),
+                ]);
+            }
+            Err(crate::io::ReadCapError::Io(_)) => {
+                let msg = self.message.clone().unwrap_or_else(|| {
+                    format!(
+                        "pair_hash target {:?} does not exist or is unreadable",
+                        self.target
+                    )
+                });
+                return Ok(vec![
+                    Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)),
+                ]);
+            }
         };
         let b_text = String::from_utf8_lossy(&b_bytes);
         let b_lower = b_text.to_ascii_lowercase();
@@ -118,8 +131,20 @@ impl Rule for PairHashRule {
             if !self.source_scope.matches(&entry.path, ctx.index) {
                 continue;
             }
-            let Ok(a_bytes) = std::fs::read(ctx.root.join(&entry.path)) else {
-                continue; // permission / race — silent skip, like content rules
+            let a_bytes = match crate::io::read_capped(&ctx.root.join(&entry.path)) {
+                Ok(b) => b,
+                Err(crate::io::ReadCapError::TooLarge(n)) => {
+                    violations.push(
+                        Violation::new(format!(
+                            "{} is too large to hash ({n} bytes; 256 MiB cap)",
+                            entry.path.display()
+                        ))
+                        .with_path(entry.path.clone()),
+                    );
+                    continue;
+                }
+                // permission / race — silent skip, like content rules
+                Err(crate::io::ReadCapError::Io(_)) => continue,
             };
             let digest = self.algorithm.hex(&a_bytes);
             if let Some(desc) = self.check(&entry.path, &digest, &b_text, &b_lower) {

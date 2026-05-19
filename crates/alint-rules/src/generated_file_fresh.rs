@@ -142,11 +142,20 @@ impl Rule for GeneratedFileFreshRule {
             )]);
         }
 
-        let Ok(committed) = std::fs::read(ctx.root.join(file)) else {
-            return Ok(vec![self.violation(
-                file,
-                "is not on disk, but the generator produced output for it",
-            )]);
+        let committed = match crate::io::read_capped(&ctx.root.join(file)) {
+            Ok(b) => b,
+            Err(crate::io::ReadCapError::TooLarge(n)) => {
+                return Ok(vec![self.violation(
+                    file,
+                    &format!("is too large to diff ({n} bytes; 256 MiB cap)"),
+                )]);
+            }
+            Err(crate::io::ReadCapError::Io(_)) => {
+                return Ok(vec![self.violation(
+                    file,
+                    "is not on disk, but the generator produced output for it",
+                )]);
+            }
         };
 
         let stale = if self.normalize == Normalize::None {
