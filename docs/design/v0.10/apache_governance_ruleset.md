@@ -11,7 +11,11 @@ ids (Q2); the "v0.9.18 A2 prerequisite" is the broadened
 ASF-preamble `file_header` pattern, reused verbatim (Q3); levels
 mirror the bundled-ruleset "non-blocking, upgrade in your own
 config" convention (Q4); off-disk artefacts (branch protection,
-release-signing server state) out of scope (Q5).
+release-signing server state) out of scope (Q5). v0.10
+post-audit fix (P1 #44, decision D1): `apache-gov-notice-asf-attribution`
+relaxed (matches the bare *and* long ASF attribution forms, not
+just the parenthetical) and downgraded `error`→`warning` — see
+the False-positive surface entry.
 
 Demand evidence:
 [`docs/development/launch-evidence.md`](../../development/launch-evidence.md)
@@ -80,7 +84,7 @@ each id is independently `level: off`-able).
 |---|---|---|---|
 | `apache-gov-license-exists` | `file_exists` | LICENSE at root | error |
 | `apache-gov-notice-exists` | `file_exists` | NOTICE at root | error |
-| `apache-gov-notice-asf-attribution` | `file_content_matches` | NOTICE carries the ASF attribution line | error |
+| `apache-gov-notice-asf-attribution` | `file_content_matches` | NOTICE carries the ASF attribution (bare or long form) | warning |
 | `apache-gov-keys-exists` | `file_exists` | KEYS at root (release-signing) | warning |
 | `apache-gov-source-license-header` | `file_header` | RAT: ASF header on sources | warning |
 | `apache-gov-no-binaries-in-source` | `file_absent` | RAT: no compiled binaries in the source tree | warning |
@@ -103,11 +107,19 @@ Standard bundled-ruleset semantics (offline, no `extends:`/
 choices:
 
 - **`apache-gov-notice-asf-attribution`** — `file_content_matches`
-  on the NOTICE file for a tolerant regex of the canonical line
-  "This product includes software developed at / The Apache
-  Software Foundation (http(s)://www.apache.org/)". This is the
+  on the NOTICE file for the **invariant** ASF attribution
+  substring `The Apache Software Foundation`. This deliberately
+  matches *both* common real-world forms: the long template
+  ("This product includes software developed at / The Apache
+  Software Foundation (https://www.apache.org/).") **and** the
+  very common bare form ("Copyright <year> The Apache Software
+  Foundation", no parenthetical). The `(https://www.apache.org/)`
+  parenthetical is LICENSE-appendix boilerplate, **not** a NOTICE
+  invariant — requiring it false-positived on legitimate TLP
+  NOTICEs (P1 #44 / D1), so it is *not* required. This is the
   governance check `compliance/apache-2@v1` does not do (it only
-  asserts NOTICE *exists*).
+  asserts NOTICE *exists*). Level `warning` (D1): a wording
+  mismatch on a baseline-adoption ruleset should not hard-block.
 - **`apache-gov-source-license-header`** reuses the **v0.9.18
   broadened ASF pattern** verbatim — `Licensed (to the Apache
   Software Foundation|under the Apache License,?\s*Version 2)` —
@@ -124,20 +136,31 @@ choices:
   binaries; an ASF *source release* must not). The ASF
   source-release policy pillar.
 - **Levels** mirror `oss-baseline@v1` / `compliance/apache-2@v1`:
-  the legally-load-bearing artefacts (LICENSE, NOTICE, NOTICE
-  attribution) are `error`; KEYS / headers / no-binaries are
-  `warning` (real, but a repo mid-adoption should not be hard-
-  blocked); README / changelog are `info`. The ruleset header
-  documents "upgrade severity in your own config when ready".
+  LICENSE / NOTICE *existence* are `error` (unambiguous, an ASF
+  legal requirement); NOTICE-attribution wording, KEYS, headers
+  and no-binaries are `warning` (real, but content/wording
+  checks on a mid-adoption repo should not hard-block — D1
+  moved NOTICE-attribution here); README / changelog are `info`.
+  The ruleset header documents "upgrade severity in your own
+  config when ready".
 
 ## False-positive surface
 
-- **NOTICE attribution wording drift.** The ASF line has minor
-  historical variants (http vs https, trailing slash, line
-  wrapping). The regex is whitespace- and scheme-tolerant
-  (`https?://www\.apache\.org/?`) and matched across line breaks
-  via `file_content_matches` (whole-file), not line-anchored.
-  Documented; tighten in-config if a project wants exactness.
+- **NOTICE attribution wording (P1 #44 / D1 — resolved).** The
+  original pattern required the `(https://www.apache.org/)`
+  parenthetical at `error` level. That parenthetical is
+  LICENSE-appendix boilerplate, **not** a NOTICE invariant: many
+  legitimate Apache TLP NOTICEs use the bare `Copyright <year>
+  The Apache Software Foundation` form and would have
+  hard-failed (an `error`-level false positive on the exact
+  intended adopters; the original passing fixture was
+  written-to-the-regex, masking it). Resolved: the rule now
+  matches only the invariant substring `The Apache Software
+  Foundation` (covers both the bare and the long template forms)
+  at `warning` level. A representative bare-form-NOTICE silent
+  e2e scenario was added so the realistic case is covered, not
+  just the long template. Projects wanting strict exactness
+  tighten in-config.
 - **`no-binaries` vs. test fixtures.** Real ASF projects commit
   binary test fixtures (arrow's format test data, spark's test
   jars). The exclude set covers the conventional fixture dirs;
