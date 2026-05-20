@@ -300,7 +300,7 @@ jobs:
           # step; include it in the same commit so the PR is
           # one-merge-completes-everything.
           git add docs/benchmarks/HISTORY.md
-          git commit -m "docs(bench): publish ${OUT_LABEL} matrix (S1-S10 at 1k/10k/100k/1m × full/changed) + HISTORY.md refresh"
+          git commit -m "docs(bench): publish ${OUT_LABEL} matrix (S1-S13 at 1k/10k/100k/1m × full/changed) + HISTORY.md refresh"
           git push origin "$branch" --force
 
           # Render a per-cell summary the maintainer pastes into HISTORY.md.
@@ -315,7 +315,7 @@ jobs:
           ## What landed
 
           - \`docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}/\` — full
-            publish-grade hyperfine matrix (S1-S10 × {1k, 10k, 100k, 1m} × {full,
+            publish-grade hyperfine matrix (S1-S13 × {1k, 10k, 100k, 1m} × {full,
             changed}) at \`--warmup 3 --runs 10\`.
           - \`docs/benchmarks/micro/results/linux-x86_64/${OUT_LABEL}/criterion/\`
             — trimmed criterion snapshot from \`cargo bench -p alint-bench\`.
@@ -328,8 +328,23 @@ jobs:
 
           ## Maintainer review checklist
 
-          - [ ] Skim \`results.json\` for any cell with \`stddev_ms / mean_ms > 0.10\`
-            (CV > 10 %) — re-run those on a quieter system before merging.
+          - [ ] Run \`xtask bench-gate\` against the previous release's
+            \`results.json\` — non-zero exit blocks the merge. Replaces
+            the v0.9.22-and-earlier "CV > 10 % eyeball" (which was
+            never met by any shipped release and never enforced in
+            code); see [\`RELEASING.md\`](../RELEASING.md) §"Bench-record review"
+            for the canonical procedure.
+            \`\`\`sh
+            git fetch origin ${branch}
+            git show origin/${branch}:docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}/results.json > /tmp/new.json
+            cargo run -q -p xtask -- bench-gate \\
+              --results /tmp/new.json \\
+              --baseline docs/benchmarks/macro/results/linux-x86_64/v<prev>/results.json
+            \`\`\`
+            Gating: per-cell within-run CV ≤ 10 % on 100k/1m cells
+            (1k/10k advisory); \`min_ms\` regression ≤ +15 % vs the
+            prior release on ≥10k cells. New cells with no baseline
+            mate are skipped from the regression check.
           - [ ] Eyeball the HISTORY.md headline row for
             \`${OUT_LABEL}\` — if the auto-extracted first sentence
             from CHANGELOG.md isn't a good one-row blurb, edit
