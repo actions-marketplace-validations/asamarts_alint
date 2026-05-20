@@ -1495,13 +1495,30 @@ rules:
     fn in_crate_schema_matches_root() {
         // Guard against drift between the in-crate copy (embedded by
         // `include_str!`) and the root `schemas/v1/config.json` that the
-        // public URL serves. Only runs inside the workspace checkout — the
-        // published crate does not ship the root copy, so the test skips.
-        let root =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/v1/config.json");
-        let Ok(canonical) = std::fs::read_to_string(&root) else {
-            return;
-        };
+        // public URL serves.
+        //
+        // The crate-tarball context (`cargo publish` strips the root
+        // schemas/ tree) skips the assertion — but only when we can
+        // POSITIVELY identify that we are running from a tarball, not
+        // silently every time the file fails to read. Workspace context
+        // is detected by a co-located workspace `Cargo.lock`; absence
+        // of that lock means we are unpacked outside the workspace and
+        // the test correctly bows out. Presence + a missing root schema
+        // is a real failure (someone deleted the canonical copy) and is
+        // now flagged, not papered over.
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace_lock = manifest_dir.join("../../Cargo.lock");
+        if !workspace_lock.is_file() {
+            return; // crate-tarball context — workspace Cargo.lock absent.
+        }
+        let root = manifest_dir.join("../../schemas/v1/config.json");
+        let canonical = std::fs::read_to_string(&root).unwrap_or_else(|e| {
+            panic!(
+                "workspace context detected (../../Cargo.lock exists) but the \
+                 canonical schema at {} is unreadable: {e}",
+                root.display()
+            )
+        });
         assert_eq!(
             canonical, CONFIG_SCHEMA_V1,
             "crates/alint-dsl/schemas/v1/config.json has drifted from \

@@ -6,7 +6,7 @@ name: bench-record
 #
 # Two layers per run:
 # - macro: `xtask bench-scale --include-1m --warmup 3 --runs 10` over
-#   the full S1-S10 × {1k,10k,100k,1m} × {full,changed} matrix.
+#   the full S1-S13 × {1k,10k,100k,1m} × {full,changed} matrix.
 # - micro: `cargo bench -p alint-bench --features fs-benches` against
 #   the criterion harness, then `xtask publish-benches` to land the
 #   trim'd criterion snapshot under
@@ -175,9 +175,11 @@ jobs:
         run: cargo build --release -p alint -p xtask
 
       # ── Macro: full publish-grade matrix ─────────────────────────
-      # 10 scenarios × 4 sizes × 2 modes = 80 cells. The 1M cells
-      # dominate — ~10 min each, so ~3h for the 20 1M cells alone.
-      # S10 added in v0.9.9 (scope_filter outside per-file dispatch).
+      # 13 scenarios × 4 sizes × 2 modes = 104 cells. The 1M cells
+      # dominate — ~10 min each, so ~3h for the 26 1M cells alone.
+      # S10 added in v0.9.9 (scope_filter outside per-file dispatch);
+      # S11–S13 added in v0.10 (v0.10 cross-file / per-file /
+      # single-shot dispatch classes — release-gating per audit D5).
       - name: macro bench-scale
         env:
           OUT_LABEL: ${{ steps.label.outputs.label }}
@@ -188,7 +190,7 @@ jobs:
           ./target/release/xtask bench-scale \
             --include-1m \
             --sizes 1k,10k,100k,1m \
-            --scenarios S1,S2,S3,S4,S5,S6,S7,S8,S9,S10 \
+            --scenarios S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,S12,S13 \
             --modes full,changed \
             --tools alint \
             --warmup 3 --runs 10 \

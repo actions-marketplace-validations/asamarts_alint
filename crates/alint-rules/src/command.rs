@@ -26,9 +26,15 @@
 //! - `ALINT_ROOT` — absolute repo root.
 //! - `ALINT_RULE_ID` — the rule's `id:`.
 //! - `ALINT_LEVEL` — `error` / `warning` / `info`.
-//! - `ALINT_VAR_<NAME>` — one per top-level `vars:` entry,
-//!   uppercased.
+//! - `ALINT_VAR_<NAME>` — one per top-level `vars:` entry. The
+//!   `<NAME>` is the YAML key uppercased and otherwise passed
+//!   through verbatim (no character substitution); for portable
+//!   `command:` rules use only `[A-Za-z0-9_]` in `vars:` keys —
+//!   keys containing other characters (e.g. `my-var`) produce
+//!   env-var names that POSIX shells cannot reference, so the
+//!   child process won't see them.
 //! - `ALINT_FACT_<NAME>` — one per resolved fact, stringified.
+//!   Same naming contract as `ALINT_VAR_<NAME>`.
 //!
 //! Trust model: `command` rules are only allowed in the user's own
 //! top-level config. Any extended source (local file, HTTPS URL,
