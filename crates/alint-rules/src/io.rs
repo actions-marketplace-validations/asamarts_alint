@@ -80,8 +80,10 @@ pub enum ReadCapError {
 
 /// Read a whole file, refusing (via a cheap `metadata` stat, so
 /// the oversized bytes are never read) anything larger than
-/// `max`.
-fn read_capped_with(path: &Path, max: u64) -> Result<Vec<u8>, ReadCapError> {
+/// `max`. `pub(crate)` so rule-level tests can inject a tiny
+/// `max` to exercise the over-cap violation path without
+/// materialising a >256 MiB fixture.
+pub(crate) fn read_capped_with(path: &Path, max: u64) -> Result<Vec<u8>, ReadCapError> {
     match std::fs::metadata(path) {
         Ok(m) if m.len() > max => Err(ReadCapError::TooLarge(m.len())),
         Ok(_) => std::fs::read(path).map_err(ReadCapError::Io),

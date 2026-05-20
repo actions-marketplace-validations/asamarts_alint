@@ -102,10 +102,28 @@ impl Rule for JsonSchemaPassesRule {
                 continue;
             }
             let full = ctx.root.join(&entry.path);
-            let Ok(text) = std::fs::read_to_string(&full) else {
-                // Permission / race — silent skip, like other
-                // content rules.
-                continue;
+            let text = match crate::io::read_capped(&full) {
+                Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+                Err(crate::io::ReadCapError::TooLarge(n)) => {
+                    // Over the 256 MiB whole-file cap — surface
+                    // a clear violation rather than the previous
+                    // silent skip (which masked an OOM-DoS
+                    // surface on hostile / accidental multi-GB
+                    // candidate files).
+                    violations.push(
+                        Violation::new(format!(
+                            "file is too large to analyze ({n} bytes; {} MiB cap)",
+                            crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+                        ))
+                        .with_path(entry.path.clone()),
+                    );
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(_)) => {
+                    // Permission / race — silent skip, like other
+                    // content rules.
+                    continue;
+                }
             };
 
             let Some(format) = self
@@ -146,8 +164,16 @@ impl Rule for JsonSchemaPassesRule {
 }
 
 fn compile_schema(schema_abs: &std::path::Path) -> std::result::Result<Validator, String> {
-    let bytes = std::fs::read(schema_abs)
-        .map_err(|e| format!("could not read schema {}: {e}", schema_abs.display()))?;
+    let bytes = crate::io::read_capped(schema_abs).map_err(|e| match e {
+        crate::io::ReadCapError::TooLarge(n) => format!(
+            "schema {} is too large to read ({n} bytes; {} MiB cap)",
+            schema_abs.display(),
+            crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+        ),
+        crate::io::ReadCapError::Io(e) => {
+            format!("could not read schema {}: {e}", schema_abs.display())
+        }
+    })?;
     let schema_value: Value = serde_json::from_slice(&bytes)
         .map_err(|e| format!("schema {} is not valid JSON: {e}", schema_abs.display()))?;
     jsonschema::validator_for(&schema_value).map_err(|e| {

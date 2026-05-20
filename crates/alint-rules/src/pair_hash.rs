@@ -421,6 +421,41 @@ mod tests {
         assert_eq!(v[0].path.as_deref(), Some(Path::new("bad.txt")));
     }
 
+    /// Low-cap injection sanity for the read-cap contract that
+    /// `pair_hash` (and the other v0.10 cross-file / structured
+    /// rules) consume. We can't materialise a >256 MiB fixture
+    /// at test time, so we go in via `read_capped_with` directly
+    /// — proves the cap helper preserves the file's real size
+    /// (so the rule's `{n} bytes` interpolation reports honestly)
+    /// and that the canonical "too large to analyze" wording
+    /// constructed from that `n` matches what the rule's evaluate
+    /// path emits verbatim. Audit follow-up M4.
+    #[test]
+    fn over_cap_violation_text_matches_canonical_format_via_low_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("manifest.sha256");
+        std::fs::write(&p, b"0123456789").unwrap(); // 10 bytes
+        let err = crate::io::read_capped_with(&p, 4).unwrap_err();
+        let n = match err {
+            crate::io::ReadCapError::TooLarge(n) => n,
+            other @ crate::io::ReadCapError::Io(_) => {
+                panic!("expected TooLarge, got {other:?}")
+            }
+        };
+        assert_eq!(n, 10, "TooLarge must carry the real file size");
+        // Byte-identical to the format string in
+        // `pair_hash::evaluate` (target branch, ~line 107).
+        let cap_mib = crate::io::MAX_ANALYZE_BYTES / (1024 * 1024);
+        let canonical = format!(
+            "pair_hash target {p:?} is too large to analyze \
+             ({n} bytes; {cap_mib} MiB cap)",
+        );
+        assert!(
+            canonical.contains("too large to analyze (10 bytes; 256 MiB cap)"),
+            "canonical message must carry the bytes+cap suffix verbatim: {canonical}"
+        );
+    }
+
     #[test]
     fn build_rejects_empty_source_and_fix_block() {
         let spec = crate::test_support::spec_yaml(

@@ -368,10 +368,29 @@ fn evaluate_one_per_file_rule(
         return Vec::new();
     }
     let abs = ctx.root.join(literal);
-    let Ok(bytes) = std::fs::read(&abs) else {
-        // Mirror the rule-major behaviour: silent skip on read
-        // failure (permission flake, race with mid-walk delete).
-        return Vec::new();
+    let bytes = match crate::io::read_capped(&abs) {
+        Ok(b) => b,
+        Err(crate::io::ReadCapError::TooLarge(n)) => {
+            // Over the 256 MiB whole-file cap — surface a clear
+            // violation rather than silently skipping (which used
+            // to mask an OOM-DoS surface on hostile / accidental
+            // multi-GB files reached via a `for_each_dir` literal
+            // path).
+            return vec![
+                Violation::new(format!(
+                    "{parent_id}: nested rule #{nested_i} cannot analyze {} \
+                     — file is too large ({n} bytes; {} MiB cap)",
+                    literal.display(),
+                    crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+                ))
+                .with_path(literal),
+            ];
+        }
+        Err(crate::io::ReadCapError::Io(_)) => {
+            // Mirror the rule-major behaviour: silent skip on read
+            // failure (permission flake, race with mid-walk delete).
+            return Vec::new();
+        }
     };
     match pf.evaluate_file(ctx, literal, &bytes) {
         Ok(vs) => vs,
