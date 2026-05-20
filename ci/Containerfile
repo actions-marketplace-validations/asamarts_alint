@@ -1,6 +1,6 @@
 FROM debian:bookworm-slim
 
-ARG RUNNER_VERSION=2.332.0
+ARG RUNNER_VERSION=2.334.0
 ARG RUST_VERSION=stable
 
 # System packages
