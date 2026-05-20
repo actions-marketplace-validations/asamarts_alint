@@ -754,10 +754,12 @@ fn emit_rules_master_index(
     let _ = writeln!(&mut page, "  label: 'Index'");
     let _ = writeln!(&mut page, "---");
     let _ = writeln!(&mut page);
-    // Headline count is the canonical "70 rule kinds" figure used
+    // Headline count is the canonical rule-kind figure used
     // across README / docs/site/about / schema / alint.org: the
     // {behaviors} documented rule behaviors plus {alias_count}
-    // short-name aliases that ride inline on their canonical page.
+    // short-name aliases that ride inline on their canonical page
+    // (79 = 69 + 10 as of v0.10.0; this comment intentionally
+    // does not pin a number — it tracks via the format args).
     // Deriving the total from those two components keeps the
     // sentence self-consistent even if the registry/docs ever drift
     // (that drift is independently caught by the WARN loop above).
