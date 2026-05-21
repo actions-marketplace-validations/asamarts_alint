@@ -188,7 +188,19 @@ fn write_violation(
     if opts.show_docs
         && let Some(url) = &result.policy_url
     {
-        let docs = style::DOCS;
+        // Style swap on `opts.hyperlinks`: when OSC 8 is emitted the
+        // terminal handles link styling itself (hover underline +
+        // pointer cursor), so emitting our own `\e[4m` on top
+        // causes some renderers — notably `asciinema-player` —
+        // to extend the underline past the URL to the end of the
+        // terminal row. Drop the explicit underline in that path;
+        // keep it on the fallback path so non-OSC-8 terminals
+        // still get the visual link cue.
+        let docs = if opts.hyperlinks {
+            style::DOCS_LINKED
+        } else {
+            style::DOCS
+        };
         write!(w, "{MSG_INDENT}{dim}docs:{dim:#} {docs}")?;
         write_hyperlink(w, url, url, opts.hyperlinks)?;
         writeln!(w, "{docs:#}")?;

@@ -52,10 +52,21 @@ pub const PATH: Style = Style::new().bold();
 /// message.
 pub const RULE_ID: Style = Style::new().dimmed();
 
-/// Documentation / policy URLs.
+/// Documentation / policy URLs — fallback styling for terminals
+/// that do NOT support OSC 8 hyperlinks. Blue + underline reads
+/// as the universal link convention.
 pub const DOCS: Style = Style::new()
     .fg_color(Some(Color::Ansi(AnsiColor::Blue)))
     .underline();
+
+/// Documentation / policy URLs — styling when the surrounding
+/// emission wraps the URL in an OSC 8 hyperlink. The terminal
+/// itself handles the link affordance (typically a hover-driven
+/// underline + `pointer` cursor), so emitting our own `\e[4m`
+/// on top causes some renderers (notably `asciinema-player`)
+/// to extend the underline past the link text to the end of the
+/// row. Drop the explicit underline; keep blue as the convention.
+pub const DOCS_LINKED: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Blue)));
 
 /// "fixable" tag — green to read as a positive affordance.
 pub const FIXABLE: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Green)));
@@ -395,6 +406,37 @@ mod tests {
         let mut out = Vec::new();
         write_hyperlink(&mut out, "https://example.com", "click", false).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), "click");
+    }
+
+    #[test]
+    fn docs_style_carries_underline_and_blue() {
+        // Non-OSC-8 fallback path: underline + blue keeps the
+        // visual link convention for terminals that can't render
+        // the OSC 8 hyperlink semantic themselves.
+        let s = format!("{DOCS}link{DOCS:#}");
+        assert!(s.contains("\x1b[4m"), "DOCS must carry underline: {s:?}");
+        // 4-bit ANSI blue is `\e[34m`.
+        assert!(s.contains("\x1b[34m"), "DOCS must carry blue: {s:?}");
+    }
+
+    #[test]
+    fn docs_linked_drops_underline_keeps_blue() {
+        // OSC-8 path: the terminal handles the link affordance
+        // itself (hover-driven underline + pointer cursor).
+        // Emitting our own `\e[4m` on top causes some renderers
+        // — notably `asciinema-player` — to extend the underline
+        // past the link text to the end of the row. The
+        // DOCS_LINKED style drops the explicit underline; blue
+        // stays as the universal "link" convention.
+        let s = format!("{DOCS_LINKED}link{DOCS_LINKED:#}");
+        assert!(
+            !s.contains("\x1b[4m"),
+            "DOCS_LINKED must NOT carry an explicit underline: {s:?}"
+        );
+        assert!(
+            s.contains("\x1b[34m"),
+            "DOCS_LINKED must keep blue as the link convention: {s:?}"
+        );
     }
 
     // ColorChoice::resolve tests. The workspace forbids

@@ -919,8 +919,16 @@ fn render_env(
 
     // Hyperlink detection needs a TTY to matter; piped output that
     // happens to survive (because `--color=always`) still won't be
-    // rendered as a link by anything downstream.
-    let hyperlinks = is_tty && supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout);
+    // rendered as a link by anything downstream. The
+    // `ALINT_FORCE_HYPERLINKS=1` escape hatch overrides both checks:
+    // used by the asciinema demo capture (stdout redirected to a
+    // file, so `is_tty=false`, but the cast is replayed inside an
+    // OSC-8-supporting terminal emulator and should carry the
+    // hyperlink semantic). Empty / `0` values do NOT force.
+    let force_hyperlinks =
+        std::env::var_os("ALINT_FORCE_HYPERLINKS").is_some_and(|v| !v.is_empty() && v != *"0");
+    let hyperlinks = force_hyperlinks
+        || (is_tty && supports_hyperlinks::on(supports_hyperlinks::Stream::Stdout));
 
     // Only ask the kernel for columns when we know we're on a TTY.
     // Pipes have no useful width; let the formatter fall back to
