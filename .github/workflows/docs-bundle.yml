@@ -119,8 +119,17 @@ jobs:
           echo "HTTP $status"
           echo "response body:"
           echo "$body"
-          if [[ "$status" =~ ^2 ]] && grep -q '"id"' <<<"$body"; then
-            echo "::notice::Cloudflare accepted the deploy hook; build queued."
+          # CF's deploy-hook API returns a JSON object shaped like
+          #   {"result":{"build_uuid":"...","status":"queued",
+          #              "already_exists":false},
+          #    "success":true,"errors":[],"messages":[]}
+          # on a clean accept. `"success":true` is the canonical
+          # success marker. Earlier-version drafts of this gate
+          # looked for `"id"` and incorrectly rejected the genuine
+          # success payload (CF returns `build_uuid`, not `id`).
+          if [[ "$status" =~ ^2 ]] && grep -q '"success":true' <<<"$body"; then
+            build_uuid=$(grep -oE '"build_uuid":"[^"]+"' <<<"$body" || true)
+            echo "::notice::Cloudflare accepted the deploy hook; ${build_uuid:-build queued}."
           else
             echo "::error::Cloudflare did NOT accept the deploy hook cleanly."
             echo "::error::Check Workers & Pages → alint-org → Deployments."
