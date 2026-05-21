@@ -95,6 +95,16 @@ jobs:
         # as a repo secret on asamarts/alint so the docs-bundle
         # update propagates to alint.org within seconds. If the
         # secret isn't set yet, the step is a no-op.
+        #
+        # The body-capturing form (vs. the older
+        # `curl -fsSL -X POST "$HOOK" -o /dev/null`) catches the
+        # 2xx-with-error-body silent-failure mode hit during the
+        # v0.10.2 cycle: Cloudflare returned an HTTP 200 carrying
+        # a JSON error payload, curl exited 0, the workflow logged
+        # "Pinged alint.org deploy hook." and the live site
+        # silently kept serving the pre-fix build. The new form
+        # logs the actual response body + HTTP status and treats
+        # anything other than 2xx-with-`"id"` as a failed step.
         env:
           HOOK: ${{ secrets.ALINT_ORG_DEPLOY_HOOK }}
         run: |
@@ -103,5 +113,16 @@ jobs:
             echo "ALINT_ORG_DEPLOY_HOOK not set — skipping site rebuild trigger."
             exit 0
           fi
-          curl -fsSL -X POST "$HOOK" -o /dev/null
-          echo "Pinged alint.org deploy hook."
+          tmp=$(mktemp)
+          status=$(curl -sS -o "$tmp" -w '%{http_code}' -X POST "$HOOK")
+          body=$(cat "$tmp"); rm -f "$tmp"
+          echo "HTTP $status"
+          echo "response body:"
+          echo "$body"
+          if [[ "$status" =~ ^2 ]] && grep -q '"id"' <<<"$body"; then
+            echo "::notice::Cloudflare accepted the deploy hook; build queued."
+          else
+            echo "::error::Cloudflare did NOT accept the deploy hook cleanly."
+            echo "::error::Check Workers & Pages → alint-org → Deployments."
+            exit 1
+          fi
