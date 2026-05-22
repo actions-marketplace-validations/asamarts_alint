@@ -35,6 +35,7 @@ actually do in their current environment.
 | [`scope_filter_changed_since.md`](./scope_filter_changed_since.md) | New `scope_filter.changed_since:` predicate. Per-rule diff-scope; composable with `has_ancestor`. Also covers the `git_no_denied_paths` `since:` option. |
 | [`commit_validation_rules.md`](./commit_validation_rules.md) | Family of four new commit-validation rule kinds (`git_commit_signed_off`, `git_commit_no_fixup`, `git_commit_author_allowlist`, `git_commit_gpg_signed`). All ship with `since:` from day one. |
 | [`variable_interpolation.md`](./variable_interpolation.md) | `{{env.X}}` interpolation across every string-typed config field. `\| default(...)` filter for fallbacks. `env.X` namespace in the `when:` expression language. Deprecation path for the v0.9.21 `${VAR}` syntax. |
+| [`informational_findings.md`](./informational_findings.md) | A notes/`--show-notes` channel for non-violation findings. Captures the v0.10 deferment: `registry_paths_resolve` / `cross_file_value_equals` silently skip non-literal entries today (`let _ = skipped;`) — this surfaces them. Feeds LSP `Hint` diagnostics too. |
 
 ## Cross-cutting decisions
 

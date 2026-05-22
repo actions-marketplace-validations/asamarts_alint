@@ -178,9 +178,9 @@ impl Rule for RegistryPathsResolveRule {
             // Non-literal (computed/interpolated) entries are
             // intentionally skipped, not failed. The skip is
             // silent in v0.10 — `alint check` has no
-            // informational-finding / `--explain` channel;
-            // visibly surfacing the skip list is a tracked
-            // v0.11 item (see the design doc).
+            // informational-finding channel; visibly surfacing
+            // the skip list is a tracked v0.11 item (see
+            // docs/design/v0.11/informational_findings.md).
             let _ = skipped;
 
             let excluded = self.excluded_entries(&text);
