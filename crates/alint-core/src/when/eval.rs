@@ -17,6 +17,18 @@ pub(super) fn eval(e: &WhenExpr, env: &WhenEnv<'_>) -> Result<Value, WhenError> 
                 None => Ok(Value::Null),
             },
             Namespace::Iter => Ok(eval_iter_value(name, env.iter.as_ref())),
+            // `env.X`: an injected map (tests) takes precedence;
+            // otherwise read the live process environment. Env is
+            // constant during a run, so the eval-time read is
+            // equivalent to a load-time snapshot. Unset → null
+            // (falsy), matching the "missing fact is falsy" rule.
+            Namespace::Env => {
+                let value = match env.env {
+                    Some(map) => map.get(name).cloned(),
+                    None => std::env::var(name).ok(),
+                };
+                Ok(value.map_or(Value::Null, Value::String))
+            }
         },
         WhenExpr::Call { ns, method, args } => match ns {
             Namespace::Iter => eval_iter_call(method, args, env),

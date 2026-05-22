@@ -13,7 +13,7 @@
 //! literal    := STRING | INT | BOOL | 'null' | list
 //! list       := '[' [expr (',' expr)*] ']'
 //! ident_or_call := NS '.' NAME ['(' [expr (',' expr)*] ')']
-//! NS         := 'facts' | 'vars' | 'iter'
+//! NS         := 'facts' | 'vars' | 'iter' | 'env'
 //! ```
 //!
 //! Design choices (all load-bearing):
@@ -108,6 +108,12 @@ pub enum Namespace {
     /// evaluates to `null` and `iter.has_file(_)` to `false` —
     /// matching the "missing fact is falsy" rule.
     Iter,
+    /// Environment variables. `env.CI`, `env.GITHUB_ACTIONS`, etc.
+    /// Resolved at evaluation time (env is constant during a run);
+    /// an unset variable evaluates to `null`, matching the
+    /// "missing fact is falsy" rule. Value-only — there are no
+    /// callable methods on `env`.
+    Env,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,18 +173,28 @@ pub struct WhenEnv<'a> {
     /// resolve to falsy / null per the "unknown fact is
     /// falsy" convention.
     pub iter: Option<IterEnv<'a>>,
+    /// Optional environment-variable snapshot backing the `env.*`
+    /// namespace. `None` — the production default — means the
+    /// evaluator reads the live process environment via
+    /// `std::env::var` (env is constant during a run, so the
+    /// eval-time read matches a load-time snapshot). Tests inject
+    /// a fake map via [`WhenEnv::with_env`] so they never touch
+    /// the real environment (Rust 2024 marks `set_var` unsafe).
+    pub env: Option<&'a HashMap<String, String>>,
 }
 
 impl<'a> WhenEnv<'a> {
     /// Construct a `WhenEnv` without iteration context — the
     /// shape every existing call site uses. `iter.*` references
-    /// in the expression resolve to null / false.
+    /// in the expression resolve to null / false; `env.*` reads
+    /// the live process environment.
     #[must_use]
     pub fn new(facts: &'a FactValues, vars: &'a HashMap<String, String>) -> Self {
         Self {
             facts,
             vars,
             iter: None,
+            env: None,
         }
     }
 
@@ -188,6 +204,15 @@ impl<'a> WhenEnv<'a> {
     #[must_use]
     pub fn with_iter(mut self, iter: IterEnv<'a>) -> Self {
         self.iter = Some(iter);
+        self
+    }
+
+    /// Back the `env.*` namespace with an explicit map instead of
+    /// the live process environment. Used by tests to resolve
+    /// `env.X` hermetically.
+    #[must_use]
+    pub fn with_env(mut self, env: &'a HashMap<String, String>) -> Self {
+        self.env = Some(env);
         self
     }
 }
@@ -342,6 +367,7 @@ mod tests {
             facts: &facts,
             vars: &vars,
             iter: None,
+            env: None,
         })
         .unwrap()
     }
@@ -463,6 +489,7 @@ mod tests {
             facts: &facts,
             vars: &vars,
             iter: None,
+            env: None,
         });
         assert!(result.is_err());
     }
@@ -476,6 +503,7 @@ mod tests {
                 facts: &facts,
                 vars: &vars,
                 iter: None,
+                env: None,
             })
             .unwrap()
         );
@@ -486,6 +514,80 @@ mod tests {
         assert!(check(
             "not (facts.is_node or (facts.n_files == 0 and facts.is_rust))"
         ));
+    }
+
+    // ─── env namespace ───────────────────────────────────────────
+
+    fn check_env(src: &str, vars_env: &[(&str, &str)]) -> bool {
+        let (facts, vars) = env();
+        let env_map: HashMap<String, String> = vars_env
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        let expr = parse(src).unwrap();
+        expr.evaluate(&WhenEnv::new(&facts, &vars).with_env(&env_map))
+            .unwrap()
+    }
+
+    #[test]
+    fn env_namespace_resolves_injected_value() {
+        assert!(check_env("env.CI == \"true\"", &[("CI", "true")]));
+        assert!(check_env(
+            "env.GITHUB_ACTIONS == \"true\" or env.CI == \"true\"",
+            &[("CI", "true")],
+        ));
+    }
+
+    #[test]
+    fn env_unset_var_is_null_and_falsy() {
+        assert!(!check_env("env.NOT_SET", &[]));
+        assert!(check_env("env.NOT_SET == null", &[]));
+        assert!(!check_env("env.NOT_SET == \"true\"", &[]));
+    }
+
+    #[test]
+    fn env_composes_with_facts_and_vars() {
+        assert!(check_env(
+            "facts.is_rust and env.CI == \"true\"",
+            &[("CI", "true")],
+        ));
+        assert!(!check_env(
+            "facts.is_node and env.CI == \"true\"",
+            &[("CI", "true")],
+        ));
+    }
+
+    #[test]
+    fn env_values_are_always_strings_compare_against_string_literals() {
+        // env vars resolve to `String`, never `Int`. Comparing to a
+        // bare integer literal is silently false (mixed-type `==`),
+        // so users must quote: `env.PORT == "8080"`, not `== 8080`.
+        assert!(check_env("env.PORT == \"8080\"", &[("PORT", "8080")]));
+        assert!(!check_env("env.PORT == 8080", &[("PORT", "8080")]));
+    }
+
+    #[test]
+    fn env_matches_and_in_operators() {
+        assert!(check_env(
+            "env.REF matches \"^refs/tags/\"",
+            &[("REF", "refs/tags/v1.0",)]
+        ));
+        assert!(check_env(
+            "\"prod\" in env.ENVIRONMENT",
+            &[("ENVIRONMENT", "prod-east",)]
+        ));
+    }
+
+    #[test]
+    fn env_parses_as_valid_namespace() {
+        // `env.X` parses cleanly (regression guard for the parser
+        // namespace dispatch); a bogus namespace still rejects with
+        // the updated allowed-list message.
+        assert!(parse("env.CI == \"true\"").is_ok());
+        let WhenError::Parse { message, .. } = parse("environ.CI").unwrap_err() else {
+            panic!("expected parse error");
+        };
+        assert!(message.contains("env.NAME"), "msg: {message}");
     }
 
     // ─── iter namespace ──────────────────────────────────────────
@@ -517,6 +619,7 @@ mod tests {
                 is_dir,
                 index,
             }),
+            env: None,
         })
         .unwrap()
     }
@@ -670,6 +773,7 @@ mod tests {
                     is_dir: true,
                     index: &index,
                 }),
+                env: None,
             })
             .unwrap_err();
         let WhenError::Eval(msg) = err else {

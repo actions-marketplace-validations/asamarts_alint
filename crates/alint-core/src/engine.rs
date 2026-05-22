@@ -255,6 +255,7 @@ impl Engine {
             facts: &fact_values,
             vars: &self.vars,
             iter: None,
+            env: None,
         };
 
         // Per-rule wall-time accumulator for the cross-file
@@ -626,6 +627,7 @@ impl Engine {
             facts: &fact_values,
             vars: &self.vars,
             iter: None,
+            env: None,
         };
         let fix_ctx = FixContext {
             root,

@@ -204,6 +204,7 @@ pub(crate) fn evaluate_for_each(
                     facts,
                     vars,
                     iter: Some(iter_env),
+                    env: None,
                 };
                 match expr.evaluate(&env) {
                     Ok(true) => {}
@@ -236,6 +237,7 @@ pub(crate) fn evaluate_for_each(
                         facts,
                         vars,
                         iter: Some(iter_env),
+                        env: None,
                     };
                     match expr.evaluate(&env) {
                         Ok(true) => {}

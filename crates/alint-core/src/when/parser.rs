@@ -167,12 +167,13 @@ impl Parser {
                     "facts" => Namespace::Facts,
                     "vars" => Namespace::Vars,
                     "iter" => Namespace::Iter,
+                    "env" => Namespace::Env,
                     other => {
                         return Err(WhenError::Parse {
                             pos,
                             message: format!(
                                 "unknown identifier {other:?}; only `facts.NAME`, \
-                                 `vars.NAME`, and `iter.NAME` are allowed"
+                                 `vars.NAME`, `iter.NAME`, and `env.NAME` are allowed"
                             ),
                         });
                     }
