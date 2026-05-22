@@ -301,6 +301,37 @@ fn env_lookup(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// Rewrite POSIX `${VAR}` / `${VAR:-default}` occurrences into the
+/// canonical v0.11 `{{env.VAR}}` / `{{env.VAR | default('default')}}`
+/// form, for the deprecation warning's actionable suggestion. Mirrors
+/// [`expand_env`]'s grammar; non-`${...}` text passes through.
+fn posix_to_env_template(input: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + 2..];
+        let Some(end) = after_open.find('}') else {
+            out.push_str("${");
+            rest = after_open;
+            continue;
+        };
+        let inner = &after_open[..end];
+        match inner.split_once(":-") {
+            Some((name, def)) => {
+                let _ = write!(out, "{{{{env.{name} | default('{def}')}}}}");
+            }
+            None => {
+                let _ = write!(out, "{{{{env.{inner}}}}}");
+            }
+        }
+        rest = &after_open[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -325,6 +356,27 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "`include_merges: true` has no effect without `since:`. Either remove it \
              or set `since:` to enable range mode.",
         ));
+    }
+
+    // Deprecation: v0.9.21 shipped POSIX `${VAR}` interpolation on
+    // `since:` only. v0.11 generalises env interpolation to the
+    // canonical `{{env.X}}` form (resolved at config load by
+    // `alint-dsl`), so a `since:` value still written as `${VAR}`
+    // is a legacy syntax. It keeps working this one minor (expanded
+    // at evaluate time by `expand_env`) but warns; v1.0 removes it.
+    // Scoped to `since:` because `${VAR}` was never interpolated in
+    // any other field — a literal `${` elsewhere is just a literal.
+    if let Some(raw) = &opts.since {
+        if raw.contains("${") {
+            eprintln!(
+                "alint: warning: rule {:?}: `since: {raw}` uses the deprecated v0.9.21 \
+                 `${{VAR}}` interpolation syntax. The canonical v0.11+ form is `{}`; \
+                 the `${{VAR}}` form will be removed in v1.0. \
+                 See https://alint.org/docs/configuration/#variable-interpolation.",
+                spec.id,
+                posix_to_env_template(raw),
+            );
+        }
     }
 
     let pattern = opts
@@ -544,6 +596,40 @@ mod tests {
             err.to_string().contains("include_merges"),
             "expected include_merges hint, got: {err}"
         );
+    }
+
+    #[test]
+    fn posix_to_env_template_converts_simple_and_default() {
+        assert_eq!(
+            posix_to_env_template("${ALINT_BASE_SHA}"),
+            "{{env.ALINT_BASE_SHA}}"
+        );
+        assert_eq!(
+            posix_to_env_template("${BASE:-origin/main}"),
+            "{{env.BASE | default('origin/main')}}"
+        );
+        // Bare text + embedded form pass through / convert in place.
+        assert_eq!(posix_to_env_template("origin/main"), "origin/main");
+        assert_eq!(posix_to_env_template("refs/${REF}"), "refs/{{env.REF}}");
+    }
+
+    #[test]
+    fn build_accepts_legacy_posix_since_with_deprecation() {
+        // `${VAR}` still builds (deprecation is a stderr warning, not
+        // an error) so existing v0.9.21 configs keep loading. The
+        // value is still expanded at evaluate time by `expand_env`.
+        let s = spec("requires_body = true\nsince = \"${ALINT_BASE_SHA}\"\n");
+        assert!(build(&s).is_ok());
+    }
+
+    #[test]
+    fn build_accepts_canonical_template_since() {
+        // The canonical `{{env.X}}` form is resolved upstream by the
+        // DSL interp pass before the rule sees it; here (no interp)
+        // it simply arrives as a literal ref and builds fine without
+        // triggering the `${VAR}` deprecation path.
+        let s = spec("requires_body = true\nsince = \"{{env.ALINT_BASE_SHA}}\"\n");
+        assert!(build(&s).is_ok());
     }
 
     #[test]
