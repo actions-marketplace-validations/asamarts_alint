@@ -127,8 +127,20 @@ fn load_nested_config(abs_path: &Path, rel_dir: &Path) -> Result<Vec<Mapping>> {
         path: abs_path.to_path_buf(),
         source,
     })?;
-    let config: RawConfig = serde_yaml_ng::from_str(&contents)
-        .map_err(|e| Error::Other(format!("parsing nested config {}: {e}", abs_path.display())))?;
+    // Route through the shared parse path so nested configs get the
+    // same `{{env.X}}` interpolation as the top-level config and
+    // drop-ins. A YAML/typed error keeps the "parsing nested config"
+    // context; an interpolation error already carries the path.
+    let config: RawConfig = match crate::loader::parse_config_interpolated(&contents, abs_path) {
+        Ok(c) => c,
+        Err(Error::Yaml(e)) => {
+            return Err(Error::Other(format!(
+                "parsing nested config {}: {e}",
+                abs_path.display()
+            )));
+        }
+        Err(other) => return Err(other),
+    };
 
     // MVP: reject nested configs that try to set anything that
     // could affect the whole repo. Only `version:` and `rules:`

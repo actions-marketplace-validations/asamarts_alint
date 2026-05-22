@@ -11,6 +11,31 @@ use alint_core::{Error, Result};
 use crate::extends;
 use crate::{LoadOptions, RawConfig, apply_rule_filter, merge, reject_command_rules_in};
 
+/// Parse a local config file's `contents` into a [`RawConfig`],
+/// resolving `{{env.X}}` interpolation first. Shared by
+/// `load_recursive` and nested-config loading so every local config
+/// file (top-level, `.alint.d/` drop-ins, local `extends:` targets,
+/// and nested configs) gets identical interpolation treatment —
+/// bundled and remote `extends:` content is handled elsewhere and
+/// deliberately NOT interpolated against the consumer's environment.
+///
+/// Gated on the presence of any `{{` marker: a config with no
+/// interpolation parses straight into `RawConfig`, which keeps the
+/// line/column-aware serde error messages (the `Value` round-trip
+/// loses span info) AND skips a redundant second parse. An interp
+/// failure is reported with the `source` path; a typed/YAML error
+/// propagates bare so the existing diagnostics are unchanged.
+pub(crate) fn parse_config_interpolated(contents: &str, source: &Path) -> Result<RawConfig> {
+    if contents.contains("{{") {
+        let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)?;
+        crate::interp::interpolate_value(&mut value, &|n| std::env::var(n).ok())
+            .map_err(|e| Error::Other(format!("{}: interpolation error: {e}", source.display())))?;
+        Ok(serde_yaml_ng::from_value(value)?)
+    } else {
+        Ok(serde_yaml_ng::from_str(contents)?)
+    }
+}
+
 /// Recursively load `path`, resolving its `extends:` chain
 /// left-to-right. Later entries in the chain override earlier
 /// ones; the current file's own definitions override everything
@@ -37,7 +62,7 @@ pub(crate) fn load_recursive(
         path: canonical.clone(),
         source,
     })?;
-    let mut config: RawConfig = serde_yaml_ng::from_str(&contents)?;
+    let mut config = parse_config_interpolated(&contents, &canonical)?;
 
     let extends = std::mem::take(&mut config.extends);
     if extends.is_empty() {

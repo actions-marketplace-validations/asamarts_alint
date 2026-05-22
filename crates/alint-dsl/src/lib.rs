@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 
 pub mod bundled;
 pub mod extends;
+mod interp;
 mod loader;
 mod nested;
 
@@ -897,6 +898,43 @@ rules:
             Some(alint_core::Level::Warning)
         );
         assert_eq!(cfg.rules.len(), 2);
+    }
+
+    #[test]
+    fn load_interpolates_env_default_through_real_path() {
+        // End-to-end through `load()`: the value field uses an
+        // unset env var with a default, so it resolves hermetically
+        // (no env var set — Rust 2024 marks `set_var` unsafe). Proves
+        // the YAML-value → interpolate → RawConfig wiring in the
+        // loader fires and that `vars.`/`id:` are left intact.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".alint.yml"),
+            "version: 1\nrules:\n  - id: spdx\n    kind: file_exists\n    \
+             paths: \"{{env.ALINT_TEST_UNSET_DIR | default('src')}}/X\"\n    level: error\n",
+        )
+        .unwrap();
+        let cfg = load(&tmp.path().join(".alint.yml")).unwrap();
+        assert_eq!(cfg.rules.len(), 1);
+        assert_eq!(cfg.rules[0].id, "spdx");
+        // `id:` is in SKIP_KEYS, never interpolated; `paths:` is.
+        let paths = format!("{:?}", cfg.rules[0].paths);
+        assert!(paths.contains("src/X"), "paths not interpolated: {paths}");
+    }
+
+    #[test]
+    fn load_errors_on_undefined_env_without_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".alint.yml"),
+            "version: 1\nrules:\n  - id: r\n    kind: file_exists\n    \
+             paths: \"{{env.ALINT_TEST_DEFINITELY_UNSET}}\"\n    level: error\n",
+        )
+        .unwrap();
+        let err = load(&tmp.path().join(".alint.yml")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("interpolation error"), "{msg}");
+        assert!(msg.contains("ALINT_TEST_DEFINITELY_UNSET"), "{msg}");
     }
 
     #[test]
