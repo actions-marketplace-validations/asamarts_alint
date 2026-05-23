@@ -775,6 +775,7 @@ GitNoDeniedPathsRule {
         "*.pem",
         "id_rsa",
     ],
+    since_raw: None,
 }
 
 === kind: header | id: header-alias ===

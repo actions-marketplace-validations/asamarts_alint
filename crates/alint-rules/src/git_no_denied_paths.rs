@@ -19,7 +19,7 @@
 //! `git rm --cached`, which is a sensitive operation alint
 //! should never automate.
 
-use alint_core::git::collect_tracked_paths;
+use alint_core::git::{CommitRangeError, collect_changed_paths_checked, collect_tracked_paths};
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
@@ -33,6 +33,13 @@ struct Options {
     /// basename-only patterns (`*.env`) both work; `globset`'s
     /// matcher checks both forms.
     denied: Vec<String>,
+    /// Optional git ref. When set, only denied paths that changed
+    /// in the `<since>...HEAD` diff are flagged (the PR-scoped
+    /// shape — catches a secret added in the PR even if HEAD's
+    /// tree still tracks an older one). Accepts the `{{env.X}}`
+    /// interpolation (resolved at config load).
+    #[serde(default)]
+    since: Option<String>,
 }
 
 #[derive(Debug)]
@@ -45,6 +52,10 @@ pub struct GitNoDeniedPathsRule {
     /// Original patterns, kept for the violation message so the
     /// user sees which entry on their denylist matched.
     denied_src: Vec<String>,
+    /// `since:` value (already `{{env.X}}`-interpolated at load).
+    /// `None` checks every tracked path; `Some` restricts to the
+    /// `<since>...HEAD` diff.
+    since_raw: Option<String>,
 }
 
 impl Rule for GitNoDeniedPathsRule {
@@ -59,7 +70,33 @@ impl Rule for GitNoDeniedPathsRule {
             return Ok(violations);
         };
 
+        // When `since:` is set, restrict to paths that changed in the
+        // `<since>...HEAD` diff. A bad ref hard-fails (shallow-clone
+        // hint); no-git is already covered by the `tracked` guard.
+        let diff = match &self.since_raw {
+            None => None,
+            Some(since) => match collect_changed_paths_checked(ctx.root, since) {
+                Ok(diff) => diff,
+                Err(CommitRangeError::BadRange { stderr }) => {
+                    return Err(Error::rule_config(
+                        &self.id,
+                        format!(
+                            "could not resolve `{since}...HEAD`: {stderr}. Common cause: \
+                             shallow clone. In a GitHub Actions PR workflow, use \
+                             `actions/checkout@v4` with `fetch-depth: 0` so the base ref is \
+                             reachable."
+                        ),
+                    ));
+                }
+            },
+        };
+
         for path in &tracked {
+            if let Some(diff) = &diff
+                && !diff.contains(path)
+            {
+                continue;
+            }
             let matches = self.denied_set.matches(path);
             if matches.is_empty() {
                 continue;
@@ -120,6 +157,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         message: spec.message.clone(),
         denied_set,
         denied_src: opts.denied,
+        since_raw: opts.since,
     }))
 }
 
@@ -183,6 +221,21 @@ mod tests {
         assert_eq!(set.matches(std::path::Path::new("private.pem")).len(), 1);
         assert_eq!(set.matches(std::path::Path::new(".env")).len(), 1);
         assert_eq!(set.matches(std::path::Path::new("README.md")).len(), 0);
+    }
+
+    fn spec(toml: &str) -> RuleSpec {
+        let mut full =
+            String::from("id = \"d\"\nkind = \"git_no_denied_paths\"\nlevel = \"error\"\n");
+        full.push_str(toml);
+        toml::from_str(&full).unwrap()
+    }
+
+    #[test]
+    fn build_accepts_optional_since() {
+        assert!(build(&spec("denied = [\"*.env\"]\n")).is_ok());
+        assert!(build(&spec("denied = [\"*.env\"]\nsince = \"origin/main\"\n")).is_ok());
+        // `denied` is still required.
+        assert!(build(&spec("since = \"origin/main\"\n")).is_err());
     }
 
     #[test]

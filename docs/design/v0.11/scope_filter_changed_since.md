@@ -9,10 +9,11 @@ either may be set alone (`has_ancestor` is now optional in the spec).
 `alint-core::git::collect_changed_paths_checked` distinguishes no-git
 (silent) from bad-ref (hard error with the shallow-clone hint).
 
-**Deferred to a follow-up:** the adjacent `git_no_denied_paths.since:`
-option (the design's §"adjacent rule-level option") — it is a separate
-rule-level change, not part of the `scope_filter` predicate, and is
-tracked for a later v0.11.x item.
+The adjacent `git_no_denied_paths.since:` option (the design's
+§"adjacent rule-level option") also shipped (2026-05-23): the rule
+gained an optional `since:` ref that scopes the denylist check to the
+`<since>...HEAD` diff via the same `collect_changed_paths_checked`
+helper.
 
 Original draft written 2026-05-14 after v0.9.21 shipped #26.
 

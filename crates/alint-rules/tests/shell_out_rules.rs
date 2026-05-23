@@ -147,6 +147,53 @@ fn git_no_denied_paths_silent_outside_git() {
     );
 }
 
+#[test]
+fn git_no_denied_paths_since_scopes_to_diff() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+
+    // Base commit tracks an old secret.
+    std::fs::write(root.join("old.env"), b"OLD=1\n").unwrap();
+    run_git(root, &["add", "old.env"]);
+    run_git(root, &["commit", "-q", "-m", "base"]);
+    let base = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    // A later commit adds a new secret.
+    std::fs::write(root.join("new.env"), b"NEW=1\n").unwrap();
+    run_git(root, &["add", "new.env"]);
+    run_git(root, &["commit", "-q", "-m", "add new.env"]);
+
+    // Both files are tracked and match `*.env`, but only new.env
+    // changed since base → `since:` scopes the rule to the diff.
+    let yaml = format!(
+        "id: no-secrets\n\
+         kind: git_no_denied_paths\n\
+         denied: [\"*.env\"]\n\
+         since: \"{base}\"\n\
+         level: error\n"
+    );
+    let engine = build_engine_from_yaml(&yaml);
+    let report = run_engine(&engine, root);
+    let v = collect_violations(&report);
+    assert_eq!(v.len(), 1, "since should scope to the diff: {v:?}");
+    assert_eq!(v[0].path.as_deref(), Some(Path::new("new.env")));
+}
+
 // ─── git_commit_message ─────────────────────────────────────
 
 #[test]
