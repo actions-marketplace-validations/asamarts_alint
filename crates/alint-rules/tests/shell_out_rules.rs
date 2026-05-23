@@ -528,6 +528,90 @@ fn git_commit_gpg_signed_silent_outside_git() {
     );
 }
 
+// ─── scope_filter.changed_since (engine end-to-end) ─────────
+
+#[test]
+fn changed_since_scopes_a_per_file_rule_to_the_diff() {
+    if !git_available() {
+        eprintln!("git unavailable; skipping changed_since test");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+
+    // Base commit: old.rs (lacks the required header).
+    std::fs::write(root.join("old.rs"), b"fn old() {}\n").unwrap();
+    run_git(root, &["add", "old.rs"]);
+    run_git(root, &["commit", "-q", "-m", "base"]);
+    let base = String::from_utf8(
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+
+    // Later commit adds new.rs (also lacks the header). Only new.rs
+    // is in `<base>...HEAD`.
+    std::fs::write(root.join("new.rs"), b"fn new_thing() {}\n").unwrap();
+    run_git(root, &["add", "new.rs"]);
+    run_git(root, &["commit", "-q", "-m", "add new.rs"]);
+
+    // file_content_matches fires when the file does NOT contain the
+    // pattern; both files lack `// SPDX`, but changed_since scopes the
+    // rule to the PR diff (new.rs only).
+    let yaml = format!(
+        "id: spdx-on-changed\n\
+         kind: file_content_matches\n\
+         paths: \"**/*.rs\"\n\
+         pattern: \"^// SPDX\"\n\
+         scope_filter:\n  changed_since: \"{base}\"\n\
+         level: error\n"
+    );
+    let engine = build_engine_from_yaml(&yaml);
+    let report = run_engine(&engine, root);
+    let v = collect_violations(&report);
+    assert_eq!(
+        v.len(),
+        1,
+        "only the changed file should be in scope: {v:?}"
+    );
+    assert_eq!(
+        v[0].path.as_deref(),
+        Some(Path::new("new.rs")),
+        "the violation must be on the file added since base"
+    );
+}
+
+#[test]
+fn changed_since_outside_git_matches_nothing() {
+    // No repo: the diff resolves to nothing, so the rule silently
+    // checks zero files (does not fire on every file).
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("a.rs"), b"fn a() {}\n").unwrap();
+
+    let engine = build_engine_from_yaml(
+        "id: spdx-on-changed\n\
+         kind: file_content_matches\n\
+         paths: \"**/*.rs\"\n\
+         pattern: \"^// SPDX\"\n\
+         scope_filter:\n  changed_since: \"origin/main\"\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "outside a git repo, changed_since matches nothing"
+    );
+}
+
 // ─── command ────────────────────────────────────────────────
 
 // Linux-only because the macOS GitHub runner's `/bin/true`

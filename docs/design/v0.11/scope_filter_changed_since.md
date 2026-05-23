@@ -1,6 +1,20 @@
 # `scope_filter.changed_since:` — per-rule diff-scope predicate
 
-Status: Design draft, written 2026-05-14 after v0.9.21 shipped #26.
+Status: **Implemented (2026-05-22)** — the `scope_filter.changed_since:`
+predicate. The diff set is resolved once per `Engine::run`/`fix` and
+cached on the `FileIndex` (`OnceLock<HashMap<ref, HashSet<PathBuf>>>`),
+so `Scope::matches(path, index)` keeps its signature (44 hot-path call
+sites unchanged). `changed_since` AND-composes with `has_ancestor`;
+either may be set alone (`has_ancestor` is now optional in the spec).
+`alint-core::git::collect_changed_paths_checked` distinguishes no-git
+(silent) from bad-ref (hard error with the shallow-clone hint).
+
+**Deferred to a follow-up:** the adjacent `git_no_denied_paths.since:`
+option (the design's §"adjacent rule-level option") — it is a separate
+rule-level change, not part of the `scope_filter` predicate, and is
+tracked for a later v0.11.x item.
+
+Original draft written 2026-05-14 after v0.9.21 shipped #26.
 
 ## Problem
 

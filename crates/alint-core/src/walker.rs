@@ -76,6 +76,12 @@ pub struct FileIndex {
     pub entries: Vec<FileEntry>,
     path_set: OnceLock<HashSet<Arc<Path>>>,
     parent_to_children: OnceLock<HashMap<Arc<Path>, Vec<usize>>>,
+    /// Per-`since`-ref diff sets backing `scope_filter.changed_since:`.
+    /// Populated once by the engine before per-file dispatch (a ref
+    /// that resolves to "not a git repo" stores an empty set, so the
+    /// predicate silently matches nothing). Read lock-free in the
+    /// hot loop after `set`.
+    changed_paths: OnceLock<HashMap<String, HashSet<std::path::PathBuf>>>,
 }
 
 impl FileIndex {
@@ -88,7 +94,31 @@ impl FileIndex {
             entries,
             path_set: OnceLock::new(),
             parent_to_children: OnceLock::new(),
+            changed_paths: OnceLock::new(),
         }
+    }
+
+    /// Look up the cached changed-paths set for a `since` ref. `None`
+    /// means the cache wasn't populated for this ref (the engine only
+    /// resolves refs that appear on a per-file rule's
+    /// `scope_filter.changed_since:`); the predicate treats that as
+    /// "no file matches".
+    #[must_use]
+    pub fn changed_paths(&self, since: &str) -> Option<&HashSet<std::path::PathBuf>> {
+        self.changed_paths.get()?.get(since)
+    }
+
+    /// `true` once the engine has populated the changed-paths cache.
+    #[must_use]
+    pub fn changed_paths_initialized(&self) -> bool {
+        self.changed_paths.get().is_some()
+    }
+
+    /// Populate the changed-paths cache (engine-only, once per run,
+    /// before parallel dispatch). A no-op if already set, so re-using
+    /// one index across `run` + `fix` is safe.
+    pub fn set_changed_paths(&self, map: HashMap<String, HashSet<std::path::PathBuf>>) {
+        let _ = self.changed_paths.set(map);
     }
 
     pub fn files(&self) -> impl Iterator<Item = &FileEntry> {

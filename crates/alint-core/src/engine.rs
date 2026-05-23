@@ -344,6 +344,10 @@ impl Engine {
             }
         }
 
+        // Resolve `scope_filter.changed_since:` diffs once, before the
+        // per-file dispatch reads the per-file `Scope::matches` cache.
+        self.resolve_changed_paths(root, index)?;
+
         // Per-file partition: file-major loop reads each file
         // once and dispatches to every per-file rule whose scope
         // matches. Coalesces N reads of one file across N rules
@@ -635,6 +639,10 @@ impl Engine {
             fix_size_limit: self.fix_size_limit,
         };
 
+        // Same `scope_filter.changed_since:` resolution as `run`, so a
+        // fix pass respects per-rule diff scoping too.
+        self.resolve_changed_paths(root, index)?;
+
         let mut results: Vec<FixRuleResult> = Vec::new();
         for entry in &self.entries {
             if self.skip_for_changed(entry.rule.as_ref(), full_ctx.index) {
@@ -864,6 +872,62 @@ impl Engine {
             return false;
         };
         !set.iter().any(|p| scope.matches(p, index))
+    }
+
+    /// Resolve every distinct `scope_filter.changed_since:` ref across
+    /// the rule set and cache each `<ref>...HEAD` diff on the index,
+    /// once per run (before any `Scope::matches` reads it). A ref that
+    /// isn't a git repo caches an empty set — the documented silent
+    /// no-op. A ref that doesn't resolve *inside* a repo is a hard
+    /// error with a shallow-clone hint, so the misconfiguration
+    /// surfaces instead of silently matching nothing.
+    fn resolve_changed_paths(&self, root: &Path, index: &FileIndex) -> Result<()> {
+        if index.changed_paths_initialized() {
+            return Ok(());
+        }
+        let mut refs: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for entry in &self.entries {
+            // Per-file rules expose their scope via `PerFileRule::path_scope`
+            // (the `Rule::path_scope` default is `None`); rule-major rules
+            // expose it via `Rule::path_scope`. changed_since is a per-file
+            // concept, so prefer the per-file scope, falling back to the
+            // rule-level one.
+            let scope = entry
+                .rule
+                .as_per_file()
+                .map(super::rule::PerFileRule::path_scope)
+                .or_else(|| entry.rule.path_scope());
+            if let Some(scope) = scope
+                && let Some(filter) = scope.scope_filter()
+                && let Some(since) = filter.changed_since()
+            {
+                refs.insert(since);
+            }
+        }
+        if refs.is_empty() {
+            return Ok(());
+        }
+        let mut map = std::collections::HashMap::new();
+        for since in refs {
+            match crate::git::collect_changed_paths_checked(root, since) {
+                Ok(Some(set)) => {
+                    map.insert(since.to_string(), set);
+                }
+                Ok(None) => {
+                    map.insert(since.to_string(), std::collections::HashSet::new());
+                }
+                Err(crate::git::CommitRangeError::BadRange { stderr }) => {
+                    return Err(crate::error::Error::Other(format!(
+                        "scope_filter.changed_since: could not resolve `{since}...HEAD`: \
+                         {stderr}. Common cause: shallow clone. In a GitHub Actions PR \
+                         workflow, use `actions/checkout@v4` with `fetch-depth: 0` so the \
+                         base ref is reachable."
+                    )));
+                }
+            }
+        }
+        index.set_changed_paths(map);
+        Ok(())
     }
 }
 

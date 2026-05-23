@@ -63,6 +63,11 @@ use crate::walker::FileIndex;
 #[derive(Debug, Clone)]
 pub struct ScopeFilter {
     has_ancestor: Vec<PathBuf>,
+    /// `changed_since: <ref>` — when set, the file must also be in the
+    /// `<ref>...HEAD` diff (resolved once per run, cached on the
+    /// [`FileIndex`]). AND-composes with `has_ancestor`. Empty
+    /// `has_ancestor` + `Some` `changed_since` is a diff-only filter.
+    changed_since: Option<String>,
 }
 
 /// YAML-level shape of `scope_filter:`. Deserialised by
@@ -74,12 +79,21 @@ pub struct ScopeFilter {
 pub struct ScopeFilterSpec {
     /// Single literal filename or non-empty list of literal
     /// filenames. Each must be a basename (no path separator,
-    /// no glob metacharacters).
-    #[serde(deserialize_with = "deserialize_string_or_list")]
-    pub has_ancestor: Vec<String>,
+    /// no glob metacharacters). Optional since v0.11 — a
+    /// `scope_filter:` with only `changed_since:` is valid.
+    #[serde(default, deserialize_with = "deserialize_opt_string_or_list")]
+    pub has_ancestor: Option<Vec<String>>,
+    /// `changed_since: <git-ref>` — narrow the rule to files in the
+    /// `<ref>...HEAD` diff. Accepts the `{{env.X}}` interpolation
+    /// (resolved at config load). At least one of `has_ancestor:` /
+    /// `changed_since:` must be present.
+    #[serde(default)]
+    pub changed_since: Option<String>,
 }
 
-fn deserialize_string_or_list<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+fn deserialize_opt_string_or_list<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -90,8 +104,8 @@ where
         Many(Vec<String>),
     }
     match OneOrMany::deserialize(deserializer)? {
-        OneOrMany::One(s) => Ok(vec![s]),
-        OneOrMany::Many(v) => Ok(v),
+        OneOrMany::One(s) => Ok(Some(vec![s])),
+        OneOrMany::Many(v) => Ok(Some(v)),
     }
 }
 
@@ -106,19 +120,32 @@ impl ScopeFilter {
     /// - string contains a glob metacharacter
     ///   (`* ? [ ] { } !`)
     pub fn from_spec(rule_id: &str, spec: ScopeFilterSpec) -> Result<Self> {
-        if spec.has_ancestor.is_empty() {
+        let has_ancestor = match spec.has_ancestor {
+            Some(names) => {
+                if names.is_empty() {
+                    return Err(Error::rule_config(
+                        rule_id,
+                        "scope_filter.has_ancestor must be a non-empty list",
+                    ));
+                }
+                let mut paths = Vec::with_capacity(names.len());
+                for name in names {
+                    validate_manifest_name(rule_id, &name)?;
+                    paths.push(PathBuf::from(name));
+                }
+                paths
+            }
+            None => Vec::new(),
+        };
+        if has_ancestor.is_empty() && spec.changed_since.is_none() {
             return Err(Error::rule_config(
                 rule_id,
-                "scope_filter.has_ancestor must be a non-empty list",
+                "scope_filter must set at least one of `has_ancestor:` or `changed_since:`",
             ));
         }
-        let mut paths = Vec::with_capacity(spec.has_ancestor.len());
-        for name in spec.has_ancestor {
-            validate_manifest_name(rule_id, &name)?;
-            paths.push(PathBuf::from(name));
-        }
         Ok(Self {
-            has_ancestor: paths,
+            has_ancestor,
+            changed_since: spec.changed_since,
         })
     }
 
@@ -127,7 +154,24 @@ impl ScopeFilter {
     pub fn has_ancestor_unchecked(names: Vec<&str>) -> Self {
         Self {
             has_ancestor: names.into_iter().map(PathBuf::from).collect(),
+            changed_since: None,
         }
+    }
+
+    /// Direct construction of a diff-only filter. Tests only.
+    #[doc(hidden)]
+    pub fn changed_since_unchecked(since: &str) -> Self {
+        Self {
+            has_ancestor: Vec::new(),
+            changed_since: Some(since.to_string()),
+        }
+    }
+
+    /// The configured `changed_since:` ref, if any. The engine reads
+    /// this from every per-file rule to know which diffs to resolve.
+    #[must_use]
+    pub fn changed_since(&self) -> Option<&str> {
+        self.changed_since.as_deref()
     }
 
     /// True iff at least one of the configured ancestor
@@ -140,6 +184,27 @@ impl ScopeFilter {
     /// matching ancestor's path is not exposed (this is a
     /// boolean filter).
     pub fn matches(&self, file: &Path, index: &FileIndex) -> bool {
+        if !self.has_ancestor.is_empty() && !self.ancestor_matches(file, index) {
+            return false;
+        }
+        if let Some(since) = &self.changed_since {
+            // The diff set is resolved once per run and cached on the
+            // index; a missing entry (ref the engine didn't resolve, or
+            // a no-git repo) matches nothing — the documented silent
+            // no-op.
+            let in_diff = index
+                .changed_paths(since)
+                .is_some_and(|set| set.contains(file));
+            if !in_diff {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The `has_ancestor` walk, factored out so [`matches`](Self::matches)
+    /// can AND it with `changed_since`.
+    fn ancestor_matches(&self, file: &Path, index: &FileIndex) -> bool {
         let mut cur = file.parent();
         loop {
             let dir = cur.unwrap_or_else(|| Path::new(""));
@@ -380,7 +445,8 @@ mod tests {
         let err = ScopeFilter::from_spec(
             "r",
             ScopeFilterSpec {
-                has_ancestor: vec![],
+                has_ancestor: Some(vec![]),
+                changed_since: None,
             },
         )
         .unwrap_err();
@@ -392,7 +458,8 @@ mod tests {
         let err = ScopeFilter::from_spec(
             "r",
             ScopeFilterSpec {
-                has_ancestor: vec![String::new()],
+                has_ancestor: Some(vec![String::new()]),
+                changed_since: None,
             },
         )
         .unwrap_err();
@@ -404,7 +471,8 @@ mod tests {
         let err = ScopeFilter::from_spec(
             "r",
             ScopeFilterSpec {
-                has_ancestor: vec!["foo/bar".into()],
+                has_ancestor: Some(vec!["foo/bar".into()]),
+                changed_since: None,
             },
         )
         .unwrap_err();
@@ -417,7 +485,8 @@ mod tests {
             let err = ScopeFilter::from_spec(
                 "r",
                 ScopeFilterSpec {
-                    has_ancestor: vec![(*bad).into()],
+                    has_ancestor: Some(vec![(*bad).into()]),
+                    changed_since: None,
                 },
             )
             .unwrap_err();
@@ -440,7 +509,8 @@ mod tests {
             ScopeFilter::from_spec(
                 "r",
                 ScopeFilterSpec {
-                    has_ancestor: vec![(*good).into()],
+                    has_ancestor: Some(vec![(*good).into()]),
+                    changed_since: None,
                 },
             )
             .unwrap_or_else(|e| panic!("{good:?} should be valid; got {e}"));
@@ -453,7 +523,16 @@ mod tests {
     fn deserialize_single_string_form() {
         let yaml = "has_ancestor: Cargo.toml\n";
         let spec: ScopeFilterSpec = serde_yaml_ng::from_str(yaml).unwrap();
-        assert_eq!(spec.has_ancestor, vec!["Cargo.toml"]);
+        assert_eq!(spec.has_ancestor, Some(vec!["Cargo.toml".to_string()]));
+        assert_eq!(spec.changed_since, None);
+    }
+
+    #[test]
+    fn deserialize_changed_since_only_form() {
+        let yaml = "changed_since: origin/main\n";
+        let spec: ScopeFilterSpec = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(spec.has_ancestor, None);
+        assert_eq!(spec.changed_since.as_deref(), Some("origin/main"));
     }
 
     #[test]
@@ -462,7 +541,7 @@ mod tests {
         let spec: ScopeFilterSpec = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(
             spec.has_ancestor,
-            vec!["pom.xml".to_string(), "build.gradle".to_string()],
+            Some(vec!["pom.xml".to_string(), "build.gradle".to_string()]),
         );
     }
 
@@ -470,5 +549,81 @@ mod tests {
     fn deserialize_rejects_unknown_field() {
         let yaml = "has_ancestor: Cargo.toml\nunknown: x\n";
         assert!(serde_yaml_ng::from_str::<ScopeFilterSpec>(yaml).is_err());
+    }
+
+    // ── changed_since ─────────────────────────────────────────
+
+    fn idx_with_diff(paths: &[&str], since: &str, diff: &[&str]) -> FileIndex {
+        let i = idx(paths);
+        let mut map = std::collections::HashMap::new();
+        map.insert(since.to_string(), diff.iter().map(PathBuf::from).collect());
+        i.set_changed_paths(map);
+        i
+    }
+
+    #[test]
+    fn changed_since_matches_only_files_in_diff() {
+        let f = ScopeFilter::changed_since_unchecked("origin/main");
+        let i = idx_with_diff(&["src/a.rs", "src/b.rs"], "origin/main", &["src/a.rs"]);
+        assert!(f.matches(Path::new("src/a.rs"), &i), "in-diff file matches");
+        assert!(
+            !f.matches(Path::new("src/b.rs"), &i),
+            "out-of-diff file skipped"
+        );
+    }
+
+    #[test]
+    fn changed_since_with_unpopulated_cache_matches_nothing() {
+        // No git / unresolved ref → empty/absent cache → silent no-op.
+        let f = ScopeFilter::changed_since_unchecked("origin/main");
+        let i = idx(&["src/a.rs"]);
+        assert!(!f.matches(Path::new("src/a.rs"), &i));
+    }
+
+    #[test]
+    fn changed_since_and_composes_with_has_ancestor() {
+        // Both gates must hold. a.rs is in the diff AND under a
+        // Cargo.toml; b.rs is in the diff but has no ancestor manifest.
+        let f = ScopeFilter {
+            has_ancestor: vec![PathBuf::from("Cargo.toml")],
+            changed_since: Some("origin/main".to_string()),
+        };
+        let i = idx_with_diff(
+            &["crates/x/Cargo.toml", "crates/x/a.rs", "loose/b.rs"],
+            "origin/main",
+            &["crates/x/a.rs", "loose/b.rs"],
+        );
+        assert!(f.matches(Path::new("crates/x/a.rs"), &i));
+        assert!(
+            !f.matches(Path::new("loose/b.rs"), &i),
+            "no ancestor manifest"
+        );
+    }
+
+    #[test]
+    fn from_spec_rejects_neither_field() {
+        let err = ScopeFilter::from_spec(
+            "r",
+            ScopeFilterSpec {
+                has_ancestor: None,
+                changed_since: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("at least one"), "msg: {err}");
+    }
+
+    #[test]
+    fn from_spec_accepts_changed_since_only() {
+        let f = ScopeFilter::from_spec(
+            "r",
+            ScopeFilterSpec {
+                has_ancestor: None,
+                changed_since: Some("origin/main".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(f.changed_since(), Some("origin/main"));
+        assert!(f.has_ancestor_names().is_empty());
     }
 }

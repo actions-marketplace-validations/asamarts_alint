@@ -125,6 +125,59 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
     Some(out)
 }
 
+/// Like [`collect_changed_paths`] with a `base` ref, but distinguishes
+/// "not a git repo" (silent) from "ref doesn't resolve" (hard error) —
+/// the contract `scope_filter.changed_since:` needs. Returns the set of
+/// paths changed in `<since>...HEAD` (three-dot, merge-base diff —
+/// matching `alint check --changed`), relative to `root`.
+///
+/// - `Ok(Some(set))` — resolved.
+/// - `Ok(None)`       — not a git repo / `git` not on PATH (silent).
+/// - `Err(BadRange)`  — in a repo, but `<since>` didn't resolve (e.g.
+///   a shallow-clone gotcha). The caller surfaces a fetch-depth hint.
+pub fn collect_changed_paths_checked(
+    root: &Path,
+    since: &str,
+) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
+    // Probe: are we in a git repo at all? If not, silent None —
+    // matching the advisory posture of the rest of this module.
+    let Ok(probe) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+    else {
+        return Ok(None);
+    };
+    if !probe.status.success() {
+        return Ok(None);
+    }
+    let Ok(output) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["diff", "--name-only", "--relative", "-z"])
+        .arg(format!("{since}...HEAD"))
+        .output()
+    else {
+        return Ok(None);
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(CommitRangeError::BadRange { stderr });
+    }
+    let mut out = HashSet::new();
+    for chunk in output.stdout.split(|&b| b == 0) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let Ok(s) = std::str::from_utf8(chunk) else {
+            return Ok(None);
+        };
+        out.insert(PathBuf::from(s));
+    }
+    Ok(Some(out))
+}
+
 /// HEAD's commit message, as a single string with newlines
 /// preserved between subject and body. The subject is the first
 /// line; everything after the first blank line is the body.
@@ -948,6 +1001,22 @@ filename a.rs
             .unwrap();
         assert_eq!(with_merge.len(), 3);
         assert!(with_merge.iter().any(|r| r.message.starts_with("Merge ")));
+    }
+
+    #[test]
+    fn changed_paths_checked_none_outside_git_and_bad_range_inside() {
+        // Outside a git repo: silent None (so changed_since no-ops).
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            collect_changed_paths_checked(tmp.path(), "origin/main"),
+            Ok(None)
+        ));
+        // Inside a repo, an unresolvable ref hard-errors.
+        let repo = make_repo_with_commits(&["init"]);
+        assert!(matches!(
+            collect_changed_paths_checked(repo.path(), "no-such-ref"),
+            Err(CommitRangeError::BadRange { .. })
+        ));
     }
 
     #[test]
