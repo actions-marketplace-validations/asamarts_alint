@@ -697,6 +697,32 @@ GitBlameAgeRule {
     max_age: 15552000s,
 }
 
+=== kind: git_commit_author_allowlist | id: org-authors-only ===
+GitCommitAuthorAllowlistRule {
+    id: "org-authors-only",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    email_pattern: Some(
+        Regex(
+            "^.+@example\\.com$",
+        ),
+    ),
+    name_pattern: None,
+    since_raw: None,
+    include_merges: false,
+}
+
+=== kind: git_commit_gpg_signed | id: signed-commits ===
+GitCommitGpgSignedRule {
+    id: "signed-commits",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    since_raw: None,
+    include_merges: false,
+}
+
 === kind: git_commit_message | id: conventional-commit ===
 GitCommitMessageRule {
     id: "conventional-commit",
@@ -710,6 +736,29 @@ GitCommitMessageRule {
     ),
     subject_max_length: None,
     requires_body: false,
+    since_raw: None,
+    include_merges: false,
+}
+
+=== kind: git_commit_no_fixup | id: no-fixup-commits ===
+GitCommitNoFixupRule {
+    id: "no-fixup-commits",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    since_raw: None,
+    include_merges: false,
+}
+
+=== kind: git_commit_signed_off | id: dco-sign-off ===
+GitCommitSignedOffRule {
+    id: "dco-sign-off",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    pattern: Regex(
+        "(?m)^Signed-off-by: .+ <.+@.+>$",
+    ),
     since_raw: None,
     include_merges: false,
 }

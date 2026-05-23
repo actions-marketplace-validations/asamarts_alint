@@ -1,0 +1,26 @@
+name: git_commit_no_fixup fires on a leftover fixup! commit
+tags: [check, git_commit_no_fixup, git, failing]
+
+# HEAD mode (no `since:`): the tip commit's subject is prefixed
+# `fixup! `, the shape `git commit --fixup` produces. The rule
+# fires once — the user forgot to `rebase --autosquash`.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: no-fixup
+        kind: git_commit_no_fixup
+        level: error
+  git:
+    init: true
+    commits:
+      - "fixup! feat: the original change"
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: no-fixup, level: error}

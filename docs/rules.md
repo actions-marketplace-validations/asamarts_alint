@@ -840,6 +840,68 @@ jobs:
         uses: asamarts/alint@v0.9.21
 ```
 
+### `git_commit_signed_off`
+
+Assert every commit in scope carries a DCO (Developer Certificate of Origin) `Signed-off-by:` trailer — required by every CNCF / Linux Foundation / kernel-style project. A commit lacking the trailer fires one violation, with the short SHA + subject snippet so you know which to amend (`git commit --amend -s` or `git rebase --signoff`).
+
+```yaml
+# HEAD-only: the tip commit must be signed off.
+- id: dco
+  kind: git_commit_signed_off
+  level: error
+
+# Range mode for PR CI: every commit in the PR must be signed off.
+- id: pr-dco
+  kind: git_commit_signed_off
+  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
+  level: error
+```
+
+The default `pattern:` is the canonical DCO shape `(?m)^Signed-off-by: .+ <.+@.+>$`. Override `pattern:` to enforce a stricter form (e.g. a corporate-domain email). Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes (silent outside a git repo; a bad `since:` ref hard-fails with a shallow-clone hint). See [variable interpolation](/docs/concepts/variable-interpolation/) for the `{{env.X}}` form.
+
+### `git_commit_no_fixup`
+
+Fail on residual `fixup!` / `squash!` / `amend!` commits left in scope — the ones `git commit --fixup` / `--squash` produce, meant to be collapsed by `git rebase --autosquash` before merging. Forgetting to rebase is the universal case; this rule catches the leftover so it doesn't land on the main branch.
+
+```yaml
+# Range mode for PR CI: no un-squashed fixups may merge.
+- id: no-fixup
+  kind: git_commit_no_fixup
+  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
+  level: error
+```
+
+No configuration knobs — the matched subject prefixes are exactly what `--autosquash` understands. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes.
+
+### `git_commit_author_allowlist`
+
+Assert every commit author in scope matches an allowed email and/or name pattern. At least one of `email_pattern:` / `name_pattern:` is required; specifying both means BOTH must match (AND). A commit whose author fails any specified pattern fires one violation. Demand: enterprise repos enforcing contributor identity against a corporate domain; OSS projects catching commits from sock-puppet or compromised accounts.
+
+```yaml
+# Every commit in the PR must be authored from the corporate domain.
+- id: org-authors-only
+  kind: git_commit_author_allowlist
+  email_pattern: '^.+@example\.com$'
+  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
+  level: error
+```
+
+`email_pattern:` matches `git log %ae`; `name_pattern:` matches `git log %an`. Both are Rust regexes. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes (silent outside a git repo; a bad `since:` ref hard-fails with a shallow-clone hint).
+
+### `git_commit_gpg_signed`
+
+Assert every commit in scope has a verifying signature (`git verify-commit` exits 0). A commit that is unsigned — or signed with a key that doesn't verify against the local keyring — fires one violation. Demand: kernel maintainers, security-sensitive OSS, anyone using GitHub's "Require signed commits" branch protection.
+
+```yaml
+# Every commit in the PR must carry a verifying signature.
+- id: signed-commits
+  kind: git_commit_gpg_signed
+  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
+  level: error
+```
+
+The rule reflects git's own verdict and deliberately does **not** distinguish "unsigned" from "signed with an untrusted key" — trust is git's GPG config / `.git/allowed_signers`, not this rule's job. No configuration knobs. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes.
+
 ### `git_blame_age`
 
 Fire on lines matching a regex whose `git blame` author-time is older than `max_age_days`. Same regex match shape as `file_content_forbidden`, but with a per-line age gate: a TODO added yesterday passes silently; a TODO that has sat in tree for 18 months fires. Closes the gap between `level: warning` on every TODO (too noisy) and `level: off` (accepts unbounded debt accumulation).

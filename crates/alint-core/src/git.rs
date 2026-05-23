@@ -155,6 +155,35 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
     Some(raw.trim_end_matches('\n').to_string())
 }
 
+/// HEAD as a full [`CommitRecord`] — abbreviated SHA, author name +
+/// email, and the message. Used by the commit-validation family's
+/// HEAD-only mode (`since:` unset), where rules like
+/// `git_commit_author_allowlist` need the author and the SHA in
+/// addition to the message.
+///
+/// Returns `None` on the same conditions as [`head_commit_message`]
+/// (no `git`, not a repo, unborn HEAD), so the rule silently no-ops.
+/// Uses the same NUL-separated `--format` encoding as
+/// [`commit_messages_in_range`] so a single commit round-trips
+/// through the shared commit-log parser.
+pub fn head_commit_record(root: &Path) -> Option<CommitRecord> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "log",
+            "-1",
+            "--abbrev-commit",
+            "--format=%h%x00%an%x00%ae%x00%B%x1e",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_commit_log(&output.stdout).into_iter().next()
+}
+
 /// One commit in a `<since>..HEAD` range, as returned by
 /// [`commit_messages_in_range`]. `sha` is the abbreviated SHA from
 /// `git log --abbrev-commit` (typically 7 chars; git auto-extends if
@@ -166,6 +195,11 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
 pub struct CommitRecord {
     pub sha: String,
     pub message: String,
+    /// Author name (`git log %an`). Empty when synthesised for a
+    /// HEAD-only check that didn't capture authorship.
+    pub author_name: String,
+    /// Author email (`git log %ae`).
+    pub author_email: String,
 }
 
 /// Errors that distinguish "git is here but the range is invalid"
@@ -248,7 +282,7 @@ pub fn commit_messages_in_range(
         "log",
         "--reverse",
         "--abbrev-commit",
-        "--format=%h%x00%B%x1e",
+        "--format=%h%x00%an%x00%ae%x00%B%x1e",
     ]);
     if !include_merges {
         cmd.arg("--no-merges");
@@ -278,20 +312,22 @@ fn parse_commit_log(stdout: &[u8]) -> Vec<CommitRecord> {
         if record.is_empty() {
             continue;
         }
-        // Each record is sha + NUL + message. Trim the leading
-        // newline that git inserts between records.
+        // Each record is sha + NUL + author-name + NUL +
+        // author-email + NUL + message. Trim the leading newline
+        // that git inserts between records.
         let record = record.strip_prefix(b"\n").unwrap_or(record);
-        let mut parts = record.splitn(2, |&b| b == 0);
-        let Some(sha_bytes) = parts.next() else {
+        let mut parts = record.splitn(4, |&b| b == 0);
+        let (Some(sha_bytes), Some(name_bytes), Some(email_bytes), Some(msg_bytes)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
             continue;
         };
-        let Some(msg_bytes) = parts.next() else {
-            continue;
-        };
-        let Ok(sha) = std::str::from_utf8(sha_bytes) else {
-            continue;
-        };
-        let Ok(msg) = std::str::from_utf8(msg_bytes) else {
+        let (Ok(sha), Ok(name), Ok(email), Ok(msg)) = (
+            std::str::from_utf8(sha_bytes),
+            std::str::from_utf8(name_bytes),
+            std::str::from_utf8(email_bytes),
+            std::str::from_utf8(msg_bytes),
+        ) else {
             continue;
         };
         // `--format=%B` ends every body with a trailing newline.
@@ -299,9 +335,37 @@ fn parse_commit_log(stdout: &[u8]) -> Vec<CommitRecord> {
         out.push(CommitRecord {
             sha: sha.to_string(),
             message,
+            author_name: name.to_string(),
+            author_email: email.to_string(),
         });
     }
     out
+}
+
+/// Verify a commit's signature via `git verify-commit <sha>`.
+///
+/// Returns:
+/// - `Some(true)`  — `verify-commit` exited 0 (a good signature that
+///   verified against the local keyring).
+/// - `Some(false)` — it exited non-zero: the commit is unsigned, or
+///   the signature didn't verify (e.g. signed with a key not in the
+///   local keyring).
+/// - `None`        — `git` isn't on PATH (the shell-out itself
+///   failed). Callers iterating commits from a valid repo never see
+///   this; it's the advisory-posture escape hatch.
+///
+/// This reflects git's own verdict and deliberately does NOT
+/// distinguish "unsigned" from "signed with an untrusted key" —
+/// trust is the user's GPG config / `.git/allowed_signers`, not this
+/// rule's job.
+pub fn verify_commit(root: &Path, sha: &str) -> Option<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["verify-commit", sha])
+        .output()
+        .ok()?;
+    Some(output.status.success())
 }
 
 /// One line of `git blame --line-porcelain` output: the
@@ -727,11 +791,14 @@ filename a.rs
 
     #[test]
     fn parse_commit_log_single_commit() {
-        // sha + NUL + body-with-trailing-newline + RS.
-        let raw = b"abc1234\0subject line\n\nbody line one\nbody line two\n\x1e";
+        // sha NUL name NUL email NUL body-with-trailing-newline RS.
+        let raw =
+            b"abc1234\0Jane Doe\0jane@example.com\0subject line\n\nbody line one\nbody line two\n\x1e";
         let records = parse_commit_log(raw);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].sha, "abc1234");
+        assert_eq!(records[0].author_name, "Jane Doe");
+        assert_eq!(records[0].author_email, "jane@example.com");
         assert_eq!(
             records[0].message,
             "subject line\n\nbody line one\nbody line two"
@@ -743,10 +810,11 @@ filename a.rs
         // Two commits, oldest first (matches --reverse). Between
         // records, git inserts a newline before the next SHA; the
         // parser strips it.
-        let raw = b"a1\0first\n\x1e\nb2\0second\n\x1e";
+        let raw = b"a1\0A\0a@x.test\0first\n\x1e\nb2\0B\0b@x.test\0second\n\x1e";
         let records = parse_commit_log(raw);
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].sha, "a1");
+        assert_eq!(records[0].author_email, "a@x.test");
         assert_eq!(records[0].message, "first");
         assert_eq!(records[1].sha, "b2");
         assert_eq!(records[1].message, "second");
@@ -754,7 +822,7 @@ filename a.rs
 
     #[test]
     fn parse_commit_log_subject_only_no_body() {
-        let raw = b"deadbef\0just the subject\n\x1e";
+        let raw = b"deadbef\0N\0n@x.test\0just the subject\n\x1e";
         let records = parse_commit_log(raw);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].message, "just the subject");
@@ -764,7 +832,7 @@ filename a.rs
     fn parse_commit_log_preserves_blank_lines_in_body() {
         // A real commit body with multiple paragraphs survives the
         // round-trip unchanged.
-        let raw = b"sha7777\0fix: thing\n\nfirst paragraph.\n\nsecond paragraph.\n\nthird.\n\x1e";
+        let raw = b"sha7777\0N\0n@x.test\0fix: thing\n\nfirst paragraph.\n\nsecond paragraph.\n\nthird.\n\x1e";
         let records = parse_commit_log(raw);
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -775,9 +843,9 @@ filename a.rs
 
     #[test]
     fn parse_commit_log_skips_record_with_invalid_utf8() {
-        // A SHA followed by invalid UTF-8 in the message. The
-        // parser drops the malformed record rather than panicking.
-        let mut raw: Vec<u8> = b"abc1234\0".to_vec();
+        // A record whose message field is invalid UTF-8. The parser
+        // drops the malformed record rather than panicking.
+        let mut raw: Vec<u8> = b"abc1234\0N\0n@x.test\0".to_vec();
         raw.extend_from_slice(&[0xff, 0xfe, 0xfd]); // invalid UTF-8
         raw.push(0x1e);
         let records = parse_commit_log(&raw);
@@ -880,6 +948,26 @@ filename a.rs
             .unwrap();
         assert_eq!(with_merge.len(), 3);
         assert!(with_merge.iter().any(|r| r.message.starts_with("Merge ")));
+    }
+
+    #[test]
+    fn verify_commit_returns_false_for_unsigned_commit() {
+        // make_repo_with_commits disables gpg signing, so HEAD is
+        // unsigned; verify-commit exits non-zero → Some(false).
+        let repo = make_repo_with_commits(&["init: unsigned commit"]);
+        let head = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        assert_eq!(verify_commit(repo.path(), &head), Some(false));
     }
 
     #[test]

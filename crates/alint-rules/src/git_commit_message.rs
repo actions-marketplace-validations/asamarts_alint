@@ -133,6 +133,8 @@ impl Rule for GitCommitMessageRule {
                 Some(message) => vec![CommitRecord {
                     sha: "HEAD".to_string(),
                     message,
+                    author_name: String::new(),
+                    author_email: String::new(),
                 }],
                 None => return Ok(violations), // silent no-op
             },
@@ -467,6 +469,8 @@ mod tests {
         let commit = CommitRecord {
             sha: "a1b2c3d".to_string(),
             message: "fix: thing".to_string(),
+            author_name: String::new(),
+            author_email: String::new(),
         };
         let s = format_msg(&commit, "fix: thing", "subject too long");
         assert!(s.contains("commit a1b2c3d"));
@@ -480,6 +484,8 @@ mod tests {
         let commit = CommitRecord {
             sha: "abc1234".to_string(),
             message: long_subject.clone(),
+            author_name: String::new(),
+            author_email: String::new(),
         };
         let s = format_msg(&commit, &long_subject, "too long");
         // Subject preview is capped at 60 chars + ellipsis.

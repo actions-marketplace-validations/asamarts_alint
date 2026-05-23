@@ -1,0 +1,26 @@
+name: git_commit_signed_off fires when HEAD has no DCO trailer
+tags: [check, git_commit_signed_off, git, failing]
+
+# HEAD mode (no `since:`): the tip commit has no `Signed-off-by:`
+# trailer, so the rule fires once. The default pattern is the
+# canonical DCO sign-off shape.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: dco
+        kind: git_commit_signed_off
+        level: error
+  git:
+    init: true
+    commits:
+      - "feat: a change with no sign-off"
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: dco, level: error}

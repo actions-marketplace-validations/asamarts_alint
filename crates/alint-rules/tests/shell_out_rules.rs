@@ -224,6 +224,310 @@ fn git_commit_message_silent_outside_git() {
     );
 }
 
+// ─── git_commit_signed_off ──────────────────────────────────
+
+#[test]
+fn git_commit_signed_off_fires_when_head_lacks_trailer() {
+    if !git_available() {
+        eprintln!("git unavailable; skipping git_commit_signed_off test");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    run_git(
+        root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat: no trailer here",
+        ],
+    );
+
+    let engine = build_engine_from_yaml(
+        "id: dco\n\
+         kind: git_commit_signed_off\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    let v = collect_violations(&report);
+    assert_eq!(
+        v.len(),
+        1,
+        "expected one violation on the un-signed commit: {v:?}"
+    );
+    assert!(
+        v[0].message.contains("Signed-off-by"),
+        "violation should mention the trailer: {}",
+        v[0].message
+    );
+}
+
+#[test]
+fn git_commit_signed_off_silent_when_head_has_trailer() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    run_git(
+        root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat: thing\n\nSigned-off-by: alint test <test@alint.test>",
+        ],
+    );
+
+    let engine = build_engine_from_yaml(
+        "id: dco\n\
+         kind: git_commit_signed_off\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "a signed-off commit must not fire"
+    );
+}
+
+#[test]
+fn git_commit_signed_off_silent_outside_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = build_engine_from_yaml(
+        "id: dco\n\
+         kind: git_commit_signed_off\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, tmp.path());
+    assert!(
+        collect_violations(&report).is_empty(),
+        "no-repo must not fire git_commit_signed_off"
+    );
+}
+
+// ─── git_commit_no_fixup ────────────────────────────────────
+
+#[test]
+fn git_commit_no_fixup_fires_on_leftover_fixup() {
+    if !git_available() {
+        eprintln!("git unavailable; skipping git_commit_no_fixup test");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    run_git(
+        root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "fixup! feat: original",
+        ],
+    );
+
+    let engine = build_engine_from_yaml(
+        "id: no-fixup\n\
+         kind: git_commit_no_fixup\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    let v = collect_violations(&report);
+    assert_eq!(
+        v.len(),
+        1,
+        "expected one violation on the fixup! commit: {v:?}"
+    );
+    assert!(
+        v[0].message.contains("fixup") || v[0].message.contains("autosquash"),
+        "violation should reference the fixup shape: {}",
+        v[0].message
+    );
+}
+
+#[test]
+fn git_commit_no_fixup_silent_on_normal_commit() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    run_git(
+        root,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "feat: a normal commit",
+        ],
+    );
+
+    let engine = build_engine_from_yaml(
+        "id: no-fixup\n\
+         kind: git_commit_no_fixup\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "a normal commit must not fire git_commit_no_fixup"
+    );
+}
+
+#[test]
+fn git_commit_no_fixup_silent_outside_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = build_engine_from_yaml(
+        "id: no-fixup\n\
+         kind: git_commit_no_fixup\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, tmp.path());
+    assert!(
+        collect_violations(&report).is_empty(),
+        "no-repo must not fire git_commit_no_fixup"
+    );
+}
+
+// ─── git_commit_author_allowlist ────────────────────────────
+
+#[test]
+fn git_commit_author_allowlist_fires_on_outside_author() {
+    if !git_available() {
+        eprintln!("git unavailable; skipping git_commit_author_allowlist test");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root); // commits as test@alint.test
+    run_git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "feat: a change"],
+    );
+
+    let engine = build_engine_from_yaml(
+        "id: org-authors\n\
+         kind: git_commit_author_allowlist\n\
+         email_pattern: '^.+@example\\.com$'\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    let v = collect_violations(&report);
+    assert_eq!(
+        v.len(),
+        1,
+        "expected one violation on the outside author: {v:?}"
+    );
+    assert!(
+        v[0].message.contains("allowlist") && v[0].message.contains("test@alint.test"),
+        "violation should name the disallowed author: {}",
+        v[0].message
+    );
+}
+
+#[test]
+fn git_commit_author_allowlist_silent_when_author_matches() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    run_git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "feat: a change"],
+    );
+
+    // Pattern matches the harness author (test@alint.test).
+    let engine = build_engine_from_yaml(
+        "id: org-authors\n\
+         kind: git_commit_author_allowlist\n\
+         email_pattern: '^.+@alint\\.test$'\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "an allowed author must not fire"
+    );
+}
+
+#[test]
+fn git_commit_author_allowlist_silent_outside_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = build_engine_from_yaml(
+        "id: org-authors\n\
+         kind: git_commit_author_allowlist\n\
+         email_pattern: '^.+@example\\.com$'\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, tmp.path());
+    assert!(
+        collect_violations(&report).is_empty(),
+        "no-repo must not fire git_commit_author_allowlist"
+    );
+}
+
+// ─── git_commit_gpg_signed ──────────────────────────────────
+
+#[test]
+fn git_commit_gpg_signed_fires_on_unsigned_commit() {
+    if !git_available() {
+        eprintln!("git unavailable; skipping git_commit_gpg_signed test");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    // git_init does not configure signing, so this commit is unsigned.
+    run_git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "feat: unsigned"],
+    );
+
+    let engine = build_engine_from_yaml(
+        "id: signed-commits\n\
+         kind: git_commit_gpg_signed\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    let v = collect_violations(&report);
+    assert_eq!(
+        v.len(),
+        1,
+        "expected one violation on the unsigned commit: {v:?}"
+    );
+    assert!(
+        v[0].message.contains("not signed") || v[0].message.contains("verify"),
+        "violation should reference the missing signature: {}",
+        v[0].message
+    );
+}
+
+#[test]
+fn git_commit_gpg_signed_silent_outside_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = build_engine_from_yaml(
+        "id: signed-commits\n\
+         kind: git_commit_gpg_signed\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, tmp.path());
+    assert!(
+        collect_violations(&report).is_empty(),
+        "no-repo must not fire git_commit_gpg_signed"
+    );
+}
+
 // ─── command ────────────────────────────────────────────────
 
 // Linux-only because the macOS GitHub runner's `/bin/true`

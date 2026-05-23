@@ -9,6 +9,7 @@ pub mod case;
 pub mod command;
 pub mod command_idempotent;
 pub mod commented_out_code;
+mod commit_range;
 pub mod cross_file_value_equals;
 pub mod dir_absent;
 pub mod dir_contains;
@@ -42,7 +43,11 @@ pub mod for_each_dir;
 pub mod for_each_file;
 pub mod generated_file_fresh;
 pub mod git_blame_age;
+pub mod git_commit_author_allowlist;
+pub mod git_commit_gpg_signed;
 pub mod git_commit_message;
+pub mod git_commit_no_fixup;
+pub mod git_commit_signed_off;
 pub mod git_no_denied_paths;
 pub mod import_gate;
 pub mod indent_style;
@@ -83,6 +88,10 @@ pub mod unique_by;
 /// prefix — `content_matches`, `content_forbidden`, `header`,
 /// `is_text`, `max_size`. Both forms resolve to the same
 /// builder; new rules land under short names only.
+// A flat one-line-per-kind registration table that grows with every
+// rule kind; splitting it into arbitrary sub-functions would obscure
+// the "every kind registered here" invariant the drift audits rely on.
+#[allow(clippy::too_many_lines)]
 pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("file_exists", file_exists::build);
     registry.register("file_absent", file_absent::build);
@@ -132,6 +141,13 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("commented_out_code", commented_out_code::build);
     registry.register("git_no_denied_paths", git_no_denied_paths::build);
     registry.register("git_commit_message", git_commit_message::build);
+    registry.register("git_commit_signed_off", git_commit_signed_off::build);
+    registry.register("git_commit_no_fixup", git_commit_no_fixup::build);
+    registry.register(
+        "git_commit_author_allowlist",
+        git_commit_author_allowlist::build,
+    );
+    registry.register("git_commit_gpg_signed", git_commit_gpg_signed::build);
     registry.register("git_blame_age", git_blame_age::build);
     registry.register("file_is_text", file_is_text::build);
     registry.register("is_text", file_is_text::build);
@@ -256,6 +272,10 @@ mod registry_tests {
             "json_schema_passes",
             "git_no_denied_paths",
             "git_commit_message",
+            "git_commit_signed_off",
+            "git_commit_no_fixup",
+            "git_commit_author_allowlist",
+            "git_commit_gpg_signed",
             "git_blame_age",
             "file_is_text",
             "is_text",

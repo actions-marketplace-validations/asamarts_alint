@@ -440,6 +440,19 @@ rules:
     kind: git_commit_message
     pattern: "^(feat|fix|chore): "
     level: warning
+  - id: dco-sign-off
+    kind: git_commit_signed_off
+    level: warning
+  - id: no-fixup-commits
+    kind: git_commit_no_fixup
+    level: warning
+  - id: org-authors-only
+    kind: git_commit_author_allowlist
+    email_pattern: '^.+@example\.com$'
+    level: warning
+  - id: signed-commits
+    kind: git_commit_gpg_signed
+    level: warning
 
   # ─── Plugin tier 1 ─────────────────────────────────────────────
   - id: shellcheck-shell-scripts

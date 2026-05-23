@@ -1,0 +1,28 @@
+name: git_commit_author_allowlist fires on an author outside the domain
+tags: [check, git_commit_author_allowlist, git, failing]
+
+# HEAD mode (no `since:`): the harness commits as
+# `alint test <test@alint.test>` (see the e2e git setup). The
+# allowlist requires `@example.com`, so the tip commit's author
+# fails the pattern and fires once.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: org-authors
+        kind: git_commit_author_allowlist
+        email_pattern: '^.+@example\.com$'
+        level: error
+  git:
+    init: true
+    commits:
+      - "feat: a change from an outside author"
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: org-authors, level: error}
