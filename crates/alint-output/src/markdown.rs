@@ -328,6 +328,7 @@ mod tests {
             level,
             policy_url: None,
             violations,
+            notes: Vec::new(),
             is_fixable: false,
         }
     }
@@ -361,6 +362,7 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
+                    is_note: false,
                 }],
             )],
         };
@@ -382,6 +384,7 @@ mod tests {
                         message: "z".into(),
                         line: None,
                         column: None,
+                        is_note: false,
                     }],
                 ),
                 rule(
@@ -392,6 +395,7 @@ mod tests {
                         message: "a".into(),
                         line: None,
                         column: None,
+                        is_note: false,
                     }],
                 ),
             ],
@@ -470,6 +474,7 @@ mod tests {
                 level: Level::Error,
                 policy_url: Some("https://example.com/policy".into()),
                 violations: vec![Violation::new("x").with_path(PathBuf::from("a.rs"))],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
@@ -517,6 +522,7 @@ mod tests {
                     message: "x".into(),
                     line: Some(7),
                     column: None,
+                    is_note: false,
                 }],
             )],
         };
@@ -532,12 +538,14 @@ mod tests {
             message: "a".into(),
             line: Some(1),
             column: Some(1),
+            is_note: false,
         };
         let v2 = Violation {
             path: Some(Path::new("a.rs").into()),
             message: "b".into(),
             line: Some(2),
             column: Some(1),
+            is_note: false,
         };
         let r1 = Report {
             results: vec![rule("r1", Level::Error, vec![v1.clone(), v2.clone()])],
@@ -569,6 +577,7 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: Some(1),
                             column: None,
+                            is_note: false,
                         },
                         status: FixStatus::Applied("removed 3 trailing spaces".into()),
                     },
@@ -578,6 +587,7 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: None,
                             column: None,
+                            is_note: false,
                         },
                         status: FixStatus::Unfixable,
                     },

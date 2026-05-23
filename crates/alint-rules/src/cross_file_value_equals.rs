@@ -197,7 +197,14 @@ impl CrossFileValueEqualsRule {
                 return None;
             }
         };
-        let literal: Vec<String> = values.into_iter().filter(|v| !is_non_literal(v)).collect();
+        let (skipped, literal): (Vec<String>, Vec<String>) =
+            values.into_iter().partition(|v| is_non_literal(v));
+        for v in &skipped {
+            out.push(Self::note(
+                src,
+                &format!("skipped non-literal source value {v:?}"),
+            ));
+        }
         match literal.as_slice() {
             [one] => Some(one.clone()),
             [] => {
@@ -258,7 +265,14 @@ impl CrossFileValueEqualsRule {
                 return;
             }
         };
-        let literal: Vec<&String> = values.iter().filter(|v| !is_non_literal(v)).collect();
+        let (skipped, literal): (Vec<&String>, Vec<&String>) =
+            values.iter().partition(|v| is_non_literal(v));
+        for v in &skipped {
+            out.push(Self::note(
+                target,
+                &format!("skipped non-literal target value {v:?}"),
+            ));
+        }
         if literal.is_empty() {
             if !self.allow_missing {
                 out.push(Self::violation(
@@ -277,6 +291,12 @@ impl CrossFileValueEqualsRule {
 
     fn violation(path: &Path, reason: &str) -> Violation {
         Violation::new(format!("{}: {reason}", path.display())).with_path(path.to_path_buf())
+    }
+
+    /// An informational note (non-violation finding) — e.g. a
+    /// non-literal value the rule skipped rather than compared.
+    fn note(path: &Path, reason: &str) -> Violation {
+        Self::violation(path, reason).as_note()
     }
 
     fn mismatch(&self, target: &Path, source: &str, target_value: &str) -> Violation {
@@ -567,6 +587,22 @@ mod tests {
         // mismatch; but "no literal value" fires unless allowed.
         let mut r2 = r;
         r2.allow_missing = true;
-        assert!(eval(&r2, root, &idx).is_empty(), "non-literal must skip");
+        let v = eval(&r2, root, &idx);
+        // Skipped non-literal target surfaces as a note, not a
+        // violation (v0.11).
+        let real: Vec<_> = v.iter().filter(|x| !x.is_note).collect();
+        let notes: Vec<_> = v.iter().filter(|x| x.is_note).collect();
+        assert!(
+            real.is_empty(),
+            "non-literal must not be a violation, got {real:?}"
+        );
+        assert_eq!(notes.len(), 1, "skipped target value surfaces as one note");
+        assert!(
+            notes[0]
+                .message
+                .contains("skipped non-literal target value"),
+            "note: {:?}",
+            notes[0].message
+        );
     }
 }

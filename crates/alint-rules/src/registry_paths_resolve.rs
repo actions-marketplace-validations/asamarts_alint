@@ -176,12 +176,21 @@ impl Rule for RegistryPathsResolveRule {
                 }
             };
             // Non-literal (computed/interpolated) entries are
-            // intentionally skipped, not failed. The skip is
-            // silent in v0.10 — `alint check` has no
-            // informational-finding channel; visibly surfacing
-            // the skip list is a tracked v0.11 item (see
-            // docs/design/v0.11/informational_findings.md).
-            let _ = skipped;
+            // intentionally skipped, not failed — surfaced as
+            // informational notes (v0.11; see
+            // docs/design/v0.11/informational_findings.md) so the
+            // skip is no longer silent.
+            for entry in &skipped {
+                violations.push(
+                    Violation::new(format!(
+                        "registry {}: skipped non-literal entry {entry:?} \
+                         (cannot statically resolve an interpolated/computed path)",
+                        registry_rel.display()
+                    ))
+                    .with_path(registry_rel.clone())
+                    .as_note(),
+                );
+            }
 
             let excluded = self.excluded_entries(&text);
             let base_dir = self.base_dir(&registry_rel);
@@ -259,11 +268,15 @@ impl RegistryPathsResolveRule {
         }
     }
 
-    fn extract_entries(&self, text: &str) -> std::result::Result<(Vec<String>, usize), String> {
+    fn extract_entries(
+        &self,
+        text: &str,
+    ) -> std::result::Result<(Vec<String>, Vec<String>), String> {
         let raw = extract_values(&self.extract, text)?;
-        let before = raw.len();
-        let kept: Vec<String> = raw.into_iter().filter(|e| !is_non_literal(e)).collect();
-        let skipped = before - kept.len();
+        // Non-literal (computed/interpolated) entries can't be
+        // statically resolved; they're surfaced as notes, not failed.
+        let (skipped, kept): (Vec<String>, Vec<String>) =
+            raw.into_iter().partition(|e| is_non_literal(e));
         Ok((kept, skipped))
     }
 
@@ -594,7 +607,20 @@ mod tests {
         // real literal path (v0.10 post-audit P2).
         let idx = index(&["pkgs.nix"], &["pkgs/real"]);
         let v = eval(&r, dir.path(), &idx);
-        assert!(v.is_empty(), "non-literal must be skipped, got {v:?}");
+        // The non-literal entry is skipped (not a violation) but
+        // surfaces as an informational note (v0.11).
+        let real: Vec<_> = v.iter().filter(|x| !x.is_note).collect();
+        let notes: Vec<_> = v.iter().filter(|x| x.is_note).collect();
+        assert!(
+            real.is_empty(),
+            "non-literal must not be a violation, got {real:?}"
+        );
+        assert_eq!(notes.len(), 1, "skipped entry surfaces as one note");
+        assert!(
+            notes[0].message.contains("skipped non-literal"),
+            "note message: {:?}",
+            notes[0].message
+        );
     }
 
     #[test]

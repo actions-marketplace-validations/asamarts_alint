@@ -65,6 +65,11 @@
         "violations": {
           "type": "array",
           "items": { "$ref": "#/$defs/violation" }
+        },
+        "notes": {
+          "type": "array",
+          "description": "Informational notes (non-violation findings, e.g. entries a rule skipped rather than failed on). Omitted when empty; never affects `passed`.",
+          "items": { "$ref": "#/$defs/violation" }
         }
       }
     },

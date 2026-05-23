@@ -1,7 +1,18 @@
 # Informational findings — the notes/skip-surfacing channel
 
-Status: Design draft, written 2026-05-21 to capture a v0.10 deferment
-before it falls off the v0.11 cut.
+Status: **Implemented (2026-05-23).** Notes flow as `is_note`-flagged
+`Violation`s through the existing return channel; `RuleResult::new`
+partitions them into `RuleResult.notes` at assembly time, so pass/fail
+and every unmodified formatter only ever see real violations in
+`violations`. Producers: `registry_paths_resolve` (skipped non-literal
+entries) and `cross_file_value_equals` (dropped non-literal
+source/target values). Surfacing: `alint check` prints a one-line
+stderr count by default and the full list with `--show-notes`; the
+`json` formatter carries a per-result `notes` array (omitted when
+empty; `check-report.json` schema extended). The `read_capped`
+over-cap path stays a violation (not a note). Deferred fast-follow:
+`agent`/`markdown`/`sarif` note rendering (they currently omit notes,
+which is safe). Original draft written 2026-05-21.
 
 ## Problem
 

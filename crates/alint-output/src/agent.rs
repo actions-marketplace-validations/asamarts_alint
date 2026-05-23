@@ -240,6 +240,7 @@ mod tests {
                     .with_path(PathBuf::from("src/api.ts"))
                     .with_location(2, 1),
             ],
+            notes: Vec::new(),
             is_fixable: false,
         };
         let out = run(vec![result]);
@@ -267,6 +268,7 @@ mod tests {
             level: Level::Error,
             policy_url: Some("https://example.com/policy".into()),
             violations: vec![Violation::new("A README is required at the root.")],
+            notes: Vec::new(),
             is_fixable: true,
         };
         let out = run(vec![result]);
@@ -294,6 +296,7 @@ mod tests {
             level: Level::Error,
             policy_url: None,
             violations: vec![Violation::new("Multiple lockfiles found.")],
+            notes: Vec::new(),
             is_fixable: false,
         };
         let out = run(vec![result]);
@@ -317,6 +320,7 @@ mod tests {
                 level: Level::Error,
                 policy_url: None,
                 violations: vec![Violation::new("a")],
+                notes: Vec::new(),
                 is_fixable: false,
             },
             RuleResult {
@@ -324,6 +328,7 @@ mod tests {
                 level: Level::Warning,
                 policy_url: None,
                 violations: vec![Violation::new("b1"), Violation::new("b2")],
+                notes: Vec::new(),
                 is_fixable: false,
             },
             RuleResult {
@@ -331,6 +336,7 @@ mod tests {
                 level: Level::Info,
                 policy_url: None,
                 violations: vec![Violation::new("c")],
+                notes: Vec::new(),
                 is_fixable: false,
             },
             RuleResult {
@@ -338,6 +344,7 @@ mod tests {
                 level: Level::Warning,
                 policy_url: None,
                 violations: vec![],
+                notes: Vec::new(),
                 is_fixable: false,
             },
         ];

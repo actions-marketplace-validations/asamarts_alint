@@ -62,6 +62,12 @@ struct Cli {
     #[arg(long, global = true)]
     fail_on_warning: bool,
 
+    /// List informational notes (non-violation findings, e.g. entries
+    /// a rule skipped rather than failed on) in full on stderr. By
+    /// default only a one-line count is shown.
+    #[arg(long, global = true)]
+    show_notes: bool,
+
     /// When to emit ANSI color codes in human output. `auto` (the
     /// default) inspects TTY + `NO_COLOR` + `CLICOLOR_FORCE`.
     /// Only affects the `human` format; `json` / `sarif` /
@@ -632,6 +638,14 @@ fn cmd_check(path: &Path, changed: &ChangedMode, cli: &Cli) -> Result<ExitCode> 
         .context("writing output")?;
     out.flush().ok();
 
+    // Informational notes (non-violation findings) — surfaced on
+    // stderr for the human format so stdout stays clean. JSON carries
+    // them in its `notes` array instead. A one-line count by default;
+    // the full list with `--show-notes`.
+    if format == Format::Human {
+        report_notes_to_stderr(&report, cli.show_notes);
+    }
+
     tracing::debug!(rules = rule_count, "done");
 
     let exit = if report.has_errors() || (cli.fail_on_warning && report.has_warnings()) {
@@ -640,6 +654,30 @@ fn cmd_check(path: &Path, changed: &ChangedMode, cli: &Cli) -> Result<ExitCode> 
         ExitCode::SUCCESS
     };
     Ok(exit)
+}
+
+/// Surface informational notes (non-violation findings) on stderr so
+/// stdout stays clean. A one-line count by default; the full
+/// `path: message` list when `show_notes` is set. No output when there
+/// are no notes.
+fn report_notes_to_stderr(report: &alint_core::Report, show_notes: bool) {
+    let total: usize = report.results.iter().map(|r| r.notes.len()).sum();
+    if total == 0 {
+        return;
+    }
+    if show_notes {
+        eprintln!("alint: {total} informational note(s):");
+        for result in &report.results {
+            for note in &result.notes {
+                match &note.path {
+                    Some(p) => eprintln!("  note: {}: {}", p.display(), note.message),
+                    None => eprintln!("  note: {}", note.message),
+                }
+            }
+        }
+    } else {
+        eprintln!("alint: {total} informational note(s); run with --show-notes to list.");
+    }
 }
 
 fn cmd_fix(path: &Path, dry_run: bool, changed: &ChangedMode, cli: &Cli) -> Result<ExitCode> {

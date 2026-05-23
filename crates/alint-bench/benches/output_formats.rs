@@ -46,6 +46,7 @@ fn build_report(n_violations: usize) -> Report {
             level: *level,
             policy_url: Some(format!("https://example.com/rules/{i}").into()),
             violations,
+            notes: Vec::new(),
             is_fixable: i % 2 == 0,
         });
     }

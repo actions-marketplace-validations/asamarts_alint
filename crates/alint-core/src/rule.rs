@@ -28,6 +28,13 @@ pub struct Violation {
     pub message: Cow<'static, str>,
     pub line: Option<usize>,
     pub column: Option<usize>,
+    /// Transient flag: when `true`, this is an informational *note*
+    /// (a non-violation finding — e.g. an entry a rule skipped rather
+    /// than failed on), not a real violation. Defaults to `false`.
+    /// The engine partitions notes out of [`RuleResult::violations`]
+    /// into [`RuleResult::notes`] at result-assembly time, so the flag
+    /// never reaches a formatter and pass/fail logic is unaffected.
+    pub is_note: bool,
 }
 
 impl Violation {
@@ -37,7 +44,16 @@ impl Violation {
             message: message.into(),
             line: None,
             column: None,
+            is_note: false,
         }
+    }
+
+    /// Mark this finding as an informational note rather than a
+    /// violation. See [`Violation::is_note`].
+    #[must_use]
+    pub fn as_note(mut self) -> Self {
+        self.is_note = true;
+        self
     }
 
     /// Attach a path to the violation. Accepts anything convertible
@@ -75,6 +91,11 @@ pub struct RuleResult {
     pub level: Level,
     pub policy_url: Option<Arc<str>>,
     pub violations: Vec<Violation>,
+    /// Informational notes (non-violation findings) the rule
+    /// produced — e.g. entries it skipped rather than failed on.
+    /// Partitioned out of the rule's raw output by
+    /// [`RuleResult::new`]; never counted in pass/fail.
+    pub notes: Vec<Violation>,
     /// Whether the rule declares a [`Fixer`] — surfaced here so
     /// the human formatter can tag violations as `fixable`
     /// without threading the rule registry into the renderer.
@@ -82,6 +103,30 @@ pub struct RuleResult {
 }
 
 impl RuleResult {
+    /// Build a result from a rule's raw output, partitioning
+    /// note-flagged [`Violation`]s (`is_note`) into [`notes`](Self::notes)
+    /// and the rest into [`violations`](Self::violations). Centralises
+    /// the note/violation split so pass/fail and formatters only ever
+    /// see real violations in `violations`.
+    #[must_use]
+    pub fn new(
+        rule_id: Arc<str>,
+        level: Level,
+        policy_url: Option<Arc<str>>,
+        raw: Vec<Violation>,
+        is_fixable: bool,
+    ) -> Self {
+        let (notes, violations): (Vec<_>, Vec<_>) = raw.into_iter().partition(|v| v.is_note);
+        Self {
+            rule_id,
+            level,
+            policy_url,
+            violations,
+            notes,
+            is_fixable,
+        }
+    }
+
     pub fn passed(&self) -> bool {
         self.violations.is_empty()
     }
@@ -536,12 +581,40 @@ mod tests {
     }
 
     #[test]
+    fn new_partitions_notes_out_of_violations() {
+        let raw = vec![
+            Violation::new("real one"),
+            Violation::new("a skipped entry").as_note(),
+            Violation::new("real two"),
+        ];
+        let r = RuleResult::new("x".into(), Level::Error, None, raw, false);
+        assert_eq!(r.violations.len(), 2, "notes excluded from violations");
+        assert_eq!(r.notes.len(), 1);
+        assert_eq!(r.notes[0].message, "a skipped entry");
+        assert!(!r.passed(), "real violations present → not passed");
+
+        // A result whose only finding is a note passes (notes never
+        // affect pass/fail).
+        let only_notes = RuleResult::new(
+            "y".into(),
+            Level::Error,
+            None,
+            vec![Violation::new("just a note").as_note()],
+            false,
+        );
+        assert!(only_notes.passed(), "notes-only result passes");
+        assert!(only_notes.violations.is_empty());
+        assert_eq!(only_notes.notes.len(), 1);
+    }
+
+    #[test]
     fn rule_result_passed_iff_violations_empty() {
         let mut r = RuleResult {
             rule_id: "x".into(),
             level: Level::Error,
             policy_url: None,
             violations: Vec::new(),
+            notes: Vec::new(),
             is_fixable: false,
         };
         assert!(r.passed());

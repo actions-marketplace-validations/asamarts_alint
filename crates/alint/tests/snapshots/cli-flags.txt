@@ -9,6 +9,7 @@
   --no-docs
   --no-gitignore
   --progress <WHEN>
+  --show-notes
   --width <COLS>
   -V, --version
   -c, --config <CONFIG>
@@ -26,6 +27,7 @@
   --no-docs
   --no-gitignore
   --progress <WHEN>
+  --show-notes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -40,6 +42,7 @@
   --no-docs
   --no-gitignore
   --progress <WHEN>
+  --show-notes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -54,6 +57,7 @@
   --no-docs
   --no-gitignore
   --progress <WHEN>
+  --show-notes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -71,6 +75,7 @@
   --no-docs
   --no-gitignore
   --progress <WHEN>
+  --show-notes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -85,6 +90,7 @@
   --no-docs
   --no-gitignore
   --progress <WHEN>
+  --show-notes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -100,6 +106,7 @@
   --no-docs
   --no-gitignore
   --progress <WHEN>
+  --show-notes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -117,6 +124,7 @@
   --no-docs
   --no-gitignore
   --progress <WHEN>
+  --show-notes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -135,6 +143,7 @@
   --output <PATH>
   --progress <WHEN>
   --section-title <TEXT>
+  --show-notes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>

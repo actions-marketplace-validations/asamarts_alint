@@ -434,6 +434,7 @@ impl Engine {
                                 violations: vec![Violation::new(format!(
                                     "when evaluation error: {e}"
                                 ))],
+                                notes: Vec::new(),
                                 is_fixable: entry.rule.fixer().is_some(),
                             },
                         ));
@@ -554,13 +555,13 @@ impl Engine {
             };
             results.push((
                 idx,
-                RuleResult {
-                    rule_id: Arc::from(entry.rule.id()),
-                    level: entry.rule.level(),
-                    policy_url: entry.rule.policy_url().map(Arc::from),
+                RuleResult::new(
+                    Arc::from(entry.rule.id()),
+                    entry.rule.level(),
+                    entry.rule.policy_url().map(Arc::from),
                     violations,
-                    is_fixable: entry.rule.fixer().is_some(),
-                },
+                    entry.rule.fixer().is_some(),
+                ),
             ));
         }
         results
@@ -980,6 +981,7 @@ fn run_entry(
                     level: entry.rule.level(),
                     policy_url: entry.rule.policy_url().map(Arc::from),
                     violations: vec![Violation::new(format!("when evaluation error: {e}"))],
+                    notes: Vec::new(),
                     is_fixable: entry.rule.fixer().is_some(),
                 });
             }
@@ -993,13 +995,14 @@ fn run_one(rule: &dyn Rule, ctx: &Context<'_>) -> RuleResult {
         Ok(v) => v,
         Err(e) => vec![Violation::new(format!("rule error: {e}"))],
     };
-    RuleResult {
-        rule_id: Arc::from(rule.id()),
-        level: rule.level(),
-        policy_url: rule.policy_url().map(Arc::from),
+    // `new` partitions any note-flagged violations into `notes`.
+    RuleResult::new(
+        Arc::from(rule.id()),
+        rule.level(),
+        rule.policy_url().map(Arc::from),
         violations,
-        is_fixable: rule.fixer().is_some(),
-    }
+        rule.fixer().is_some(),
+    )
 }
 
 #[cfg(test)]

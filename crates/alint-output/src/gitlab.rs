@@ -154,6 +154,7 @@ mod tests {
             level,
             policy_url: None,
             violations,
+            notes: Vec::new(),
             is_fixable: false,
         }
     }
@@ -178,6 +179,7 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
+                    is_note: false,
                 }],
             )],
         };
@@ -230,6 +232,7 @@ mod tests {
                 level: Level::Off,
                 policy_url: None,
                 violations: vec![Violation::new("ignored").with_path(PathBuf::from("a"))],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
@@ -262,6 +265,7 @@ mod tests {
                     message: "x".into(),
                     line: Some(0),
                     column: None,
+                    is_note: false,
                 }],
             )],
         };
@@ -280,6 +284,7 @@ mod tests {
                     message: "msg".into(),
                     line: Some(7),
                     column: None,
+                    is_note: false,
                 }],
             )],
         };
@@ -307,6 +312,7 @@ mod tests {
                     message: "same-msg".into(),
                     line: Some(line),
                     column: None,
+                    is_note: false,
                 }],
             )],
         };
@@ -356,6 +362,7 @@ mod tests {
                     message: r#"contains "quotes" and \backslashes\ and newline\nliteral"#.into(),
                     line: Some(1),
                     column: None,
+                    is_note: false,
                 }],
             )],
         };
