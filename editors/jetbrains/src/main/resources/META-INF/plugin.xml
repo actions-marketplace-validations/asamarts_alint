@@ -1,0 +1,42 @@
+<idea-plugin>
+    <id>org.alint.lsp</id>
+    <name>alint</name>
+    <vendor url="https://alint.org">alint contributors</vendor>
+
+    <description><![CDATA[
+        In-editor diagnostics, hover-to-explain, and quick-fixes for
+        <a href="https://github.com/asamarts/alint">alint</a> — the
+        language-agnostic linter for repository structure, file
+        existence, filename conventions, and content rules.
+        <br/><br/>
+        The plugin launches <code>alint lsp</code> (the alint language
+        server) via LSP4IJ and lets the IDE render the results. Works
+        across the JetBrains suite (IDEA, PyCharm, GoLand, WebStorm,
+        RustRover, CLion, Rider, Android Studio).
+    ]]></description>
+
+    <!-- Platform + LSP4IJ (the LSP client we register with). -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.redhat.devtools.lsp4ij</depends>
+
+    <!-- LSP4IJ extension points. NOTE: the EP names/attributes below
+         match LSP4IJ's documented schema; if a coordinate drifts in the
+         pinned LSP4IJ version, adjust here (verified at `gradle
+         buildPlugin` time). alint is repo-structural, so it maps to all
+         files rather than a single language. -->
+    <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+        <server
+            id="alint"
+            name="alint"
+            factoryClass="org.alint.lsp.AlintLanguageServerFactory"/>
+        <fileNamePatternMapping
+            patterns="*"
+            serverId="alint"/>
+    </extensions>
+
+    <!-- AlintSettings is auto-registered via its @Service annotation,
+         so it is NOT declared here (that would double-register). -->
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="alint" displayType="BALLOON"/>
+    </extensions>
+</idea-plugin>

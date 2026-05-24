@@ -150,8 +150,13 @@ they're a manual post-release follow-up, not a tagged CI job.
    with a tag-gated `publish-vscode` job (Marketplace + Open VSX). One
    prerequisite remains before the first publish: a local Node 18+
    `npm ci && npm run build` validation (the TS wasn't built in-repo).
-3. **JetBrains plugin** (LSP4IJ) — the second-biggest audience; one
-   plugin, whole suite.
+3. ✅ **JetBrains plugin** (LSP4IJ) — done (`editors/jetbrains/`, Kotlin
+   + `intellij-platform-gradle-plugin` 2.x), with a tag-gated
+   `publish-jetbrains` job. Authored without a local JVM/Gradle/IntelliJ
+   toolchain, so it needs `./gradlew buildPlugin` on JDK 17+ to verify
+   the version coordinates (IntelliJ platform / Kotlin / LSP4IJ / Gradle
+   plugin) before the first publish; the `asamarts` Marketplace vendor +
+   `JETBRAINS_MARKETPLACE_TOKEN` (and signing secrets) must be set up.
 4. **Zed extension** — small, Rust, completes the Tier-1 set.
 5. **Neovim + Sublime + Emacs docs/packages** + honorable-mention
    config snippets — Tier-2, low effort, broad coverage.
