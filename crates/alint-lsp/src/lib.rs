@@ -817,16 +817,26 @@ mod tests {
         ));
     }
 
+    /// An absolute root valid on the test's OS — `Url::from_file_path`
+    /// requires absolute, and `/repo` is NOT absolute on Windows.
+    fn repo_root() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(r"C:\repo")
+        } else {
+            PathBuf::from("/repo")
+        }
+    }
+
     #[test]
     fn set_content_maps_to_full_document_text_edit() {
-        let root = Path::new("/repo");
+        let root = repo_root();
         let edit = FixEdit::SetContent {
             path: PathBuf::from("a.txt"),
             content: b"fixed\n".to_vec(),
         };
-        let ws = fix_edit_to_workspace_edit(&edit, root).unwrap();
+        let ws = fix_edit_to_workspace_edit(&edit, &root).unwrap();
         let changes = ws.changes.expect("content edit uses the changes map");
-        let uri = Url::from_file_path("/repo/a.txt").unwrap();
+        let uri = Url::from_file_path(root.join("a.txt")).unwrap();
         let edits = &changes[&uri];
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].new_text, "fixed\n");
@@ -839,7 +849,7 @@ mod tests {
         let edit = FixEdit::DeleteFile {
             path: PathBuf::from("debug.log"),
         };
-        let ws = fix_edit_to_workspace_edit(&edit, Path::new("/repo")).unwrap();
+        let ws = fix_edit_to_workspace_edit(&edit, &repo_root()).unwrap();
         assert!(ws.changes.is_none());
         let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
             panic!("delete must use resource operations");
@@ -857,7 +867,7 @@ mod tests {
             path: PathBuf::from("LICENSE"),
             content: b"Apache-2.0\n".to_vec(),
         };
-        let ws = fix_edit_to_workspace_edit(&edit, Path::new("/repo")).unwrap();
+        let ws = fix_edit_to_workspace_edit(&edit, &repo_root()).unwrap();
         let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
             panic!("create must use resource operations");
         };
@@ -875,7 +885,7 @@ mod tests {
             from: PathBuf::from("FooBar.rs"),
             to: PathBuf::from("foo_bar.rs"),
         };
-        let ws = fix_edit_to_workspace_edit(&edit, Path::new("/repo")).unwrap();
+        let ws = fix_edit_to_workspace_edit(&edit, &repo_root()).unwrap();
         let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
             panic!("rename must use resource operations");
         };
@@ -891,6 +901,6 @@ mod tests {
             path: PathBuf::from("a.bin"),
             content: vec![0xff, 0xfe],
         };
-        assert!(fix_edit_to_workspace_edit(&edit, Path::new("/repo")).is_none());
+        assert!(fix_edit_to_workspace_edit(&edit, &repo_root()).is_none());
     }
 }
