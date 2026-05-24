@@ -8,9 +8,13 @@ per-edit (`didChange`) live re-evaluation now ships too — it drives
 `Engine::run_for_file` (the single-file hot path, see
 `single_file_reevaluation.md`) against the editor's in-memory bytes, so
 per-keystroke feedback costs one file's evaluation; cross-file rules
-still refresh on save. Still deferred: hover (`policy_url`/message),
-code actions (apply fix / add-to-ignore), `didChangeWatchedFiles`, and
-the `Hint`-diagnostic surfacing of informational notes. Original design
+still refresh on save. **Hover ships too:** hovering a violation marker
+renders the rule id, severity, message, and `policy_url` (as a link)
+from a per-URI cache of the last-published findings; `policy_url` is
+also attached to each diagnostic as its `codeDescription` so editors
+link it from the Problems panel. Still deferred: code actions (apply
+fix / add-to-ignore), `didChangeWatchedFiles`, and the
+`Hint`-diagnostic surfacing of informational notes. Original design
 draft written 2026-05-02 after v0.9.6.
 
 ## Problem

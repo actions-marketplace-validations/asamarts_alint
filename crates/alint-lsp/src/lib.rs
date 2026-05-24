@@ -5,7 +5,7 @@
 //! It is driven by the `alint lsp` subcommand, speaking LSP over stdio
 //! (see [`run_stdio`]).
 //!
-//! Two evaluation paths:
+//! Evaluation paths:
 //!
 //! - **Open / save** run the full [`alint_core::Engine`] over the
 //!   workspace (cross-file rules included) and publish per-file
@@ -16,18 +16,22 @@
 //!   evaluation, not the whole tree's. Cross-file rules are not
 //!   re-run on change (they refresh on the next save), matching
 //!   `docs/design/v0.11/single_file_reevaluation.md`.
+//! - **Hover** over a violation marker renders the rule id, message,
+//!   and `policy_url` from the per-file cache of the last-published
+//!   findings.
 //!
-//! Hover and code actions are deferred to later slices of the LSP epic.
+//! Code actions are deferred to a later slice of the LSP epic.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tower_lsp::lsp_types::{
-    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, InitializeParams, InitializeResult,
-    InitializedParams, MessageType, NumberOrString, Position, Range, ServerCapabilities,
-    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    CodeDescription, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams, Hover,
+    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    InitializedParams, MarkupContent, MarkupKind, MessageType, NumberOrString, Position, Range,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server, jsonrpc::Result as JsonRpcResult};
 
@@ -35,8 +39,20 @@ use alint_core::{
     Engine, Error, FileIndex, Level, RuleEntry, RuleResult, Violation, WalkOptions, walk,
 };
 
-/// Per-file diagnostics keyed by absolute path.
-type DiagnosticsByPath = HashMap<PathBuf, Vec<Diagnostic>>;
+/// One cached finding for a file: enough to publish a diagnostic and to
+/// render a hover. Kept per URI in [`State::diagnostics`] so `hover`
+/// can answer from the last-published set without re-running rules.
+#[derive(Debug, Clone)]
+struct Finding {
+    range: Range,
+    severity: DiagnosticSeverity,
+    rule_id: String,
+    message: String,
+    policy_url: Option<String>,
+}
+
+/// Per-file findings keyed by absolute path.
+type FindingsByPath = HashMap<PathBuf, Vec<Finding>>;
 
 /// A loaded workspace: the config-built engine plus the walked index.
 /// Cached on open/save and reused by the change hot path so a keystroke
@@ -74,6 +90,9 @@ struct State {
     /// Cached engine + index from the last full check. `None` until the
     /// first open/save; the change hot path needs it.
     session: Option<Arc<Session>>,
+    /// Last-published findings per open URI, so `hover` can answer by
+    /// position without re-running rules.
+    diagnostics: HashMap<Url, Vec<Finding>>,
 }
 
 #[derive(Debug)]
@@ -90,6 +109,7 @@ impl Backend {
                 root: None,
                 open: HashSet::new(),
                 session: None,
+                diagnostics: HashMap::new(),
             }),
         }
     }
@@ -111,13 +131,21 @@ impl Backend {
 
         match tokio::task::spawn_blocking(move || build_and_run(&root)).await {
             Ok(Ok(Some((session, by_path)))) => {
-                self.state.lock().unwrap().session = Some(session);
-                self.publish_each(&open, &by_path).await;
+                let to_publish = {
+                    let mut state = self.state.lock().unwrap();
+                    state.session = Some(session);
+                    cache_and_collect(&mut state, &open, &by_path)
+                };
+                self.publish_all(to_publish).await;
             }
             Ok(Ok(None)) => {
                 // No `.alint.yml` — clear any stale diagnostics.
-                self.state.lock().unwrap().session = None;
-                self.publish_each(&open, &DiagnosticsByPath::new()).await;
+                let to_publish = {
+                    let mut state = self.state.lock().unwrap();
+                    state.session = None;
+                    cache_and_collect(&mut state, &open, &FindingsByPath::new())
+                };
+                self.publish_all(to_publish).await;
             }
             Ok(Err(err)) => {
                 self.client
@@ -155,19 +183,26 @@ impl Backend {
             session
                 .engine
                 .run_for_file(&session.root, &session.index, &rel, text.as_bytes())
-                .map(|results| group_violations(&session.root, &results))
+                .map(|results| group_findings(&session.root, &results))
         })
         .await;
 
         match outcome {
             Ok(Ok(by_path)) => {
-                let diagnostics = by_path.get(&abs_key).cloned().unwrap_or_default();
+                let findings = by_path.get(&abs_key).cloned().unwrap_or_default();
+                let diagnostics = findings.iter().map(finding_to_diagnostic).collect();
+                self.state
+                    .lock()
+                    .unwrap()
+                    .diagnostics
+                    .insert(uri.clone(), findings);
                 self.client
                     .publish_diagnostics(uri, diagnostics, None)
                     .await;
             }
             Ok(Err(Error::FileNotInIndex { .. })) => {
                 // Excluded from linting — clear any diagnostics.
+                self.state.lock().unwrap().diagnostics.remove(&uri);
                 self.client.publish_diagnostics(uri, Vec::new(), None).await;
             }
             Ok(Err(err)) => {
@@ -186,17 +221,10 @@ impl Backend {
         }
     }
 
-    /// Publish per-file diagnostics for each open document, clearing
-    /// those absent from `by_path`.
-    async fn publish_each(&self, open: &[Url], by_path: &DiagnosticsByPath) {
-        for uri in open {
-            let diagnostics = uri
-                .to_file_path()
-                .ok()
-                .and_then(|abs| by_path.get(&abs).cloned())
-                .unwrap_or_default();
+    async fn publish_all(&self, items: Vec<(Url, Vec<Diagnostic>)>) {
+        for (uri, diagnostics) in items {
             self.client
-                .publish_diagnostics(uri.clone(), diagnostics, None)
+                .publish_diagnostics(uri, diagnostics, None)
                 .await;
         }
     }
@@ -213,6 +241,7 @@ impl LanguageServer for Backend {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
                     TextDocumentSyncKind::FULL,
                 )),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -259,10 +288,69 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
-        self.state.lock().unwrap().open.remove(&uri);
+        {
+            let mut state = self.state.lock().unwrap();
+            state.open.remove(&uri);
+            state.diagnostics.remove(&uri);
+        }
         // Clear any diagnostics the editor is still showing.
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
     }
+
+    async fn hover(&self, params: HoverParams) -> JsonRpcResult<Option<Hover>> {
+        let pos = params.text_document_position_params.position;
+        let uri = params.text_document_position_params.text_document.uri;
+
+        let findings = {
+            let state = self.state.lock().unwrap();
+            state.diagnostics.get(&uri).cloned()
+        };
+        let Some(findings) = findings else {
+            return Ok(None);
+        };
+        let matching: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| range_contains(f.range, pos))
+            .collect();
+        if matching.is_empty() {
+            return Ok(None);
+        }
+
+        let value = matching
+            .iter()
+            .map(|f| render_finding(f))
+            .collect::<Vec<_>>()
+            .join("\n\n---\n\n");
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value,
+            }),
+            range: matching.first().map(|f| f.range),
+        }))
+    }
+}
+
+/// Cache the findings for each open document and collect the
+/// `(uri, diagnostics)` pairs to publish. Documents absent from
+/// `by_path` are cached empty and cleared.
+fn cache_and_collect(
+    state: &mut State,
+    open: &[Url],
+    by_path: &FindingsByPath,
+) -> Vec<(Url, Vec<Diagnostic>)> {
+    let mut out = Vec::with_capacity(open.len());
+    for uri in open {
+        let findings = uri
+            .to_file_path()
+            .ok()
+            .and_then(|abs| by_path.get(&abs).cloned())
+            .unwrap_or_default();
+        let diagnostics = findings.iter().map(finding_to_diagnostic).collect();
+        state.diagnostics.insert(uri.clone(), findings);
+        out.push((uri.clone(), diagnostics));
+    }
+    out
 }
 
 /// Resolve the workspace root from the `initialize` params, preferring
@@ -326,7 +414,7 @@ fn build_session(root: &Path) -> Result<Option<Session>, String> {
 
 /// Build a session and run the full engine over it. `Ok(None)` ⇒ no
 /// config (caller clears diagnostics).
-fn build_and_run(root: &Path) -> Result<Option<(Arc<Session>, DiagnosticsByPath)>, String> {
+fn build_and_run(root: &Path) -> Result<Option<(Arc<Session>, FindingsByPath)>, String> {
     let Some(session) = build_session(root)? else {
         return Ok(None);
     };
@@ -334,28 +422,32 @@ fn build_and_run(root: &Path) -> Result<Option<(Arc<Session>, DiagnosticsByPath)
         .engine
         .run(&session.root, &session.index)
         .map_err(|e| format!("running rules: {e}"))?;
-    let by_path = group_violations(&session.root, &report.results);
+    let by_path = group_findings(&session.root, &report.results);
     Ok(Some((Arc::new(session), by_path)))
 }
 
-/// Group rule-result violations into per-file LSP diagnostics keyed by
+/// Group rule-result violations into per-file findings keyed by
 /// absolute path. File- and tree-level findings (no path) are skipped —
 /// they have no document to attach to.
-fn group_violations(root: &Path, results: &[RuleResult]) -> DiagnosticsByPath {
-    let mut by_path = DiagnosticsByPath::new();
+fn group_findings(root: &Path, results: &[RuleResult]) -> FindingsByPath {
+    let mut by_path = FindingsByPath::new();
     for result in results {
         let Some(severity) = severity_of(result.level) else {
             continue;
         };
+        let policy_url = result.policy_url.as_ref().map(ToString::to_string);
         for violation in &result.violations {
             let Some(rel) = &violation.path else {
                 continue;
             };
             let abs = root.join(rel.as_ref());
-            by_path
-                .entry(abs)
-                .or_default()
-                .push(diagnostic(severity, &result.rule_id, violation));
+            by_path.entry(abs).or_default().push(Finding {
+                range: violation_range(violation),
+                severity,
+                rule_id: result.rule_id.to_string(),
+                message: violation.message.to_string(),
+                policy_url: policy_url.clone(),
+            });
         }
     }
     by_path
@@ -370,26 +462,71 @@ fn severity_of(level: Level) -> Option<DiagnosticSeverity> {
     }
 }
 
-/// Map one alint violation to an LSP diagnostic. alint line/column are
-/// 1-indexed and optional; LSP positions are 0-indexed. File- and
-/// tree-level findings (no line) anchor at the start of the file.
-fn diagnostic(severity: DiagnosticSeverity, rule_id: &str, violation: &Violation) -> Diagnostic {
+fn severity_label(severity: DiagnosticSeverity) -> &'static str {
+    match severity {
+        DiagnosticSeverity::ERROR => "error",
+        DiagnosticSeverity::WARNING => "warning",
+        _ => "info",
+    }
+}
+
+/// alint line/column are 1-indexed and optional; LSP positions are
+/// 0-indexed. File- and tree-level findings (no line) anchor at the
+/// start of the file. The range is one character wide so the editor has
+/// something to attach the marker (and hover) to.
+fn violation_range(violation: &Violation) -> Range {
     let line = violation
         .line
         .map_or(0, |l| u32::try_from(l.saturating_sub(1)).unwrap_or(0));
     let col = violation
         .column
         .map_or(0, |c| u32::try_from(c.saturating_sub(1)).unwrap_or(0));
-    let start = Position::new(line, col);
-    let end = Position::new(line, col.saturating_add(1));
+    Range::new(
+        Position::new(line, col),
+        Position::new(line, col.saturating_add(1)),
+    )
+}
+
+fn finding_to_diagnostic(f: &Finding) -> Diagnostic {
+    let code_description = f
+        .policy_url
+        .as_deref()
+        .and_then(|u| Url::parse(u).ok())
+        .map(|href| CodeDescription { href });
     Diagnostic {
-        range: Range::new(start, end),
-        severity: Some(severity),
-        code: Some(NumberOrString::String(rule_id.to_string())),
+        range: f.range,
+        severity: Some(f.severity),
+        code: Some(NumberOrString::String(f.rule_id.clone())),
+        code_description,
         source: Some("alint".to_string()),
-        message: violation.message.to_string(),
+        message: f.message.clone(),
         ..Diagnostic::default()
     }
+}
+
+/// True when `pos` falls within `range` (inclusive of both ends so a
+/// hover on the single-character marker registers).
+fn range_contains(range: Range, pos: Position) -> bool {
+    let after_start = (pos.line, pos.character) >= (range.start.line, range.start.character);
+    let before_end = (pos.line, pos.character) <= (range.end.line, range.end.character);
+    after_start && before_end
+}
+
+/// Markdown hover body for one finding: rule id + severity, the
+/// message, and a policy link when the rule declares one.
+fn render_finding(f: &Finding) -> String {
+    let mut s = format!(
+        "**alint** · `{}` ({})\n\n{}",
+        f.rule_id,
+        severity_label(f.severity),
+        f.message
+    );
+    if let Some(url) = &f.policy_url {
+        s.push_str("\n\n[Policy →](");
+        s.push_str(url);
+        s.push(')');
+    }
+    s
 }
 
 #[cfg(test)]
@@ -404,6 +541,16 @@ mod tests {
             line,
             column,
             is_note: false,
+        }
+    }
+
+    fn finding(policy_url: Option<&str>) -> Finding {
+        Finding {
+            range: Range::new(Position::new(3, 6), Position::new(3, 7)),
+            severity: DiagnosticSeverity::ERROR,
+            rule_id: "my-rule".to_string(),
+            message: "boom".to_string(),
+            policy_url: policy_url.map(ToString::to_string),
         }
     }
 
@@ -422,24 +569,59 @@ mod tests {
     }
 
     #[test]
-    fn diagnostic_converts_one_indexed_position_to_zero_indexed() {
-        let d = diagnostic(
-            DiagnosticSeverity::ERROR,
-            "my-rule",
-            &violation(Some(4), Some(7)),
-        );
-        assert_eq!(d.range.start, Position::new(3, 6));
-        assert_eq!(d.range.end, Position::new(3, 7));
-        assert_eq!(d.source.as_deref(), Some("alint"));
-        assert_eq!(d.code, Some(NumberOrString::String("my-rule".to_string())));
-        assert_eq!(d.message, "boom");
+    fn violation_range_converts_one_indexed_to_zero_indexed() {
+        let r = violation_range(&violation(Some(4), Some(7)));
+        assert_eq!(r.start, Position::new(3, 6));
+        assert_eq!(r.end, Position::new(3, 7));
     }
 
     #[test]
-    fn diagnostic_without_line_anchors_at_file_start() {
-        let d = diagnostic(DiagnosticSeverity::WARNING, "r", &violation(None, None));
-        assert_eq!(d.range.start, Position::new(0, 0));
-        assert_eq!(d.range.end, Position::new(0, 1));
+    fn violation_range_without_line_anchors_at_file_start() {
+        let r = violation_range(&violation(None, None));
+        assert_eq!(r.start, Position::new(0, 0));
+        assert_eq!(r.end, Position::new(0, 1));
+    }
+
+    #[test]
+    fn finding_to_diagnostic_carries_rule_and_policy_link() {
+        let d = finding_to_diagnostic(&finding(Some("https://example.com/policy")));
+        assert_eq!(d.code, Some(NumberOrString::String("my-rule".to_string())));
+        assert_eq!(d.source.as_deref(), Some("alint"));
+        assert_eq!(d.message, "boom");
+        assert_eq!(
+            d.code_description.unwrap().href.as_str(),
+            "https://example.com/policy"
+        );
+    }
+
+    #[test]
+    fn finding_to_diagnostic_omits_code_description_for_non_url_policy() {
+        let d = finding_to_diagnostic(&finding(Some("not a url")));
+        assert!(d.code_description.is_none());
+    }
+
+    #[test]
+    fn range_contains_is_inclusive_of_both_ends() {
+        let r = Range::new(Position::new(3, 6), Position::new(3, 7));
+        assert!(range_contains(r, Position::new(3, 6)));
+        assert!(range_contains(r, Position::new(3, 7)));
+        assert!(!range_contains(r, Position::new(3, 8)));
+        assert!(!range_contains(r, Position::new(2, 6)));
+    }
+
+    #[test]
+    fn render_finding_includes_rule_message_and_policy() {
+        let md = render_finding(&finding(Some("https://example.com/p")));
+        assert!(md.contains("my-rule"), "{md}");
+        assert!(md.contains("(error)"), "{md}");
+        assert!(md.contains("boom"), "{md}");
+        assert!(md.contains("https://example.com/p"), "{md}");
+    }
+
+    #[test]
+    fn render_finding_omits_policy_link_when_absent() {
+        let md = render_finding(&finding(None));
+        assert!(!md.contains("Policy"), "{md}");
     }
 
     #[test]
