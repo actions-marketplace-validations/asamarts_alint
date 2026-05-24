@@ -1,6 +1,14 @@
 # `alint-lsp` — Language Server Protocol implementation
 
-Status: Design draft, written 2026-05-02 after v0.9.6.
+Status: **Scaffold landed** (2026-05-23). `crates/alint-lsp` + the
+`alint lsp` stdio subcommand ship the diagnostics-on-open/save slice
+described below (full `Engine::run` over the workspace, FULL document
+sync, violations → `publishDiagnostics`). Still deferred: per-edit
+(`didChange`) live re-evaluation via the single-file hot path (see
+`single_file_reevaluation.md`), hover (`policy_url`/message), code
+actions (apply fix / add-to-ignore), `didChangeWatchedFiles`, and the
+`Hint`-diagnostic surfacing of informational notes. Original design
+draft written 2026-05-02 after v0.9.6.
 
 ## Problem
 

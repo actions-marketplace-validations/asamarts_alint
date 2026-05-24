@@ -306,6 +306,12 @@ enum Command {
         )]
         format: String,
     },
+    /// Start the alint language server, speaking LSP over stdio.
+    /// Editor integrations (VS Code, Zed, Neovim, and others) spawn
+    /// this and drive it via the Language Server Protocol; it is not
+    /// meant to be run interactively. Publishes diagnostics for the
+    /// workspace's `.alint.yml` rules on document open and save.
+    Lsp,
 }
 
 fn main() -> ExitCode {
@@ -450,7 +456,15 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
             &cli,
         ),
         Command::ValidateConfig { path, format } => cmd_validate_config(path, &format, &cli),
+        Command::Lsp => cmd_lsp(),
     }
+}
+
+/// Start the LSP server over stdio. Blocks (running its own async
+/// runtime inside `alint-lsp`) until the client disconnects.
+fn cmd_lsp() -> Result<ExitCode> {
+    alint_lsp::run_stdio().context("running language server")?;
+    Ok(ExitCode::SUCCESS)
 }
 
 #[derive(Debug)]

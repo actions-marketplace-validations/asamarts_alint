@@ -1,0 +1,30 @@
+[package]
+name = "alint-lsp"
+description = "Internal: Language Server Protocol server for alint. Not a stable public API."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage = "https://github.com/asamarts/alint"
+readme = "../../README.md"
+authors.workspace = true
+# Like the other internal crates, this publishes to crates.io (with
+# an "Internal" description) rather than `publish = false`: the alint
+# binary depends on it for the `alint lsp` subcommand, and a workspace
+# dep of a published crate must be resolvable on crates.io (the v0.8.1
+# lesson). Promote to a documented public API once the surface stabilises.
+
+[dependencies]
+alint-core.workspace = true
+alint-dsl.workspace = true
+alint-rules.workspace = true
+tower-lsp.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

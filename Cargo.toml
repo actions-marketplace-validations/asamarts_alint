@@ -5,6 +5,7 @@ members = [
     "crates/alint-dsl",
     "crates/alint-rules",
     "crates/alint-output",
+    "crates/alint-lsp",
     "crates/alint",
     "crates/alint-bench",
     "crates/alint-testkit",
@@ -27,6 +28,7 @@ alint-core = { path = "crates/alint-core", version = "0.10.2" }
 alint-dsl = { path = "crates/alint-dsl", version = "0.10.2" }
 alint-rules = { path = "crates/alint-rules", version = "0.10.2" }
 alint-output = { path = "crates/alint-output", version = "0.10.2" }
+alint-lsp = { path = "crates/alint-lsp", version = "0.10.2" }
 alint-bench = { path = "crates/alint-bench", version = "0.10.2" }
 alint-testkit = { path = "crates/alint-testkit", version = "0.10.2" }
 
@@ -77,6 +79,10 @@ roxmltree = "0.20"
 # the design docs were relocated to `docs/design/v0.11/` (the
 # move itself shipped in v0.9.22).
 tower-lsp = "0.20"
+# Async runtime for the LSP server (tower-lsp is async). Only
+# `crates/alint-lsp` pulls it in; the CLI enters the runtime via the
+# `lsp` subcommand.
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
