@@ -172,6 +172,16 @@ impl Engine {
         self.entries.len()
     }
 
+    /// The fixer for the loaded rule with this id, if the rule declares
+    /// one. Lets a caller (the LSP server) build an "Apply fix" edit for
+    /// a specific violation without re-deriving the rule set.
+    pub fn fixer_for(&self, rule_id: &str) -> Option<&dyn crate::rule::Fixer> {
+        self.entries
+            .iter()
+            .find(|e| e.rule.id() == rule_id)
+            .and_then(|e| e.rule.fixer())
+    }
+
     // ~125 lines but each block has its own purpose (changed-set
     // short-circuit, fact eval, git probe, filtered-index build,
     // cross-file partition, per-file partition, assembly). Splitting

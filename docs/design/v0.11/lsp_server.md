@@ -12,10 +12,17 @@ still refresh on save. **Hover ships too:** hovering a violation marker
 renders the rule id, severity, message, and `policy_url` (as a link)
 from a per-URI cache of the last-published findings; `policy_url` is
 also attached to each diagnostic as its `codeDescription` so editors
-link it from the Problems panel. Still deferred: code actions (apply
-fix / add-to-ignore), `didChangeWatchedFiles`, and the
-`Hint`-diagnostic surfacing of informational notes. Original design
-draft written 2026-05-02 after v0.9.6.
+link it from the Problems panel. **"Apply fix" code actions ship:** a
+violation whose rule declares a fixer offers a quick-fix that returns a
+`WorkspaceEdit` (the editor applies it to the buffer, undoable) — built
+from a new non-writing `Fixer::fix_edit` → `FixEdit` engine capability
+(`SetContent` for content transforms; `CreateFile` / `DeleteFile` /
+`RenameFile` resource ops for the file-op fixers). The disk-writing
+`Fixer::apply` path (used by `alint fix`) is unchanged. Still deferred:
+the **"Add rule to ignore"** code action (it edits `.alint.yml`, a
+separate decision), `didChangeWatchedFiles`, and the `Hint`-diagnostic
+surfacing of informational notes. Original design draft written
+2026-05-02 after v0.9.6.
 
 ## Problem
 

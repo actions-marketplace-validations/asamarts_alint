@@ -1,6 +1,7 @@
 use std::io::Write;
+use std::path::Path;
 
-use alint_core::{Error, FixContext, FixOutcome, Fixer, Result, Violation};
+use alint_core::{Error, FixContext, FixEdit, FixOutcome, Fixer, Result, Violation};
 
 /// Strips trailing space/tab on every line of each violating
 /// file. Preserves original line endings (LF stays LF, CRLF
@@ -51,6 +52,19 @@ impl Fixer for FileTrimTrailingWhitespaceFixer {
             "trimmed trailing whitespace in {}",
             path.display()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let text = std::str::from_utf8(bytes).ok()?;
+        let trimmed = strip_trailing_whitespace(text);
+        if trimmed.as_bytes() == bytes {
+            return None;
+        }
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: trimmed.into_bytes(),
+        })
     }
 }
 
@@ -114,6 +128,19 @@ impl Fixer for FileAppendFinalNewlineFixer {
             "appended final newline to {}",
             path.display()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        if bytes.is_empty() || bytes.ends_with(b"\n") {
+            return None;
+        }
+        let mut content = bytes.to_vec();
+        content.push(b'\n');
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content,
+        })
     }
 }
 
@@ -192,6 +219,18 @@ impl Fixer for FileNormalizeLineEndingsFixer {
             path.display(),
             self.target.name()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let normalized = normalize_line_endings(bytes, self.target);
+        if normalized == bytes {
+            return None;
+        }
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: normalized,
+        })
     }
 }
 
@@ -275,6 +314,19 @@ impl Fixer for FileCollapseBlankLinesFixer {
             path.display(),
             self.max,
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let text = std::str::from_utf8(bytes).ok()?;
+        let collapsed = collapse_blank_lines(text, self.max);
+        if collapsed.as_bytes() == bytes {
+            return None;
+        }
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: collapsed.into_bytes(),
+        })
     }
 }
 
@@ -475,5 +527,45 @@ mod tests {
     #[test]
     fn collapse_blank_lines_no_op_on_empty_file() {
         assert_eq!(collapse_blank_lines("", 2), "");
+    }
+
+    #[test]
+    fn trim_fix_edit_returns_set_content_with_trimmed_bytes() {
+        let v = Violation::new("ws").with_path(std::path::Path::new("x.rs"));
+        let edit = FileTrimTrailingWhitespaceFixer
+            .fix_edit(&v, b"let _ = 1;   \n", std::path::Path::new("/repo"))
+            .expect("dirty file yields an edit");
+        match edit {
+            FixEdit::SetContent { path, content } => {
+                assert_eq!(path, std::path::Path::new("x.rs"));
+                assert_eq!(content, b"let _ = 1;\n");
+            }
+            other => panic!("expected SetContent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trim_fix_edit_returns_none_when_already_clean() {
+        let v = Violation::new("ws").with_path(std::path::Path::new("x.rs"));
+        assert!(
+            FileTrimTrailingWhitespaceFixer
+                .fix_edit(&v, b"clean\n", std::path::Path::new("/repo"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn append_final_newline_fix_edit_appends_one_newline() {
+        let v = Violation::new("eof").with_path(std::path::Path::new("x.txt"));
+        let edit = FileAppendFinalNewlineFixer
+            .fix_edit(&v, b"hello", std::path::Path::new("/repo"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("x.txt"),
+                content: b"hello\n".to_vec(),
+            }
+        );
     }
 }

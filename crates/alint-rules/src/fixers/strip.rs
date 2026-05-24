@@ -1,4 +1,6 @@
-use alint_core::{Error, FixContext, FixOutcome, Fixer, Result, Violation};
+use std::path::Path;
+
+use alint_core::{Error, FixContext, FixEdit, FixOutcome, Fixer, Result, Violation};
 
 /// Strips Unicode bidi control characters (the Trojan Source
 /// codepoints U+202A–202E, U+2066–2069) from the file's content.
@@ -18,6 +20,15 @@ impl Fixer for FileStripBidiFixer {
             ctx,
             crate::no_bidi_controls::is_bidi_control,
             /* preserve_leading_feff = */ false,
+        )
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        char_filter_edit(
+            violation,
+            bytes,
+            crate::no_bidi_controls::is_bidi_control,
+            false,
         )
     }
 }
@@ -41,6 +52,15 @@ impl Fixer for FileStripZeroWidthFixer {
             ctx,
             |c| matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}'),
             /* preserve_leading_feff = */ true,
+        )
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        char_filter_edit(
+            violation,
+            bytes,
+            |c| matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}'),
+            true,
         )
     }
 }
@@ -89,6 +109,15 @@ impl Fixer for FileStripBomFixer {
             path.display()
         )))
     }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let bom = crate::no_bom::detect_bom(bytes)?;
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: bytes[bom.byte_len()..].to_vec(),
+        })
+    }
 }
 
 /// Shared read-modify-write helper for "remove every char that
@@ -123,15 +152,7 @@ fn apply_char_filter(
             path.display()
         )));
     };
-    let mut out = String::with_capacity(text.len());
-    let mut first_char = true;
-    for c in text.chars() {
-        let keep_because_leading_bom = preserve_leading_feff && first_char && c == '\u{FEFF}';
-        if keep_because_leading_bom || !predicate(c) {
-            out.push(c);
-        }
-        first_char = false;
-    }
+    let out = filter_chars(text, predicate, preserve_leading_feff);
     if out.as_bytes() == existing {
         return Ok(FixOutcome::Skipped(format!(
             "{} has no {label} chars to strip",
@@ -143,4 +164,44 @@ fn apply_char_filter(
         source,
     })?;
     Ok(FixOutcome::Applied(format!("{verb} {}", path.display())))
+}
+
+/// Pure "drop every char matching `predicate`" transform, shared by the
+/// disk-writing `apply_char_filter` and the editor-edit `char_filter_edit`
+/// so the two paths can't diverge.
+fn filter_chars(
+    text: &str,
+    predicate: impl Fn(char) -> bool,
+    preserve_leading_feff: bool,
+) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut first_char = true;
+    for c in text.chars() {
+        let keep_because_leading_bom = preserve_leading_feff && first_char && c == '\u{FEFF}';
+        if keep_because_leading_bom || !predicate(c) {
+            out.push(c);
+        }
+        first_char = false;
+    }
+    out
+}
+
+/// [`FixEdit`] form of the char-filter fixers: returns `None` when the
+/// violation has no path, the content isn't UTF-8, or nothing changes.
+fn char_filter_edit(
+    violation: &Violation,
+    bytes: &[u8],
+    predicate: impl Fn(char) -> bool,
+    preserve_leading_feff: bool,
+) -> Option<FixEdit> {
+    let path = violation.path.as_deref()?;
+    let text = std::str::from_utf8(bytes).ok()?;
+    let out = filter_chars(text, predicate, preserve_leading_feff);
+    if out.as_bytes() == bytes {
+        return None;
+    }
+    Some(FixEdit::SetContent {
+        path: path.to_path_buf(),
+        content: out.into_bytes(),
+    })
 }

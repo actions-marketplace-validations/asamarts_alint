@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -474,6 +474,26 @@ pub enum FixOutcome {
     Skipped(String),
 }
 
+/// A proposed fix expressed as data, so a caller can turn it into an
+/// editor edit (an LSP `WorkspaceEdit`) instead of writing the file.
+/// Returned by [`Fixer::fix_edit`]. Paths are relative to the alint
+/// root, matching [`Violation::path`].
+///
+/// `fix_edit` is the non-writing sibling of [`Fixer::apply`]: `apply`
+/// mutates the filesystem (for `alint fix`); `fix_edit` describes the
+/// same change so the editor can apply it to the buffer (with undo).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FixEdit {
+    /// Replace the full contents of an existing file.
+    SetContent { path: PathBuf, content: Vec<u8> },
+    /// Create a file that doesn't exist yet.
+    CreateFile { path: PathBuf, content: Vec<u8> },
+    /// Delete a file.
+    DeleteFile { path: PathBuf },
+    /// Rename a file (same directory or not).
+    RenameFile { from: PathBuf, to: PathBuf },
+}
+
 /// A mechanical corrector for a specific rule's violations.
 pub trait Fixer: Send + Sync + std::fmt::Debug {
     /// Short human-readable summary of what this fixer does,
@@ -482,6 +502,22 @@ pub trait Fixer: Send + Sync + std::fmt::Debug {
 
     /// Apply the fix against a single violation.
     fn apply(&self, violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome>;
+
+    /// Express the fix for `violation` as a [`FixEdit`] without touching
+    /// the filesystem, given the current `bytes` of the violation's file
+    /// (empty for create-style fixers) and the workspace `root` (so
+    /// content sourced from a template can be read). Returns `None` when
+    /// the fixer has no editor-expressible form, or when there's nothing
+    /// to change.
+    ///
+    /// Used by the LSP server to offer an "Apply fix" code action as a
+    /// `WorkspaceEdit`. The default returns `None` — a fixer opts in by
+    /// overriding it. Implementations MUST NOT write to disk (reading a
+    /// declared template is allowed).
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        let _ = (violation, bytes, root);
+        None
+    }
 }
 
 /// Result of [`read_for_fix`] — either the bytes of the file,

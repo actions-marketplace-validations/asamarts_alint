@@ -19,24 +19,33 @@
 //! - **Hover** over a violation marker renders the rule id, message,
 //!   and `policy_url` from the per-file cache of the last-published
 //!   findings.
+//! - **Code actions** offer an "Apply fix" quick-fix for any violation
+//!   whose rule declares a fixer, returning a `WorkspaceEdit`
+//!   ([`alint_core::Fixer::fix_edit`] → [`alint_core::FixEdit`]) the
+//!   editor applies to the buffer.
 //!
-//! Code actions are deferred to a later slice of the LSP epic.
+//! The "add rule to ignore" action and `didChangeWatchedFiles` are
+//! deferred to later slices of the LSP epic.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tower_lsp::lsp_types::{
-    CodeDescription, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams, Hover,
-    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, MarkupContent, MarkupKind, MessageType, NumberOrString, Position, Range,
-    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
+    CodeActionProviderCapability, CodeActionResponse, CodeDescription, CreateFile, DeleteFile,
+    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentChangeOperation, DocumentChanges,
+    Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    InitializedParams, MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf,
+    OptionalVersionedTextDocumentIdentifier, Position, Range, RenameFile, ResourceOp,
+    ServerCapabilities, ServerInfo, TextDocumentEdit, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server, jsonrpc::Result as JsonRpcResult};
 
 use alint_core::{
-    Engine, Error, FileIndex, Level, RuleEntry, RuleResult, Violation, WalkOptions, walk,
+    Engine, Error, FileIndex, FixEdit, Level, RuleEntry, RuleResult, Violation, WalkOptions, walk,
 };
 
 /// One cached finding for a file: enough to publish a diagnostic and to
@@ -49,6 +58,9 @@ struct Finding {
     rule_id: String,
     message: String,
     policy_url: Option<String>,
+    /// Whether the rule declares a fixer — gates the "Apply fix" code
+    /// action without re-deriving the rule set.
+    fixable: bool,
 }
 
 /// Per-file findings keyed by absolute path.
@@ -93,6 +105,9 @@ struct State {
     /// Last-published findings per open URI, so `hover` can answer by
     /// position without re-running rules.
     diagnostics: HashMap<Url, Vec<Finding>>,
+    /// In-memory text per open URI (the editor's authoritative buffer),
+    /// so `codeAction` can compute a fix edit against unsaved content.
+    documents: HashMap<Url, String>,
 }
 
 #[derive(Debug)]
@@ -110,6 +125,7 @@ impl Backend {
                 open: HashSet::new(),
                 session: None,
                 diagnostics: HashMap::new(),
+                documents: HashMap::new(),
             }),
         }
     }
@@ -242,6 +258,7 @@ impl LanguageServer for Backend {
                     TextDocumentSyncKind::FULL,
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -262,11 +279,13 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        self.state
-            .lock()
-            .unwrap()
-            .open
-            .insert(params.text_document.uri);
+        {
+            let mut state = self.state.lock().unwrap();
+            state.open.insert(params.text_document.uri.clone());
+            state
+                .documents
+                .insert(params.text_document.uri, params.text_document.text);
+        }
         self.check_and_publish().await;
     }
 
@@ -276,8 +295,13 @@ impl LanguageServer for Backend {
         let Some(change) = params.content_changes.pop() else {
             return;
         };
-        self.reeval_file(params.text_document.uri, change.text)
-            .await;
+        let uri = params.text_document.uri;
+        self.state
+            .lock()
+            .unwrap()
+            .documents
+            .insert(uri.clone(), change.text.clone());
+        self.reeval_file(uri, change.text).await;
     }
 
     async fn did_save(&self, _: DidSaveTextDocumentParams) {
@@ -292,6 +316,7 @@ impl LanguageServer for Backend {
             let mut state = self.state.lock().unwrap();
             state.open.remove(&uri);
             state.diagnostics.remove(&uri);
+            state.documents.remove(&uri);
         }
         // Clear any diagnostics the editor is still showing.
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
@@ -328,6 +353,61 @@ impl LanguageServer for Backend {
             }),
             range: matching.first().map(|f| f.range),
         }))
+    }
+
+    async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> JsonRpcResult<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri;
+        let selection = params.range;
+
+        let (session, findings, text) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.session.clone(),
+                state.diagnostics.get(&uri).cloned(),
+                state.documents.get(&uri).cloned(),
+            )
+        };
+        let (Some(session), Some(findings), Some(text)) = (session, findings, text) else {
+            return Ok(None);
+        };
+        let Ok(abs) = uri.to_file_path() else {
+            return Ok(None);
+        };
+        let Ok(rel) = abs.strip_prefix(&session.root).map(Path::to_path_buf) else {
+            return Ok(None);
+        };
+
+        let bytes = text.as_bytes();
+        let mut actions: CodeActionResponse = Vec::new();
+        for finding in &findings {
+            if !finding.fixable || !ranges_overlap(finding.range, selection) {
+                continue;
+            }
+            let Some(fixer) = session.engine.fixer_for(&finding.rule_id) else {
+                continue;
+            };
+            let violation = Violation::new(finding.message.clone()).with_path(rel.clone());
+            let Some(edit) = fixer.fix_edit(&violation, bytes, &session.root) else {
+                continue;
+            };
+            let Some(workspace_edit) = fix_edit_to_workspace_edit(&edit, &session.root) else {
+                continue;
+            };
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("alint: fix `{}`", finding.rule_id),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![finding_to_diagnostic(finding)]),
+                edit: Some(workspace_edit),
+                ..CodeAction::default()
+            }));
+        }
+        if actions.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(actions))
     }
 }
 
@@ -447,6 +527,7 @@ fn group_findings(root: &Path, results: &[RuleResult]) -> FindingsByPath {
                 rule_id: result.rule_id.to_string(),
                 message: violation.message.to_string(),
                 policy_url: policy_url.clone(),
+                fixable: result.is_fixable,
             });
         }
     }
@@ -512,6 +593,94 @@ fn range_contains(range: Range, pos: Position) -> bool {
     after_start && before_end
 }
 
+/// True when two ranges intersect (the code-action selection vs. a
+/// finding's marker).
+fn ranges_overlap(a: Range, b: Range) -> bool {
+    let a_start = (a.start.line, a.start.character);
+    let a_end = (a.end.line, a.end.character);
+    let b_start = (b.start.line, b.start.character);
+    let b_end = (b.end.line, b.end.character);
+    a_start <= b_end && b_start <= a_end
+}
+
+/// A range that covers any whole document. LSP clients clamp positions
+/// past EOF, so this replaces the full file regardless of its length —
+/// sidestepping UTF-16 column counting for a full-document edit.
+fn whole_document() -> Range {
+    Range::new(Position::new(0, 0), Position::new(u32::MAX, u32::MAX))
+}
+
+/// Map a core [`FixEdit`] to an LSP [`WorkspaceEdit`]. Content edits use
+/// the widely-supported `changes` map; create/delete/rename use resource
+/// operations (the client must advertise `resourceOperations` support).
+/// Returns `None` when content isn't UTF-8 or a path can't become a URI.
+fn fix_edit_to_workspace_edit(edit: &FixEdit, root: &Path) -> Option<WorkspaceEdit> {
+    match edit {
+        FixEdit::SetContent { path, content } => {
+            let new_text = String::from_utf8(content.clone()).ok()?;
+            let uri = Url::from_file_path(root.join(path)).ok()?;
+            let mut changes = HashMap::new();
+            changes.insert(
+                uri,
+                vec![TextEdit {
+                    range: whole_document(),
+                    new_text,
+                }],
+            );
+            Some(WorkspaceEdit {
+                changes: Some(changes),
+                document_changes: None,
+                change_annotations: None,
+            })
+        }
+        FixEdit::CreateFile { path, content } => {
+            let new_text = String::from_utf8(content.clone()).ok()?;
+            let uri = Url::from_file_path(root.join(path)).ok()?;
+            let ops = vec![
+                DocumentChangeOperation::Op(ResourceOp::Create(CreateFile {
+                    uri: uri.clone(),
+                    options: None,
+                    annotation_id: None,
+                })),
+                DocumentChangeOperation::Edit(TextDocumentEdit {
+                    text_document: OptionalVersionedTextDocumentIdentifier { uri, version: None },
+                    edits: vec![OneOf::Left(TextEdit {
+                        range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+                        new_text,
+                    })],
+                }),
+            ];
+            Some(operations(ops))
+        }
+        FixEdit::DeleteFile { path } => {
+            let uri = Url::from_file_path(root.join(path)).ok()?;
+            Some(operations(vec![DocumentChangeOperation::Op(
+                ResourceOp::Delete(DeleteFile { uri, options: None }),
+            )]))
+        }
+        FixEdit::RenameFile { from, to } => {
+            let old_uri = Url::from_file_path(root.join(from)).ok()?;
+            let new_uri = Url::from_file_path(root.join(to)).ok()?;
+            Some(operations(vec![DocumentChangeOperation::Op(
+                ResourceOp::Rename(RenameFile {
+                    old_uri,
+                    new_uri,
+                    options: None,
+                    annotation_id: None,
+                }),
+            )]))
+        }
+    }
+}
+
+fn operations(ops: Vec<DocumentChangeOperation>) -> WorkspaceEdit {
+    WorkspaceEdit {
+        changes: None,
+        document_changes: Some(DocumentChanges::Operations(ops)),
+        change_annotations: None,
+    }
+}
+
 /// Markdown hover body for one finding: rule id + severity, the
 /// message, and a policy link when the rule declares one.
 fn render_finding(f: &Finding) -> String {
@@ -551,6 +720,7 @@ mod tests {
             rule_id: "my-rule".to_string(),
             message: "boom".to_string(),
             policy_url: policy_url.map(ToString::to_string),
+            fixable: false,
         }
     }
 
@@ -628,5 +798,99 @@ mod tests {
     fn build_session_returns_none_when_no_config() {
         let dir = tempfile::tempdir().unwrap();
         assert!(build_session(dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn ranges_overlap_detects_intersection_and_disjoint() {
+        let a = Range::new(Position::new(2, 0), Position::new(2, 10));
+        assert!(ranges_overlap(
+            a,
+            Range::new(Position::new(2, 5), Position::new(2, 6))
+        ));
+        assert!(ranges_overlap(
+            a,
+            Range::new(Position::new(0, 0), Position::new(5, 0))
+        ));
+        assert!(!ranges_overlap(
+            a,
+            Range::new(Position::new(3, 0), Position::new(3, 1))
+        ));
+    }
+
+    #[test]
+    fn set_content_maps_to_full_document_text_edit() {
+        let root = Path::new("/repo");
+        let edit = FixEdit::SetContent {
+            path: PathBuf::from("a.txt"),
+            content: b"fixed\n".to_vec(),
+        };
+        let ws = fix_edit_to_workspace_edit(&edit, root).unwrap();
+        let changes = ws.changes.expect("content edit uses the changes map");
+        let uri = Url::from_file_path("/repo/a.txt").unwrap();
+        let edits = &changes[&uri];
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_text, "fixed\n");
+        assert_eq!(edits[0].range.start, Position::new(0, 0));
+        assert!(ws.document_changes.is_none());
+    }
+
+    #[test]
+    fn delete_maps_to_a_resource_operation() {
+        let edit = FixEdit::DeleteFile {
+            path: PathBuf::from("debug.log"),
+        };
+        let ws = fix_edit_to_workspace_edit(&edit, Path::new("/repo")).unwrap();
+        assert!(ws.changes.is_none());
+        let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
+            panic!("delete must use resource operations");
+        };
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(
+            ops[0],
+            DocumentChangeOperation::Op(ResourceOp::Delete(_))
+        ));
+    }
+
+    #[test]
+    fn create_maps_to_create_op_plus_insert_edit() {
+        let edit = FixEdit::CreateFile {
+            path: PathBuf::from("LICENSE"),
+            content: b"Apache-2.0\n".to_vec(),
+        };
+        let ws = fix_edit_to_workspace_edit(&edit, Path::new("/repo")).unwrap();
+        let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
+            panic!("create must use resource operations");
+        };
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(
+            ops[0],
+            DocumentChangeOperation::Op(ResourceOp::Create(_))
+        ));
+        assert!(matches!(ops[1], DocumentChangeOperation::Edit(_)));
+    }
+
+    #[test]
+    fn rename_maps_to_rename_op() {
+        let edit = FixEdit::RenameFile {
+            from: PathBuf::from("FooBar.rs"),
+            to: PathBuf::from("foo_bar.rs"),
+        };
+        let ws = fix_edit_to_workspace_edit(&edit, Path::new("/repo")).unwrap();
+        let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
+            panic!("rename must use resource operations");
+        };
+        assert!(matches!(
+            ops[0],
+            DocumentChangeOperation::Op(ResourceOp::Rename(_))
+        ));
+    }
+
+    #[test]
+    fn set_content_with_non_utf8_yields_no_edit() {
+        let edit = FixEdit::SetContent {
+            path: PathBuf::from("a.bin"),
+            content: vec![0xff, 0xfe],
+        };
+        assert!(fix_edit_to_workspace_edit(&edit, Path::new("/repo")).is_none());
     }
 }

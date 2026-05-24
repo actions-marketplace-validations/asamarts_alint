@@ -1,7 +1,9 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use alint_core::{ContentSourceSpec, Error, FixContext, FixOutcome, Fixer, Result, Violation};
+use alint_core::{
+    ContentSourceSpec, Error, FixContext, FixEdit, FixOutcome, Fixer, Result, Violation,
+};
 
 /// UTF-8 byte-order mark. Preserved across prepend operations so
 /// editors that rely on it don't break.
@@ -79,6 +81,16 @@ impl Fixer for FileCreateFixer {
             "created {}",
             self.path.display()
         )))
+    }
+
+    fn fix_edit(&self, _violation: &Violation, _bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        // The target is set at build time, not taken from the violation.
+        // Content is resolved (reading a declared template is allowed).
+        let content = resolve_source_bytes(&self.source, root).ok()?;
+        Some(FixEdit::CreateFile {
+            path: self.path.clone(),
+            content,
+        })
     }
 }
 
@@ -173,6 +185,24 @@ impl Fixer for FilePrependFixer {
         })?;
         Ok(FixOutcome::Applied(format!("prepended {}", path.display())))
     }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let prepend = resolve_source_bytes(&self.source, root).ok()?;
+        let mut out = Vec::with_capacity(bytes.len() + prepend.len());
+        if bytes.starts_with(UTF8_BOM) {
+            out.extend_from_slice(UTF8_BOM);
+            out.extend_from_slice(&prepend);
+            out.extend_from_slice(&bytes[UTF8_BOM.len()..]);
+        } else {
+            out.extend_from_slice(&prepend);
+            out.extend_from_slice(bytes);
+        }
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: out,
+        })
+    }
 }
 
 /// Appends `source` content to the end of each violating file.
@@ -242,6 +272,17 @@ impl Fixer for FileAppendFixer {
             "appended to {}",
             path.display()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let payload = resolve_source_bytes(&self.source, root).ok()?;
+        let mut out = bytes.to_vec();
+        out.extend_from_slice(&payload);
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: out,
+        })
     }
 }
 
@@ -487,5 +528,41 @@ mod tests {
             .apply(&Violation::new("m"), &make_ctx(&tmp, false))
             .unwrap();
         assert!(matches!(outcome, FixOutcome::Skipped(_)));
+    }
+
+    #[test]
+    fn file_create_fix_edit_returns_create_with_inline_content() {
+        let tmp = TempDir::new().unwrap();
+        let fixer = FileCreateFixer::new(PathBuf::from("LICENSE"), "Apache-2.0\n".into(), true);
+        let edit = fixer
+            .fix_edit(&Violation::new("missing"), &[], tmp.path())
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::CreateFile {
+                path: PathBuf::from("LICENSE"),
+                content: b"Apache-2.0\n".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn file_prepend_fix_edit_inserts_before_existing_bytes() {
+        let tmp = TempDir::new().unwrap();
+        let fixer = FilePrependFixer::new("// header\n".into());
+        let edit = fixer
+            .fix_edit(
+                &Violation::new("m").with_path(std::path::Path::new("a.rs")),
+                b"fn main() {}\n",
+                tmp.path(),
+            )
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: PathBuf::from("a.rs"),
+                content: b"// header\nfn main() {}\n".to_vec(),
+            }
+        );
     }
 }
