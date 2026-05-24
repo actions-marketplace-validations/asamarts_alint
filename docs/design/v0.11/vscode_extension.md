@@ -1,6 +1,11 @@
 # VS Code extension
 
-Status: Design draft, written 2026-05-02 after v0.9.6.
+Status: Design draft, written 2026-05-02 after v0.9.6. **Now one of
+six editor targets** — the cross-editor packaging/publishing matrix
+and the choice of the other editors (JetBrains, Zed, Neovim, Sublime
+Text, Emacs) live in [`editor_integrations.md`](./editor_integrations.md).
+Publish to **both** the VS Code Marketplace and Open VSX (the latter
+is what Cursor / Windsurf / VSCodium read).
 
 ## Problem
 
