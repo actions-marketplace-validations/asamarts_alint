@@ -3,11 +3,14 @@
 Status: **Scaffold landed** (2026-05-23). `crates/alint-lsp` + the
 `alint lsp` stdio subcommand ship the diagnostics-on-open/save slice
 described below (full `Engine::run` over the workspace, FULL document
-sync, violations → `publishDiagnostics`). Still deferred: per-edit
-(`didChange`) live re-evaluation via the single-file hot path (see
-`single_file_reevaluation.md`), hover (`policy_url`/message), code
-actions (apply fix / add-to-ignore), `didChangeWatchedFiles`, and the
-`Hint`-diagnostic surfacing of informational notes. Original design
+sync, violations → `publishDiagnostics`). **Update (2026-05-24):**
+per-edit (`didChange`) live re-evaluation now ships too — it drives
+`Engine::run_for_file` (the single-file hot path, see
+`single_file_reevaluation.md`) against the editor's in-memory bytes, so
+per-keystroke feedback costs one file's evaluation; cross-file rules
+still refresh on save. Still deferred: hover (`policy_url`/message),
+code actions (apply fix / add-to-ignore), `didChangeWatchedFiles`, and
+the `Hint`-diagnostic surfacing of informational notes. Original design
 draft written 2026-05-02 after v0.9.6.
 
 ## Problem

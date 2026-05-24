@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
@@ -32,6 +32,12 @@ pub enum Error {
     #[error("rule {rule_id:?}: {message}")]
     RuleConfig { rule_id: String, message: String },
 
+    #[error(
+        "file not in index: {path} \
+         (excluded by .gitignore / ignore:, or outside the walked tree)"
+    )]
+    FileNotInIndex { path: PathBuf },
+
     #[error("{0}")]
     Other(String),
 }
@@ -41,6 +47,16 @@ impl Error {
         Self::RuleConfig {
             rule_id: rule_id.into(),
             message: message.into(),
+        }
+    }
+
+    /// The single-file re-evaluation contract ([`Engine::run_for_file`](crate::Engine::run_for_file))
+    /// returns this when the requested path isn't in the cached index —
+    /// distinct from "rules ran but found nothing." Callers (the LSP
+    /// server) read it as "this file is excluded from linting."
+    pub fn file_not_in_index(path: &Path) -> Self {
+        Self::FileNotInIndex {
+            path: path.to_path_buf(),
         }
     }
 }

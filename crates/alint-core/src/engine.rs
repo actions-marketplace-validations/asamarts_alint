@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::facts::{FactSpec, FactValues, evaluate_facts};
 use crate::registry::RuleRegistry;
 use crate::report::{FixItem, FixReport, FixRuleResult, FixStatus, Report};
@@ -59,6 +59,12 @@ struct GitTrackedIndexes {
     /// [`GitTrackedMode::DirAware`].
     dir_aware: Option<FileIndex>,
 }
+
+/// Return of [`Engine::collect_live_per_file_entries`]: the per-file
+/// entries that should evaluate this run (paired with their position in
+/// `self.entries`), plus any `when`-evaluation-error results to emit
+/// verbatim.
+type LivePerFileEntries<'a> = (Vec<(usize, &'a RuleEntry)>, Vec<(usize, RuleResult)>);
 
 /// A rule bundled with an optional `when` expression. Rules with a `when`
 /// that evaluates to false at runtime are skipped (no `RuleResult` is
@@ -402,48 +408,7 @@ impl Engine {
         filtered_ctx: Option<&'a Context<'a>>,
         when_env: &'a WhenEnv<'a>,
     ) -> Vec<(usize, RuleResult)> {
-        // Pre-filter live per-file entries: opt-in via
-        // `as_per_file`, not skipped by `--changed`, and `when`
-        // resolved. `when` evaluates against constant facts +
-        // vars (no `iter` namespace at the engine level), so its
-        // verdict is independent of the file being scanned —
-        // resolve it once per rule before entering the file
-        // loop. `when` errors short-circuit to a per-rule result
-        // with the error message; behaviour matches the
-        // rule-major path's `run_entry` for parity.
-        let mut live: Vec<(usize, &RuleEntry)> = Vec::new();
-        let mut when_errors: Vec<(usize, RuleResult)> = Vec::new();
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if entry.rule.as_per_file().is_none() {
-                continue;
-            }
-            if self.skip_for_changed(entry.rule.as_ref(), full_ctx.index) {
-                continue;
-            }
-            if let Some(expr) = &entry.when {
-                match expr.evaluate(when_env) {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(e) => {
-                        when_errors.push((
-                            idx,
-                            RuleResult {
-                                rule_id: Arc::from(entry.rule.id()),
-                                level: entry.rule.level(),
-                                policy_url: entry.rule.policy_url().map(Arc::from),
-                                violations: vec![Violation::new(format!(
-                                    "when evaluation error: {e}"
-                                ))],
-                                notes: Vec::new(),
-                                is_fixable: entry.rule.fixer().is_some(),
-                            },
-                        ));
-                        continue;
-                    }
-                }
-            }
-            live.push((idx, entry));
-        }
+        let (live, when_errors) = self.collect_live_per_file_entries(full_ctx.index, when_env);
         if live.is_empty() {
             return when_errors;
         }
@@ -565,6 +530,163 @@ impl Engine {
             ));
         }
         results
+    }
+
+    /// Pre-filter the per-file entries that should evaluate this run:
+    /// opt-in via `as_per_file`, not skipped by `--changed`, and `when`
+    /// resolved. `when` evaluates against constant facts + vars (no
+    /// `iter` namespace at the engine level), so its verdict is
+    /// independent of the file being scanned — resolve it once per rule
+    /// here rather than per file. A `when` error short-circuits to a
+    /// per-rule result carrying the error message, matching the
+    /// rule-major path's `run_entry` for parity.
+    ///
+    /// Returns `(live entries, when-error results)`. Shared by
+    /// [`Engine::run`]'s file-major loop and [`Engine::run_for_file`].
+    fn collect_live_per_file_entries<'a>(
+        &'a self,
+        index: &FileIndex,
+        when_env: &WhenEnv<'_>,
+    ) -> LivePerFileEntries<'a> {
+        let mut live: Vec<(usize, &RuleEntry)> = Vec::new();
+        let mut when_errors: Vec<(usize, RuleResult)> = Vec::new();
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if entry.rule.as_per_file().is_none() {
+                continue;
+            }
+            if self.skip_for_changed(entry.rule.as_ref(), index) {
+                continue;
+            }
+            if let Some(expr) = &entry.when {
+                match expr.evaluate(when_env) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(e) => {
+                        when_errors.push((
+                            idx,
+                            RuleResult {
+                                rule_id: Arc::from(entry.rule.id()),
+                                level: entry.rule.level(),
+                                policy_url: entry.rule.policy_url().map(Arc::from),
+                                violations: vec![Violation::new(format!(
+                                    "when evaluation error: {e}"
+                                ))],
+                                notes: Vec::new(),
+                                is_fixable: entry.rule.fixer().is_some(),
+                            },
+                        ));
+                        continue;
+                    }
+                }
+            }
+            live.push((idx, entry));
+        }
+        (live, when_errors)
+    }
+
+    /// Re-evaluate only the per-file rules that apply to a single file,
+    /// using caller-supplied `bytes` (the LSP server's in-memory edited
+    /// copy is authoritative for unsaved edits — see
+    /// `docs/design/v0.11/single_file_reevaluation.md`). The cost is
+    /// proportional to *one* file's evaluation, not the whole tree's, so
+    /// an editor can call this on every (debounced) keystroke.
+    ///
+    /// Cross-file rules (those without an `as_per_file` view) are
+    /// intentionally NOT run — the caller re-runs those on save, and
+    /// only the ones whose scope intersects the changed file. `when:` is
+    /// resolved once against the engine's constant facts/vars, exactly
+    /// as [`Engine::run`] does.
+    ///
+    /// Returns [`Error::FileNotInIndex`] when `file_path` isn't in the
+    /// cached `index` — distinct from "ran but found nothing." The
+    /// caller reads it as "this file is excluded from linting"
+    /// (`.gitignore` / `ignore:` / outside the walked tree).
+    pub fn run_for_file(
+        &self,
+        root: &Path,
+        index: &FileIndex,
+        file_path: &Path,
+        bytes: &[u8],
+    ) -> Result<Vec<RuleResult>> {
+        if !index.contains_file(file_path) {
+            return Err(Error::file_not_in_index(file_path));
+        }
+
+        let fact_values = evaluate_facts(&self.facts, root, index)?;
+        let git_tracked = self.collect_git_tracked_if_needed(root);
+        let git_blame = self.build_blame_cache_if_needed(root);
+        // Per-file rules may carry `scope_filter.changed_since:`; resolve
+        // (and cache) the diff before any `Scope::matches` reads it.
+        self.resolve_changed_paths(root, index)?;
+
+        let ctx = Context {
+            root,
+            index,
+            registry: Some(&self.registry),
+            facts: Some(&fact_values),
+            vars: Some(&self.vars),
+            git_tracked: git_tracked.as_ref(),
+            git_blame: git_blame.as_ref(),
+        };
+        let when_env = WhenEnv {
+            facts: &fact_values,
+            vars: &self.vars,
+            iter: None,
+            env: None,
+        };
+
+        let (live, when_errors) = self.collect_live_per_file_entries(index, &when_env);
+
+        // Dispatch each in-scope rule against the supplied bytes. The
+        // raw violations (notes included) are bucketed by entry index;
+        // `RuleResult::new` partitions notes out below. A rule that is
+        // applicable but emits nothing leaves no bucket entry → no
+        // result, matching `run`'s "passing rules omitted" semantics.
+        let mut bucket: HashMap<usize, Vec<Violation>> = HashMap::new();
+        for (idx, entry) in &live {
+            let pf = entry
+                .rule
+                .as_per_file()
+                .expect("live entries are per-file rules by construction");
+            if !pf.path_scope().matches(file_path, index) {
+                continue;
+            }
+            match pf.evaluate_file(&ctx, file_path, bytes) {
+                Ok(vs) => {
+                    if !vs.is_empty() {
+                        bucket.entry(*idx).or_default().extend(vs);
+                    }
+                }
+                Err(e) => bucket
+                    .entry(*idx)
+                    .or_default()
+                    .push(Violation::new(format!("rule error: {e}"))),
+            }
+        }
+
+        let mut by_idx: HashMap<usize, RuleResult> = when_errors.into_iter().collect();
+        for (idx, entry) in &live {
+            if let Some(violations) = bucket.remove(idx) {
+                by_idx.insert(
+                    *idx,
+                    RuleResult::new(
+                        Arc::from(entry.rule.id()),
+                        entry.rule.level(),
+                        entry.rule.policy_url().map(Arc::from),
+                        violations,
+                        entry.rule.fixer().is_some(),
+                    ),
+                );
+            }
+        }
+        // Preserve `self.entries` order, mirroring `run`'s assembly.
+        let mut results = Vec::with_capacity(by_idx.len());
+        for idx in 0..self.entries.len() {
+            if let Some(rr) = by_idx.remove(&idx) {
+                results.push(rr);
+            }
+        }
+        Ok(results)
     }
 
     /// Evaluate every rule and apply fixers for their violations.
@@ -1354,6 +1476,96 @@ mod tests {
         let report = engine.run(tmp.path(), &index).unwrap();
 
         assert!(report.results.is_empty(), "results: {:?}", report.results);
+    }
+
+    #[test]
+    fn run_for_file_runs_only_in_scope_per_file_rules() {
+        // 3-rule fixture: a per-file rule in scope for `.txt`, a
+        // per-file rule scoped to `.rs` (out of scope), and a
+        // cross-file rule (must never run via run_for_file). Only the
+        // in-scope per-file rule should fire.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"no magic").unwrap();
+
+        let in_scope = Box::new(PerFileStub {
+            id: "txt-needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let out_of_scope = Box::new(PerFileStub {
+            id: "rs-needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.rs".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let cross = stub("cross", "**/*.txt");
+        let engine = Engine::new(vec![in_scope, out_of_scope, cross], RuleRegistry::new());
+
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let results = engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"no magic")
+            .unwrap();
+
+        assert_eq!(results.len(), 1, "results: {results:?}");
+        assert_eq!(&*results[0].rule_id, "txt-needs-magic");
+        assert_eq!(results[0].violations.len(), 1);
+    }
+
+    #[test]
+    fn run_for_file_uses_supplied_bytes_not_disk() {
+        // On-disk content passes the rule; the in-memory edited bytes
+        // (handed to run_for_file) fail it. The supplied bytes win —
+        // this is the whole point of the LSP unsaved-edit contract.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"MAGIC on disk").unwrap();
+
+        let rule = Box::new(PerFileStub {
+            id: "needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let engine = Engine::new(vec![rule], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+
+        let results = engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"edited, no prefix")
+            .unwrap();
+        assert_eq!(results.len(), 1, "edited bytes should fail the rule");
+        assert_eq!(&*results[0].rule_id, "needs-magic");
+    }
+
+    #[test]
+    fn run_for_file_passing_rule_omitted() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"whatever").unwrap();
+        let rule = Box::new(PerFileStub {
+            id: "needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let engine = Engine::new(vec![rule], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let results = engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"MAGIC passes")
+            .unwrap();
+        assert!(
+            results.is_empty(),
+            "passing rule must be omitted: {results:?}"
+        );
+    }
+
+    #[test]
+    fn run_for_file_errors_when_file_not_in_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let engine = Engine::new(vec![], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let err = engine
+            .run_for_file(tmp.path(), &index, Path::new("ghost.txt"), b"x")
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::FileNotInIndex { .. }),
+            "expected FileNotInIndex, got: {err:?}"
+        );
     }
 
     #[test]
