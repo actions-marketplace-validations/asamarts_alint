@@ -144,11 +144,12 @@ they're a manual post-release follow-up, not a tagged CI job.
 
 ## Phasing (within the v0.11 LSP epic)
 
-1. **`alint lsp` server** (`lsp_server.md`) + `single_file_reevaluation`
-   — the foundation; nothing else is possible without it.
-2. **VS Code extension** (`vscode_extension.md`) — highest reach;
-   proves the binary-resolution + diagnostics-mapping story end to end.
-   Publish to Marketplace + Open VSX (covers the fork ecosystem).
+1. ✅ **`alint lsp` server** (`lsp_server.md`) + `single_file_reevaluation`
+   — done. Diagnostics, hover, and apply-fix code actions all ship.
+2. ✅ **VS Code extension** (`vscode_extension.md`) — done (`editors/vscode/`),
+   with a tag-gated `publish-vscode` job (Marketplace + Open VSX). One
+   prerequisite remains before the first publish: a local Node 18+
+   `npm ci && npm run build` validation (the TS wasn't built in-repo).
 3. **JetBrains plugin** (LSP4IJ) — the second-biggest audience; one
    plugin, whole suite.
 4. **Zed extension** — small, Rust, completes the Tier-1 set.

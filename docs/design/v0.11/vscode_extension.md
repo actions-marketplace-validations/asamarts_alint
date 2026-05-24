@@ -1,11 +1,33 @@
 # VS Code extension
 
-Status: Design draft, written 2026-05-02 after v0.9.6. **Now one of
-six editor targets** — the cross-editor packaging/publishing matrix
-and the choice of the other editors (JetBrains, Zed, Neovim, Sublime
-Text, Emacs) live in [`editor_integrations.md`](./editor_integrations.md).
-Publish to **both** the VS Code Marketplace and Open VSX (the latter
-is what Cursor / Windsurf / VSCodium read).
+Status: **Implemented** (2026-05-24). The extension lives in
+`editors/vscode/` (TypeScript, esbuild-bundled): it resolves the
+`alint` binary (`alint.path` → PATH → opt-in download mirroring
+`npm/install.js` → locate prompt), launches `alint lsp` over stdio via
+`vscode-languageclient`, and registers the documented settings +
+commands. A tag-gated `publish-vscode` job in `release.yml` publishes
+to **both** the VS Code Marketplace (`vsce publish`, `VSCE_PAT`) and
+Open VSX (`ovsx publish`, `OVSX_PAT` — what Cursor / Windsurf /
+VSCodium read). **Caveat:** the TypeScript was authored but NOT built
+or run in-repo (the dev container's Node is too old); a local
+`npm ci && npm run build && npm run check-types` on Node 18+ is the
+prerequisite before the first publish. Deviations from the draft are
+noted inline. Originally one of six editor targets — see
+[`editor_integrations.md`](./editor_integrations.md). Design draft
+written 2026-05-02 after v0.9.6.
+
+**Deviations from the draft below:**
+- `alint.lintOnChange` / `alint.lintDelay` settings were dropped — the
+  server owns the eval-on-change policy and exposes no flags for it
+  yet, so those would have been dead config. Add them back if/when
+  `alint lsp` grows the corresponding options.
+- "Show effective rules" renders `alint list` output in the **alint
+  output channel**, not a webview panel (smaller surface; revisit if a
+  richer view is wanted).
+- The single-file source layout is `src/{extension,binary,download,target}.ts`
+  (the draft's `binary.ts` split into `binary.ts` + `download.ts`, plus
+  a `target.ts` for the platform→triple map shared with the download
+  path).
 
 ## Problem
 

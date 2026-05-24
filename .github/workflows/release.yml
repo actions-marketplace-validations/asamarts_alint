@@ -388,3 +388,49 @@ jobs:
           fi
           git commit -m "Bump alint to ${TAG}"
           git push origin main
+
+  publish-vscode:
+    name: publish VS Code extension (Marketplace + Open VSX)
+    # `needs: release` so the extension's first-run download finds the
+    # matching binary tarballs on GitHub Releases. The .vsix itself
+    # contains only the bundled JS client — no native bytes — so the
+    # build matrix is irrelevant; we gate on the GH Release being live.
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: stamp version from tag + publish to both registries
+        env:
+          # Repo secrets (Settings → Secrets → Actions):
+          #   VSCE_PAT — Azure DevOps PAT for the `asamarts` VS Code
+          #              Marketplace publisher (Marketplace → Manage).
+          #   OVSX_PAT — Open VSX access token (open-vsx.org → settings).
+          # Same mid-release-token-expiry risk as NPM_TOKEN: if either
+          # 401s, rotate it and `gh run rerun <id> --failed` — no new
+          # tag needed (the .vsix is idempotent per version).
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd editors/vscode
+          # Strip leading v: v0.10.2 → 0.10.2. The committed source can
+          # stay at any past version (so local `vsce package` during
+          # development works); CI rewrites to the release tag here.
+          ver="${TAG#v}"
+          node -e "
+            const fs = require('fs');
+            const pkg = require('./package.json');
+            pkg.version = '$ver';
+            fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          echo "==> extension version set to $ver"
+          npm ci
+          npm run build
+          # vsce/ovsx read VSCE_PAT/OVSX_PAT from the environment.
+          npx --no-install vsce publish --no-dependencies
+          npx --no-install ovsx publish --no-dependencies
