@@ -157,7 +157,11 @@ they're a manual post-release follow-up, not a tagged CI job.
    the version coordinates (IntelliJ platform / Kotlin / LSP4IJ / Gradle
    plugin) before the first publish; the `asamarts` Marketplace vendor +
    `JETBRAINS_MARKETPLACE_TOKEN` (and signing secrets) must be set up.
-4. **Zed extension** — small, Rust, completes the Tier-1 set.
+4. ✅ **Zed extension** — done (`editors/zed/`, Rust→wasm via
+   `zed_extension_api`); compiles to wasm locally. Publishing is a
+   manual PR to `zed-industries/extensions` (no release job). Known
+   limitation: Zed attaches LSPs per-language, so `extension.toml` lists
+   a broad common-language set rather than all files.
 5. **Neovim + Sublime + Emacs docs/packages** + honorable-mention
    config snippets — Tier-2, low effort, broad coverage.
 
