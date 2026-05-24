@@ -42,7 +42,8 @@ LSP-readiness:
 **Honorable mentions (config-only, community-contributed, documented
 but not first-party packaged):** Helix (`languages.toml`, Rust-built),
 Eclipse (LSP4E). Each is a ~10-line config snippet pointing at `alint
-lsp`; we document them but don't own a published package.
+lsp`; we document them but don't own a published package. Now shipped as
+docs/snippets under `editors/helix/` and `editors/eclipse/`.
 
 ## Per-editor specifics
 
@@ -162,8 +163,12 @@ they're a manual post-release follow-up, not a tagged CI job.
    manual PR to `zed-industries/extensions` (no release job). Known
    limitation: Zed attaches LSPs per-language, so `extension.toml` lists
    a broad common-language set rather than all files.
-5. **Neovim + Sublime + Emacs docs/packages** + honorable-mention
-   config snippets — Tier-2, low effort, broad coverage.
+5. ✅ **Neovim + Sublime + Emacs docs/packages** + honorable-mention
+   config snippets — done. `editors/{nvim,sublime,emacs,helix,eclipse}/`
+   ship config snippets / a small `alint.el` / docs. Remaining work is
+   the upstream/registry submissions (nvim-lspconfig PR, optional
+   `LSP-alint` Package Control + `alint.el` MELPA recipes) — tracked as
+   community follow-ups, not code in this repo.
 
 Realistically 2-5 may slip to v0.11.x / v0.12 — the server + VS Code is
 the v0.11 must-have; the rest is incremental once the server is stable.

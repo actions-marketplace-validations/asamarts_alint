@@ -1,0 +1,25 @@
+# alint language server for Helix.
+# Merge into ~/.config/helix/languages.toml.
+#
+# Requires the `alint` binary on PATH (Homebrew / cargo / npm / Docker /
+# install.sh).
+
+[language-server.alint]
+command = "alint"
+args = ["lsp"]
+
+# Helix attaches language servers per-language — there is no "all files"
+# wildcard. Add "alint" to the `language-servers` list of each language
+# you want it to lint (alongside that language's own server). Examples:
+
+[[language]]
+name = "rust"
+language-servers = ["rust-analyzer", "alint"]
+
+[[language]]
+name = "python"
+language-servers = ["pylsp", "alint"]
+
+[[language]]
+name = "go"
+language-servers = ["gopls", "alint"]
