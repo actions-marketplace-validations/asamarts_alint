@@ -676,3 +676,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   **A5** (`oss-baseline@v1` `oss-license-exists` recognises
   LICENSE.TXT and LICENSE.md). Plus this case study's own
   **B3** repo-config fix (drop/scope the over-eager Bazel-header rule).
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (58 rules, ~78% coverage). +9 surfaces: the bats sanity suite
+(pylint/buildifier/clang-format/codespell/api-compat) -> command_idempotent
+with per-file offender parsing, the tensorflow.org/code/<path> link
+integrity -> registry_paths_resolve, and requirements_lock cross-version pin
+parity -> cross_file_value_equals. Note: compliance/apache-2@v1 OVER-FIRES
+(1,185 generated .pbtxt goldens + _pb2.py + third_party), so it is extended
+with a same-id paths.exclude override rather than used as-is.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 6).

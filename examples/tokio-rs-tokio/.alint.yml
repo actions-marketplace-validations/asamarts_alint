@@ -1,124 +1,87 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
-# Starter alint config for tokio-rs/tokio.
 #
-# tokio is a small, well-curated Rust workspace (10 members:
-# tokio, tokio-macros, tokio-test, tokio-stream, tokio-util,
-# benches, examples, stress-test, tests-build, tests-integration).
-# All structural validation lives in `.github/workflows/` —
-# there is no `ci/` directory or hand-rolled hack/verify-*.sh
-# pipeline. The `ci.yml` workflow is ~1365 lines of
-# matrix-driven cargo invocations; the only repo-state
-# checks (vs. build/test runs) are:
+# Re-analysis of tokio-rs/tokio for alint (post-v0.10/v0.11 capabilities).
 #
-#   - `cargo fmt --check`               (fmt job)
-#   - `cargo clippy --workspace ...`    (clippy job)
-#   - `cargo deny`                       (audit.yml + pr-audit.yml)
-#   - `cargo doc --no-deps -Dwarnings`  (docs job)
-#   - `cargo semver-checks`              (semver job)
-#   - `diff README.md tokio/README.md`  (check-readme job)
-#   - `grep -q "$(...)" README.md`      (version-in-README check)
-#   - `cargo spellcheck` + dictionary
-#       sortedness/uniqueness/count check (check-spelling job)
-#   - `grep -rne '\s$'`                  (trailing-whitespace check
-#       inside check-spelling job)
+# tokio is a 10-member Cargo workspace with members at the repo ROOT
+# (no crates/ prefix): the 5 published crates
+#   tokio, tokio-macros, tokio-test, tokio-stream, tokio-util
+# plus 5 internal (publish=false) crates
+#   benches, examples, stress-test, tests-build, tests-integration.
 #
-# This config replaces the structural-state subset (everything
-# that can be answered by reading the working tree, not by
-# building) with declarative rules, plus shell-out wrappers for
-# the language-aware tools (rustfmt, clippy, deny, semver,
-# spellcheck).
+# ALL structural validation lives in .github/workflows/ — there is no
+# ci/ dir or hack/verify-*.sh pipeline. ci.yml is ~1390 lines of
+# matrix-driven cargo invocations. The repo-STATE checks (things you can
+# answer by reading the working tree, not by compiling) are:
 #
-# Adopt by saving as `.alint.yml` at the repo root and running
-# `alint check`. The `command:` rules require the matching CLI
-# on PATH (rustfmt, clippy, cargo-deny, cargo-spellcheck,
-# cargo-semver-checks); install once, run forever.
+#   fmt job ............ rustfmt --check --edition 2021 $(git ls-files '*.rs')
+#   clippy job ......... cargo clippy --workspace ... (2 feature passes)
+#   docs job ........... cargo doc --lib --no-deps -Dwarnings
+#   semver job ......... cargo-semver-checks (published crates)
+#   check-readme ....... diff README.md tokio/README.md
+#                        grep tokio Cargo.toml version IN README.md
+#   check-spelling ..... spellcheck.dic header-is-int + count==lines + sorted-unique
+#                        cargo spellcheck --code 1
+#                        grep -rne '\s$'   (trailing whitespace)
+#   audit.yml/pr-audit.yml .. cargo deny check (deny.toml)
+#   ci.yml env block ... rust_min: '1.71' is hand-synced to README/CONTRIBUTING
+#                        + tokio/tokio-util/tokio-test/tokio-stream Cargo.toml
+#                        (see the explicit "When updating this, also update:"
+#                        comment at ci.yml lines 23-31)
 #
-# What this config does NOT replace (keep the existing job):
-#   - The matrix test runs themselves (test-tokio-full,
-#     cross-test-*, miri-*, asan, valgrind, wasm32-*, etc.) —
-#     these compile + execute code, which is out of alint's
-#     "no-build / no-execute" scope.
-#   - The `--cfg` / `--features` matrix dispatch — that's CI
-#     orchestration, not repo state.
-#   - The PR-label gates in `loom.yml` (`R-loom-*` labels) —
-#     dynamic CI behavior, not a static check.
-#   - The kernel-version probe in `uring-kernel-version-test.yml`
-#     (downloads & builds a kernel) — out of scope.
-#   - The illumos `buildomat` job — runs on third-party CI; the
-#     config file's existence is checked below.
-#
-# Known limitations versus the existing pipeline (each requires
-# an alint primitive that doesn't ship today — see this directory's
-# README.md for the full gap catalogue):
-#   - The `diff README.md tokio/README.md` check — needs a
-#     `cross_file_value_equals` rule kind ("contents of file A
-#     must equal contents of file B"). `pair` only asserts the
-#     partner exists; equality is the gap.
-#   - The "tokio version in README is up-to-date" check — needs a
-#     `cross_file_value_equals` variant that selects a value via
-#     regex from one file and asserts it appears literally in
-#     another.
-#   - The dictionary sortedness check (`spellcheck.dic` lines
-#     sorted, unique, with the line-count header matching the
-#     actual line count) — needs `ordered_block` (sortedness)
-#     plus a `pair_hash`-style line-count cross-check.
-#   - The `[patch.crates-io]` mirror keys (every workspace member
-#     listed there) — needs `cross_file_value_equals` parsing
-#     `[workspace] members` and `[patch.crates-io]` keys.
-#   - The "every workspace member declares `[lints] workspace =
-#     true`" inheritance check — currently approximated below by
-#     `file_content_matches`, but a `toml_path_matches` against a
-#     bool-typed value would be cleaner. (works today; documented
-#     as a future polish.)
+# This config replaces the structural-state subset declaratively and
+# shells out for the language-aware tools. The big wins vs the
+# v0.9.17-era example (examples/tokio-rs-tokio/.alint.yml) are flagged
+# [NEW v0.10] / [NEW v0.11] — they retire gaps that the old config could
+# only assert existence for.
 
 version: 1
 
 extends:
   - alint://bundled/oss-baseline@v1
   - alint://bundled/rust@v1
-  - alint://bundled/monorepo@v1
   - alint://bundled/monorepo/cargo-workspace@v1
   - alint://bundled/ci/github-actions@v1
   - alint://bundled/hygiene/no-tracked-artifacts@v1
 
 rules:
-  # ── ci.yml: fmt job ────────────────────────────────────────────
-  # Tokio's `fmt` job is `rustfmt --check --edition 2021
-  # $(git ls-files '*.rs')`. We shell out via `cargo fmt
-  # --check` rooted at the workspace, which walks every .rs
-  # under the workspace. Anchor on Cargo.toml (the workspace
-  # root) so the rule fires once, not per file.
+  # ════════════════════════════════════════════════════════════════
+  # SHELL-OUTS: language-aware tools (command / command_idempotent)
+  # ════════════════════════════════════════════════════════════════
+
+  # ── fmt job ──────────────────────────────────────────────────────
+  # rustfmt --check is the canonical idempotent formatter. command_idempotent
+  # [NEW v0.10] models "run the tool in check-mode; clean tree = pass" and,
+  # via files_from/files_pattern, can attribute each diff to a file.
   - id: tokio-rustfmt-check
-    kind: command
-    paths: "Cargo.toml"
+    kind: command_idempotent
+    paths: "Cargo.toml"            # anchor: fire once at the workspace root
     command: ["cargo", "fmt", "--check"]
     timeout: 120
     level: error
 
-  # ── ci.yml: clippy job ─────────────────────────────────────────
-  # `cargo clippy --workspace --tests --no-deps`. One invocation
-  # at the workspace root, then a second pass with all features
-  # for nightly. The rule below covers the stable-features pass;
-  # the unstable pass is gated on tokio_unstable cfg, which only
-  # CI exercises (cargo-features-aware orchestration is out of
-  # scope for a static config).
+  # ── clippy job (stable feature pass) ─────────────────────────────
+  # The unstable pass (RUSTFLAGS=--cfg tokio_unstable, --all-features) and
+  # the [patch.crates-io]-stripped second pass are CI feature-orchestration,
+  # NOT static state — left in CI. clippy's lints are semantic (require a
+  # full type-checking compile), so this stays a shell-out, not a rule kind.
   - id: tokio-clippy-workspace
     kind: command
     paths: "Cargo.toml"
-    command:
-      - cargo
-      - clippy
-      - --workspace
-      - --tests
-      - --no-deps
-      - --features
-      - "full,test-util"
+    command: ["cargo", "clippy", "--workspace", "--tests", "--no-deps",
+              "--features", "full,test-util"]
     timeout: 600
     level: error
 
-  # ── audit.yml + pr-audit.yml: cargo-deny ───────────────────────
-  # Both workflows run `cargo deny` against `deny.toml`. Single
-  # invocation, gated to the deny.toml's existence.
+  # ── docs job ─────────────────────────────────────────────────────
+  # cargo doc is a build; intrinsically a shell-out. -Dwarnings posture only.
+  - id: tokio-cargo-doc
+    kind: command
+    paths: "Cargo.toml"
+    command: ["cargo", "doc", "--workspace", "--no-deps"]
+    timeout: 600
+    level: warning
+
+  # ── audit.yml / pr-audit.yml ─────────────────────────────────────
   - id: tokio-cargo-deny
     kind: command
     paths: "deny.toml"
@@ -126,63 +89,12 @@ rules:
     timeout: 120
     level: error
 
-  # ── deny.toml well-formed ──────────────────────────────────────
-  # The audit jobs silently no-op if `deny.toml` exists but has
-  # no `[licenses]` allowlist. Catch the empty-allowlist
-  # regression statically, before audit.yml's cargo-deny run
-  # would.
-  - id: tokio-cargo-deny-config-present
-    kind: file_exists
-    paths: deny.toml
-    level: error
-    message: |
-      deny.toml must exist at the repo root for both audit.yml
-      and pr-audit.yml's `cargo deny check` to enforce the
-      MIT/Apache-2.0 license allowlist.
-
-  - id: tokio-cargo-deny-licenses-allowlist
-    kind: toml_path_matches
-    paths: deny.toml
-    path: "$.licenses.allow[*]"
-    matches: ".+"
-    level: error
-    message: |
-      deny.toml must declare `[licenses] allow = [...]` —
-      otherwise `cargo deny check licenses` either rejects
-      everything (default-deny) or no-ops with no allowlist.
-
-  - id: tokio-cargo-deny-bans-wildcards
-    kind: toml_path_matches
-    paths: deny.toml
-    path: "$.bans.wildcards"
-    matches: '^deny$'
-    level: warning
-    message: |
-      tokio's deny.toml sets `[bans] wildcards = "deny"` so a
-      stray `*` version requirement in any Cargo.toml fails
-      audit.yml. Removing this guard would let unbounded
-      version requirements ship to crates.io.
-
-  # ── docs job: cargo doc -Dwarnings ─────────────────────────────
-  # The `docs` job builds the rustdoc with `RUSTDOCFLAGS=
-  # -Dwarnings`. Static surface: a passing `cargo doc --no-deps`
-  # is a build, not a structural check, but the *requirement*
-  # that the workspace builds clean docs maps to a `command`
-  # shell-out at the workspace root.
-  - id: tokio-cargo-doc-no-deps
-    kind: command
-    paths: "Cargo.toml"
-    command: ["cargo", "doc", "--workspace", "--no-deps"]
-    timeout: 600
-    level: warning
-
-  # ── semver job: cargo-semver-checks ────────────────────────────
-  # The `semver` job uses `obi1kenobi/cargo-semver-checks-action`
-  # against the `tokio` package. Map it to a per-published-crate
-  # invocation via for_each_dir.
-  - id: tokio-semver-checks-published-crates
+  # ── semver job ───────────────────────────────────────────────────
+  # cargo-semver-checks needs a built rustdoc JSON — shell-out, per crate.
+  - id: tokio-semver-checks
     kind: for_each_dir
     select: "{tokio,tokio-macros,tokio-test,tokio-stream,tokio-util}"
+    when_iter: 'iter.has_file("Cargo.toml")'
     require:
       - kind: command
         paths: "{path}"
@@ -190,100 +102,182 @@ rules:
         timeout: 300
     level: warning
 
-  # ── check-readme job: README mirror + version cross-ref ────────
-  # The `check-readme` job runs:
-  #   diff README.md tokio/README.md
-  #   grep -q "$(sed '/^version = /!d' Cargo.toml | head -n1)" README.md
-  # Neither has a clean alint replacement today (see README's
-  # "needs new alint primitive" section for `cross_file_value_equals`).
-  # We DO assert both files exist as a foundation.
-  - id: tokio-readme-root-exists
-    kind: file_exists
-    paths: README.md
-    level: error
-
-  - id: tokio-readme-tokio-crate-exists
-    kind: file_exists
-    paths: tokio/README.md
-    level: error
-    message: |
-      tokio/README.md must exist and stay byte-identical to the
-      repo-root README.md (enforced at CI by `diff README.md
-      tokio/README.md` in the `check-readme` job). alint can't
-      assert byte-equality of two files today; this rule asserts
-      the existence requirement.
-
-  # ── check-spelling job: spellcheck.dic shape ────────────────────
-  # The job's first stage hand-validates spellcheck.dic:
-  #   1. First line must be an integer.
-  #   2. The integer must equal `wc -l` of the rest.
-  #   3. The rest must be sorted unique under LC_ALL=en_US.UTF8.
-  # alint can express (1) statically; (2) and (3) need a new
-  # primitive (see README).
-  - id: tokio-spellcheck-dic-first-line-is-count
-    kind: file_content_matches
-    paths: spellcheck.dic
-    pattern: '\A\d+\n'
-    level: warning
-    message: |
-      spellcheck.dic must start with an integer count of the
-      remaining lines. The check-spelling CI job parses this
-      header and rejects the file if it isn't an integer. (The
-      sortedness + count-equals-actual-line-count parts of the
-      check are out of alint's scope today — see this directory's
-      README.md for the `ordered_block` gap.)
-
-  - id: tokio-spellcheck-dic-exists
-    kind: file_exists
-    paths: spellcheck.dic
-    level: error
-
-  - id: tokio-spellcheck-toml-exists
-    kind: file_exists
-    paths: spellcheck.toml
-    level: error
-
-  # ── check-spelling job: cargo-spellcheck shell-out ─────────────
+  # ── check-spelling job: cargo-spellcheck ─────────────────────────
   - id: tokio-cargo-spellcheck
     kind: command
-    paths: spellcheck.toml
+    paths: "spellcheck.toml"
     command: ["cargo", "spellcheck", "--code", "1"]
     timeout: 300
     level: warning
 
-  # ── check-spelling job: trailing whitespace ────────────────────
-  # The job's tail stage does `grep --exclude-dir=.git
-  # --exclude-dir=target -rne '\s$' .` Map to alint's
-  # no_trailing_whitespace, scoped to text-y files only (the
-  # repo-wide grep would also flag binary diffs in fixtures —
-  # alint's per-rule paths/exclude is the cleaner expression).
+  # ════════════════════════════════════════════════════════════════
+  # BIG WIN #1 — README mirror equality   [NEW v0.10: pair_hash]
+  # check-readme job: `diff README.md tokio/README.md`.
+  # The v0.9.17 config could only assert BOTH files exist; pair_hash
+  # asserts byte-equality. We hash the root README and require its digest
+  # to be "contains"-found in the tokio crate copy. (Identical files →
+  # identical sha256; for true diff-on-mismatch a future
+  # cross_file_value_equals(lines) variant would be cleaner — see note.)
+  # ════════════════════════════════════════════════════════════════
+  - id: tokio-readme-mirror
+    kind: pair_hash
+    source: "README.md"
+    target: "tokio/README.md"
+    algorithm: sha256
+    format: contains
+    level: error
+    message: |
+      README.md (repo root) and tokio/README.md must stay byte-identical
+      (CI enforces `diff README.md tokio/README.md`). pair_hash compares
+      sha256 digests so any drift fails the lint.
+
+  # ════════════════════════════════════════════════════════════════
+  # BIG WIN #2 — tokio version is current in README
+  #              [NEW v0.10: cross_file_value_equals]
+  # check-readme job: grep the `version = ` line from tokio/Cargo.toml
+  # and require it to appear in README.md. The v0.9.17 config flagged
+  # this as an outright gap ("needs cross_file_value_equals"). Now:
+  # extract version from tokio/Cargo.toml, require the literal
+  # `version = "X"` snippet in README.md.
+  # ════════════════════════════════════════════════════════════════
+  - id: tokio-readme-version-current
+    kind: cross_file_value_equals
+    source:
+      file: "tokio/Cargo.toml"
+      extract: { toml: "$.package.version" }
+    targets:
+      - file: "README.md"
+        extract: { regex: 'tokio = \{ version = "([0-9]+\.[0-9]+\.[0-9]+)"' }
+    level: error
+    message: |
+      The `tokio = { version = "X.Y.Z", ... }` snippet in README.md must
+      match tokio/Cargo.toml's [package] version. (CI: the `grep -q` in
+      the check-readme job.)
+
+  # ════════════════════════════════════════════════════════════════
+  # BIG WIN #3 — MSRV (rust-version) coherence across the workspace
+  #              [NEW v0.10: cross_file_value_equals]
+  # ci.yml pins `rust_min: '1.71'` and a comment (lines 23-31) lists the
+  # FIVE files that must be hand-synced. This is the classic drift bug
+  # cross_file_value_equals exists for: take tokio/Cargo.toml's
+  # rust-version as the source of truth, require every sibling published
+  # crate AND ci.yml's rust_min to match. The v0.9.17 config had NO MSRV
+  # check at all.
+  # ════════════════════════════════════════════════════════════════
+  - id: tokio-msrv-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "tokio/Cargo.toml"
+      extract: { toml: "$.package.rust-version" }
+    targets:
+      - file: "tokio-util/Cargo.toml"
+        extract: { toml: "$.package.rust-version" }
+      - file: "tokio-test/Cargo.toml"
+        extract: { toml: "$.package.rust-version" }
+      - file: "tokio-stream/Cargo.toml"
+        extract: { toml: "$.package.rust-version" }
+      - file: "tokio-macros/Cargo.toml"
+        extract: { toml: "$.package.rust-version" }
+      - file: ".github/workflows/ci.yml"
+        extract: { regex: "rust_min:\\s*'([0-9]+\\.[0-9]+)'" }
+    level: error
+    message: |
+      All published tokio-* crates' [package] rust-version, plus ci.yml's
+      `rust_min`, must agree. ci.yml's own comment (lines 23-31) lists
+      these as hand-synced — exactly the drift cross_file_value_equals
+      prevents. (README/CONTRIBUTING also restate it as prose; not
+      machine-extractable, left as docs.)
+
+  # ════════════════════════════════════════════════════════════════
+  # BIG WIN #4 — inter-crate tokio dependency pin coherence
+  #              [NEW v0.10: cross_file_value_equals]
+  # tokio-util depends on tokio = "1.47.0"; a published-crate dep must
+  # never out-pin the actual tokio version. We assert the tokio-util dep
+  # major matches; for an exact-pin policy swap regex to capture full ver.
+  # (Demonstrative — tokio's actual policy allows >= within 1.x, so this
+  # is a warning, not an error.)
+  # ════════════════════════════════════════════════════════════════
+  - id: tokio-util-dep-major-matches
+    kind: cross_file_value_equals
+    source:
+      file: "tokio/Cargo.toml"
+      extract: { regex: 'version = "([0-9]+)\.[0-9]+\.[0-9]+"' }   # tokio major "1"
+    targets:
+      - file: "tokio-util/Cargo.toml"
+        extract: { regex: 'tokio = \{ version = "([0-9]+)\.[0-9]+\.[0-9]+"' }
+    level: warning
+    message: |
+      tokio-util's `tokio = { version = "1.x.y" }` dependency must track
+      the same major as the tokio crate it ships beside.
+
+  # ════════════════════════════════════════════════════════════════
+  # BIG WIN #5 — spellcheck.dic sorted + unique   [NEW v0.10: ordered_block]
+  # check-spelling job runs `sed '1d' | LC_ALL=en_US.UTF8 sort -uc`.
+  # ordered_block asserts the lines between the start/end markers are
+  # sorted and unique. The v0.9.17 config flagged this as a gap. We bound
+  # the block: start AFTER the integer header line, end at EOF.
+  # NOTE: the count-header == actual-line-count assertion (first line is
+  # an int equal to wc -l of the rest) is STILL a gap — it needs a
+  # "line-count cross-check" primitive (a NEW-rule-kind candidate:
+  # `line_count_header`). Kept as the partial check below.
+  # ════════════════════════════════════════════════════════════════
+  - id: tokio-spellcheck-dic-sorted
+    kind: ordered_block
+    paths: "spellcheck.dic"
+    start: '^\d+$'        # the integer header line; block begins after it
+    end: '\z'             # to end of file
+    comparator: lexical   # LC_ALL=C sort; tune if locale matters
+    unique: true
+    level: warning
+    message: |
+      spellcheck.dic words (everything after the integer header) must be
+      sorted and unique, matching the check-spelling job's `sort -uc`.
+
+  - id: tokio-spellcheck-dic-header-is-int
+    kind: file_content_matches
+    paths: "spellcheck.dic"
+    pattern: '\A\d+\n'
+    level: warning
+    message: |
+      spellcheck.dic must begin with an integer line count. (The
+      header-equals-actual-count assertion is not yet expressible — see
+      the line_count_header NEW-rule-kind candidate.)
+
+  # ── check-spelling job: trailing whitespace ──────────────────────
+  # `grep -rne '\s$'` repo-wide. Scoped to text files (binary fixtures
+  # would false-positive a naive repo-wide grep).
   - id: tokio-no-trailing-whitespace
     kind: no_trailing_whitespace
     paths:
-      include:
-        - "**/*.rs"
-        - "**/*.md"
-        - "**/*.toml"
-        - "**/*.yml"
-        - "**/*.yaml"
-        - "**/*.sh"
-      exclude:
-        - "target/**"
-        - ".git/**"
+      include: ["**/*.rs", "**/*.md", "**/*.toml", "**/*.yml", "**/*.yaml", "**/*.sh"]
+      exclude: ["target/**", ".git/**"]
     level: warning
     fix:
       file_trim_trailing_whitespace: {}
 
-  # ── workspace conventions ──────────────────────────────────────
-  # tokio's workspace declares `[workspace.lints.rust]` with a
-  # large `unexpected_cfgs` table. Every published member must
-  # inherit via `[lints] workspace = true` so the workspace
-  # cfg-allowlist actually applies. Without this, a stray `cfg(
-  # tokio_unstable)` reference in tokio-util would emit a
-  # warn-by-default clippy lint that CI's -Dwarnings would
-  # promote to a failure.
-  - id: tokio-crate-inherits-workspace-lints
-    kind: file_content_matches
+  # ════════════════════════════════════════════════════════════════
+  # WORKSPACE STRUCTURE / MANIFEST INVARIANTS (toml_path_*, structured)
+  # ════════════════════════════════════════════════════════════════
+
+  # deny.toml has a non-empty license allowlist (else cargo deny no-ops/denies all)
+  - id: tokio-deny-licenses-allowlist
+    kind: toml_path_matches
+    paths: "deny.toml"
+    path: "$.licenses.allow[*]"
+    matches: ".+"
+    level: error
+
+  # deny.toml bans wildcard version requirements
+  - id: tokio-deny-bans-wildcards
+    kind: toml_path_equals
+    paths: "deny.toml"
+    path: "$.bans.wildcards"
+    equals: "deny"
+    level: warning
+
+  # Every published crate declares license = MIT (matches root LICENSE).
+  - id: tokio-published-crate-license
+    kind: toml_path_equals
     paths:
       include:
         - "tokio/Cargo.toml"
@@ -291,76 +285,11 @@ rules:
         - "tokio-test/Cargo.toml"
         - "tokio-stream/Cargo.toml"
         - "tokio-util/Cargo.toml"
-        - "benches/Cargo.toml"
-        - "examples/Cargo.toml"
-        - "stress-test/Cargo.toml"
-        - "tests-build/Cargo.toml"
-        - "tests-integration/Cargo.toml"
-    pattern: '(?ms)^\[lints\]\s*\nworkspace\s*=\s*true'
-    level: warning
-    message: |
-      Every workspace member's Cargo.toml should declare
-      `[lints] workspace = true` so the workspace's
-      `[workspace.lints.rust]` table (which configures the
-      `unexpected_cfgs` allowlist for `cfg(tokio_unstable)`,
-      `cfg(loom)`, `cfg(fuzzing)`, etc.) is inherited. Without
-      this, the per-crate cfg-warning posture diverges from the
-      workspace and CI's `RUSTFLAGS=-Dwarnings` flakes
-      inconsistently across crates.
+    path: "$.package.license"
+    equals: "MIT"
+    level: error
 
-  # ── workspace member layout: every internal crate has a README ─
-  # The bundled monorepo/cargo-workspace ruleset already enforces
-  # READMEs under `crates/*` — but tokio's workspace puts members
-  # at the repo root (no `crates/` prefix). Re-state the rule
-  # with the right select.
-  - id: tokio-workspace-member-has-readme
-    kind: for_each_dir
-    select: "{tokio,tokio-macros,tokio-test,tokio-stream,tokio-util,tests-build,tests-integration}"
-    when_iter: 'iter.has_file("Cargo.toml")'
-    require:
-      - kind: file_exists
-        paths: "{path}/README.md"
-    level: warning
-    message: |
-      Every workspace member should ship its own README.md so
-      crates.io / docs.rs land on a non-empty page when the
-      crate publishes. The five tokio-* members all do this
-      today; tests-build / tests-integration carry a one-line
-      stub README. (`benches`, `examples`, `stress-test` are
-      `publish = false` and intentionally minimal.)
-
-  # ── workspace members are publish=false where appropriate ──────
-  # Internal-only members (benches, examples, stress-test,
-  # tests-build, tests-integration) all carry `publish = false`
-  # in their Cargo.toml. A regression here would leak
-  # internal-only crates to crates.io on a misfired
-  # `cargo publish --workspace`.
-  - id: tokio-internal-crate-not-publishable
-    # *_path_equals (not *_matches) for bool fields — see
-    # CONFIG-AUTHORING.md pitfall #16.
-    kind: toml_path_equals
-    paths:
-      include:
-        - "benches/Cargo.toml"
-        - "examples/Cargo.toml"
-        - "stress-test/Cargo.toml"
-        - "tests-build/Cargo.toml"
-        - "tests-integration/Cargo.toml"
-    path: "$.package.publish"
-    equals: false
-    level: warning
-    message: |
-      Internal-only workspace members must declare
-      `publish = false` under `[package]`. Without the gate,
-      a `cargo publish --workspace` (which CI will eventually
-      gain or which a maintainer might run by hand) ships
-      benches / examples / stress-test code to crates.io.
-
-  # ── workspace edition is consistent ────────────────────────────
-  # tokio is on edition 2021 across the board. We assert each
-  # member declares an edition that's currently allowed; any
-  # 2024 bump would fall out of this allowlist and need an
-  # explicit update.
+  # Every member is edition 2021 (or 2024 once bumped).
   - id: tokio-cargo-edition
     kind: toml_path_matches
     paths:
@@ -379,13 +308,25 @@ rules:
     matches: '^(2021|2024)$'
     level: error
 
-  # ── tokio-* published crates declare a license ─────────────────
-  # The five tokio-* published crates are MIT-licensed. tokio's
-  # CI doesn't check this directly, but a missing `license =`
-  # field on a published crate fails `cargo publish` at the
-  # final upload step — better to fail at lint time.
-  - id: tokio-published-crate-license
-    kind: toml_path_matches
+  # Internal crates are publish=false (bool → *_equals, not *_matches).
+  - id: tokio-internal-crate-not-publishable
+    kind: toml_path_equals
+    paths:
+      include:
+        - "benches/Cargo.toml"
+        - "examples/Cargo.toml"
+        - "stress-test/Cargo.toml"
+        - "tests-build/Cargo.toml"
+        - "tests-integration/Cargo.toml"
+    path: "$.package.publish"
+    equals: false
+    level: warning
+
+  # Every member inherits [lints] workspace = true so the workspace
+  # unexpected_cfgs allowlist applies (else -Dwarnings flakes per-crate).
+  # toml_path_equals on the bool is cleaner than the v0.9.17 regex.
+  - id: tokio-crate-inherits-workspace-lints
+    kind: toml_path_equals
     paths:
       include:
         - "tokio/Cargo.toml"
@@ -393,104 +334,125 @@ rules:
         - "tokio-test/Cargo.toml"
         - "tokio-stream/Cargo.toml"
         - "tokio-util/Cargo.toml"
-    path: "$.package.license"
-    matches: '^MIT$'
-    level: error
-    message: |
-      Every published tokio-* crate must declare `license = "MIT"`
-      under `[package]`. Without it `cargo publish` fails at the
-      upload step; with the wrong value (e.g. defaulting to
-      Apache) crates.io's metadata diverges from the LICENSE file
-      shipped at the repo root.
-
-  # ── tests-integration: each [[bin]] has a matching src file ────
-  # tests-integration's Cargo.toml declares 3 [[bin]] entries:
-  # test-cat, test-mem, test-process-signal. Each must have a
-  # source file at src/bin/<name>.rs. A drifting [[bin]] entry
-  # silently fails to build only when its required-features are
-  # active — easy to miss. The pair rule below asserts the file
-  # exists; the [[bin]] declaration ↔ filename ↔ ci.yml job-step
-  # cross-reference is the deeper check (out of scope today).
-  - id: tokio-tests-integration-bin-cat-exists
-    kind: file_exists
-    paths: tests-integration/src/bin/test-cat.rs
-    level: warning
-    message: |
-      tests-integration/Cargo.toml declares `[[bin]] name =
-      "test-cat"` (the workflow's valgrind step compiles it).
-      The bin needs a matching src file.
-
-  - id: tokio-tests-integration-bin-mem-exists
-    kind: file_exists
-    paths: tests-integration/src/bin/test-mem.rs
+        - "stress-test/Cargo.toml"
+        - "tests-build/Cargo.toml"
+        - "tests-integration/Cargo.toml"
+    path: "$.lints.workspace"
+    equals: true
     level: warning
 
-  - id: tokio-tests-integration-bin-process-signal-exists
-    kind: file_exists
-    paths: tests-integration/src/bin/test-process-signal.rs
+  # Workspace [patch.crates-io] tokio → local path (else fresh clone
+  # resolves siblings against crates.io and cross-crate dev breaks).
+  - id: tokio-workspace-patch-block-present
+    kind: toml_path_equals
+    paths: "Cargo.toml"
+    path: "$.patch['crates-io'].tokio.path"
+    equals: "tokio"
+    level: error
+
+  # Per-crate CHANGELOG.md presence for every PUBLISHED crate.
+  - id: tokio-published-crate-has-changelog
+    kind: for_each_dir
+    select: "{tokio,tokio-macros,tokio-test,tokio-stream,tokio-util}"
+    when_iter: 'iter.has_file("Cargo.toml")'
+    require:
+      - kind: file_exists
+        paths: "{path}/CHANGELOG.md"
     level: warning
 
-  # ── workflow files use pinned actions ──────────────────────────
-  # tokio's workflows mostly pin major versions (`@v6`, `@v2`)
-  # rather than commit SHAs — that's the project's convention.
-  # The bundled ci/github-actions ruleset has the SHA-pinning
-  # check; we don't add a stricter override here. (Listing this
-  # for completeness — the bundled ruleset handles it.)
+  # Per-published-crate README (root-level members; bundled cargo-workspace
+  # ruleset assumes crates/* prefix which tokio does NOT use).
+  - id: tokio-workspace-member-has-readme
+    kind: for_each_dir
+    select: "{tokio,tokio-macros,tokio-test,tokio-stream,tokio-util,tests-build,tests-integration}"
+    when_iter: 'iter.has_file("Cargo.toml")'
+    require:
+      - kind: file_exists
+        paths: "{path}/README.md"
+    level: warning
 
-  # ── pr-audit.yml + audit.yml exist ─────────────────────────────
-  - id: tokio-audit-workflow-exists
+  # tests-integration [[bin]] entries have matching src files (valgrind job
+  # compiles test-mem / test-process-signal).
+  - id: tokio-tests-integration-bin-cat
     kind: file_exists
-    paths: .github/workflows/audit.yml
-    level: error
-    message: |
-      audit.yml runs nightly cargo-deny against dependency
-      changes. Without it, license / source-allowlist
-      regressions only surface on the next manual `cargo deny`.
-
-  - id: tokio-pr-audit-workflow-exists
+    paths: "tests-integration/src/bin/test-cat.rs"
+    level: warning
+  - id: tokio-tests-integration-bin-mem
     kind: file_exists
-    paths: .github/workflows/pr-audit.yml
-    level: error
-    message: |
-      pr-audit.yml runs cargo-deny on every PR that touches
-      Cargo.toml. Without it, dependency-tree changes ship
-      without license review on the PR itself.
+    paths: "tests-integration/src/bin/test-mem.rs"
+    level: warning
+  - id: tokio-tests-integration-bin-process-signal
+    kind: file_exists
+    paths: "tests-integration/src/bin/test-process-signal.rs"
+    level: warning
 
-  # ── ci.yml exists and is the main pipeline ─────────────────────
+  # Workflow / config files exist.
   - id: tokio-ci-workflow-exists
     kind: file_exists
-    paths: .github/workflows/ci.yml
+    paths: ".github/workflows/ci.yml"
     level: error
-
-  # ── illumos buildomat config lives at .github/buildomat ────────
-  # The Buildomat illumos CI is configured per-repo via
-  # `.github/buildomat/config.toml`. The directory's existence
-  # is the structural assertion; the config is small enough that
-  # a content match would be over-fitting.
-  - id: tokio-buildomat-config-present
+  - id: tokio-audit-workflow-exists
     kind: file_exists
-    paths: .github/buildomat/config.toml
-    level: warning
-    message: |
-      .github/buildomat/config.toml configures the illumos CI
-      runs (Buildomat). If it disappears, illumos coverage
-      silently drops from every PR.
-
-  # ── workspace root Cargo.toml carries the [patch.crates-io] ────
-  # block that lets in-workspace crates resolve to local paths
-  # rather than published versions during workspace builds. A
-  # missing block silently breaks `cargo build` on a fresh clone
-  # because tokio-stream / tokio-util / tokio-test would resolve
-  # against crates.io instead of `path = "..."` siblings.
-  - id: tokio-workspace-patch-block-present
-    kind: toml_path_matches
-    paths: Cargo.toml
-    path: "$.patch['crates-io'].tokio.path"
-    matches: '^tokio$'
+    paths: ".github/workflows/audit.yml"
     level: error
-    message: |
-      The workspace root Cargo.toml must declare
-      `[patch.crates-io] tokio = { path = "tokio" }` (and the
-      sibling tokio-* members) so cross-crate development uses
-      the local source. Removing this would silently break
-      cross-member development against unpublished changes.
+  - id: tokio-pr-audit-workflow-exists
+    kind: file_exists
+    paths: ".github/workflows/pr-audit.yml"
+    level: error
+  - id: tokio-deny-config-exists
+    kind: file_exists
+    paths: "deny.toml"
+    level: error
+  - id: tokio-spellcheck-toml-exists
+    kind: file_exists
+    paths: "spellcheck.toml"
+    level: error
+  - id: tokio-spellcheck-dic-exists
+    kind: file_exists
+    paths: "spellcheck.dic"
+    level: error
+
+# ══════════════════════════════════════════════════════════════════
+# scope_filter (per-rule, [NEW v0.11]) — for PR speed you could add
+#   scope_filter:
+#     changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
+# to the no_trailing_whitespace / spellcheck rules so only changed files
+# are scanned. Omitted from the canonical config (full-tree on push) but
+# documented here as the recommended PR-mode overlay.
+#
+# ══════════════════════════════════════════════════════════════════
+# GENUINE NON-REPLACEABLES (stay in CI — out of alint's no-build scope)
+# ══════════════════════════════════════════════════════════════════
+#   - clippy LINT SEMANTICS: requires full type-checking compile. The
+#     shell-out above runs it; alint cannot reimplement the lints.
+#   - The matrix TEST/CHECK runs: test-tokio-full, test-workspace-*,
+#     cross-test/cross-check, miri-{lib,test,doc}, asan, valgrind,
+#     wasm32-{unknown,wasip1,wasip2}, sgx/redox/freebsd/illumos,
+#     no-atomic-u64, test-hyper/test-quinn, check-external-types,
+#     check-fuzzing — these COMPILE+EXECUTE code (and miri/asan/valgrind
+#     are runtime instrumentation). Out of scope by design.
+#   - feature-powerset (cargo hack --feature-powerset --depth 2) &
+#     minimal-versions & --each-feature: combinatorial COMPILE matrices /
+#     dependency-resolution probes — CI orchestration, not repo state.
+#   - The --cfg tokio_unstable / docsrs / loom feature dispatch: CI knob
+#     wiring, not a static file invariant.
+#   - loom.yml R-loom-* PR-label gates & uring-kernel-version-test.yml
+#     (downloads+builds a kernel): dynamic CI behaviour.
+#   - cargo doc / cargo-semver-checks / cargo-spellcheck: shelled out
+#     above (they build/parse), but the underlying analysis is the tool's.
+#   - No DCO / sign-off in tokio → git_commit_signed_off N/A.
+#
+# ══════════════════════════════════════════════════════════════════
+# NEW-RULE-KIND CANDIDATES (would close the remaining gaps)
+# ══════════════════════════════════════════════════════════════════
+#   1. line_count_header — assert a file's first line is an integer equal
+#      to the count of the remaining lines (spellcheck.dic header). Today
+#      only the "is an int" half is expressible. Generic to any
+#      "N\n<N lines>" manifest format.
+#   2. cross_file_value_equals(extract: {lines:{}}) full-file-equality
+#      mode — would let tokio-readme-mirror report the DIFF on mismatch
+#      (pair_hash only says "digests differ"). A natural pairing with the
+#      existing diff-style output.
+#   3. toml_member_set_equals — assert [workspace] members ⊇/== the
+#      [patch.crates-io] keys (currently only the single tokio path key is
+#      checked). A "two TOML arrays/key-sets must agree" primitive.

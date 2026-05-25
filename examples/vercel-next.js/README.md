@@ -684,3 +684,19 @@ Three candidate refinements for the next revalidation pass:
   `[workspace]` members),
   **A5** (`oss-baseline@v1` `oss-license-exists` recognises
   LICENSE.TXT and LICENSE.md).
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (115 rules, ~82% coverage). +4 surfaces: registry_paths_resolve
+expresses the errors/manifest.json registry (a documented v0.9.17 gap),
+command_idempotent x11 collapses every lint tool (prettier/eslint/tsc/
+ast-grep/cargo fmt+clippy/typos/...) under one runner with timeouts, and the
+config covers both halves of the hybrid pnpm + Cargo monorepo (JS json_path
+/ for_each_dir + Rust toml_path / rust-toolchain lockstep). Non-replaceable:
+the AST/type/NLP semantic tools, the Rust compile, mutating generators.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 6).

@@ -90,6 +90,11 @@ batch.
 | protocolbuffers-protobuf | ~58 | ~47 (~81%) | +19 | file_header, command_idempotent, cross_file_value_equals, ordered_block | 45 |
 | python-cpython | ~31 | ~25 (~81%) | +8 | command_idempotent, cross_file_value_equals, registry_paths_resolve | 78 |
 | pytorch-pytorch | ~63 | ~49 (~78%) | +6 | command_idempotent, generated_file_fresh, registry_paths_resolve, cross_file_value_equals, import_gate | 61 |
+| rust-lang-rust | ~34 | ~20 (~59%) | +6 | ordered_block, registry_paths_resolve, generated_file_fresh, command_idempotent, file_content_forbidden | 68 |
+| tensorflow-tensorflow | ~41 | ~32 (~78%) | +9 | command_idempotent, registry_paths_resolve, cross_file_value_equals, file_header | 58 |
+| tokio-rs-tokio | ~24 | ~20 (~83%) | +5 | cross_file_value_equals, pair_hash, ordered_block, command_idempotent, for_each_dir | 73 |
+| vercel-next.js | ~61 | ~50 (~82%) | +4 | registry_paths_resolve, command_idempotent, for_each_dir, toml_path_matches | 115 |
+| vercel-turbo | ~38 | ~31 (~82%) | +6 | cross_file_value_equals, registry_paths_resolve, import_gate, command_idempotent | 91 |
 
 ## Per-batch findings
 
@@ -372,7 +377,51 @@ All 5 configs rewritten + validated. One integration fix (pytorch:
   predicate.
 
 ### Batch 6 — rust, tensorflow, tokio, next.js, turbo
-_(pending)_
+
+All 5 configs rewritten + validated. Integration fixes: tokio
+`ordered_block` `comparator: byte` → `lexical` (valid: lexical /
+lexical-ci / numeric); turbo `registry_paths_resolve` `source:` is a flat
+string with `extract:` as a sibling (not nested cross-file-style); turbo
+`$schema` JSONPath is `$['$schema']` (no leading dot before the bracket);
+tensorflow registry rule was missing `level:`.
+
+- **rust** — 20/34 (~59%, ~27 behaviors, +6). `ordered_block` maps
+  `tidy::alphabetical` exactly (the tidy-alphabetical-start/end markers);
+  the whole `tidy::style` whitespace/length/forbidden-token sweep → ~10
+  declarative rules; the Cargo.lock `source =` allowlist (tidy::extdeps,
+  exactly 2 allowed sources) → exact; rustfmt → `command_idempotent`;
+  triagebot path-filter → `registry_paths_resolve`. **Correction to the
+  prompt's hint:** the per-tier PERMITTED_DEPENDENCIES allowlist needs a
+  `cargo metadata` graph walk, NOT `import_gate` (which reads source, not
+  the resolved dep graph) — kept as a non-replaceable.
+- **tensorflow** — 32/41 (~78%, +9). The bats sanity suite (pylint/
+  buildifier/clang-format/codespell/api-compat) → `command_idempotent`
+  with per-file offender parsing; the `tensorflow.org/code/<path>` link
+  integrity → `registry_paths_resolve`; requirements_lock cross-version
+  pin parity → `cross_file_value_equals`. **`compliance/apache-2@v1`
+  over-fires** (1,185 generated `.pbtxt` goldens + `_pb2.py` + third_party)
+  — extended with a same-id `paths.exclude` override.
+- **tokio** — 20/24 (~83%, the corpus high). `cross_file_value_equals`
+  ×3 — the headline being MSRV coherence across 5 crates' `rust-version`
+  + ci.yml's `rust_min` (the classic hand-synced 6-file drift, now
+  machine-enforced from one source); `pair_hash` for the README
+  byte-mirror; `ordered_block` for spellcheck.dic. No DCO → signoff N/A.
+- **next.js** — 50/61 (~82%, +4). `registry_paths_resolve` for the
+  errors/manifest.json registry (a documented v0.9.17 gap);
+  `command_idempotent` ×11 collapses all lint tools; dual-half coverage
+  (JS json_path/for_each_dir + Rust toml_path/rust-toolchain lockstep).
+- **turbo** — 31/38 (~82%, +6). n-way npm-version ↔ version.txt
+  coherence → `cross_file_value_equals` (the real cross-half contract);
+  `registry_paths_resolve` on `[workspace].members`; `import_gate`
+  mirroring clippy.toml type/method bans. **Premise corrections:** turbo
+  is MIT (not MPL-2.0) and Rust files carry no SPDX header (assert the
+  `#![deny]` attr instead); the Cargo `turbo` crate is pinned 0.1.0, so
+  coherence is npm ↔ version.txt, not Cargo ↔ npm.
+
+**All 30 case studies re-analyzed.** Every example config now exercises
+the v0.10/v0.11 capability set; coverage rose materially on every repo
+(biggest jumps: protobuf +19, k8s +10, tensorflow +9, cpython +8,
+airflow +27pp). The aggregate cross-cutting synthesis follows below.
 
 ## Cross-cutting findings
 
@@ -436,6 +485,33 @@ _(Running list; finalized in the aggregate phase after all batches.)_
 - **`cross_file_keys_cover` / value-set ⊆ key-set** (pnpm catalogMode
   strict: every catalog reference must resolve to a catalog key) —
   another facet of the membership family alongside `registry_value_used`.
+- **`pair_changed_together`** (rust rustdoc_json FORMAT_VERSION ↔ the
+  format struct; turbo/next release guards) — two files that must change
+  in the same commit. Diff-aware, like `changeset_requires_path`.
+- **full-file `lines:{}` equality / `structured_block_equals`** (tokio
+  README mirror with diff-on-mismatch; rust rustdoc template sync) —
+  `pair_hash` reports only a digest mismatch, not the offending lines.
+- **`no_case_collisions`** (tensorflow Windows dup-casing; a recurring
+  cross-platform hazard) and **`dir_name_equals_field`** (turbo crate/pkg
+  dir ↔ name field) — small, cleanly-scoped structural kinds.
+
+**Engine/ruleset tuning candidates (batch 6 additions):**
+- **`compliance/apache-2@v1` over-fires on EVERY large Apache/CNCF repo
+  in the corpus — 5 confirmations** (airflow, helm, istio, kubernetes,
+  tensorflow). The universal failure mode: branded/abbreviated headers,
+  thousands of generated files (`.pbtxt`/`.pb.go`/`.gen.go`/`_pb2.py`),
+  third_party/ vendored trees, "The X Authors" attribution, and no
+  top-level NOTICE. **This is the single highest-confidence ruleset fix
+  in the whole re-analysis.** Recommended: ship generated-file +
+  third_party excludes and header-tolerance in the bundle, OR document a
+  copy-paste `paths.exclude` + relaxed-`file_header` override recipe (the
+  pattern every batch independently re-derived).
+- **`import_gate` reads source text, not the resolved dependency graph**
+  (rust PERMITTED_DEPENDENCIES, also helm/istio depguard partially) —
+  it expresses flat per-file "dir X ↛ import Y" edges well, but a
+  Cargo.lock/`cargo metadata` allowlist or a transitive-closure firewall
+  (go deps_test.go) is out of scope. A `cargo metadata`/lockfile-aware
+  dependency-allowlist kind is a distinct, frequently-wanted feature.
 
 **Engine/ruleset tuning candidates (batch 3 additions):**
 - **The ASF compliance bundles over-fire on real Apache projects** —
@@ -472,3 +548,85 @@ _(Running list; finalized in the aggregate phase after all batches.)_
 bucket is now largely expressible; airflow alone went 35% -> 52%. The
 biggest single wins are `command_idempotent` (codegen-freshness +
 per-file-spawn collapse) and `xml_path_*` (Maven `pom.xml`).
+
+## Aggregate synthesis (all 30 repos)
+
+Re-analysis complete across all six batches. Every example config was
+rewritten against its current upstream and the full v0.10/v0.11 capability
+set, then validated with `alint validate-config` (the actual
+`examples-validate` CI gate). Coverage rose on all 30 repos.
+
+### Coverage at a glance
+
+- **Typical replaceable share landed in the ~65-83% band**, up from the
+  ~35-55% the v0.9.17-era configs expressed. Highs: tokio ~83%, next.js /
+  turbo / protobuf / cpython ~81-82%. The residual is consistently the
+  same shape: AST/type-aware linters (eslint/clippy/govet/mypy/tsc),
+  compile/test execution, and semantic graph analysis — alint's
+  deliberate non-goals.
+- **Newly-unlocked surfaces per repo ranged +3 to +19**, dominated by
+  four v0.10 kinds: `command_idempotent` (per-file-spawn collapse +
+  codegen-freshness in --check mode — the single most-used unlock),
+  `cross_file_value_equals` (version/MSRV/pin coherence — repeatedly the
+  baseline's explicitly-deferred "needs a new primitive" gap),
+  `import_gate` (layering/dep firewalls), and `registry_paths_resolve`
+  (manifest→disk resolution). The v0.11 additions (`changed_since`,
+  commit-validation, `{{env.X}}`) showed up everywhere as the way to
+  PR-scope an otherwise-intractable full-tree sweep.
+
+### New-rule-kind candidates, ranked by demand (signal count)
+
+1. **`git_commit_subject_matches`** (go, node, nixpkgs + latent) — the
+   commit family's missing subject-shape rule. Cheapest to build on
+   existing plumbing; clearest single win.
+2. **`changeset_requires_path`** — "the diff must ADD a file under glob
+   X" (prettier changelog_unreleased, cpython NEWS.d, pnpm `.changeset/`;
+   related: turbo/rust release guards, `pair_changed_together`). Ties
+   directly to the v0.11 `changed_since` machinery.
+3. **value-set membership family** — `registry_value_used` (typescript
+   diagnostics, react codes.json), `cross_file_keys_cover` (pnpm
+   catalog), `cross_file_set_equals` (rust features↔book, tf goldens).
+   Recurring N-in-1 / set-equality need that `cross_file_value_equals`
+   (1:1) and `pair_hash` (digest) cannot express. (Note: verify how much
+   `registry_paths_resolve`'s existing `orphans`/`must_contain` already
+   covers before designing new kinds.)
+4. **`normalize:`/value-transform on `cross_file_value_equals`**
+   (protobuf `4.36-dev`↔`4.36.0`, pnpm `pnpm@x`↔`x`) — strip-prefix /
+   semver-floor so "same value, two forms" stops forcing dual regex pins.
+5. **richer `import_gate`** — default-deny/table-driven mode (vscode
+   code-import-patterns) and glob-discovered per-dir rule files (k8s 66
+   `.import-restrictions`). Plus a SEPARATE dep-graph allowlist kind
+   (`cargo metadata`/lockfile-aware) for rust PERMITTED_DEPENDENCIES /
+   go transitive closure — out of import_gate's flat-regex scope.
+6. Smaller/niche: `embedded_checksum` (cpython clinic), `no_case_collisions`
+   (tf), `dir_name_equals_field` (turbo), full-file `lines:{}` equality
+   with diff-on-mismatch (tokio README mirror), `cross_language_implementation_complete`
+   (flutter/protobuf parity), a `nix@v1` ecosystem bundle.
+
+### Engine/ruleset tuning (highest confidence first)
+
+1. **The ASF compliance bundles over-fire on every large Apache/CNCF repo
+   — 5+ confirmations** (`compliance/apache-2@v1`: helm, istio, k8s,
+   tensorflow; `apache/governance@v1`: airflow). Universal cause:
+   branded/abbreviated headers, generated files, third_party trees, "The
+   X Authors" attribution, no top-level NOTICE. **The single
+   highest-confidence fix.** Ship generated-file/third_party excludes +
+   header tolerance in the bundles, or document the `paths.exclude` +
+   relaxed-`file_header` override recipe every batch independently
+   re-derived.
+2. **`generated_file_fresh` is stdout-only; real codegen mutates files**
+   — `command_idempotent` (--check) is the broadly-applicable form. Worth
+   making explicit in the docs so users don't reach for the wrong kind.
+3. **`import_gate` presets** — no scala/java/dart/nix preset (generic +
+   `import_pattern` works but a preset is cleaner).
+
+### Release-readiness assessment
+
+The re-analysis surfaced **no v0.10/v0.11 regressions or defects** — only
+additive feature opportunities (the candidates above) and one
+documentation/ruleset-polish item (the ASF-bundle over-fire, which has an
+immediate per-config workaround already shipped in the affected examples).
+None of these block the v0.11 release: they are the v0.12+ backlog. The 30
+refreshed example configs all validate and materially raise the
+demonstrated coverage of the shipped capability set. **v0.11 is clear to
+cut on this analysis.**
