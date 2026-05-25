@@ -156,9 +156,12 @@ they're a manual post-release follow-up, not a tagged CI job.
    `publish-jetbrains` job. **Build-validated:** `./gradlew buildPlugin`
    compiles the Kotlin against the real LSP4IJ 0.7.0 + IntelliJ 2024.2
    and packages the `.zip`; a committed Gradle wrapper + the `editors`
-   CI job guard it. Still needs a manual `runIde` smoke (does the server
-   actually attach in a live IDE?) and the `asamarts` Marketplace vendor
-   + `JETBRAINS_MARKETPLACE_TOKEN` / signing secrets before publishing.
+   CI job guard it. **`runIde` smoke passed** (headless under Xvfb): the
+   plugin loads in a real IntelliJ 2024.2 alongside LSP4IJ with its
+   extension points resolved and zero errors. The only unvalidated bit
+   is live server attachment on an opened file (needs an interactive
+   project). Before publishing: the `asamarts` Marketplace vendor +
+   `JETBRAINS_MARKETPLACE_TOKEN` / signing secrets.
 4. ✅ **Zed extension** — done (`editors/zed/`, Rust→wasm via
    `zed_extension_api`); compiles to wasm locally. Publishing is a
    manual PR to `zed-industries/extensions` (no release job). Known

@@ -92,10 +92,53 @@ points are explicit.
 | Workflow | Triggered by | What it does | Time |
 |---|---|---|---|
 | `ci.yml` | tag + main pushes | fmt + clippy + test + doc + dogfood. Self-hosted Linux. | ~5 min |
-| `release.yml` | tag push only | preflight gate → cross-platform build matrix → GitHub Release → ghcr.io Docker → npm → Homebrew tap → crates.io. | ~15-25 min |
+| `release.yml` | tag push only | preflight gate → cross-platform build matrix → GitHub Release → ghcr.io Docker → npm → Homebrew tap → crates.io → VS Code Marketplace + Open VSX → JetBrains Marketplace. | ~15-25 min |
 | `docs-bundle.yml` | tag + main pushes | `xtask docs-export` → push refreshed bundle to `docs-bundle` branch → Cloudflare deploy hook → alint.org rebuilds. The sibling `check-pins.yml` workflow in the alint.org repo (PR + push + daily cron) asserts alint.org's three install-pin sites reference the latest tag from this release; fires automatically. | ~3-5 min |
 | `bench-docker.yml` | tag pushes | Build + push `ghcr.io/asamarts/alint-bench:<tag>` (the reproducible competitive-bench environment). | ~5 min |
 | **`bench-record.yml`** | tag push only | **Self-hosted full publish-grade `xtask bench-scale` matrix (S1-S13 × {1k, 10k, 100k, 1m} × {full, changed}) at `--warmup 3 --runs 10`. Opens a PR adding the new per-version macro/results dir + criterion micro snapshot.** | **~3.5 hr** |
+
+## Editor extensions / IDE plugins
+
+The six editor integrations live under `editors/`. Two distribution
+paths:
+
+**Token-published on the tag (automated in `release.yml`):**
+
+| Job | Publishes to | Secrets required |
+|---|---|---|
+| `publish-vscode` | VS Code Marketplace (`vsce`) **+ Open VSX** (`ovsx`) | `VSCE_PAT`, `OVSX_PAT` |
+| `publish-jetbrains` | JetBrains Marketplace (`gradle publishPlugin`) | `JETBRAINS_MARKETPLACE_TOKEN`, `JETBRAINS_CERTIFICATE_CHAIN`, `JETBRAINS_PRIVATE_KEY`, `JETBRAINS_PRIVATE_KEY_PASSWORD` |
+
+These stamp the version from the tag (`v0.x.y` → `0.x.y`), so the
+committed `package.json` / `pluginVersion` can lag. A token 401 mid-run
+is recoverable the same way as npm: rotate + `gh run rerun <id>
+--failed`, no new tag (the `.vsix` / plugin `.zip` are idempotent per
+version).
+
+**One-time prerequisites (NOT yet done; do before the first editor
+release):**
+
+1. Create the **VS Code Marketplace publisher** `asamarts` (Azure
+   DevOps) and an **Open VSX** namespace; generate `VSCE_PAT` / `OVSX_PAT`.
+2. Create the **JetBrains Marketplace vendor**; generate the marketplace
+   token + a plugin signing certificate/key.
+3. Add all of the above as repo **Actions secrets**.
+4. Manual `runIde` smoke of the JetBrains plugin (does the LSP server
+   attach in a live IDE?) and an install-from-`.vsix` smoke of the VS
+   Code extension. The `editors` CI job already build-validates all
+   three packaged plugins on every `editors/**` change.
+
+**PR-based registries (manual, NOT automated; do after the release so
+the binaries exist on GitHub Releases):**
+
+| Editor | Submit |
+|---|---|
+| Zed | PR adding `editors/zed/` to [`zed-industries/extensions`](https://github.com/zed-industries/extensions) (registry builds the wasm from source) |
+| Neovim | PR upstreaming `editors/nvim/lsp/alint.lua` to [`neovim/nvim-lspconfig`](https://github.com/neovim/nvim-lspconfig) |
+| Emacs | MELPA recipe PR for `editors/emacs/alint.el` to [`melpa/melpa`](https://github.com/melpa/melpa) |
+| Sublime | (optional) build + submit an `LSP-alint` Package Control helper |
+
+Helix / Eclipse are docs-only (config snippets): nothing to publish.
 
 ## Bench-record review (the human gate)
 

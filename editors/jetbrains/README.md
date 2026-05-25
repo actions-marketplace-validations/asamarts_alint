@@ -31,9 +31,11 @@ cd editors/jetbrains
 ```
 
 The build is exercised by the `editors` CI job (it also typechecks the
-VS Code extension and wasm-builds the Zed one). Runtime behaviour inside
-a live IDE (does the LSP server attach and surface diagnostics?) still
-warrants a manual `runIde` smoke before a release.
+VS Code extension and wasm-builds the Zed one). A headless `runIde`
+smoke has confirmed the plugin loads in a real IntelliJ 2024.2 alongside
+LSP4IJ with no errors; what's left to verify by hand is the server
+actually attaching and surfacing diagnostics when you open a file in a
+project (`./gradlew runIde`, then open a repo with a `.alint.yml`).
 
 ## Publishing
 
