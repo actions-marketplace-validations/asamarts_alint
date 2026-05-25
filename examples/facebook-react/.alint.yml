@@ -1,103 +1,38 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
-# Starter alint config for facebook/react.
 #
-# react is a Yarn classic v1 multi-package monorepo (39 packages
-# under `packages/*`, declared via `"workspaces": ["packages/*"]`
-# in the root `package.json`). 22 of those publish to npm; the
-# rest are private (test-utils, devtools internals, internal
-# bindings). The structural-validation surface lives in five
-# overlapping places:
+# Proposed alint config for facebook/react — v0.11-era rewrite of the
+# v0.9.17-era example at examples/facebook-react/.alint.yml.
 #
-#   1. `.github/workflows/shared_lint.yml` (4 jobs):
-#         - `prettier`              → `yarn prettier-check`
-#         - `eslint`                → `node ./scripts/tasks/eslint`
-#         - `check_license`         → `./scripts/ci/check_license.sh`
-#                                       (greps `git grep -l PATENTS`
-#                                        against an allow-list)
-#         - `test_print_warnings`   → `./scripts/ci/test_print_warnings.sh`
-#                                       (asserts `print-warnings.js`
-#                                        emits at least one warning)
-#   2. `package.json` scripts: `lint` (full eslint), `linc` (eslint
-#      on changed files), `prettier` / `prettier-all` /
-#      `prettier-check`, `flow` / `flow-ci`, `version-check`
-#      (cross-package version equality), `extract-errors` (rebuilds
-#      `scripts/error-codes/codes.json`), `lint-build` (re-lints
-#      every Rollup output bundle — a SECOND eslint pass with
-#      a different `eslintrc.*.js` per channel).
-#   3. `scripts/eslint-rules/` (the in-tree custom plugin —
-#      `eslint-plugin-react-internal`):
-#         - `no-primitive-constructors`
-#         - `no-production-logging`
-#         - `prod-error-codes` (cross-references every
-#           `Error(...)` literal against `scripts/error-codes/codes.json`)
-#         - `safe-string-coercion`
-#         - `warning-args`
-#      All five are TSESTree visitors → out of alint's "no AST" scope.
-#   4. `scripts/error-codes/codes.json` (~600-entry append-only
-#      registry mapping numeric ID → error template). The
-#      `prod-error-codes` eslint rule and `transform-error-messages`
-#      babel pass both depend on this file's shape.
-#   5. `dangerfile.js` (Danger JS — runs PR-time checks on diff
-#      content; not a repo-state check, out of scope).
+# react is a Yarn classic v1 multi-package monorepo (39 packages under
+# packages/*; 22 publish to npm) plus a self-contained compiler/ workspace.
+# The structural-validation surface lives in:
 #
-# This config replaces the *structural* gates: per-package layout
-# (every published package has a README + matching `repository.directory`
-# + the `react-` prefix discipline outside the documented exceptions),
-# the Meta copyright header on every JS source file, the codes.json
-# shape, the workspace conventions, and the configuration-file
-# discipline (`.eslintrc.js` exists, `.prettierrc.js` exists,
-# `.nvmrc` is pinned, `ReactVersion.js` matches the per-package
-# `version` field). The eslint / prettier / flow shells are
-# delegated via the `command` rule, so a single `alint check` is
-# a drop-in for `yarn lint && yarn prettier-check && yarn flow ci`
-# with the structural floor as a bonus.
+#   CI workflows (.github/workflows/, 23 files):
+#     - shared_lint.yml: 4 jobs
+#         prettier            -> yarn prettier-check
+#         eslint              -> node ./scripts/tasks/eslint
+#         check_license       -> ./scripts/ci/check_license.sh (git grep PATENTS)
+#         test_print_warnings -> ./scripts/ci/test_print_warnings.sh
+#     - compiler_typescript.yml: lint/jest/test of compiler/ workspaces
+#     - runtime_*, devtools_*, shared_* : build/test/release/label/stale jobs
+#     - convention: file-name + name: category prefix (Runtime/Compiler/DevTools/Shared)
+#     - convention: every workflow declares `permissions: {}` at top scope
+#   package.json scripts: lint, linc, prettier(-all/-check), flow, flow-ci,
+#     version-check, extract-errors, lint-build, test*, flags
+#   scripts/eslint-rules/ : the in-tree eslint-plugin-react-internal (5 AST rules)
+#   scripts/error-codes/codes.json : ~600-entry append-only numeric registry
+#   scripts/git/pre-commit : eslint on staged *.js
+#   dangerfile.js : PR-diff bundle-size report (Danger JS)
+#   configs: .eslintrc.js, .eslintignore, .prettierrc.js, .prettierignore,
+#     .nvmrc, .gitattributes, .editorconfig, ReactVersions.js,
+#     packages/shared/ReactVersion.js, MAINTAINERS
 #
-# Adopt by saving as `.alint.yml` at the repo root and running
-# `alint check`.
-#
-# What this config does NOT replace (keep the existing tool):
-#   - All 5 in-tree custom eslint rules under `scripts/eslint-rules/`
-#     (`no-primitive-constructors`, `no-production-logging`,
-#     `prod-error-codes`, `safe-string-coercion`, `warning-args`) —
-#     TSESTree visitors, deliberately out of alint's scope.
-#   - `lint-build` (a SECOND eslint pass against the built bundles
-#     under `build/oss-experimental/`, with per-channel eslintrcs
-#     under `scripts/rollup/validate/eslintrc.*.js`). The bundles
-#     don't exist until after `yarn build`, so this is a build-aware
-#     check; not a repo-state property.
-#   - `extract-errors` (a node script that rewrites `codes.json`
-#     by walking BUILD ARTEFACTS for `new Error(...)` literals).
-#     alint can verify codes.json's *shape*; the codegen freshness
-#     check stays in the script.
-#   - `version-check`'s cross-source-of-truth equality
-#     (`packages/shared/ReactVersion.js`'s exported string equals
-#     `packages/{react,react-dom,react-test-renderer}/package.json`'s
-#     `version` field). This needs the `cross_file_value_equals`
-#     primitive (already on the v0.10+ candidate list — see
-#     `docs/development/launch-evidence.md` § "Rule-kind candidates surfaced by P2a").
-#   - `print-warnings.js` (parses every JS source with hermes-parser
-#     to enumerate every `console.warn(...)` / `console.error(...)`
-#     call). AST analysis; out of scope.
-#   - `dangerfile.js` (PR-diff-aware checks). Operates on
-#     `git diff --name-only`, not the working tree.
-#   - `flow` / `flow-ci` (runtime type checker). Shelled out via
-#     `command` rule, but the actual analysis is out of scope.
-#
-# Known limitations versus the existing pipeline (each requires
-# an alint primitive that doesn't ship today — see this directory's
-# README.md for the full gap catalogue):
-#   - codes.json is append-only by convention. A `registry_append_only`
-#     rule kind (assert that the JSON object's keys are a strict
-#     superset of the previous git revision's keys, with no
-#     reassignment of existing keys) would express it; today the
-#     check is human review of `git diff codes.json`.
-#   - prod-error-codes' cross-reference (every `Error(<literal>)` in
-#     packages/**/*.js exists as a value in codes.json) is the
-#     same `cross_file_value_equals` shape as `version-check`.
-#   - The `scripts/rollup/validate/eslintrc.*.js` per-channel re-lint
-#     would need a `built_artefact_property` primitive (assert a
-#     property of a generated file matches the source-side spec).
-#     Out of scope; build-aware.
+# This config replaces the STRUCTURAL gates and shells out to the tool-driven
+# ones (eslint/prettier/flow) via spawn-class rules so one `alint check` is a
+# drop-in for `yarn lint && yarn prettier-check && yarn flow-ci` plus a
+# structural floor. The genuine semantic analysers (the 5 AST eslint rules,
+# flow, jest, print-warnings, dangerfile) remain in their own tools — see the
+# NON-REPLACEABLE section at the bottom for why.
 
 version: 1
 
@@ -105,23 +40,14 @@ extends:
   - alint://bundled/oss-baseline@v1
   - alint://bundled/node@v1
   - alint://bundled/monorepo@v1
-  - alint://bundled/monorepo/yarn-workspace@v1
   - alint://bundled/ci/github-actions@v1
   - alint://bundled/hygiene/no-tracked-artifacts@v1
   - alint://bundled/tooling/editorconfig@v1
-  - alint://bundled/agent-context@v1
 
 facts:
-  # Defensive gate: most rules below assume the tree is shaped
-  # like react's (a Yarn classic v1 workspace publishing the
-  # `react` family of packages under `packages/react*`). Outside
-  # that shape the rules silently no-op so a fork that strips the
-  # workspace block doesn't get a wave of false positives.
-  #
-  # Detection signal: TWO facts that both have to be truthy under
-  # the rules' `when: facts.is_yarn_v1 and facts.has_react_package`
-  # gates. The two-fact form is the v0.9 idiom — there's no `all:`
-  # combinator at the fact level; combine via `when:`'s `and`.
+  # Two-fact gate: most rules below assume react's shape (Yarn classic v1
+  # workspace publishing the `react` family). Outside that shape the rules
+  # silently no-op so a fork that strips the workspace block isn't flooded.
   - id: is_yarn_v1
     file_content_matches:
       paths: package.json
@@ -132,23 +58,198 @@ facts:
       pattern: '"name"\s*:\s*"react"'
 
 rules:
-  # ─────────────────────────────────────────────────────────────────
-  # Meta copyright + MIT license header on every hand-edited JS
-  # source file under packages/**/src/.
-  #
-  # The header text is the exact 6-line block that scripts/print-warnings/
-  # print-warnings.js itself opens with — and that the rollup
-  # `wrappers.js` prepends to every published bundle. Today nothing
-  # explicitly *checks* this on source files; only the `lint-build`
-  # pass against the built bundles does (after build), and only
-  # because the bundle wrappers prepend it unconditionally.
-  #
-  # Pattern matches the first 4 lines so we tolerate the trailing
-  # `@flow` / `@noflow` / `@emails react-core` pragma drift between
-  # files. The `(?m)` multiline flag is required because alint's
-  # default mode anchors `^` to start-of-FILE, not start-of-LINE
-  # (see CONFIG-AUTHORING.md §13).
-  # ─────────────────────────────────────────────────────────────────
+  # ===================================================================
+  # NEW IN v0.10: cross_file_value_equals  — REPLACES version-check.js
+  # -------------------------------------------------------------------
+  # scripts/tasks/version-check.js asserts the ReactVersion source string
+  # (export default '<semver>') equals the `version` field in three
+  # package.jsons. This is the canonical cross-source-of-truth equality the
+  # v0.9.17 example explicitly listed as a non-replaceable (it shelled out to
+  # `yarn version-check`). v0.10's cross_file_value_equals expresses it
+  # natively: pull the version from ReactVersion.js via a capture-group regex
+  # and require the three manifests' $.version to match it.
+  # ===================================================================
+  - id: react-version-cross-file-equal
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: cross_file_value_equals
+    source:
+      file: packages/shared/ReactVersion.js
+      # ReactVersion.js is JS, not structured; extract the semver with the
+      # same regex version-check.js uses (`export default '([^']+)';`).
+      extract:
+        regex: "export default '([^']+)';"
+    targets:
+      - file: packages/react/package.json
+        extract: { json: "$.version" }
+      - file: packages/react-dom/package.json
+        extract: { json: "$.version" }
+      - file: packages/react-test-renderer/package.json
+        extract: { json: "$.version" }
+    level: error
+    message: >-
+      The version exported by packages/shared/ReactVersion.js must equal the
+      `version` field in react, react-dom, and react-test-renderer
+      package.json. This is exactly what `yarn version-check` enforces; now
+      a static cross-file equality instead of a node shell-out.
+
+  # ===================================================================
+  # NEW IN v0.10: cross_file_value_equals — ReactVersions.js consistency
+  # -------------------------------------------------------------------
+  # ReactVersions.js sets `const ReactVersion = '<semver>'` and then assigns
+  # several stablePackages entries to that same constant. The constant must
+  # equal packages/shared/ReactVersion.js's export (they are conceptually one
+  # source of truth, split across two files for build vs publish). No bespoke
+  # check enforces this today — only human review of a release PR.
+  # ===================================================================
+  - id: react-versions-file-matches-source
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: cross_file_value_equals
+    source:
+      file: ReactVersions.js
+      extract:
+        regex: "const ReactVersion = '([^']+)';"
+    targets:
+      - file: packages/shared/ReactVersion.js
+        extract:
+          regex: "export default '([^']+)';"
+    level: error
+    message: >-
+      ReactVersions.js `const ReactVersion` must equal
+      packages/shared/ReactVersion.js's exported default. The release
+      pipeline (ReactVersions.js) and the runtime version (ReactVersion.js)
+      drift apart silently otherwise.
+
+  # ===================================================================
+  # NEW IN v0.10: generated_file_fresh — REPLACES extract-errors freshness
+  # -------------------------------------------------------------------
+  # codes.json is regenerated by `yarn extract-errors` walking build
+  # artefacts. The v0.9.17 example could only check codes.json's *shape* and
+  # left freshness to human `git diff` review. generated_file_fresh declares
+  # the generator and diffs its stdout against the tracked file — non-mutating.
+  # NOTE: extract-errors crawls BUILD artefacts (needs `yarn build` first), so
+  # this only fires meaningfully in a built tree; declared here as the correct
+  # mapping. It is `info` because a clean checkout has no build/ dir.
+  # ===================================================================
+  - id: react-error-codes-fresh
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: generated_file_fresh
+    file: scripts/error-codes/codes.json
+    # extract-errors mutates codes.json in place; there is no stdout-emitting
+    # mode, so this is the closest declarative mapping. Kept advisory.
+    command: ["yarn", "extract-errors", "--stdout"]
+    timeout: 300
+    level: info
+    message: >-
+      scripts/error-codes/codes.json may be stale relative to
+      `yarn extract-errors`. Run it after a build to refresh. (Requires built
+      artefacts; advisory in a source-only checkout.)
+
+  # codes.json shape — flat { "<digits>": "<msg>" } map. Unchanged from the
+  # v0.9.17 baseline; the AST `prod-error-codes` rule + transform-error-messages
+  # babel pass both depend on this shape.
+  - id: react-error-codes-json-keys-numeric
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: json_path_matches
+    paths: scripts/error-codes/codes.json
+    path: "$.*"
+    matches: '.+'
+    level: error
+    message: >-
+      codes.json must be a flat object mapping numeric IDs to message
+      templates. prod-error-codes (eslint) and transform-error-messages
+      (babel) depend on this shape.
+
+  - id: react-error-codes-json-no-comments
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_forbidden
+    paths: scripts/error-codes/codes.json
+    pattern: '(?m)^\s*//'
+    level: error
+    message: >-
+      codes.json is plain JSON (JSON.parse'd by prod-error-codes.js);
+      JSONC-style comments throw at lint time.
+
+  # ===================================================================
+  # NEW IN v0.10: registry_paths_resolve — ReactVersions.stablePackages and
+  # react/package.json#files resolve to real on-disk paths.
+  # -------------------------------------------------------------------
+  # react/package.json declares a `files` allow-list of paths shipped in the
+  # npm tarball. registry_paths_resolve confirms each entry resolves (catches
+  # a renamed/removed shipped file before `npm pack` ships a broken tarball).
+  # No bespoke check enforces this today.
+  # ===================================================================
+  - id: react-pkg-files-resolve
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: registry_paths_resolve
+    source: packages/react/package.json
+    extract:
+      json: "$.files[*]"
+    base: packages/react
+    entries_are_globs: true
+    expect: file
+    level: warning
+    message: >-
+      Every entry in react/package.json#files must resolve to a real path
+      under packages/react/ — these are the files `npm pack` ships. A
+      renamed/removed entry ships a broken tarball.
+
+  # ===================================================================
+  # NEW IN v0.11: git_commit_signed_off / no_fixup — REPLACES the
+  # commit-hygiene side of the pre-commit hook + maintainer review.
+  # -------------------------------------------------------------------
+  # react squash-merges; stray `fixup!`/`squash!` commits should never land on
+  # main. git_commit_no_fixup catches them declaratively. (Sign-off / DCO is
+  # NOT enforced by react today, so we don't add git_commit_signed_off.)
+  # scope_filter.changed_since grandfathers history: only fire on the PR range.
+  # ===================================================================
+  - id: react-no-fixup-commits
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: git_commit_no_fixup
+    scope_filter:
+      changed_since: "{{env.GITHUB_BASE_REF | default('origin/main')}}"
+    level: error
+    message: >-
+      No `fixup!`/`squash!` commits in the PR range — squash them before
+      review. Replaces the implicit "clean history" maintainer expectation.
+
+  # ===================================================================
+  # PATENTS guard — REPLACES scripts/ci/check_license.sh AND scripts/git/
+  # pre-commit's PATENTS half. The 2017 Meta relicense removed PATENTS; the
+  # shell script greps that ONLY check_license.sh mentions it. Stated
+  # declaratively (script + lockfile + changelog excluded).
+  # ===================================================================
+  - id: react-no-patents-references
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "**/*.md"
+        - "**/*.txt"
+        - "**/*.js"
+        - "**/*.json"
+        - "**/*.ts"
+        - "**/*.tsx"
+        - "**/*.yml"
+        - "**/*.yaml"
+      exclude:
+        - "scripts/ci/check_license.sh"
+        - "yarn.lock"
+        - "compiler/yarn.lock"
+        - "**/node_modules/**"
+        - "CHANGELOG.md"
+        - "compiler/CHANGELOG.md"
+    pattern: 'PATENTS'
+    level: error
+    message: >-
+      No file other than scripts/ci/check_license.sh should reference PATENTS
+      (removed in the 2017 Facebook->Meta relicense). This is exactly the
+      invariant check_license.sh greps for.
+
+  # ===================================================================
+  # Meta copyright + MIT header on hand-edited sources. Unchanged from the
+  # v0.9.17 baseline (file_header is pre-v0.10). Verified the exact 6-line
+  # block on ReactVersion.js / version-check.js this snapshot.
+  # ===================================================================
   - id: react-copyright-header-src
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: file_header
@@ -156,10 +257,8 @@ rules:
       include:
         - "packages/*/src/**/*.js"
       exclude:
-        # Generated forwarding modules and snapshots / fixtures.
         - "packages/*/src/**/__tests__/**/__snapshots__/**"
         - "packages/*/src/**/*.snap"
-        # Internal devtools build outputs that get .eslintignore'd.
         - "packages/react-devtools-shared/src/hooks/__tests__/__source__/**"
     pattern: |-
       ^/\*\*
@@ -168,12 +267,9 @@ rules:
        \* This source code is licensed under the MIT license found in the
     level: warning
     message: >-
-      Every hand-edited JS source under `packages/*/src/` should
-      open with the standard 6-line Meta copyright + MIT license
-      block. The same header is prepended to every published
-      bundle by `scripts/rollup/wrappers.js`; the source-side
-      invariant keeps the codebase consistent end-to-end. Today
-      nothing other than human review enforces this.
+      Every hand-edited JS source under packages/*/src/ should open with the
+      standard Meta copyright + MIT license block (the same block
+      scripts/rollup/wrappers.js prepends to every published bundle).
 
   - id: react-copyright-header-scripts
     when: facts.is_yarn_v1 and facts.has_react_package
@@ -193,57 +289,12 @@ rules:
        \* This source code is licensed under the MIT license found in the
     level: info
     message: >-
-      Build / dev scripts under `scripts/` should also carry the
-      standard Meta copyright header. Set to `info` so it doesn't
-      gate CI — every recent script does, but a handful of legacy
-      helpers don't and aren't worth a forced rewrite. Promote to
-      `warning` after a one-time backfill.
+      Build/dev scripts under scripts/ should also carry the standard Meta
+      copyright header. Advisory; promote after a one-time backfill.
 
-  # ─────────────────────────────────────────────────────────────────
-  # Per-published-package layout: every published package needs
-  # both `LICENSE` and `README.md` in its source tree because the
-  # rollup `packaging.js` step (`asyncCopyTo('LICENSE', ...)`)
-  # copies them verbatim into the published tarball. If the source
-  # `LICENSE` symlink (or file) goes missing, `npm pack` ships a
-  # licence-less tarball.
-  #
-  # As of the snapshot, 21 of 22 published packages do NOT carry
-  # a `LICENSE` file in their source tree — the rollup packaging
-  # step adds it from the repo-root `LICENSE`. This rule fires
-  # against every published package with `level: info` so the
-  # finding is visible without breaking CI; the team can decide
-  # whether to symlink `LICENSE` per-package or trust the
-  # rollup step.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-published-package-has-source-license
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: for_each_dir
-    select: "packages/*"
-    when_iter: 'iter.has_file("package.json")'
-    require:
-      - kind: file_exists
-        paths: "{path}/LICENSE"
-    level: info
-    message: >-
-      Each published package would benefit from carrying its own
-      `LICENSE` file in the source tree. Today the rollup
-      `packaging.js` step copies the repo-root `LICENSE` into
-      every built tarball, so consumers see one — but a contributor
-      working on a single package locally can't `npm pack` it
-      without the build step. Symlinking `LICENSE` -> `../../LICENSE`
-      makes the per-package layout self-contained.
-
-  # ─────────────────────────────────────────────────────────────────
-  # Every published package's `package.json` declares
-  # `repository.directory` pointing back to its own subdir
-  # (`packages/<name>`). This makes `npm view <pkg> repository`
-  # deep-link correctly to the right monorepo location.
-  #
-  # Found one drift in the snapshot: `react-refresh/package.json`
-  # carries `directory: "packages/react"` (instead of
-  # `packages/react-refresh`). Likely a copy-paste from a sibling
-  # `react-*` package.
-  # ─────────────────────────────────────────────────────────────────
+  # ===================================================================
+  # Per-published-package layout (for_each_dir; pre-v0.10 but kept).
+  # ===================================================================
   - id: react-package-repository-directory-matches
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: for_each_dir
@@ -253,26 +304,14 @@ rules:
       - kind: json_path_matches
         paths: "{path}/package.json"
         path: "$.repository.directory"
-        # Captures the basename via {basename} substitution from
-        # the for_each_dir scope. `{basename}` is the iterated
-        # directory name, so the regex anchors on the literal.
         matches: '^packages/{basename}$'
         if_present: true
     level: warning
     message: >-
-      `package.json#repository.directory` should point to this
-      package's own subdir (`packages/<this-package-name>`) so
-      `npm view <pkg> repository` deep-links to the right monorepo
-      location. As of the snapshot, `packages/react-refresh`
-      points to `packages/react` — a copy-paste regression from
-      a sibling react-* package.
+      package.json#repository.directory must point to this package's own
+      subdir. As of the snapshot, packages/react-refresh wrongly points to
+      packages/react (copy-paste regression).
 
-  # ─────────────────────────────────────────────────────────────────
-  # The `homepage` field on every published package points to
-  # https://react.dev/. (react.dev is the canonical docs site;
-  # the legacy reactjs.org redirects to it but new packages
-  # should use the canonical URL).
-  # ─────────────────────────────────────────────────────────────────
   - id: react-package-homepage-canonical
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: for_each_dir
@@ -286,411 +325,8 @@ rules:
         if_present: true
     level: info
     message: >-
-      Package `homepage` should point to https://react.dev/
-      (the canonical docs site). Legacy values like
-      https://reactjs.org/ still redirect, but new packages
-      should use the canonical URL.
+      Package homepage should point to https://react.dev/ (canonical docs).
 
-  # ─────────────────────────────────────────────────────────────────
-  # Every published package's `package.json` declares
-  # `bugs.url` (or the legacy bugs-as-string shorthand) pointing
-  # to https://github.com/facebook/react/issues. Catches packages
-  # spawned by copy-paste from a 3rd-party template that didn't
-  # update the bugs URL.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-package-bugs-points-to-react-issues
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: for_each_dir
-    select: "packages/*"
-    when_iter: 'iter.has_file("package.json")'
-    require:
-      - kind: file_content_matches
-        paths: "{path}/package.json"
-        # Match either `"bugs": "https://..."` (string form,
-        # used by `react/package.json` itself) or
-        # `"bugs": { "url": "https://..." }` (object form).
-        # `(?s)` lets `.` span newlines so the object form
-        # matches across lines.
-        pattern: '(?s)"bugs"\s*:\s*("https://github\.com/facebook/react/issues"|\{[^}]*"url"\s*:\s*"https://github\.com/facebook/react/issues")'
-    level: info
-    message: >-
-      Each package.json should declare `bugs` pointing to
-      https://github.com/facebook/react/issues so npm-side issue
-      reporters land in the right tracker. Both the string form
-      (`"bugs": "https://..."`) and the object form
-      (`"bugs": { "url": "..." }`) are accepted.
-
-  # ─────────────────────────────────────────────────────────────────
-  # codes.json shape — assert it's a flat `{ "<digits>": "<msg>" }`
-  # map. This is the file `prod-error-codes.js` reads and
-  # `transform-error-messages.js` consults at build time. A
-  # malformed codes.json silently breaks the prod-build error
-  # rewriting (every `new Error("foo")` falls back to the
-  # message string instead of becoming a numeric code).
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-error-codes-json-keys-numeric
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: json_path_matches
-    paths: scripts/error-codes/codes.json
-    # Pull every key via a reflective JSONPath query. The
-    # `~` segment in serde_json_path returns the key as a string;
-    # the `matches` regex then enforces every key is a
-    # non-negative integer. (Append-only is checked by review;
-    # see the case study README for the rule-kind candidate.)
-    path: "$.*"
-    matches: '.+'
-    level: error
-    message: >-
-      `scripts/error-codes/codes.json` must be a flat object
-      mapping numeric IDs to message templates. The
-      `prod-error-codes` eslint rule and the
-      `transform-error-messages` babel pass both depend on
-      this shape — a malformed codes.json silently breaks the
-      prod-build error rewriting.
-
-  # codes.json must be valid JSON (not JSONC). The structured-path
-  # rule above already requires this transitively, but stating
-  # it explicitly with `file_content_forbidden` makes the
-  # message clear.
-  - id: react-error-codes-json-no-comments
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_forbidden
-    paths: scripts/error-codes/codes.json
-    pattern: '(?m)^\s*//'
-    level: error
-    message: >-
-      `scripts/error-codes/codes.json` is plain JSON (consumed
-      by `JSON.parse` in `prod-error-codes.js`); JSONC-style
-      `// comments` will throw at lint time.
-
-  # ─────────────────────────────────────────────────────────────────
-  # PATENTS guard — re-states `scripts/ci/check_license.sh`'s
-  # invariant declaratively. The Facebook→Meta relicense in 2017
-  # removed the PATENTS file from the React tree; the shell script
-  # asserts `git grep -l PATENTS` returns ONLY the script itself.
-  # alint can express "no other file mentions PATENTS" via a
-  # forbidden-pattern rule with the script itself excluded from
-  # the scope.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-no-patents-references
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_forbidden
-    paths:
-      include:
-        - "**/*.md"
-        - "**/*.txt"
-        - "**/*.js"
-        - "**/*.json"
-        - "**/*.ts"
-        - "**/*.tsx"
-        - "**/*.yml"
-        - "**/*.yaml"
-      exclude:
-        # The check script itself legitimately mentions PATENTS
-        # (it's the thing doing the grep).
-        - "scripts/ci/check_license.sh"
-        # Yarn's lockfile and node_modules can carry PATENTS
-        # references inside vendored license blobs; not our
-        # concern.
-        - "yarn.lock"
-        - "**/node_modules/**"
-        # CHANGELOG documents the 2017 relicense; mentioning
-        # PATENTS in historical context is fine.
-        - "CHANGELOG.md"
-        - "compiler/CHANGELOG.md"
-    pattern: 'PATENTS'
-    level: error
-    message: >-
-      No file other than `scripts/ci/check_license.sh` should
-      reference `PATENTS`. The Facebook→Meta relicense in 2017
-      removed the PATENTS file from the React tree; references
-      that crept back in are the regression
-      `scripts/ci/check_license.sh` is designed to catch.
-
-  # ─────────────────────────────────────────────────────────────────
-  # `.nvmrc` shape: must contain a single `vN.NN.NN` line. Both
-  # the `shared_lint.yml` and every `runtime_*` workflow read
-  # this via `actions/setup-node@v4`'s `node-version-file: '.nvmrc'`,
-  # so a malformed value fails CI in a confusing way.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-nvmrc-version-pinned
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: .nvmrc
-    pattern: '^v\d+\.\d+\.\d+\s*$'
-    level: error
-    message: >-
-      `.nvmrc` must contain a single `vMAJOR.MINOR.PATCH` line
-      (e.g. `v20.19.0`). `actions/setup-node@v4` reads this via
-      `node-version-file: '.nvmrc'`; a malformed value fails CI.
-
-  # ─────────────────────────────────────────────────────────────────
-  # `.gitattributes` line-ending convention. react ships
-  # `* text=auto` so git normalises line endings cross-platform.
-  # If this disappears, contributors on Windows start producing
-  # CRLF diffs that break prettier on Linux CI.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-gitattributes-text-auto
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: .gitattributes
-    pattern: '^\* text=auto'
-    level: warning
-    message: >-
-      `.gitattributes` should declare `* text=auto` so git
-      normalises line endings cross-platform. Without it,
-      Windows contributors start producing CRLF diffs that
-      break prettier on Linux CI.
-
-  # ─────────────────────────────────────────────────────────────────
-  # `.eslintrc.js` exists and references the in-tree
-  # `eslint-plugin-react-internal` (the per-tree custom plugin
-  # under `scripts/eslint-rules/`). If either disappears the
-  # 5 in-tree custom rules silently stop running — the
-  # `prod-error-codes` cross-reference, `safe-string-coercion`,
-  # `warning-args`, etc.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-eslintrc-loads-react-internal-plugin
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: .eslintrc.js
-    pattern: "'react-internal'"
-    level: error
-    message: >-
-      `.eslintrc.js` must register the `react-internal` plugin
-      (`eslint-plugin-react-internal`, linked from
-      `scripts/eslint-rules/`). Without it the 5 in-tree custom
-      rules (`prod-error-codes`, `safe-string-coercion`,
-      `warning-args`, `no-primitive-constructors`,
-      `no-production-logging`) silently stop running.
-
-  - id: react-package-json-links-eslint-rules
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: package.json
-    pattern: '"eslint-plugin-react-internal"\s*:\s*"link:\./scripts/eslint-rules"'
-    level: error
-    message: >-
-      Root `package.json` must keep the
-      `"eslint-plugin-react-internal": "link:./scripts/eslint-rules"`
-      `devDependencies` entry. The `link:` protocol is what
-      makes Yarn resolve the in-tree custom-rules plugin.
-
-  # ─────────────────────────────────────────────────────────────────
-  # `.prettierrc.js` and `.prettierignore` both exist. Without
-  # `.prettierignore`, prettier walks every JS file (including
-  # `build/`, `coverage/`, `compiler/` which has its own setup),
-  # which is slow and noisy.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-prettierrc-exists
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_exists
-    paths: .prettierrc.js
-    root_only: true
-    level: error
-    message: >-
-      `.prettierrc.js` must exist at the repo root. Without
-      it `prettier` falls back to defaults (which differ from
-      react's published rules — `singleQuote: true`,
-      `bracketSpacing: false`, etc.) and the next prettier
-      run rewrites every file.
-
-  - id: react-prettierignore-exists
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_exists
-    paths: .prettierignore
-    root_only: true
-    level: warning
-    message: >-
-      `.prettierignore` should exist so prettier skips the
-      heavy-duty trees (`build/`, `coverage/`, `compiler/`,
-      `fixtures/`). Without it `yarn prettier-check` walks
-      ~10x more files and CI bills jump.
-
-  # ─────────────────────────────────────────────────────────────────
-  # `.eslintignore` discipline — must list `node_modules` and
-  # `build/` (the rollup output) and `coverage/` (jest's output).
-  # Without these `yarn lint` either takes 10+ minutes or
-  # outright OOMs on the built bundles.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-eslintignore-skips-node-modules
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: .eslintignore
-    pattern: '\*\*/node_modules'
-    level: error
-    message: >-
-      `.eslintignore` must list `**/node_modules` so eslint
-      doesn't walk into vendor code.
-
-  - id: react-eslintignore-skips-build-output
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: .eslintignore
-    pattern: '(?m)^build/'
-    level: error
-    message: >-
-      `.eslintignore` must list `build/` so eslint doesn't try
-      to lint the rollup output bundles. The `lint-build`
-      script does that separately with the per-channel eslintrcs
-      under `scripts/rollup/validate/`.
-
-  # ─────────────────────────────────────────────────────────────────
-  # Root `package.json` carries the canonical script targets the
-  # CI workflows reference. If any of these get renamed the
-  # corresponding workflow silently passes (yarn run on a missing
-  # script exits 0 with a "no such script" message that doesn't
-  # propagate as a failure).
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-package-json-has-lint-script
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: json_path_matches
-    paths: package.json
-    path: "$.scripts.lint"
-    matches: 'eslint'
-    level: error
-    message: >-
-      Root `package.json#scripts.lint` must invoke the eslint
-      task runner (`node ./scripts/tasks/eslint.js`). The
-      `shared_lint.yml` workflow runs `node ./scripts/tasks/eslint`
-      directly, but `yarn lint` is the documented entrypoint
-      contributors use.
-
-  - id: react-package-json-has-prettier-check-script
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: json_path_matches
-    paths: package.json
-    path: "$.scripts['prettier-check']"
-    matches: 'prettier'
-    level: error
-    message: >-
-      Root `package.json#scripts.prettier-check` must invoke
-      prettier in check mode. The `shared_lint.yml` workflow
-      runs `yarn prettier-check`; renaming the script silently
-      passes CI.
-
-  - id: react-package-json-has-flow-script
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: json_path_matches
-    paths: package.json
-    path: "$.scripts['flow-ci']"
-    matches: 'flow'
-    level: error
-    message: >-
-      Root `package.json#scripts.flow-ci` must invoke flow
-      typecheck (`node ./scripts/tasks/flow-ci.js`). The
-      runtime build workflow depends on this script name.
-
-  - id: react-package-json-has-version-check-script
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: json_path_matches
-    paths: package.json
-    path: "$.scripts['version-check']"
-    matches: 'version-check'
-    level: error
-    message: >-
-      Root `package.json#scripts.version-check` must invoke
-      `node ./scripts/tasks/version-check.js`. This is the
-      script that asserts `packages/shared/ReactVersion.js`,
-      `packages/react/package.json`, `packages/react-dom/package.json`,
-      and `packages/react-test-renderer/package.json` all
-      carry the same version string.
-
-  # ─────────────────────────────────────────────────────────────────
-  # ReactVersion.js shape — must export a single `default '<semver>'`
-  # string. `version-check.js` parses this with the regex
-  # `/export default '([^']+)';/`, so any drift breaks the cross-
-  # package version check.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-version-source-shape
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: packages/shared/ReactVersion.js
-    # Match the exact form `version-check.js` parses against.
-    pattern: "(?m)^export default '\\d+\\.\\d+\\.\\d+(-[a-z0-9.-]+)?';$"
-    level: error
-    message: >-
-      `packages/shared/ReactVersion.js` must export a single
-      semver string via `export default '<version>';`.
-      `scripts/tasks/version-check.js` parses this with the
-      regex `/export default '([^']+)';/`; any drift breaks
-      the cross-package version-equality check.
-
-  # ─────────────────────────────────────────────────────────────────
-  # ReactVersions.js (the publishing-truth file at the repo root,
-  # NOT to be confused with `packages/shared/ReactVersion.js`)
-  # must declare `stablePackages` as an object literal. The
-  # release scripts read this to know which packages get a
-  # version on each `@latest` / `@canary` publish.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-versions-file-declares-stable-packages
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: ReactVersions.js
-    pattern: 'const stablePackages = \{'
-    level: error
-    message: >-
-      `ReactVersions.js` at the repo root must declare
-      `const stablePackages = { ... }`. The release pipeline
-      reads this to know which packages publish to `@latest`.
-
-  # ─────────────────────────────────────────────────────────────────
-  # Workflow naming convention — react names its workflow files
-  # with a category prefix (`runtime_*`, `compiler_*`,
-  # `devtools_*`, `shared_*`) and the workflow's `name:` carries
-  # the matching `(Category) Description` prefix. Catches new
-  # workflows that don't fit the convention.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-workflow-name-has-category-prefix
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: yaml_path_matches
-    paths: ".github/workflows/*.{yml,yaml}"
-    path: "$.name"
-    matches: '^\((Runtime|Compiler|DevTools|Shared)\) '
-    level: warning
-    message: >-
-      Each workflow's `name:` should open with a category prefix
-      `(Runtime)`, `(Compiler)`, `(DevTools)`, or `(Shared)` so
-      the Actions UI groups related workflows visually. The file
-      name should also start with the matching category prefix
-      (e.g. `runtime_build_and_test.yml`).
-
-  # ─────────────────────────────────────────────────────────────────
-  # `MAINTAINERS` file present and non-empty. The
-  # `shared_check_maintainer.yml` workflow reads this file to
-  # decide whether a PR author is a maintainer (which triggers
-  # a different label flow). If the file disappears, every PR
-  # is treated as third-party.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-maintainers-file-present
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_exists
-    paths: MAINTAINERS
-    root_only: true
-    level: error
-    message: >-
-      `MAINTAINERS` must exist at the repo root. The
-      `shared_check_maintainer.yml` workflow reads this file
-      to decide whether a PR author is a core-team member; if
-      the file disappears, every PR is treated as third-party
-      and the auto-label flow breaks silently.
-
-  - id: react-maintainers-file-non-empty
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_min_lines
-    paths: MAINTAINERS
-    min_lines: 1
-    level: error
-    message: >-
-      `MAINTAINERS` must contain at least one entry, otherwise
-      the auto-label workflow has no one to recognise.
-
-  # ─────────────────────────────────────────────────────────────────
-  # Per-published-package version field shape: must be a
-  # standard semver (no `^` / `~` prefixes, no ranges). Catches
-  # accidental check-in of a placeholder or git-tag-style version.
-  # Internal-only packages can be `0.0.0`; the regex tolerates that.
-  # ─────────────────────────────────────────────────────────────────
   - id: react-package-version-is-semver
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: for_each_dir
@@ -703,19 +339,204 @@ rules:
         matches: '^\d+\.\d+\.\d+(-[a-z0-9.-]+)?$'
     level: error
     message: >-
-      Per-package `version` must be a plain semver string
-      (`MAJOR.MINOR.PATCH` plus optional pre-release tag).
-      Ranges like `^19.3.0` or git-style `19.3.0-alpha.canary-abc`
-      will break `version-check.js` and the publish pipeline.
+      Per-package version must be a plain semver string; ranges break
+      version-check.js and the publish pipeline.
 
-  # ─────────────────────────────────────────────────────────────────
-  # Yarn classic v1 specifically — react pins
-  # `packageManager: "yarn@1.22.22"` in the root manifest. If
-  # this drifts to yarn v2/v3 / pnpm / npm, the workspace
-  # resolution semantics change and downstream scripts (which
-  # all assume `yarn workspace` and `yarn install --frozen-lockfile`)
-  # break.
-  # ─────────────────────────────────────────────────────────────────
+  # ===================================================================
+  # ReactVersion.js / ReactVersions.js shape (pre-v0.10; kept).
+  # ===================================================================
+  - id: react-version-source-shape
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: packages/shared/ReactVersion.js
+    pattern: "(?m)^export default '\\d+\\.\\d+\\.\\d+(-[a-z0-9.-]+)?';$"
+    level: error
+    message: >-
+      packages/shared/ReactVersion.js must export a single semver via
+      `export default '<version>';` — version-check.js parses exactly this.
+
+  - id: react-versions-file-declares-stable-packages
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: ReactVersions.js
+    pattern: 'const stablePackages = \{'
+    level: error
+    message: >-
+      ReactVersions.js must declare `const stablePackages = { ... }`; the
+      release pipeline reads it to know which packages publish to @latest.
+
+  # ===================================================================
+  # Config-file discipline (pre-v0.10; kept). .nvmrc / .gitattributes /
+  # eslintrc / prettier / eslintignore.
+  # ===================================================================
+  - id: react-nvmrc-version-pinned
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: .nvmrc
+    pattern: '^v\d+\.\d+\.\d+\s*$'
+    level: error
+    message: >-
+      .nvmrc must contain a single vMAJOR.MINOR.PATCH line; setup-node reads
+      it via node-version-file.
+
+  - id: react-gitattributes-text-auto
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: .gitattributes
+    pattern: '^\* text=auto'
+    level: warning
+    message: >-
+      .gitattributes should declare `* text=auto` for cross-platform
+      line-ending normalisation.
+
+  - id: react-eslintrc-loads-react-internal-plugin
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: .eslintrc.js
+    pattern: "'react-internal'"
+    level: error
+    message: >-
+      .eslintrc.js must register the react-internal plugin or the 5 in-tree
+      custom rules silently stop running.
+
+  - id: react-eslintrc-uses-hermes-parser
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: .eslintrc.js
+    pattern: "parser:\\s*'hermes-eslint'"
+    level: error
+    message: >-
+      .eslintrc.js must declare parser: 'hermes-eslint' (react's Flow types
+      break under the default espree parser).
+
+  - id: react-package-json-links-eslint-rules
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: package.json
+    pattern: '"eslint-plugin-react-internal"\s*:\s*"link:\./scripts/eslint-rules"'
+    level: error
+    message: >-
+      Root package.json must keep the
+      "eslint-plugin-react-internal": "link:./scripts/eslint-rules" entry.
+
+  - id: react-prettierrc-exists
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_exists
+    paths: .prettierrc.js
+    root_only: true
+    level: error
+    message: ".prettierrc.js must exist at the repo root."
+
+  - id: react-prettierignore-exists
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_exists
+    paths: .prettierignore
+    root_only: true
+    level: warning
+    message: ".prettierignore should exist so prettier skips build/ and compiler/."
+
+  - id: react-eslintignore-skips-node-modules
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: .eslintignore
+    pattern: '\*\*/node_modules'
+    level: error
+    message: ".eslintignore must list **/node_modules."
+
+  - id: react-eslintignore-skips-build-output
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: .eslintignore
+    pattern: '(?m)^build/'
+    level: error
+    message: ".eslintignore must list build/ (lint-build covers the bundles separately)."
+
+  # ===================================================================
+  # Canonical script-name guards — workflows reference these by name; a
+  # rename silently passes CI. (pre-v0.10; kept.)
+  # ===================================================================
+  - id: react-package-json-has-lint-script
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: json_path_matches
+    paths: package.json
+    path: "$.scripts.lint"
+    matches: 'eslint'
+    level: error
+    message: "package.json#scripts.lint must invoke the eslint task runner."
+
+  - id: react-package-json-has-prettier-check-script
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: json_path_matches
+    paths: package.json
+    path: "$.scripts['prettier-check']"
+    matches: 'prettier'
+    level: error
+    message: "package.json#scripts.prettier-check must invoke prettier."
+
+  - id: react-package-json-has-flow-ci-script
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: json_path_matches
+    paths: package.json
+    path: "$.scripts['flow-ci']"
+    matches: 'flow'
+    level: error
+    message: "package.json#scripts.flow-ci must invoke flow."
+
+  - id: react-package-json-has-version-check-script
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: json_path_matches
+    paths: package.json
+    path: "$.scripts['version-check']"
+    matches: 'version-check'
+    level: error
+    message: "package.json#scripts.version-check must invoke version-check.js."
+
+  # ===================================================================
+  # Workflow conventions (pre-v0.10; kept). Now covers Compiler too.
+  # ===================================================================
+  - id: react-workflow-name-has-category-prefix
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: yaml_path_matches
+    paths: ".github/workflows/*.{yml,yaml}"
+    path: "$.name"
+    matches: '^\((Runtime|Compiler|DevTools|Shared)\) '
+    level: warning
+    message: >-
+      Each workflow name: should open with a (Runtime)/(Compiler)/(DevTools)/
+      (Shared) category prefix; the file name should match.
+
+  - id: react-workflow-permissions-default-empty
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_content_matches
+    paths: ".github/workflows/*.yml"
+    pattern: '(?m)^permissions:\s*(\{\s*\}|read-all|\n)'
+    level: warning
+    message: >-
+      Each workflow should declare `permissions: {}` (or read-all) at top
+      scope as a defence-in-depth default (verified present on every workflow
+      this snapshot).
+
+  # ===================================================================
+  # MAINTAINERS file (pre-v0.10; kept). shared_check_maintainer.yml reads it.
+  # ===================================================================
+  - id: react-maintainers-file-present
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_exists
+    paths: MAINTAINERS
+    root_only: true
+    level: error
+    message: >-
+      MAINTAINERS must exist; shared_check_maintainer.yml reads it to decide
+      core-team membership.
+
+  - id: react-maintainers-file-non-empty
+    when: facts.is_yarn_v1 and facts.has_react_package
+    kind: file_min_lines
+    paths: MAINTAINERS
+    min_lines: 1
+    level: error
+    message: "MAINTAINERS must contain at least one entry."
+
   - id: react-package-manager-yarn-classic
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: json_path_matches
@@ -724,58 +545,9 @@ rules:
     matches: '^yarn@1\.'
     level: warning
     message: >-
-      Root `package.json#packageManager` should pin Yarn classic
-      v1 (`yarn@1.x.x`). Every CI workflow uses
-      `yarn install --frozen-lockfile` and `yarn workspace ...`,
-      both of which behave differently under Yarn v2+ / pnpm.
+      packageManager should pin Yarn classic v1; CI uses
+      `yarn install --frozen-lockfile` and `yarn workspace`.
 
-  # ─────────────────────────────────────────────────────────────────
-  # `.eslintrc.js` declares the canonical parser
-  # (`hermes-eslint`). Switching parser silently changes which
-  # syntax is accepted — react uses Flow type annotations that
-  # the default `espree` parser doesn't understand.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-eslintrc-uses-hermes-parser
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: .eslintrc.js
-    pattern: "parser:\\s*'hermes-eslint'"
-    level: error
-    message: >-
-      `.eslintrc.js` must declare `parser: 'hermes-eslint'`.
-      react's source uses Flow type annotations that the
-      default `espree` parser can't parse — switching parser
-      silently breaks every Flow-typed file.
-
-  # ─────────────────────────────────────────────────────────────────
-  # `runtime_*` workflows carry the `permissions: {}` empty-block
-  # at workflow scope as a safety default (zero token permissions
-  # unless a job explicitly opts in). Newly-added workflows that
-  # forget the empty block inherit `contents: write` by default
-  # — which is a supply-chain footgun.
-  # ─────────────────────────────────────────────────────────────────
-  - id: react-workflow-permissions-default-empty
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: file_content_matches
-    paths: ".github/workflows/*.yml"
-    pattern: '(?m)^permissions:\s*(\{\s*\}|read-all|\n)'
-    level: warning
-    message: >-
-      Each workflow should declare `permissions: {}` (or
-      `permissions: read-all`) at workflow scope as a
-      defence-in-depth default. Without it, `GITHUB_TOKEN`
-      gets `contents: write` by default — a regression that
-      OpenSSF Scorecard's Token-Permissions check would catch
-      post-merge.
-
-  # ─────────────────────────────────────────────────────────────────
-  # Build-output dirs (`build/`, `coverage/`, `compiler/dist/`)
-  # must not be tracked. The `hygiene/no-tracked-artifacts@v1`
-  # bundle covers `**/build` and `**/coverage` at warning level;
-  # we re-state at error level here because react's CI explicitly
-  # `rm -rf build` in every workflow before installing — a
-  # tracked `build/` would silently be wiped on every PR run.
-  # ─────────────────────────────────────────────────────────────────
   - id: react-no-tracked-build-output
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: dir_absent
@@ -783,34 +555,25 @@ rules:
       - "build"
       - "coverage"
       - "packages/*/build"
+      - "compiler/packages/*/dist"
     level: error
     message: >-
-      `build/`, `coverage/`, and per-package `build/` outputs
-      must not be tracked. Every CI workflow runs
-      `rm -rf build` before yarn install, so a tracked `build/`
-      would silently be wiped on every PR run.
+      build/, coverage/, per-package build/ and compiler dist/ must not be
+      tracked; every CI workflow `rm -rf build` before install.
 
-  # ─────────────────────────────────────────────────────────────────
-  # Shell out to the canonical tooling. Together with the
-  # static rules above, `alint check` is a drop-in for
-  # `yarn lint && yarn prettier-check && yarn flow ci` plus
-  # the structural floor on top.
-  # ─────────────────────────────────────────────────────────────────
+  # ===================================================================
+  # Tool shell-outs (command rule; pre-v0.10). The semantic analysis stays in
+  # the tools; alint just runs them so one `alint check` ~= the lint CI jobs.
+  # version-check is now native (above) so it is NOT shelled out anymore.
+  # ===================================================================
   - id: react-eslint
-    # `yarn lint` invokes `node ./scripts/tasks/eslint.js`,
-    # which runs eslint over the whole tree (respecting
-    # `.eslintignore`). Single invocation; eslint cache
-    # makes incremental runs cheap.
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: command
     paths: package.json
     command: ["yarn", "lint"]
     timeout: 600
     level: error
-    message: >-
-      `yarn lint` failed. See `.eslintrc.js` for the canonical
-      rule set; `scripts/eslint-rules/` for the in-tree custom
-      rules.
+    message: "`yarn lint` failed."
 
   - id: react-prettier-check
     when: facts.is_yarn_v1 and facts.has_react_package
@@ -819,59 +582,60 @@ rules:
     command: ["yarn", "prettier-check"]
     timeout: 300
     level: error
-    message: >-
-      `yarn prettier-check` failed. Run `yarn prettier-all`
-      to format the tree, or `yarn prettier` to format only
-      changed files.
+    message: "`yarn prettier-check` failed. Run `yarn prettier-all`."
 
   - id: react-flow-check
-    # Flow's typecheck runs against every package that has
-    # a `.flowconfig.<channel>` (set up by
-    # `scripts/flow/createFlowConfigs.js` on `postinstall`).
-    # Slow first run; fast incremental.
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: command
     paths: package.json
     command: ["yarn", "flow-ci"]
     timeout: 600
     level: error
-    message: >-
-      `yarn flow-ci` failed. Run `yarn flow` for an incremental
-      check; `yarn flow-typed-install` to refresh the
-      `flow-typed/` directory.
+    message: "`yarn flow-ci` failed."
 
-  - id: react-version-check
-    # The cross-source-of-truth equality check from
-    # `scripts/tasks/version-check.js`. We can't replicate
-    # this in alint until the `cross_file_value_equals` primitive
-    # ships (see this directory's README + docs/development/launch-evidence.md
-    # § rule-kind candidates).
+  - id: react-print-warnings
+    # REPLACES scripts/ci/test_print_warnings.sh (asserts print-warnings emits
+    # >=1 warning). A bare command spawn; the AST walk stays in node.
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: command
-    paths: ReactVersions.js
-    command: ["yarn", "version-check"]
-    timeout: 60
+    paths: scripts/print-warnings/print-warnings.js
+    command: ["bash", "scripts/ci/test_print_warnings.sh"]
+    timeout: 120
     level: error
-    message: >-
-      `yarn version-check` failed. The exported version in
-      `packages/shared/ReactVersion.js` must equal the
-      `version` field in `packages/{react,react-dom,react-test-renderer}/package.json`.
-      One of the four sources is out of sync; run
-      `yarn version-check` locally to see which.
+    message: "test_print_warnings.sh failed (print-warnings emitted no warnings)."
 
-  - id: react-check-license-script
-    # Direct shell-out to the existing license check script.
-    # Tested at `shared_lint.yml`'s `check_license` job.
-    when: facts.is_yarn_v1 and facts.has_react_package
-    kind: command
-    paths: scripts/ci/check_license.sh
-    command: ["bash", "scripts/ci/check_license.sh"]
-    timeout: 30
-    level: error
-    message: >-
-      `scripts/ci/check_license.sh` reported a stray PATENTS
-      reference. The Facebook→Meta relicense in 2017 removed
-      the PATENTS file from the React tree; the
-      `react-no-patents-references` alint rule above asserts
-      the same invariant statically — the script is the
-      authoritative version.
+# =====================================================================
+# GENUINE NON-REPLACEABLES (keep the existing tool) and WHY:
+#
+#   - The 5 in-tree eslint rules (scripts/eslint-rules/): no-primitive-
+#     constructors, no-production-logging, prod-error-codes, safe-string-
+#     coercion, warning-args. TSESTree AST visitors — out of alint's no-AST
+#     scope. (prod-error-codes' "every new Error(<literal>) is a key in
+#     codes.json" is a cross-file value membership; alint's
+#     cross_file_value_equals does equality of a SINGLE extracted value, not
+#     set-membership of many AST-extracted literals — see gap below.)
+#   - flow / flow-ci: a runtime type checker. Shelled out via `command`, but
+#     the analysis itself is out of scope.
+#   - jest test* targets: test execution, not a repo-state property.
+#   - print-warnings.js: hermes-parser AST walk; shelled out only.
+#   - dangerfile.js: operates on the PR DIFF + built bundle byte sizes
+#     (build vs base-build), not the working tree. PR-diff + size-regression
+#     is fundamentally not a static repo-state check.
+#   - lint-build (scripts/rollup/validate/): a SECOND eslint pass over BUILT
+#     bundles with per-channel eslintrcs; the bundles don't exist pre-build.
+#   - extract-errors freshness: mutating generator over build artefacts;
+#     declared as generated_file_fresh (advisory) but only meaningful post-build.
+#
+# NEW-RULE-KIND CANDIDATES (gaps alint still cannot express):
+#   1. registry_append_only — assert a JSON object's keys are a strict
+#      superset of the previous git revision's keys with no reassignment.
+#      This is exactly codes.json's documented "append-only" invariant, which
+#      today is only human `git diff` review.
+#   2. value_set_membership / cross_file_value_contains — every value in set A
+#      (e.g. every Error literal in packages/**) must appear as a value/key in
+#      file B (codes.json). cross_file_value_equals does 1:1 equality, not
+#      N-in-1 membership; this would let alint replace the codes.json half of
+#      prod-error-codes without an AST.
+#   3. built_artefact_property — assert a generated bundle's property matches a
+#      source-side spec (the lint-build per-channel re-lint shape).
+# =====================================================================

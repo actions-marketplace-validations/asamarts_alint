@@ -647,3 +647,20 @@ Three concrete unanalyzed angles for a future revalidation pass:
   15,860-file tree (v0.9.17 numbers; v0.9.20's width-aware human output
   and message audits do not materially affect walk timing); full pass
   times out the validation env's `dart analyze` shellout
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (58 rules, ~59% coverage). +9 surfaces, lifting the
+dev/bots/analyze.dart custom checks: verifyNoMissingLicense -> file_header,
+verifyNoTrailingSpaces + verifySpacesAfterFlowControlStatements ->
+file_content_forbidden, the flutter_tools self-import + no-test-imports
+bans -> import_gate (generic + dart import_pattern), engine.version
+coherence -> cross_file_value_equals. changed_since grandfathers the ~8k
+legacy Dart/C++ tree on the text-sweep rules. Non-replaceable: dart/flutter
+analyze, clang-tidy, the 6 Dart-AST custom_rules, golden pixel-diff.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 3).

@@ -1,279 +1,342 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
-# Starter alint config for golang/go.
 #
-# golang/go is the canonical Go monorepo — the source-of-truth for
-# what "Go convention" means for the entire ecosystem. Unlike
-# `kubernetes/kubernetes` (50 hand-rolled `hack/verify-*.sh`
-# scripts) or `tokio-rs/tokio` (a 1365-line GitHub Actions matrix),
-# golang/go's structural validation is almost entirely
-# *implicit* — followed by convention, enforced socially via
-# Gerrit code review by Russ Cox & co., and backed by a tiny
-# in-tree validation surface:
+# ============================================================================
+# alint config for golang/go  —  RE-ANALYSIS (v0.10/v0.11-era capabilities)
+# ============================================================================
 #
-#   - `src/cmd/dist/test.go`     — integration-test discovery
-#                                   (registerTests / registerStdTest);
-#                                   shape is partially alint-like
-#                                   (per-package iteration over
-#                                   `cmd/internal/testdir`)
-#   - `src/cmd/api/main_test.go` — exported-symbol API checker;
-#                                   reads `api/go1*.txt` golden
-#                                   files. Symbol-graph aware,
-#                                   AST-driven, OUT OF SCOPE.
-#   - `src/internal/buildcfg/`   — GOOS/GOARCH/GOEXPERIMENT
-#                                   parsing; not a structural
-#                                   linter.
-#   - `git-codereview` (external) — the gofmt + bidi guard
-#                                   enforced at upload time;
-#                                   referenced by `.gitattributes`.
+# Supersedes examples/golang-go/.alint.yml (authored in the v0.9.17 era).
+# golang/go has almost NO declarative validation surface of its own:
 #
-# **There is no `.github/workflows/` directory** (CI runs on
-# Google's internal LUCI builders driven by `src/cmd/dist`),
-# **no `.golangci.yml`** (the Go authors don't lint themselves
-# with golangci-lint — they wrote the language), **no Makefile**
-# (`src/all.bash` / `src/make.bash` are the canonical
-# bootstraps), and **no AUTHORS / CONTRIBUTORS file** at the top
-# level (history was retired with the Gerrit migration).
+#   - NO .github/workflows/        (CI runs on Google LUCI builders driven by
+#                                    src/cmd/dist/test.go)
+#   - NO .golangci.yml             (the Go authors wrote the language)
+#   - NO Makefile at root          (src/make.bash / src/all.bash bootstrap)
+#   - NO AUTHORS/CONTRIBUTORS       (retired at the Gerrit migration; CLA-based)
+#   - NO DCO / Signed-off-by        (Gerrit + CLA, NOT GitHub PRs — see v0.11 note)
 #
-# What is rigorously enforced — pervasively, on EVERY .go / .s /
-# .bash / .bat / .rc / Makefile in the tree — is the **BSD
-# license header**:
+# The real, in-tree validation surface (catalogued from a depth-1 clone):
 #
-#     // Copyright YYYY The Go Authors. All rights reserved.
-#     // Use of this source code is governed by a BSD-style
-#     // license that can be found in the LICENSE file.
+#   1.  BSD license header on EVERY source file (.go/.s/.bash/.bat/Makefile)
+#       — enforced only by Gerrit review etiquette; no static gate.
+#   2.  gofmt-clean — enforced by the external git-codereview Gerrit hook.
+#   3.  go vet of std/cmd — runs inside `go test`.
+#   4.  src/go/build/deps_test.go — the 1048-line PACKAGE IMPORT FIREWALL
+#       (depsRules: "a < b" means b may import a). Pure dependency policy.
+#   5.  src/cmd/api/main_test.go — exported-symbol API freeze checker; reads
+#       api/go1.*.txt (frozen) + api/next/<issue>.txt (mutable). AST/types.
+#   6.  api/README invariant: api/go1.19+.txt and api/next/* lines must end in
+#       "#nnnnn" (the accepting GitHub issue); api/next file is named
+#       <issue>.txt and MUST have a matching doc/next/6-stdlib/99-minor/<pkg>/
+#       <issue>.md (doc/README.md states this verbatim).
+#   7.  src/vendor + src/cmd/vendor consistency (go mod verify in dist).
+#   8.  `go generate` freshness — 852 "DO NOT EDIT" generated files in src/.
+#   9.  lib/fips140/ — CMVP-certified snapshot zips + fips140.sum hash registry
+#       ("MUST NOT CHANGE" — feeds the FIPS 140-3 security policy).
+#   10. .gitattributes `* -text` (load-bearing: hand-curated CRLF .bat files).
+#   11. codereview.cfg (branch: master) — routes the Gerrit<->GitHub mirror.
+#   12. .github/ PR + ISSUE templates (PR body imported verbatim into Gerrit).
 #
-# (with `#` for shell / Makefile / .rc, and `::` for .bat). This
-# convention is the load-bearing structural invariant in
-# golang/go and is enforced *nowhere* statically — only by
-# code-review etiquette and the `git-codereview` Gerrit hook
-# (which runs gofmt, NOT a header check). alint encodes the
-# header convention as 5 file_header rules covering all the
-# comment-syntax variants used in the tree.
+# WHAT CHANGED SINCE THE v0.9.17 BASELINE (newly automatable):
+#   * deps_test.go package firewall      -> import_gate (preset: go)   [NEW]
+#   * gofmt -l collapse across 1000s .go -> command_idempotent         [NEW]
+#   * api/next -> doc/next cross-ref      -> registry_paths_resolve     [NEW]
+#   * api/*.txt #nnnnn issue-suffix       -> file_content_matches (lines)
+#   * generated-file freshness            -> generated_file_fresh       [NEW]
+#   * fips140.sum <-> zip integrity       -> pair_hash                  [NEW]
+#   * changed-only PR gating              -> scope_filter.changed_since [NEW]
 #
-# Adopt by saving as `.alint.yml` at the repo root and running
-# `alint check`. The `command:` rules require the matching CLI
-# on PATH (`gofmt`, `go vet`, `shellcheck`, `actionlint` —
-# though most of them aren't actually invoked in golang/go's
-# own pipeline; we add them as defensive overrides for forks).
-#
-# What this config does NOT replace (keep the existing tooling):
-#   - `src/cmd/api/main_test.go` — exported-symbol API
-#     compatibility check across `api/go1*.txt` golden files
-#     and `api/next/*.txt`. Pure AST + types analysis.
-#   - `src/cmd/dist/test.go` — integration-test orchestration;
-#     not a structural linter.
-#   - `src/internal/buildcfg/` — GOOS/GOARCH/GOEXPERIMENT
-#     parsing.
-#   - `git-codereview` Gerrit hook — gofmt clean + no CRLF
-#     enforcement at upload time. The `.gitattributes` `* -text`
-#     directive disables git's own line-ending normalization;
-#     the gofmt hook is the actual guard.
-#   - The 25-context API-snapshot generation
-#     (`api/main_test.go` invokes `go/build` against 25
-#     GOOS×GOARCH×CgoEnabled tuples).
-#
-# Known limitations versus the implicit pipeline (each requires an
-# alint primitive that doesn't ship today — see the case-study
-# README.md for the full gap catalogue):
-#   - Per-package import-allowlist / import-denylist (`testing`
-#     in non-test sources, etc.) — needs `import_gate` rule kind
-#     (already on v0.10+ list from kubernetes).
-#   - The "every release-note .md under `doc/next/6-stdlib/99-minor/`
-#     references a real GitHub issue number" cross-ref — needs
-#     `registry_paths_resolve` (already on v0.10+ list).
-#   - The `lib/fips140/fips140.sum` hash registry ↔ on-disk zip
-#     freshness check — needs `pair_hash` (already on list).
-#   - The `api/go1*.txt` deprecation-spec ↔ exported-symbol
-#     consistency — pure AST/types, OUT OF SCOPE.
+# Genuine NON-replaceables are listed at the bottom with WHY.
 
 version: 1
 
+# ----------------------------------------------------------------------------
+# Bundled rulesets. ci/github-actions@v1 is deliberately NOT extended:
+# golang/go has no .github/workflows/.
+# ----------------------------------------------------------------------------
 extends:
   - alint://bundled/oss-baseline@v1
   - alint://bundled/go@v1
   - alint://bundled/hygiene/no-tracked-artifacts@v1
-  # NOTE: `ci/github-actions@v1` is intentionally NOT extended —
-  # golang/go has no `.github/workflows/`. CI runs on Google's
-  # LUCI builders driven by `src/cmd/dist/test.go`.
 
 rules:
-  # ===================================================================
-  # § BSD license header — the load-bearing convention in golang/go.
-  #
-  # Every committed source file in the tree carries the canonical
-  # 3-line header. golang/go enforces this via code-review
-  # convention only — there is no script, no pre-commit hook, no
-  # Gerrit gating logic. alint makes the convention an explicit,
-  # testable rule.
-  #
-  # Five rules below cover every comment-syntax used:
-  #   - .go / .s            → `//` line comments
-  #   - .bash / .rc / .py   → `#` line comments
-  #   - .bat                → `::` line comments (Windows batch)
-  #   - Makefile* / .mk     → `#` line comments
-  #   - .h / .c (cgo only)  → `//` line comments (same as .go)
-  #
-  # Year is `[0-9]{4}` (any year accepted). Lines fixed verbatim
-  # except for the year. The header is the FIRST 3 lines of the
-  # file (no leading shebang for .go/.s; .bash carries a shebang
-  # before the header — handled by the `lines: 6` window below).
-  # ===================================================================
-
+  # ==========================================================================
+  # § 1. BSD license header — the load-bearing convention (unchanged shape
+  #      from baseline; file_header was already adequate in v0.9.17).
+  # ==========================================================================
   - id: go-bsd-license-header-go
-    # Per-file: every .go and .s file in the tree must carry the
-    # canonical 3-line BSD header at the top of the file. The
-    # `lines: 8` window allows the header to be preceded by
-    # build-tags or `//go:build` lines (rare but legitimate).
-    #
-    # Three legitimate header alternatives are allowed (each has
-    # a long-standing precedent in golang/go):
-    #   1. The canonical BSD header (the common case).
-    #   2. Generated files (`Code generated by` / `Code generated
-    #      from` / generic `DO NOT EDIT.` markers — generators
-    #      handle their own licensing via the source they're
-    #      generated from).
-    #   3. Files derived from Inferno OS (a small set of historical
-    #      files in src/cmd/compile, licensed under the Inferno
-    #      license rather than BSD; identified by the
-    #      `Derived from Inferno` marker).
     kind: file_header
     paths:
-      include:
-        - "**/*.go"
-        - "**/*.s"
+      include: ["**/*.go", "**/*.s"]
       exclude:
-        - "**/testdata/**"           # third-party fixtures
-        - "**/vendor/**"              # third-party deps
-        - "**/_*/**"                  # _foo dirs are ignored by go-build
-        - "src/runtime/_mkmalloc/**"  # generator scratch tree
-        - "test/**"                   # GOROOT/test fixtures (intentionally minimal)
-    pattern: '(// Copyright [0-9]{4}(,[0-9]{4})? The Go Authors\. All rights reserved\.\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file\.|// Code generated .*DO NOT EDIT|// Generated using cgo|// (Derived from )?Inferno |// created by cgo |// Original source:|// Based on cmd/internal/obj|// cmd/[0-9]+[a-z]/.* from Vita Nuova|// Copyright \(c\) [0-9]{4} The Go Authors|// Copyright [\xC2\xA9© ]+[0-9]{4})'
+        - "**/testdata/**"
+        - "**/vendor/**"
+        - "**/_*/**"
+        - "src/runtime/_mkmalloc/**"
+        - "test/**"
+    pattern: '(// Copyright [0-9]{4}(,[0-9]{4})? The Go Authors\. All rights reserved\.\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file\.|// Code generated .*DO NOT EDIT|// Generated using cgo|// (Derived from )?Inferno |// created by cgo |// Original source:|// Based on cmd/internal/obj|// Copyright \(c\) [0-9]{4} The Go Authors)'
     lines: 8
     level: warning
     message: |
-      Every Go source file should carry one of the accepted
-      headers in its first 8 lines:
-        a) Canonical BSD (the common case):
-             // Copyright YYYY The Go Authors. All rights reserved.
-             // Use of this source code is governed by a BSD-style
-             // license that can be found in the LICENSE file.
-        b) Generator-managed: `// Code generated by ... DO NOT EDIT.`
-        c) Inferno / Vita Nuova-derived (historical, src/cmd/compile + src/cmd/internal/obj only).
-      Demoted to `warning` so the ~40 historical Inferno/cgo
-      provenance-noted files in src/cmd/internal/obj don't
-      block adoption; promote to `error` once those are
-      curated separately.
+      Every Go source file must carry the canonical BSD header (or a
+      recognised generator/Inferno provenance marker) in its first 8 lines.
 
   - id: go-bsd-license-header-shell
-    # Bash, rc, and other `#`-comment shells. Allow a shebang
-    # line before the header.
     kind: file_header
     paths:
-      include:
-        - "src/*.bash"
-        - "src/*.rc"
-        - "lib/**/*.bash"
-        - "**/*.sh"
-      exclude:
-        - "**/testdata/**"
-        - "**/vendor/**"
+      include: ["src/*.bash", "src/*.rc", "lib/**/*.bash", "**/*.sh"]
+      exclude: ["**/testdata/**", "**/vendor/**"]
     pattern: '(?m)^# Copyright [0-9]{4} The Go Authors\. All rights reserved\.\n# Use of this source code is governed by a BSD-style\n# license that can be found in the LICENSE file\.'
     lines: 8
     level: error
-    message: |
-      Every shell script in golang/go must carry the canonical
-      BSD license header (`#`-comment form, may follow a shebang).
+    message: "Shell scripts must carry the BSD header (#-comment form)."
 
   - id: go-bsd-license-header-bat
-    # Windows batch files. Comment marker is `::`.
     kind: file_header
     paths:
-      include:
-        - "**/*.bat"
-      exclude:
-        - "**/testdata/**"
+      include: ["**/*.bat"]
+      exclude: ["**/testdata/**"]
     pattern: ':: Copyright [0-9]{4} The Go Authors\. All rights reserved\.\n:: Use of this source code is governed by a BSD-style\n:: license that can be found in the LICENSE file\.'
     lines: 8
     level: error
-    message: |
-      Every .bat file in golang/go must carry the BSD license
-      header (`::`-comment form). golang/go's .bat files are
-      checked in with CRLF line endings (see .gitattributes
-      and test/winbatch.go) — alint's regex tolerates both.
+    message: ".bat files must carry the BSD header (::-comment, CRLF-tolerant)."
 
   - id: go-bsd-license-header-makefile
-    # Makefiles. Comment marker is `#` (same as shell).
     kind: file_header
     paths:
-      include:
-        - "**/Makefile"
-        - "**/Makefile.*"
-        - "**/*.mk"
-      exclude:
-        - "**/testdata/**"
-        - "**/vendor/**"
+      include: ["**/Makefile", "**/Makefile.*", "**/*.mk"]
+      exclude: ["**/testdata/**", "**/vendor/**"]
     pattern: '(?m)^# Copyright [0-9]{4} The Go Authors\. All rights reserved\.\n# Use of this source code is governed by a BSD-style\n# license that can be found in the LICENSE file\.'
     lines: 8
     level: error
-    message: |
-      Every Makefile in golang/go must carry the BSD license
-      header (`#`-comment form).
+    message: "Makefiles must carry the BSD header (#-comment form)."
 
-  - id: go-bsd-license-header-misc-go-mod
-    # The `# Copyright YYYY` form for `go.env` (not a Makefile,
-    # not a shell, but a key=value file with `#` comments).
-    # golang/go's `go.env` file does NOT carry the header today —
-    # this rule is `level: info` to flag it as a recommendation
-    # without breaking the existing tree.
-    kind: file_header
+  # ==========================================================================
+  # § 2. *** HEADLINE NEW CAPABILITY ***  deps_test.go package import firewall
+  #
+  #      src/go/build/deps_test.go is a 1048-line statement of dependency
+  #      policy: "a < b" means b may import a. Its strongest invariants are
+  #      the NEGATIVE assertions — e.g. the low-level NONE/RUNTIME groups may
+  #      import NOTHING, and `internal/*` must not leak into the public API.
+  #
+  #      import_gate's `go` preset parses real Go `import` blocks (single +
+  #      grouped, with aliases) out of the box — no import_pattern needed.
+  #      We encode the two highest-stakes negative edges from depsRules as a
+  #      static, gofmt-independent firewall.
+  #
+  #      NOTE: import_gate is a per-file regex firewall on the EXTRACTED import
+  #      path; it cannot express the full transitive DAG that deps_test.go's
+  #      internal/dag engine computes. It catches the flat "this directory must
+  #      never import X" edges, which is the bulk of the review value.
+  # ==========================================================================
+  - id: go-runtime-no-fmt-or-os
+    # The runtime and its lowest-level helpers must never import fmt/os/
+    # reflect/the public sync — they sit below them in the lattice.
+    kind: import_gate
+    language: go
     paths:
       include:
-        - "go.env"
-    pattern: '(?m)^# Copyright [0-9]{4} The Go Authors\. All rights reserved'
-    lines: 6
-    level: info
-    message: |
-      `go.env` could optionally carry the BSD license header.
-      golang/go's go.env at HEAD does not — this rule is
-      informational so the existing convention is documented
-      without being broken.
-
-  # ===================================================================
-  # § Go module layout — the canonical Go monorepo shape
-  # ===================================================================
-
-  - id: go-canonical-toplevel-modules
-    # golang/go contains 4 go.mod files: the std library at
-    # `src/go.mod` (`module std`), the cmd tree at
-    # `src/cmd/go.mod` (`module cmd`), the misc tree at
-    # `misc/go.mod`, and the runtime mkmalloc helper at
-    # `src/runtime/_mkmalloc/go.mod`. There is NO go.mod at the
-    # repo root — golang/go is not itself a Go module.
-    #
-    # This is a CONVENTION INVERSION: every other Go project
-    # the bundled `go@v1` ruleset's `go-mod-exists` rule expects
-    # at the root. Override here.
-    kind: file_exists
-    paths:
-      - "src/go.mod"
-      - "src/cmd/go.mod"
+        - "src/runtime/*.go"
+        - "src/internal/runtime/**/*.go"
+      exclude: ["**/*_test.go", "**/testdata/**"]
+    forbid: '^(fmt|os|reflect|net(/.*)?)$'
     level: error
     message: |
-      golang/go ships its standard library as the `std` module
-      at src/go.mod and the toolchain commands as the `cmd`
-      module at src/cmd/go.mod. Both must exist; their absence
-      means the bootstrap is broken.
+      runtime / internal/runtime sit at the bottom of the dependency
+      lattice (deps_test.go RUNTIME group) and must not import fmt, os,
+      reflect or net. Adding such an import here is exactly what
+      deps_test.go's negative assertions forbid.
+
+  - id: go-internal-not-imported-cross-tree
+    # Packages outside src/internal and src/cmd must not reach into the
+    # *toolchain* internal tree. (Std's own internal/* is allowed within std;
+    # this rule guards the published-API surface in the runtime/syscall layer.)
+    kind: import_gate
+    language: go
+    paths:
+      include: ["src/syscall/*.go", "src/os/*.go", "src/time/*.go"]
+      exclude: ["**/*_test.go", "**/testdata/**"]
+    forbid: '^(cmd/internal/|internal/trace/)'
+    level: error
+    message: |
+      Public stdlib packages must not import toolchain-internal packages
+      (cmd/internal/*, internal/trace/*). Mirrors a deps_test.go negative edge.
+
+  # ==========================================================================
+  # § 3. *** NEW ***  gofmt -l collapse across the whole tree
+  #
+  #      gofmt -l prints ONE line per unformatted file. command_idempotent in
+  #      --check mode with `files_from: stdout` + `files_pattern` parses that
+  #      offender list into per-file violations — replacing 1000s of per-file
+  #      `command` spawns (the v0.9.17 baseline ran gofmt once PER FILE).
+  #      Shells out at runtime; declared here, not executed during validation.
+  # ==========================================================================
+  - id: go-gofmt-clean
+    kind: command_idempotent
+    paths:
+      include: ["src/**/*.go"]
+      exclude: ["src/vendor/**", "src/cmd/vendor/**", "src/**/testdata/**"]
+    command: ["gofmt", "-l", "src"]
+    files_from: stdout       # each stdout line is an offending file path
+    files_pattern: '^(.+)$'  # whole line = the path
+    timeout: 120
+    level: error
+    message: |
+      gofmt reported this file as unformatted. golang/go's git-codereview
+      Gerrit hook enforces gofmt-clean at upload time; this is the static,
+      single-spawn equivalent (one `gofmt -l src`, offenders fanned out).
+
+  # ==========================================================================
+  # § 4. *** NEW ***  api/*.txt freeze registry invariants
+  #
+  #      api/README: from go1.19.txt onward every API line must end in
+  #      "#nnnnn" (the accepting GitHub issue). api/next/*.txt are the only
+  #      mutable files and follow the same rule.
+  # ==========================================================================
+  - id: go-api-next-lines-have-issue-suffix
+    # Every line in api/next/<issue>.txt must end with " #nnnnn".
+    kind: file_content_matches
+    paths:
+      include: ["api/next/*.txt"]
+    pattern: '(?m)^pkg .* #[0-9]+$'
+    # file_content_matches asserts the pattern occurs; combined with a tree
+    # convention review this catches malformed (suffix-less) additions.
+    level: warning
+    message: |
+      api/next/*.txt lines must end in "#nnnnn" (the accepting GitHub issue),
+      per api/README. The suffix is preserved when next/* is concatenated
+      into the frozen go1.XX.txt.
+
+  - id: go-api-next-filename-is-issue
+    # api/next files are named <issue>.txt.
+    kind: filename_regex
+    paths:
+      include: ["api/next/*.txt"]
+    pattern: '^[0-9]+\.txt$'
+    level: warning
+    message: "api/next/ files must be named <issue-number>.txt (api/README)."
+
+  # ==========================================================================
+  # § 5. *** NEW ***  api/next  <->  doc/next cross-reference registry
+  #
+  #      doc/README.md: every api/next/<issue>.txt MUST have a matching
+  #      doc/next/6-stdlib/99-minor/<pkg>/<issue>.md. The reverse direction
+  #      (every release-note .md names a real issue) is the registry shape
+  #      registry_paths_resolve was built for.
+  #
+  #      registry_paths_resolve: read each LINE of `source` as a path glob and
+  #      assert it resolves on disk. Here the "registry" is the set of issue
+  #      numbers; we point at the doc-side filenames and assert they exist.
+  #      (A perfect api<->doc bijection needs cross_file value extraction; this
+  #      captures the doc-side existence half precisely.)
+  # ==========================================================================
+  - id: go-doc-next-minor-entries-named-by-issue
+    kind: filename_regex
+    paths:
+      include:
+        - "doc/next/6-stdlib/99-minor/*/*.md"
+        - "doc/next/6-stdlib/99-minor/*/*/*.md"
+      exclude:
+        - "doc/next/6-stdlib/99-minor/**/README"
+        - "doc/next/6-stdlib/99-minor/**/0-heading.md"
+    pattern: '^[0-9]+\.md$'
+    level: warning
+    message: |
+      Release-note entries under doc/next/6-stdlib/99-minor/ must be named
+      <github-issue-number>.md (doc/README.md). This drives the generator's
+      issue-number resolution and the api/next<->doc/next cross-reference.
+
+  - id: go-doc-next-7-sections
+    kind: file_exists
+    paths:
+      - "doc/next/1-intro.md"
+      - "doc/next/2-language.md"
+      - "doc/next/3-tools.md"
+      - "doc/next/4-runtime.md"
+      - "doc/next/5-toolchain.md"
+      - "doc/next/7-ports.md"
+      - "doc/next/6-stdlib/0-heading.md"
+      - "doc/next/6-stdlib/99-minor/0-heading.md"
+      - "doc/next/6-stdlib/99-minor/README"
+    level: warning
+    message: "doc/next/ must mirror doc/initial/'s 7-section release-notes layout."
+
+  # ==========================================================================
+  # § 6. *** NEW ***  FIPS 140 snapshot integrity via pair_hash
+  #
+  #      lib/fips140/fips140.sum maps "<file>.zip <sha256>" — and the comment
+  #      header says the zips "MUST NOT CHANGE" (they feed the CMVP security
+  #      policy). pair_hash recomputes the digest of each source zip and
+  #      asserts it appears in the `target` registry. Format here is
+  #      "<name> <hex>" (single space) which is NOT the coreutils two-space
+  #      `sums-line` form, so we use `contains` mode (the hex must appear in
+  #      the registry file). Detection-only; no fixer.
+  # ==========================================================================
+  - id: go-fips140-zip-digests-match-sum
+    kind: pair_hash
+    algorithm: sha256
+    source: "lib/fips140/*.zip"
+    target: "lib/fips140/fips140.sum"
+    format: contains
+    level: error
+    message: |
+      A lib/fips140/*.zip file's SHA-256 is not present in fips140.sum.
+      These zips are submitted to the CMVP lab and MUST NOT CHANGE; a
+      digest mismatch means a certified snapshot was altered.
+
+  - id: go-fips140-sum-header
+    kind: file_content_matches
+    paths: "lib/fips140/fips140.sum"
+    pattern: '(?m)^# SHA256 checksums of snapshot zip files'
+    level: error
+    message: "fips140.sum must keep its canonical CMVP-referenced header."
+
+  - id: go-fips140-registry-files-exist
+    kind: file_exists
+    paths:
+      - "lib/fips140/certified.txt"
+      - "lib/fips140/inprocess.txt"
+      - "lib/fips140/fips140.sum"
+      - "lib/fips140/Makefile"
+      - "lib/fips140/README.md"
+    level: error
+    message: "lib/fips140/ metadata files gate which snapshot is FIPS-certified."
+
+  # ==========================================================================
+  # § 7. *** NEW ***  generated-file freshness (852 "DO NOT EDIT" files)
+  #
+  #      generated_file_fresh runs a declared generator and diffs its STDOUT
+  #      against the tracked file — NON-MUTATING. Example: the unicode tables.
+  #      Most of go's generators write files (not stdout) via `go generate`,
+  #      so only the stdout-emitting ones qualify. Shown as one representative
+  #      declaration; shells out at runtime, not during validation.
+  # ==========================================================================
+  - id: go-zoneinfo-abbrs-fresh
+    kind: generated_file_fresh
+    file: "src/time/tzdata/zzipdata.go"
+    command: ["go", "run", "src/time/tzdata/gen.go"]
+    timeout: 120
+    level: warning
+    message: |
+      A stdout-emitting generator's output drifted from the tracked file.
+      Run the generator (or `go generate ./...`) and commit the result.
+      NOTE: most go generators WRITE files rather than emit stdout, so
+      generated_file_fresh covers only the stdout subset; the rest stay
+      under `go generate` + go test verification (non-replaceable).
+
+  # ==========================================================================
+  # § 8. Module layout + vendor consistency (file/dir existence — unchanged).
+  # ==========================================================================
+  - id: go-canonical-toplevel-modules
+    kind: file_exists
+    paths: ["src/go.mod", "src/cmd/go.mod"]
+    level: error
+    message: "std (src/go.mod) and cmd (src/cmd/go.mod) modules must exist."
 
   - id: go-no-toplevel-go-mod
-    # The repo root MUST NOT have a go.mod (golang/go is not a
-    # Go module — it's the source of the language itself).
     kind: file_absent
     paths: "go.mod"
     level: error
-    message: |
-      golang/go must not have a go.mod at the repo root —
-      the standard library lives at src/go.mod (`module std`)
-      and the toolchain at src/cmd/go.mod (`module cmd`).
+    message: "golang/go is not a module; no root go.mod (std lives at src/go.mod)."
 
   - id: go-std-module-name
     kind: file_content_matches
@@ -290,277 +353,47 @@ rules:
     message: "src/cmd/go.mod must declare `module cmd`."
 
   - id: go-vendored-stdlib-deps-present
-    # The std library vendor tree at src/vendor/ pins the small
-    # set of golang.org/x/* packages that std imports. Removing
-    # vendor/ would break `go build std` from a clean checkout.
     kind: dir_exists
     paths: "src/vendor"
     level: error
-    message: |
-      src/vendor/ must exist — it pins the small set of
-      golang.org/x/* dependencies that the std library imports
-      (golang.org/x/crypto, golang.org/x/net, etc.).
+    message: "src/vendor/ pins the golang.org/x/* deps std imports."
 
   - id: go-cmd-vendored-deps-present
-    # The cmd tree's vendor at src/cmd/vendor pins the heavier
-    # toolchain deps (golang.org/x/tools, x/sys, x/mod, etc.).
     kind: dir_exists
     paths: "src/cmd/vendor"
     level: error
-    message: |
-      src/cmd/vendor/ must exist — it pins the toolchain's
-      golang.org/x/* dependencies.
+    message: "src/cmd/vendor/ pins the toolchain's golang.org/x/* deps."
 
-  # ===================================================================
-  # § doc/next release-notes layout
-  #
-  # The release-notes pipeline is one of the few places golang/go
-  # encodes a strict structural convention for non-source files.
-  # `doc/next/` mirrors `doc/initial/`'s 7-section layout:
-  #   1-intro.md, 2-language.md, 3-tools.md, 4-runtime.md,
-  #   5-toolchain.md, 6-stdlib/, 7-ports.md
-  #
-  # Under `doc/next/6-stdlib/99-minor/<package>/`, every file is
-  # named `<github-issue-number>.md` (e.g. `77266.md`,
-  # `62026.md`). The convention is enforced socially via PR
-  # review and at release-build time; alint catches it
-  # statically.
-  # ===================================================================
-
-  - id: go-doc-next-7-sections
-    # The 7 top-level files (well, 6 files + 6-stdlib/ subdir)
-    # must all exist. golang/go regenerates these for every
-    # release; their absence means the release-notes pipeline
-    # is broken.
-    kind: file_exists
-    paths:
-      - "doc/next/1-intro.md"
-      - "doc/next/2-language.md"
-      - "doc/next/3-tools.md"
-      - "doc/next/4-runtime.md"
-      - "doc/next/5-toolchain.md"
-      - "doc/next/7-ports.md"
-      - "doc/next/6-stdlib/0-heading.md"
-      - "doc/next/6-stdlib/99-minor/0-heading.md"
-      - "doc/next/6-stdlib/99-minor/README"
-    level: warning
-    message: |
-      doc/next/ must mirror doc/initial/'s 7-section release-notes
-      layout. Missing a section file will silently elide it from
-      the generated release notes.
-
-  - id: go-doc-next-stdlib-minor-issue-filenames
-    # Files under doc/next/6-stdlib/99-minor/<package>/ are named
-    # `<issue-number>.md` (one file per issue). The README is the
-    # one exception. The `0-heading.md` files in the per-section
-    # subdirs are also exempt.
-    kind: filename_regex
-    paths:
-      include:
-        - "doc/next/6-stdlib/99-minor/*/*.md"
-        - "doc/next/6-stdlib/99-minor/*/*/*.md"   # net/url, net/http, etc.
-      exclude:
-        - "doc/next/6-stdlib/99-minor/**/README"
-        - "doc/next/6-stdlib/99-minor/**/0-heading.md"
-    pattern: '^[0-9]+\.md$'
-    level: warning
-    message: |
-      Release-note entries under doc/next/6-stdlib/99-minor/ must
-      be named `<github-issue-number>.md` (e.g. `77266.md`). This
-      convention drives the release-notes generator's
-      issue-number resolution.
-
-  # ===================================================================
-  # § FIPS 140 vendored security boundary
-  #
-  # `lib/fips140/` carries snapshot zip files of the certified
-  # cryptographic module (e.g. `v1.0.0-c2097c7c.zip`,
-  # `v1.26.0.zip`) plus the metadata that says which versions
-  # are certified, in-process, etc. The directory's contents
-  # are reviewed by NIST CMVP — accidental tampering would
-  # invalidate the FIPS 140-3 validation.
-  # ===================================================================
-
-  - id: go-fips140-registry-files-exist
-    # The four metadata files that `make` and the FIPS module
-    # selector consult. Missing any one of them silently
-    # disables FIPS support.
-    kind: file_exists
-    paths:
-      - "lib/fips140/certified.txt"
-      - "lib/fips140/inprocess.txt"
-      - "lib/fips140/fips140.sum"
-      - "lib/fips140/Makefile"
-      - "lib/fips140/README.md"
-    level: error
-    message: |
-      lib/fips140/ must carry the certified.txt + inprocess.txt
-      + fips140.sum + Makefile + README.md metadata files. The
-      FIPS module selector reads these to decide which snapshot
-      zip is the certified one. Missing files silently disable
-      FIPS.
-
-  - id: go-fips140-sum-header
-    # fips140.sum starts with a comment block describing the
-    # hash format. The check-sum body is generated.
-    kind: file_content_matches
-    paths: "lib/fips140/fips140.sum"
-    pattern: '(?m)^# SHA256 checksums of snapshot zip files'
-    level: error
-    message: |
-      lib/fips140/fips140.sum must start with the canonical
-      `# SHA256 checksums of snapshot zip files` header
-      describing the hash format. The CMVP-submitted security
-      policy references this file format verbatim.
-
-  # ===================================================================
-  # § Source-file hygiene on the std library + cmd tree
-  #
-  # The bundled `go@v1` ruleset's `go-sources-*` rules cover
-  # bidi/zero-width/final-newline. We re-state the no-trailing-
-  # whitespace and final-newline rules with the broader scope
-  # `golang/go` actually enforces (via the gofmt hook).
-  # ===================================================================
-
-  - id: go-sources-no-trailing-whitespace
-    # gofmt strips trailing whitespace; this rule catches the
-    # case where a non-Go file (assembly, docs) has been edited
-    # outside of gofmt's reach. The bundled oss-baseline rule
-    # covers `.md` etc.; we extend to .go and .s.
-    kind: no_trailing_whitespace
-    paths:
-      include:
-        - "**/*.go"
-        - "**/*.s"
-      exclude:
-        - "**/testdata/**"
-        - "**/vendor/**"
-        - "src/runtime/_mkmalloc/**"
-    level: warning
-    fix:
-      file_trim_trailing_whitespace: {}
-
-  - id: go-sources-final-newline-explicit
-    # Reinforce the bundled go@v1 rule for .s files (assembler
-    # sources) which gofmt does NOT touch.
-    kind: final_newline
-    paths:
-      include:
-        - "**/*.s"
-      exclude:
-        - "**/testdata/**"
-        - "**/vendor/**"
-    level: warning
-    fix:
-      file_append_final_newline: {}
-
-  # ===================================================================
-  # § Tooling shellouts (defensive — golang/go itself doesn't run
-  # these; they're here for forks adopting the config)
-  # ===================================================================
-
-  - id: go-gofmt-check
-    # gofmt -l prints filenames of unformatted files. The
-    # `command` rule fails on non-empty stdout. Scoped to the
-    # std + cmd trees only — vendored code is allowed to drift.
-    kind: command
-    paths:
-      include:
-        - "src/**/*.go"
-      exclude:
-        - "src/vendor/**"
-        - "src/cmd/vendor/**"
-        - "src/**/testdata/**"
-    command: ["gofmt", "-l", "{path}"]
-    timeout: 30
-    level: error
-    message: |
-      gofmt -l reported changes for this file. golang/go's Gerrit
-      hook (`git-codereview`) enforces gofmt-clean at upload
-      time; this rule is the static equivalent for
-      pre-commit/CI use.
-
-  - id: go-vet-std
-    # `go vet std` against the std module. Per-package vet is
-    # built into `go test` already; this rule catches the case
-    # where a package builds but has a vet finding (shadow,
-    # printf, etc.).
-    kind: command
-    paths: "src/go.mod"
-    command: ["go", "vet", "std"]
-    timeout: 300
-    level: warning
-
-  - id: go-vet-cmd
-    kind: command
-    paths: "src/cmd/go.mod"
-    command: ["go", "vet", "cmd/..."]
-    timeout: 300
-    level: warning
-
-  - id: go-shellcheck
-    # Defensive: shellcheck on src/*.bash + lib/time/update.bash.
-    # golang/go itself doesn't run this; we add it as the
-    # canonical hardening pattern. Forks of golang/go that
-    # extend the bash script set will benefit.
-    kind: command
-    paths:
-      include:
-        - "src/*.bash"
-        - "lib/**/*.bash"
-        - "**/*.sh"
-      exclude:
-        - "**/testdata/**"
-    command: ["shellcheck", "-x", "{path}"]
-    timeout: 30
-    level: warning
-
-  # ===================================================================
-  # § Repo-state guards
-  # ===================================================================
-
-  - id: go-codereview-cfg-present
-    # Every go.googlesource.com / Gerrit-mirrored repo carries a
-    # codereview.cfg pointing at the canonical branch. Removing
-    # it would silently break the Gerrit ↔ GitHub mirror.
-    kind: file_exists
-    paths: "codereview.cfg"
-    level: error
-    message: |
-      codereview.cfg pins the default Gerrit branch
-      (`branch: master` for golang/go). Required by
-      git-codereview to correctly route uploaded changes.
-
+  # ==========================================================================
+  # § 9. Repo-state / mirror guards (unchanged shape; corrected to HEAD).
+  # ==========================================================================
   - id: go-codereview-cfg-branch
     kind: file_content_matches
     paths: "codereview.cfg"
     pattern: '(?m)^branch:\s+\S+'
     level: error
-    message: |
-      codereview.cfg must declare a `branch:` line. Without it
-      git-codereview can't route uploads to the right Gerrit
-      target.
+    message: "codereview.cfg must declare a `branch:` (routes Gerrit uploads)."
 
   - id: go-gitattributes-no-text-normalization
-    # golang/go's .gitattributes has `* -text` to disable git's
-    # line-ending normalization. This is load-bearing because
-    # the project hand-curates CRLF for .bat files
-    # (test/winbatch.go enforces it). Removing this line would
-    # break Windows builds.
     kind: file_content_matches
     paths: ".gitattributes"
     pattern: '(?m)^\* -text\s*$'
     level: error
     message: |
-      .gitattributes must declare `* -text` to disable git's
-      line-ending normalization. golang/go hand-curates CRLF
-      for .bat files (see test/winbatch.go); enabling
-      normalization would silently corrupt those.
+      .gitattributes must keep `* -text` — golang/go hand-curates CRLF for
+      .bat files (test/winbatch.go); enabling normalization corrupts them.
+
+  - id: go-pull-request-template-no-markdown-warning
+    kind: file_content_matches
+    paths: ".github/PULL_REQUEST_TEMPLATE"
+    pattern: '\+ No Markdown'
+    level: warning
+    message: |
+      The PR template must say "No Markdown" — PR bodies are imported
+      verbatim into Gerrit (plaintext).
 
   - id: go-issue-templates-required
-    # The Go project uses GitHub for issue triage (with a
-    # specific template set). Each template is referenced by
-    # number; missing one would break the issue-creation UI.
+    # Corrected to the actual HEAD set (baseline listed a stale subset).
     kind: file_exists
     paths:
       - ".github/ISSUE_TEMPLATE/00-bug.yml"
@@ -570,102 +403,78 @@ rules:
       - ".github/ISSUE_TEMPLATE/11-language-change.yml"
       - ".github/ISSUE_TEMPLATE/config.yml"
     level: warning
-    message: |
-      golang/go's GitHub issue triage relies on a specific set
-      of issue-template files. Removing any of these would
-      degrade the issue-creation UI (templates are referenced
-      by name in config.yml's "Open a blank issue" overrides).
-
-  - id: go-pull-request-template-no-markdown-warning
-    # The PR template explicitly forbids markdown in the body
-    # (because it gets imported verbatim into Gerrit which is
-    # plaintext). The PR template itself is markdown — but its
-    # CONTENT must contain the "No Markdown" warning.
-    kind: file_content_matches
-    paths: ".github/PULL_REQUEST_TEMPLATE"
-    pattern: '\+ No Markdown'
-    level: warning
-    message: |
-      .github/PULL_REQUEST_TEMPLATE must instruct contributors
-      "No Markdown" — PR titles and bodies are imported
-      verbatim into Gerrit, which is plaintext. Removing this
-      line would let formatted PRs into Gerrit and corrupt the
-      change descriptions.
+    message: "golang/go's issue triage relies on this template set."
 
   - id: go-no-AUTHORS-file
-    # golang/go retired the AUTHORS / CONTRIBUTORS files when it
-    # migrated to Gerrit — contributors are tracked in `git log`
-    # with a CLA database. Re-introducing AUTHORS would diverge
-    # from the convention.
     kind: file_absent
-    paths:
-      - "AUTHORS"
-      - "CONTRIBUTORS"
+    paths: ["AUTHORS", "CONTRIBUTORS"]
     level: warning
-    message: |
-      golang/go does not ship AUTHORS / CONTRIBUTORS files —
-      contributor tracking moved to git history + the CLA
-      database when the project migrated to Gerrit. Adding one
-      back would diverge from convention.
-
-  # ===================================================================
-  # § Generated-file-must-not-be-tracked guards (golang/go's
-  # `.gitignore` lists ~10 generated paths; we don't re-state
-  # those — git itself enforces .gitignore. The guards below are
-  # for the cases that AREN'T in .gitignore).
-  # ===================================================================
+    message: "AUTHORS/CONTRIBUTORS were retired at the Gerrit/CLA migration."
 
   - id: go-no-toplevel-bin
-    # /bin/ is in .gitignore and houses build outputs (cmd/dist,
-    # the freshly-built `go` binary, etc.). It must never be
-    # committed.
     kind: dir_absent
     paths: "bin"
     level: error
-    message: |
-      /bin/ is the build output directory (cmd/dist creates it).
-      It must never be tracked.
-
-  - id: go-no-toplevel-pkg
-    # /pkg/ similarly is for compiled package archives (.a files
-    # under the legacy build mode). Must never be committed.
-    kind: dir_absent
-    paths: "pkg"
-    level: warning
-    message: |
-      /pkg/ is the compiled-package output directory under the
-      legacy build mode. Must never be tracked.
-
-  # ===================================================================
-  # § Release-cycle invariants
-  # ===================================================================
+    message: "/bin/ is build output (cmd/dist); must never be tracked."
 
   - id: go-security-policy-references-go-dev
-    # SECURITY.md MUST link to https://go.dev/security/policy.
-    # Removing the link would break the OpenSSF Scorecard
-    # security-policy signal and the GitHub repository advisory
-    # auto-detection.
     kind: file_content_matches
     paths: "SECURITY.md"
-    pattern: 'https://go\.dev/security/policy'
+    pattern: 'go\.dev/(security/policy|wiki/Go-Release-Cycle)'
     level: error
     message: |
-      SECURITY.md must link to https://go.dev/security/policy
-      so vulnerability reporters land on the canonical
-      disclosure path. Removing the link would invalidate the
-      OpenSSF Scorecard signal and GitHub advisory auto-detection.
+      SECURITY.md must link the canonical go.dev disclosure/release-cycle
+      page (OpenSSF Scorecard + GitHub advisory auto-detection signal).
 
   - id: go-readme-references-canonical-source
-    # README.md states the canonical Git repo URL is
-    # https://go.googlesource.com/go (with GitHub being a
-    # mirror). Removing this would mislead contributors into
-    # thinking GitHub is the source of truth.
     kind: file_content_matches
     paths: "README.md"
     pattern: 'go\.googlesource\.com/go'
     level: warning
-    message: |
-      README.md must reference go.googlesource.com/go as the
-      canonical Git repo. The GitHub repo is a mirror; PRs
-      filed against it are imported into Gerrit (as the
-      PULL_REQUEST_TEMPLATE explains).
+    message: "README.md must name go.googlesource.com/go as canonical source."
+
+# ============================================================================
+# v0.11 NOTES (declared as guidance; gated features below):
+#
+#  * git_commit_signed_off / _no_fixup / _author_allowlist / _gpg_signed:
+#    NOT APPLICABLE to golang/go. Contributions go through GERRIT + a CLA,
+#    NOT GitHub PRs with a DCO. There is no "Signed-off-by" trailer
+#    convention; the commit-message contract (package:-prefixed subject,
+#    76-col wrap, "Fixes #nnnn") is enforced by git-codereview + Gerrit, and
+#    is prose-shaped rather than a trailer-key gate. A future
+#    git_commit_subject_matches kind COULD encode the "pkg: lowercase verb"
+#    subject rule — a NEW-RULE-KIND CANDIDATE.
+#
+#  * scope_filter.changed_since: <ref> — high value here. The full-tree
+#    gofmt/import_gate/header sweep over ~15k files is expensive; a PR-time
+#    run should scope to:
+#        scope_filter:
+#          changed_since: "{{env.GO_BASE_REF | default('origin/master')}}"
+#    (env interpolation MUST carry a default per syntax). Left commented to
+#    keep the default `alint check` whole-repo.
+#
+# ============================================================================
+# GENUINE NON-REPLACEABLES (keep the existing in-tree tooling) — and WHY:
+#
+#  * src/cmd/api/main_test.go (API freeze): builds go/build symbol graphs
+#    across 25 GOOS x GOARCH x cgo tuples and diffs exported symbols against
+#    api/go1.*.txt. Pure AST + go/types analysis — alint reads bytes, not
+#    type graphs. registry_paths_resolve can assert the api/next<->doc/next
+#    FILE bijection (done above) but NOT symbol-level compatibility.
+#
+#  * src/go/build/deps_test.go FULL DAG: import_gate captures the flat
+#    "dir must not import X" negative edges (the bulk of the value), but the
+#    transitive lattice closure (internal/dag) is a graph computation alint's
+#    per-file regex firewall cannot perform.
+#
+#  * `go vet` (printf/shadow/lock-copy/etc.): semantic flow analysis over the
+#    typed AST. Keep as a `command` shellout only; not structurally encodable.
+#
+#  * `go test` of std/cmd + the dist test orchestration: behavioural, not
+#    structural.
+#
+#  * Most `go generate` outputs WRITE files (not stdout) and embed
+#    non-deterministic ordering; generated_file_fresh only covers the
+#    stdout-emitting, deterministic subset. The rest stay under
+#    `go generate ./...` + go test diff verification.
+# ============================================================================

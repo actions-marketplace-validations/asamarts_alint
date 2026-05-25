@@ -75,6 +75,11 @@ batch.
 | astral-sh-uv | ~30 | ~22 | +8 | command_idempotent, generated_file_fresh, registry_paths_resolve, cross_file_value_equals, import_gate, git_commit_gpg_signed, {{env.X}}, changed_since | 89 |
 | bazelbuild-bazel | ~55 | ~38 (~69%) | +5 | import_gate, cross_file_value_equals, git_commit_no_fixup, changed_since | 86 |
 | dotnet-runtime | ~55 | ~46 (~84%) | +9 | dotnet@v1, json_path_*, xml_path_*, cross_file_value_equals, git_commit_no_fixup, changed_since | 59 |
+| facebook-react | ~31 | ~24 (~77%) | +4 | cross_file_value_equals, registry_paths_resolve, generated_file_fresh, git_commit_no_fixup, changed_since | 82 |
+| flutter-flutter | ~58 | ~34 (~59%) | +9 | import_gate, command_idempotent, cross_file_value_equals, file_header, file_content_forbidden, changed_since | 58 |
+| golang-go | ~22 | ~16 (~73%) | +5 | import_gate (go preset), command_idempotent, pair_hash, registry_paths_resolve, generated_file_fresh | 62 |
+| helm-helm | ~23 | ~18 (~78%) | +5 | git_commit_signed_off, import_gate (go preset), command_idempotent, cross_file_value_equals, ordered_block | 58 |
+| istio-istio | ~26 | ~21 (~81%) | +6 | git_commit_signed_off, import_gate (go preset), command_idempotent, cross_file_value_equals | 64 |
 
 ## Per-batch findings
 
@@ -188,7 +193,74 @@ no default, so `validate-config` (no env set) rejected it — added
 defaults). The other four validated as-drafted.
 
 ### Batch 3 — react, flutter, go, helm, istio
-_(pending)_
+
+All 5 configs rewritten + validated (`alint validate-config`); live
+`alint check` deliberately not run (they shell out to each repo's own
+tooling). Integration required many field-name fixes (see below) — the
+subagents drafted blind to the real schema.
+
+- **react** — 24/31 (~77%, +4). Headline: `cross_file_value_equals`
+  natively replaces `version-check.js` (the exact primitive the v0.9.17
+  example called out as a non-replaceable shell-out) — the version
+  exported by `ReactVersion.js` must equal `$.version` in the three
+  published manifests; a second cross-file rule syncs `ReactVersions.js`
+  (release) ↔ `ReactVersion.js` (runtime). `registry_paths_resolve`
+  resolves `react/package.json` `files` tarball allow-list on disk;
+  `generated_file_fresh` covers `extract-errors` codes.json freshness
+  (advisory — needs a built tree). Honest non-replaceables (7): the 5
+  in-tree AST eslint rules, flow, jest, dangerfile (PR-diff + bundle-byte
+  regression), lint-build (built bundles).
+- **flutter** — 34/58 (~59%, +9). The `analyze.dart` prize:
+  verifyNoMissingLicense → two `file_header` rules (literal
+  `Copyright 201[34]`, NOT a year range); verifyNoTrailingSpaces +
+  verifySpacesAfterFlowControlStatements → `file_content_forbidden`;
+  verifyNoBadImportsInFlutterTools + verifyNoTestImports → `import_gate`
+  (generic + dart `import_pattern`). `cross_file_value_equals` for the
+  engine.version ↔ engine.stamp pin (`allow_missing_target: true`).
+  `changed_since` grandfathers the ~8k-file legacy tree on the four
+  text-sweep rules. Non-replaceables: dart/flutter analyze + clang-tidy,
+  the 6 custom_rules (Dart AST), golden pixel-diff. The
+  @Deprecated↔notice pairing is genuinely inexpressible (no per-file
+  conditional-content rule) and was dropped — stays in analyze.dart.
+- **go** — 16/22 (~73%, +5). Headline: the `deps_test.go` package
+  firewall → `import_gate` (preset `go`), encoding the high-stakes
+  negative edges (runtime ↛ fmt/os/reflect/net; stdlib ↛ cmd/internal).
+  `pair_hash` (contains mode) for `fips140.sum` ↔ the CMVP zip digests;
+  gofmt -l fan-out → `command_idempotent`. Non-replaceables: cmd/api
+  symbol freeze (AST over 25 build tuples); the full *transitive* deps
+  DAG closure (import_gate is flat per-file regex). Signoff N/A
+  (Gerrit + CLA, no DCO).
+- **helm** — 18/23 (~78%, +5). DCO → `git_commit_signed_off` (the
+  load-bearing CNCF gate); depguard/gomodguard → `import_gate` (preset
+  `go`); `.github/env` Go pin ↔ go.mod → `cross_file_value_equals`;
+  golangci "keep sorted" linter list → `ordered_block`; gofmt/golangci/
+  tidy → `command_idempotent`. **`compliance/apache-2@v1` over-fires
+  (NOT extended)** — helm uses an abbreviated branded header, so the
+  canonical ASF/RAT bundle would false-positive on most files; kept
+  bespoke `file_header` rules.
+- **istio** — 21/26 (~81%, +6). `make gen-check` codegen freshness →
+  `command_idempotent` (correctly NOT `generated_file_fresh`: `make gen`
+  MUTATES, that kind diffs stdout only); DCO → `git_commit_signed_off`;
+  depguard 16-pkg ban + operator/istioctl directory boundary →
+  `import_gate` (preset `go`); 5 chart-hub `file_content_matches`
+  collapsed to one `cross_file_value_equals`. **`compliance/apache-2@v1`
+  over-fires (excluded)** — ~1,700 generated `.gen.go`/`.pb.go` carry no
+  header, some say "The Kubernetes Authors", no top-level NOTICE.
+
+**Integration fixes (the subagents' recurring schema errors — fold into
+batch 4-6 prompts):** `import_gate` uses `language:` not `preset:`, and
+`forbid:` is a SINGLE regex string (not a list — collapse to an
+anchored alternation); `allow:` is the list. `cross_file_value_equals`
+source/targets use `file:` (not `path:`) + `extract:`, and conditional
+presence is `allow_missing_target: true` (not a `when:` map — `when:` is
+a fact-expression STRING, there is no `file_contains`/`file_exists`
+predicate). `registry_paths_resolve` uses `base:` not `base_dir:`.
+`pair_hash` uses `source:` + `target:` + `format:` (not `paths:`/`mode:`).
+`generated_file_fresh` takes a single `file:` (not `paths:`).
+`ordered_block` uses `start:`/`end:` (not `begin:`) and has no
+`item_pattern`. "Forbid a pattern" is `file_content_forbidden` with
+`pattern:` (not `file_content_matches` + `forbid:`). `scope_filter` is
+PER-RULE only (block form), never a top-level config key.
 
 ### Batch 4 — kubernetes, typescript, vscode, nixpkgs, node
 _(pending)_
@@ -219,6 +291,37 @@ _(Running list; finalized in the aggregate phase after all batches.)_
   registry is the gap. Pairs with the spark/arrow registry work.
 - **`.bazelrc`-style include/path resolution** (bazel) — resolve the
   paths an rc file imports. Narrower than the above.
+- **value-set membership / `*_path_contains`** (react prod-error-codes
+  "every thrown Error literal ∈ codes.json"; helm; batch-1 echoes) —
+  `cross_file_value_equals` does 1:1 equality, not N-in-1 membership.
+  Now flagged by 3+ repos; pairs conceptually with `pair_inverse`.
+- **`registry_append_only`** (react codes.json) — assert a registry
+  only ever grows (documented invariant; no kind expresses it).
+- **`git_commit_subject_matches`** (go Gerrit `pkg: lowercase verb`) —
+  a subject-line convention rule; the commit-validation family has
+  signed-off / no-fixup / author / gpg but no subject-shape rule.
+- **`cross_language_implementation_complete`** (flutter per-platform
+  engine-surface parity) — 3rd demand signal across the corpus.
+
+**Engine/ruleset tuning candidates (batch 3 additions):**
+- **The ASF compliance bundles over-fire on real Apache projects** —
+  now 3 confirmations: `apache/governance@v1` (airflow, batch 1) and
+  `compliance/apache-2@v1` (helm + istio, batch 3). Real ASF/CNCF repos
+  use abbreviated/branded headers, exclude generated `.pb.go`/`.gen.go`,
+  attribute some files to other authors ("The Kubernetes Authors"), and
+  often have no top-level NOTICE/KEYS. The canonical bundles assume the
+  full RAT header on every file. Action for the aggregate phase: relax
+  the bundles (header tolerance + generated-file excludes) or ship a
+  documented per-rule `paths:`/exclude override recipe.
+- **`import_gate` is a flat per-file regex, not a graph** (go
+  deps_test.go) — it catches "directory X must never import Y" edges
+  (the bulk of the value) but cannot express transitive DAG closure.
+  A genuine, acceptable limit worth documenting.
+- **mutating-generator working-tree-diff** (helm gen-test-golden, istio
+  `make gen`) reconfirmed — `generated_file_fresh` is stdout-only, so
+  mutating generators must use `command_idempotent` (--check mode). This
+  is now the dominant pattern; `generated_file_fresh` fits only the rare
+  stdout-emitting generator.
 
 **Engine/ruleset tuning candidates:**
 - **`import_gate` has no scala/java preset** (spark) — `generic` +

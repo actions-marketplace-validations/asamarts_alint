@@ -689,3 +689,19 @@ Three concrete unanalyzed angles for a future revalidation pass:
   and message audits do not materially affect walk timing); full pass
   dominated by `istio-yamllint` shellout spawn-failures (2,635 messages)
   when `yamllint` is missing
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (64 rules, ~81% coverage). +6 surfaces: `make gen-check`
+codegen freshness -> command_idempotent (correctly NOT generated_file_fresh
+since `make gen` mutates files), DCO -> git_commit_signed_off, the depguard
+16-package ban + operator/istioctl directory boundary -> import_gate
+(preset go), and 5 hard-coded chart-hub checks collapsed into one
+cross_file_value_equals. Note: compliance/apache-2@v1 OVER-FIRES (generated
+.pb.go/.gen.go carry no header, no top-level NOTICE) so it is excluded.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 3).

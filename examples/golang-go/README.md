@@ -627,3 +627,20 @@ Three concrete unanalyzed angles for a future revalidation pass:
   `/tmp/golang-go`'s ~12,000-file in-scope tree (v0.9.17 numbers;
   v0.9.20's width-aware human output and message audits do not
   materially affect walk timing)
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (62 rules, ~73% coverage). +5 surfaces, headlined by the
+deps_test.go package firewall -> import_gate (preset go), encoding the
+high-stakes negative edges (runtime must not import fmt/os/reflect/net;
+stdlib must not import cmd/internal). pair_hash (contains mode) checks the
+fips140.sum <-> CMVP zip digests; gofmt -l fan-out collapses into one
+command_idempotent. Non-replaceable: cmd/api symbol freeze (AST), the full
+transitive deps DAG closure (import_gate is flat per-file regex), go vet.
+Commit sign-off N/A (Gerrit + CLA, not GitHub DCO).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 3).
