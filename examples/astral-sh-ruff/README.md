@@ -717,3 +717,13 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   remain. The §6.2 Bug 1 (bundled python@v1 over-reach into test
   fixtures) was fixed in v0.9.18 A3 — no per-rule
   `paths.exclude:` workaround needed
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (80 rules). +8 surfaces: command_idempotent expresses the cargo dev generate-all codegen gate + collapses ~5,844 formatter spawns, generated_file_fresh for schema freshness, import_gate for ruff_* -> ty_*, changed_since + {{env.X}} grandfather the malformed fixtures. Residual #1: pair_inverse for insta --unreferenced.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 1).

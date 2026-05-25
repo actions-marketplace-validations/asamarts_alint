@@ -741,3 +741,13 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   shellouts spawn-fail-fast (tools not on PATH); declarative-only
   timing of 1.35 s is the marketable number until the toolchain is
   installed
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (110 rules). ~74% coverage: xml_path_* gives structural pom.xml assertions (vs fragile regex), apache/governance@v1 collapses ~11 ASF rules, import_gate lifts scalastyle IllegalImports (via generic + import_pattern; no scala preset yet), command_idempotent for proto/dep checks.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 1).
