@@ -302,22 +302,19 @@ jobs:
     # being live.
     needs: release
     runs-on: ubuntu-latest
-    permissions:
-      # OIDC Trusted Publishing — no NODE_AUTH_TOKEN. Configure the
-      # trusted publisher once at npmjs.com (package → Settings →
-      # Trusted Publisher → GitHub Actions: asamarts/alint, release.yml).
-      id-token: write
-      contents: read
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: "24"
+          node-version: "20"
           registry-url: "https://registry.npmjs.org"
-      - name: ensure npm supports OIDC trusted publishing
-        run: npm install -g npm@latest
       - name: stamp package version from tag + publish
         env:
+          # PAT auth (NPM_TOKEN). npm Trusted Publishing (OIDC) is
+          # deferred: npmjs.com's UI to enable a trusted publisher is
+          # currently broken (same blocker hit at v0.10.0). crates.io
+          # already runs keyless via OIDC; revisit npm when the UI ships.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TAG: ${{ github.ref_name }}
         shell: bash
         run: |
@@ -336,9 +333,7 @@ jobs:
             fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           echo "==> package.json version set to $ver"
-          # OIDC: npm authenticates via the id-token, no NODE_AUTH_TOKEN.
-          # --provenance attaches a signed build attestation.
-          npm publish --access public --provenance
+          npm publish --access public
 
   homebrew:
     name: bump Homebrew tap (asamarts/homebrew-alint)

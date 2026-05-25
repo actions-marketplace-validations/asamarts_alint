@@ -33,7 +33,7 @@ to rotate.
 |---|---|---|---|---|
 | `GITHUB_TOKEN` | ghcr.io Docker | built-in | per-run | already keyless |
 | `CARGO_REGISTRY_TOKEN` | crates.io | crates.io account | manual | **yes → migrate to Trusted Publishing** |
-| `NPM_TOKEN` | npm (`@asamarts/alint`) | npmjs.com | **yes (bit us in v0.10.0)** | **yes → migrate to Trusted Publishing** |
+| `NPM_TOKEN` | npm (`@asamarts/alint`) | npmjs.com | **yes (bit us in v0.10.0)** | yes, but deferred (npmjs trusted-publisher UI is broken) |
 | `HOMEBREW_TAP_DEPLOY_KEY` | `asamarts/homebrew-alint` | ssh-keygen + repo deploy key | no (SSH key) | n/a (use a GitHub App for org scale) |
 | `VSCE_PAT` | VS Code Marketplace | Azure DevOps PAT | **yes (max 1 yr)** | no (Azure DevOps has no GH OIDC) |
 | `OVSX_PAT` | Open VSX | open-vsx.org token | no | no |
@@ -44,13 +44,15 @@ to rotate.
 
 ## Automation strategy: keyless where the registry supports it
 
-Both of our most rotation-prone tokens now support **GitHub OIDC
-Trusted Publishing** (launched 2025). **`release.yml` is already wired
-for this** (the `publish-crates` and `publish-npm` jobs carry
-`id-token: write` and no token env); the only thing left is the
-one-time per-registry trusted-publisher config below. Migrating
-eliminates the token, the rotation, and the class of failure that broke
-the v0.10.0 npm publish:
+Both crates.io and npm support **GitHub OIDC Trusted Publishing**
+(launched 2025). **crates.io is live on it:** the `publish-crates` job
+carries `id-token: write` and mints a short-lived token, so there is no
+`CARGO_REGISTRY_TOKEN` to rotate. **npm is deferred** to the
+`NPM_TOKEN` PAT: npmjs.com's UI to enable a trusted publisher is
+currently broken (the same blocker hit at v0.10.0), so the
+`publish-npm` job still uses `NODE_AUTH_TOKEN`. Revisit npm OIDC when
+that UI ships; it would eliminate the one token with a recurring
+expiry-failure history.
 
 - **crates.io:** configure a Trusted Publisher (crate Settings →
   Trusted Publishing: repo `asamarts/alint`, the release workflow file,
@@ -65,7 +67,8 @@ the v0.10.0 npm publish:
   npm; `npm publish` then authenticates via OIDC (no `NODE_AUTH_TOKEN`)
   and gets build provenance for free.
 
-After migration, `CARGO_REGISTRY_TOKEN` and `NPM_TOKEN` can be deleted.
+crates.io is migrated, so `CARGO_REGISTRY_TOKEN` can be deleted.
+`NPM_TOKEN` stays in use until npm's trusted-publisher UI is fixed.
 
 ## Per-channel setup runbook
 
@@ -76,9 +79,10 @@ two that go keyless if you take the OIDC path).
 2. **crates.io** — keyless: add the Trusted Publisher (above). Token
    fallback: crates.io → Account Settings → API Tokens → new token
    scoped to publish; `gh secret set CARGO_REGISTRY_TOKEN`.
-3. **npm** — keyless: add the Trusted Publisher (above). Token fallback:
+3. **npm** — currently the token path (OIDC deferred, npmjs UI bug):
    npmjs.com → Access Tokens → Granular, `@asamarts` scope, read+write
-   packages; `gh secret set NPM_TOKEN`.
+   packages, set a calendar reminder for the expiry; `gh secret set
+   NPM_TOKEN`.
 4. **Homebrew tap** — `ssh-keygen -t ed25519 -f tap_key -N ""`; add
    `tap_key.pub` as a **write** deploy key on `asamarts/homebrew-alint`;
    `gh secret set HOMEBREW_TAP_DEPLOY_KEY --repo asamarts/alint < tap_key`;
@@ -101,10 +105,11 @@ two that go keyless if you take the OIDC path).
 
 After the one-time setup, the only recurring human steps are:
 
-- **VS Code Azure DevOps PAT rotation** (the one credential with no
-  keyless path and a hard max expiry). Minimize: set the maximum
-  expiry, add a calendar reminder, and on a `401` use the npm-style
-  recovery (rotate + `gh run rerun <id> --failed`, no new tag).
+- **VS Code Azure DevOps PAT** and **`NPM_TOKEN`** rotation (the two
+  credentials with expiry; npm has no keyless path yet, VS Code never
+  will). Minimize: set the maximum expiry, add a calendar reminder, and
+  on a `401` rotate + `gh run rerun <id> --failed` (no new tag, the
+  artifacts are idempotent per version).
 - **Zed extension version bump.** The Zed registry pins a version, so
   each release needs a one-line bump PR to `zed-industries/extensions`.
   This is the only per-release PR; it can be automated later with a
