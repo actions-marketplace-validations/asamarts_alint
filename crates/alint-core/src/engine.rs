@@ -182,6 +182,18 @@ impl Engine {
             .and_then(|e| e.rule.fixer())
     }
 
+    /// Whether the loaded rule with this id is a per-file rule (the kind
+    /// [`Engine::run_for_file`] re-evaluates). Lets the LSP server tell
+    /// per-file findings (refreshed on every edit) apart from cross-file
+    /// ones (refreshed only on save), so it can preserve the latter
+    /// while re-running the former. Unknown ids return `false`.
+    pub fn is_per_file(&self, rule_id: &str) -> bool {
+        self.entries
+            .iter()
+            .find(|e| e.rule.id() == rule_id)
+            .is_some_and(|e| e.rule.as_per_file().is_some())
+    }
+
     // ~125 lines but each block has its own purpose (changed-set
     // short-circuit, fact eval, git probe, filtered-index build,
     // cross-file partition, per-file partition, assembly). Splitting
@@ -622,7 +634,17 @@ impl Engine {
             return Err(Error::file_not_in_index(file_path));
         }
 
-        let fact_values = evaluate_facts(&self.facts, root, index)?;
+        // Facts are constant for an index's lifetime, so cache them on
+        // the index: the LSP calls `run_for_file` on every keystroke and
+        // re-scanning the tree for facts each time would dominate the
+        // cost. First call computes + caches; the rest reuse.
+        let fact_values: &FactValues = if let Some(values) = index.cached_facts() {
+            values
+        } else {
+            let computed = evaluate_facts(&self.facts, root, index)?;
+            index.set_facts(computed);
+            index.cached_facts().expect("facts just set on the index")
+        };
         let git_tracked = self.collect_git_tracked_if_needed(root);
         let git_blame = self.build_blame_cache_if_needed(root);
         // Per-file rules may carry `scope_filter.changed_since:`; resolve
@@ -633,13 +655,13 @@ impl Engine {
             root,
             index,
             registry: Some(&self.registry),
-            facts: Some(&fact_values),
+            facts: Some(fact_values),
             vars: Some(&self.vars),
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
         };
         let when_env = WhenEnv {
-            facts: &fact_values,
+            facts: fact_values,
             vars: &self.vars,
             iter: None,
             env: None,
@@ -1561,6 +1583,46 @@ mod tests {
             results.is_empty(),
             "passing rule must be omitted: {results:?}"
         );
+    }
+
+    #[test]
+    fn is_per_file_classifies_rules() {
+        let pf = Box::new(PerFileStub {
+            id: "pf".into(),
+            scope: Scope::from_patterns(&["**/*".to_string()]).unwrap(),
+            prefix: b"X".to_vec(),
+        });
+        let cross = stub("cross", "**/*");
+        let engine = Engine::new(vec![pf, cross], RuleRegistry::new());
+        assert!(engine.is_per_file("pf"));
+        assert!(!engine.is_per_file("cross"));
+        assert!(!engine.is_per_file("unknown-id"));
+    }
+
+    #[test]
+    fn run_for_file_caches_facts_on_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let rule = Box::new(PerFileStub {
+            id: "pf".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let engine = Engine::new(vec![rule], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+
+        assert!(index.cached_facts().is_none());
+        engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"x")
+            .unwrap();
+        assert!(
+            index.cached_facts().is_some(),
+            "facts should be cached after the first run_for_file"
+        );
+        // Second call reuses the cache without error.
+        engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"x")
+            .unwrap();
     }
 
     #[test]

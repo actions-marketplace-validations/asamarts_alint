@@ -82,6 +82,12 @@ pub struct FileIndex {
     /// predicate silently matches nothing). Read lock-free in the
     /// hot loop after `set`.
     changed_paths: OnceLock<HashMap<String, HashSet<std::path::PathBuf>>>,
+    /// Evaluated `facts:` values, cached so repeated [`Engine::run_for_file`]
+    /// calls (the LSP per-keystroke path) don't re-scan the tree.
+    /// ASSUMPTION: a given index is evaluated by one engine's fact set
+    /// for its lifetime (true in alint — an index is walked fresh per
+    /// run / per LSP session). Read lock-free after `set`.
+    facts: OnceLock<crate::facts::FactValues>,
 }
 
 impl FileIndex {
@@ -95,7 +101,22 @@ impl FileIndex {
             path_set: OnceLock::new(),
             parent_to_children: OnceLock::new(),
             changed_paths: OnceLock::new(),
+            facts: OnceLock::new(),
         }
+    }
+
+    /// The cached evaluated `facts:` values, if [`set_facts`](Self::set_facts)
+    /// has run. `None` before the first evaluation.
+    #[must_use]
+    pub fn cached_facts(&self) -> Option<&crate::facts::FactValues> {
+        self.facts.get()
+    }
+
+    /// Cache the evaluated facts (no-op if already set). The engine
+    /// populates this on the first `run_for_file` so subsequent
+    /// per-file re-evaluations reuse it instead of re-scanning the tree.
+    pub fn set_facts(&self, values: crate::facts::FactValues) {
+        let _ = self.facts.set(values);
     }
 
     /// Look up the cached changed-paths set for a `since` ref. `None`

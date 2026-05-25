@@ -18,11 +18,22 @@ violation whose rule declares a fixer offers a quick-fix that returns a
 from a new non-writing `Fixer::fix_edit` → `FixEdit` engine capability
 (`SetContent` for content transforms; `CreateFile` / `DeleteFile` /
 `RenameFile` resource ops for the file-op fixers). The disk-writing
-`Fixer::apply` path (used by `alint fix`) is unchanged. Still deferred:
-the **"Add rule to ignore"** code action (it edits `.alint.yml`, a
-separate decision), `didChangeWatchedFiles`, and the `Hint`-diagnostic
-surfacing of informational notes. Original design draft written
-2026-05-02 after v0.9.6.
+`Fixer::apply` path (used by `alint fix`) is unchanged. **Review
+hardening (2026-05-24):** `didChangeWatchedFiles` now reloads the
+session (config edits take effect without saving an open doc);
+path-less / tree-level findings (e.g. a missing required file) are
+anchored to `.alint.yml` so they're visible; a malformed config is
+surfaced as a diagnostic on `.alint.yml` rather than only logged; the
+change hot path preserves cached cross-file findings (only per-file
+ones are replaced) so cross-file markers don't flicker while typing;
+facts are cached on the index so per-keystroke re-eval doesn't re-scan
+the tree; `code_action` honors the client's `only` filter. Still
+deferred: the **"Add rule to ignore"** code action (it edits
+`.alint.yml`, a separate decision), debounce/cancellation of in-flight
+runs, surfacing live diagnostics for unsaved brand-new files (lint is
+on-disk; they appear after the first save/walk), and the
+`Hint`-diagnostic surfacing of informational notes. Original design
+draft written 2026-05-02 after v0.9.6.
 
 ## Problem
 

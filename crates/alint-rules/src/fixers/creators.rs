@@ -547,6 +547,26 @@ mod tests {
     }
 
     #[test]
+    fn file_append_fix_edit_appends_payload() {
+        let tmp = TempDir::new().unwrap();
+        let fixer = FileAppendFixer::new("\n## Section\n".into());
+        let edit = fixer
+            .fix_edit(
+                &Violation::new("m").with_path(std::path::Path::new("notes.md")),
+                b"# Notes\n",
+                tmp.path(),
+            )
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: PathBuf::from("notes.md"),
+                content: b"# Notes\n\n## Section\n".to_vec(),
+            }
+        );
+    }
+
+    #[test]
     fn file_prepend_fix_edit_inserts_before_existing_bytes() {
         let tmp = TempDir::new().unwrap();
         let fixer = FilePrependFixer::new("// header\n".into());

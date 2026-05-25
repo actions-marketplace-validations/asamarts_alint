@@ -568,4 +568,54 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn append_final_newline_fix_edit_none_when_already_terminated() {
+        let v = Violation::new("eof").with_path(std::path::Path::new("x.txt"));
+        assert!(
+            FileAppendFinalNewlineFixer
+                .fix_edit(&v, b"ends\n", std::path::Path::new("/repo"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn normalize_line_endings_fix_edit_rewrites_to_target() {
+        let v = Violation::new("le").with_path(std::path::Path::new("a.md"));
+        let edit = FileNormalizeLineEndingsFixer::new(LineEndingTarget::Lf)
+            .fix_edit(&v, b"a\r\nb\r\n", std::path::Path::new("/repo"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("a.md"),
+                content: b"a\nb\n".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_line_endings_fix_edit_none_when_already_target() {
+        let v = Violation::new("le").with_path(std::path::Path::new("a.md"));
+        assert!(
+            FileNormalizeLineEndingsFixer::new(LineEndingTarget::Lf)
+                .fix_edit(&v, b"a\nb\n", std::path::Path::new("/repo"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn collapse_blank_lines_fix_edit_collapses_runs() {
+        let v = Violation::new("blanks").with_path(std::path::Path::new("a.txt"));
+        let edit = FileCollapseBlankLinesFixer::new(1)
+            .fix_edit(&v, b"a\n\n\nb\n", std::path::Path::new("/repo"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("a.txt"),
+                content: b"a\n\nb\n".to_vec(),
+            }
+        );
+    }
 }

@@ -34,13 +34,13 @@ use std::sync::{Arc, Mutex};
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CodeActionResponse, CodeDescription, CreateFile, DeleteFile,
-    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentChangeOperation, DocumentChanges,
-    Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, MarkupContent, MarkupKind, MessageType, NumberOrString, OneOf,
-    OptionalVersionedTextDocumentIdentifier, Position, Range, RenameFile, ResourceOp,
-    ServerCapabilities, ServerInfo, TextDocumentEdit, TextDocumentSyncCapability,
-    TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
+    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    DocumentChangeOperation, DocumentChanges, Hover, HoverContents, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MarkupContent,
+    MarkupKind, MessageType, NumberOrString, OneOf, OptionalVersionedTextDocumentIdentifier,
+    Position, Range, RenameFile, ResourceOp, ServerCapabilities, ServerInfo, TextDocumentEdit,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server, jsonrpc::Result as JsonRpcResult};
 
@@ -61,6 +61,11 @@ struct Finding {
     /// Whether the rule declares a fixer — gates the "Apply fix" code
     /// action without re-deriving the rule set.
     fixable: bool,
+    /// Whether this came from a per-file rule (re-evaluated on every
+    /// edit) vs a cross-file rule (only on save). On `didChange` we keep
+    /// the cached cross-file findings and replace only the per-file ones,
+    /// so cross-file markers don't flicker away while typing.
+    per_file: bool,
 }
 
 /// Per-file findings keyed by absolute path.
@@ -74,6 +79,17 @@ struct Session {
     root: PathBuf,
     engine: Engine,
     index: FileIndex,
+    /// The discovered `.alint.yml` (relative to root). Used to anchor
+    /// path-less findings and config errors as diagnostics.
+    config_path: PathBuf,
+}
+
+/// A failure building the session, carrying the config file (if known)
+/// so the server can surface it as a diagnostic on `.alint.yml`.
+#[derive(Debug)]
+struct BuildError {
+    config_path: Option<PathBuf>,
+    message: String,
 }
 
 /// Build a tokio runtime and serve the alint language server over
@@ -147,12 +163,18 @@ impl Backend {
 
         match tokio::task::spawn_blocking(move || build_and_run(&root)).await {
             Ok(Ok(Some((session, by_path)))) => {
+                let config_uri = Url::from_file_path(&session.config_path).ok();
                 let to_publish = {
                     let mut state = self.state.lock().unwrap();
                     state.session = Some(session);
                     cache_and_collect(&mut state, &open, &by_path)
                 };
                 self.publish_all(to_publish).await;
+                // Clear any stale "config error" diagnostic now that the
+                // config loaded cleanly.
+                if let Some(uri) = config_uri {
+                    self.client.publish_diagnostics(uri, Vec::new(), None).await;
+                }
             }
             Ok(Ok(None)) => {
                 // No `.alint.yml` — clear any stale diagnostics.
@@ -163,10 +185,31 @@ impl Backend {
                 };
                 self.publish_all(to_publish).await;
             }
-            Ok(Err(err)) => {
+            Ok(Err(build_err)) => {
                 self.client
-                    .log_message(MessageType::WARNING, format!("alint: {err}"))
+                    .log_message(
+                        MessageType::WARNING,
+                        format!("alint: {}", build_err.message),
+                    )
                     .await;
+                // Surface a malformed/unbuildable config as a diagnostic
+                // on `.alint.yml` so it's visible, not just logged.
+                if let Some(uri) = build_err
+                    .config_path
+                    .as_ref()
+                    .and_then(|p| Url::from_file_path(p).ok())
+                {
+                    let diagnostic = Diagnostic {
+                        range: Range::new(Position::new(0, 0), Position::new(0, 1)),
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        source: Some("alint".to_string()),
+                        message: build_err.message,
+                        ..Diagnostic::default()
+                    };
+                    self.client
+                        .publish_diagnostics(uri, vec![diagnostic], None)
+                        .await;
+                }
             }
             Err(join_err) => {
                 self.client
@@ -181,8 +224,11 @@ impl Backend {
 
     /// Single-file hot path: re-evaluate per-file rules against the
     /// editor's in-memory `text` and publish diagnostics for just this
-    /// document. Cross-file findings refresh on the next save.
-    async fn reeval_file(&self, uri: Url, text: String) {
+    /// document. Per-file findings replace the previous per-file ones,
+    /// but cached cross-file findings (from the last full run) are
+    /// preserved so they don't flicker away while typing — they refresh
+    /// on the next save. `version` ties the diagnostics to the edit.
+    async fn reeval_file(&self, uri: Url, text: String, version: i32) {
         let session = self.state.lock().unwrap().session.clone();
         let Some(session) = session else {
             return; // No cached session yet — open/save will populate it.
@@ -199,27 +245,44 @@ impl Backend {
             session
                 .engine
                 .run_for_file(&session.root, &session.index, &rel, text.as_bytes())
-                .map(|results| group_findings(&session.root, &results))
+                .map(|results| {
+                    group_findings(
+                        &session.root,
+                        &results,
+                        &session.engine,
+                        &session.config_path,
+                    )
+                })
         })
         .await;
 
         match outcome {
             Ok(Ok(by_path)) => {
-                let findings = by_path.get(&abs_key).cloned().unwrap_or_default();
-                let diagnostics = findings.iter().map(finding_to_diagnostic).collect();
-                self.state
-                    .lock()
-                    .unwrap()
-                    .diagnostics
-                    .insert(uri.clone(), findings);
+                let per_file = by_path.get(&abs_key).cloned().unwrap_or_default();
+                let diagnostics = {
+                    let mut state = self.state.lock().unwrap();
+                    // Keep cross-file findings from the last full run;
+                    // replace the per-file ones with the fresh results.
+                    let mut merged: Vec<Finding> = state
+                        .diagnostics
+                        .get(&uri)
+                        .map(|prev| prev.iter().filter(|f| !f.per_file).cloned().collect())
+                        .unwrap_or_default();
+                    merged.extend(per_file);
+                    let diags: Vec<Diagnostic> = merged.iter().map(finding_to_diagnostic).collect();
+                    state.diagnostics.insert(uri.clone(), merged);
+                    diags
+                };
                 self.client
-                    .publish_diagnostics(uri, diagnostics, None)
+                    .publish_diagnostics(uri, diagnostics, Some(version))
                     .await;
             }
             Ok(Err(Error::FileNotInIndex { .. })) => {
-                // Excluded from linting — clear any diagnostics.
+                // Excluded from linting (or not yet walked) — clear.
                 self.state.lock().unwrap().diagnostics.remove(&uri);
-                self.client.publish_diagnostics(uri, Vec::new(), None).await;
+                self.client
+                    .publish_diagnostics(uri, Vec::new(), Some(version))
+                    .await;
             }
             Ok(Err(err)) => {
                 self.client
@@ -296,17 +359,25 @@ impl LanguageServer for Backend {
             return;
         };
         let uri = params.text_document.uri;
+        let version = params.text_document.version;
         self.state
             .lock()
             .unwrap()
             .documents
             .insert(uri.clone(), change.text.clone());
-        self.reeval_file(uri, change.text).await;
+        self.reeval_file(uri, change.text, version).await;
     }
 
     async fn did_save(&self, _: DidSaveTextDocumentParams) {
         // Rebuild the session (the tree / config may have changed) and
         // re-run everything, including cross-file rules.
+        self.check_and_publish().await;
+    }
+
+    async fn did_change_watched_files(&self, _: DidChangeWatchedFilesParams) {
+        // A watched file changed outside the editor's edit flow — most
+        // importantly `.alint.yml`. Rebuild the session and re-run so
+        // config edits take effect without needing to save an open doc.
         self.check_and_publish().await;
     }
 
@@ -362,6 +433,17 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let selection = params.range;
 
+        // Respect the client's kind filter: if it asked for a specific
+        // set of action kinds that doesn't admit quick-fixes, return none.
+        if let Some(only) = &params.context.only {
+            let admits_quickfix = only
+                .iter()
+                .any(|kind| *kind == CodeActionKind::QUICKFIX || *kind == CodeActionKind::EMPTY);
+            if !admits_quickfix {
+                return Ok(None);
+            }
+        }
+
         let (session, findings, text) = {
             let state = self.state.lock().unwrap();
             (
@@ -406,6 +488,12 @@ impl LanguageServer for Backend {
         }
         if actions.is_empty() {
             return Ok(None);
+        }
+        // A single fix is the obvious one to apply.
+        if actions.len() == 1 {
+            if let CodeActionOrCommand::CodeAction(action) = &mut actions[0] {
+                action.is_preferred = Some(true);
+            }
         }
         Ok(Some(actions))
     }
@@ -489,38 +577,66 @@ fn build_session(root: &Path) -> Result<Option<Session>, String> {
         root: root.to_path_buf(),
         engine,
         index,
+        config_path,
     }))
 }
 
 /// Build a session and run the full engine over it. `Ok(None)` ⇒ no
-/// config (caller clears diagnostics).
-fn build_and_run(root: &Path) -> Result<Option<(Arc<Session>, FindingsByPath)>, String> {
-    let Some(session) = build_session(root)? else {
-        return Ok(None);
+/// config (caller clears diagnostics). `Err` carries the config path so
+/// the caller can surface a load/build failure as a diagnostic.
+fn build_and_run(root: &Path) -> Result<Option<(Arc<Session>, FindingsByPath)>, BuildError> {
+    let config_path = alint_dsl::discover(root);
+    let session = match build_session(root) {
+        Ok(Some(s)) => s,
+        Ok(None) => return Ok(None),
+        Err(message) => {
+            return Err(BuildError {
+                config_path,
+                message,
+            });
+        }
     };
     let report = session
         .engine
         .run(&session.root, &session.index)
-        .map_err(|e| format!("running rules: {e}"))?;
-    let by_path = group_findings(&session.root, &report.results);
+        .map_err(|e| BuildError {
+            config_path: Some(session.config_path.clone()),
+            message: format!("running rules: {e}"),
+        })?;
+    let by_path = group_findings(
+        &session.root,
+        &report.results,
+        &session.engine,
+        &session.config_path,
+    );
     Ok(Some((Arc::new(session), by_path)))
 }
 
-/// Group rule-result violations into per-file findings keyed by
-/// absolute path. File- and tree-level findings (no path) are skipped —
-/// they have no document to attach to.
-fn group_findings(root: &Path, results: &[RuleResult]) -> FindingsByPath {
+/// Group rule-result violations into per-file findings keyed by absolute
+/// path. Path-less findings (existence / tree-level rules) are anchored
+/// to the config file so they're still visible in the editor. Each
+/// finding is tagged `per_file` so the change hot path can preserve
+/// cross-file findings.
+fn group_findings(
+    root: &Path,
+    results: &[RuleResult],
+    engine: &Engine,
+    config_path: &Path,
+) -> FindingsByPath {
     let mut by_path = FindingsByPath::new();
     for result in results {
         let Some(severity) = severity_of(result.level) else {
             continue;
         };
         let policy_url = result.policy_url.as_ref().map(ToString::to_string);
+        let per_file = engine.is_per_file(&result.rule_id);
         for violation in &result.violations {
-            let Some(rel) = &violation.path else {
-                continue;
+            // Anchor path-less (tree/file-level) findings to the config
+            // file so a "missing required file" still shows somewhere.
+            let abs = match &violation.path {
+                Some(rel) => root.join(rel.as_ref()),
+                None => config_path.to_path_buf(),
             };
-            let abs = root.join(rel.as_ref());
             by_path.entry(abs).or_default().push(Finding {
                 range: violation_range(violation),
                 severity,
@@ -528,6 +644,7 @@ fn group_findings(root: &Path, results: &[RuleResult]) -> FindingsByPath {
                 message: violation.message.to_string(),
                 policy_url: policy_url.clone(),
                 fixable: result.is_fixable,
+                per_file,
             });
         }
     }
@@ -721,6 +838,7 @@ mod tests {
             message: "boom".to_string(),
             policy_url: policy_url.map(ToString::to_string),
             fixable: false,
+            per_file: true,
         }
     }
 
@@ -798,6 +916,34 @@ mod tests {
     fn build_session_returns_none_when_no_config() {
         let dir = tempfile::tempdir().unwrap();
         assert!(build_session(dir.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn group_findings_anchors_pathless_to_config() {
+        use alint_core::{Engine, RuleResult};
+        let engine = Engine::new(vec![], alint_core::RuleRegistry::new());
+        let root = repo_root();
+        let config = root.join(".alint.yml");
+        let results = vec![RuleResult {
+            rule_id: std::sync::Arc::from("missing-license"),
+            level: Level::Error,
+            policy_url: None,
+            violations: vec![Violation::new("LICENSE is missing")],
+            notes: Vec::new(),
+            is_fixable: false,
+        }];
+        let by_path = group_findings(&root, &results, &engine, &config);
+        // The path-less violation is anchored to the config file.
+        assert!(
+            by_path.contains_key(&config),
+            "anchored to config: {by_path:?}"
+        );
+        let finding = &by_path[&config][0];
+        assert!(
+            !finding.per_file,
+            "unknown/cross-file rule tagged per_file=false"
+        );
+        assert_eq!(finding.message, "LICENSE is missing");
     }
 
     #[test]

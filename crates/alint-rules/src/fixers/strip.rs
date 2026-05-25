@@ -205,3 +205,74 @@ fn char_filter_edit(
         content: out.into_bytes(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v() -> Violation {
+        Violation::new("x").with_path(std::path::Path::new("a.txt"))
+    }
+
+    #[test]
+    fn bidi_fix_edit_strips_control_chars() {
+        // U+202E (RLO) embedded in otherwise-ASCII content.
+        let edit = FileStripBidiFixer
+            .fix_edit(&v(), "a\u{202E}b".as_bytes(), std::path::Path::new("/r"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("a.txt"),
+                content: b"ab".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn bidi_fix_edit_none_when_clean() {
+        assert!(
+            FileStripBidiFixer
+                .fix_edit(&v(), b"clean ascii", std::path::Path::new("/r"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn zero_width_fix_edit_strips_but_preserves_leading_bom() {
+        let edit = FileStripZeroWidthFixer
+            .fix_edit(
+                &v(),
+                "\u{FEFF}a\u{200B}b".as_bytes(),
+                std::path::Path::new("/r"),
+            )
+            .unwrap();
+        let FixEdit::SetContent { content, .. } = edit else {
+            panic!("expected SetContent");
+        };
+        assert_eq!(content, "\u{FEFF}ab".as_bytes());
+    }
+
+    #[test]
+    fn bom_fix_edit_strips_leading_bom() {
+        let edit = FileStripBomFixer
+            .fix_edit(&v(), "\u{FEFF}hello".as_bytes(), std::path::Path::new("/r"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("a.txt"),
+                content: b"hello".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn bom_fix_edit_none_when_no_bom() {
+        assert!(
+            FileStripBomFixer
+                .fix_edit(&v(), b"no bom", std::path::Path::new("/r"))
+                .is_none()
+        );
+    }
+}
