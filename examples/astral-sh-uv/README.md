@@ -562,3 +562,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 - **Open suspected bugs in this directory's `.alint.yml`:** **none.**
   Config is clean against the v0.9.20 engine + canonical-22 pitfall
   catalogue.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (89 rules). +8 surfaces: command_idempotent (ruff check +
+ruff format --check, with per-file offender parsing) replaces the plain
+command shellouts and matches the real mutating pre-commit hooks,
+generated_file_fresh for 4 codegen-freshness gates, registry_paths_resolve
++ cross_file_value_equals for the workspace-member pins,
+{{env.UV_RUFF_VERSION | default('latest')}} pins the shellout tool
+version to CI's, and git_commit_gpg_signed.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 2).

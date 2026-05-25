@@ -655,3 +655,18 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 - **Open suspected bugs in this directory's `.alint.yml`:** **none.**
   Config is clean against the v0.9.20 engine + canonical-22 pitfall
   catalogue.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (86 rules, ~69% coverage). +5 surfaces: import_gate reclaims
+two textual layering firewalls (C++ -> JNI headers, sun.misc.Unsafe
+routing), cross_file_value_equals syncs the .bazelversion pin against the
+presubmit config, and changed_since PR-scopes the now-5,729-file Java
+license-header sweep. The re-analysis also caught a 274-false-positive
+bug in the prior config (a BUILD-naming rule with prefix "#").
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 2).

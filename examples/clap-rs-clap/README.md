@@ -567,3 +567,18 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 - **Open suspected bugs in this directory's `.alint.yml`:** **none.**
   Config is clean against the v0.9.20 engine + canonical-22 pitfall
   catalogue.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (76 rules). +9 surfaces: toml_path_* asserts the workspace
+Cargo.toml shape structurally, cross_file_value_equals syncs the 4
+member-crate version pins to the workspace, for_each_dir enforces
+per-crate README/CHANGELOG, command_idempotent upgrades the
+rustfmt/clippy/typos gates to per-file offender parsing, and
+git_commit_no_fixup + git_commit_message catch PR-range hygiene.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 2).
