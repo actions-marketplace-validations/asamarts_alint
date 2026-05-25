@@ -656,3 +656,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   on `=======` markdown-section underlines. The v0.9.18 cross-cutting
   revalidation (B4) did not pull this rule into the A1-A6 refinement
   scope. Still in the bundled-ruleset refinement queue.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (45 rules, ~81% coverage). +19 surfaces (the largest gain in
+the corpus): the famous src/file_lists.cmake <-> Bazel-glob staleness ->
+one command_idempotent rule, the BSD header sweep across ~10 language
+bindings -> file_header (the repo had zero header rules before), and
+per-language version coherence (version.json + protobuf_version.bzl) ->
+true cross_file_value_equals. Non-replaceable: the wire-format conformance
+suite, protoc/C++ compile.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 5).

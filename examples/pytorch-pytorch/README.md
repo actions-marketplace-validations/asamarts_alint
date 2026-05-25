@@ -653,3 +653,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
   The previously-flagged `root_only: true` + multi-component-literal
   cleanup has been applied.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (61 rules, ~78% coverage). +6 surfaces: the .lintrunner.toml
+formatter codes -> command_idempotent x9 (asserting "the formatter is a
+no-op", the real CI invariant), torchgen freshness -> generated_file_fresh,
+build_variables.bzl -> registry_paths_resolve. Correction: cmake/Codegen.cmake
+exec()s the .bzl as Python, so there is no bzl<->CMake duplication to sync
+(the old README's "sync gap" was partly a mis-diagnosis). Non-replaceable:
+clang-tidy/mypy, the custom AST adapters, WORKFLOWSYNC (N-to-N equality).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 5).

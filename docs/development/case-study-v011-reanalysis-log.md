@@ -85,6 +85,11 @@ batch.
 | microsoft-vscode | ~58 | ~33 (~57%) | +6 | import_gate, cross_file_value_equals, file_header, file_content_forbidden | 68 |
 | nixos-nixpkgs | ~21 | ~14 (~67%) | +3 | ordered_block, command_idempotent, for_each_dir | 58 |
 | nodejs-node | ~34 | ~22 (~65%) | +4 | command_idempotent, ordered_block, git_commit_no_fixup, registry_paths_resolve | 61 |
+| pnpm-pnpm | ~31 | ~24 (~77%) | +6 | registry_paths_resolve, toml_path_*, command_idempotent, for_each_dir | 92 |
+| prettier-prettier | ~28 | ~21 (~75%) | +6 | command_idempotent, file_content_forbidden, json_path_matches, for_each_dir | 65 |
+| protocolbuffers-protobuf | ~58 | ~47 (~81%) | +19 | file_header, command_idempotent, cross_file_value_equals, ordered_block | 45 |
+| python-cpython | ~31 | ~25 (~81%) | +8 | command_idempotent, cross_file_value_equals, registry_paths_resolve | 78 |
+| pytorch-pytorch | ~63 | ~49 (~78%) | +6 | command_idempotent, generated_file_fresh, registry_paths_resolve, cross_file_value_equals, import_gate | 61 |
 
 ## Per-batch findings
 
@@ -319,7 +324,52 @@ does not take `allow_missing_target` — that field is cross-file only).
   lint-readme-lists' live-GitHub-team check, license-builder (generator).
 
 ### Batch 5 — pnpm, prettier, protobuf, cpython, pytorch
-_(pending)_
+
+All 5 configs rewritten + validated. One integration fix (pytorch:
+`allow_missing_target` must be a rule-level field, not nested inside a
+`targets[]` item).
+
+- **protobuf** — 47/58 (~81%, **+19** — the largest single-repo gain in
+  the corpus). The famous `src/file_lists.cmake` ↔ Bazel-glob staleness
+  → one `command_idempotent` rule (replacing a scheduled CI job); BSD
+  header sweep across ~10 language bindings → `file_header` (the repo
+  had zero header rules before); per-language version coherence
+  (version.json × 9 + protobuf_version.bzl) upgraded from shape-only
+  regex to true `cross_file_value_equals`; conformance failure-list
+  sortedness → `ordered_block`. Non-replaceables: the wire-format
+  conformance suite, protoc/C++ compile.
+- **cpython** — 25/31 (~81%, +8). `make regen-all` codegen freshness →
+  `command_idempotent` (was a static file_exists stub); ruff/black →
+  `command_idempotent`; configure.ac ↔ patchlevel.h version coherence →
+  `cross_file_value_equals`; `.gitattributes` generated markers →
+  `registry_paths_resolve`. Non-replaceables: Argument Clinic
+  self-checksums (self-referential intra-file digest, bespoke algo), the
+  NEWS.d-blurb-per-PR rule (a diff "must-ADD" predicate), the 4 C-API
+  semantic checks (stable_abi/smelly/check-c-globals).
+- **pytorch** — 49/63 (~78%, +6). The `.lintrunner.toml` formatter codes
+  (clang-format/ruff/codespell/pyfmt/…) → `command_idempotent` ×9 ("the
+  formatter is a no-op", the real CI invariant); torchgen freshness →
+  `generated_file_fresh`; `build_variables.bzl` → `registry_paths_resolve`.
+  **Useful correction:** `cmake/Codegen.cmake` literally `exec()`s the
+  `.bzl` as Python, so there is NO bzl↔CMake duplication to sync — the
+  v0.9.17 README's "WORKFLOWSYNC/sync gap" was partly a mis-diagnosis.
+  Non-replaceables: clang-tidy/mypy, the custom AST adapters, WORKFLOWSYNC
+  (N-to-N job equality), STABLE_SHIM (git-diff-hunk-aware).
+- **pnpm** — 24/31 (~77%, +6). **The repo went polyglot since the
+  v0.9.17 study** — it now has a full Rust half (`pacquet/` + crates).
+  `registry_paths_resolve` resolves the pnpm-workspace.yaml `packages:`
+  globs to real dirs; `toml_path_matches` covers the new Rust toolchain;
+  `command_idempotent` for meta-updater-no-drift + cargo fmt/taplo/typos.
+  Honest finding: meta-updater's invariants are COMPUTED-value syncs
+  (`pnpm@11.3.0` vs `11.3.0`), not verbatim equality — so they fall back
+  to dual regex pins (a `normalize:`/transform on cross_file_value_equals
+  would close this; see protobuf).
+- **prettier** — 21/28 (~75%, +6). Per-tool `command_idempotent` (was a
+  single `yarn lint` wrapper); `check-deps.js` fully retired (5
+  package.json pins → declarative); ~7 of 9 changelog sub-checks
+  declarative + PR-scoped via `changed_since`. Non-replaceables: tsc,
+  eslint AST, knip/cspell, the changelog_unreleased-per-PR "must-ADD"
+  predicate.
 
 ### Batch 6 — rust, tensorflow, tokio, next.js, turbo
 _(pending)_
@@ -367,6 +417,25 @@ _(Running list; finalized in the aggregate phase after all batches.)_
   N-in-1 membership gap from batches 1-3; now ~5 signals.
 - **A `nix@v1` ecosystem bundle** (nixpkgs) — no nix ecosystem bundle
   exists, unlike rust/go/python/node/dotnet.
+- **`changeset_requires_path` / "the diff must ADD a file under glob X"**
+  (prettier changelog_unreleased, cpython Misc/NEWS.d, pnpm `.changeset/`
+  — 3 explicit signals, more latent) — `scope_filter.changed_since`
+  already computes the changed set, but no kind asserts that the change
+  set MUST include a new path matching a glob. The cleanest, most
+  broadly-demanded new kind tied to the v0.11 changed-since machinery.
+- **`normalize:`/value-transform on `cross_file_value_equals`** (protobuf
+  `4.36-dev` vs `4.36.0`; pnpm `pnpm@11.3.0` vs `11.3.0`; nodeVersion
+  `22.13.0` vs `>=22.13`) — 2-3 signals. The existing `normalize:`
+  supports trim/lower only; a strip-prefix / semver-floor transform
+  would close the "same value, two FORMS" drift that currently forces
+  dual regex pins. Pairs with the membership candidate.
+- **`embedded_checksum` / `self_checksum`** (cpython Argument Clinic
+  `output=<hash>` end-markers) — a self-referential intra-file digest
+  with a tool-specific algorithm; `pair_hash` assumes distinct files +
+  standard sha. Niche but cleanly scoped.
+- **`cross_file_keys_cover` / value-set ⊆ key-set** (pnpm catalogMode
+  strict: every catalog reference must resolve to a catalog key) —
+  another facet of the membership family alongside `registry_value_used`.
 
 **Engine/ruleset tuning candidates (batch 3 additions):**
 - **The ASF compliance bundles over-fire on real Apache projects** —

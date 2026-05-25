@@ -644,3 +644,18 @@ gates that prettier's existing tooling stack (eslint + cspell +
 knip + tsc + prettier-self) does not provide, expressed in 4 ten-
 line YAML rules + a 22-path `file_exists` block, running in the
 102 ms full-tree pass.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (65 rules, ~75% coverage). +6 surfaces: per-tool
+command_idempotent (was a single `yarn lint` wrapper), check-deps.js fully
+retired (its 5 package.json pins become declarative), and ~7 of 9 changelog
+sub-checks become declarative + PR-scoped via changed_since. Non-replaceable:
+tsc, eslint AST, knip/cspell, and the changelog_unreleased-per-PR "must-ADD"
+predicate (a strong new-rule-kind candidate).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 5).
