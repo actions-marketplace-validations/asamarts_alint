@@ -115,6 +115,10 @@ is recoverable the same way as npm: rotate + `gh run rerun <id>
 --failed`, no new tag (the `.vsix` / plugin `.zip` are idempotent per
 version).
 
+See [`docs/development/release-credentials.md`](docs/development/release-credentials.md)
+for the full credential inventory, the secret-storage convention, and
+the OIDC (keyless) publishing setup for crates.io + npm.
+
 **One-time prerequisites (NOT yet done; do before the first editor
 release):**
 

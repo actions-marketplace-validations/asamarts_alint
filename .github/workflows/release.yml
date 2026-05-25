@@ -272,18 +272,24 @@ jobs:
     # skipped via the crates.io API check).
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      # OIDC Trusted Publishing — no CARGO_REGISTRY_TOKEN. Configure the
+      # trusted publisher once at crates.io (each crate → Settings →
+      # Trusted Publishing: repo asamarts/alint, workflow release.yml).
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: publish-crates
+      - name: mint a short-lived crates.io token via OIDC
+        uses: rust-lang/crates-io-auth-action@v1
+        id: crates-auth
       - name: publish all 5 crates in dependency order
         env:
-          # Set this in repo Settings → Secrets → Actions. Token
-          # comes from https://crates.io/me; needs `publish-update`
-          # scope on each of the five alint crates.
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
         run: ci/scripts/publish-crates.sh
 
   publish-npm:
@@ -296,22 +302,22 @@ jobs:
     # being live.
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      # OIDC Trusted Publishing — no NODE_AUTH_TOKEN. Configure the
+      # trusted publisher once at npmjs.com (package → Settings →
+      # Trusted Publisher → GitHub Actions: asamarts/alint, release.yml).
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      - name: ensure npm supports OIDC trusted publishing
+        run: npm install -g npm@latest
       - name: stamp package version from tag + publish
         env:
-          # Set this in repo Settings → Secrets → Actions. Token
-          # is a granular access token (npmjs.com → Access
-          # Tokens → Generate → Granular) with `Read and write`
-          # on packages, scoped to `@asamarts`, no IP restriction.
-          # We tried Trusted Publishing first but npm's UI
-          # currently requires 2FA to enable it and the 2FA
-          # configuration UI was broken; revisit when that ships.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TAG: ${{ github.ref_name }}
         shell: bash
         run: |
@@ -330,7 +336,9 @@ jobs:
             fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           echo "==> package.json version set to $ver"
-          npm publish --access public
+          # OIDC: npm authenticates via the id-token, no NODE_AUTH_TOKEN.
+          # --provenance attaches a signed build attestation.
+          npm publish --access public --provenance
 
   homebrew:
     name: bump Homebrew tap (asamarts/homebrew-alint)
