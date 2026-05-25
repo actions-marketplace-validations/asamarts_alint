@@ -46,6 +46,10 @@ export async function resolveAlintBinary(
   );
   if (choice === "Download") {
     try {
+      // Download the alint release matching this extension's version.
+      // The extension version is stamped to the alint release at publish
+      // time, so `v<version>` always exists. (JetBrains does the same;
+      // the Zed extension can't read its own version and uses latest.)
       const version = (context.extension.packageJSON as { version: string }).version;
       const dest = await downloadAlint(version, path.dirname(cached), (m) =>
         log.appendLine(`[download] ${m}`),

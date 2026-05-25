@@ -513,7 +513,10 @@ pub trait Fixer: Send + Sync + std::fmt::Debug {
     /// Used by the LSP server to offer an "Apply fix" code action as a
     /// `WorkspaceEdit`. The default returns `None` — a fixer opts in by
     /// overriding it. Implementations MUST NOT write to disk (reading a
-    /// declared template is allowed).
+    /// declared template is allowed). Unlike [`apply`](Self::apply),
+    /// this is not `fix_size_limit`-guarded: the caller already holds
+    /// the bytes (an open editor buffer), so size is bounded by what the
+    /// editor opened.
     fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
         let _ = (violation, bytes, root);
         None

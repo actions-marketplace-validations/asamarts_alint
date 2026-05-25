@@ -33,6 +33,7 @@ jobs:
       docs: ${{ steps.detect.outputs.docs }}
       bench: ${{ steps.detect.outputs.bench }}
       examples: ${{ steps.detect.outputs.examples }}
+      editors: ${{ steps.detect.outputs.editors }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -215,6 +216,36 @@ jobs:
       - uses: actions/checkout@v6
       - run: ci/scripts/shell-tests.sh
 
+  # ── Editor extensions ─────────────────────────────────────────────
+  # Build the packaged extensions that otherwise only build at release
+  # time: typecheck + bundle the VS Code TS extension, and wasm-build the
+  # Zed extension. Runs on a GitHub-hosted runner (needs Node + the wasm
+  # target). JetBrains is intentionally omitted (multi-GB IntelliJ SDK).
+  editors:
+    name: Editors (VS Code + Zed)
+    needs: changes
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.editors == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: VS Code — install, typecheck, bundle
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm run check-types
+          npm run build
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - name: Zed — wasm build
+        working-directory: editors/zed
+        run: cargo build --release --target wasm32-wasip1
+
   # ── Summary report ───────────────────────────────────────────────
   summary:
     name: Summary
@@ -232,6 +263,7 @@ jobs:
       - bench-smoke
       - examples
       - shell-tests
+      - editors
     runs-on: [self-hosted, linux, alint]
     steps:
       - uses: actions/checkout@v6
@@ -240,6 +272,7 @@ jobs:
           DOCS_CHANGED: ${{ needs.changes.outputs.docs }}
           BENCH_CHANGED: ${{ needs.changes.outputs.bench }}
           EXAMPLES_CHANGED: ${{ needs.changes.outputs.examples }}
+          EDITORS_CHANGED: ${{ needs.changes.outputs.editors }}
           FMT_RESULT: ${{ needs.fmt.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
@@ -251,4 +284,5 @@ jobs:
           BENCH_SMOKE_RESULT: ${{ needs.bench-smoke.result }}
           EXAMPLES_RESULT: ${{ needs.examples.result }}
           SHELL_TESTS_RESULT: ${{ needs.shell-tests.result }}
+          EDITORS_RESULT: ${{ needs.editors.result }}
         run: ci/scripts/summary.sh

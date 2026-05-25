@@ -46,7 +46,11 @@ impl AlintExtension {
             }
         }
 
-        // 4. Download the matching release from GitHub.
+        // 4. Download from GitHub. Strategy note (kept consistent across
+        // editors): the VS Code / JetBrains plugins download the alint
+        // release matching their own (release-stamped) version; a Zed
+        // wasm extension can't read its own version at runtime, so it
+        // takes the latest release instead.
         zed::set_language_server_installation_status(
             language_server_id,
             &zed::LanguageServerInstallationStatus::CheckingForUpdate,

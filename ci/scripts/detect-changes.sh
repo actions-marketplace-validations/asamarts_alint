@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Detect which components changed to enable conditional CI pipelines.
 # Outputs: rust=true/false, docs=true/false, bench=true/false,
-#          examples=true/false
+#          examples=true/false, editors=true/false
 #
 # Environment variables (set by the workflow):
 #   GH_EVENT         - github.event_name (push | pull_request)
@@ -45,6 +45,7 @@ RUST=false
 DOCS=false
 BENCH=false
 EXAMPLES=false
+EDITORS=false
 
 # CI infrastructure or workspace manifest changes trigger all pipelines.
 if echo "$CHANGED" | grep -qE '^(\.github/workflows/|ci/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$)'; then
@@ -53,6 +54,12 @@ if echo "$CHANGED" | grep -qE '^(\.github/workflows/|ci/|Cargo\.toml$|Cargo\.loc
   DOCS=true
   BENCH=true
   EXAMPLES=true
+  EDITORS=true
+fi
+
+# Editor extensions/integrations (VS Code TS + Zed wasm get built in CI).
+if echo "$CHANGED" | grep -qE '^editors/'; then
+  EDITORS=true
 fi
 
 if echo "$CHANGED" | grep -qE '^(crates/|xtask/|schemas/|\.alint\.yml$)'; then
@@ -77,7 +84,7 @@ if echo "$CHANGED" | grep -qE '^(examples/|schemas/|crates/alint-rules/|crates/a
 fi
 
 echo ""
-echo "==> rust=${RUST}  docs=${DOCS}  bench=${BENCH}  examples=${EXAMPLES}"
+echo "==> rust=${RUST}  docs=${DOCS}  bench=${BENCH}  examples=${EXAMPLES}  editors=${EDITORS}"
 
 # ── Write GitHub Actions outputs ─────────────────────────────────────
 
@@ -87,5 +94,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "docs=${DOCS}"
     echo "bench=${BENCH}"
     echo "examples=${EXAMPLES}"
+    echo "editors=${EDITORS}"
   } >> "$GITHUB_OUTPUT"
 fi

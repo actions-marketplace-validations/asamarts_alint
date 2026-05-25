@@ -23,9 +23,11 @@
 //!   whose rule declares a fixer, returning a `WorkspaceEdit`
 //!   ([`alint_core::Fixer::fix_edit`] → [`alint_core::FixEdit`]) the
 //!   editor applies to the buffer.
+//! - **Watched files** (`didChangeWatchedFiles`) reload the session, so
+//!   `.alint.yml` edits take effect without saving an open document.
 //!
-//! The "add rule to ignore" action and `didChangeWatchedFiles` are
-//! deferred to later slices of the LSP epic.
+//! The "add rule to ignore" action is deferred to a later slice of the
+//! LSP epic.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

@@ -66,6 +66,10 @@ object AlintNotifier {
         ApplicationManager.getApplication().executeOnPooledThread {
             val group = NotificationGroupManager.getInstance().getNotificationGroup("alint")
             try {
+                // Download the alint release matching this plugin's
+                // (release-stamped) version — same strategy as the VS
+                // Code extension. (The Zed extension uses latest, since
+                // its wasm can't read its own version.)
                 val version = pluginVersion()
                 val path = AlintBinary.download(version) { thisLogger().info("alint: $it") }
                 AlintSettings.getInstance().alintPath = path
