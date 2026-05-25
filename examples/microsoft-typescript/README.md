@@ -727,3 +727,18 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   semantic gap). Awaits the `{stem_all}` v0.10+ template-token engine
   extension; no config-side workaround is clean enough to apply yet.
   See §6.2 Bug 1.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (71 rules, ~67% coverage). +3 surfaces: cross_file_value_equals
+pins the dprint TypeScript plugin version (.dprint.jsonc wasm URL <->
+package.json @dprint/typescript), registry_paths_resolve resolves
+src/lib/libs.json $.libs[*] to the .d.ts sources, and import_gate (js) is a
+coarse stand-in for a no-direct-import rule. Non-replaceable: the 9 custom
+AST eslint rules, the baseline accept/diff loop, generated-lib freshness.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 4).

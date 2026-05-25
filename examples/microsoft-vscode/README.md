@@ -662,3 +662,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   on existing rules, vscode-only — low priority).
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
   Config is clean.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (68 rules, ~57% coverage). +6 surfaces: cross_file_value_equals
+closes the baseline's flagship deferred gap (copilot engines.vscode <->
+root version), and import_gate (js) ports the http/https-import ban, the
+direct-gulp-import ban, and the uniform common/ cross-layer slice. Key
+limit: vscode's code-import-patterns is a generated default-deny per-file
+allowlist, which import_gate (forbid+allow) cannot fully express, so the
+44 semantic AST rules stay on eslint.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 4).

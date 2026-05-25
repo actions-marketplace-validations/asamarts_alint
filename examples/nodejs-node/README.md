@@ -817,3 +817,20 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   layer + 2 net-new filename-grammar conventions (changelog +
   test-discovery) that previously had **no static enforcement at
   all**. See §2.2 for the cross-reference.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (61 rules, ~65% coverage). +4 surfaces: command_idempotent x7
+collapses the per-language lint fan-outs (eslint/cpplint/ruff/remark/
+shellcheck/yaml/clang-format), ordered_block x2 enforces the README TSC +
+collaborator list ordering (previously only a bespoke mjs script), and
+git_commit_no_fixup gates the squash-landing workflow. Baseline correction:
+node has no SPDX/license header convention, so that mapping was removed.
+Non-replaceable: 30 custom AST eslint rules + cpplint, core-validate-commit
+metadata/trailer semantics, the live-GitHub-team README check.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 4).

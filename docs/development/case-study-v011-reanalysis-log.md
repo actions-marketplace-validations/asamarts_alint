@@ -80,6 +80,11 @@ batch.
 | golang-go | ~22 | ~16 (~73%) | +5 | import_gate (go preset), command_idempotent, pair_hash, registry_paths_resolve, generated_file_fresh | 62 |
 | helm-helm | ~23 | ~18 (~78%) | +5 | git_commit_signed_off, import_gate (go preset), command_idempotent, cross_file_value_equals, ordered_block | 58 |
 | istio-istio | ~26 | ~21 (~81%) | +6 | git_commit_signed_off, import_gate (go preset), command_idempotent, cross_file_value_equals | 64 |
+| kubernetes-kubernetes | ~51 | ~34 (~67%) | +10 | import_gate (go preset), file_header, command_idempotent, for_each_dir | 58 |
+| microsoft-typescript | ~27 | ~18 (~67%) | +3 | cross_file_value_equals, registry_paths_resolve, import_gate, command_idempotent | 71 |
+| microsoft-vscode | ~58 | ~33 (~57%) | +6 | import_gate, cross_file_value_equals, file_header, file_content_forbidden | 68 |
+| nixos-nixpkgs | ~21 | ~14 (~67%) | +3 | ordered_block, command_idempotent, for_each_dir | 58 |
+| nodejs-node | ~34 | ~22 (~65%) | +4 | command_idempotent, ordered_block, git_commit_no_fixup, registry_paths_resolve | 61 |
 
 ## Per-batch findings
 
@@ -263,7 +268,55 @@ predicate). `registry_paths_resolve` uses `base:` not `base_dir:`.
 PER-RULE only (block form), never a top-level config key.
 
 ### Batch 4 — kubernetes, typescript, vscode, nixpkgs, node
-_(pending)_
+
+All 5 configs rewritten + validated. The hardened syntax cheatsheet in
+the subagent prompts (folding in batch-3's recurring schema errors) cut
+integration to a single fix across all five (node: `registry_paths_resolve`
+does not take `allow_missing_target` — that field is cross-file only).
+
+- **kubernetes** — 34/51 (~67%, +10). The 66 per-directory
+  `.import-restrictions` files → `import_gate` (preset `go`); per-language
+  boilerplate → `file_header` (year-OPTIONAL — post-2025 k8s drops the
+  year: `Copyright ([0-9]{4} )?The Kubernetes Authors`); codegen/vendor
+  freshness → `command_idempotent` in verify mode. **Dropped two
+  bundles:** `compliance/apache-2@v1` over-fires (branded "Kubernetes
+  Authors" header, thousands of generated headers, no NOTICE), and
+  `ci/github-actions@v1` (k8s has NO `.github/workflows/` — it runs on
+  Prow). EasyCLA not DCO → signoff omitted. Non-replaceables:
+  govet/typecheck/internal-modules/vendor-cycles (AST), publishing-bot
+  content sync.
+- **typescript** — 18/27 (~67%, +3). `cross_file_value_equals` pins the
+  dprint TS plugin version (`.dprint.jsonc` wasm URL ↔ package.json
+  `@dprint/typescript`); `registry_paths_resolve` resolves
+  `src/lib/libs.json` `$.libs[*]` → the `.d.ts` sources exist;
+  `import_gate` (js) as a coarse stand-in for a no-direct-import AST
+  rule. Non-replaceables: all 9 custom AST eslint rules, the baseline
+  accept/diff loop, generated-lib freshness (mutating generators).
+- **vscode** — 33/58 (~57%, +6). `cross_file_value_equals` closes the
+  baseline's flagship deferred gap (copilot `engines.vscode` ↔ root
+  version); `import_gate` (js) ports the http/https-import ban, the
+  direct-gulp-import ban, and the uniform `common/` ↛ node/electron
+  cross-layer slice. **Key limit:** vscode's `code-import-patterns` is a
+  *generated default-deny per-file allowlist* (hundreds of entries +
+  layer ordering) — `import_gate` is forbid+allow, so only uniform
+  cross-layer bans port. 44 semantic AST rules stay on eslint.
+- **nixpkgs** — 14/21 (~67%, +3). `ordered_block` finally gets clean
+  targets: maintainer-list.nix + team-list.nix wrap lists in literal
+  `# keep-sorted start/end` markers; `command_idempotent` collapses the
+  treefmt suite (nixfmt/actionlint/zizmor); `for_each_dir` for the
+  `pkgs/by-name` shard file-shape (the largest iteration). No nix
+  ecosystem bundle exists (gap). Non-replaceables: nix eval, nixfmt
+  semantics, meta.maintainers/license cross-refs (need a nix extractor),
+  CODEOWNERS-glob resolution.
+- **node** — 22/34 (~65%, +4). `command_idempotent` ×7 collapses the
+  per-language lint fan-outs (eslint/cpplint/ruff/remark/shellcheck/
+  yaml/clang-format); `ordered_block` ×2 for the README TSC + collaborator
+  lists (previously only a bespoke mjs script); `git_commit_no_fixup`
+  (node lands squashed). **Baseline correction:** node has NO SPDX/license
+  `file_header` convention (only 2 src files carry one) — that mapping
+  was wrong and was removed. Non-replaceables: 30 custom AST eslint rules
+  + cpplint, core-validate-commit metadata/trailer semantics,
+  lint-readme-lists' live-GitHub-team check, license-builder (generator).
 
 ### Batch 5 — pnpm, prettier, protobuf, cpython, pytorch
 _(pending)_
@@ -302,6 +355,18 @@ _(Running list; finalized in the aggregate phase after all batches.)_
   signed-off / no-fixup / author / gpg but no subject-shape rule.
 - **`cross_language_implementation_complete`** (flutter per-platform
   engine-surface parity) — 3rd demand signal across the corpus.
+- **`git_commit_subject_matches`** (now 4 signals: go Gerrit
+  `pkg: lowercase verb`, node `subsystem: desc ≤72col`, nixpkgs
+  `pkgs/x: old -> new`, + others) — **the single most-requested new
+  commit kind.** The v0.11 commit family has signed-off / no-fixup /
+  author / gpg but no subject-shape rule. Strongest new-kind candidate
+  overall; cheap to build on the existing commit-validation plumbing.
+- **`registry_value_used` / value-set membership** (typescript
+  diagnosticMessages, react codes.json, helm) — assert each registry
+  key/value is referenced ≥1× across a target file set. Reconfirms the
+  N-in-1 membership gap from batches 1-3; now ~5 signals.
+- **A `nix@v1` ecosystem bundle** (nixpkgs) — no nix ecosystem bundle
+  exists, unlike rust/go/python/node/dotnet.
 
 **Engine/ruleset tuning candidates (batch 3 additions):**
 - **The ASF compliance bundles over-fire on real Apache projects** —

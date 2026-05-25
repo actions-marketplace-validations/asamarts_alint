@@ -654,3 +654,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
   All 3 historical bugs documented in §6.2 have been resolved in
   v0.9.18; the current config is clean.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (58 rules, ~67% coverage). +10 surfaces, headlined by the
+66 per-directory `.import-restrictions` files -> import_gate (preset go),
+the per-language boilerplate sweep -> file_header (year-optional, since
+post-2025 k8s drops the year), and codegen/vendor freshness ->
+command_idempotent in verify mode. Note: compliance/apache-2@v1 OVER-FIRES
+(branded "Kubernetes Authors" header + generated code) so it is dropped,
+as is ci/github-actions@v1 (k8s runs on Prow, has no .github/workflows).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 4).
