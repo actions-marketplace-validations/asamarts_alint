@@ -153,11 +153,12 @@ they're a manual post-release follow-up, not a tagged CI job.
    `npm ci && npm run build` validation (the TS wasn't built in-repo).
 3. ✅ **JetBrains plugin** (LSP4IJ) — done (`editors/jetbrains/`, Kotlin
    + `intellij-platform-gradle-plugin` 2.x), with a tag-gated
-   `publish-jetbrains` job. Authored without a local JVM/Gradle/IntelliJ
-   toolchain, so it needs `./gradlew buildPlugin` on JDK 17+ to verify
-   the version coordinates (IntelliJ platform / Kotlin / LSP4IJ / Gradle
-   plugin) before the first publish; the `asamarts` Marketplace vendor +
-   `JETBRAINS_MARKETPLACE_TOKEN` (and signing secrets) must be set up.
+   `publish-jetbrains` job. **Build-validated:** `./gradlew buildPlugin`
+   compiles the Kotlin against the real LSP4IJ 0.7.0 + IntelliJ 2024.2
+   and packages the `.zip`; a committed Gradle wrapper + the `editors`
+   CI job guard it. Still needs a manual `runIde` smoke (does the server
+   actually attach in a live IDE?) and the `asamarts` Marketplace vendor
+   + `JETBRAINS_MARKETPLACE_TOKEN` / signing secrets before publishing.
 4. ✅ **Zed extension** — done (`editors/zed/`, Rust→wasm via
    `zed_extension_api`); compiles to wasm locally. Publishing is a
    manual PR to `zed-industries/extensions` (no release job). Known

@@ -50,6 +50,11 @@ dependencies {
 }
 
 intellijPlatform {
+    // No Java sources or GUI (.form) files — this is Kotlin LSP glue —
+    // so skip bytecode instrumentation (which would otherwise pull the
+    // IntelliJ Java-compiler/ant-tasks dependency).
+    instrumentCode = false
+
     pluginConfiguration {
         id = "org.alint.lsp"
         name = "alint"
@@ -76,6 +81,17 @@ intellijPlatform {
     }
 }
 
+// Target Java 17 (the IntelliJ 2024.2+ baseline) using the JDK that
+// runs Gradle. Deliberately NOT `jvmToolchain(17)`, which makes Gradle
+// try to *provision* a toolchain and fails on boxes without toolchain
+// auto-detection or a download repo configured — build with a JDK 17+.
 kotlin {
-    jvmToolchain(17)
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
 }

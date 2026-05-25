@@ -21,19 +21,19 @@ lets the IDE render the results. All linting logic lives in alint.
 
 ## Building locally
 
-> The plugin was authored without a local Gradle/IntelliJ-SDK toolchain
-> in CI. Validate it before publishing.
+The plugin builds cleanly with the committed Gradle wrapper and a
+**full JDK 17** (not a JRE — code compilation needs `javac`):
 
 ```sh
 cd editors/jetbrains
-gradle wrapper            # one-time: generates the wrapper jar
-./gradlew buildPlugin     # produces build/distributions/alint-*.zip
+./gradlew buildPlugin     # produces build/distributions/alint-jetbrains-*.zip
 ./gradlew runIde          # launch a sandbox IDE with the plugin
 ```
 
-`build.gradle.kts` carries a "verify-before-build" note listing the
-version coordinates (IntelliJ platform, Kotlin, LSP4IJ, the Gradle
-plugin) to confirm/bump on first build.
+The build is exercised by the `editors` CI job (it also typechecks the
+VS Code extension and wasm-builds the Zed one). Runtime behaviour inside
+a live IDE (does the LSP server attach and surface diagnostics?) still
+warrants a manual `runIde` smoke before a release.
 
 ## Publishing
 
