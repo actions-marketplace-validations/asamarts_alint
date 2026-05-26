@@ -251,9 +251,9 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - name: JetBrains — build plugin
+      - name: JetBrains — build + verify plugin
         working-directory: editors/jetbrains
-        run: ./gradlew buildPlugin --no-daemon
+        run: ./gradlew buildPlugin verifyPlugin --no-daemon
 
   # ── Summary report ───────────────────────────────────────────────
   summary:

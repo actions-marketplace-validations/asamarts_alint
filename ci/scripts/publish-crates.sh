@@ -53,11 +53,15 @@ fi
 # v0.8.5 fixture-completeness test), so alint-rules must
 # publish first. alint-output is independent of dsl/rules; it
 # can publish anywhere after core but before alint.
+# alint-lsp (added v0.11) depends on core/dsl/rules and is a
+# workspace dep of the published `alint` binary, so it must publish
+# after those three and before alint — same v0.8.1 lesson as above.
 CRATES=(
   alint-core
   alint-rules
   alint-output
   alint-dsl
+  alint-lsp
   alint
 )
 

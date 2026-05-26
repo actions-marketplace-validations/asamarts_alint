@@ -433,6 +433,7 @@ jobs:
           "
           echo "==> extension version set to $ver"
           npm ci
+          npm run check-types
           npm run build
           # vsce/ovsx read VSCE_PAT/OVSX_PAT from the environment.
           npx --no-install vsce publish --no-dependencies
@@ -476,4 +477,6 @@ jobs:
           ver="${TAG#v}"
           # Pass the version to Gradle without editing the build file.
           echo "==> plugin version set to $ver"
-          gradle -PpluginVersion="$ver" publishPlugin
+          # Use the pinned wrapper (./gradlew) so release matches what CI
+          # validates, not the setup-action's provisioned Gradle.
+          ./gradlew -PpluginVersion="$ver" publishPlugin
