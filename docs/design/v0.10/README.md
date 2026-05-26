@@ -87,7 +87,7 @@ Held back to keep the cut tight:
   `lsp_server.md`, `vscode_extension.md`, and
   `single_file_reevaluation.md` design docs now live in
   [`../v0.11/`](../v0.11/)).
-- **WASM plugin tier** — v0.12 (was v0.11 before the scope flip).
+- **WASM plugin tier** — v0.13 (was v0.12 before the v0.12 real-world-coverage cut was inserted).
 - **`detect: linguist` and `detect: askalono` facts** — PROPOSAL
   §4.6 items still open; orthogonal to rule-kind coverage.
 - **Bazel-licensing-declaration-aware rule kind** — single-source

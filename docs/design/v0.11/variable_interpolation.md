@@ -268,7 +268,7 @@ net still catches the common single-character slips.
 
 ## Security considerations
 
-- **Env vars never reach rule bodies.** WASM plugins (v0.12)
+- **Env vars never reach rule bodies.** WASM plugins (v0.13)
   receive their config dict *post-interpolation* — the host
   resolves `{{env.X}}` references before passing config to the
   guest. Guests can't read env vars indirectly via config
