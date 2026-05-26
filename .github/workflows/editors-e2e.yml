@@ -11,14 +11,17 @@ name: editors e2e (VS Code LSP integration)
 # headless-minimal). Gated on the editors, the LSP server, or the binary
 # so a server<->client contract change re-runs the real-client check.
 
+# NOTE: manual-dispatch only for now. The real-client VS Code e2e does
+# not yet pass under headless CI: the extension host disposes its
+# connection mid-`client.start()` (an `Unexpected SIGPIPE` in the host),
+# reproduced on both GitHub-hosted ubuntu-latest and locally, and NOT
+# fixed by --no-sandbox / dbus-run-session / telemetry-off / a pinned VS
+# Code version. The `alint lsp` server itself is healthy (proven by a
+# raw-stdio probe and the green Layer-0 protocol tests in
+# crates/alint/tests/lsp_*). Kept dispatch-only so it can't red PRs
+# while the headless-activation issue is investigated; flip the
+# pull_request trigger back on once it goes green.
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "editors/**"
-      - "crates/alint-lsp/**"
-      - "crates/alint/**"
-      - ".github/workflows/editors-e2e.yml"
   workflow_dispatch:
 
 concurrency:
