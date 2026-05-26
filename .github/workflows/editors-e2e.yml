@@ -1,0 +1,51 @@
+name: editors e2e (VS Code LSP integration)
+
+# Real-client end-to-end for the editor integrations: launches a real
+# VS Code under Xvfb, points it at an `alint` binary built from this
+# branch (via the `alint.path` setting), and asserts the extension
+# surfaces diagnostics + an apply-fix quick action from the `alint lsp`
+# language server.
+#
+# Runs on GitHub-hosted ubuntu-latest, which ships the GUI libraries +
+# xvfb that @vscode/test-electron needs (the self-hosted bench runner is
+# headless-minimal). Gated on the editors, the LSP server, or the binary
+# so a server<->client contract change re-runs the real-client check.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "editors/**"
+      - "crates/alint-lsp/**"
+      - "crates/alint/**"
+      - ".github/workflows/editors-e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vscode:
+    name: VS Code extension (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build alint from this branch
+        run: cargo build --release -p alint
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: VS Code e2e (xvfb)
+        working-directory: editors/vscode
+        env:
+          # The extension resolves this via the `alint.path` setting
+          # written into the temp fixture workspace by runTest.ts.
+          ALINT_TEST_BINARY: ${{ github.workspace }}/target/release/alint
+        run: |
+          npm ci
+          xvfb-run -a npm run test:e2e

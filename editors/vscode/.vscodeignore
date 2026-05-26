@@ -1,10 +1,12 @@
 # The extension ships only the bundled output + manifest + docs.
 # Everything below is build-time only or already inlined by esbuild.
 src/**
+out/**
 node_modules/**
 .vscode-test/**
 esbuild.js
 tsconfig.json
+tsconfig.test.json
 .gitignore
 **/*.ts
 **/*.map

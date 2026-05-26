@@ -1,0 +1,18 @@
+version: 1
+# Fixture config for the VS Code extension e2e. Two per-file rules: an
+# error-level forbidden-pattern rule (no fixer) and a warning-level
+# trailing-whitespace rule WITH a fixer, so the test can assert both a
+# diagnostic and an apply-fix code action. Excluded from alint's own
+# dogfood via the root .alint.yml ignore list.
+rules:
+  - id: no-todo
+    kind: file_content_forbidden
+    paths: "**/*.txt"
+    pattern: "TODO"
+    level: error
+  - id: clean-ws
+    kind: no_trailing_whitespace
+    paths: "**/*.txt"
+    level: warning
+    fix:
+      file_trim_trailing_whitespace: {}

@@ -17,6 +17,11 @@ ignore:
   # rules they're meant to test the exclusion of. Surfaced when
   # the v0.9.20 Dogfood CI job tripped on 4 such fixture files.
   - "crates/alint-e2e/fixtures/**"
+  # The VS Code extension e2e ships a fixture workspace with its own
+  # nested .alint.yml + a deliberately-violating bad.txt (a TODO +
+  # trailing whitespace) so the test can assert a diagnostic and an
+  # apply-fix. Dogfooding alint over it would re-fire those rules.
+  - "editors/vscode/src/test/fixtures/**"
 
 facts:
   - id: has_rust
