@@ -1,11 +1,11 @@
 # Niche rule kinds (1-2 sources each)
 
-Status: **Planned (v0.12).** Five small, cleanly-scoped kinds batched
+Status: **Planned (v0.12).** Six small, cleanly-scoped kinds batched
 into one design doc; each has 1-2 corpus sources. Triage against the
 100-repo study before committing — the wider corpus may promote some
 to higher demand or add siblings.
 
-## The five
+## The six
 
 ### `embedded_checksum` / `self_checksum`
 - **Source:** cpython Argument Clinic — each generated block ends with
@@ -46,6 +46,19 @@ to higher demand or add siblings.
   assertions). Three topologies: data-format-driven, within-language
   source↔golden, platform-driven. May warrant its own doc once the
   100-repo study sharpens the shape.
+
+### `bazel_licenses_declared` (carried from the v0.11 long-tail)
+- **Source:** tensorflow's `licenses(["notice"])` BUILD-file
+  discipline (every BUILD package declares a license). Single-source,
+  but the source is a 100k+ file tree where the alignment cost of the
+  hand-rolled check is high.
+- **Gap:** a Bazel-licensing-declaration-aware kind — assert that each
+  BUILD/BUILD.bazel under a scope carries a `licenses([...])` (or the
+  newer `package(default_applicable_licenses=...)`) declaration.
+- **Sketch:** `kind: bazel_licenses_declared`, `paths:` (BUILD-file
+  glob), `allowed:` (permitted license tokens). Sibling to
+  `cross_language_implementation_complete` in provenance (both were the
+  v0.11 opportunistic long-tail); batched here as niche rule kinds.
 
 ## Open questions
 
