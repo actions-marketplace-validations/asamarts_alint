@@ -7,7 +7,8 @@
 //!   3. that an apply-fix `WorkspaceEdit`'s own `newText` actually
 //!      resolves the violation when fed back to the server,
 //!   4. config discovery from an ancestor when the client roots at a
-//!      subdirectory.
+//!      subdirectory,
+//!   5. config reload on didChangeWatchedFiles.
 //!
 //! Unix-only for the same `file://` reason as the shared harness.
 #![cfg(unix)]
@@ -263,6 +264,64 @@ fn lsp_discovers_config_in_ancestor_when_rooted_at_subdir() {
     assert!(
         !diags.is_empty(),
         "rooting at a subdir should still discover the ancestor .alint.yml and fire, got none"
+    );
+
+    server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
+    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
+}
+
+/// (5) `didChangeWatchedFiles` reloads the config: a diagnostic present
+/// on open clears after `.alint.yml` is edited on disk (here, rescoped
+/// so the open file no longer matches) and the watched-files
+/// notification fires — no need to save the open document.
+#[test]
+fn lsp_reloads_config_on_did_change_watched_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let cfg = root.join(".alint.yml");
+    std::fs::write(&cfg, TWO_RULE_CONFIG).unwrap(); // rules on **/*.txt
+    let text = "has a TODO here   \n";
+    std::fs::write(root.join("a.txt"), text).unwrap();
+
+    let root_uri = format!("file://{}", root.to_str().unwrap());
+    let file_uri = format!("{root_uri}/a.txt");
+    let cfg_uri = format!("{root_uri}/.alint.yml");
+
+    let mut server = spawn_server(root);
+    server.send(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": { "rootUri": root_uri, "capabilities": {} }
+    }));
+    recv_response(&server.rx, 1);
+    server.send(&json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }));
+    server.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": {
+            "uri": file_uri, "languageId": "plaintext", "version": 1, "text": text
+        }}
+    }));
+    let diags = wait_for_diagnostics(&server.rx, &file_uri);
+    assert!(!diags.is_empty(), "expected diagnostics on open, got none");
+
+    // Rescope the rules to **/*.py on disk so a.txt no longer matches,
+    // then fire didChangeWatchedFiles (the handler ignores the params
+    // and just rebuilds + republishes).
+    std::fs::write(
+        &cfg,
+        "version: 1\nrules:\n  \
+         - id: no-todo\n    kind: file_content_forbidden\n    \
+         paths: \"**/*.py\"\n    pattern: 'TODO'\n    level: error\n",
+    )
+    .unwrap();
+    server.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didChangeWatchedFiles",
+        "params": { "changes": [{ "uri": cfg_uri, "type": 2 }] }
+    }));
+
+    let after = wait_for_diagnostics(&server.rx, &file_uri);
+    assert!(
+        after.is_empty(),
+        "config reload should clear a.txt's diagnostics (rule rescoped away), got {after:?}"
     );
 
     server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
