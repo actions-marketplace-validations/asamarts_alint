@@ -35,9 +35,15 @@ dependencies {
         plugin("com.redhat.devtools.lsp4ij", "0.7.0")
         pluginVerifier()
         zipSigner()
+        // Platform test fixtures for the headless LSP integration test.
+        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
     }
     // Used by the managed-download path to extract the release .tar.gz.
     implementation("org.apache.commons:commons-compress:1.27.1")
+    testImplementation("junit:junit:4.13.2")
+    // The platform test fixtures (UsefulTestCase) reference opentest4j,
+    // which isn't pulled onto the gradle test classpath transitively.
+    testImplementation("org.opentest4j:opentest4j:1.3.0")
 }
 
 intellijPlatform {

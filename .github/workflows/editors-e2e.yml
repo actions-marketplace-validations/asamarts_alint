@@ -83,3 +83,27 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y emacs-nox
       - name: Validate Tier-2 configs (helix TOML / sublime JSONC / emacs)
         run: bash editors/test/lint-configs.sh
+
+  jetbrains:
+    name: JetBrains LSP e2e (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build alint from this branch
+        run: cargo build --release -p alint
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: JetBrains LSP integration test
+        working-directory: editors/jetbrains
+        env:
+          # The test points the plugin's server command at this binary via
+          # the alint.path setting (AlintSettings).
+          ALINT_TEST_BINARY: ${{ github.workspace }}/target/release/alint
+        run: ./gradlew test --no-daemon
