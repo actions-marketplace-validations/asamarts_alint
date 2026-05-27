@@ -1,15 +1,16 @@
-name: editors e2e (VS Code LSP integration)
+name: editors e2e (LSP integration)
 
-# Real-client end-to-end for the editor integrations: launches a real
-# VS Code under Xvfb, points it at an `alint` binary built from this
-# branch (via the `alint.path` setting), and asserts the extension
-# surfaces diagnostics + an apply-fix quick action from the `alint lsp`
-# language server.
+# Real-client end-to-end for the editor integrations against an `alint`
+# binary built from this branch:
+#   * vscode — launches a real VS Code under Xvfb and asserts the
+#     extension surfaces diagnostics + an apply-fix quick action.
+#   * nvim   — boots headless Neovim with editors/nvim on the
+#     runtimepath, enables the `alint` server, and asserts a diagnostic.
 #
-# Runs on GitHub-hosted ubuntu-latest, which ships the GUI libraries +
-# xvfb that @vscode/test-electron needs (the self-hosted bench runner is
+# Runs on GitHub-hosted ubuntu-latest (ships the GUI libs + xvfb that
+# @vscode/test-electron needs; the self-hosted bench runner is
 # headless-minimal). Gated on the editors, the LSP server, or the binary
-# so a server<->client contract change re-runs the real-client check.
+# so a server<->client contract change re-runs the real-client checks.
 
 on:
   pull_request:
@@ -49,3 +50,24 @@ jobs:
         run: |
           npm ci
           xvfb-run -a npm run test:e2e
+
+  nvim:
+    name: Neovim LSP smoke (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build alint from this branch
+        run: cargo build --release -p alint
+
+      - name: Install Neovim (stable, 0.11+)
+        run: |
+          curl -fsSL https://github.com/neovim/neovim/releases/download/stable/nvim-linux-x86_64.tar.gz -o /tmp/nvim.tar.gz
+          tar -C /tmp -xzf /tmp/nvim.tar.gz
+          echo "/tmp/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: nvim LSP smoke
+        env:
+          ALINT_TEST_BINARY: ${{ github.workspace }}/target/release/alint
+        run: bash editors/nvim/test/run-smoke.sh
