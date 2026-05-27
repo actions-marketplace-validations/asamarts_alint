@@ -16,11 +16,10 @@ import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
  * Registers `alint lsp` with LSP4IJ. Wired in `plugin.xml` under the
  * `com.redhat.devtools.lsp4ij` server extension point.
  *
- * NOTE (verify against the pinned LSP4IJ version): the
- * `ProcessStreamConnectionProvider` setters (`setCommands` /
- * `setWorkingDirectory`) and the `LanguageServerFactory` interface are
- * LSP4IJ's documented API; if a coordinate drifts, adjust here at
- * `gradle buildPlugin` time.
+ * Uses LSP4IJ's `ProcessStreamConnectionProvider` (`setCommands` /
+ * `setWorkingDirectory`) and the `LanguageServerFactory` interface; the
+ * editors CI job (`./gradlew buildPlugin verifyPlugin`) catches API
+ * drift in the pinned LSP4IJ version.
  */
 class AlintLanguageServerFactory : LanguageServerFactory {
     override fun createConnectionProvider(project: Project): StreamConnectionProvider =

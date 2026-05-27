@@ -3,18 +3,9 @@
 // Built with the IntelliJ Platform Gradle Plugin 2.x and depends on
 // Red Hat's LSP4IJ to host the `alint lsp` language server. One plugin
 // covers the whole JetBrains suite (IDEA, PyCharm, GoLand, WebStorm,
-// RustRover, CLion, Rider, Android Studio).
-//
-// ┌─────────────────────────────────────────────────────────────────┐
-// │ VERIFY-BEFORE-BUILD: the version coordinates below were authored  │
-// │ without a local Gradle/IntelliJ-SDK toolchain (see                │
-// │ docs/design/v0.11/editor_integrations.md). Run `gradle wrapper`   │
-// │ then `./gradlew buildPlugin` on JDK 17+ and bump any that drift:  │
-// │   - intellij-platform-gradle-plugin version                       │
-// │   - the Kotlin plugin version                                     │
-// │   - the IntelliJ platform target (intellijIdeaCommunity)          │
-// │   - the LSP4IJ marketplace plugin version                         │
-// └─────────────────────────────────────────────────────────────────┘
+// RustRover, CLion, Rider, Android Studio). The version coordinates
+// below are validated by the editors CI job (./gradlew buildPlugin
+// verifyPlugin).
 
 plugins {
     kotlin("jvm") version "2.0.21"

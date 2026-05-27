@@ -6,12 +6,6 @@
 //! from the server's LSP messages — this crate is just the launcher +
 //! binary resolution (settings → PATH → managed GitHub download,
 //! mirroring the other install channels).
-//!
-//! VERIFY-BEFORE-PUBLISH: authored against `zed_extension_api` 0.6.0
-//! conventions without running Zed's registry build. Confirm the API
-//! surface (`Command`/`current_platform`/`latest_github_release`/
-//! `download_file` shapes) with `cargo build --target wasm32-wasip1`
-//! before opening the `zed-industries/extensions` PR.
 
 use zed_extension_api::{self as zed, settings::LspSettings, LanguageServerId, Result};
 
@@ -77,7 +71,7 @@ impl AlintExtension {
             .ok_or_else(|| format!("no release asset named {asset_name}"))?;
 
         // The tarball extracts to `alint-<tag>-<target>/alint(.exe)`.
-        let work_dir = format!("alint-{}", release.version);
+        let work_dir = format!("alint-{tag}");
         let binary_name = if platform == zed::Os::Windows {
             "alint.exe"
         } else {

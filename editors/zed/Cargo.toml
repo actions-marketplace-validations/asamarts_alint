@@ -9,9 +9,10 @@ license = "Apache-2.0 OR MIT"
 crate-type = ["cdylib"]
 
 [dependencies]
-# VERIFY-BEFORE-PUBLISH: pin to the zed_extension_api version Zed's
-# registry currently builds against (Zed bumps the wasm ABI). Confirm
-# with `cargo build --target wasm32-wasip1` before opening the registry PR.
+# Pin to a zed_extension_api version Zed's registry builds against (Zed
+# bumps the wasm ABI). The editors CI job compile-checks this pin via
+# `cargo build --target wasm32-wasip1`; re-confirm it matches the
+# registry's toolchain before publishing.
 zed_extension_api = "0.6.0"
 
 # Standalone workspace so the parent alint Cargo workspace doesn't try to

@@ -19,11 +19,10 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>com.redhat.devtools.lsp4ij</depends>
 
-    <!-- LSP4IJ extension points. NOTE: the EP names/attributes below
-         match LSP4IJ's documented schema; if a coordinate drifts in the
-         pinned LSP4IJ version, adjust here (verified at `gradle
-         buildPlugin` time). alint is repo-structural, so it maps to all
-         files rather than a single language. -->
+    <!-- LSP4IJ extension points (EP names/attributes per LSP4IJ's
+         documented schema; the editors CI job builds + verifies the
+         plugin). alint is repo-structural, so it maps to all files
+         rather than a single language. -->
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
         <server
             id="alint"
