@@ -6,14 +6,14 @@
 // VS Code from the server's LSP messages — none of that logic lives
 // here. See `docs/design/v0.11/vscode_extension.md`.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 
 import { type ExtensionContext, type OutputChannel, Uri, commands, window, workspace } from "vscode";
 import {
   LanguageClient,
   type LanguageClientOptions,
   type ServerOptions,
-  TransportKind,
+  type StreamInfo,
 } from "vscode-languageclient/node";
 
 import { resolveAlintBinary } from "./binary";
@@ -40,10 +40,18 @@ async function start(context: ExtensionContext): Promise<void> {
     return;
   }
   const extraArgs = workspace.getConfiguration("alint").get<string[]>("serverArgs") ?? [];
-  const serverOptions: ServerOptions = {
-    command: binary,
-    args: ["lsp", ...extraArgs],
-    transport: TransportKind.stdio,
+  // Spawn the server ourselves and hand the client the streams
+  // (StreamInfo), rather than the Executable/stdio form where
+  // vscode-languageclient spawns it. The Executable path triggers an
+  // "Unexpected SIGPIPE" in the extension host that disposes the
+  // connection during start() under headless test hosts; spawning
+  // directly is stable. alint speaks LSP over stdio either way.
+  const serverOptions: ServerOptions = (): Promise<StreamInfo> => {
+    const server = spawn(binary, ["lsp", ...extraArgs], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    server.stderr.on("data", (chunk: Buffer) => log.append(chunk.toString()));
+    return Promise.resolve({ reader: server.stdout, writer: server.stdin });
   };
   const clientOptions: LanguageClientOptions = {
     // alint is repo-structural, not language-specific — watch every
