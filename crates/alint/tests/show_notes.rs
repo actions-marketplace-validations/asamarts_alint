@@ -46,7 +46,11 @@ fn default_run_prints_a_one_line_note_count() {
         "default run should not list note bodies; stderr:\n{stderr}"
     );
     // Note-only (no violations) -> success exit.
-    assert!(out.status.success(), "note-only run should exit 0, got {:?}", out.status);
+    assert!(
+        out.status.success(),
+        "note-only run should exit 0, got {:?}",
+        out.status
+    );
 }
 
 #[test]
