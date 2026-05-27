@@ -50,7 +50,20 @@ object AlintBinary {
         val base = "https://github.com/$REPO/releases/download/$tag"
 
         log("downloading $archive")
-        val tarBytes = fetch("$base/$archive")
+        val tarBytes = try {
+            fetch("$base/$archive")
+        } catch (ex: Exception) {
+            // Most often a 404: the plugin's version is ahead of the
+            // published releases (e.g. a locally built plugin still
+            // carrying the committed default version). Give an actionable
+            // message rather than a bare HTTP status.
+            throw IllegalStateException(
+                "could not download alint $tag for $target ($archive): ${ex.message}. " +
+                    "The plugin version may be ahead of the published releases — set the " +
+                    "`alint.path` setting to a local alint binary, or update the plugin.",
+                ex,
+            )
+        }
         val shaText = String(fetch("$base/$archive.sha256"))
         val expected = shaText.trim().split(Regex("\\s+")).first()
         val actual = sha256Hex(tarBytes)
@@ -124,7 +137,10 @@ object AlintBinary {
         TarArchiveInputStream(GzipCompressorInputStream(ByteArrayInputStream(tarGz))).use { tar ->
             var entry = tar.nextEntry
             while (entry != null) {
-                if (entry.name == entryName || entry.name.endsWith("/$binaryName")) {
+                // Exact match only (the release tarball's known layout is
+                // `alint-<tag>-<target>/alint`); matching any nested
+                // `*/alint` could pick up an unexpected entry.
+                if (entry.name == entryName) {
                     Files.newOutputStream(dest).use { tar.copyTo(it) }
                     return
                 }

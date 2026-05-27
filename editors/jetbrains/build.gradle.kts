@@ -62,12 +62,15 @@ intellijPlatform {
         }
     }
     pluginVerification {
-        // Verify against the recommended IDE set for the compatibility
-        // range (sinceBuild 242 → latest). This is what `verifyPlugin`
-        // checks in CI; it mirrors the Marketplace's own verifier so
-        // compat regressions surface pre-tag rather than at publish.
+        // Verify against explicit released IDEs (the sinceBuild 242 floor
+        // + one recent), NOT recommended(): recommended() reaches for the
+        // newest build — including unreleased EAPs (e.g. 2025.3) that
+        // aren't downloadable and fail dependency resolution. Runs in the
+        // editors CI job so Marketplace-compat regressions surface
+        // pre-tag.
         ides {
-            recommended()
+            ide(org.jetbrains.intellij.platform.gradle.IntelliJPlatformType.IntellijIdeaCommunity, "2024.2")
+            ide(org.jetbrains.intellij.platform.gradle.IntelliJPlatformType.IntellijIdeaCommunity, "2024.3")
         }
     }
     publishing {
