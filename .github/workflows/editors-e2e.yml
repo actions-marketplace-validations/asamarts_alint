@@ -71,3 +71,15 @@ jobs:
         env:
           ALINT_TEST_BINARY: ${{ github.workspace }}/target/release/alint
         run: bash editors/nvim/test/run-smoke.sh
+
+  tier2-configs:
+    name: Tier-2 editor configs (static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # python3 (tomllib) is preinstalled; emacs is needed to byte-compile
+      # the elisp config.
+      - name: Install Emacs
+        run: sudo apt-get update && sudo apt-get install -y emacs-nox
+      - name: Validate Tier-2 configs (helix TOML / sublime JSONC / emacs)
+        run: bash editors/test/lint-configs.sh
