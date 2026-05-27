@@ -59,6 +59,12 @@ struct Finding {
     severity: DiagnosticSeverity,
     rule_id: String,
     message: String,
+    /// The violation's original 1-indexed line/column (if any), kept so
+    /// a code-action fixer that is range-scoped sees the same location
+    /// the rule reported — `range` alone can't distinguish a real
+    /// (1,1) anchor from a path-less finding anchored at the file start.
+    line: Option<usize>,
+    column: Option<usize>,
     policy_url: Option<String>,
     /// Whether the rule declares a fixer — gates the "Apply fix" code
     /// action without re-deriving the rule set.
@@ -473,7 +479,11 @@ impl LanguageServer for Backend {
             let Some(fixer) = session.engine.fixer_for(&finding.rule_id) else {
                 continue;
             };
-            let violation = Violation::new(finding.message.clone()).with_path(rel.clone());
+            let mut violation = Violation::new(finding.message.clone()).with_path(rel.clone());
+            // Preserve the reported location so range-scoped fixers act on
+            // the right line/column (not just whole-file fixers).
+            violation.line = finding.line;
+            violation.column = finding.column;
             let Some(edit) = fixer.fix_edit(&violation, bytes, &session.root) else {
                 continue;
             };
@@ -545,6 +555,14 @@ fn build_session(root: &Path) -> Result<Option<Session>, String> {
     let Some(config_path) = alint_dsl::discover(root) else {
         return Ok(None);
     };
+    // The discovered config's directory is the effective repo root.
+    // `discover` walks up from the client-provided root, so a client that
+    // rooted at a subfolder (Sublime/Eglot/Helix have no uniform root
+    // marker) still gets the ancestor `.alint.yml` governing the whole
+    // repo — and relative paths in rules resolve from there, matching the
+    // CLI. When the client already rooted at the config's dir (the common
+    // case), this is a no-op.
+    let effective_root = config_path.parent().unwrap_or(root).to_path_buf();
     let config = alint_dsl::load(&config_path).map_err(|e| format!("loading config: {e}"))?;
 
     let registry = alint_rules::builtin_registry();
@@ -573,10 +591,11 @@ fn build_session(root: &Path) -> Result<Option<Session>, String> {
         respect_gitignore: config.respect_gitignore,
         extra_ignores: config.ignore,
     };
-    let index = walk(root, &walk_opts).map_err(|e| format!("walking repository: {e}"))?;
+    let index =
+        walk(&effective_root, &walk_opts).map_err(|e| format!("walking repository: {e}"))?;
 
     Ok(Some(Session {
-        root: root.to_path_buf(),
+        root: effective_root,
         engine,
         index,
         config_path,
@@ -644,6 +663,8 @@ fn group_findings(
                 severity,
                 rule_id: result.rule_id.to_string(),
                 message: violation.message.to_string(),
+                line: violation.line,
+                column: violation.column,
                 policy_url: policy_url.clone(),
                 fixable: result.is_fixable,
                 per_file,
@@ -838,6 +859,9 @@ mod tests {
             severity: DiagnosticSeverity::ERROR,
             rule_id: "my-rule".to_string(),
             message: "boom".to_string(),
+            // 1-indexed location matching the 0-indexed range above.
+            line: Some(4),
+            column: Some(7),
             policy_url: policy_url.map(ToString::to_string),
             fixable: false,
             per_file: true,
@@ -946,6 +970,37 @@ mod tests {
             "unknown/cross-file rule tagged per_file=false"
         );
         assert_eq!(finding.message, "LICENSE is missing");
+        // A path-less finding has no source location.
+        assert_eq!(finding.line, None);
+        assert_eq!(finding.column, None);
+    }
+
+    #[test]
+    fn group_findings_threads_violation_line_and_column() {
+        use alint_core::{Engine, RuleResult};
+        let engine = Engine::new(vec![], alint_core::RuleRegistry::new());
+        let root = repo_root();
+        let config = root.join(".alint.yml");
+        let results = vec![RuleResult {
+            rule_id: std::sync::Arc::from("line-rule"),
+            level: Level::Warning,
+            policy_url: None,
+            violations: vec![
+                Violation::new("bad line")
+                    .with_path(std::path::PathBuf::from("src/x.rs"))
+                    .with_location(12, 3),
+            ],
+            notes: Vec::new(),
+            is_fixable: true,
+        }];
+        let by_path = group_findings(&root, &results, &engine, &config);
+        let finding = &by_path[&root.join("src/x.rs")][0];
+        // The reported location is carried onto the finding (so a
+        // range-scoped code-action fixer sees it), and drives the
+        // 1-indexed -> 0-indexed LSP range.
+        assert_eq!(finding.line, Some(12));
+        assert_eq!(finding.column, Some(3));
+        assert_eq!(finding.range.start.line, 11);
     }
 
     #[test]

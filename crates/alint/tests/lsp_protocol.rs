@@ -5,7 +5,9 @@
 //!   2. workspace-root resolution via `workspace_folders` (the branch
 //!      the server checks first, before `rootUri`),
 //!   3. that an apply-fix `WorkspaceEdit`'s own `newText` actually
-//!      resolves the violation when fed back to the server.
+//!      resolves the violation when fed back to the server,
+//!   4. config discovery from an ancestor when the client roots at a
+//!      subdirectory.
 //!
 //! Unix-only for the same `file://` reason as the shared harness.
 #![cfg(unix)]
@@ -216,6 +218,51 @@ fn lsp_apply_fix_resolves_violation() {
     assert!(
         after.is_empty(),
         "applying the fix's own newText should clear the violation, got {after:?}"
+    );
+
+    server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
+    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
+}
+
+/// (4) Root discovery from a subfolder: a client that opens a *subdir*
+/// as its workspace (Sublime/Eglot/Helix have no uniform root marker)
+/// must still pick up the repo-root `.alint.yml` from an ancestor and
+/// lint correctly. The server roots at the discovered config's
+/// directory, so a file in the subdir still gets diagnostics.
+#[test]
+fn lsp_discovers_config_in_ancestor_when_rooted_at_subdir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    std::fs::write(repo.join(".alint.yml"), TWO_RULE_CONFIG).unwrap();
+    let sub = repo.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let text = "has a TODO here   \n";
+    std::fs::write(sub.join("bad.py"), "# TODO\n").unwrap();
+    // (.py so the no-todo rule's **/*.py glob matches under the repo root)
+    std::fs::write(sub.join("bad.txt"), text).unwrap();
+
+    // Root the client at the SUBDIR, not the repo root.
+    let sub_uri = format!("file://{}", sub.to_str().unwrap());
+    let file_uri = format!("{sub_uri}/bad.txt");
+
+    let mut server = spawn_server(&sub);
+    server.send(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": { "rootUri": sub_uri, "capabilities": {} }
+    }));
+    recv_response(&server.rx, 1);
+    server.send(&json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }));
+    server.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": { "textDocument": {
+            "uri": file_uri, "languageId": "plaintext", "version": 1, "text": text
+        }}
+    }));
+
+    let diags = wait_for_diagnostics(&server.rx, &file_uri);
+    assert!(
+        !diags.is_empty(),
+        "rooting at a subdir should still discover the ancestor .alint.yml and fire, got none"
     );
 
     server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
