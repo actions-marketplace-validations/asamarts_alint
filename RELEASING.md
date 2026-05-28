@@ -115,6 +115,21 @@ is recoverable the same way as npm: rotate + `gh run rerun <id>
 --failed`, no new tag (the `.vsix` / plugin `.zip` are idempotent per
 version).
 
+**JetBrains Marketplace internal-API rejections** are a *separate* class
+of mid-release failure: the Marketplace's validator rejects references
+to certain platform-internal classes that `intellij-plugin-verifier`
+does NOT flag (e.g. `PluginManagerCore.getPlugin(PluginId)` is rejected
+at upload but not annotated `@ApiStatus.Internal` in any released-IDE
+bytecode, so `verifyPlugin` reports `Compatible`). The
+`verifyNoMarketplaceDeniedApis` gradle task (in
+`editors/jetbrains/build.gradle.kts`) scans the built jar's constant
+pool for a deny-list of such classes, runs as a `buildPlugin` finalizer
+(so every path — `verifyPlugin`, `signPlugin`, `publishPlugin` — picks
+it up), and points at the public alternative. When Marketplace
+moderation flags a new internal API, add the offending FQN (slashed
+JVM form) to the `deniedClasses` list and the gate will catch it
+pre-tag. See <https://plugins.jetbrains.com/docs/intellij/api-internal.html>.
+
 See [`docs/development/release-credentials.md`](docs/development/release-credentials.md)
 for the full credential inventory, the secret-storage convention, and
 the OIDC (keyless) publishing setup for crates.io + npm.
