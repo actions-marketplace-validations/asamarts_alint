@@ -5,7 +5,6 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.ide.plugins.PluginManager
 import com.intellij.openapi.project.Project
 import com.redhat.devtools.lsp4ij.LanguageServerFactory
 import com.redhat.devtools.lsp4ij.server.ProcessStreamConnectionProvider
@@ -90,11 +89,16 @@ object AlintNotifier {
         }
     }
 
-    // The IntelliJ Platform's `@ApiStatus.Internal` `PluginManagerCore.getPlugin(PluginId)`
-    // fails Marketplace validation; `PluginManager.getPluginByClass(Class)` is the
-    // documented public alternative for "look up the plugin this class belongs to."
+    // JetBrains Marketplace validation rejects BOTH `PluginManagerCore.getPlugin(PluginId)`
+    // and `PluginManager.getPluginByClass(Class)` as internal-API usage, even though
+    // released-IDE bytecode marks neither @ApiStatus.Internal. We sidestep the whole
+    // plugin-lookup surface by stamping the version into a generated resource at build
+    // time (see `generateVersionResource` in build.gradle.kts) and reading it from our
+    // own classloader. No platform API touched.
     // See https://plugins.jetbrains.com/docs/intellij/api-internal.html
     private fun pluginVersion(): String =
-        PluginManager.getPluginByClass(AlintNotifier::class.java)?.version
-            ?: error("could not determine plugin version")
+        AlintNotifier::class.java.classLoader
+            .getResourceAsStream("alint-lsp/version.txt")
+            ?.use { it.readBytes().toString(Charsets.UTF_8).trim() }
+            ?: error("alint-lsp/version.txt not on the classpath; build.gradle.kts wiring broken")
 }

@@ -128,6 +128,37 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+// --- Generated version resource -------------------------------------------
+//
+// AlintNotifier.pluginVersion() reads this file instead of any platform
+// plugin-lookup API (PluginManagerCore.getPlugin / PluginManager.getPluginByClass
+// are both rejected by Marketplace validation as internal-API usage). The
+// gradle build already knows the version via -PpluginVersion or the committed
+// default, so we just stamp it as a classpath resource our own classloader
+// can read at runtime — zero platform API surface.
+val generateVersionResource = tasks.register("generateVersionResource") {
+    group = "build"
+    description = "Write the plugin version into a classpath resource for runtime self-lookup."
+    val outDir = layout.buildDirectory.dir("generated/resources/version")
+    val versionString = project.version.toString()
+    inputs.property("version", versionString)
+    outputs.dir(outDir)
+    doLast {
+        val f = outDir.get().asFile.resolve("alint-lsp/version.txt")
+        f.parentFile.mkdirs()
+        f.writeText(versionString)
+    }
+}
+sourceSets["main"].resources.srcDir(generateVersionResource.map { it.outputs.files })
+
+// Make the build's idea of the version visible to PluginVersionResourceTest so
+// it can cross-check the embedded resource. Decoupling the test from gradle's
+// internal `project.version` re-evaluation matters because the resource is
+// generated once at build time and shouldn't drift from what tests see.
+tasks.named<Test>("test") {
+    systemProperty("alint.test.plugin.version", project.version.toString())
+}
+
 // --- Marketplace-deny bytecode scan ---------------------------------------
 //
 // JetBrains Marketplace's moderation validator rejects references to certain
@@ -153,9 +184,16 @@ val verifyNoMarketplaceDeniedApis = tasks.register("verifyNoMarketplaceDeniedApi
     outputs.file(marker)
 
     // (FQN slashed form). Whole-class bans: any reference at all is a fail,
-    // including method calls, field reads, and superclass declarations.
+    // including method calls, field reads, and superclass declarations. The
+    // two PluginManager* classes were both rejected by Marketplace moderation
+    // on v0.11.0 uploads — PluginManagerCore.getPlugin(PluginId) on the first
+    // build, then PluginManager.getPluginByClass(Class) on the second — so
+    // both surfaces are off-limits. Look up plugin metadata via a build-time
+    // resource (see generateVersionResource above) or, if you need someone
+    // else's plugin descriptor, ApplicationManager-routed extension lookups.
     val deniedClasses = listOf(
         "com/intellij/ide/plugins/PluginManagerCore",
+        "com/intellij/ide/plugins/PluginManager",
     )
 
     // Only scan jars produced by THIS project (not bundled third-party libs
