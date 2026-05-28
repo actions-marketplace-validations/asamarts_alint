@@ -218,7 +218,31 @@ SCENARIOS = [
         "S10", "scope_filter outside per-file dispatch",
         "Five rules from outside the `PerFileRule` dispatch path (`file_max_size`, `no_empty_files`, `no_symlinks`, `filename_case`, `filename_regex`) each with `scope_filter: { has_ancestor: <manifest> }` over the polyglot tree. Per-rule `evaluate()` iterating `ctx.index.files()` with both path-glob AND scope_filter narrowing — the dispatch shape v0.9.9 wired through (v0.9.8 silently dropped `scope_filter:` on these 17 rule kinds). **New in v0.9.9.**",
     ),
+    (
+        "S11", "v0.10 cross-file dispatch class",
+        "Three v0.10 cross-file kinds (`registry_paths_resolve`, `cross_file_value_equals`, `pair_hash`) over the regular synthetic monorepo with a `manifest.sha256` overlay. Exercises the whole-repo entry points the v0.10 cross-file engine uses, plus the new `crate::extract` / `crate::io::read_capped` helpers. Adds to S7 (the v0.2-era cross-file family: `pair` / `unique_by` / `for_each_*` / `dir_only_contains` / `every_matching_has`) by covering the v0.10 additions. **New in v0.10.0.**",
+    ),
+    (
+        "S12", "v0.10 per-file dispatch class",
+        "Three v0.10 per-file kinds (`ordered_block`, `import_gate`, `xml_path_equals` + `xml_path_matches`) over `**/*.rs` plus a single root-level `.csproj` overlay (per-package fan-out skipped to keep cross-version file counts stable). Exercises the per-file dispatch path made fast by v0.9.3, with the v0.10-new extraction / regex / XML structured-query paths. Adds to S6 (dense content fan-out on `**/*.rs`) by covering the v0.10 additions independently of S6's pure-content baseline. **New in v0.10.0.**",
+    ),
+    (
+        "S13", "v0.10 single-shot dispatch class",
+        "Two v0.10 single-shot kinds (`generated_file_fresh`, `command_idempotent`) declared with `command: [\"true\"]` so the row measures `crate::spawn::run_capturing` (fork / exec / concurrent pipe-drain / wait / stdout-parse), not the user's tool. Single-shot rules add a fixed cost per run; tree walk dominates the row. Signal of interest is cross-version stability of the spawn path — regressions in `crate::spawn` or the engine's single-shot dispatch surface here in isolation. **New in v0.10.0.**",
+    ),
 ]
+
+# Per-scenario "this is the first version where the scenario exists".
+# Older versions render `n/a` (vs `—` which means "version exists but
+# wasn't measured at that size"). Extend when adding a scenario; no
+# need to enumerate every prior tag.
+FIRST_VERSION: Dict[str, str] = {
+    "S9": "v0.9.6",
+    "S10": "v0.9.9",
+    "S11": "v0.10.0",
+    "S12": "v0.10.0",
+    "S13": "v0.10.0",
+}
 
 # Manual cells from the published v0.5.6 markdown (no JSON exists).
 MANUAL = {
@@ -249,11 +273,10 @@ def load_arch(base: str, arch: str) -> Dict[Cell, Stat]:
 def fmt(data: Dict[Cell, Stat], v: str, s: str, sz: str, m: str) -> str:
     cell = data.get((v, s, sz, m))
     if cell is None:
-        # S9 didn't exist before v0.9.6.
-        if s == "S9" and v in ("v0.9.5", "v0.9.4", "v0.5.7", "v0.5.6"):
-            return "n/a"
-        # S10 didn't exist before v0.9.9.
-        if s == "S10" and v in ("v0.9.8", "v0.9.7", "v0.9.6", "v0.9.5", "v0.9.4", "v0.5.7", "v0.5.6"):
+        # Scenarios that don't exist at the rendered tag get `n/a`;
+        # `—` is reserved for "version exists, size not measured".
+        first = FIRST_VERSION.get(s)
+        if first is not None and semver_key(v) < semver_key(first):
             return "n/a"
         return "—"
     mean, sd = cell
@@ -427,18 +450,12 @@ def render_trajectory_json(
         for json_key, scenario in cell_keys:
             stat = data.get((v, scenario, "1m", "full"))
             if stat is None:
-                # Scenarios didn't exist at older tags. Mirror
-                # render()'s fmt() rules so the JSON and the
-                # markdown agree byte-for-byte on those cells.
-                if scenario == "S9" and v in ("v0.9.5", "v0.9.4", "v0.5.7", "v0.5.6"):
-                    cells[json_key] = None
-                elif scenario == "S10" and v in (
-                    "v0.9.8", "v0.9.7", "v0.9.6", "v0.9.5",
-                    "v0.9.4", "v0.5.7", "v0.5.6",
-                ):
-                    cells[json_key] = None
-                else:
-                    cells[json_key] = None
+                # Scenarios that don't exist at this tag, AND scenarios
+                # that exist but lack the 1M cell, both fall through to
+                # `None` here. Mirror fmt()'s n/a-vs-— distinction via
+                # FIRST_VERSION so the markdown table and this JSON
+                # don't drift on those cells.
+                cells[json_key] = None
                 continue
             mean_ms, stddev_ms = stat
             cells[json_key] = {

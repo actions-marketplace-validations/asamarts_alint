@@ -706,6 +706,198 @@ Five rules from outside the `PerFileRule` dispatch path (`file_max_size`, `no_em
 | v0.5.7 | n/a | n/a | n/a | n/a |
 | v0.5.6 | n/a | n/a | n/a | n/a |
 
+## S11 — v0.10 cross-file dispatch class
+
+Three v0.10 cross-file kinds (`registry_paths_resolve`, `cross_file_value_equals`, `pair_hash`) over the regular synthetic monorepo with a `manifest.sha256` overlay. Exercises the whole-repo entry points the v0.10 cross-file engine uses, plus the new `crate::extract` / `crate::io::read_capped` helpers. Adds to S7 (the v0.2-era cross-file family: `pair` / `unique_by` / `for_each_*` / `dir_only_contains` / `every_matching_has`) by covering the v0.10 additions. **New in v0.10.0.**
+
+### S11 — full
+
+| Version | 1k | 10k | 100k | 1M |
+|---|---:|---:|---:|---:|
+| **v0.11.0** | 9 ms ± 1 | 24 ms ± 1 | 162 ms ± 7 | 1.53 s ± 0.02 |
+| v0.10.2 | 9 ms ± 1 | 24 ms ± 0 | 173 ms ± 14 | 1.62 s ± 0.00 |
+| v0.10.1 | 9 ms ± 1 | 25 ms ± 4 | 169 ms ± 11 | 1.64 s ± 0.03 |
+| v0.10.0 | 9 ms ± 1 | 24 ms ± 1 | 165 ms ± 7 | 1.58 s ± 0.03 |
+| v0.9.23 | n/a | n/a | n/a | n/a |
+| v0.9.22 | n/a | n/a | n/a | n/a |
+| v0.9.21 | n/a | n/a | n/a | n/a |
+| v0.9.20 | n/a | n/a | n/a | n/a |
+| v0.9.19 | n/a | n/a | n/a | n/a |
+| v0.9.18 | n/a | n/a | n/a | n/a |
+| v0.9.17 | n/a | n/a | n/a | n/a |
+| v0.9.16 | n/a | n/a | n/a | n/a |
+| v0.9.14 | n/a | n/a | n/a | n/a |
+| v0.9.13 | n/a | n/a | n/a | n/a |
+| v0.9.12 | n/a | n/a | n/a | n/a |
+| v0.9.11 | n/a | n/a | n/a | n/a |
+| v0.9.10 | n/a | n/a | n/a | n/a |
+| v0.9.9 | n/a | n/a | n/a | n/a |
+| v0.9.8 | n/a | n/a | n/a | n/a |
+| v0.9.7 | n/a | n/a | n/a | n/a |
+| v0.9.6 | n/a | n/a | n/a | n/a |
+| v0.9.5 | n/a | n/a | n/a | n/a |
+| v0.9.4 | n/a | n/a | n/a | n/a |
+| v0.5.7 | n/a | n/a | n/a | n/a |
+| v0.5.6 | n/a | n/a | n/a | n/a |
+
+### S11 — changed
+
+| Version | 1k | 10k | 100k | 1M |
+|---|---:|---:|---:|---:|
+| **v0.11.0** | 20 ms ± 1 | 50 ms ± 1 | 444 ms ± 16 | 4.24 s ± 0.03 |
+| v0.10.2 | 23 ms ± 6 | 52 ms ± 1 | 444 ms ± 18 | 4.42 s ± 0.06 |
+| v0.10.1 | 21 ms ± 1 | 51 ms ± 1 | 453 ms ± 16 | 4.51 s ± 0.03 |
+| v0.10.0 | 21 ms ± 1 | 55 ms ± 12 | 438 ms ± 12 | 4.37 s ± 0.05 |
+| v0.9.23 | n/a | n/a | n/a | n/a |
+| v0.9.22 | n/a | n/a | n/a | n/a |
+| v0.9.21 | n/a | n/a | n/a | n/a |
+| v0.9.20 | n/a | n/a | n/a | n/a |
+| v0.9.19 | n/a | n/a | n/a | n/a |
+| v0.9.18 | n/a | n/a | n/a | n/a |
+| v0.9.17 | n/a | n/a | n/a | n/a |
+| v0.9.16 | n/a | n/a | n/a | n/a |
+| v0.9.14 | n/a | n/a | n/a | n/a |
+| v0.9.13 | n/a | n/a | n/a | n/a |
+| v0.9.12 | n/a | n/a | n/a | n/a |
+| v0.9.11 | n/a | n/a | n/a | n/a |
+| v0.9.10 | n/a | n/a | n/a | n/a |
+| v0.9.9 | n/a | n/a | n/a | n/a |
+| v0.9.8 | n/a | n/a | n/a | n/a |
+| v0.9.7 | n/a | n/a | n/a | n/a |
+| v0.9.6 | n/a | n/a | n/a | n/a |
+| v0.9.5 | n/a | n/a | n/a | n/a |
+| v0.9.4 | n/a | n/a | n/a | n/a |
+| v0.5.7 | n/a | n/a | n/a | n/a |
+| v0.5.6 | n/a | n/a | n/a | n/a |
+
+## S12 — v0.10 per-file dispatch class
+
+Three v0.10 per-file kinds (`ordered_block`, `import_gate`, `xml_path_equals` + `xml_path_matches`) over `**/*.rs` plus a single root-level `.csproj` overlay (per-package fan-out skipped to keep cross-version file counts stable). Exercises the per-file dispatch path made fast by v0.9.3, with the v0.10-new extraction / regex / XML structured-query paths. Adds to S6 (dense content fan-out on `**/*.rs`) by covering the v0.10 additions independently of S6's pure-content baseline. **New in v0.10.0.**
+
+### S12 — full
+
+| Version | 1k | 10k | 100k | 1M |
+|---|---:|---:|---:|---:|
+| **v0.11.0** | 11 ms ± 1 | 38 ms ± 1 | 313 ms ± 7 | 3.16 s ± 0.02 |
+| v0.10.2 | 12 ms ± 1 | 43 ms ± 1 | 379 ms ± 15 | 3.74 s ± 0.01 |
+| v0.10.1 | 12 ms ± 1 | 43 ms ± 1 | 368 ms ± 6 | 3.72 s ± 0.05 |
+| v0.10.0 | 12 ms ± 1 | 47 ms ± 11 | 368 ms ± 7 | 3.66 s ± 0.09 |
+| v0.9.23 | n/a | n/a | n/a | n/a |
+| v0.9.22 | n/a | n/a | n/a | n/a |
+| v0.9.21 | n/a | n/a | n/a | n/a |
+| v0.9.20 | n/a | n/a | n/a | n/a |
+| v0.9.19 | n/a | n/a | n/a | n/a |
+| v0.9.18 | n/a | n/a | n/a | n/a |
+| v0.9.17 | n/a | n/a | n/a | n/a |
+| v0.9.16 | n/a | n/a | n/a | n/a |
+| v0.9.14 | n/a | n/a | n/a | n/a |
+| v0.9.13 | n/a | n/a | n/a | n/a |
+| v0.9.12 | n/a | n/a | n/a | n/a |
+| v0.9.11 | n/a | n/a | n/a | n/a |
+| v0.9.10 | n/a | n/a | n/a | n/a |
+| v0.9.9 | n/a | n/a | n/a | n/a |
+| v0.9.8 | n/a | n/a | n/a | n/a |
+| v0.9.7 | n/a | n/a | n/a | n/a |
+| v0.9.6 | n/a | n/a | n/a | n/a |
+| v0.9.5 | n/a | n/a | n/a | n/a |
+| v0.9.4 | n/a | n/a | n/a | n/a |
+| v0.5.7 | n/a | n/a | n/a | n/a |
+| v0.5.6 | n/a | n/a | n/a | n/a |
+
+### S12 — changed
+
+| Version | 1k | 10k | 100k | 1M |
+|---|---:|---:|---:|---:|
+| **v0.11.0** | 25 ms ± 14 | 49 ms ± 2 | 436 ms ± 6 | 4.31 s ± 0.05 |
+| v0.10.2 | 21 ms ± 1 | 51 ms ± 1 | 455 ms ± 14 | 4.48 s ± 0.09 |
+| v0.10.1 | 21 ms ± 0 | 54 ms ± 9 | 446 ms ± 19 | 4.49 s ± 0.06 |
+| v0.10.0 | 25 ms ± 11 | 55 ms ± 15 | 440 ms ± 16 | 4.48 s ± 0.04 |
+| v0.9.23 | n/a | n/a | n/a | n/a |
+| v0.9.22 | n/a | n/a | n/a | n/a |
+| v0.9.21 | n/a | n/a | n/a | n/a |
+| v0.9.20 | n/a | n/a | n/a | n/a |
+| v0.9.19 | n/a | n/a | n/a | n/a |
+| v0.9.18 | n/a | n/a | n/a | n/a |
+| v0.9.17 | n/a | n/a | n/a | n/a |
+| v0.9.16 | n/a | n/a | n/a | n/a |
+| v0.9.14 | n/a | n/a | n/a | n/a |
+| v0.9.13 | n/a | n/a | n/a | n/a |
+| v0.9.12 | n/a | n/a | n/a | n/a |
+| v0.9.11 | n/a | n/a | n/a | n/a |
+| v0.9.10 | n/a | n/a | n/a | n/a |
+| v0.9.9 | n/a | n/a | n/a | n/a |
+| v0.9.8 | n/a | n/a | n/a | n/a |
+| v0.9.7 | n/a | n/a | n/a | n/a |
+| v0.9.6 | n/a | n/a | n/a | n/a |
+| v0.9.5 | n/a | n/a | n/a | n/a |
+| v0.9.4 | n/a | n/a | n/a | n/a |
+| v0.5.7 | n/a | n/a | n/a | n/a |
+| v0.5.6 | n/a | n/a | n/a | n/a |
+
+## S13 — v0.10 single-shot dispatch class
+
+Two v0.10 single-shot kinds (`generated_file_fresh`, `command_idempotent`) declared with `command: ["true"]` so the row measures `crate::spawn::run_capturing` (fork / exec / concurrent pipe-drain / wait / stdout-parse), not the user's tool. Single-shot rules add a fixed cost per run; tree walk dominates the row. Signal of interest is cross-version stability of the spawn path — regressions in `crate::spawn` or the engine's single-shot dispatch surface here in isolation. **New in v0.10.0.**
+
+### S13 — full
+
+| Version | 1k | 10k | 100k | 1M |
+|---|---:|---:|---:|---:|
+| **v0.11.0** | 19 ms ± 1 | 29 ms ± 1 | 147 ms ± 11 | 1.37 s ± 0.01 |
+| v0.10.2 | 19 ms ± 1 | 33 ms ± 11 | 148 ms ± 3 | 1.47 s ± 0.02 |
+| v0.10.1 | 18 ms ± 1 | 30 ms ± 1 | 151 ms ± 5 | 1.45 s ± 0.01 |
+| v0.10.0 | 18 ms ± 1 | 30 ms ± 1 | 148 ms ± 15 | 1.42 s ± 0.02 |
+| v0.9.23 | n/a | n/a | n/a | n/a |
+| v0.9.22 | n/a | n/a | n/a | n/a |
+| v0.9.21 | n/a | n/a | n/a | n/a |
+| v0.9.20 | n/a | n/a | n/a | n/a |
+| v0.9.19 | n/a | n/a | n/a | n/a |
+| v0.9.18 | n/a | n/a | n/a | n/a |
+| v0.9.17 | n/a | n/a | n/a | n/a |
+| v0.9.16 | n/a | n/a | n/a | n/a |
+| v0.9.14 | n/a | n/a | n/a | n/a |
+| v0.9.13 | n/a | n/a | n/a | n/a |
+| v0.9.12 | n/a | n/a | n/a | n/a |
+| v0.9.11 | n/a | n/a | n/a | n/a |
+| v0.9.10 | n/a | n/a | n/a | n/a |
+| v0.9.9 | n/a | n/a | n/a | n/a |
+| v0.9.8 | n/a | n/a | n/a | n/a |
+| v0.9.7 | n/a | n/a | n/a | n/a |
+| v0.9.6 | n/a | n/a | n/a | n/a |
+| v0.9.5 | n/a | n/a | n/a | n/a |
+| v0.9.4 | n/a | n/a | n/a | n/a |
+| v0.5.7 | n/a | n/a | n/a | n/a |
+| v0.5.6 | n/a | n/a | n/a | n/a |
+
+### S13 — changed
+
+| Version | 1k | 10k | 100k | 1M |
+|---|---:|---:|---:|---:|
+| **v0.11.0** | 29 ms ± 1 | 59 ms ± 12 | 417 ms ± 18 | 4.06 s ± 0.01 |
+| v0.10.2 | 34 ms ± 12 | 61 ms ± 12 | 436 ms ± 15 | 4.23 s ± 0.02 |
+| v0.10.1 | 30 ms ± 1 | 60 ms ± 7 | 435 ms ± 13 | 4.26 s ± 0.06 |
+| v0.10.0 | 30 ms ± 1 | 58 ms ± 6 | 421 ms ± 14 | 4.17 s ± 0.07 |
+| v0.9.23 | n/a | n/a | n/a | n/a |
+| v0.9.22 | n/a | n/a | n/a | n/a |
+| v0.9.21 | n/a | n/a | n/a | n/a |
+| v0.9.20 | n/a | n/a | n/a | n/a |
+| v0.9.19 | n/a | n/a | n/a | n/a |
+| v0.9.18 | n/a | n/a | n/a | n/a |
+| v0.9.17 | n/a | n/a | n/a | n/a |
+| v0.9.16 | n/a | n/a | n/a | n/a |
+| v0.9.14 | n/a | n/a | n/a | n/a |
+| v0.9.13 | n/a | n/a | n/a | n/a |
+| v0.9.12 | n/a | n/a | n/a | n/a |
+| v0.9.11 | n/a | n/a | n/a | n/a |
+| v0.9.10 | n/a | n/a | n/a | n/a |
+| v0.9.9 | n/a | n/a | n/a | n/a |
+| v0.9.8 | n/a | n/a | n/a | n/a |
+| v0.9.7 | n/a | n/a | n/a | n/a |
+| v0.9.6 | n/a | n/a | n/a | n/a |
+| v0.9.5 | n/a | n/a | n/a | n/a |
+| v0.9.4 | n/a | n/a | n/a | n/a |
+| v0.5.7 | n/a | n/a | n/a | n/a |
+| v0.5.6 | n/a | n/a | n/a | n/a |
+
 ## How to add a row
 
 When a release tag lands, the `bench-record.yml` workflow (introduced in
