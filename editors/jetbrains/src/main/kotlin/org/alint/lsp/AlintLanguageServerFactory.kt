@@ -5,8 +5,7 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
-import com.intellij.openapi.extensions.PluginId
-import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.ide.plugins.PluginManager
 import com.intellij.openapi.project.Project
 import com.redhat.devtools.lsp4ij.LanguageServerFactory
 import com.redhat.devtools.lsp4ij.server.ProcessStreamConnectionProvider
@@ -91,7 +90,11 @@ object AlintNotifier {
         }
     }
 
+    // The IntelliJ Platform's `@ApiStatus.Internal` `PluginManagerCore.getPlugin(PluginId)`
+    // fails Marketplace validation; `PluginManager.getPluginByClass(Class)` is the
+    // documented public alternative for "look up the plugin this class belongs to."
+    // See https://plugins.jetbrains.com/docs/intellij/api-internal.html
     private fun pluginVersion(): String =
-        PluginManagerCore.getPlugin(PluginId.getId("org.alint.lsp"))?.version
+        PluginManager.getPluginByClass(AlintNotifier::class.java)?.version
             ?: error("could not determine plugin version")
 }
