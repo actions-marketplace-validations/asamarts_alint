@@ -124,8 +124,9 @@ bytecode, so `verifyPlugin` reports `Compatible`). The
 `verifyNoMarketplaceDeniedApis` gradle task (in
 `editors/jetbrains/build.gradle.kts`) scans the built jar's constant
 pool for a deny-list of such classes, runs as a `buildPlugin` finalizer
-(so every path — `verifyPlugin`, `signPlugin`, `publishPlugin` — picks
-it up), and points at the public alternative. When Marketplace
+(so every path that produces the zip, including `verifyPlugin`,
+`signPlugin`, and `publishPlugin`, picks it up), and points at the
+public alternative. When Marketplace
 moderation flags a new internal API, add the offending FQN (slashed
 JVM form) to the `deniedClasses` list and the gate will catch it
 pre-tag. See <https://plugins.jetbrains.com/docs/intellij/api-internal.html>.
