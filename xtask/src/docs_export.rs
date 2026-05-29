@@ -1478,10 +1478,77 @@ fn write_manifest(target_dir: &Path) -> Result<()> {
     let sha = git_sha().unwrap_or_else(|| "unknown".to_string());
     let version = env!("CARGO_PKG_VERSION");
     let now = now_iso();
+    let rule_kinds_total = count_canonical_rule_kinds()?;
+    let bundled_rulesets_total = count_canonical_bundled_rulesets()?;
 
+    // format_version BUMPED 1 -> 2 because consumers reading the older
+    // shape will tolerate extra keys, but a downstream that
+    // affirmatively checks for `rule_kinds_total` / `bundled_rulesets_total`
+    // needs a way to refuse a v1-only manifest cleanly. alint.org's
+    // check-version-pins.sh keys off this.
     let json = format!(
-        "{{\n  \"alint_version\": \"{version}\",\n  \"git_sha\": \"{sha}\",\n  \"generated_at\": \"{now}\",\n  \"format_version\": 1\n}}\n"
+        "{{\n  \
+         \"alint_version\": \"{version}\",\n  \
+         \"git_sha\": \"{sha}\",\n  \
+         \"generated_at\": \"{now}\",\n  \
+         \"format_version\": 2,\n  \
+         \"rule_kinds_total\": {rule_kinds_total},\n  \
+         \"bundled_rulesets_total\": {bundled_rulesets_total}\n\
+         }}\n"
     );
     fs::write(target_dir.join("manifest.json"), json)?;
     Ok(())
+}
+
+/// Canonical rule-kind count = distinct `kind:` values in the
+/// `all_kinds.yaml` test fixture. This is the same source-of-truth that
+/// `coverage_audit_readme_claims::readme_rule_kinds_count_matches_fixture`
+/// pins README.md against, so this manifest field can never drift from
+/// the README claim (the test would fail first). alint.org's
+/// `check-version-pins.sh` consumes this value to gate the cross-repo
+/// `<N>` rule-kind claim on every static landing.
+fn count_canonical_rule_kinds() -> Result<usize> {
+    let path = crate::bench_release::workspace_root()?
+        .join("crates")
+        .join("alint-dsl")
+        .join("tests")
+        .join("fixtures")
+        .join("all_kinds.yaml");
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let mut kinds: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for raw in text.lines() {
+        let line = raw.trim_start();
+        if let Some(rest) = line.strip_prefix("kind:") {
+            let value = rest.trim().trim_end_matches(',');
+            if !value.is_empty() && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                kinds.insert(value.to_string());
+            }
+        }
+    }
+    Ok(kinds.len())
+}
+
+/// Canonical bundled-ruleset count = recursive `.yml` file count under
+/// `crates/alint-dsl/rulesets/v1/`. Mirrors
+/// `coverage_audit_readme_claims::readme_bundled_rulesets_count_matches_filesystem`
+/// so this manifest field can never drift from the README claim.
+fn count_canonical_bundled_rulesets() -> Result<usize> {
+    fn count_yml(dir: &Path) -> Result<usize> {
+        let mut n = 0;
+        for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
+            let p = entry?.path();
+            if p.is_dir() {
+                n += count_yml(&p)?;
+            } else if p.extension().and_then(|e| e.to_str()) == Some("yml") {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+    let dir = crate::bench_release::workspace_root()?
+        .join("crates")
+        .join("alint-dsl")
+        .join("rulesets")
+        .join("v1");
+    count_yml(&dir)
 }
