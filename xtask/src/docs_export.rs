@@ -17,6 +17,31 @@ use crate::{build_release_binary, git_sha, now_iso, walkdir_plain, workspace_roo
 
 // ---- docs-export ----------------------------------------------------------
 
+/// Every `enum Command` variant in `crates/alint/src/main.rs` MUST
+/// have an entry here. The 2026-05-30 audit found that five
+/// subcommands (`init`, `suggest`, `export-agents-md`,
+/// `validate-config`, `lsp`) had been added to the binary over time
+/// without anyone bumping this list, leaving five
+/// `/docs/cli/<sub>/` URLs as live 404s. The
+/// `cli_reference_subcmds_match_command_enum` test below pins this
+/// list against the enum so a new subcommand can't ship without
+/// its docs page following.
+///
+/// Names are kebab-case to match `clap`'s default conversion of the
+/// `PascalCase` enum variants (`ExportAgentsMd` -> `export-agents-md`).
+const CLI_REFERENCE_SUBCMDS: &[&str] = &[
+    "check",
+    "fix",
+    "list",
+    "explain",
+    "facts",
+    "init",
+    "suggest",
+    "export-agents-md",
+    "validate-config",
+    "lsp",
+];
+
 /// Workspace-relative paths the export reads from. Centralised so a
 /// `git mv` of any of these is a one-liner here, not a hunt across
 /// the function body.
@@ -1329,7 +1354,7 @@ fn generate_cli_reference(workspace: &Path, target_dir: &Path) -> Result<()> {
     let _ = writeln!(&mut index, "```");
     fs::write(cli_dir.join("index.md"), index)?;
 
-    let subcmds = ["check", "fix", "list", "explain", "facts"];
+    let subcmds = CLI_REFERENCE_SUBCMDS;
     for sub in subcmds {
         let help = run_help(&bin, &[sub])?;
         // SERP description: clap prints the subcommand's own one-
@@ -1544,8 +1569,8 @@ fn count_canonical_auto_fix_ops() -> Result<usize> {
             if p.is_dir() {
                 n += count_fixers(&p)?;
             } else if p.extension().and_then(|e| e.to_str()) == Some("rs") {
-                let src = fs::read_to_string(&p)
-                    .with_context(|| format!("read {}", p.display()))?;
+                let src =
+                    fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
                 for line in src.lines() {
                     let line = line.trim_start();
                     if line.starts_with("pub struct ") && line.contains("Fixer") {
@@ -1602,7 +1627,9 @@ fn count_enum_variants(source: &str, enum_name: &str) -> usize {
         if line.is_empty() || line.starts_with("//") || line.starts_with("#[") {
             continue;
         }
-        let first = line.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').next();
+        let first = line
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .next();
         if let Some(ident) = first
             && let Some(c) = ident.chars().next()
             && c.is_ascii_uppercase()
@@ -1686,4 +1713,104 @@ fn count_canonical_bundled_rulesets() -> Result<usize> {
         .join("rulesets")
         .join("v1");
     count_yml(&dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pin the `CLI_REFERENCE_SUBCMDS` list against the `enum
+    /// Command` variants in `crates/alint/src/main.rs`. If the
+    /// binary gains a subcommand and the list isn't bumped, the
+    /// `/docs/cli/<new>/` URL would be a live 404 on alint.org;
+    /// this test catches that pre-merge.
+    #[test]
+    fn cli_reference_subcmds_match_command_enum() {
+        let path = crate::bench_release::workspace_root()
+            .expect("workspace_root")
+            .join("crates")
+            .join("alint")
+            .join("src")
+            .join("main.rs");
+        let src =
+            fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        // Reuse the same variant-extraction approach the
+        // `count_enum_variants` helper uses, but return the names
+        // not just the count so we can compare set membership.
+        let needle = "enum Command {";
+        let start = src.find(needle).expect("enum Command {") + needle.len();
+        let body = &src[start..];
+        let mut depth = 1usize;
+        let mut end = 0;
+        for (i, c) in body.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &body[..end];
+        let outer = strip_nested_braces(body);
+        let mut variants: Vec<String> = Vec::new();
+        for raw in outer.lines() {
+            let line = raw.trim_start();
+            if line.is_empty() || line.starts_with("//") || line.starts_with("#[") {
+                continue;
+            }
+            let first = line
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .next();
+            if let Some(ident) = first
+                && let Some(c) = ident.chars().next()
+                && c.is_ascii_uppercase()
+            {
+                variants.push(pascal_to_kebab(ident));
+            }
+        }
+        variants.sort();
+        let mut listed: Vec<String> = CLI_REFERENCE_SUBCMDS
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        listed.sort();
+        assert_eq!(
+            variants, listed,
+            "CLI_REFERENCE_SUBCMDS does not match `enum Command` variants in \
+             crates/alint/src/main.rs. A new subcommand probably landed \
+             without its `/docs/cli/<name>.md` reference page being \
+             generated; bump CLI_REFERENCE_SUBCMDS in xtask/src/docs_export.rs \
+             to match the enum (kebab-case)."
+        );
+    }
+
+    /// `PascalCase` -> `kebab-case`. `ExportAgentsMd` ->
+    /// `export-agents-md`, matching clap's default conversion.
+    fn pascal_to_kebab(ident: &str) -> String {
+        let mut out = String::with_capacity(ident.len() + 2);
+        for (i, c) in ident.char_indices() {
+            if c.is_ascii_uppercase() {
+                if i > 0 {
+                    out.push('-');
+                }
+                out.push(c.to_ascii_lowercase());
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn pascal_to_kebab_examples() {
+        assert_eq!(pascal_to_kebab("Check"), "check");
+        assert_eq!(pascal_to_kebab("ExportAgentsMd"), "export-agents-md");
+        assert_eq!(pascal_to_kebab("ValidateConfig"), "validate-config");
+        assert_eq!(pascal_to_kebab("Lsp"), "lsp");
+    }
 }
