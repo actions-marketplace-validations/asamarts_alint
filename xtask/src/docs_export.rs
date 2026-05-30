@@ -1480,24 +1480,159 @@ fn write_manifest(target_dir: &Path) -> Result<()> {
     let now = now_iso();
     let rule_kinds_total = count_canonical_rule_kinds()?;
     let bundled_rulesets_total = count_canonical_bundled_rulesets()?;
+    let subcommands_total = count_canonical_subcommands()?;
+    let output_formats_total = count_canonical_output_formats()?;
+    let auto_fix_ops_total = count_canonical_auto_fix_ops()?;
 
-    // format_version BUMPED 1 -> 2 because consumers reading the older
-    // shape will tolerate extra keys, but a downstream that
-    // affirmatively checks for `rule_kinds_total` / `bundled_rulesets_total`
-    // needs a way to refuse a v1-only manifest cleanly. alint.org's
-    // check-version-pins.sh keys off this.
+    // format_version BUMPED 2 -> 3 (Phase 2.6 of the drift audit) so
+    // alint.org's drift gate can affirmatively detect the three new
+    // count fields. The alint.org side's sync-from-alint.mjs widened
+    // its accepted-versions set to {1,2,3} BEFORE this bump landed
+    // so CF Pages builds don't silently fail the way they did during
+    // the 2026-05-22 v2 bump.
     let json = format!(
         "{{\n  \
          \"alint_version\": \"{version}\",\n  \
          \"git_sha\": \"{sha}\",\n  \
          \"generated_at\": \"{now}\",\n  \
-         \"format_version\": 2,\n  \
+         \"format_version\": 3,\n  \
          \"rule_kinds_total\": {rule_kinds_total},\n  \
-         \"bundled_rulesets_total\": {bundled_rulesets_total}\n\
+         \"bundled_rulesets_total\": {bundled_rulesets_total},\n  \
+         \"subcommands_total\": {subcommands_total},\n  \
+         \"output_formats_total\": {output_formats_total},\n  \
+         \"auto_fix_ops_total\": {auto_fix_ops_total}\n\
          }}\n"
     );
     fs::write(target_dir.join("manifest.json"), json)?;
     Ok(())
+}
+
+/// Canonical subcommand count = `enum Command` variants in
+/// `crates/alint/src/main.rs`. Mirrors
+/// `coverage_audit_readme_claims::readme_subcommands_count_matches_command_enum`.
+fn count_canonical_subcommands() -> Result<usize> {
+    let path = crate::bench_release::workspace_root()?
+        .join("crates")
+        .join("alint")
+        .join("src")
+        .join("main.rs");
+    let src = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    Ok(count_enum_variants(&src, "Command"))
+}
+
+/// Canonical output-format count = `enum Format` variants in
+/// `crates/alint-output/src/lib.rs`. Mirrors
+/// `coverage_audit_readme_claims::readme_output_formats_count_matches_format_enum`.
+fn count_canonical_output_formats() -> Result<usize> {
+    let path = crate::bench_release::workspace_root()?
+        .join("crates")
+        .join("alint-output")
+        .join("src")
+        .join("lib.rs");
+    let src = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    Ok(count_enum_variants(&src, "Format"))
+}
+
+/// Canonical auto-fix-ops count = `pub struct *Fixer` declarations under
+/// `crates/alint-rules/src/fixers/`. Mirrors
+/// `coverage_audit_readme_claims::readme_auto_fix_ops_count_matches_fixers`.
+fn count_canonical_auto_fix_ops() -> Result<usize> {
+    fn count_fixers(dir: &Path) -> Result<usize> {
+        let mut n = 0;
+        for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
+            let p = entry?.path();
+            if p.is_dir() {
+                n += count_fixers(&p)?;
+            } else if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let src = fs::read_to_string(&p)
+                    .with_context(|| format!("read {}", p.display()))?;
+                for line in src.lines() {
+                    let line = line.trim_start();
+                    if line.starts_with("pub struct ") && line.contains("Fixer") {
+                        n += 1;
+                    }
+                }
+            }
+        }
+        Ok(n)
+    }
+    let dir = crate::bench_release::workspace_root()?
+        .join("crates")
+        .join("alint-rules")
+        .join("src")
+        .join("fixers");
+    count_fixers(&dir)
+}
+
+/// Find `enum <name> {` in `source` and count comma-terminated or
+/// brace-terminated variant identifiers in its body. Tolerates
+/// docstrings, attributes, and variants with struct/tuple fields.
+/// Mirrors the helper in `coverage_audit_readme_claims` so the
+/// manifest can't drift from the README-pinned canonical count.
+fn count_enum_variants(source: &str, enum_name: &str) -> usize {
+    let needle = format!("enum {enum_name} {{");
+    let Some(start_idx) = source.find(&needle) else {
+        return 0;
+    };
+    let start = start_idx + needle.len();
+    let body = &source[start..];
+    let mut depth = 1usize;
+    let mut end = 0;
+    for (i, c) in body.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    if end == 0 {
+        return 0;
+    }
+    let body = &body[..end];
+    let outer = strip_nested_braces(body);
+    let mut count = 0;
+    for raw in outer.lines() {
+        let line = raw.trim_start();
+        if line.is_empty() || line.starts_with("//") || line.starts_with("#[") {
+            continue;
+        }
+        let first = line.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').next();
+        if let Some(ident) = first
+            && let Some(c) = ident.chars().next()
+            && c.is_ascii_uppercase()
+        {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Strip every `{ … }` region (recursively) from the input so the
+/// outer-variant tokens of a struct-style enum body don't include
+/// the field names inside `Variant { field: T }`.
+fn strip_nested_braces(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut depth = 0usize;
+    for c in input.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {
+                if depth == 0 {
+                    out.push(c);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Canonical rule-kind count = distinct `kind:` values in the
