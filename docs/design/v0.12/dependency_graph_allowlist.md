@@ -1,7 +1,15 @@
-# Dependency-graph allowlist kind
+# Dependency-graph allowlist kind (package-graph)
 
-Status: **Planned (v0.12).** Distinct from `import_gate`; 2 corpus
-signals, both high-stakes.
+Status: **Decoupled + deferred (2026-05-30).** Scoped to the
+*package*-graph allowlist only (rust/go — semantic package nodes,
+toolchain/lockfile-resolved). The language-agnostic *file*-reference
+graph reframe — the broader and more on-mission generalisation — split
+out to [`file_dependency_graph.md`](./file_dependency_graph.md), which
+is study-gated for v0.12. This package-graph item stays parked: it sits
+on alint's `cargo deny` / `bazel mod` non-goal line, has only 2 corpus
+sources, and is revisited only if the 100-repo study reconfirms demand
+*and* a pure-parse (non-spawning) `Cargo.lock` design holds. Distinct
+from `import_gate`; both corpus signals high-stakes.
 
 ## Motivation / demand
 

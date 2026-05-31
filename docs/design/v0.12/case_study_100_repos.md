@@ -42,6 +42,17 @@ Subagent batch-orchestration, ~5 repos/batch:
 3. Hand subagents a hardened syntax cheatsheet up front — the 30-repo
    pass showed this cuts integration churn to ~1 fix/batch.
 
+**Study-gated harvest (added 2026-05-30).** In addition to the standard
+new-kind candidates, each batch explicitly records any **file → file
+reference graph** the repo enforces — where it cares about cycles,
+dangling references, orphans, generated-file freshness, or
+layered/forbidden edges — together with the *edge source* (content
+regex, naming convention, or manifest declaration). This is the evidence
+gate for the generic
+[`file_dependency_graph.md`](./file_dependency_graph.md) kind: its edge
+DSL is not committed until the study confirms the shapes recur (0
+file-graph sources confirmed at draft time).
+
 ## Outputs
 
 - Per-repo example configs (a new `examples/` tier or an extension of

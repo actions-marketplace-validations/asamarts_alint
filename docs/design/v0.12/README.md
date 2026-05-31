@@ -45,7 +45,8 @@ a much wider corpus.
 | [`value_set_membership.md`](./value_set_membership.md) | N-in-1 / set membership family | ts, react, pnpm, rust, tf |
 | [`cross_file_normalize.md`](./cross_file_normalize.md) | `normalize:` value-transform | protobuf, pnpm |
 | [`import_gate_enrichment.md`](./import_gate_enrichment.md) | default-deny + glob-discovered rules | vscode, kubernetes |
-| [`dependency_graph_allowlist.md`](./dependency_graph_allowlist.md) | resolved-graph dep firewall | rust, go |
+| [`file_dependency_graph.md`](./file_dependency_graph.md) | generic file-reference graph — cycles / orphans / freshness / layering; language-agnostic, **study-gated** | (0 file-graph sources yet) |
+| [`dependency_graph_allowlist.md`](./dependency_graph_allowlist.md) | package-graph dep firewall (**decoupled + deferred**; non-goal-adjacent) | rust, go |
 | [`niche_rule_kinds.md`](./niche_rule_kinds.md) | 6 small kinds, 1-2 sources each | cpython, tokio, tf, turbo, flutter |
 | [`asf_bundle_overfire.md`](./asf_bundle_overfire.md) | ASF bundle fix + import_gate presets + docs | airflow, helm, istio, k8s, tf |
 | [`deferred_from_v011.md`](./deferred_from_v011.md) | v0.11 carryovers (scope predicates, walk-error policy, LSP ignore-action) | DSL completeness; pnpm |
