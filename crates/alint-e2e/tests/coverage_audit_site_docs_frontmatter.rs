@@ -92,11 +92,21 @@ fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<PathBuf>) {
 
 /// Pull the YAML block between the first two `---` delimiters. Returns
 /// `None` for files that have no frontmatter at all; that's the
-/// caller's policy decision (we treat it as a failure below — every
+/// caller's policy decision (we treat it as a failure below, since every
 /// site page is expected to have at minimum a `title:`).
+///
+/// Tolerates both LF and CRLF line endings. Git may check the site docs
+/// out with CRLF on Windows, and Astro's frontmatter loader (plus YAML
+/// itself) accept CRLF, so a CRLF checkout is not a real frontmatter
+/// defect. Matching only `---\n` false-failed the windows-latest lane on
+/// every page.
 fn extract_frontmatter(source: &str) -> Option<&str> {
-    let after_open = source.strip_prefix("---\n")?;
-    let close = after_open.find("\n---\n")?;
+    let after_open = source
+        .strip_prefix("---\n")
+        .or_else(|| source.strip_prefix("---\r\n"))?;
+    let close = after_open
+        .find("\n---\n")
+        .or_else(|| after_open.find("\r\n---\r\n"))?;
     Some(&after_open[..close])
 }
 
@@ -163,6 +173,18 @@ fn extract_frontmatter_returns_none_without_opening_delimiter() {
 fn extract_frontmatter_returns_none_without_closing_delimiter() {
     let src = "---\ntitle: hello\nbody never gets a closing delim\n";
     assert_eq!(extract_frontmatter(src), None);
+}
+
+#[test]
+fn extract_frontmatter_tolerates_crlf_line_endings() {
+    // Git on Windows checks the site docs out with CRLF; Astro and YAML
+    // both accept it, so this audit must too. Regression: the
+    // windows-latest cross-platform lane false-failed every page when
+    // extract_frontmatter matched only LF (`---\n`) delimiters.
+    let src = "---\r\ntitle: hello\r\nfoo: bar\r\n---\r\n\r\nbody\r\n";
+    let fm = extract_frontmatter(src).expect("CRLF frontmatter should be found");
+    assert_eq!(fm, "title: hello\r\nfoo: bar");
+    serde_yaml::from_str::<serde_yaml::Value>(fm).expect("CRLF frontmatter should parse");
 }
 
 /// Regression specifically for the `variable-interpolation.md` failure
