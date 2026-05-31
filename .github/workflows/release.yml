@@ -287,7 +287,7 @@ jobs:
       - name: mint a short-lived crates.io token via OIDC
         uses: rust-lang/crates-io-auth-action@v1
         id: crates-auth
-      - name: publish all 5 crates in dependency order
+      - name: publish all 6 crates in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
         run: ci/scripts/publish-crates.sh

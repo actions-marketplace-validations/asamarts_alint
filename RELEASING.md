@@ -97,6 +97,20 @@ points are explicit.
 | `bench-docker.yml` | tag pushes | Build + push `ghcr.io/asamarts/alint-bench:<tag>` (the reproducible competitive-bench environment). | ~5 min |
 | **`bench-record.yml`** | tag push only | **Self-hosted full publish-grade `xtask bench-scale` matrix (S1-S13 × {1k, 10k, 100k, 1m} × {full, changed}) at `--warmup 3 --runs 10`. Opens a PR adding the new per-version macro/results dir + criterion micro snapshot.** | **~3.5 hr** |
 
+## Adding a new published crate
+
+When a new workspace crate joins the crates.io publish list
+(`ci/scripts/publish-crates.sh` `CRATES=()`), **register its crates.io
+Trusted Publisher before the release that first publishes it via OIDC**:
+crate → Settings → Trusted Publishing → repo `asamarts/alint`, workflow
+`release.yml`, no environment. The OIDC token is scoped per crate, so a
+crate without a publisher entry fails that release's `publish to
+crates.io` job with `403 ... access token is not valid for crate
+<name>`, *after* the earlier crates have already published (crates.io
+is permanent; see Yanking). The publish script is idempotent, so the
+recovery is: add the publisher, then `gh run rerun <id> --failed`
+(never re-tag). `alint-lsp` hit this on v0.11.1.
+
 ## Editor extensions / IDE plugins
 
 The six editor integrations live under `editors/`. Two distribution
