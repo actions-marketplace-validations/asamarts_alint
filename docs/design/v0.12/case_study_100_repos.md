@@ -48,7 +48,9 @@ every repo through one shape.
 ## Repo selection — a stratified, pinned frame (not a wish-list)
 
 Step 0 of the study produces and commits the final 100+ list. This
-defines how it is chosen.
+defines how it is chosen. (**Produced + pinned 2026-06-01:**
+[`case_study_repos.md`](./case_study_repos.md) — 111 repos, evidence-vetted
+for diversity / activeness / popularity / quality.)
 
 **Stratification axes** (aim for spread across each; do not require a
 repo per cell):
