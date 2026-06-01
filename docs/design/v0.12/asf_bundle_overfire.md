@@ -1,10 +1,15 @@
 # ASF compliance-bundle over-fire fix (+ import_gate presets, docs)
 
-Status: **In progress (v0.12); decisions locked 2026-05-31.** The
-**highest-confidence, lowest-risk** item in the cut — landing as a
-standalone ahead of the 100-repo study. The concrete spec is in
-**Decisions** below; the change rides `@v1` (pure false-positive
-reduction, backward-compatible).
+Status: **Implemented (v0.12).** Landed standalone ahead of the 100-repo
+study across `856e65b3` (FP-fix core — SPDX header tolerance,
+generated/vendored excludes, the apache-2 override note, e2e scenarios)
+and `956f7dd7` (import_gate scala/java/dart/nix presets,
+`generated_file_fresh` stdout-only doc); the governance bundle's parallel
+override note lands with this status flip. The **highest-confidence,
+lowest-risk** item in the cut. Rode `@v1` (pure false-positive reduction,
+backward-compatible); concrete spec in **Decisions** below. (Residual
+open question — where the canonical generated-glob list lives — is
+intentionally deferred; revisit only if a third bundle needs the set.)
 
 ## Motivation / demand
 
