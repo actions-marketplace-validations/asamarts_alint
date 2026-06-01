@@ -81,9 +81,12 @@ Universal failure mode:
   `vendor/`, `node_modules/`).
 - **Glob list inlined** in the two bundles for now, consistent with how
   `rust@v1` / `python@v1` inline their excludes.
-- **Companions deferred.** The `import_gate` scala/java/dart/nix presets
-  and the `generated_file_fresh` stdout-only doc note are real but
-  separable; they land as a follow-on, not in this FP-fix increment.
+- **Companions (landed as a follow-on).** The `import_gate`
+  scala/java/dart/nix presets and the `generated_file_fresh` stdout-only
+  doc clarification shipped in a follow-on commit after the FP-fix core
+  (kept separate so the bundle FP fix stayed atomic). The Nix preset
+  covers the `import` builtin; the NixOS `imports = [ ... ]` module-list
+  form still needs `language: generic` + a custom pattern.
 
 ## Residual open question
 

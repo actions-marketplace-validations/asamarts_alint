@@ -11,7 +11,7 @@
 //! - id: staging-no-main-module
 //!   kind: import_gate
 //!   paths: "staging/src/k8s.io/**/*.go"
-//!   language: go                          # go|python|rust|js|generic
+//!   language: go                          # go|python|rust|js|scala|java|dart|nix|generic
 //!   forbid: "^k8s\\.io/kubernetes/"       # regex on the EXTRACTED target
 //!   allow: ["staging/src/k8s.io/legacy/**"]
 //!   level: error
@@ -32,6 +32,10 @@ enum Language {
     Python,
     Rust,
     Js,
+    Scala,
+    Java,
+    Dart,
+    Nix,
     /// No preset — an explicit `import_pattern` is required.
     Generic,
 }
@@ -55,6 +59,20 @@ impl Language {
             // `import x from "m"`, `import "m"`, `require("m")`,
             // `import("m")` -> `m`.
             Self::Js => r#"(?:from\s*|require\s*\(\s*|import\s*\(\s*|import\s+)['"]([^'"]+)['"]"#,
+            // `import a.b.c`, `import a.b.{c, d}`, `import a.b._` -> the
+            // dotted path (a trailing `.`/`_` on selector imports is
+            // harmless for prefix forbids).
+            Self::Scala => r"^\s*import\s+([\w.]+)",
+            // `import a.b.C;`, `import static a.b.C.m;`, `import a.b.*;`.
+            Self::Java => r"^\s*import\s+(?:static\s+)?([\w.]+)",
+            // `import 'package:foo/bar.dart';` / `export "dart:async";`
+            // -> the quoted URI.
+            Self::Dart => r#"^\s*(?:import|export)\s+['"]([^'"]+)['"]"#,
+            // The `import` builtin: `import ./mod.nix`, `import <nixpkgs>`,
+            // `let x = import ../foo;` -> the path expression. The NixOS
+            // `imports = [ ... ]` module-list form is multi-target; gate
+            // it with `language: generic` + a custom `import_pattern`.
+            Self::Nix => r#"\bimport\s+(<[^>]+>|\.\.?/[^\s;{(]+|"[^"]+")"#,
             Self::Generic => return None,
         })
     }
@@ -180,7 +198,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         (None, None) => {
             return Err(Error::rule_config(
                 &spec.id,
-                "import_gate requires `language:` (go/python/rust/js) or `import_pattern:`",
+                "import_gate requires `language:` (go/python/rust/js/scala/java/dart/nix) or `import_pattern:`",
             ));
         }
     };
@@ -319,6 +337,43 @@ mod tests {
         let r = rule(Language::Js, r"^lodash", &[]);
         let src = "import _ from \"lodash\";\nconst x = require('lodash/fp');\nimport y from \"react\";\n";
         assert_eq!(eval(&r, "src/a.js", src).len(), 2);
+    }
+
+    #[test]
+    fn scala_import_paths() {
+        let r = rule(Language::Scala, r"^scala\.sys", &[]);
+        let src =
+            "import scala.sys.process._\nimport scala.collection.mutable\nimport java.util.List\n";
+        let v = eval(&r, "src/a.scala", src);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("scala.sys"));
+    }
+
+    #[test]
+    fn java_import_static_and_wildcard() {
+        let r = rule(Language::Java, r"^com\.internal", &[]);
+        let src = "import com.internal.Secret;\nimport static com.internal.Util.helper;\nimport java.util.List;\nimport com.internal.*;\n";
+        let v = eval(&r, "src/A.java", src);
+        assert_eq!(v.len(), 3, "{v:?}");
+        assert!(v.iter().all(|x| !x.message.contains("java.util.List")));
+    }
+
+    #[test]
+    fn dart_import_and_export_uris() {
+        let r = rule(Language::Dart, r"^package:legacy/", &[]);
+        let src = "import 'package:legacy/old.dart';\nexport \"package:legacy/api.dart\";\nimport 'dart:async';\n";
+        let v = eval(&r, "lib/a.dart", src);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v.iter().all(|x| !x.message.contains("dart:async")));
+    }
+
+    #[test]
+    fn nix_import_builtin_paths() {
+        let r = rule(Language::Nix, r"^<nixpkgs>$", &[]);
+        let src = "let pkgs = import <nixpkgs> { };\nin import ./local.nix\n";
+        let v = eval(&r, "default.nix", src);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("nixpkgs"));
     }
 
     #[test]
