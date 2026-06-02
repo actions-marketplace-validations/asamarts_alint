@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for python-poetry/poetry @ aab3194f200e52198101d0f303b0f6423897829c
+# (v0.12 case-study Stage A draft).
+#
+# Enforced addressable surface (A) is small: poetry's CI/pre-commit surface is
+# dominated by tool execution (ruff / mypy / pytest / zizmor / poetry check /
+# build / docs) which is D (non-goal). The genuinely native A-items are the
+# three file-hygiene pre-commit hooks. Everything below the "value-add" marker
+# is alint structure-assertion the repo does not itself gate on (R3/R5) and is
+# NOT counted in coverage_today.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+
+rules:
+  # ---- A-items: the enforced file-hygiene pre-commit hooks --------------
+  # .pre-commit-config.yaml: pre-commit-hooks trailing-whitespace
+  - id: poetry-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.py", "**/*.toml", "**/*.yaml", "**/*.yml", "**/*.md", "**/*.txt", "**/*.cfg"]
+      exclude:
+        - "tests/repositories/fixtures/pypi.org/metadata/**"
+    level: error
+    message: "Trailing whitespace (enforced by pre-commit trailing-whitespace)."
+
+  # .pre-commit-config.yaml: pre-commit-hooks check-merge-conflict
+  - id: poetry-no-merge-conflict-markers
+    kind: no_merge_conflict_markers
+    paths:
+      include: ["**/*"]
+      # RST section underlines (=======) in this vendored fixture look like
+      # conflict markers; pre-commit excludes it for the same reason.
+      exclude:
+        - "**/attrs-19.3.0.dist-info/METADATA"
+    level: error
+    message: "Unresolved merge-conflict marker (enforced by pre-commit check-merge-conflict)."
+
+  # .pre-commit-config.yaml: pre-commit-hooks end-of-file-fixer
+  - id: poetry-final-newline
+    kind: final_newline
+    paths:
+      include: ["**/*.py", "**/*.toml", "**/*.md"]
+      exclude:
+        - "**/*.egg-info/**"
+        - "tests/repositories/fixtures/pypi.org/metadata/**"
+    level: error
+    message: "File must end with exactly one newline (enforced by pre-commit end-of-file-fixer)."
+
+  # ---- value-add (NOT in coverage_today; R3/R5) ------------------------
+  # poetry self-hosts: pyproject must declare requires-poetry (poetry check).
+  - id: poetry-pyproject-requires-poetry
+    kind: toml_path_matches
+    paths: pyproject.toml
+    path: "$.tool.poetry['requires-poetry']"
+    matches: '^>=2'
+    level: warning
+    message: "pyproject [tool.poetry] should pin requires-poetry (>=2.0)."
+
+  - id: poetry-pyproject-license-mit
+    kind: toml_path_equals
+    paths: pyproject.toml
+    path: "$.project.license"
+    equals: "MIT"
+    level: warning
+    message: "Project license should be MIT (matches LICENSE)."
+
+  - id: poetry-pyproject-build-backend
+    kind: toml_path_equals
+    paths: pyproject.toml
+    path: "$['build-system']['build-backend']"
+    equals: "poetry.core.masonry.api"
+    level: warning
+    message: "Poetry must build itself with poetry-core masonry."
+
+  - id: poetry-pyproject-requires-python-floor
+    kind: toml_path_matches
+    paths: pyproject.toml
+    path: "$.project['requires-python']"
+    matches: '>=3\.10'
+    level: warning
+    message: "requires-python floor should be >=3.10."
+
+  # .gitattributes invariant: metadata fixtures are binary (hash stability).
+  - id: poetry-gitattributes-metadata-binary
+    kind: file_content_matches
+    paths: .gitattributes
+    pattern: '\*\.metadata binary'
+    level: warning
+    message: ".gitattributes must keep *.metadata as binary (fixture hash stability)."
+
+  # Structure poetry ships but does not gate on.
+  - id: poetry-ships-json-schema
+    kind: file_exists
+    paths: ["src/poetry/json/schemas/poetry.json"]
+    level: warning
+    message: "poetry ships the pyproject [tool.poetry] JSON schema."
+
+  - id: poetry-changelog-exists
+    kind: file_exists
+    paths: ["CHANGELOG.md"]
+    level: warning
+    message: "A CHANGELOG.md should exist."

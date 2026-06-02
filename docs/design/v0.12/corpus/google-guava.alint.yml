@@ -1,0 +1,114 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for google/guava @ a8e9533b499a446cccf7eff54e7775327fb119ec
+# Shape: JVM/Java core library, Maven (dual jre/android reactor), Google single-vendor.
+#
+# What guava ENFORCES (the denominator) is overwhelmingly D (non-goal): the CI
+# matrix is `mvnw install/verify` across JDK 8/11/17/25 x {jre,android} x
+# {ubuntu,windows} (one build+test behavior), a downstream Gradle integration
+# build, the maven-enforcer require{Maven,Java}Version, and an OpenSSF Scorecard
+# supply-chain scan. There is NO checkstyle/spotless/RAT/license plugin in the
+# pom -- the Apache-2.0 header and Google Java Style are review-enforced
+# conventions (CONTRIBUTING.md), not tool gates.
+#
+# The addressable (A) surface guava enforces is small and expressed below:
+#   - Apache-2.0 license header on every source file (CONTRIBUTING-required)
+#   - GitHub Actions pinned to a full SHA (Scorecard Pinned-Dependencies + dependabot)
+#   - a root LICENSE file (Apache-2.0; the pom <licenses> declares it too)
+#
+# Everything else here (parent-pom version coherence, maven-wrapper sha pin
+# presence) is alint VALUE-ADD, not part of guava's enforced surface.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/java@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # === A-items: what guava actually enforces ========================
+
+  # A1 -- Apache-2.0 boilerplate in every source file.
+  # CONTRIBUTING.md: "all files must have a copy of the boilerplate license
+  # comment." No RAT/license-maven plugin enforces it -> review convention (R5).
+  # guava has documented exceptions that must be excluded or this over-fires:
+  #   - package-info.java (annotation-only, no header)
+  #   - JSR166 public-domain code (AtomicDouble*, Striped64, LongAdder) -- Doug Lea,
+  #     released to the public domain, carries a CC0 banner not the Apache header
+  #   - a couple of files with the older `// Copyright <yr> Google Inc.` banner
+  - id: guava-apache-license-header
+    kind: file_header
+    paths:
+      include: ["**/*.java"]
+      exclude:
+        - "**/package-info.java"
+        - "**/module-info.java"
+        # JSR166 / public-domain imports (CC0, not Apache):
+        - "**/AtomicDouble.java"
+        - "**/AtomicDoubleArray.java"
+        - "**/Striped64.java"
+        - "**/LongAdder.java"
+        - "**/JSR166TestCase.java"
+        - "**/AtomicDoubleTest.java"
+        - "**/AtomicDoubleArrayTest.java"
+        # Older `// Copyright <yr> Google Inc. All Rights Reserved.` banner:
+        - "**/Fingerprint2011.java"
+        - "**/Fingerprint2011Test.java"
+        - "**/GraphsBridgeMethods.java"
+        - "**/InvalidatableSet.java"
+        - "**/InvalidatableSetTest.java"
+        - "**/PublicSuffixTrieTest.java"
+    lines: 16
+    pattern: 'Licensed under the Apache License,?\s*Version 2'
+    level: warning
+    message: >-
+      Guava source files must carry the Apache-2.0 boilerplate header
+      (CONTRIBUTING.md). Copy it from any existing file.
+
+  # A3 -- root LICENSE present (covered by oss-license-exists from oss-baseline;
+  # restated at error level because for guava this is a hard expectation).
+  - id: guava-license-exists
+    kind: file_exists
+    paths: ["LICENSE"]
+    root_only: true
+    level: error
+    message: "Guava ships under Apache-2.0; a root LICENSE file is required."
+
+  # (A2 -- GHA SHA-pinning -- comes from the ci/github-actions bundle:
+  #  rule `gha-pin-actions-to-sha`. guava pins every `uses:` to a 40-hex SHA.)
+
+  # === alint VALUE-ADD (NOT guava-enforced; excluded from coverage ratio) ===
+
+  # The four jre-flavor module poms all carry the parent version
+  # `999.0.0-HEAD-jre-SNAPSHOT`. Maven's reactor already enforces child
+  # <parent><version> == parent version at build time (so this is build-gated, D),
+  # but asserting the literal coherence cheaply is a nice belt-and-suspenders.
+  # NOTE: cross_file_value_equals extracts via toml/json/yaml/regex -- NOT xml
+  # path -- so we anchor a regex on the jre SNAPSHOT version literal. Each jre
+  # pom carries exactly one `999.0.0-HEAD-jre-SNAPSHOT` <version> (its own or
+  # its <parent>'s); the glob `guava*/pom.xml` hits the 5 jre module poms and
+  # excludes android/**.
+  - id: guava-jre-pom-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: pom.xml
+      extract: { regex: '<version>(999\.0\.0-HEAD-jre-SNAPSHOT)</version>' }
+    targets:
+      files: "guava*/pom.xml"
+      extract: { regex: '<version>(999\.0\.0-HEAD-jre-SNAPSHOT)</version>' }
+    level: info
+    message: "All jre-flavor module poms should share the guava-parent version."
+
+  # maven-wrapper distribution is checksum-pinned (supply-chain hygiene).
+  # The wrapper verifies the sha at runtime (that's the D enforcement); asserting
+  # the pin is *declared* is the alint value-add.
+  - id: guava-maven-wrapper-sha-pinned
+    kind: file_content_matches
+    # NOTE: file_content_matches matches the whole file as one string; `^`/`$`
+    # anchor to file start/end, NOT line boundaries. The pin line sits mid-file,
+    # so the `(?m)` multiline flag is required for the anchors to work.
+    paths: [".mvn/wrapper/maven-wrapper.properties"]
+    pattern: '(?m)^distributionSha256Sum=[0-9a-f]{64}$'
+    level: info
+    message: "The Maven Wrapper distribution should be checksum-pinned (distributionSha256Sum)."

@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for guzzle/guzzle @ 3137dc55ae12f19bb3d6d744189947b37d18b954
+#
+# CASE-STUDY FINDING (v0.12): guzzle's ENFORCED validation surface is
+# ENTIRELY tool-execution (D, per ruling R2): PHPUnit, PHPStan (level 9),
+# php-cs-fixer (@PSR12:risky/@Symfony), and composer-normalize. There are
+# NO bespoke shell gates, NO committed hooks, NO codegen-freshness diffs,
+# NO import/layering firewall, NO cross-file value gate. Enforced A/B/C = 0.
+#
+# Everything below is therefore alint VALUE-ADD (structure/coherence the
+# repo does NOT gate on today but alint can express declaratively), NOT the
+# enforced-compliance surface. Recorded here because the protocol asks the
+# config to "express as much as is reasonable".
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+  - alint://bundled/tooling/editorconfig@v1
+
+rules:
+  # --- value-add: required project documents present ----------------
+  - id: guzzle-changelog-exists
+    kind: file_exists
+    paths: ["CHANGELOG.md"]
+    root_only: true
+    level: warning
+    message: "guzzle ships a hand-maintained CHANGELOG.md; it must exist at the root."
+
+  - id: guzzle-upgrading-guide-exists
+    kind: file_exists
+    paths: ["UPGRADING.md"]
+    root_only: true
+    level: info
+    message: "guzzle documents breaking changes in UPGRADING.md (referenced from CHANGELOG)."
+
+  # --- value-add: composer.json policy assertions (R3 — assertion, not
+  #     the composer-normalize tool run, which stays D) -----------------
+  - id: guzzle-composer-name
+    kind: json_path_equals
+    paths: ["composer.json"]
+    path: "$.name"
+    equals: "guzzlehttp/guzzle"
+    level: error
+    message: "composer.json package name must be guzzlehttp/guzzle."
+
+  - id: guzzle-composer-license-mit
+    kind: json_path_equals
+    paths: ["composer.json"]
+    path: "$.license"
+    equals: "MIT"
+    level: error
+    message: "guzzle is MIT-licensed; composer.json license must say so (must match LICENSE)."
+
+  - id: guzzle-composer-sort-packages
+    # composer-normalize (D) enforces full normalization by running the
+    # tool; this is the cheap declarative SUBSET alint asserts directly:
+    # the sort-packages flag that keeps `require` ordered must stay set.
+    kind: json_path_equals
+    paths: ["composer.json"]
+    path: "$.config['sort-packages']"
+    equals: true
+    level: warning
+    message: "composer.json config.sort-packages must stay true so `require` stays ordered."
+
+  # --- value-add: cross-file VERSION coherence the repo hand-maintains
+  #     but does NOT gate on. COMPOSER_ROOT_VERSION is duplicated across
+  #     both workflows; assert they stay equal. (cross_file_value_equals)
+  - id: guzzle-composer-root-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: .github/workflows/ci.yml
+      extract: { yaml: "$.env.COMPOSER_ROOT_VERSION" }
+    targets:
+      files: ".github/workflows/static.yml"
+      extract: { yaml: "$.env.COMPOSER_ROOT_VERSION" }
+    normalize: none
+    allow_missing_target: false
+    level: warning
+    message: >-
+      COMPOSER_ROOT_VERSION is duplicated in ci.yml and static.yml;
+      the two must stay in sync when the dev branch version bumps.
+
+  # --- value-add: LICENSE content invariant -------------------------
+  - id: guzzle-license-is-mit
+    kind: file_content_matches
+    paths: ["LICENSE"]
+    pattern: "The MIT License \\(MIT\\)"
+    level: warning
+    message: "LICENSE must remain the MIT license text."
+
+  # --- value-add: hygiene over the whole tree (php-cs-fixer only
+  #     enforces these on src/+tests/ .php via @PSR12 — alint widens the
+  #     net to docs/config; still value-add, NOT the enforced surface) --
+  - id: guzzle-final-newline-wide
+    kind: final_newline
+    paths: ["**/*.php", "**/*.md", "**/*.json", "**/*.neon", "**/*.dist"]
+    level: info
+    fix:
+      file_append_final_newline: {}
+
+  - id: guzzle-no-trailing-whitespace-wide
+    kind: no_trailing_whitespace
+    paths: ["**/*.php", "**/*.md", "**/*.neon"]
+    level: info
+    fix:
+      file_trim_trailing_whitespace: {}

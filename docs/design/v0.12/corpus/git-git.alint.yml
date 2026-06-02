@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config for git/git @ 1666c1265231b0bc5f613fbbf3f0a9896cdef76e
+#
+# git/git is a C/CLI codebase (with a small Rust libgit-rs/libgit-sys arm and a
+# meson build alongside the Makefile). Its enforced validation surface is
+# DOMINATED by execution/semantic checks alint does not reimplement (clang-format,
+# sparse, coccinelle, coverity, header self-containment, the test suite across
+# Windows/macOS/Docker matrices, asan/ubsan/leaks/fuzz, the perl Documentation
+# linters, chainlint / check-non-portable-shell, cargo fmt/clippy/msrv, git-po
+# helper). Those stay D (recorded in the case-study record, not here).
+#
+# What alint expresses NATIVELY (the A surface), all bundle-backed or below:
+#   - no trailing whitespace        -> oss-no-trailing-whitespace
+#                                      (git: check-whitespace.yml `git log --check`
+#                                       + .gitattributes whitespace=trail,space)
+#   - no Unicode bidi/directional   -> oss-no-bidi-controls
+#                                      (git: ci/check-directional-formatting.bash)
+#   - final newline                 -> oss-final-newline (.editorconfig
+#                                       insert_final_newline = true)
+#   - every t/tNNNN-*.sh executable -> git-test-files-executable (executable_bit)
+#                                      (git: t/Makefile test-lint-executable)
+#   - no portability-hostile chars  -> git-portable-filenames (filename_regex)
+#     in tracked filenames             (git: t/Makefile test-lint-filenames)
+#
+# alint value-add (NOT a git-enforced gate; structure git does not check):
+#   - oss-readme/license/security/code-of-conduct/gitignore existence
+#   - the test-number-uniqueness rule below is the CLOSEST alint can get to
+#     t/Makefile test-lint-duplicates, but it can only catch EXACT-stem dups,
+#     not the numeric-prefix collision git actually forbids (key templates
+#     have no regex-capture) -> level: info, documented as a C tuning gap.
+#
+# B / new-primitive gaps git exercises that alint cannot express (see record):
+#   - lint-docs-meson : meson.build manpage block must EQUAL the git*.adoc glob
+#   - lint-manpages   : every command has a .adoc AND a command-list.txt row
+#   - lint-gitlink    : doc gitlink:git-foo[1] cross-refs must resolve to a page
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ── A: every integration test file must carry the +x bit ───────────────────
+  # t/Makefile `test-lint-executable` fails the build for any non-executable
+  # t/tNNNN-*.sh; tools/test discovery relies on the bit.
+  - id: git-test-files-executable
+    kind: executable_bit
+    paths:
+      include:
+        - "t/t[0-9][0-9][0-9][0-9]-*.sh"
+        - "t/perf/p[0-9][0-9][0-9][0-9]-*.sh"
+    require: true
+    level: error
+
+  # ── A: no portability-hostile characters in tracked file names ─────────────
+  # t/Makefile `test-lint-filenames` rejects any tracked path whose basename
+  # contains  " * : < > ? \ |  (Windows-hostile). Expressed as an anchored
+  # basename allowlist of "anything but those bytes".
+  - id: git-portable-filenames
+    kind: filename_regex
+    paths:
+      include: ["**/*"]
+    pattern: '^[^"*:<>?\\|]+$'
+    level: error
+
+  # ── C (info): closest expressible form of test-lint-duplicates ─────────────
+  # git forbids two test files sharing the numeric prefix tNNNN. `unique_by`
+  # keys on a path template (no regex capture of just the number), so this can
+  # only flag exact-stem duplicates — a strictly weaker check. Kept as info to
+  # document the tuning gap, not as a faithful port.
+  - id: git-test-stem-unique
+    kind: unique_by
+    select: "t/t[0-9][0-9][0-9][0-9]-*.sh"
+    key: "{stem}"
+    level: info

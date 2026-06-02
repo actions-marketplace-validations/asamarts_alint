@@ -1,0 +1,141 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# ════════════════════════════════════════════════════════════════════════
+# Proposed alint config for python/mypy  (case study v0.12, pinned
+# @ 4c8f9944ead815e264bcb71cd5f0e8eeb2a75689; shape: Python · type
+# checker · tox · community).
+#
+# WHAT alint ADDS / WHAT IT CANNOT
+# mypy's enforced surface is DOMINATED by tool/execution gates that are
+# deliberate non-goals (D): the pytest matrix (py3.10-3.15 × OS × mypyc-
+# compiled × 32-bit), self type-check (running mypy on mypy), black, ruff,
+# codespell, actionlint+shellcheck, zizmor, check-jsonschema, the Sphinx
+# `-W` docs build, the error-code-documentation completeness gate, the
+# mypy_primer regression diff, and test-stubgenc.sh's stubgen+git-diff
+# codegen-freshness check. alint can ORCHESTRATE several of those via
+# command / command_idempotent (legit value-add, recorded separately) but
+# wrapping a tool is not alint expressing the check (calibration R2).
+#
+# The genuinely ADDRESSABLE bespoke surface alint expresses natively:
+#   - trailing-whitespace  (pre-commit-hooks)  -> no_trailing_whitespace
+#   - end-of-file newline  (end-of-file-fixer) -> final_newline
+#   - requirement-file dependency coherence    -> cross_file_value_equals
+#     (the three "NOTE: keep in sync" headers across pyproject.toml,
+#      mypy-requirements.txt, build-requirements.txt). Single-scalar
+#      witness only; full requirement-SET equality is the C-tuning gap.
+#
+# ABSENT CATEGORIES (calibration R6): no per-file license headers (one
+# root MIT LICENSE only); no committed lockfile (pins via
+# test-requirements.txt + a hashless mypy-requirements.txt — `python`
+# bundle's python-has-lockfile WILL fire, expected); no CODEOWNERS; no
+# dependabot/renovate; no submodules (typeshed is vendored, not a
+# submodule). NEW-KIND demand (B = 1): the `bad-pr-link` hook needs an
+# intra-line cross-capture-equality predicate that RE2 regex can't do
+# (see B1 below). Every other idiosyncratic gate is execution/AST/NLP.
+# ════════════════════════════════════════════════════════════════════════
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+  - alint://bundled/tooling/editorconfig@v1   # honours mypy's .editorconfig
+                                              # (trim_trailing_whitespace +
+                                              # insert_final_newline) declaratively
+
+rules:
+
+  # ──────────────────────────────────────────────────────────────────────
+  # A1 — trailing whitespace (pre-commit `trailing-whitespace` hook).
+  # The .pre-commit-config.yaml excludes vendored trees; mirror that.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: mypy-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.py", "**/*.pyi", "**/*.toml", "**/*.ini", "**/*.cfg",
+                "**/*.yml", "**/*.yaml", "**/*.md", "**/*.rst", "**/*.txt"]
+      exclude:
+        - "mypy/typeshed/**"
+        - "mypyc/external/**"
+        - "misc/typeshed_patches/**"
+    level: warning
+    message: "Trailing whitespace (mirrors the pre-commit trailing-whitespace hook)."
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  # ──────────────────────────────────────────────────────────────────────
+  # A2 — final newline (pre-commit `end-of-file-fixer` hook).
+  # ──────────────────────────────────────────────────────────────────────
+  - id: mypy-final-newline
+    kind: final_newline
+    paths:
+      include: ["**/*.py", "**/*.pyi", "**/*.toml", "**/*.ini", "**/*.cfg",
+                "**/*.yml", "**/*.yaml", "**/*.md", "**/*.rst", "**/*.txt"]
+      exclude:
+        - "mypy/typeshed/**"
+        - "mypyc/external/**"
+        - "misc/typeshed_patches/**"
+    level: warning
+    message: "File must end with exactly one newline (mirrors end-of-file-fixer)."
+    fix:
+      file_append_final_newline: {}
+
+  # ──────────────────────────────────────────────────────────────────────
+  # B1 (NOT expressible — recorded, not enabled). The `bad-pr-link` local
+  # pygrep hook fires when a CHANGELOG entry `[<n>](.../pull/<m>)` has n != m
+  # (display number must equal the /pull/ URL number). Its regex relies on a
+  # BACKREFERENCE + NEGATIVE LOOK-AHEAD `(?!\1...)`. alint's regex engine is
+  # RE2-style (no backrefs, no look-around — verified: `validate-config`
+  # rejects the pattern with "look-around ... is not supported"). So
+  # `file_content_forbidden` CANNOT express "two captured groups on the same
+  # line must be EQUAL". NEW-KIND CANDIDATE: an intra-line cross-capture
+  # equality predicate (e.g. `line_captures_equal`). Source: mypy
+  # .pre-commit-config.yaml:51-56. Left out of the config so it validates.
+  # ──────────────────────────────────────────────────────────────────────
+
+  # ──────────────────────────────────────────────────────────────────────
+  # A4 / C1 — requirement-file dependency coherence.
+  # pyproject.toml, mypy-requirements.txt and build-requirements.txt each
+  # carry a "NOTE: this needs to be kept in sync ..." header. The enforced
+  # convention is that the whole dependency LIST agrees; alint can witness
+  # ONE pinned constraint cleanly (here the typing_extensions floor for
+  # python<3.15). Full SET equality across the files is the C-tuning gap
+  # (would want a `requirements_consistent` preset). Counted ONCE, as C.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: mypy-requirements-typing-extensions-floor-coherent
+    kind: cross_file_value_equals
+    source:
+      file: "mypy-requirements.txt"
+      extract: { regex: "typing_extensions>=([0-9.]+); python_version<'3\\.15'" }
+    targets:
+      - file: "pyproject.toml"
+        # [project.dependencies] copy of the same floor.
+        extract: { regex: "typing_extensions>=([0-9.]+); python_version<'3\\.15'" }
+    normalize: none
+    allow_missing_target: false
+    level: warning
+    message: >-
+      typing_extensions floor drifted between mypy-requirements.txt and
+      pyproject.toml — the "keep in sync" requirement files disagree.
+
+  # ──────────────────────────────────────────────────────────────────────
+  # VALUE-ADD (NOT in the coverage denominator; calibration R3/R5).
+  # Structural assertions mypy does not gate on, but which alint can hold:
+  # the CI/lint config files exist + the .editorconfig contract. Kept as
+  # info so they never block; recorded here for completeness.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: mypy-precommit-config-exists
+    kind: file_exists
+    paths: [".pre-commit-config.yaml"]
+    root_only: true
+    level: info
+    message: "mypy gates lint/format via pre-commit; keep its config present."
+
+  - id: mypy-tox-config-exists
+    kind: file_exists
+    paths: ["tox.ini"]
+    root_only: true
+    level: info
+    message: "tox is the canonical task runner (py/lint/type/docs envs)."

@@ -23,7 +23,8 @@ durable artifact and the configs are staged separately pending that decision.
 | batch 3 | 20 | 85 | 30 | 25 | 305 | 61% | 48 |
 | batch 4 | 20 | 125 | 42 | 57 | 357 | 56% | 81 |
 | batch 5 | 20 | 95 | 30 | 33 | 380 | 60% | 45 |
-| **cumulative** | **76** | **366** | **120** | **129** | **~1270** | **60%** | **208** |
+| batch 6 | 20 | 54 | 12 | 14 | 239 | 68% | 18 |
+| **cumulative** | **96** | **420** | **132** | **143** | **~1509** | **60%** | **226** |
 
 ---
 
@@ -369,3 +370,27 @@ unchanged for **three straight batches** (3, 4, 5).
 
 ### Artifacts
 20 validated configs folded into [`corpus/`](./corpus/) (now 75).
+
+---
+
+## Batch 6 — 2026-06-02 (20: remaining Python / Ruby / PHP / Swift / JVM libs)
+
+Workflow: 40 agents, ~3.8M tokens. Repos: git, guava, netty, junit-framework,
+black, pytest, mypy, poetry, sqlalchemy, rich, httpx, ruby, jekyll, brew,
+fastlane, phpstan, guzzle, vapor, alamofire, signal-android.
+
+Stage-B-reconciled **A=54 B=12 C=14 D=239, coverage 54/80 = 68%** (cumulative
+**96/111 repos: 420/695 = 60%**). High end: guava/httpx/jekyll/phpstan/signal at
+100%; the small Swift/PHP libs (guzzle, vapor, alamofire) at 0% (pure-execution
+surfaces). file-graph +18 → **226 cumulative**.
+
+**Confirmation again — no new Tier-1/2.** Two notable corpus-validations of
+*already-planned* workstreams: `changeset_adds_file` (sqlalchemy) →
+[`changeset_requires_path.md`](./changeset_requires_path.md); and
+`no_filename_case_conflict` recurs (poetry, after pandas). Everything else maps
+to the existing backlog (doc-xref-resolve → file-graph; requirements-consistent →
+set-membership; files-synced-from-upstream → `files_equal`). Tier-1 unchanged for
+a **4th straight batch**.
+
+### Artifacts
+20 validated configs folded into [`corpus/`](./corpus/) (now 95).

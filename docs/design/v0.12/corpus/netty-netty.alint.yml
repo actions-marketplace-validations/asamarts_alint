@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for netty/netty @ e067b6e3376afee7629481d46333c3acf7f95943
+# v0.12 case-study Stage A. Expresses the A-bucket of Netty's enforced
+# bespoke-validation surface (the rest is `mvn verify` execution = D:
+# checkstyle AST rules / forbidden-apis / revapi binary-compat / xml-format /
+# tests / native build / CodeQL — alint orchestrates but does not reimplement).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/java@v1
+
+rules:
+  # === A1 — Apache license header on every Java/shell source file ============
+  # Netty enforces this via a checkstyle Header module (config lives in the
+  # external netty-build-common jar, run inside `mvn verify`'s validate phase).
+  # The header invariant itself is a pure content-prefix match → alint-native.
+  # NOTE: the bundled compliance/apache-2 header rule does NOT match Netty's
+  # exact ASF-derived wording ("The Netty Project licenses this file to you
+  # under the Apache License, version 2.0" — lowercase v, "licenses this file
+  # to you" not "Licensed"), so we express Netty's literal form here.
+  - id: netty-source-has-apache-header
+    kind: file_header
+    paths:
+      include:
+        - "**/*.java"
+        - "**/*.sh"
+      exclude:
+        - "**/target/**"
+        - "**/generated/**"
+        - "**/.git/**"
+    lines: 16
+    pattern: 'The Netty Project licenses this file to you under the Apache License'
+    level: error
+    message: >-
+      Every Netty source file must begin with the Apache 2.0 license header
+      ("The Netty Project licenses this file to you under the Apache License,
+      version 2.0 ..."). Enforced in CI by the checkstyle Header module.
+    policy_url: "https://www.apache.org/licenses/LICENSE-2.0#apply"
+
+  # === A2 — nohttp: no plaintext http:// URLs ==============================
+  # Netty runs the io.spring.nohttp checkstyle module over the whole tree
+  # (pom.xml `nohttp-checkstyle-validation` execution) to ban `http://` links
+  # in favour of `https://`. Pure forbidden-substring → alint-native.
+  # (The repo carries ~40 documented suppressions in
+  # nohttp-checkstyle-suppressions.xml for unreachable/legacy hosts; the
+  # exclude list below mirrors the structural suppressions. The per-URL
+  # message-based suppressions are a C-tuning gap — see study notes.)
+  - id: netty-nohttp-no-plaintext-http
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "**/*.java"
+        - "**/*.xml"
+        - "**/*.md"
+        - "**/*.properties"
+      exclude:
+        - "**/target/**"
+        - "**/.git/**"
+        - "**/dependency-reduced-pom.xml"
+        - "license/LICENSE.boringssl.txt"
+        - "NOTICE.txt"
+    # Plain forbidden substring. alint's regex engine has no look-ahead, so we
+    # cannot inline the per-host allowlist the way nohttp's suppressions file
+    # does — that gap is the C-tuning finding for this repo (nohttp needs a
+    # message/host allowlist, not just path excludes).
+    pattern: 'http://[a-zA-Z]'
+    level: warning
+    message: >-
+      Plaintext http:// URL found. Netty's nohttp checkstyle gate requires
+      https:// for all reachable links (see nohttp-checkstyle.xml). If the
+      host genuinely lacks TLS, add a suppression in
+      nohttp-checkstyle-suppressions.xml.
+    policy_url: "https://github.com/spring-io/nohttp"
+
+  # === A3 — EA Java version kept in sync (cross-file value) =================
+  # .github/scripts/check_java_ea_version.sh hard-codes EXPECTED_VERSION and
+  # its own comment says "Keep this version in sync with
+  # docker-compose.centos-7.26.yaml". The CI workflow check-jdk.ea-version.yml
+  # gates on this script. The docker value is "<ver>-open"; strip the suffix.
+  - id: netty-ea-java-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: .github/scripts/check_java_ea_version.sh
+      extract:
+        regex: "EXPECTED_VERSION='([^']+)'"
+    targets:
+      - file: docker/docker-compose.centos-7.26.yaml
+        extract:
+          regex: 'java_version\s*:\s*"([0-9a-z.]+?)-open"'
+    level: error
+    message: >-
+      The EA JDK version in check_java_ea_version.sh (EXPECTED_VERSION) must
+      match java_version in docker-compose.centos-7.26.yaml (the script's own
+      "keep in sync" comment). Update both together.
+
+  # === alint value-add (NOT Netty-gated; recorded as bonus structure) =======
+  # Apache governance artefacts at the repo root. Netty ships these but has no
+  # CI gate asserting their presence; alint can assert it cheaply.
+  - id: netty-notice-file-exists
+    kind: file_exists
+    paths: ["NOTICE.txt"]
+    root_only: true
+    level: warning
+    message: "Apache governance: NOTICE.txt must exist at the repo root."
+
+  - id: netty-license-file-exists
+    kind: file_exists
+    paths: ["LICENSE.txt"]
+    root_only: true
+    level: error
+    message: "Apache governance: LICENSE.txt must exist at the repo root."
+
+  # Structure invariant Netty maintains by hand (no CI gate): every reactor
+  # module directory actually has a pom.xml. Value-add (pair existence).
+  - id: netty-build-wrapper-present
+    kind: file_exists
+    paths: ["mvnw", "mvnw.cmd"]
+    root_only: true
+    level: info
+    message: "Maven wrapper scripts (mvnw / mvnw.cmd) should be committed for reproducible builds."

@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# ════════════════════════════════════════════════════════════════════════
+# Proposed alint config for sqlalchemy/sqlalchemy
+# (pinned commit 4fb459aaf05dd9c31ce3ece57c1bbf81ca9855de)
+#
+# Shape: Python DB/ORM library, gerrit-reviewed (GitHub is a mirror),
+# tox -> nox (tox is DEPRECATED per tools/warn_tox.py). The enforced
+# bespoke-validation surface lives in the `pep8`/`lint` nox session
+# (noxfile.py:360-399 / tox.ini:246-292), run by .github/workflows/
+# run-on-pr.yaml + run-test.yaml via `nox -e pep8`.
+#
+# That session runs 13 commands. Almost all are TOOL EXECUTION (D, per
+# calibration R2): flake8p, black --check, slotscheck, the 3 runtime-
+# derived code generators (generate_tuple_map_overloads / proxy_methods /
+# sql_functions --check, which must import the built package and
+# introspect), format_docs_code --check (black on rst blocks), and
+# walk_packages (imports every subpackage). alint can *orchestrate* these
+# via command_idempotent (value-add), but cannot express their logic.
+#
+# Two of the 13 are genuine STRUCTURAL/CONTENT invariants alint expresses
+# natively (verified against the clone):
+#   * normalize_file_headers.py --check  -> per-file MIT header  (A1)
+#   * cython_imports.py --check          -> fixed generated block (A2)
+#
+# One is a NEW-KIND gap (B1): sync_test_files.py --check derives a test
+# file from another test file via a text transform + black; no alint kind
+# expresses "file B == transform(file A)".
+# ════════════════════════════════════════════════════════════════════════
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+
+  # ══════════════════════════════════════════════════════════════════════
+  # A1 — per-file MIT license header on every lib/sqlalchemy source file.
+  #
+  # Enforced by tools/normalize_file_headers.py --check (lint session).
+  # Every .py/.pyx/.pxd under lib/sqlalchemy MUST begin with:
+  #     # <relative/path>
+  #     # Copyright (C) <start>-<end> the SQLAlchemy authors and contributors
+  #     # <see AUTHORS file>
+  #     #
+  #     # This module is part of SQLAlchemy and is released under
+  #     # the MIT License: https://www.opensource.org/licenses/mit-license.php
+  #
+  # Line 1 is the file's own relative path (dynamic); the copyright start
+  # year varies per file (2005/2010/2020/...) and the end year rolls, so
+  # the pattern uses \d{4}-\d{4}.
+  #
+  # IMPORTANT (verified against the clone, calibration R4): the tool's
+  # *actual* invariant is LOOSER than the full fixed block. checker
+  # (normalize_file_headers.py:10-13) only requires (a) a "# <path>" first
+  # comment and (b) a line matching the copyright regex; it does NOT re-
+  # verify the MIT-license lines line-for-line, and it tolerates extra
+  # attribution lines (e.g. "# Includes alterations by ...", a second
+  # per-author Copyright line) and a wrapped "<see AUTHORS file>". A naive
+  # full-block regex FALSE-FIRES on 6 such files (log.py, engine/
+  # processors.py, the async dialect drivers ...). So the file_header
+  # pattern matches the robust enforced invariant: path-comment line 1 +
+  # the copyright line on line 2. (The self-referential "line 1 == this
+  # file's own relative path" semantic is NOT checkable by a static regex.)
+  # ──────────────────────────────────────────────────────────────────────
+  - id: sqla-source-license-header
+    kind: file_header
+    paths:
+      include: ["lib/sqlalchemy/**/*.py", "lib/sqlalchemy/**/*.pyx", "lib/sqlalchemy/**/*.pxd"]
+    lines: 2
+    pattern: '^# [\w./+-]+\.(?:py|pyx|pxd)\n# Copyright \(C\) \d{4}-\d{4} the SQLAlchemy authors and contributors'
+    level: error
+    message: >-
+      Every lib/sqlalchemy source file must carry the standard header
+      (path comment on line 1 + "Copyright (C) <years> the SQLAlchemy
+      authors and contributors" on line 2). Run
+      `python tools/normalize_file_headers.py` to regenerate.
+
+  # ══════════════════════════════════════════════════════════════════════
+  # A2 — the generated cython-import block in every *_cy.py file.
+  #
+  # Enforced by tools/cython_imports.py --check (lint session). Each
+  # lib/sqlalchemy/**/*_cy.py must contain exactly one block bounded by
+  # "# START GENERATED CYTHON IMPORT" / "# END GENERATED CYTHON IMPORT".
+  # The block body is a FIXED literal (no runtime introspection), so a
+  # whole-file content match expresses it natively. The block sits below
+  # the header + mypy comments, so this is file_content_matches (whole
+  # file), not file_header (leading lines).
+  # ──────────────────────────────────────────────────────────────────────
+  - id: sqla-cython-import-block-present
+    kind: file_content_matches
+    paths:
+      include: ["lib/sqlalchemy/**/*_cy.py"]
+    pattern: '# START GENERATED CYTHON IMPORT\n# This section is automatically generated by the script tools/cython_imports\.py\ntry:'
+    level: error
+    message: >-
+      Every *_cy.py module must contain the generated cython-import block
+      (tools/cython_imports.py). Run `python tools/cython_imports.py` to
+      regenerate it.
+
+  # ══════════════════════════════════════════════════════════════════════
+  # VALUE-ADD (NOT a repo-enforced check; recorded outside the A/B/C/D
+  # ratio per calibration R3/R5). Structural assertions SQLAlchemy does
+  # not gate on, but that alint can add cheaply:
+  #
+  #   * The README family exists (README.rst is the project readme;
+  #     README.unittests.rst / README.dialects.rst are the test/dialect
+  #     guides). oss-baseline already covers README presence generically.
+  #   * AUTHORS file referenced by every header actually exists.
+  #
+  # NOTE on version coherence: lib/sqlalchemy/__init__.py __version__ =
+  # "2.1.0b3" but doc/build/conf.py release = "2.1.0b2" — these DELIBERATELY
+  # differ (docs lag), and SQLAlchemy enforces no coherence gate, so a
+  # cross_file_value_equals here is NOT added (it would (correctly) fail
+  # against the clone and is not an enforced check).
+  # ──────────────────────────────────────────────────────────────────────
+  - id: sqla-authors-file-exists
+    kind: file_exists
+    paths: ["AUTHORS"]
+    root_only: true
+    level: warning
+    message: >-
+      The per-file license headers point at "<see AUTHORS file>"; the
+      AUTHORS file must exist at the repo root.
+
+  - id: sqla-unittests-guide-exists
+    kind: file_exists
+    paths: ["README.unittests.rst"]
+    root_only: true
+    level: info
+    message: >-
+      README.unittests.rst (the canonical test-running guide referenced
+      throughout CONTRIBUTING / the dev guide) should be present.

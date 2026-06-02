@@ -1,0 +1,209 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# fastlane/fastlane @ c30e449d26dc99fa3841f94f3a2a505a676aedbf
+# Ruby mobile-CI CLI; a single-gem monorepo of ~19 tool subdirs
+# (cert, deliver, gym, match, ...), bundler-managed, RSpec + RuboCop.
+#
+# Where validation lives:
+#   .circleci/config.yml ... the REAL gate. jobs:
+#       tests_macos / tests_ubuntu .... `bundle exec fastlane execute_tests`
+#                                       (rspec) + `bundle exec danger` (PR meta)
+#                                       + Ruby-3.0 deprecation/obsolete grep on a
+#                                       runtime test-artifact (test-reports/ruby_warnings.txt)
+#       validate_fastlane_swift_generation . `fastlane generate_swift_api`
+#                                       (generates + swift-builds Actions.swift; NOT git-diff freshness)
+#       validate_documentation ........ `fastlane validate_docs`
+#       lint_source_code .............. `fastlane lint_source`
+#   .github/workflows/ci.yml .......... duplicate rspec on windows + Ruby-3.0 grep
+#   .github/workflows/module_test.yml . build gem, assert executables, load each tool module
+#   Rakefile / fastlane/Fastfile ...... the bespoke validators (lanes)
+#   Dangerfile ........................ PR-meta review warnings (size/WIP/changelog) — runtime, D
+#   internal/rubocop/*.rb ............. 3 custom AST RuboCop cops — D (syntax-tree)
+#
+# alint expresses the repo-STATE subset of `lint_source` declaratively
+# (the ensure_no_debug_code greps are literally
+#   `grep -RE <text> <path> --include=*.rb --exclude-dir ...`)
+# plus the bin/ executables invariant and the branding convention,
+# and shells out for the language-aware tools (rspec/rubocop/shellcheck/docs).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A — `lint_source` debug-code firewall  (ensure_no_debug_code)
+  # fastlane/Fastfile:28-49. Each call is literally
+  #   grep -RE '<text>' <path> --include=*.rb --exclude-dir .bundle --exclude-dir vendor
+  # => file_content_forbidden over **/*.rb, excluding vendored/bundle dirs.
+  # ════════════════════════════════════════════════════════════════
+  - id: fl-no-debugger-breakpoints
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.rb"]
+      exclude: ["vendor/**", ".bundle/**", "**/playground.rb"]
+    pattern: 'binding\.(irb|pry)'
+    level: error
+    message: >-
+      Debug breakpoint (binding.irb / binding.pry) left in code. CI gate:
+      `fastlane lint_source` → ensure_no_debug_code(text: "binding\\.(irb|pry)").
+
+  - id: fl-no-todo-comments
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.rb"]
+      exclude: ["vendor/**", ".bundle/**"]
+    pattern: '# TODO'
+    level: warning
+    message: >-
+      `# TODO` left in a .rb file. CI gate: `fastlane lint_source` →
+      ensure_no_debug_code(text: "# TODO"). (warning here; CI fails the lane.)
+
+  - id: fl-no-rspec-focus
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.rb"]
+      exclude: ["vendor/**", ".bundle/**"]
+    pattern: 'now: '
+    level: error
+    message: >-
+      `now: ` (RSpec focus marker) left in code — would silently narrow the
+      suite. CI gate: `fastlane lint_source` → ensure_no_debug_code(text: "now: ").
+
+  - id: fl-no-merge-conflict-markers
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.rb"]
+      exclude: ["vendor/**", ".bundle/**"]
+    pattern: '<<<<<<<'
+    level: error
+    message: >-
+      Unresolved merge-conflict marker in a .rb file. CI gate:
+      `fastlane lint_source` → ensure_no_debug_code(text: "<<<<<<<").
+
+  # ════════════════════════════════════════════════════════════════
+  # A — module-boundary / layering firewall  (ALSO a file-graph edge source)
+  # spaceship/lib and credentials_manager/lib MUST NOT call fastlane_core's
+  # `UI.` facility — they are lower in the dependency stack and do not depend
+  # on fastlane_core. fastlane/Fastfile:37-38:
+  #   ensure_no_debug_code(text: " UI\\.", path: "spaceship/lib", extension: ".rb")
+  #   ensure_no_debug_code(text: " UI\\.", path: "credentials_manager/lib", extension: ".rb")
+  # Edge source = content regex (token presence) scoped to a module dir.
+  # ════════════════════════════════════════════════════════════════
+  - id: fl-spaceship-no-ui-dependency
+    kind: file_content_forbidden
+    paths:
+      include: ["spaceship/lib/**/*.rb"]
+    pattern: ' UI\.'
+    level: error
+    message: >-
+      spaceship/lib must not reference fastlane_core's `UI.` — spaceship sits
+      below fastlane_core in the dependency stack and cannot require it. CI gate:
+      ensure_no_debug_code(text: " UI\\.", path: "spaceship/lib"). (layering firewall)
+
+  - id: fl-credentials-manager-no-ui-dependency
+    kind: file_content_forbidden
+    paths:
+      include: ["credentials_manager/lib/**/*.rb"]
+    pattern: ' UI\.'
+    level: error
+    message: >-
+      credentials_manager/lib must not reference fastlane_core's `UI.` — same
+      layering reason as spaceship. CI gate:
+      ensure_no_debug_code(text: " UI\\.", path: "credentials_manager/lib").
+
+  # ════════════════════════════════════════════════════════════════
+  # A — `bin/` executables invariant  (module_test.yml sanity check)
+  # module_test.yml:54 asserts the built gem's spec.executables ==
+  #   %w(bin-proxy fastlane match_file).
+  # The gemspec derives that from `bin/*` minus `console`
+  # (fastlane.gemspec:56). So the tracked invariant is: bin/ holds exactly
+  # {bin-proxy, fastlane, match_file, console}. dir_only_contains expresses it.
+  # ════════════════════════════════════════════════════════════════
+  - id: fl-bin-executables-fixed
+    kind: dir_only_contains
+    select: "bin"
+    allow:
+      - "bin-proxy"
+      - "fastlane"
+      - "match_file"
+      - "console"
+    level: error
+    message: >-
+      bin/ must hold exactly {bin-proxy, fastlane, match_file, console};
+      module_test.yml asserts the shipped gem's executables are
+      [bin-proxy, fastlane, match_file] (console is excluded by the gemspec).
+      A new/removed bin would silently change the gem's CLI surface.
+
+  # ════════════════════════════════════════════════════════════════
+  # A (core subset) — branding convention  (ensure_tool_name_formatting)
+  # CONTRIBUTING.md "Branding": _fastlane_ and tool names are lowercase and
+  # italicized in prose; never `fastlane` / **fastlane** / <code>fastlane</code>
+  # / [fastlane] / <ins>fastlane</ins>. Enforced by ensure_tool_name_formatting
+  # (fastlane/helper/tool_name_formatting_helper.rb) over **/*.md.
+  # NOTE: the helper ALSO does a case-sensitivity scan with env-var/module
+  # exceptions — that nuanced arm is awkward in alint (see notes / C); the
+  # plain forbidden-form arm below is the native subset. CONTRIBUTING.md is
+  # exempt (it documents the ❌ bad forms on purpose).
+  # ════════════════════════════════════════════════════════════════
+  - id: fl-branding-no-code-fastlane
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.md"]
+      exclude: ["CONTRIBUTING.md", "vendor/**", ".bundle/**", "CHANGELOG.latest.md"]
+    pattern: '`_?fastlane_?`|\*\*fastlane\*\*|<code>fastlane</code>|<ins>fastlane</ins>'
+    level: warning
+    message: >-
+      Brand `fastlane` per CONTRIBUTING.md: lowercase + italic (_fastlane_),
+      never `fastlane` / **fastlane** / <code>fastlane</code> / <ins>fastlane</ins>.
+      CI gate: `fastlane validate_docs` → ensure_tool_name_formatting.
+
+  # ════════════════════════════════════════════════════════════════
+  # VALUE-ADD (NOT enforced by the repo; recorded per R5) — structure
+  # assertions alint can add but fastlane does not gate on.
+  # ════════════════════════════════════════════════════════════════
+  - id: fl-changelog-latest-exists
+    kind: file_exists
+    paths: ["CHANGELOG.latest.md"]
+    root_only: true
+    level: info
+    message: "Release pipeline reads CHANGELOG.latest.md (value-add; not a repo gate)."
+
+  - id: fl-gemfile-lock-tracked
+    kind: file_exists
+    paths: ["Gemfile.lock"]
+    root_only: true
+    level: info
+    message: >-
+      fastlane is an application gem and commits Gemfile.lock (value-add: the
+      hygiene/lockfiles bundle's intent, asserted here without forcing the bundle).
+
+  # ════════════════════════════════════════════════════════════════
+  # ORCHESTRATION VALUE-ADD (D tools wrapped; NOT in the coverage ratio).
+  # alint can be the single entrypoint that runs the language-aware gates.
+  # ════════════════════════════════════════════════════════════════
+  - id: fl-rubocop
+    kind: command
+    paths: ".rubocop.yml"
+    command: ["bundle", "exec", "rubocop"]
+    timeout: 600
+    level: error
+    message: "RuboCop (incl. fastlane's 3 custom AST cops) — D, wrapped for orchestration."
+
+  - id: fl-shellcheck
+    kind: command
+    paths: "Brewfile"
+    command: ["bash", "-c", "git ls-files -z '*.sh' '*.bash' | grep -z -v 'Pods-' | xargs -0 shellcheck"]
+    timeout: 300
+    level: warning
+    message: "shellcheck of tracked *.sh/*.bash — D (shell AST), wrapped (mirrors lint_source)."
+
+  - id: fl-rspec
+    kind: command
+    paths: ".rspec"
+    command: ["bundle", "exec", "rake", "test_all"]
+    timeout: 600
+    level: error
+    message: "RSpec suite via rake test_all — D (test execution), wrapped (execute_tests)."

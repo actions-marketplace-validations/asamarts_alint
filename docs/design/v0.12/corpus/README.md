@@ -43,5 +43,11 @@ trees, not current upstream.
   `protocolbuffers-protobuf`, `prettier-prettier`, `helm-helm`, `istio-istio`,
   `dotnet-runtime`, `microsoft-TypeScript`, `pnpm-pnpm`, `mastodon-mastodon`,
   `NixOS-nixpkgs`, `valkey-io-valkey`, `quarkusio-quarkus`, `AvaloniaUI-Avalonia`.
+- **Batch 6:** `git-git`, `google-guava`, `netty-netty`,
+  `junit-team-junit-framework`, `psf-black`, `pytest-dev-pytest`, `python-mypy`,
+  `python-poetry-poetry`, `sqlalchemy-sqlalchemy`, `Textualize-rich`,
+  `encode-httpx`, `ruby-ruby`, `jekyll-jekyll`, `Homebrew-brew`,
+  `fastlane-fastlane`, `phpstan-phpstan`, `guzzle-guzzle`, `vapor-vapor`,
+  `Alamofire-Alamofire`, `signalapp-Signal-Android`.
 
 Later batches append here as they pass their checkpoint.
