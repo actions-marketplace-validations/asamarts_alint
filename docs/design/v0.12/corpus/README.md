@@ -26,5 +26,11 @@ trees, not current upstream.
   `spring-projects-spring-boot`, `symfony-symfony`, `redis-redis`,
   `hashicorp-terraform`, `vitejs-vite`, `BurntSushi-ripgrep`,
   `dotnet-aspnetcore`, `phoenixframework-phoenix`.
+- **Batch 3:** `rails-rails`, `laravel-framework`, `gradle-gradle`,
+  `JetBrains-kotlin`, `postgres-postgres`, `openssl-openssl`,
+  `pandas-dev-pandas`, `numpy-numpy`, `swiftlang-swift`, `jgm-pandoc`,
+  `gohugoio-hugo`, `grafana-grafana`, `sveltejs-svelte`, `serde-rs-serde`,
+  `ansible-ansible`, `elastic-elasticsearch`, `neovim-neovim`,
+  `composer-composer`, `fastapi-fastapi`, `NixOS-nix`.
 
 Later batches append here as they pass their checkpoint.

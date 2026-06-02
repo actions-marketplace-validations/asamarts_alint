@@ -1,0 +1,186 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config — fastapi/fastapi @ 3d2aace42fdfe34077647e47f3ee9688161e2651
+#
+# Shape: Python web framework (single package `fastapi/`), pdm-backend build,
+# uv lockfile, community governance. ALL bespoke validation lives in:
+#   - .pre-commit-config.yaml  (prek/pre-commit; mirrored in CI via pre-commit.yml)
+#   - .github/workflows/**     (test / build-docs / guard-dependencies / zizmor / ...)
+#   - scripts/*.sh + scripts/docs.py  (the docs / README / translation generators)
+#
+# The enforced ADDRESSABLE surface is small: the repo is dominated by
+# execution/semantic gates (ruff, mypy, ty, typos, pytest @ 100% coverage,
+# zizmor, codspeed) which are D non-goals. The handful of repo-STATE checks
+# alint expresses natively are below; everything shelled out is recorded as
+# orchestration value-add, NOT as alint expressing the check.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A-ITEMS — enforced checks alint expresses NATIVELY
+  # ════════════════════════════════════════════════════════════════
+
+  # ── A1: README codegen-freshness ─────────────────────────────────
+  # pre-commit `generate-readme` hook: `scripts/docs.py generate-readme`
+  # regenerates README.md from docs/en/docs/index.md (+ sponsors.yml) and
+  # exits 1 on drift. The canonical codegen-freshness check. The repo's
+  # own generator writes-in-place and returns nonzero on staleness, so we
+  # wrap it as the freshness checker (command_idempotent: nonzero == drift).
+  - id: fastapi-readme-generated-fresh
+    kind: command_idempotent
+    paths: "README.md"
+    command: ["uv", "run", "./scripts/docs.py", "generate-readme"]
+    timeout: 180
+    level: error
+    message: |
+      README.md must be regenerated from docs/en/docs/index.md whenever
+      index.md or docs/en/data/sponsors.yml change
+      (pre-commit hook `generate-readme`). Run
+      `uv run ./scripts/docs.py generate-readme`.
+
+  # ── A2: mkdocs.yml languages section freshness ───────────────────
+  # pre-commit `update-languages`: scripts/docs.py update-languages rewrites
+  # docs/en/mkdocs.yml's `extra.alternate` from the on-disk language dirs +
+  # docs/language_names.yml, exits 1 on drift. Codegen-freshness again.
+  - id: fastapi-mkdocs-languages-fresh
+    kind: command_idempotent
+    paths: "docs/en/mkdocs.yml"
+    command: ["uv", "run", "./scripts/docs.py", "update-languages"]
+    timeout: 180
+    level: error
+    message: |
+      docs/en/mkdocs.yml `extra.alternate` must list every available
+      translation (pre-commit hook `update-languages`). Run
+      `uv run ./scripts/docs.py update-languages`.
+
+  # ── A3: no non-translated pages leak into translation dirs ───────
+  # pre-commit `ensure-non-translated`: scripts/docs.py ensure-non-translated
+  # forbids the EN-only sections (reference/, release-notes.md, management*.md,
+  # contributing.md, translations.md, fastapi-people.md, external-links.md,
+  # newsletter.md) from appearing under any non-`en` language tree, exits 1.
+  # This is a STRUCTURE INVARIANT ("no Y under Z") — natively file_absent.
+  # alint's globber does NOT support the `!(en)` extglob negation, and a
+  # bare `docs/*/docs/reference/**` over-matches the legitimate EN source.
+  # So enumerate the 11 non-`en` language dirs explicitly via brace
+  # expansion (supported) — verified to FIRE on a planted violation.
+  - id: fastapi-no-translated-reference
+    kind: file_absent
+    paths:
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/reference/**"
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/release-notes.md"
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/fastapi-people.md"
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/external-links.md"
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/newsletter.md"
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/management-tasks.md"
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/management.md"
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/contributing.md"
+      - "docs/{de,es,fr,ja,ko,pt,ru,tr,uk,zh,zh-hant}/docs/translations.md"
+    level: error
+    message: |
+      EN-only sections (reference/, release-notes.md, management*,
+      contributing.md, translations.md, fastapi-people.md,
+      external-links.md, newsletter.md) must NOT be translated — they may
+      not appear under a non-`en` docs/<lang>/docs/ tree
+      (pre-commit hook `ensure-non-translated`).
+
+  # ── A4: no trailing whitespace (pre-commit `trailing-whitespace`) ─
+  # pre-commit/pre-commit-hooks `trailing-whitespace` hook, also mirrored
+  # in CI (pre-commit.yml). Natively `no_trailing_whitespace`. Scoped to
+  # the source/docs/scripts/tests Python (the hook runs on every text file;
+  # we exclude the .venv that `uv run` may materialize locally).
+  - id: fastapi-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["fastapi/**/*.py", "docs_src/**/*.py", "tests/**/*.py", "scripts/**/*.py"]
+      exclude: [".venv/**", "**/__pycache__/**"]
+    level: error
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  # ── A5: files end with a newline (pre-commit `end-of-file-fixer`) ─
+  - id: fastapi-final-newline
+    kind: final_newline
+    paths:
+      include: ["fastapi/**/*.py", "docs_src/**/*.py", "scripts/**/*.py"]
+      exclude: [".venv/**", "**/__pycache__/**"]
+    level: error
+    fix:
+      file_append_final_newline: {}
+
+  # ── (value-add) static-tree analogue of check-added-large-files ──
+  # .pre-commit `check-added-large-files --maxkb=750` (exclude uv.lock) is a
+  # byte cap on ADDED files — alint has no `file_max_size`, and the
+  # delta-on-add semantics aren't stateless-expressible → recorded as a D/B
+  # note, not enforced here (left off).
+  - id: fastapi-no-oversized-files
+    kind: file_min_size
+    paths: ["uv.lock"]
+    min_bytes: 1
+    level: "off"
+
+  # ════════════════════════════════════════════════════════════════
+  # SHELL-OUTS — language/semantic tools (D non-goals; orchestration
+  # value-add only, NOT counted as alint expressing the check, per R2)
+  # ════════════════════════════════════════════════════════════════
+
+  # scripts/lint.sh: mypy + ty + ruff check + ruff format --check
+  - id: fastapi-lint
+    kind: command
+    paths: "pyproject.toml"
+    command: ["bash", "scripts/lint.sh"]
+    timeout: 600
+    level: error
+
+  # zizmor workflow-security lint (.pre-commit + zizmor.yml)
+  - id: fastapi-zizmor
+    kind: command
+    paths: ".github/workflows"
+    command: ["uv", "run", "zizmor", "."]
+    timeout: 300
+    level: warning
+
+  # ════════════════════════════════════════════════════════════════
+  # VALUE-ADD STRUCTURE / MANIFEST ASSERTIONS
+  # (NOT enforced by the repo's own gates → excluded from coverage, R3/R5)
+  # ════════════════════════════════════════════════════════════════
+
+  # pyproject declares the MIT license (matches root LICENSE)
+  - id: fastapi-pyproject-license-mit
+    kind: toml_path_equals
+    paths: "pyproject.toml"
+    path: "$.project.license"
+    equals: "MIT"
+    level: info
+    message: "pyproject.toml [project].license should declare MIT (matches root LICENSE)."
+
+  # pyproject declares the version source (pdm dynamic, from fastapi/__init__.py)
+  - id: fastapi-version-is-dynamic
+    kind: toml_path_matches
+    paths: "pyproject.toml"
+    path: "$.project.dynamic[*]"
+    matches: "version"
+    level: info
+    message: "Version is sourced dynamically from fastapi/__init__.py (pdm); keep it dynamic."
+
+  # .python-version pin is a bare MAJOR.MINOR (workflows read it)
+  - id: fastapi-python-version-pin
+    kind: file_content_matches
+    paths: ".python-version"
+    pattern: '\A3\.\d+\s*\z'
+    level: info
+    message: ".python-version should be a bare 3.x pin (workflows use python-version-file)."
+
+  # The docs translation master list exists (update-languages depends on it)
+  - id: fastapi-language-names-exists
+    kind: file_exists
+    paths: ["docs/language_names.yml"]
+    root_only: false
+    level: info
+    message: "docs/language_names.yml (ISO-639-1 master list) is required by update-languages."

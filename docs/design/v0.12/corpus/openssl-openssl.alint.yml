@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — openssl/openssl @ 0a396bdd1ce5dc773b7684de56b6f1c7bae1f077
+# (v0.12 100-repo study, shape C: crypto C library, make + Perl Configure,
+#  OpenSSL Foundation governance, Apache-2.0 licensed).
+#
+# WHERE THE BESPOKE-VALIDATION SURFACE LIVES (scanned the full superset):
+#   * .github/workflows/** — ci.yml (~30 jobs) + ~30 specialised workflows.
+#     The repo-STATE (non-build) gates are:
+#       check_update ....... make build_generated && make update && git diff
+#                            --exit-code  (CODEGEN FRESHNESS — regenerates the
+#                            symbol-ordinal manifests util/lib{crypto,ssl}.num,
+#                            providers.num, opensslv.h, etc. and asserts the
+#                            tree is unchanged). [D: runs Configure + Perl gen]
+#       check_docs ......... make doc-nits / md-nits / help (POD + markdown
+#                            prose linters). [D: NLP/doc tooling]
+#       style-checks.yml ... pre-commit run = clang-format(WebKit) + codespell.
+#                            [D: formatter + spell NLP]
+#       fips-checksums.yml . make fips-checksums + diff-fips-checksums (FIPS
+#                            module source digest) + abidiff. [D: build + hash
+#                            recompute + ABI graph]
+#       check-news-changes . suggests a NEWS/CHANGES entry when a PR touches
+#                            include/openssl, a CVE, or Configure options.
+#                            [D: operates on git diffs, not tree state]
+#       windows.yml ........ checkplatformsyms.pl (built-DLL export allowlist).
+#                            [D: inspects compiled binaries]
+#       static-analysis .... Coverity. [D]
+#   * .pre-commit-config.yaml — codespell + clang-format (mirrors style-checks).
+#   * util/ — home-grown validators: check-malloc-errs, find-unused-errs,
+#     ck_errf.pl, checkplatformsyms.pl (all run code or grep source semantics → D).
+#   * CONTRIBUTING.md §2 — DOCUMENTED REVIEW CONVENTION: every source file must
+#     open with the OpenSSL copyright + Apache-2.0 license header. This is the
+#     one cleanly-addressable enforced check (940/945 C files carry it). -> A.
+#   * No CODEOWNERS, no .editorconfig, no dependabot/renovate, no committed git
+#     hooks, no tracked lockfile (C project), NO NOTICE file (not an ASF repo).
+#
+# The ENFORCED addressable surface is dominated by the per-file header (A1).
+# Almost everything else OpenSSL gates on is build/test/formatter/NLP/codegen
+# execution that alint orchestrates but does not reimplement (D). The rules
+# below: (1) express A1 natively, then (2) add alint VALUE-ADD structural
+# assertions OpenSSL does not itself gate on (recorded separately, NOT in the
+# coverage ratio per R3/R5).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/compliance/apache-2@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A1 — per-file OpenSSL copyright + Apache-2.0 license header
+  #   ENFORCED: CONTRIBUTING.md §2 ("All source files should start with the
+  #   following text ... Copyright 20xx-20yy The OpenSSL Project Authors ...
+  #   Licensed under the Apache License 2.0"). A documented review convention
+  #   (R5 counts it). The bundled apache-2-source-has-license-header does NOT
+  #   match OpenSSL's "Apache License 2.0" short form (its accept-pattern wants
+  #   "Version 2" / the ASF preamble / SPDX) — so we express the OpenSSL form
+  #   ourselves and turn the bundled rule off below to avoid a double-fire.
+  #   This is the only natively-expressible item in OpenSSL's enforced surface.
+  # ════════════════════════════════════════════════════════════════
+  - id: openssl-source-copyright-header
+    kind: file_header
+    paths:
+      include:
+        - "**/*.{c,h,c.in,h.in,pl,pm,sh}"
+      exclude:
+        - "fuzz/corpora/**"
+        - "**/*.pem"
+        # Generated headers explicitly excluded by .pre-commit-config clang-format:
+        - "crypto/objects/obj_dat.h"
+        - "crypto/objects/obj_xref.h"
+        - "include/openssl/obj_mac.h"
+    lines: 10
+    pattern: 'Copyright .* The OpenSSL (Project )?Authors\. All [Rr]ights [Rr]eserved\.'
+    level: warning
+    message: >-
+      OpenSSL source files must open with the project copyright +
+      Apache-2.0 license header (CONTRIBUTING.md §2):
+      "Copyright 20xx-20yy The OpenSSL Project Authors. All Rights
+      Reserved." followed by "Licensed under the Apache License 2.0".
+
+  # The bundled apache-2 source-header rule's accept-pattern does not include
+  # the bare "Apache License 2.0" short form OpenSSL uses, so it would
+  # false-positive on every OpenSSL file. We rely on A1 above instead.
+  - id: apache-2-source-has-license-header
+    level: "off"
+
+  # OpenSSL is Apache-2.0 LICENSED but is NOT an ASF project and ships no
+  # NOTICE file by design (the bundle note: NOTICE is the ASF redistribution
+  # artefact). Disable the NOTICE check rather than force a non-existent file.
+  - id: apache-2-notice-file-exists
+    level: "off"
+
+  # ════════════════════════════════════════════════════════════════
+  # VALUE-ADD STRUCTURAL ASSERTIONS (NOT in the coverage ratio — R3/R5)
+  # Structure alint CAN assert but OpenSSL does not itself gate on.
+  # ════════════════════════════════════════════════════════════════
+
+  # The exported-symbol ordinal manifests must exist (regenerated by
+  # `make update` via util/mkdef.pl; the check_update job diffs them).
+  - id: openssl-ordinal-manifests-exist
+    kind: file_exists
+    paths:
+      include:
+        - "util/libcrypto.num"
+        - "util/libssl.num"
+        - "util/providers.num"
+    level: warning
+    message: >-
+      The libcrypto / libssl / providers symbol-ordinal manifests
+      (regenerated by `make update`) must be present and tracked.
+
+  # The structural version-of-record file exists and declares the
+  # MAJOR/MINOR/PATCH fields the build + opensslv.h template consume.
+  - id: openssl-version-dat-fields
+    kind: file_content_matches
+    paths: "VERSION.dat"
+    pattern: '(?s)MAJOR=\d+.*MINOR=\d+.*PATCH=\d+.*SHLIB_VERSION=\d+'
+    level: warning
+    message: >-
+      VERSION.dat must declare MAJOR / MINOR / PATCH / SHLIB_VERSION
+      (consumed by Configure and templated into opensslv.h).
+
+  # The validation-relevant config/convention files exist.
+  - id: openssl-precommit-config-exists
+    kind: file_exists
+    paths: ".pre-commit-config.yaml"
+    level: info
+  - id: openssl-clang-format-config-exists
+    kind: file_exists
+    paths: ".clang-format"
+    level: info
+  - id: openssl-ci-workflow-exists
+    kind: file_exists
+    paths: ".github/workflows/ci.yml"
+    level: warning
+  - id: openssl-changes-md-exists
+    kind: file_exists
+    paths: "CHANGES.md"
+    root_only: true
+    level: info
+  - id: openssl-news-md-exists
+    kind: file_exists
+    paths: "NEWS.md"
+    root_only: true
+    level: info

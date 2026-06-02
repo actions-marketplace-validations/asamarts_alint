@@ -1,0 +1,202 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for JetBrains/kotlin @ 155ca706b548d7d1c7c007d2689400800b0440f1
+# (v0.12 case study — Stage A). CI is TeamCity (.space/safe-merge.json); the
+# in-repo enforced surface lives in repo/codebase-tests/** (JUnit conformance
+# tests run from rootDir) + gradle dependency-verification + documented
+# conventions in .ai/guidelines.md. Most of that surface is execution/AST/
+# bytecode (D); the items below are the natively-expressible (A) slice plus
+# alint structural value-add (clearly marked, excluded from the coverage ratio).
+#
+# Hygiene bundles deliberately NOT extended repo-wide: this is a ~5M-LOC
+# monorepo dominated by compiler testData; oss/java trailing-whitespace +
+# final-newline sweeps would emit tens of thousands of intentional-fixture
+# violations. They are recorded as C tuning (wants paths.exclude of testData).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+# Severity floor stays at the bundle defaults; this study config is read-only.
+
+rules:
+  # ====================================================================
+  # A — natively expressible, mirrors a repo-ENFORCED conformance check
+  # (repo/codebase-tests/.../CodeConformanceTest.kt + LicensesTests.kt)
+  # ====================================================================
+
+  # CodeConformanceTest.testNotUsingCanonicalFileApi (KT-69613):
+  # .canonicalPath / .canonicalFile banned in build-tool source trees.
+  - id: kt-no-canonical-file-api
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "compiler/build-tools/**/src/**/*.kt"
+        - "compiler/daemon/**/src/**/*.kt"
+        - "compiler/incremental-compilation-impl/src/**/*.kt"
+        - "build-common/src/**/*.kt"
+        - "jps/jps-common/src/**/*.kt"
+        - "jps/jps-plugin/src/**/*.kt"
+    pattern: '\.canonical(Path|File)\b'
+    level: error
+    message: >-
+      KT-69613: canonicalPath / canonicalFile must not be used (resolves
+      symlinks, loses FileSystem info). Mirrors CodeConformanceTest.
+
+  # CodeConformanceTest.testNoDirectPathToStringConversion (KT-83715):
+  # .absolutePathString() banned in the kotlin-build-tools API/impl trees.
+  - id: kt-no-absolute-path-string
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "compiler/build-tools/kotlin-build-tools-api/**/*.kt"
+        - "compiler/build-tools/kotlin-build-tools-impl/**/*.kt"
+        - "compiler/build-tools/kotlin-build-tools-compat/**/*.kt"
+        - "compiler/build-tools/kotlin-build-tools-cri-impl/**/*.kt"
+    pattern: '\.absolutePathString\(\)'
+    level: error
+    message: >-
+      KT-83715: absolutePathString() loses FileSystem information; use a
+      FileSystem-aware conversion. Mirrors CodeConformanceTest.
+
+  # CodeConformanceTest.testNoBadSubstringsInProjectCode — the banned-package
+  # import firewall (subset of the 6 rules; the cleanest, allowlist-free ones).
+  - id: kt-no-deprecated-jet-package
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.kt", "**/*.java"]
+      exclude:
+        - "**/testData/**"
+        - "dependencies/**"
+        - "repo/codebase-tests/**"
+    pattern: 'org\.jetbrains\.jet\b'
+    level: error
+    message: >-
+      Package org.jetbrains.jet is deprecated in favor of org.jetbrains.kotlin.
+      Mirrors CodeConformanceTest.testNoBadSubstringsInProjectCode.
+
+  - id: kt-no-jcommander-internal
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.kt", "**/*.java"]
+      exclude:
+        - "**/testData/**"
+        - "dependencies/**"
+        - "repo/codebase-tests/**"
+    pattern: 'com\.beust\.jcommander\.internal'
+    level: error
+    message: >-
+      com.beust.jcommander.internal won't work without TestNG on the IDEA
+      plugin classpath; use Guava collections. Mirrors CodeConformanceTest.
+
+  - id: kt-no-trove
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.kt", "**/*.java"]
+      exclude:
+        - "**/testData/**"
+        - "dependencies/**"
+        - "repo/codebase-tests/**"
+    pattern: 'gnu\.trove'
+    level: error
+    message: >-
+      Avoid the trove library in new code. Mirrors CodeConformanceTest.
+
+  # CodeConformanceTest.testRepositoriesAbuse — bintray must not appear in
+  # build scripts (use the cache redirector) outside the redirector module.
+  - id: kt-no-bintray-repo
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "**/*.gradle.kts"
+        - "**/*.gradle"
+      exclude:
+        - "repo/gradle-settings-conventions/cache-redirector/**"
+    pattern: 'bintray\.com'
+    level: error
+    message: >-
+      Direct bintray.com repositories are banned; import via the cache
+      redirector. Mirrors CodeConformanceTest.testRepositoriesAbuse.
+
+  # CodeConformanceTest.testNoHardcodedPathSeparatorInSSOT (KT-84449):
+  # an unescaped ${File.pathSeparator} in the arguments-DSL SSoT is banned.
+  - id: kt-no-hardcoded-path-separator-ssot
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "compiler/arguments/src/org/jetbrains/kotlin/arguments/dsl/types/**/*.kt"
+    # NOTE: the repo test uses a negative-lookbehind (?<![\\$]) to allow the
+    # escaped / raw-string forms; alint's regex engine has no look-behind, so
+    # this forbids the bare token (small fidelity loss vs CodeConformanceTest).
+    pattern: '\$\{File\.pathSeparator\}'
+    level: error
+    message: >-
+      KT-84449: platform-specific File.pathSeparator must be escaped
+      (\${File.pathSeparator}) or in a raw $$ string. Mirrors CodeConformanceTest.
+
+  # LicensesTests.testLicensesAreExistingFiles — every third-party license file
+  # referenced from license/README.md must exist on disk.
+  # (registry_paths_resolve: the README is the manifest, base = repo root.)
+  - id: kt-license-references-resolve
+    kind: registry_paths_resolve
+    source: license/README.md
+    extract:
+      regex: '\[(license/third_party/[^\]]+\.txt)\]'
+    base: lint_root
+    level: error
+    message: >-
+      A third-party license file referenced from license/README.md is missing.
+      Mirrors LicensesTests.testLicensesAreExistingFiles.
+
+  # ====================================================================
+  # alint STRUCTURAL VALUE-ADD — NOT a repo-enforced gate, excluded from
+  # the A/B/C/D coverage ratio (R3/R5). Recorded for completeness.
+  # ====================================================================
+
+  # Documented convention (.ai/guidelines.md): a sub-area CLAUDE.md is exactly
+  # "@AGENTS.md". Asserted on the known area dirs (root CLAUDE.md exempt).
+  - id: kt-area-claude-md-is-agents-stub
+    kind: file_content_matches
+    paths:
+      include:
+        - "compiler/CLAUDE.md"
+        - "analysis/CLAUDE.md"
+        - "compiler/psi/CLAUDE.md"
+        - "compiler/build-tools/CLAUDE.md"
+        - "analysis/test-data-manager/CLAUDE.md"
+        - "compiler/fir/analysis-tests/CLAUDE.md"
+        - "libraries/tools/kotlin-gradle-plugin/CLAUDE.md"
+        - "libraries/tools/kotlin-gradle-plugin-api/CLAUDE.md"
+        - "libraries/tools/kotlin-gradle-plugin-integration-tests/CLAUDE.md"
+    pattern: '^@AGENTS\.md\s*$'
+    level: warning
+    message: >-
+      Per .ai/guidelines.md, a sub-area CLAUDE.md must contain only "@AGENTS.md".
+
+  # The canonical Apache-2 governance files the repo keeps under license/.
+  - id: kt-license-txt-exists
+    kind: file_exists
+    paths: license/LICENSE.txt
+    level: error
+  - id: kt-license-notice-exists
+    kind: file_exists
+    paths: license/NOTICE.txt
+    level: error
+  - id: kt-copyright-header-template-exists
+    kind: file_exists
+    paths: license/COPYRIGHT_HEADER.txt
+    level: warning
+
+  # Gradle dependency-verification manifest must be present (its hashes are
+  # ENFORCED by Gradle at build = D; asserting the manifest exists is value-add).
+  - id: kt-dependency-verification-metadata-exists
+    kind: file_exists
+    paths: gradle/verification-metadata.xml
+    level: error
+
+  # JS toolchain lockfile present (kotlin-js-store/yarn.lock is tracked).
+  - id: kt-js-store-lockfile-exists
+    kind: file_exists
+    paths: kotlin-js-store/yarn.lock
+    level: warning

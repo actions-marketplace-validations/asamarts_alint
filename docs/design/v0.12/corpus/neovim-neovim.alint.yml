@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# ============================================================================
+# neovim/neovim @ fb5aad1d07d68b3da38bc7ba5c6a7896b3dfcda5  (v0.12 case study)
+# ============================================================================
+# Shape: C-core + Lua-runtime EDITOR, CMake/Zig dual build, community
+# governance. The ENFORCED bespoke-validation surface is dominated by
+# tool-execution (D non-goals): stylua / uncrustify / clang-tidy /
+# clang-analyzer / clint.lua / luals / shellcheck / ts_query_ls / IWYU /
+# CodeQL / Coverity / lintcommit / lintdoc / ASAN+UBSAN / TSAN / valgrind /
+# the unit+functional+old test suites / -Werror builds (cmake, zig,
+# old-cmake, external-deps, windows) / zizmor. alint does NOT reimplement
+# any of those; it can only ORCHESTRATE them (value-add, not coverage).
+#
+# What alint expresses HERE is small and mostly value-add:
+#   * action-pinning POLICY (the C-tuning relaxation, below)
+#   * structural / declaration assertions the repo does NOT itself gate on
+#     (recorded as value-add, excluded from the coverage denominator)
+#
+# The two genuinely-ENFORCED addressable checks are NEW-KIND gaps (B), kept
+# as documented stubs at the bottom — neither runs cleanly today.
+#
+# NOT replaced (keep the existing tool — D non-goals):
+#   stylua, uncrustify, clang-tidy/-analyzer, src/clint.lua, lua-language-server,
+#   shellcheck, ts_query_ls, include-what-you-use, CodeQL, Coverity,
+#   scripts/lintcommit.lua, scripts/lintdoc.lua, ASAN/UBSAN/TSAN/valgrind,
+#   the test suites, -Werror builds, zizmor.
+
+version: 1
+
+extends:
+  # OSS hygiene baseline — README + LICENSE presence, no committed merge
+  # markers, no bidi controls, final newline, etc. (neovim ships README.md
+  # + LICENSE.txt at root, so the presence rules pass.)
+  - alint://bundled/oss-baseline@v1
+
+  # GitHub Actions hardening bundle — least-privilege `permissions`,
+  # workflow `name:`, action pinning. The pin rule is OVERRIDDEN below to
+  # match neovim's actual first/third-party policy (see C1).
+  - alint://bundled/ci/github-actions@v1
+
+# NOTE on R6 absent categories (recorded, NOT forced):
+#   * NO per-file license headers / SPDX in C or Lua sources — single root
+#     LICENSE.txt (Apache-2.0 + Vim license, "Neovim contributors"). The
+#     apache/governance + compliance/apache-2 header/NOTICE bundles are
+#     deliberately NOT extended — they would false-positive.
+#   * NO tracked lockfile. Dependency provenance lives in two hand-synced
+#     manifests (cmake.deps/deps.txt URL+SHA256 pairs; build.zig.zon
+#     .url+.hash) kept in sync by scripts/bump_deps.lua — NOT CI-gated.
+#   * NO pre-commit / husky / lefthook / committed git hooks.
+
+rules:
+  # ── C1 (TUNING): action-pinning policy override ───────────────────────
+  # neovim's ENFORCED policy (see .github/zizmor.yml `unpinned-uses`:
+  # `actions/*: ref-pin`, `github/*: ref-pin`) is: FIRST-PARTY actions
+  # (actions/*, github/*) MAY be tag-pinned (`@v6`); THIRD-PARTY actions
+  # MUST be SHA-pinned. The bundle's gha-pin-actions-to-sha is too strict
+  # (it would flag actions/checkout@v6 ×28). This override expresses the
+  # real policy: a `uses:` value that is NOT a local `./` action and NOT
+  # actions/*|github/* must be `<owner>/<repo>[/sub]@<40-hex-sha>`.
+  # This is the C bucket: expressible, but only by re-deriving the bundle
+  # rule per repo — wants a first-party-allowlist preset.
+  - id: gha-pin-actions-to-sha
+    kind: yaml_path_matches
+    paths: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    path: "$.jobs.*.steps[*].uses"
+    # Accept: SHA-pinned third-party | actions/* | github/* | local ./ |
+    # docker:// image refs (optional.yml uses a multiarch docker image).
+    matches: '^(\./.*|docker://.*|actions/[^@]+@.*|github/[^@]+@.*|[a-zA-Z0-9._/-]+@[a-f0-9]{40})$'
+    if_present: true
+    level: warning
+    message: >-
+      Third-party GitHub Action is not SHA-pinned. neovim policy
+      (.github/zizmor.yml) allows tag-pinning only for actions/* and
+      github/*; everything else must be pinned to a 40-char commit SHA.
+
+  # ── VALUE-ADD (NOT in the A/B/C/D denominator, per R3/R5) ─────────────
+  # Structural assertions the repo does NOT gate on. These PASS against the
+  # clone and demonstrate alint utility; recorded as value-add, never
+  # counted as enforced coverage.
+  #
+  # NOTE (alint usability finding, C-tuning): the config-policy assertions
+  # this repo invites — ".github/zizmor.yml declares unpinned-uses",
+  # "cmake.deps/deps.txt pins a SHA256 per tarball", "scripts/lintcommit.lua
+  # declares allowed_types" — are the natural job of `file_content_matches`.
+  # But that kind's `paths` are GLOBBED through the file index and a bare
+  # literal path (e.g. "cmake.deps/deps.txt") matches NOTHING; only "*"/"**"
+  # globs resolve, and a `dir/**` glob fires the per-file "must contain"
+  # check on every sibling (false positives). There is no clean
+  # single-literal-file content assertion (file_exists has root_only;
+  # file_content_matches does not). Those three rules are therefore OMITTED
+  # rather than shipped broken — see the worked verification in the record.
+
+  # Editor/style config files that the formatters consume exist.
+  - id: nvim-style-configs-exist
+    kind: file_exists
+    paths:
+      - ".editorconfig"
+      - ".stylua.toml"
+      - ".clang-format"
+      - ".clang-tidy"
+      - ".luarc.json"
+      - "src/uncrustify.cfg"
+    root_only: true
+    level: info
+    message: "Expected the committed formatter/linter config files to be present."
+
+  # Contributor + maintainer process docs exist.
+  - id: nvim-process-docs-exist
+    kind: file_exists
+    paths: ["CONTRIBUTING.md", "MAINTAIN.md", "BUILD.md", "INSTALL.md", "AGENTS.md"]
+    root_only: true
+    level: info
+    message: "Expected the contributor/maintainer process docs to be present."
+
+  # The vendored-dep checksum manifest + the dual zig manifest both exist
+  # (their hand-sync via scripts/bump_deps.lua is NOT CI-gated, R5).
+  - id: nvim-dep-manifests-exist
+    kind: file_exists
+    paths: ["cmake.deps/deps.txt", "build.zig.zon"]
+    root_only: true
+    level: info
+    message: "Expected the dependency provenance manifests to be present."
+
+  # ── B-ITEM STUBS (the genuinely-ENFORCED addressable gaps) ────────────
+  # Kept as documentation only — NOT active rules — because neither runs
+  # cleanly on a static clone today.
+  #
+  # B1 — generic CODEGEN-FRESHNESS ("regenerate, then `git diff --exit-code`
+  #      is clean across a path-set"). ENFORCED twice:
+  #        * docs.yml:21-28  — `make doc` must leave runtime/doc/*.txt +
+  #          runtime/lua/vim/_meta/*.gen.lua unchanged.
+  #        * test.yml zig-build-linux:267-268 — regenerate doctags, then
+  #          `diff -u runtime/doc/tags zig-out/runtime/doc/tags`.
+  #      `generated_file_fresh` only diffs a generator's STDOUT against ONE
+  #      target file; both neovim generators WRITE FILES IN PLACE and use
+  #      git-diff. Gap = a "run <cmd>; assert <path-glob> unchanged in git"
+  #      primitive (the file_dependency_graph freshness edge). 2 edge sources.
+  #
+  # B2 — counting CROSS-FILE TOKEN COHERENCE. ENFORCED by
+  #      scripts/linterrcodes.lua (docs.yml:33): every `EXX` error code
+  #      defined in src/nvim/**.c must be documented in runtime/doc/*.txt,
+  #      with a per-code occurrence-count budget (the `dup_allowed` table).
+  #      Gap = "every token matching regex R in file-set A appears in
+  #      file-set B with declared per-token counts." 1 edge source.

@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for grafana/grafana @ a54b2e1e9aaf979938813f6ed9e44de569fe1105
+# v0.12 case-study Stage A. Polyglot monorepo (Go backend + TS/JS frontend),
+# AGPL-3.0-only, single-vendor (Grafana Labs) governance, make + go + yarn(nx).
+#
+# Most of grafana's enforced surface is TOOL EXECUTION (golangci-lint, eslint,
+# prettier, tsc, gofmt, knip, madge, govulncheck, vale, shellcheck, actionlint,
+# zizmor, the CUE/swagger/k8s/jsonnet codegen-freshness gates, the go/frontend
+# test suites) -> D non-goals (alint orchestrates, does not reimplement).
+# This config expresses the A-items: existence/structure/hygiene + the cross-file
+# Go-version coherence + the reject-gh-secrets content firewall.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/go@v1
+  - alint://bundled/node@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # --- A: governance / structure that grafana gates on (CODEOWNERS + policybot) ---
+  - id: grafana-notice-exists
+    kind: file_exists
+    paths: [NOTICE.md]
+    root_only: true
+    level: error
+    message: "NOTICE.md must exist (Kibana-attribution + AGPL notice; CODEOWNERS-owned)."
+
+  - id: grafana-licensing-exists
+    kind: file_exists
+    paths: [LICENSING.md]
+    root_only: true
+    level: error
+    message: "LICENSING.md must exist (AGPL / enterprise licensing note; CODEOWNERS-owned)."
+
+  - id: grafana-governance-exists
+    kind: file_exists
+    paths: [GOVERNANCE.md]
+    root_only: true
+    level: warning
+    message: "GOVERNANCE.md must exist (project governance; CODEOWNERS-owned)."
+
+  - id: grafana-maintainers-exists
+    kind: file_exists
+    paths: [MAINTAINERS.md]
+    root_only: true
+    level: warning
+    message: "MAINTAINERS.md must exist (CODEOWNERS-owned)."
+
+  # --- A: AGPL SPDX boilerplate header used by Go codegen (hack/boilerplate.go.txt) ---
+  - id: grafana-boilerplate-spdx
+    kind: file_content_matches
+    paths: [hack/boilerplate.go.txt]
+    pattern: "SPDX-License-Identifier: AGPL-3.0-only"
+    level: error
+    message: "Go codegen boilerplate header must carry the AGPL-3.0-only SPDX line."
+
+  # --- A: cross-file Go toolchain-version coherence ---
+  # go-workspace-check enforces `make update-workspace` leaves go.mod/go.work in
+  # sync; the `go X.Y.Z` directive must match across the root module + workspace.
+  - id: grafana-go-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: go.mod
+      extract: { regex: 'go (\d+\.\d+\.\d+)' }
+    targets:
+      - file: go.work
+        extract: { regex: 'go (\d+\.\d+\.\d+)' }
+    level: error
+    message: "go.mod and go.work must declare the same Go toolchain version."
+
+  # --- C/partial: reject-gh-secrets policy approximation ---
+  # grafana forbids ${{ secrets.* }} other than GITHUB_TOKEN in workflows
+  # (Vault is the sanctioned secret source). The EXACT check needs an
+  # allow-list exception for GITHUB_TOKEN -- file_content_forbidden has no
+  # `allow:` field and the Rust `regex` crate has no negative-lookahead, so
+  # the precise "secrets.X where X != GITHUB_TOKEN" cannot be expressed (gap;
+  # see new_kind_candidates). This approximation forbids credential-shaped
+  # secret names that never collide with GITHUB_TOKEN; grafana is clean at the
+  # pin (only GITHUB_TOKEN is referenced), so this PASSES and guards regressions.
+  - id: grafana-no-credential-secrets
+    kind: file_content_forbidden
+    paths: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    pattern: 'secrets\.[A-Za-z0-9_]*(_PAT|_API_KEY|_PASSWORD|_CREDENTIAL)[A-Za-z0-9_]*'
+    level: warning
+    message: "Use Vault for secrets; credential-shaped GitHub secrets are banned in workflows (reject-gh-secrets policy)."
+
+  # --- A: config-policy assertions (alint value-add; recorded but low-stakes) ---
+  - id: grafana-editorconfig-trims-whitespace
+    kind: file_content_matches
+    paths: [.editorconfig]
+    pattern: "trim_trailing_whitespace = true"
+    level: info
+    message: ".editorconfig should declare trim_trailing_whitespace = true."
+
+  - id: grafana-zizmor-policy-exists
+    kind: file_exists
+    paths: [.github/zizmor.yml]
+    level: info
+    message: "zizmor action-pinning policy config should exist."
+
+  # --- A: structure invariants grafana relies on (lefthook, citools, generated policy) ---
+  - id: grafana-lefthook-config-exists
+    kind: file_exists
+    paths: [lefthook.yml]
+    root_only: true
+    level: info
+    message: "lefthook pre-commit config should exist (gofmt/prettier/cue-fix hooks)."
+
+  - id: grafana-renovate-config-exists
+    kind: file_exists
+    paths: [.github/renovate.json5]
+    level: info
+    message: "renovate config should exist (dependency automation)."

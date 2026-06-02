@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for laravel/framework @ 42b494e1ed2bc80511bca064c8a395b776ff1516
+# (v0.12 case study — PHP web-framework library, Composer monorepo that is
+# `splitsh-lite`-split into ~35 read-only `illuminate/*` subtree repos).
+#
+# What laravel/framework actually ENFORCES is dominated by execution checks
+# (PHPUnit across php/phpunit/stability/DB/queue/redis matrices, PHPStan on
+# src + types) — all deliberate non-goals (D) for alint. The addressable,
+# alint-expressible enforced surface is the *registry-path coherence* the
+# release tooling + Composer autoloader depend on, captured below as A items.
+# A small set of structural assertions the repo does not gate on are recorded
+# as value-add (clearly marked).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1   # README.md + LICENSE.md both present -> pass
+
+rules:
+  # ===================== A (enforced + natively expressible) =====================
+
+  # A1 — composer.json `autoload.files[*]`: each globally-autoloaded helper file
+  # must exist on disk. Composer fatals at autoload time if any entry is missing,
+  # so this is a Composer-enforced invariant. (9 entries; all resolve at the pin.)
+  - id: laravel-composer-autoload-files-resolve
+    kind: registry_paths_resolve
+    source: composer.json
+    extract: { json: "$.autoload.files[*]" }
+    base: registry_dir
+    expect: file
+    level: error
+    message: "Every composer.json autoload.files entry must exist on disk (Composer fatals otherwise)."
+
+  # A2 — composer.json `autoload-dev.files[*]`: dev-autoloaded fixtures must exist.
+  - id: laravel-composer-autoload-dev-files-resolve
+    kind: registry_paths_resolve
+    source: composer.json
+    extract: { json: "$['autoload-dev'].files[*]" }
+    base: registry_dir
+    expect: file
+    level: error
+    message: "Every composer.json autoload-dev.files entry must exist on disk."
+
+  # A3 — bin/split.sh enumerates `split 'src/Illuminate/<Component>'` for each
+  # component subtree pushed to its read-only illuminate/* repo. Each prefixed
+  # directory must exist or the release-time splitsh-lite run breaks. Regex
+  # capture group 1 pulls the path; entries must resolve to directories.
+  - id: laravel-split-component-dirs-resolve
+    kind: registry_paths_resolve
+    source: bin/split.sh
+    extract: { regex: "split '(src/Illuminate/[A-Za-z]+)'" }
+    base: lint_root
+    expect: dir
+    level: error
+    message: "Every component path split by bin/split.sh must be a real src/Illuminate/* directory."
+
+  # A4 — composer.json `autoload.psr-4` namespace roots must exist as directories.
+  - id: laravel-composer-psr4-dirs-resolve
+    kind: registry_paths_resolve
+    source: composer.json
+    extract: { json: "$.autoload['psr-4'].*" }
+    base: registry_dir
+    expect: dir
+    level: error
+    message: "Every composer.json autoload.psr-4 namespace root must be a real directory."
+
+  # ===================== value-add (NOT a repo-enforced gate; recorded separately) =====================
+
+  # V1 — version-channel coherence: the dev-master branch alias must be identical
+  # across the root composer.json and every per-component composer.json. Laravel
+  # hand-syncs this on each major; nothing in CI checks it (no gate, no documented
+  # review checklist) -> alint value-add, not in the coverage denominator.
+  - id: laravel-branch-alias-coherent
+    kind: cross_file_value_equals
+    source:
+      file: composer.json
+      extract: { json: "$.extra['branch-alias']['dev-master']" }
+    targets:
+      files: "src/Illuminate/*/composer.json"
+      extract: { json: "$.extra['branch-alias']['dev-master']" }
+    normalize: trim
+    level: warning
+    message: "All component composer.json files should share the root's dev-master branch-alias."
+
+  # NOTE: a "config.sort-packages == true" assertion was attempted via
+  # json_path_equals but REMOVED — the structured-path family drops non-string
+  # JSON nodes, so it cannot assert a boolean/numeric value (it would emit a
+  # spurious "path not found"). Recorded as a tuning gap, not shipped as a
+  # silently-failing rule.

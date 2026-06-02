@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config — gohugoio/hugo @ b01ecd4cd4377921efe427fed8a16326b85f2ace
+# Shape: Go · CLI/static-site-generator · mage build · community governance.
+#
+# WHERE HUGO'S VALIDATION LIVES (the enforced surface):
+#   .github/workflows/test.yml  — the ONLY validation CI. One matrix job
+#       (go 1.25/1.26 × ubuntu/windows) that runs, all as TOOL EXECUTION:
+#         gofmt (check_gofmt.sh) · staticcheck · go vet · go test -race
+#         (via `mage -v check` → Fmt+Vet+TestRace) · gotmplfmt -d (embedded
+#         template formatting diff) · dragonfly cross-build · dart-sass
+#         download checksum verify.  ALL of these are D (build/AST/test/
+#         formatter execution) — alint orchestrates but does not reimplement.
+#   .circleci/config.yml — RELEASE pipeline only (hugoreleaser build/archive/
+#       release on release-* branches); no validation gates.
+#   image.yml — Docker build + SBOM/provenance (D, build).
+#   check.sh / check_gofmt.sh / magefile.go — the same gofmt/staticcheck/
+#       vet/test tools, wrapped for local iteration. D.
+#   CONTRIBUTING.md — documented review conventions (R5): commit-message
+#       format, `Fixes #1234` refs, no-CGO, `./check.sh` must pass, AI
+#       disclosure. The machine-checkable ones (commit-message shape) need a
+#       NEW kind (B); the rest are semantic/process (D).
+#   AGENTS.md — `hdebug.Printf` must be removed before commit; ENFORCED at
+#       RUNTIME (panic when htesting.IsRealCI()) i.e. by the test suite, not
+#       a static gate → D (test execution).  (A static
+#       file_content_forbidden on `hdebug.Printf(` would be alint VALUE-ADD,
+#       cheaper than a full test run — recorded as value-add, not in the ratio.)
+#
+# Hugo's enforced surface is DOMINATED by tool execution. The genuinely
+# *addressable* (A/B/C) enforced surface is thin; most native rules below
+# are alint VALUE-ADD (R3/R5) — structure Hugo relies on but does not gate.
+#
+# CODEGEN: `mage generate` regenerates *.autogen.go + livereload JS + stringer
+# files, BUT no CI step runs `generate && git diff --exit-code` — so codegen
+# freshness is NOT an enforced edge here (0 file-graph sources). Recorded as
+# absent-category (R6).
+#
+# HEADERS: most .go files carry an Apache-2.0 "The Hugo Authors" header, but
+# ~24 legitimately omit it (package-doc files, vendored forks) and NO header
+# script gates it → a strict file_header would over-fire; not enforced (R6).
+#
+# LOCKFILE: go.sum IS tracked (binary/CLI convention) — unlike tokio's
+# gitignored Cargo.lock. hygiene/no-tracked-artifacts is safe here.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1                     # README/LICENSE/SECURITY/gitignore hygiene
+  - alint://bundled/go@v1                               # go.mod/go.sum presence + go-source hygiene
+  - alint://bundled/ci/github-actions@v1                # Hugo pins ALL actions to SHA already — should pass
+  - alint://bundled/hygiene/no-tracked-artifacts@v1     # dist/ public/ *.test are gitignored
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # SHELL-OUTS — Hugo's actual enforced checks are tool execution (D).
+  # Wrapping them is orchestration VALUE-ADD (R2), not coverage. A single
+  # `./check.sh` entrypoint already runs gofmt+staticcheck+tests; mage check
+  # is the CI twin. We model the canonical idempotent ones.
+  # ════════════════════════════════════════════════════════════════
+
+  # gofmt — the canonical idempotent formatter (check_gofmt.sh: diff gofmt -d).
+  - id: hugo-gofmt-check
+    kind: command_idempotent
+    paths: "go.mod"                 # anchor: fire once at repo root
+    command: ["gofmt", "-l", "."]
+    timeout: 120
+    level: error
+    message: >
+      gofmt must be clean (CI runs check_gofmt.sh / `mage check`).
+
+  # gotmplfmt — embedded-template formatting (test.yml:
+  #   diff <(gotmplfmt -d tpl/tplimpl/embedded/templates) <(printf '')).
+  # A formatter-execution gate over a specific subtree. D; wrapped for the
+  # single-entrypoint value.
+  - id: hugo-gotmplfmt-embedded
+    kind: command_idempotent
+    paths: "go.mod"
+    command: ["gotmplfmt", "-l", "tpl/tplimpl/embedded/templates"]
+    timeout: 120
+    level: warning
+    message: >
+      Embedded templates must be gotmplfmt-clean (CI: `diff <(gotmplfmt -d
+      tpl/tplimpl/embedded/templates) <(printf '')`).
+
+  # staticcheck + vet + tests are semantic (need a full compile) → pure
+  # shell-outs, modelled via the project's own `mage check` entrypoint so the
+  # whole enforced D surface runs through one alint-invoked command.
+  - id: hugo-mage-check
+    kind: command
+    paths: "magefile.go"
+    command: ["mage", "-v", "check"]   # Fmt + Vet + TestRace (the CI gate)
+    timeout: 600
+    level: error
+    message: >
+      `mage -v check` (gofmt + go vet + go test -race) must pass — the
+      master CI gate (.github/workflows/test.yml).
+
+  # ════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD — structural assertions Hugo RELIES ON but does not gate
+  # (R3/R5 → NOT in the coverage ratio). Recorded for utility.
+  # ════════════════════════════════════════════════════════════════
+
+  # AGENTS.md says CI fails if a stray hdebug.Printf is committed; Hugo
+  # enforces that at RUNTIME (panic under IsRealCI) via the test suite.
+  # A static forbidden-content check is a cheaper pre-test guard (value-add).
+  - id: hugo-no-committed-hdebug-print
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.go"]
+      exclude: ["common/hdebug/**", "**/*_test.go"]
+    pattern: 'hdebug\.(Printf|Panicf|AssertNotNil)\('
+    level: warning
+    message: >
+      Debug helpers (hdebug.Printf / Panicf / AssertNotNil) must be removed
+      before committing — CI panics on them (see AGENTS.md, common/hdebug).
+
+  # mage is the documented build tool; assert the magefile is present so the
+  # CI `mage check` entrypoint can resolve.
+  - id: hugo-magefile-present
+    kind: file_exists
+    paths: "magefile.go"
+    level: warning
+    message: "magefile.go is the build/test entrypoint (CONTRIBUTING.md)."
+
+  # CONTRIBUTING declares the contribution workflow; assert it exists + is
+  # non-stub (value-add; oss-baseline covers README/LICENSE/SECURITY).
+  - id: hugo-contributing-exists
+    kind: file_exists
+    paths: "CONTRIBUTING.md"
+    level: warning
+    message: "CONTRIBUTING.md documents the (humanly-enforced) review conventions."
+
+  # AGENTS.md / CLAUDE.md agent-instruction files exist and stay in sync
+  # (CLAUDE.md is `@AGENTS.md`). Value-add structure assertion.
+  - id: hugo-agents-doc-exists
+    kind: file_exists
+    paths: "AGENTS.md"
+    level: info
+    message: "AGENTS.md carries the contributor/agent coding conventions."

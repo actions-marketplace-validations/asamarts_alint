@@ -1,0 +1,171 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Proposed alint config for sveltejs/svelte @ 5b8db1be (v0.12 case study).
+#
+# svelte is a community-governed JS/TS compiler + runtime, pnpm
+# single-package "monorepo" (one real package: packages/svelte; plus a
+# playgrounds/sandbox). CI is GitHub Actions (ci.yml) + changesets
+# release; no pre-commit / husky / lefthook; no committed git hooks; no
+# CODEOWNERS / renovate / dependabot.
+#
+# ── What svelte ENFORCES, and how alint maps to it ──────────────────
+# The enforced surface is dominated by EXECUTION/SEMANTIC checks alint
+# does not reimplement (D): vitest test suite (× node 18/20/22/24 × 3
+# OS, + a SVELTE_NO_ASYNC variant), `pnpm check` / `check:tsgo` (tsc /
+# tsgo type-checking), `pnpm lint` (eslint + `prettier --check`),
+# `pnpm bench`, treeshakeability bundle check, and `--frozen-lockfile`
+# (pnpm resolves the dep graph). These are orchestratable via
+# command/command_idempotent but that is a tool-wrap, not alint
+# expressing the logic — recorded as value-add, kept OUT of coverage.
+#
+# The one structural check whose LOGIC alint expresses natively is the
+# eslint custom `no_compiler_imports` rule (an import firewall) -> A
+# via import_gate. The two codegen-freshness gates (`pnpm build` then
+# `git status --porcelain` empty; and the browser-support .generated/
+# dir) are a real gap (B): generated_file_fresh is a non-mutating
+# single-file STDOUT diff, whereas svelte runs a MUTATING multi-output
+# generator and asserts the working tree / a path is git-clean.
+#
+# Everything else below is alint VALUE-ADD the repo does not gate on
+# (bundles + structure/metadata assertions), recorded separately from
+# the A/B/C/D coverage ratio per the protocol (R3/R5).
+#
+# Save as .alint.yml at the repo root and run `alint check`.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # [A] Import firewall — the eslint custom rule `no_compiler_imports`
+  # (eslint.config.js:4-34) forbids any reference to the compiler from
+  # runtime code: it string-searches for `../compiler/` or `#compiler`
+  # in packages/svelte/src/** EXCEPT src/compiler/**. import_gate
+  # (language: js, forbid regex on the extracted/!-raw target + path
+  # scope) expresses this firewall's LOGIC declaratively. svelte
+  # enforces it via eslint-AST today; alint reimplements the rule, it
+  # does not merely wrap eslint. Passes clean against this repo (0
+  # violations) — the firewall is currently respected.
+  #
+  # NOTE: import_gate matches the EXTRACTED import target. svelte's own
+  # rule deliberately string-searches raw text (it must catch
+  # type-only `import('../compiler/...')` in JSDoc that eslint's AST
+  # misses). For real `import`/`export ... from '#compiler'` and
+  # `from '../compiler/...'` statements the extracted-target match is
+  # exact; the JSDoc-string case is the residual eslint catches that
+  # import_gate (AST-target) does not — recorded as a precision note.
+  # ════════════════════════════════════════════════════════════════
+  - id: svelte-no-compiler-imports-in-runtime
+    kind: import_gate
+    language: js
+    paths:
+      include: ["packages/svelte/src/**/*.{js,ts}"]
+      exclude:
+        - "packages/svelte/src/compiler/**"
+    forbid: '(^|/)(\.\.\/)*compiler\/|^#compiler($|\/)'
+    level: error
+    message: >-
+      Runtime code must not import the compiler (`../compiler/` or
+      `#compiler`). Mirrors the eslint `custom/no_compiler_imports`
+      rule — keeps the compiler out of the browser runtime bundle and
+      stops ambient Node types leaking in.
+
+  # ════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD below this line — structure/metadata assertions
+  # svelte does NOT gate on. Recorded separately; NOT in coverage.
+  # ════════════════════════════════════════════════════════════════
+
+  # Package-manager pin coherence: root package.json declares
+  # packageManager "pnpm@10.4.0" and engines.pnpm ">=9.0.0". Assert
+  # the pin stays a pinned pnpm@<semver> and engines stays present.
+  - id: svelte-packagemanager-pinned
+    kind: json_path_matches
+    paths: "package.json"
+    path: "$.packageManager"
+    matches: '^pnpm@\d+\.\d+\.\d+$'
+    level: info
+    message: "Root package.json should pin packageManager to an exact pnpm@x.y.z."
+
+  - id: svelte-root-private
+    kind: json_path_equals
+    paths: "package.json"
+    path: "$.private"
+    equals: true
+    level: info
+    message: "The monorepo root package.json must stay private:true (never published)."
+
+  - id: svelte-pkg-license-mit
+    kind: json_path_equals
+    paths: "packages/svelte/package.json"
+    path: "$.license"
+    equals: "MIT"
+    level: info
+    message: "packages/svelte must declare license:MIT (matches root LICENSE.md)."
+
+  # The published package keeps the generated-types entrypoints.
+  - id: svelte-pkg-types-entry
+    kind: json_path_matches
+    paths: "packages/svelte/package.json"
+    path: "$.types"
+    matches: '.+\.d\.ts$'
+    if_present: true
+    level: info
+    message: "packages/svelte should expose a generated .d.ts types entrypoint."
+
+  # editorconfig declares the house hygiene; surface it natively as a
+  # value-add backstop (prettier is what actually enforces it in CI).
+  - id: svelte-final-newline-sources
+    kind: final_newline
+    paths:
+      include: ["packages/svelte/src/**/*.{js,ts}"]
+    level: info
+    fix:
+      file_append_final_newline: {}
+
+  - id: svelte-no-trailing-whitespace-sources
+    kind: no_trailing_whitespace
+    paths:
+      include: ["packages/svelte/src/**/*.{js,ts}"]
+    level: info
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  # Structure: the real published package and its README/CHANGELOG.
+  - id: svelte-package-readme-exists
+    kind: file_exists
+    paths: "packages/svelte/README.md"
+    level: info
+    message: "The published svelte package should ship a README."
+
+  - id: svelte-package-changelog-exists
+    kind: file_exists
+    paths: "packages/svelte/CHANGELOG.md"
+    level: info
+    message: "The published svelte package should ship a CHANGELOG (changesets-managed)."
+
+# ══════════════════════════════════════════════════════════════════
+# GENUINE NON-REPLACEABLES (stay on CI / `pnpm`):
+#   - vitest test suite (D) — `pnpm test`, matrix node×OS + NO_ASYNC.
+#   - tsc / tsgo type-checking (D) — `pnpm check`, `check:tsgo`.
+#   - eslint + prettier --check (D) — `pnpm lint` (AST/format), incl.
+#     the `lube/svelte-naming-convention` snake/camel rule and the
+#     type-aware @typescript-eslint rules.
+#   - `pnpm bench` (D) — perf execution.
+#   - check-treeshakeability.js (D) — rollup-bundles each export and
+#     asserts empty/treeshakeable output; bundler-semantic.
+#   - `--frozen-lockfile` (D) — pnpm resolves the dep graph; lockfile
+#     freshness is a package-manager resolution, not a file invariant.
+#
+# B (new-kind) CANDIDATES surfaced by svelte — git-status-after-
+# generator codegen freshness (the SAME gap istio flagged):
+#   1. ci.yml:100 — `pnpm build && [ "$(git status --porcelain=v1)" = "" ]`
+#      (regenerate checked-in types/version.js/messages, assert tree
+#      clean). MUTATING multi-output generator -> not generated_file_fresh.
+#   2. ci.yml:102 — `git status --porcelain documentation/docs/07-misc/
+#      .generated/` after `pnpm generate:browser-support` (path-scoped
+#      tree-freshness). Want a `generated_tree_fresh` /
+#      "run generator, then git diff --exit-code <path>" primitive.
+# ══════════════════════════════════════════════════════════════════

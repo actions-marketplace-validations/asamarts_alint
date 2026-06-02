@@ -20,7 +20,8 @@ durable artifact and the configs are staged separately pending that decision.
 | calibration (tokio) | 1 | 5 | 2 | 0 | ~20 | 71% | 0 |
 | batch 1 | 5 | 31 | 6 | 5 | 81 | **74%** | **21** |
 | batch 2 | 10 | 25 | 10 | 9 | 127 | 57% | 13 |
-| **cumulative** | **16** | **61** | **18** | **14** | **~228** | **66%** | **34** |
+| batch 3 | 20 | 85 | 30 | 25 | 305 | 61% | 48 |
+| **cumulative** | **36** | **146** | **48** | **39** | **~533** | **63%** | **82** |
 
 ---
 
@@ -213,3 +214,79 @@ reference-boundary firewall, vite's `patchedDependencies` path resolution.
 ### Artifacts
 
 10 validated draft configs at `/tmp/cs_out/` (all `config_validated: true`).
+Batch 1-2's 15 configs are now preserved in-repo under
+[`corpus/`](./corpus/) (dogfood-excluded research artifacts).
+
+---
+
+## Batch 3 — 2026-06-02 (20-repo sweep: + Ruby/PHP/JVM/C/Haskell/Swift/Nix breadth)
+
+Workflow: 40 agents, ~3.9M tokens, ~22 min. Repos: rails, laravel, gradle,
+kotlin, postgres, openssl, pandas, numpy, swift, pandoc, hugo, grafana, svelte,
+serde, ansible, elasticsearch, neovim, composer, fastapi, nix.
+
+Stage-B-reconciled **A=85 B=30 C=25 D=305, coverage 85/140 = 61%** (per-repo
+0-100%). Stage B was busy — it changed counts on **13 of 20** records, most
+dramatically **ansible A5→A14** (Stage A under-catalogued ansible's large bespoke
+`test/sanity/` validation surface). 100%-addressable: laravel, swift, serde,
+composer; 0%: hugo, neovim (all-execution repos). **Cumulative across 36 repos:
+146/233 = 63%.**
+
+### `file_dependency_graph`: +48 sources → 82 cumulative across 36 repos
+
+Batch 3 nearly tripled the tally. grafana alone contributed **11** edge sources;
+kotlin 6, gradle 4, numpy 4, and ×3 each from pandoc/svelte/fastapi/neovim. Edge
+types now span the full design surface many times over (import-layering
+firewalls — rails `rail_inspector`; codegen-freshness; registry/manifest;
+every-X-has-Y; set-membership; intra-file reference integrity). The kind is
+**decisively the #1 build candidate.**
+
+### Demand-ranked backlog (synthesis through 36 repos)
+
+The candidate set has converged. Ranked by cross-repo recurrence:
+
+**Tier 1 — build for v0.12 (multi-batch, multi-repo):**
+1. **`file_dependency_graph`** — 82 edge sources, nearly every repo, all edge
+   shapes. (Was study-gated at 0; now overwhelmingly validated.)
+2. **`files_equal`** (whole-file byte-identity) — tokio, symfony, gradle, serde,
+   ansible, fastapi (6 repos). `pair_hash`/`pair` can't express it.
+3. **`generated_file_fresh` mutating/regen mode** (generator writes in place,
+   then `git diff --exit-code`) — redis, symfony, postgres, openssl, svelte,
+   neovim (6). Extends the shipped stdout-only kind.
+4. **`git_commit_subject_matches`** (already a planned workstream) — django,
+   spring-boot, hugo. Corpus-validated.
+5. **`value_set_membership` / cross-file subset** (already planned) —
+   aspnetcore, numpy, elasticsearch, fastapi.
+
+**Tier 2 — recurring (2-3 repos), strong candidates:**
+- **`ordered_block` sectioned / key-extracted mode** (C-tuning) — gradle, pandas,
+  kotlin (sort within marked sections / by a composite key).
+- **repeating-block / `every_element_has`** (for-all over repeated in-file
+  structures: CHANGELOG entries, config blocks) — rails, kotlin, grafana.
+- **ref-pin-vs-SHA-pin + publisher-allowlist preset** (C, GH-Actions) — flask,
+  django, grafana, neovim.
+- **`normalize: semver`** (C) — rails, pandoc.
+
+**Tier 3 — singletons (watch for recurrence):** split-constant version-compose
+(rails), `symlink_target_equals` (serde), `no_filename_case_conflict` (pandas),
+orphan-identifiers (swift), `file_mode`/no-exec-bit (elasticsearch),
+manifest-reachability (kotlin, pandoc), generated-checksum-manifest (openssl).
+
+### alint sharp-edges (C-tuning) — still accumulating
+
+19 more this batch; the firmest recurring themes are the **sectioned
+`ordered_block`** and the **ref/sha pin preset** above, plus `file_header`
+`paths.exclude` (gradle), `.gitattributes`-aware whitespace excludes (postgres),
+and `file_content_forbidden` allow-exceptions (grafana).
+
+### Stage-B value
+
+13/20 records corrected — beyond ansible's +9 A: numpy/composer/aspnetcore-style
++1 A re-bucketings, gradle/grafana/elasticsearch −1 A kind-misuses, and a long
+tail of MISSED items (kotlin CODEOWNERS-validate, swift orphan-identifiers,
+elasticsearch executable-bit, fastapi cross-dir rename pairing).
+
+### Artifacts
+
+20 validated draft configs at `/tmp/cs_out/` (all `config_validated: true`) — to
+append to [`corpus/`](./corpus/) with the next housekeeping commit.

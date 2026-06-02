@@ -1,0 +1,193 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case study — jgm/pandoc @ 90384394817b6cfb7776bdfa4d25453e5450d2fb
+#
+# pandoc is a Haskell CLI/library: a 4-package cabal project
+#   pandoc (root) · pandoc-cli · pandoc-lua-engine · pandoc-server
+# built with cabal AND stack, solo maintainer (jgm).
+#
+# Its ENFORCED-validation surface is dominated by EXECUTION checks alint
+# does not reimplement (D non-goals):
+#   - build+test across 4 GHC + stack + windows (ci.yml), -Werror warning-free
+#   - hlint (AST linter; lint.yml.bkp + CONTRIBUTING pre-commit hook)
+#   - JATS DTD validation of writer output (format-validation.yml, remote validator)
+#   - docx XML-schema validation (xmllint+WML XSD; OOXMLValidator) (docx-validation.yaml)
+#   - EPUB validation (epubcheck + ace) (Makefile validate-epub)
+#   - cabal check / cabal outdated / stack-lint-extra-deps (resolver execution)
+#   - commit-message line-length lint over git log (commit-validation-pr.yml)
+#
+# The REPO-STATE checks (answerable by reading the tree) live mostly in the
+# Makefile `prerelease` target and the few file-content CI gates. alint
+# expresses those declaratively below. Tool-runs are left to CI (shell-out
+# wrappers omitted here — they would be command/command_idempotent value-add,
+# not alint expressing the logic).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # VERSION COHERENCE (Makefile check-version-sync)
+  #   [ $(VERSION) == $(PANDOC_CLI_VERSION) ]
+  #   grep 'pandoc == $(VERSION)' pandoc-cli/pandoc-cli.cabal
+  # pandoc.cabal `version:` must equal pandoc-cli.cabal `version:` AND the
+  # `pandoc == X` build-depends pin inside pandoc-cli.cabal. .cabal is not
+  # TOML/JSON/XML, so values are regex-extracted.
+  # ════════════════════════════════════════════════════════════════
+  - id: pandoc-version-sync
+    kind: cross_file_value_equals
+    source:
+      file: "pandoc.cabal"
+      extract: { regex: '(?m)^version:\s*([0-9][0-9.]*)' }
+    targets:
+      - file: "pandoc-cli/pandoc-cli.cabal"
+        extract: { regex: '(?m)^version:\s*([0-9][0-9.]*)' }
+      - file: "pandoc-cli/pandoc-cli.cabal"
+        extract: { regex: 'pandoc\s*==\s*([0-9][0-9.]*)' }
+    level: error
+    message: |
+      pandoc.cabal version, pandoc-cli.cabal version, and pandoc-cli's
+      `pandoc == X` dependency pin must all agree (Makefile check-version-sync).
+
+  # ════════════════════════════════════════════════════════════════
+  # CHANGELOG ENTRY (Makefile check-changelog)
+  #   rg '## pandoc $(VERSION) \(\d\d\d\d-\d\d-\d\d\)' changelog.md
+  # The released version must have a changelog heading. This is a PRESENCE
+  # check ("does this heading appear anywhere"), NOT value equality.
+  # cross_file_value_equals does NOT fit: changelog.md is an append-only
+  # ledger of all 219 historical `## pandoc X (...)` headings, so asserting
+  # "every extracted version equals the cabal version" produces 204 false
+  # violations. The clean expression is file_content_matches on the literal
+  # current version. The GAP — a cross-file "source value appears >=1 time
+  # in target" primitive that extracts the version from the cabal instead
+  # of inlining it — is recorded as a new-kind candidate.
+  # ════════════════════════════════════════════════════════════════
+  - id: pandoc-changelog-has-version
+    kind: file_content_matches
+    paths: "changelog.md"
+    pattern: '## pandoc 3\.9\.0\.2 \(\d\d\d\d-\d\d-\d\d\)'
+    level: error
+    message: |
+      changelog.md must carry a `## pandoc <VERSION> (YYYY-MM-DD)` heading
+      for the current version (Makefile check-changelog). NOTE: the version
+      literal is inlined here; a cross-file "value-present-in-target" kind
+      would let this track pandoc.cabal automatically.
+
+  # ════════════════════════════════════════════════════════════════
+  # MAN-PAGE VERSION (Makefile check-manversion)
+  #   grep '"pandoc $(VERSION)"' in all three man pages
+  # ════════════════════════════════════════════════════════════════
+  - id: pandoc-manpage-version-sync
+    kind: cross_file_value_equals
+    source:
+      file: "pandoc.cabal"
+      extract: { regex: '(?m)^version:\s*([0-9][0-9.]*)' }
+    targets:
+      - file: "pandoc-cli/man/pandoc.1"
+        extract: { regex: '"pandoc ([0-9][0-9.]*)"' }
+      - file: "pandoc-cli/man/pandoc-server.1"
+        extract: { regex: '"pandoc ([0-9][0-9.]*)"' }
+      - file: "pandoc-cli/man/pandoc-lua.1"
+        extract: { regex: '"pandoc ([0-9][0-9.]*)"' }
+    level: error
+    message: |
+      All three generated man pages must carry the current pandoc version
+      in their .TH line (Makefile check-manversion).
+
+  # ════════════════════════════════════════════════════════════════
+  # LICENSE COHERENCE (CONTRIBUTING.md §8: "All code must be released
+  # under the general license governing pandoc (GPL v2)")
+  # Every package's .cabal `license:` field must be GPL-2.0-or-later.
+  # ════════════════════════════════════════════════════════════════
+  - id: pandoc-license-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "pandoc.cabal"
+      extract: { regex: '(?m)^license:\s*(\S+)' }
+    targets:
+      - file: "pandoc-cli/pandoc-cli.cabal"
+        extract: { regex: '(?m)^license:\s*(\S+)' }
+      - file: "pandoc-lua-engine/pandoc-lua-engine.cabal"
+        extract: { regex: '(?m)^license:\s*(\S+)' }
+      - file: "pandoc-server/pandoc-server.cabal"
+        extract: { regex: '(?m)^license:\s*(\S+)' }
+    level: error
+    message: |
+      All four cabal packages must declare the same license (GPL-2.0-or-later)
+      per CONTRIBUTING.md §8.
+
+  # ════════════════════════════════════════════════════════════════
+  # NO TABS IN DOCS (Makefile checkdocs)
+  #   ! rg -n -e '\t' MANUAL.txt changelog.md doc/pandoc-server.md doc/pandoc-lua.md
+  # ════════════════════════════════════════════════════════════════
+  - id: pandoc-docs-no-tabs
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "MANUAL.txt"
+        - "changelog.md"
+        - "doc/pandoc-server.md"
+        - "doc/pandoc-lua.md"
+    pattern: '\t'
+    level: error
+    message: "No literal tab characters allowed in the manual/changelog (Makefile checkdocs)."
+
+  # ════════════════════════════════════════════════════════════════
+  # NO GIT DEPENDENCIES — use only released versions
+  #   check-cabal: `! grep 'git:' cabal.project`
+  #   check-stack: `! grep 'git:' stack.yaml`
+  # NOTE: at this pin stack.yaml DOES contain 3 `git:` deps (typst-hs,
+  # typst-symbols, texmath), so pandoc-stack-no-git-deps WILL FIRE — this
+  # is a prerelease-only gate, not enforced on the main branch state.
+  # cabal.project has 0 git deps, so pandoc-cabal-no-git-deps passes.
+  # ════════════════════════════════════════════════════════════════
+  - id: pandoc-cabal-no-git-deps
+    kind: file_content_forbidden
+    paths: "cabal.project"
+    pattern: '(?m)^\s*git:'
+    level: error
+    message: "cabal.project must use only released versions (no `git:` source-deps) — Makefile check-cabal."
+
+  - id: pandoc-stack-no-git-deps
+    kind: file_content_forbidden
+    paths: "stack.yaml"
+    pattern: '(?m)^\s*-?\s*git:'
+    level: warning
+    message: "stack.yaml should use only released versions (no `git:` source-deps) — Makefile check-stack (prerelease)."
+
+  # ════════════════════════════════════════════════════════════════
+  # NO TRAILING WHITESPACE in Haskell source (Makefile fix_spacing)
+  #   for f in $(SOURCEFILES): sed -e 's/  *$//' ...
+  # SOURCEFILES = *.hs under src pandoc-cli pandoc-server pandoc-lua-engine.
+  # ════════════════════════════════════════════════════════════════
+  - id: pandoc-haskell-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include:
+        - "src/**/*.hs"
+        - "pandoc-cli/**/*.hs"
+        - "pandoc-server/**/*.hs"
+        - "pandoc-lua-engine/**/*.hs"
+    level: warning
+    message: "Haskell sources must have no trailing whitespace (Makefile fix_spacing)."
+
+  # ════════════════════════════════════════════════════════════════
+  # CONFIG-FILE EXISTENCE (alint value-add; the repo does not gate on
+  # these existing, recorded separately from the coverage ratio).
+  # ════════════════════════════════════════════════════════════════
+  - id: pandoc-editorconfig-exists
+    kind: file_exists
+    paths: ".editorconfig"
+    level: warning
+
+  - id: pandoc-hlint-config-exists
+    kind: file_exists
+    paths: ".hlint.yaml"
+    level: warning
+
+  - id: pandoc-stylish-haskell-config-exists
+    kind: file_exists
+    paths: ".stylish-haskell.yaml"
+    level: warning
