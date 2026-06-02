@@ -1,0 +1,241 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# clap-rs/clap @ 8387c812c4b9726474b8407f81ec97f0acf570ed
+#
+# clap is a 8-crate Cargo workspace with members at the repo ROOT (no
+# crates/ prefix): the facade crate `clap` (root [package]) + 7 members
+#   clap_builder, clap_derive, clap_lex, clap_complete,
+#   clap_complete_nushell, clap_mangen   (published)
+#   clap_bench                            (publish = false)
+#
+# ALL structural validation lives in .github/workflows/** + the Makefile
+# (CI just invokes `make <target>`) + the pre-commit/prek hook config.
+# There is NO scripts/ ci/ hack/ tools/ dir and NO codegen-freshness
+# `git diff --exit-code` gate. The repo-STATE checks (answerable by
+# reading the tree, not by compiling) that alint can express natively:
+#
+#   MSRV coherence ..... Cargo.toml `rust-version = "1.85" # MSRV`
+#                        == ci.yml `rust: "1.85"  # MSRV`
+#                        (CONTRIBUTING "Updating MSRV: rg --hidden MSRV
+#                         and update all references" — a review checklist;
+#                         workspace.package inheritance means the 7 members
+#                         do NOT restate it, so the coherence set is 2 sites)
+#   STABLE coherence ... Makefile `STABLE?=1.96`
+#                        == ci.yml (×4) `toolchain: "1.96" # STABLE`
+#                        == tests/derive_ui.rs `stable(1.96) // STABLE`
+#                        (renovate.json5 custom regex manager treats these
+#                         as one `STABLE` dependency it bumps in lockstep)
+#   merge-conflict ..... pre-commit `check-merge-conflict`
+#   deny.toml policy ... license allowlist + sources allow/deny declared
+#   committed style .... committed.toml `style="conventional"` declared
+#
+# Everything else CI enforces is tool execution (D): the test matrix,
+# rustfmt, clippy (+ .clippy.toml disallowed-methods), rustdoc -Dwarnings,
+# minimal-versions, lockfile-up-to-date, cargo-deny, cargo-audit, typos,
+# committed, cffconvert. Those are shelled out below for single-entrypoint
+# orchestration (value-add) but alint does not reimplement their logic.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A-ITEMS — repo-enforced state alint expresses NATIVELY
+  # ════════════════════════════════════════════════════════════════
+
+  # ── A1: MSRV value coherence ─────────────────────────────────────
+  # Cargo.toml `rust-version = "1.85"  # MSRV` is the source of truth;
+  # ci.yml's `check` matrix pins the SAME value as the msrv build target.
+  # CONTRIBUTING §"Updating MSRV" makes hand-syncing every MSRV reference
+  # a documented review step. (The 7 workspace members inherit
+  # rust-version.workspace = true, so they are NOT independent sites.)
+  - id: clap-msrv-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "Cargo.toml"
+      extract: { toml: "$.workspace.package['rust-version']" }
+    targets:
+      - file: ".github/workflows/ci.yml"
+        extract: { regex: 'rust:\s*"([0-9]+\.[0-9]+)"\s*#\s*MSRV' }
+    level: error
+    message: |
+      Cargo.toml [workspace.package] rust-version (# MSRV) must match the
+      ci.yml `check` job's msrv toolchain pin. CONTRIBUTING tells
+      contributors to `rg --hidden MSRV` and update every reference.
+
+  # ── A2: STABLE toolchain coherence ───────────────────────────────
+  # The "current stable" pin lives in the Makefile (STABLE?=1.96) and is
+  # restated in ci.yml (rustfmt/clippy/docs/ui jobs `toolchain: "1.96"
+  # # STABLE`) and tests/derive_ui.rs (`stable(1.96) // STABLE`). renovate's
+  # custom regex manager bumps all of these together as one dependency.
+  - id: clap-stable-toolchain-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "Makefile"
+      extract: { regex: 'STABLE\?=([0-9]+\.[0-9]+)' }
+    targets:
+      - file: ".github/workflows/ci.yml"
+        extract: { regex: 'toolchain:\s*"([0-9]+\.[0-9]+)"\s*#\s*STABLE' }
+      - file: "tests/derive_ui.rs"
+        extract: { regex: 'stable\(([0-9]+\.[0-9]+)\)' }
+    level: warning
+    message: |
+      The STABLE pin must agree across Makefile (STABLE?=), ci.yml
+      (toolchain "..." # STABLE), and tests/derive_ui.rs (stable(...)).
+      renovate.json5's custom regex manager bumps these in lockstep.
+
+  # ── A3: no merge-conflict markers (pre-commit check-merge-conflict) ─
+  # The .pre-commit-config.yaml `check-merge-conflict` hook; native kind.
+  - id: clap-no-merge-conflict-markers
+    kind: no_merge_conflict_markers
+    paths:
+      include: ["**/*.rs", "**/*.toml", "**/*.md", "**/*.yml", "**/*.yaml"]
+      exclude: ["target/**", ".git/**", "CHANGELOG.md"]
+    level: error
+    message: |
+      Merge-conflict markers must not be committed (mirrors the
+      pre-commit `check-merge-conflict` hook).
+
+  # ── A4: deny.toml declares a non-empty license allowlist ─────────
+  # Policy-DECLARATION assert (R3): cargo-deny ENFORCES compliance (D);
+  # alint asserts the allowlist is actually declared so deny doesn't
+  # silently deny-all.
+  - id: clap-deny-license-allowlist
+    kind: toml_path_matches
+    paths: "deny.toml"
+    path: "$.licenses.allow[*]"
+    matches: ".+"
+    level: error
+    message: "deny.toml must declare a non-empty [licenses] allow list."
+
+  # ── A5: deny.toml sources locked to crates.io ────────────────────
+  - id: clap-deny-unknown-registry-denied
+    kind: toml_path_equals
+    paths: "deny.toml"
+    path: "$.sources['unknown-registry']"
+    equals: "deny"
+    level: warning
+    message: "deny.toml should deny unknown registries (supply-chain)."
+
+  # ── A6: committed.toml declares the conventional-commit style ────
+  # committed.yml CI + the pre-commit `committed` hook ENFORCE it (D);
+  # alint asserts the policy file declares it (R3 value-add).
+  - id: clap-committed-conventional
+    kind: toml_path_equals
+    paths: "committed.toml"
+    path: "$.style"
+    equals: "conventional"
+    level: warning
+    message: "committed.toml must select the conventional-commit style."
+
+  # ════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD — structure clap does NOT gate on (recorded
+  # separately per R3/R5; NOT in the coverage denominator).
+  # ════════════════════════════════════════════════════════════════
+
+  # Every PUBLISHED workspace member ships dual LICENSE files (clap is
+  # dual MIT OR Apache-2.0; the root + every published member carries
+  # both). clap_bench (publish=false) deliberately omits them.
+  - id: clap-published-member-license-apache
+    kind: for_each_dir
+    select: "{clap_builder,clap_derive,clap_lex,clap_complete,clap_complete_nushell,clap_mangen}"
+    when_iter: 'iter.has_file("Cargo.toml")'
+    require:
+      - kind: file_exists
+        paths: "{path}/LICENSE-APACHE"
+    level: warning
+  - id: clap-published-member-license-mit
+    kind: for_each_dir
+    select: "{clap_builder,clap_derive,clap_lex,clap_complete,clap_complete_nushell,clap_mangen}"
+    when_iter: 'iter.has_file("Cargo.toml")'
+    require:
+      - kind: file_exists
+        paths: "{path}/LICENSE-MIT"
+    level: warning
+
+  # Every PUBLISHED member has a README (docs.rs front page).
+  - id: clap-published-member-has-readme
+    kind: for_each_dir
+    select: "{clap_builder,clap_derive,clap_lex,clap_complete,clap_complete_nushell,clap_mangen}"
+    when_iter: 'iter.has_file("Cargo.toml")'
+    require:
+      - kind: file_exists
+        paths: "{path}/README.md"
+    level: warning
+
+  # Workspace inherits a single license across the tree.
+  - id: clap-workspace-license-dual
+    kind: toml_path_equals
+    paths: "Cargo.toml"
+    path: "$.workspace.package.license"
+    equals: "MIT OR Apache-2.0"
+    level: warning
+
+  # The facade crate is edition 2024 (workspace.package).
+  - id: clap-workspace-edition-2024
+    kind: toml_path_equals
+    paths: "Cargo.toml"
+    path: "$.workspace.package.edition"
+    equals: "2024"
+    level: info
+
+  # clap_bench is publish = false (internal bench crate).
+  - id: clap-bench-not-publishable
+    kind: toml_path_equals
+    paths: "clap_bench/Cargo.toml"
+    path: "$.package.publish"
+    equals: false
+    level: warning
+
+  # Config / metadata files that the pipeline depends on exist.
+  - id: clap-ci-workflow-exists
+    kind: file_exists
+    paths: ".github/workflows/ci.yml"
+    level: error
+  - id: clap-deny-config-exists
+    kind: file_exists
+    paths: "deny.toml"
+    level: warning
+  - id: clap-typos-config-exists
+    kind: file_exists
+    paths: "typos.toml"
+    level: info
+  - id: clap-citation-exists
+    kind: file_exists
+    paths: "CITATION.cff"
+    level: info
+
+  # ════════════════════════════════════════════════════════════════
+  # ORCHESTRATION SHELL-OUTS — the D tools, wrapped for a single
+  # entrypoint (value-add per R2; NOT alint expressing the logic).
+  # ════════════════════════════════════════════════════════════════
+
+  - id: clap-rustfmt-check
+    kind: command_idempotent
+    paths: "Cargo.toml"
+    command: ["cargo", "fmt", "--check"]
+    timeout: 120
+    level: error
+  - id: clap-clippy-full
+    kind: command
+    paths: "Cargo.toml"
+    command: ["make", "clippy-full"]
+    timeout: 600
+    level: error
+  - id: clap-cargo-deny
+    kind: command
+    paths: "deny.toml"
+    command: ["cargo", "deny", "check", "bans", "licenses", "sources"]
+    timeout: 120
+    level: error
+  - id: clap-typos
+    kind: command
+    paths: "typos.toml"
+    command: ["typos"]
+    timeout: 120
+    level: warning

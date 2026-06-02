@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for facebook/docusaurus @ 183fc6f1e3d5dab9fb9687e85091660f90a42010
+# (v0.12 case study). TS docs-site framework monorepo (yarn + lerna).
+#
+# Bundles: oss-baseline (top-level docs), node (manifest/lockfile/build-artefact
+# hygiene), monorepo (every packages/* has package.json + README.md).
+# Repo rules below express the bespoke STRUCTURE + HYGIENE + HEADER conventions
+# this repo enforces via __tests__/validate-*.test.ts, eslint/stylelint header
+# plugins, .editorconfig, and CONTRIBUTING.md.
+
+version: 1
+
+ignore:
+  - "**/node_modules/**"
+  - "**/lib/**"
+  - "**/build/**"
+  - "**/.docusaurus/**"
+  - "**/__fixtures__/**"
+  - "**/__mocks__/**"
+  - "examples/**"
+  - "website/versioned_docs/**"
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+  - alint://bundled/monorepo@v1
+
+rules:
+  # --- MIT copyright header (CONTRIBUTING.md "Licensing" + stylelint-copyright)
+  # CONTRIBUTING.md §Licensing mandates the 4-line MIT header on every new file;
+  # eslint-plugin-header (JS/TS) + stylelint-copyright (CSS) enforce it.
+  - id: docusaurus-mit-header-ts
+    kind: file_header
+    paths:
+      include: "packages/*/src/**/*.{js,jsx,ts,tsx,mjs,cjs}"
+      exclude:
+        - "**/__tests__/**"
+        - "**/__fixtures__/**"
+        - "**/*.d.ts"
+    pattern: "This source code is licensed under the MIT license"
+    lines: 8
+    level: warning
+    message: "Source files must carry the MIT copyright header (see CONTRIBUTING.md §Licensing)."
+
+  - id: docusaurus-mit-header-css
+    kind: file_header
+    paths:
+      include: "packages/*/src/**/*.css"
+      exclude: "**/__fixtures__/**"
+    pattern: "This source code is licensed under the MIT license"
+    lines: 8
+    level: warning
+    message: "CSS files must carry the MIT copyright header (stylelint docusaurus/copyright-header)."
+
+  # --- Structure invariant: public package.json repository block ---------------
+  # Mirror of __tests__/validate-package-json.test.ts "contain repository and
+  # directory": every packages/* package.json must declare repository.type=git,
+  # the canonical url, and directory == its own path. `{path}` interpolates into
+  # both `paths:` and `equals:`.
+  - id: docusaurus-pkg-repository-type
+    kind: for_each_dir
+    select: "packages/*"
+    level: error
+    message: "Each packages/* package.json must declare repository.type: git."
+    require:
+      - kind: json_path_equals
+        paths: "{path}/package.json"
+        path: "$.repository.type"
+        equals: "git"
+
+  - id: docusaurus-pkg-repository-url
+    kind: for_each_dir
+    select: "packages/*"
+    level: error
+    message: "Each packages/* package.json repository.url must be the canonical monorepo URL."
+    require:
+      - kind: json_path_equals
+        paths: "{path}/package.json"
+        path: "$.repository.url"
+        equals: "https://github.com/facebook/docusaurus.git"
+
+  - id: docusaurus-pkg-repository-directory
+    kind: for_each_dir
+    select: "packages/*"
+    level: error
+    message: "Each packages/* package.json repository.directory must equal its own path."
+    require:
+      - kind: json_path_equals
+        paths: "{path}/package.json"
+        path: "$.repository.directory"
+        equals: "{path}"
+
+  # --- Structure invariant: tsconfig extends allowlist ------------------------
+  # Mirror of __tests__/validate-tsconfig.test.ts: every packages/*/tsconfig.*
+  # must extend one of the two shared base configs.
+  - id: docusaurus-tsconfig-extends-base
+    kind: json_path_matches
+    paths: "packages/*/tsconfig.json"
+    path: "$.extends"
+    matches: "^\\.\\./\\.\\./tsconfig\\.base(\\.client)?\\.json$"
+    if_present: true
+    level: error
+    message: "packages/*/tsconfig.json must extend ../../tsconfig.base.json or ../../tsconfig.base.client.json."
+
+  # --- package license coherence (every published package is MIT) -------------
+  - id: docusaurus-pkg-license-mit
+    kind: json_path_equals
+    paths: "packages/*/package.json"
+    path: "$.license"
+    equals: "MIT"
+    level: warning
+    message: "Each package should declare license: MIT."
+
+  # --- Editorconfig-declared hygiene (oxfmt + .editorconfig enforce these) -----
+  - id: docusaurus-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: "packages/*/src/**/*.{js,jsx,ts,tsx,mjs,cjs,css}"
+      exclude: "**/__fixtures__/**"
+    level: warning
+    message: ".editorconfig sets trim_trailing_whitespace = true."
+
+  - id: docusaurus-lf-line-endings
+    kind: line_endings
+    paths:
+      include: "packages/*/src/**/*.{js,jsx,ts,tsx,mjs,cjs,css}"
+      exclude: "**/__fixtures__/**"
+    target: lf
+    level: warning
+    message: ".editorconfig + .gitattributes mandate LF line endings."
+
+  - id: docusaurus-final-newline
+    kind: final_newline
+    paths:
+      include: "packages/*/src/**/*.{js,jsx,ts,tsx,mjs,cjs}"
+      exclude: "**/__fixtures__/**"
+    level: warning
+    message: ".editorconfig sets insert_final_newline = true."
+
+  # --- project-words.txt header marker ----------------------------------------
+  # The CI-managed dictionary carries a mandatory "DO NOT TOUCH" header line.
+  - id: docusaurus-project-words-header
+    kind: file_header
+    paths: "project-words.txt"
+    pattern: "DO NOT TOUCH"
+    lines: 1
+    level: info
+    message: "project-words.txt must keep its CI-managed header line."

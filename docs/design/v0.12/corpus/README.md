@@ -49,5 +49,11 @@ trees, not current upstream.
   `encode-httpx`, `ruby-ruby`, `jekyll-jekyll`, `Homebrew-brew`,
   `fastlane-fastlane`, `phpstan-phpstan`, `guzzle-guzzle`, `vapor-vapor`,
   `Alamofire-Alamofire`, `signalapp-Signal-Android`.
+- **Batch 7 (final):** `astral-sh-uv`, `axios-axios`, `clap-rs-clap`, `cli-cli`,
+  `duckdb-duckdb`, `etcd-io-etcd`, `expressjs-express`, `facebook-docusaurus`,
+  `gin-gonic-gin`, `junegunn-fzf`, `spf13-cobra`, `tokio-rs-axum`,
+  `vercel-next.js`, `vercel-turborepo`, `withastro-astro`.
 
-Later batches append here as they pass their checkpoint.
+**Study complete (2026-06-02): all 111 repos.** 110 configs here + `tokio` in
+`examples/`. See [`case_study_log.md`](../case_study_log.md) for the final
+synthesis + ranked backlog.

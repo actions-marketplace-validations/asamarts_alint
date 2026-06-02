@@ -1,0 +1,170 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Proposed alint config for expressjs/express @ dae209ae6559c29cfca2a1f4414c51d89ea643d5
+# (v0.12 100-repo case study — Stage A). JS web-framework library, npm,
+# OpenJS Foundation governance.
+#
+# ── express's ENFORCED validation surface (catalogued, R5 denominator) ──
+#   CI gates (.github/workflows):
+#     ci.yml      lint   -> `npm run lint` -> `eslint .`        (JS AST/lint -> D)
+#     ci.yml      test   -> `npm run test-ci` -> nyc + mocha    (test exec   -> D)
+#                           matrix: {ubuntu,windows} x node{18..26}
+#     ci.yml      coverage -> coveralls upload                  (coverage    -> D)
+#     legacy.yml  test   -> same, node {16,17}                  (R1: same D as test)
+#     codeql.yml  CodeQL js+actions semantic scan              (sec AST     -> D)
+#     scorecard.yml OpenSSF Scorecard supply-chain             (ext validator -> D)
+#   NO bespoke shell/script gate, NO husky/pre-commit/lefthook, NO Makefile,
+#   NO scripts/ tools/ ci/ hack/ dir, NO codegen-freshness, NO version-sync
+#   script, NO header-check. ESLint enforces eol-last + no-trailing-spaces +
+#   eqeqeq + indent + no-unused-vars + no-restricted-globals(Buffer) — all
+#   collapsed into the single eslint D behavior (R1/R2: enforced by RUNNING
+#   eslint, not a bespoke grep; contrast tokio's `grep -rne '\s$'` which was A).
+#
+#   => express's ENFORCED ADDRESSABLE surface is EMPTY: every gate it runs is
+#      a D non-goal (lint/test/coverage/codeql/scorecard). coverage_today is
+#      undefined-over-the-enforced-denominator (A=B=C=0). See record.
+#
+# Everything below is alint VALUE-ADD (R3/R5: structure/coherence express
+# does NOT gate on today) — recorded separately, NOT in the A/B/C/D ratio.
+# It is exactly the class of drift-guard a maintainer would WANT but hasn't
+# hand-rolled. Bundles supply OSS + node hygiene; repo rules add the
+# package-manifest coherence, the consistent per-file MIT header, and the
+# `files:` publish-allowlist integrity that npm pack relies on.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1          # README, LICENSE, .gitignore, no bidi/merge-markers
+  - alint://bundled/node@v1                   # root package.json, node_modules untracked, JS source hygiene
+  - alint://bundled/ci/github-actions@v1      # express ALREADY SHA-pins every action + declares contents:read
+
+rules:
+  # ════════════════════════════════════════════════════════════════════
+  # VALUE-ADD — package.json manifest coherence (no express script gates these)
+  # ════════════════════════════════════════════════════════════════════
+  - id: express-name-canonical
+    kind: json_path_matches
+    paths: "package.json"
+    path: "$.name"
+    matches: '^express$'
+    level: error
+    message: "package.json name must be `express` (the published npm package)."
+
+  - id: express-license-mit
+    kind: json_path_matches
+    paths: "package.json"
+    path: "$.license"
+    matches: '^MIT$'
+    level: error
+    message: "package.json license must be MIT, matching the root LICENSE file."
+
+  - id: express-engines-node-floor
+    kind: json_path_matches
+    paths: "package.json"
+    path: "$.engines.node"
+    matches: '>=\s*18'
+    level: warning
+    message: "engines.node must declare a >=18 floor (CI's lowest live matrix row is node 18)."
+
+  # cross_file_value_equals: the Readme's "Node.js N or higher is required"
+  # prose floor must equal package.json engines.node. OPEN-SCAN find
+  # (Readme.md:54 == package.json engines.node) — un-gated drift risk.
+  - id: express-readme-node-floor-coheres
+    kind: cross_file_value_equals
+    source:
+      file: "package.json"
+      extract: { regex: '"node":\s*">=\s*(\d+)"' }
+    targets:
+      - file: "Readme.md"
+        extract: { regex: 'Node\.js (\d+) or higher is required' }
+    level: warning
+    message: "Readme.md's 'Node.js N or higher is required' must match package.json engines.node (drift guard)."
+
+  - id: express-repository-canonical
+    kind: json_path_matches
+    paths: "package.json"
+    path: "$.repository"
+    matches: '^expressjs/express$'
+    level: warning
+    message: "package.json repository must point at expressjs/express."
+
+  # ════════════════════════════════════════════════════════════════════
+  # VALUE-ADD — `files:` publish-allowlist integrity. npm pack ships ONLY
+  # these globs; if any is deleted/renamed the published tarball silently
+  # loses code. express has no gate asserting they exist on disk.
+  # NOTE: file_exists with multiple `paths:` is OR (>=1 must exist), so to
+  # require EACH of the publish-allowlist entries we split into one rule
+  # per path. (Verified against the clone: a single multi-path rule passes
+  # as soon as ONE entry exists — not the intent here.)
+  # ════════════════════════════════════════════════════════════════════
+  - id: express-publish-license-exists
+    kind: file_exists
+    paths: "LICENSE"
+    root_only: true
+    level: error
+    message: "package.json `files:` lists LICENSE — it must exist (npm publish allowlist)."
+  - id: express-publish-readme-exists
+    kind: file_exists
+    paths: "Readme.md"
+    root_only: true
+    level: error
+    message: "package.json `files:` lists Readme.md — it must exist (npm publish allowlist)."
+  - id: express-publish-index-exists
+    kind: file_exists
+    paths: "index.js"
+    root_only: true
+    level: error
+    message: "package.json `files:` lists index.js — the npm `main` entrypoint must exist."
+
+  # ════════════════════════════════════════════════════════════════════
+  # VALUE-ADD — the entrypoint + core lib modules must stay present. One
+  # rule per module (file_exists multi-path is OR; per-file gives true AND).
+  # `root_only` is NOT set — it anchors globs to the repo root and would
+  # break the `lib/...` subpaths (verified: root_only + lib/*.js => false).
+  # ════════════════════════════════════════════════════════════════════
+  - id: express-core-lib-modules-exist
+    kind: for_each_dir
+    select: "lib"
+    require:
+      - kind: file_exists
+        paths: "{path}/application.js"
+      - kind: file_exists
+        paths: "{path}/express.js"
+      - kind: file_exists
+        paths: "{path}/request.js"
+      - kind: file_exists
+        paths: "{path}/response.js"
+      - kind: file_exists
+        paths: "{path}/utils.js"
+      - kind: file_exists
+        paths: "{path}/view.js"
+    level: error
+    message: "Core express lib modules (application/express/request/response/utils/view.js) must all be present."
+
+  # ════════════════════════════════════════════════════════════════════
+  # VALUE-ADD — consistent per-file MIT/copyright header on lib + entrypoint.
+  # EVERY lib/*.js and index.js opens with the `/*! express ... MIT Licensed */`
+  # block (verified across all 7 files), but NOTHING enforces it — eslint has
+  # no header rule and there is no CI step. This is the convention alint can
+  # lock declaratively. NOT in the denominator (express does not gate on it).
+  # ════════════════════════════════════════════════════════════════════
+  - id: express-source-mit-header
+    kind: file_header
+    paths:
+      include:
+        - "index.js"
+        - "lib/**/*.js"
+    pattern: '^/\*!\n \* express\n( \* Copyright\(c\).*\n)+ \* MIT Licensed\n \*/'
+    level: warning
+    message: "Each lib/*.js and index.js must open with the `/*! express ... MIT Licensed */` header (repo convention; currently un-enforced)."
+
+  # ════════════════════════════════════════════════════════════════════
+  # VALUE-ADD — eslint must stay flat-config-pinned at the root (the single
+  # lint gate's config). Smoke check it isn't accidentally deleted.
+  # ════════════════════════════════════════════════════════════════════
+  - id: express-eslintrc-exists
+    kind: file_exists
+    paths: [".eslintrc.yml", ".eslintrc", ".eslintrc.json", "eslint.config.js"]
+    root_only: true
+    level: warning
+    message: ".eslintrc.yml drives the only lint gate (`npm run lint`); it must stay present."

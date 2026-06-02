@@ -1,9 +1,14 @@
 # 100+ repo real-world case study — protocol
 
-Status: **Protocol — hardened 2026-06-01. Ready for review; no repos are
-touched until it's approved.** The vehicle for the v0.12 cut; runs first
-because its findings re-rank the gap backlog and gate the study-gated
-kinds (notably the generic [`file_dependency_graph.md`](./file_dependency_graph.md)).
+Status: **Executed + complete 2026-06-02.** All 111 repos worked (calibration
+[`case_study_calibration.md`](./case_study_calibration.md) + 7 batches), each
+pinned, Stage-A deep-read + Stage-B adversarially verified, with a validated
+config in [`corpus/`](./corpus/). Results, the coverage trend, and the locked
+demand-ranked backlog are in [`case_study_log.md`](./case_study_log.md)
+(coverage_today **61%**; **257** file-graph edge sources → `file_dependency_graph`
+verdict GO). This document is the protocol it was run under. The vehicle for the
+v0.12 cut; ran first because its findings re-rank the gap backlog and gate the
+study-gated kinds (notably the generic [`file_dependency_graph.md`](./file_dependency_graph.md)).
 Builds on the proven 30-repo method
 ([`case-study-v011-reanalysis-log.md`](../../development/case-study-v011-reanalysis-log.md))
 and hardens it for scale, comparability, and comprehensiveness.

@@ -1,0 +1,199 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# v0.12 case-study config — vercel/turborepo @ 468a9ddd2e181ea77c77c9c3d1519c628521cc9d
+#
+# Shape: dual-stack Rust(cargo, 54-crate workspace) + TS(pnpm, ~30 packages)
+# build-tool monorepo, single-vendor (Vercel). ALL bespoke validation lives in
+# .github/workflows/** + .husky/pre-push + a handful of `*-check` turbo tasks
+# (check-examples / check-lockfiles / check-openapi / turbo_types_check codegen).
+#
+# Enforced STATE checks (answerable by reading the tree, not by building):
+#   turbo_types_check ... regenerate schema.json + config-v2.ts, git diff --exit-code  -> A (generated_file_fresh)
+#   check-openapi ....... `generate-openapi-docs.ts --check` (codegen freshness)         -> A (generated_file_fresh)
+#   rust-toolchain.toml . channel hand-synced to packages/turbo-repository/scripts/build.sh
+#                         (the file's own "Needs to be copied to ..." comment)          -> A (cross_file_value_equals)
+#   .rustfmt.toml ....... `max_width=100` "Keep in sync with .editorconfig"
+#                         <-> .editorconfig [*.rs] max_line_length=100                   -> A (cross_file_value_equals)
+#
+# Enforced TOOL-EXECUTION (D, orchestrated below but not re-expressed by alint):
+#   cargo fmt --check | cargo lint(clippy) | cargo check | cargo nextest (3 OS)
+#   cargo-deny check licenses | turbo run quality (oxlint + oxfmt + taplo) |
+#   check-types(tsc) | package-checks(attw) | build | check-examples(sandbox run) |
+#   check-lockfiles(parser integration tests) | check-links(doc link graph) |
+#   lint-pr-title(conventional-commit on PR *title*)
+#
+# Absent categories (R6): NO per-file license/SPDX headers (0/488 *.rs); NO
+# dependabot/renovate; NO pre-commit/lefthook (husky pre-push only); NO root
+# Makefile/justfile. Cargo.lock + pnpm-lock.yaml ARE tracked. Versions are NOT
+# statically coherent (crates/turborepo = 0.1.0, cli/package.json = 1.0.0,
+# version.txt = 2.9.17-canary.2; stamped at release time) -> no version equality rule.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+  - alint://bundled/node@v1
+  - alint://bundled/monorepo/cargo-workspace@v1
+  - alint://bundled/monorepo/pnpm-workspace@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+  - alint://bundled/tooling/editorconfig@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A-ITEMS — the repo's STATE checks expressed natively
+  # ════════════════════════════════════════════════════════════════
+
+  # A1 — Rust toolchain channel coherence (documented hand-sync convention).
+  # rust-toolchain.toml line 2: "Needs to be copied to
+  # packages/turbo-repository/scripts/build.sh". The build.sh `rustup toolchain
+  # install <CHANNEL>` must equal rust-toolchain.toml [toolchain].channel.
+  - id: turbo-rust-toolchain-channel-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "rust-toolchain.toml"
+      extract: { toml: "$.toolchain.channel" }
+    targets:
+      - file: "packages/turbo-repository/scripts/build.sh"
+        extract: { regex: 'rustup toolchain install (nightly-[0-9]{4}-[0-9]{2}-[0-9]{2})' }
+    level: error
+    message: |
+      The nightly channel in packages/turbo-repository/scripts/build.sh must
+      match rust-toolchain.toml [toolchain].channel. rust-toolchain.toml's own
+      comment flags this as a hand-sync ("Needs to be copied to ...build.sh").
+
+  # A2 — Formatting line-width coherence (documented "Keep in sync" convention).
+  # .rustfmt.toml `max_width = 100` is annotated "Keep in sync with .editorconfig";
+  # .editorconfig [*.rs] reciprocates "# Keep in sync with rustfmt".
+  - id: turbo-fmt-width-coherence
+    kind: cross_file_value_equals
+    source:
+      file: ".rustfmt.toml"
+      extract: { regex: '(?m)^max_width\s*=\s*([0-9]+)' }
+    targets:
+      - file: ".editorconfig"
+        extract: { regex: '(?m)^max_line_length\s*=\s*([0-9]+)' }
+    level: warning
+    message: |
+      .rustfmt.toml max_width must equal .editorconfig [*.rs] max_line_length —
+      both files carry a reciprocal "Keep in sync" comment.
+
+  # A3 — @turbo/types codegen freshness (turbo_types_check CI job).
+  # CI regenerates schema.json + config-v2.ts from turborepo-schema-gen, then
+  # `git diff --exit-code`. ONE freshness behavior; schema.json is the canonical
+  # generated artifact. (Generator needs a full cargo build; see check_summary.)
+  - id: turbo-types-schema-fresh
+    kind: generated_file_fresh
+    file: packages/turbo-types/schemas/schema.json
+    command:
+      ["cargo", "run", "-p", "turborepo-schema-gen", "--", "schema", "-o", "-"]
+    workdir: "."
+    timeout: 300
+    level: error
+    message: |
+      packages/turbo-types/schemas/schema.json is stale vs the Rust config
+      types — run turborepo-schema-gen and commit (CI: turbo_types_check).
+
+  # A4 — OpenAPI docs codegen freshness (check-openapi --check CI job).
+  # apps/docs/scripts/generate-openapi-docs.ts --check diffs generated MDX/JSON
+  # artifacts against committed copies and exits 1 on drift.
+  - id: turbo-openapi-docs-fresh
+    kind: command_idempotent
+    paths: "apps/docs/package.json"
+    command:
+      [
+        "node",
+        "--experimental-strip-types",
+        "scripts/generate-openapi-docs.ts",
+        "--check",
+      ]
+    workdir: "apps/docs"
+    timeout: 180
+    level: error
+    message: |
+      Generated OpenAPI docs artifacts are stale — run the docs OpenAPI
+      generator and commit (CI: docs.yml `check-openapi`).
+
+  # ════════════════════════════════════════════════════════════════
+  # ORCHESTRATION (D tools wrapped for a single entrypoint) — value-add,
+  # NOT counted in coverage. Mirrors the CI lint/test gates.
+  # ════════════════════════════════════════════════════════════════
+
+  - id: turbo-cargo-fmt
+    kind: command_idempotent
+    paths: "Cargo.toml"
+    command: ["cargo", "fmt", "--check"]
+    timeout: 180
+    level: error
+
+  - id: turbo-cargo-clippy
+    kind: command
+    paths: "Cargo.toml"
+    command: ["cargo", "lint"]
+    timeout: 600
+    level: error
+
+  - id: turbo-cargo-deny-licenses
+    kind: command
+    paths: "deny.toml"
+    command: ["cargo", "deny", "check", "licenses"]
+    timeout: 300
+    level: error
+
+  - id: turbo-js-quality
+    kind: command_idempotent
+    paths: "package.json"
+    command: ["pnpm", "exec", "oxlint", "--deny-warnings", "."]
+    timeout: 300
+    level: error
+
+  # ════════════════════════════════════════════════════════════════
+  # ALINT VALUE-ADD — config-policy + structure assertions the repo does
+  # NOT independently gate on (recorded separately, NOT in the A/B/C ratio).
+  # ════════════════════════════════════════════════════════════════
+
+  # cargo-deny license allowlist is DECLARED (the enforcement is cargo-deny=D).
+  - id: turbo-deny-allows-mit-apache
+    kind: file_content_matches
+    paths: "deny.toml"
+    pattern: '"Apache-2.0"'
+    level: warning
+    message: "deny.toml should declare its license allowlist (MIT/Apache-2.0 baseline)."
+
+  # clippy panic-extraction firewall is DECLARED in workspace lints (enforced=clippy=D).
+  - id: turbo-clippy-denies-unwrap
+    kind: file_content_matches
+    paths: "Cargo.toml"
+    pattern: 'unwrap_used\s*=\s*"deny"'
+    level: warning
+    message: "Workspace [lints.clippy] should deny unwrap_used (CONTRIBUTING policy)."
+
+  # taplo dependency-key ordering policy is declared.
+  - id: turbo-taplo-reorders-deps
+    kind: file_content_matches
+    paths: ".taplo.toml"
+    pattern: "reorder_keys = true"
+    level: info
+    message: ".taplo.toml should reorder dependency keys (check:toml gate)."
+
+  # Governance / structure files the repo relies on but has no explicit gate for.
+  - id: turbo-codeowners-exists
+    kind: file_exists
+    paths: ".github/CODEOWNERS"
+    level: warning
+
+  - id: turbo-contributing-exists
+    kind: file_exists
+    paths: "CONTRIBUTING.md"
+    level: warning
+
+  - id: turbo-pnpm-workspace-exists
+    kind: file_exists
+    paths: "pnpm-workspace.yaml"
+    level: error
+
+  - id: turbo-toolchain-pinned
+    kind: file_exists
+    paths: "rust-toolchain.toml"
+    level: warning

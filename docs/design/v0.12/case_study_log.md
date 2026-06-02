@@ -24,7 +24,8 @@ durable artifact and the configs are staged separately pending that decision.
 | batch 4 | 20 | 125 | 42 | 57 | 357 | 56% | 81 |
 | batch 5 | 20 | 95 | 30 | 33 | 380 | 60% | 45 |
 | batch 6 | 20 | 54 | 12 | 14 | 239 | 68% | 18 |
-| **cumulative** | **96** | **420** | **132** | **143** | **~1509** | **60%** | **226** |
+| batch 7 | 15 | 37 | 12 | 4 | 222 | 70% | 31 |
+| **TOTAL (111 repos)** | **111** | **457** | **144** | **147** | **~1731** | **61%** | **257** |
 
 ---
 
@@ -394,3 +395,86 @@ a **4th straight batch**.
 
 ### Artifacts
 20 validated configs folded into [`corpus/`](./corpus/) (now 95).
+
+---
+
+## Batch 7 — 2026-06-02 (final 15: CLI tools + JS/Go libs + monorepo build tools)
+
+Workflow: 30 agents, ~2.8M tokens. Repos: uv, axios, clap, cli, duckdb, etcd,
+express, docusaurus, gin, fzf, cobra, axum, next.js, turborepo, astro.
+Stage-B-reconciled **A=37 B=12 C=4 D=222, coverage 37/53 = 70%**. duckdb gave 10
+file-graph edges; next.js 5. **This batch completes the 111-repo corpus.**
+Confirmation again — no new Tier-1/2 (everything maps to the locked backlog).
+
+---
+
+# Study complete — final synthesis (2026-06-02)
+
+**All 111 repos worked** (calibration tokio + 7 batches), each pinned, deep-read
+(Stage A) and adversarially verified (Stage B), with a validated `.alint.yml` per
+repo (in [`corpus/`](./corpus/); tokio in `examples/`).
+
+## Headline numbers
+
+- **`coverage_today` = 457 / 748 = 61%** — alint *natively* expresses 457 of the
+  748 *addressable* enforced validations across the corpus. The other **~1731
+  enforced behaviors are D non-goals** (test/build/AST/sanitizer/formatter/
+  type-check/dep-graph/NLP execution) that alint orchestrates but does not
+  reimplement, correctly excluded from the denominator (R2/R5).
+- Per-repo `coverage_today` ranges 0–100%: focused libraries and
+  cross-file-consistency-heavy repos score 70–100%; big flagships with large
+  bespoke per-line/codegen/set-membership suites and pure-execution small libs
+  pull the pooled figure down.
+- **257 file-reference-graph edge sources** harvested (tokio calibration = 0).
+
+Coverage by batch: calib 71% · b1 74% · b2 57% · b3 61% · b4 56% · b5 60% ·
+b6 68% · b7 70% (pooled **61%**).
+
+## The deliverable — demand-ranked new-kind backlog (locked)
+
+The ranking **did not change across the last five batches** (b3–b7). Build order
+for the v0.12 cut:
+
+**Tier 1 — build (high cross-repo demand, additive, no regressions):**
+1. **`file_dependency_graph`** — the generic file→file reference graph
+   (layering/import firewall · codegen-freshness `git diff --exit-code` · orphan
+   /reachability · every-X-has-Y · set-equality). **257 edge sources, ~every
+   repo, every edge shape.** Was study-gated at 0 — **verdict: GO, #1 priority.**
+2. **`generated_file_fresh` mutating/regen mode** — a generator that writes in
+   place, then `git diff --exit-code` (today's kind is stdout-only). ~12 repos
+   (redis, symfony, postgres, openssl, svelte, neovim, llvm, roslyn, react,
+   spark, uv, …).
+3. **`files_equal`** — whole-file byte-identity of A vs B (skip-header option).
+   ~9 repos (tokio, symfony, gradle, serde, ansible, fastapi, golang/go, rust,
+   brew). `pair`/`pair_hash` cannot express it.
+4–6. **`git_commit_subject_matches`**, **`value_set_membership`**,
+   **`changeset_requires_path`** — all three *already-planned* v0.12 workstreams,
+   now corpus-validated with fresh evidence (django/spring-boot/hugo;
+   aspnetcore/numpy/elasticsearch/fastapi; sqlalchemy/cpython).
+
+**Tier 2 — strong, 2–4 repos each:** sectioned/key-extracted `ordered_block`;
+`every_X_has_Y` with a value predicate; charset / `file_is_ascii` allowlist;
+`git_file_mode` / no-exec-bit; dangling-symlink + `symlink_target_equals`;
+binary-aware `file_max_size`; `no_filename_case_conflict`; the GH-Actions
+ref-vs-SHA-pin + publisher-allowlist preset; `normalize: semver`.
+
+**Tier 3 — singletons (watch):** `path_length_cap`, `max_consecutive_spaces`,
+count-header, split-constant version-compose, orphan-identifiers,
+manifest-reachability, generated-checksum-manifest, intra-file reference
+resolution.
+
+## alint sharp-edges (C-tuning, shippable as polish independent of new kinds)
+
+Recurring, corpus-proven: `no_merge_conflict_markers` false-fires on reST/MD
+setext `=====` underlines (flask, git); `file_is_ascii` needs an `allow:` list
+(curl-proven, recurs llvm/vscode/elixir); `ordered_block`/`every_matching_has`
+want a `select:` line-filter; `import_gate language: js` over-matches JSDoc
+`@typedef`; test-fixture / `test-data/` default excludes for the hygiene bundles;
+ASF source-header exclude tuning.
+
+## Recommendation
+
+The study was the v0.12 gating item ("the study runs first") — **it is complete.**
+Proceed to the build phase, design-doc-first per project convention, in the Tier-1
+order above, starting with **`file_dependency_graph`**. The 110 corpus configs +
+this log are the regression/evidence base for each new kind.

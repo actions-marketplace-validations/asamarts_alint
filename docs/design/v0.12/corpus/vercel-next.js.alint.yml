@@ -1,0 +1,242 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# vercel/next.js @ bc384860d5f0b77a3cab9769ca4b1a0d7f5ce2fe  (v0.12 case study, Stage A)
+#
+# Shape: very large JS/TS + Rust web-framework MONOREPO.
+#   - pnpm workspace: packages/* (19 npm packages, lerna-versioned in lockstep),
+#     plus apps/*, bench/*, crates/*/js, turbopack/{crates,packages}/*.
+#   - cargo workspace: 64 members (crates/*, turbopack/crates/*, turbopack/xtask).
+#   - governance: single-vendor (Vercel) + many bots (graphite, code-freeze).
+#
+# WHERE VALIDATION LIVES (enforced surface, the denominator):
+#   .github/workflows/build_and_test.yml  ~32 jobs (tests-pass aggregator) +
+#     build_reusable.yml composite. The repo-STATE (read-the-tree, not compile)
+#     gates are:
+#       lint job ........ pnpm lint-no-typescript  (prettier --check / eslint /
+#                         alex prose / ast-grep structural)  → all TOOL EXEC = D
+#                         pnpm check-examples       (codegen freshness, git-diff)
+#                         pnpm validate-externals-doc (jsonc<->mdx list sync)
+#       check-types-precompiled .. pnpm types-and-precompiled  → tsc (D) +
+#                         pnpm check-precompiled  (ncc re-bundle + git-diff)
+#       build (taskr) .... check_error_codes  (scan source -> consolidate ->
+#                         git-diff errors.json; codegen freshness)
+#       rust-check / rustdoc-check .. clippy / cargo doc  → D
+#       ast-grep job ..... ast-grep scan (19 structural rules) → D
+#   Hooks: .husky/pre-commit = lint-staged (prettier+eslint+rustfmt = D);
+#          .husky/pre-push = guard against pushing to `canary` (workflow-policy,
+#          not a repo-content check).
+#   Conventions (AGENTS.md / contributing/*): "read README files up the tree",
+#          signed commits required, ESLint/Prettier/alex described — all either
+#          tool-exec (D) or social (not machine-extractable).
+#
+# Cross-file VALUE-coherence invariants this repo carries (the alint sweet spot,
+# several only stated as in-file "if you change this also update X" comments):
+#   - rust-toolchain.toml `channel` == .devcontainer/rust feature `version`
+#     (literal review-checklist comment at top of rust-toolchain.toml).
+#   - all packages/* package.json `version` agree (lerna `version.exact: true`).
+#   - pnpm-workspace.yaml security settings (blockExoticSubdeps / minimumReleaseAge)
+#     mirrored into scripts/install-native.mjs (literal "keep in sync" comment).
+#
+# This config: extend the matching bundles; express the cross-file + structure +
+# hygiene A-items declaratively; wrap the codegen-freshness gates (which alint can
+# run but whose *generators* are bespoke) via generated_file_fresh / command_idempotent;
+# leave tsc / eslint / clippy / prettier / alex / ast-grep as documented D non-goals.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+  - alint://bundled/monorepo@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════════════
+  # A-ITEMS — cross-file VALUE coherence (cross_file_value_equals)
+  # ════════════════════════════════════════════════════════════════════════
+
+  # ── A1: rust-toolchain channel <-> devcontainer rust-feature version ──────
+  # rust-toolchain.toml top comment: "if you update this, also update
+  # `.devcontainer/rust/devcontainer-feature.json`". The classic drift bug
+  # cross_file_value_equals exists for.
+  - id: next-rust-toolchain-devcontainer-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "rust-toolchain.toml"
+      extract: { toml: "$.toolchain.channel" }
+    targets:
+      - file: ".devcontainer/rust/devcontainer-feature.json"
+        # NB: this file has TWO "version" keys (top-level feature version
+        # "0.0.0" AND the nested toolchain version). Anchor on the nested
+        # toolchain value (nightly-YYYY-MM-DD or a release like 1.NN.N), not
+        # the bare "version": "0.0.0". (R4: a naive '"version":...' regex grabs
+        # 0.0.0 and the rule fires a false mismatch.)
+        extract:
+          regex: '"version":\s*"((?:nightly|beta|stable|1\.[0-9]+)[^"]*)"'
+    level: error
+    message: |
+      rust-toolchain.toml `channel` and the devcontainer rust feature `version`
+      in .devcontainer/rust/devcontainer-feature.json must match. The toolchain
+      file's own header comment says "if you update this, also update" the
+      devcontainer feature — this is that hand-sync, enforced.
+
+  # ── A2: monorepo package version coherence ───────────────────────────────
+  # lerna.json `command.version.exact: true` versions every packages/* in
+  # lockstep; lerna.json `version` is the source of truth. Assert the canary
+  # version string is identical across the representative published packages
+  # AND equals lerna.json's recorded version. (Drift = a botched manual bump.)
+  - id: next-package-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "lerna.json"
+      extract: { json: "$.version" }
+    targets:
+      - file: "packages/next/package.json"
+        extract: { json: "$.version" }
+      - file: "packages/next-swc/package.json"
+        extract: { json: "$.version" }
+      - file: "packages/create-next-app/package.json"
+        extract: { json: "$.version" }
+      - file: "packages/font/package.json"
+        extract: { json: "$.version" }
+      - file: "packages/eslint-config-next/package.json"
+        extract: { json: "$.version" }
+    level: error
+    message: |
+      lerna versions packages/* in lockstep (lerna.json command.version.exact).
+      Every package's [version] must equal lerna.json's `version`. A package
+      left behind a `lerna version` bump is the drift this catches.
+
+  # ── A3: pnpm-workspace security settings mirrored in install-native.mjs ───
+  # pnpm-workspace.yaml comment: "Keep security related settings in sync with
+  # pnpm-workspace.yaml written to temporary fixture dirs in
+  # file://./scripts/install-native.mjs". Assert minimumReleaseAge agrees.
+  - id: next-pnpm-security-minrelease-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "pnpm-workspace.yaml"
+      extract: { regex: 'minimumReleaseAge:\s*([0-9]+)' }
+    targets:
+      - file: "scripts/install-native.mjs"
+        extract: { regex: 'minimumReleaseAge:\s*([0-9]+)' }
+    level: warning
+    message: |
+      pnpm-workspace.yaml `minimumReleaseAge` is mirrored into the temp
+      pnpm-workspace.yaml that scripts/install-native.mjs writes (per the
+      "keep security settings in sync" comment). Keep the two numbers equal.
+
+  # ════════════════════════════════════════════════════════════════════════
+  # A-ITEMS — codegen freshness (generated_file_fresh / command_idempotent).
+  # These reproduce the repo's `generate && git diff --exit-code` gates. alint
+  # RUNS the generator and diffs; the generator itself is bespoke (this is the
+  # value-add: declarative, single-entrypoint, attributed to the file).
+  # ════════════════════════════════════════════════════════════════════════
+
+  # ── A4: error-codes manifest fresh (taskr check_error_codes) ──────────────
+  # `pnpm build` -> taskr check_error_codes -> `pnpm -w run check-error-codes`
+  # scans source for new Error()s, consolidates into packages/next/errors.json,
+  # and fails if errors.json changed. command_idempotent models "run checker;
+  # clean tree = pass".
+  - id: next-error-codes-fresh
+    kind: command_idempotent
+    paths: "packages/next/errors.json"
+    command: ["pnpm", "-w", "run", "check-error-codes"]
+    timeout: 300
+    level: error
+    message: |
+      packages/next/errors.json is stale — a new thrown error has no assigned
+      code. Run `pnpm update-error-codes` (or `pnpm build`) and commit the
+      regenerated errors.json. (CI: taskr `check_error_codes`.)
+
+  # ── A5: examples normalized (scripts/check-examples.sh) ───────────────────
+  # check-examples.sh rewrites every examples/*/package.json (forces private,
+  # strips license/version/name/author/description), copies next-env.d.ts and a
+  # default .gitignore, then `git status` must be clean. A normalize-then-diff
+  # gate — command_idempotent fits exactly.
+  - id: next-examples-normalized
+    kind: command_idempotent
+    paths: "scripts/check-examples.sh"
+    command: ["bash", "scripts/check-examples.sh"]
+    timeout: 300
+    level: warning
+    message: |
+      The examples/ tree is not normalized: check-examples.sh would change a
+      package.json / next-env.d.ts / .gitignore. Run ./scripts/check-examples.sh
+      and commit. (CI: lint job `pnpm check-examples`.)
+
+  # ════════════════════════════════════════════════════════════════════════
+  # A-ITEMS — structure / filename conventions
+  # ════════════════════════════════════════════════════════════════════════
+
+  # ── A6: docs ordered-prefix filename convention ───────────────────────────
+  # docs/ uses a `NN-slug` numbered-prefix ordering convention for its
+  # top-level sections (01-app, 02-pages, ... ; 01-getting-started, ...). Every
+  # *directory-level* doc entry is either `NN-slug(.mdx)?` or index.mdx.
+  - id: next-docs-numbered-prefix
+    kind: filename_regex
+    paths:
+      include:
+        - "docs/*/[0-9]*"
+        - "docs/*/*/[0-9]*"
+    pattern: '^[0-9]{2}-[a-z0-9-]+(\.mdx)?$'
+    level: info
+    message: |
+      docs/ section entries follow the `NN-slug` ordered-prefix convention
+      (two-digit numeric prefix controlling sidebar order). Keep new docs
+      named `NN-slug` or `NN-slug.mdx`.
+
+  # ── A7: forbid npm/yarn lockfiles (this is a pnpm-only repo) ──────────────
+  # .npmrc + packageManager pin pnpm; .gitignore bans package-lock.json. Assert
+  # no stray npm/yarn lockfile is committed (a wrong-PM mistake).
+  - id: next-no-foreign-lockfiles
+    kind: file_absent
+    paths:
+      - "package-lock.json"
+      - "yarn.lock"
+      - "npm-shrinkwrap.json"
+    level: error
+    message: |
+      next.js is a pnpm-only workspace (packageManager: pnpm, .npmrc lockfile=true,
+      pnpm-lock.yaml tracked). A committed npm/yarn lockfile means someone used the
+      wrong package manager; remove it.
+
+  # ════════════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD config-policy assertions (per R3/R5: NOT in the coverage
+  # denominator — next.js does not gate on these; recorded as bonus structure).
+  # ════════════════════════════════════════════════════════════════════════
+
+  # pnpm is pinned as the package manager.
+  - id: next-packagemanager-is-pnpm
+    kind: json_path_matches
+    paths: "package.json"
+    path: "$.packageManager"
+    matches: '^pnpm@'
+    level: info
+    message: "package.json should pin pnpm via packageManager (corepack)."
+
+  # pnpm supply-chain hardening is declared.
+  - id: next-pnpm-block-exotic-subdeps-declared
+    kind: file_content_matches
+    paths: "pnpm-workspace.yaml"
+    pattern: '(?m)^blockExoticSubdeps:\s*true'
+    level: info
+    message: |
+      pnpm-workspace.yaml should keep `blockExoticSubdeps: true` (supply-chain
+      hardening — blocks non-registry transitive deps).
+
+  # The ast-grep structural-lint config is present (the job runs `ast-grep scan`).
+  - id: next-ast-grep-config-present
+    kind: file_exists
+    paths: "sgconfig.yml"
+    root_only: true
+    level: info
+    message: "sgconfig.yml (ast-grep structural-lint config) must exist; CI runs `ast-grep scan`."
+
+  # LF line endings are enforced via .gitattributes (Windows CRLF test flakiness).
+  - id: next-gitattributes-enforces-lf
+    kind: file_content_matches
+    paths: ".gitattributes"
+    pattern: '(?m)^\*\s+text=auto\s+eol=lf'
+    level: info
+    message: ".gitattributes should enforce `* text=auto eol=lf` (CRLF test flakiness)."

@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for astral-sh/uv @ cfe5277bc4226da3a8cf51ad40b34f6a4e1746e5
+# v0.12 case study (Stage A). Rust + Python hybrid; cargo workspace + maturin/pyproject.
+#
+# Enforced-surface note (R5): uv's CI gates are overwhelmingly D (rustfmt, clippy
+# incl. the clippy.toml std::fs firewall, ruff, ty, shellcheck, cargo-shear,
+# cargo-deny bans, typos, validate-pyproject, mkdocs --strict, zizmor, cargo
+# publish --dry-run, dist plan, uv lock --check, cargo dev generate-all --mode
+# check, and the runtime test/system/ecosystem suites). The ONE cleanly-native
+# enforced check is the cross-lockfile `windows` version coherence (uv-windows-*).
+# Everything else below is alint value-add (structure uv does NOT gate on).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+  - alint://bundled/python@v1
+
+ignore:
+  - "test/**"            # ecosystem/workspaces/packages fixtures (intentional non-idiomatic)
+  - "crates/uv-virtualenv/src/**/*.py"  # vendored activate scripts (ruff-excluded upstream)
+  - "**/snapshots/**"
+
+rules:
+  # === A (ENFORCED, native) ============================================
+  # check-trampoline-version-consistency.py (test-windows-trampolines.yml:32):
+  # the `windows` crate must be the SAME locked version in the main Cargo.lock
+  # and the out-of-workspace crates/uv-trampoline/Cargo.lock. Cargo.lock is an
+  # array-of-tables; RFC-9535 filter selector picks the one `windows` package.
+  - id: uv-windows-crate-version-consistent
+    kind: cross_file_value_equals
+    level: error
+    source:
+      file: Cargo.lock
+      extract:
+        toml: "$.package[?(@.name == 'windows')].version"
+    targets:
+      files: "crates/uv-trampoline/Cargo.lock"
+      extract:
+        toml: "$.package[?(@.name == 'windows')].version"
+    message: >-
+      The `windows` crate version must match between the workspace Cargo.lock and
+      crates/uv-trampoline/Cargo.lock (enforced by
+      scripts/check-trampoline-version-consistency.py).
+
+  # === value-add: structure uv does NOT gate on (NOT in coverage ratio) ===
+
+  # Dual license: uv is "MIT OR Apache-2.0" with both files committed.
+  - id: uv-license-apache-exists
+    kind: file_exists
+    level: error
+    paths: LICENSE-APACHE
+    root_only: true
+  - id: uv-license-mit-exists
+    kind: file_exists
+    level: error
+    paths: LICENSE-MIT
+    root_only: true
+
+  # Workspace package metadata declares the dual license + 2024 edition.
+  - id: uv-workspace-license-declared
+    kind: toml_path_equals
+    level: error
+    paths: Cargo.toml
+    path: "$.workspace.package.license"
+    equals: "MIT OR Apache-2.0"
+  - id: uv-workspace-edition-2024
+    kind: toml_path_equals
+    level: warning
+    paths: Cargo.toml
+    path: "$.workspace.package.edition"
+    equals: "2024"
+
+  # rust-toolchain.toml pins an exact channel (uv pins 1.96.0).
+  - id: uv-rust-toolchain-channel-pinned
+    kind: toml_path_matches
+    level: warning
+    paths: rust-toolchain.toml
+    path: "$.toolchain.channel"
+    matches: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+  # maturin build backend declared in pyproject (the Python wheel front-end).
+  - id: uv-pyproject-build-backend-maturin
+    kind: toml_path_equals
+    level: warning
+    paths: pyproject.toml
+    path: "$['build-system']['build-backend']"
+    equals: "maturin"
+
+  # The committed config files the bespoke checks/tools rely on must exist.
+  - id: uv-editorconfig-exists
+    kind: file_exists
+    level: warning
+    paths: .editorconfig
+    root_only: true
+  - id: uv-typos-config-exists
+    kind: file_exists
+    level: info
+    paths: _typos.toml
+    root_only: true
+  - id: uv-clippy-config-exists
+    kind: file_exists
+    level: info
+    paths: clippy.toml
+    root_only: true
+  - id: uv-precommit-config-exists
+    kind: file_exists
+    level: info
+    paths: .pre-commit-config.yaml
+    root_only: true
+
+  # Generated schema carries the linguist-generated marker in .gitattributes.
+  - id: uv-schema-marked-generated
+    kind: file_content_matches
+    level: info
+    paths: .gitattributes
+    pattern: "uv\\.schema\\.json linguist-generated=true"
