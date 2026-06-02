@@ -19,6 +19,8 @@ durable artifact and the configs are staged separately pending that decision.
 |---|--:|--:|--:|--:|--:|--:|--:|
 | calibration (tokio) | 1 | 5 | 2 | 0 | ~20 | 71% | 0 |
 | batch 1 | 5 | 31 | 6 | 5 | 81 | **74%** | **21** |
+| batch 2 | 10 | 25 | 10 | 9 | 127 | 57% | 13 |
+| **cumulative** | **16** | **61** | **18** | **14** | **~228** | **66%** | **34** |
 
 ---
 
@@ -133,3 +135,81 @@ parity. flask's Stage A was strong enough that Stage B moved nothing.
 5 validated draft configs at `/tmp/cs_out/<owner>-<repo>.alint.yml` (flask 13K,
 prometheus 7K, rubocop 15K, curl 5.8K, eslint 5.6K). Pending the corpus-storage
 decision before integration into the repo.
+
+---
+
+## Batch 2 — 2026-06-01 (scale-up 10: adds PHP / .NET / Elixir / Rust)
+
+Workflow: 20 agents, ~2M tokens. *(The first attempt failed transiently — all 10
+agents, including 222-file ripgrep, died without emitting output during the
+session-exit window. Clean re-run after two safeguards: agents write `alint check`
+JSON to a file and inspect only the summary/failing rules, and both stages are
+told they MUST end with the `StructuredOutput` call.)*
+
+| repo | shape | A | B | C | D | cov | file-graph | Stage B |
+|---|---|--:|--:|--:|--:|--:|--:|---|
+| `pydantic/pydantic` | Python lib | 5 | 0 | 0 | 17 | **100%** | 0 | no change |
+| `vitejs/vite` | JS build tool | 1 | 0 | 0 | 10 | **100%** | 0 | −1 D |
+| `symfony/symfony` | PHP web-fw mono | 8 | 3 | 1 | 11 | 67% | 3 | no change (HQ) |
+| `hashicorp/terraform` | Go infra/ops | 2 | 0 | 1 | 20 | 67% | 3 | no change |
+| `phoenixframework/phoenix` | Elixir web-fw | 2 | 0 | 1 | 7 | 67% | 0 | −1 A |
+| `dotnet/aspnetcore` | .NET web-fw mono | 2 | 1 | 1 | 11 | 50% | 3 | +1 A |
+| `django/django` | Python web-fw | 3 | 1 | 2 | 17 | 50% | 0 | B→C |
+| `spring-projects/spring-boot` | JVM web-fw mono | 2 | 3 | 3 | 14 | 25% | 3 | −2 A (kind-misuse) |
+| `redis/redis` | C systems/DB | 0 | 1 | 0 | 13 | 0% | 1 | no change |
+| `BurntSushi/ripgrep` | Rust CLI | 0 | 1 | 0 | 7 | 0% | 0 | C→B |
+
+Pooled **25/44 = 57%** (vs batch 1's 74%) — deliberately heavy on large
+frameworks/monorepos (django, spring-boot, symfony, aspnetcore), a systems DB
+(redis), and a solo CLI (ripgrep), where alint's addressable share is smaller:
+more codegen-freshness / set-membership / commit-message gaps and a higher D
+(execution) floor. Focused libraries still hit 100% (pydantic, vite).
+**Cumulative across 16 repos: 61/93 = 66%.**
+
+### `file_dependency_graph` keeps climbing — now 34 sources across 16 repos
+
+Batch 2 added 13 edge sources, broadening the *types*: **codegen-freshness
+`git diff --exit-code`** (redis `commands.def` from 442 JSON specs; terraform ×3;
+aspnetcore ×3 in `eng/scripts/CodeCheck.ps1`) and **registry / manifest-
+declaration** edges (spring-boot ×3 buildSrc registry→code; symfony ×3
+`composer.json` `replace`-map → sub-packages). The gate is decisively validated;
+the edge-source variety (content-regex, naming-convention, manifest, generated-
+diff) keeps arguing for a *generic* kind over per-ecosystem rules.
+
+### New-kind candidates — several VALIDATE already-planned v0.12 workstreams
+
+- **`git_commit_subject_matches` / commit-message regex** — recurs in django +
+  spring-boot. Fresh corpus evidence for the planned
+  [`git_commit_subject_matches.md`](./git_commit_subject_matches.md) (Django's
+  period-suffix + `[A.B.x]` stable-branch prefix; Spring's DCO `Signed-off-by`).
+- **`value_set_membership` / cross-file subset** — aspnetcore. Validates
+  [`value_set_membership.md`](./value_set_membership.md).
+- **`files_equal` (whole-file byte-identity)** — recurs (tokio B1 + symfony).
+  Demand accumulating; promote from a tokio singleton to a tracked candidate.
+- **`generated_file_fresh` mutating / regen mode** — redis + symfony want a
+  codegen-freshness variant whose generator writes in place (today gff is
+  stdout-only). Extends an existing kind.
+- **`registry_paths_resolve` extensions** — to code symbols (spring-boot
+  `.imports`/`.factories`) and `.slnx`/`.slnf` project paths (aspnetcore).
+- Singletons: `ordered_values_in_key` (spring-boot), `unique_filename` /
+  no-duplicate-basename (aspnetcore), `manifest_implies_content` (symfony).
+
+### alint sharp-edges (C-tuning) — recurring themes firming up
+
+The **ref-pin-vs-SHA-pin** preset (django, recurring from flask) and the
+**fixture-exclude** preset (django) now have multiple confirmations. New:
+`file_content_forbidden` allowlist + per-subpackage `import_gate` layering preset
+(spring-boot), a `php-symfony` header bundle (symfony), per-directory SPDX
+value-in-allowlist (terraform), within-file version-pin sync (phoenix).
+
+### Stage-B value
+
+4 of 10 records had counts corrected (spring-boot −2 A as kind-misuses,
+ripgrep/django re-bucketed, aspnetcore +1 A); 10 concrete misses surfaced incl.
+symfony's `splitsh.json` 183-entry subtree registry, spring-boot's
+`CheckSpringConfigurationMetadata` family, aspnetcore's shared-framework
+reference-boundary firewall, vite's `patchedDependencies` path resolution.
+
+### Artifacts
+
+10 validated draft configs at `/tmp/cs_out/` (all `config_validated: true`).
