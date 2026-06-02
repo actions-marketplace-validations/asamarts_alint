@@ -189,7 +189,9 @@ calibration example below keep the unit applied consistently.
   fix/batch).
 - A **calibration worked-example**: one repo fully worked under this
   protocol, read by every agent first, so the unit + taxonomy are
-  applied the same way batch to batch.
+  applied the same way batch to batch. (**Produced 2026-06-01:**
+  [`case_study_calibration.md`](./case_study_calibration.md) — `tokio-rs/tokio`,
+  Stage A + B, with the six rulings R1-R6 that lock the unit.)
 - A **mid-study spot-audit** of ~10% of repos with a fresh Stage-B pass,
   to catch drift before the aggregate synthesis.
 

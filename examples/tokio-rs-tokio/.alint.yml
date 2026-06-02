@@ -168,16 +168,16 @@ rules:
     kind: cross_file_value_equals
     source:
       file: "tokio/Cargo.toml"
-      extract: { toml: "$.package.rust-version" }
+      extract: { toml: "$.package['rust-version']" }
     targets:
       - file: "tokio-util/Cargo.toml"
-        extract: { toml: "$.package.rust-version" }
+        extract: { toml: "$.package['rust-version']" }
       - file: "tokio-test/Cargo.toml"
-        extract: { toml: "$.package.rust-version" }
+        extract: { toml: "$.package['rust-version']" }
       - file: "tokio-stream/Cargo.toml"
-        extract: { toml: "$.package.rust-version" }
+        extract: { toml: "$.package['rust-version']" }
       - file: "tokio-macros/Cargo.toml"
-        extract: { toml: "$.package.rust-version" }
+        extract: { toml: "$.package['rust-version']" }
       - file: ".github/workflows/ci.yml"
         extract: { regex: "rust_min:\\s*'([0-9]+\\.[0-9]+)'" }
     level: error
