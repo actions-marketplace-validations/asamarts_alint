@@ -1,12 +1,18 @@
 # Generic file-dependency-graph family
 
-Status: **Planned (v0.12), study-gated.** Decision recorded 2026-05-30:
-pursue the language-agnostic, user-defined *file*-reference graph as the
-on-mission generalisation of the (now decoupled) package-graph
-`dependency_graph_allowlist`; **gate the edge-DSL commitment on the
-100-repo study + a 2-3 case prototype** before building. See
-[`dependency_graph_allowlist.md`](./dependency_graph_allowlist.md) for
-the narrow package-graph item this splits from.
+Status: **Approved for build — 2026-06-02.** The study gate is satisfied: the
+[100-repo study](./case_study_log.md) surfaced **257 file-reference-graph edge
+sources across 56 repos** — `file_graph` is the **#1 demand-ranked new-kind** of
+the cut ([`architecture_synthesis.md`](./architecture_synthesis.md) primitive ⑤).
+Ships **standalone**: the value-relation `cross_file` unification is a separate
+build, and per "overlap discipline" below the shipped 1-level kinds are NOT folded
+in pre-1.0. **Scope (sharpened by the study):** `file_graph` owns the *path-based*
+reference graph — relative-import firewalls, derive-target codegen, content→path
+references. **Module-NAME resolution** (kubernetes import-boss over `k8s.io/…`,
+Go / TS bare specifiers) stays on the package-graph non-goal side; **set-equality**
+of extracted values (curl option↔man-page) is the `cross_file` `set_equals`
+relation, not a graph. See [`dependency_graph_allowlist.md`](./dependency_graph_allowlist.md)
+for the narrow package-graph item this splits from.
 
 ## The reframe
 
@@ -32,18 +38,38 @@ package → package allowlists (semantic nodes); a file → file graph
 cannot express them. The two items are decoupled: this one is on-mission
 and study-gated; the package-graph allowlist stays parked.
 
-## Demand
+## Demand — VALIDATED (257 edge sources, 56 repos)
 
-- **Confirmed corpus sources for the *file-graph* framing: 0 today.**
-  The motivating examples (codegen acyclicity, "a path referenced in a
-  JSON file is a dependency", generated-file freshness) are plausible
-  but unvalidated; the 2 sources on record (rust/go) are *package*-graph.
-  This is exactly why the item is study-gated — the 100-repo study must
-  surface real file-graph edge shapes before the edge DSL is committed.
-- Adjacent shapes already in the corpus that hint at latent demand:
-  protobuf codegen trees, generated-binding parity (the
-  `cross_language_implementation_complete` long-tail), config-include
-  chains.
+The study (was "0 sources today") harvested **257 file-reference-graph edge
+sources**, in nearly every repo — the decisive #1 signal. By edge-SOURCE type,
+with the *path-based subset this kind owns* called out:
+
+- **Content-regex import firewalls → `forbidden_edges` / layering** (path-based,
+  ours): flask `sansio/` cannot import the Flask globals (relative `from ..globals`);
+  rails `rail_inspector` require-graph; uv's `uv-fs` wrapper firewall; vscode /
+  eslint *relative* module boundaries.
+- **Derive-target codegen → `fresh`** (path-based, ours): proto → `*.pb.go`;
+  redis `commands.def` ← `src/commands/*.json`; prometheus ×5, terraform ×3,
+  aspnetcore ×3, uv ×3, llvm/roslyn/react/spark. *(The repos enforce these by
+  re-running the generator (= D); `file_graph`'s `fresh` is the alint-native
+  content-hash-marker variant — same intent, no generator run, no spawn-gate.)*
+- **Content→path reference resolution → `no_dangling` / `no_orphans`**
+  (path-based, ours): doc cross-links that must resolve to a file (git `gitlink:`,
+  rubocop implicit links, markdown link targets); registry orphans (next.js, k8s
+  staging).
+- **Acyclicity → `acyclic`** — the clearest *capability gap* (nothing today does
+  it). Direct file-level sources were thinner than the above (most cycle checks
+  are package-graph / AST = D), but the proto-`import` shape is path-based and the
+  lead demo.
+
+**Explicitly NOT `file_graph`** (the honest denominator, per Scope above):
+module-NAME firewalls (kubernetes import-boss `.import-restrictions` over Go module
+paths — package-graph) and value set-equality (curl `tests/test1139.pl`
+option↔man-page — `cross_file` `set_equals`). The 257 is the broad reference-graph
+harvest; `file_graph` claims the path-based majority.
+
+The edge SOURCES vary (content-regex · naming-convention · manifest · generated-
+diff) — exactly the case for ONE generic kind over per-ecosystem rules.
 
 ## Why it's a real gap (existing kinds are 1-level only)
 
@@ -127,6 +153,49 @@ dependency-cruiser's unified rule model):
 - **`require:`** is a closed set:
   `acyclic | no_dangling | no_orphans | forbidden_edges | fresh`.
 
+## Prototype — the model on 3 confirmed corpus cases (gate satisfied)
+
+The gate required validating the `edges:`/`require:` DSL against real repos before
+building. Three path-based corpus cases, each a different `require:` mode:
+
+```yaml
+# A. forbidden_edges — flask sansio import firewall (study: flask, file-graph #1).
+#    sansio code must not reach back into the IO-bound globals module.
+- id: flask-sansio-layering
+  kind: file_graph
+  nodes: "src/flask/**/*.py"
+  edges:
+    from_content: { extract: { regex: 'from\s+(\.[\w.]+)\s+import' }, resolve: relative_to_file }
+  require:
+    forbidden_edges: [{ from: "src/flask/sansio/**", to: "src/flask/globals.py" }]
+
+# B. fresh — redis commands.def derived from the per-command JSON specs
+#    (repo runs the generator = D; here the hash-marker variant, no spawn).
+- id: redis-commands-def-fresh
+  kind: file_graph
+  nodes: "src/commands/*.json"
+  edges:
+    derive_target: { from: 'src/commands/(.*)\.json', to: 'src/commands.def' }
+  require:
+    fresh: { hash: sha256, marker: '/\* @generated from .* sha256:([0-9a-f]{64}) \*/' }
+
+# C. no_dangling — every doc cross-link resolves to a file (study: rubocop/git xref)
+- id: docs-links-resolve
+  kind: file_graph
+  nodes: "docs/**/*.md"
+  edges:
+    from_content: { extract: { regex: '\]\((\.[^)]+\.md)\)' }, resolve: relative_to_file }
+  require: no_dangling
+```
+
+**Findings that shaped the build:** (1) `from_content` + `resolve` cleanly express
+the relative-import and content-link edges (the common case). (2) `derive_target`
++ hash-`marker` expresses codegen-freshness *without* re-running the generator —
+the alint-native answer to the corpus's "generate-then-`git diff`" pattern.
+(3) Bare/absolute specifiers (`from "vscode"`, `k8s.io/…`) are **dropped, not
+mis-resolved** — nodes are path-based; name resolution is the package-graph
+non-goal. The DSL held; no reshape needed.
+
 ## Critique / constraints (must hold)
 
 1. **No mtime.** Git writes checkout-time mtime, so "generated file
@@ -163,24 +232,26 @@ dependency-cruiser's unified rule model):
    v1.0 DSL-freeze boundary, not before — folding four shipped kinds into
    one engine pre-1.0 is destabilising for elegance's sake.
 
-## Plan (study-gate + prototype, then decide)
+## Plan — gates 1-3 satisfied; building (GO)
 
-1. **Decouple** the package-graph allowlist (done: its doc is now scoped
+1. **Decouple** the package-graph allowlist — **done** (its doc is scoped
    to rust/go and deferred).
-2. **Harvest file-graph edge shapes in the 100-repo study** — briefed in
-   [`case_study_100_repos.md`](./case_study_100_repos.md): per repo,
-   record any file → file reference graph the project enforces (cycles /
-   dangling / orphans / freshness / layering) and the *edge source*
-   (content regex, naming convention, or manifest declaration).
-3. **Prototype the `edges:` model on 2-3 confirmed cases** before
-   generalising — the block most likely to feel wrong on contact with
-   reality.
-4. **Decide commit-vs-slip.** If the study confirms demand, ship
-   `acyclic` first (design-doc-first, one atomic commit — clearest value,
-   real gap, O(V+E), pure-parse), then `no_dangling` / `no_orphans`,
-   then `forbidden_edges` / layering, then hash-`fresh`, each as a source
-   confirms. If the study finds no file-graph demand, it slips to v0.13+
-   without harm.
+2. **Harvest file-graph edge shapes in the 100-repo study** — **done:** 257
+   edge sources across 56 repos (see Demand + [`case_study_log.md`](./case_study_log.md)).
+3. **Prototype the `edges:` model on 2-3 confirmed cases** — **done** (the
+   Prototype section above; the DSL held, no reshape).
+4. **Build (GO).** Ship in this sub-order, each `require:` mode as an atomic
+   increment on CHANGELOG `[Unreleased]`:
+   1. **`acyclic` + `forbidden_edges`** first — the two clearest, both pure-parse
+      O(V+E), and the best-evidenced layering case (flask, rails, uv). One node
+      glob + the `from_content` edge extractor + canonical-cycle output.
+   2. **`no_dangling` / `no_orphans`** — reference integrity (doc-xref, registry
+      orphans); shares the edge extractor, adds reverse-edge / reachability.
+   3. **`fresh`** (content-hash-marker) — codegen freshness via `derive_target`;
+      reuses the `pair_hash` digest machinery over an edge.
+   Standalone kind (`crate::file_graph`), `requires_full_index` cross-file dispatch,
+   never in `SPAWNING_RULE_KINDS` (pure-parse). Needs a 1M-file bench scenario
+   (a new macro scenario, extends the S11-S13 pattern) before the v0.12 release.
 
 ## Open questions
 
