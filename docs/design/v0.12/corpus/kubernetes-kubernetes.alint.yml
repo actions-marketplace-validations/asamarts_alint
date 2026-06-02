@@ -1,0 +1,257 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Proposed alint config for kubernetes/kubernetes @ 14f9f7e9e565 (v0.12
+# case-study Stage A). kubernetes is a CNCF Apache-2.0 hyperscale Go
+# monorepo: one root go.mod + a Go workspace (go.work) over ~40
+# staging/src/k8s.io/* published modules, vendored deps, Prow CI (no
+# .github/workflows/), and a ~50-script hack/verify-*.sh gate driven by
+# `make verify`.
+#
+# The enforced surface is DOMINATED by tool-execution / codegen-freshness /
+# semantic-import-graph checks that alint deliberately does NOT reimplement
+# (those run as `command` shellouts / stay on Prow). The handful of checks
+# whose LOGIC alint expresses natively are below. See the case-study record
+# for the full A/B/C/D classification.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/go@v1
+  - alint://bundled/ci/github-actions@v1   # no-op: kubernetes uses Prow
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A1 — Apache-2.0 boilerplate header (hack/verify-boilerplate.sh +
+  # hack/boilerplate/boilerplate.go.txt). Every Go source file must
+  # carry the Apache-2.0 banner. boilerplate.py normalizes the
+  # `Copyright YYYY` year before comparing, so the stable invariant is
+  # the "Licensed under the Apache License, Version 2.0" line. Scope to
+  # primary source, excluding generated + vendor + third_party (which
+  # boilerplate.py also skips via .generated_files / path rules).
+  # ════════════════════════════════════════════════════════════════
+  - id: k8s-go-boilerplate-header
+    kind: file_header
+    paths:
+      include: ["**/*.go"]
+      exclude:
+        - "vendor/**"
+        - "third_party/**"
+        - "**/third_party/**"        # nested forked stdlib (BSD-licensed)
+        - "**/forked/**"
+        - "**/testdata/**"           # boilerplate.py skips testdata
+        - "_output/**"
+        - "**/*.pb.go"
+        - "**/generated.pb.go"
+        - "**/zz_generated.*.go"
+        - "**/types.generated.go"
+        - "**/types_swagger_doc_generated.go"
+        - "**/*_generated.go"
+    pattern: 'Licensed under the Apache License, Version 2\.0'
+    lines: 16
+    level: error
+    message: >-
+      Source file is missing the Apache-2.0 boilerplate header (see
+      hack/boilerplate/boilerplate.go.txt). Run
+      `hack/update-boilerplate.sh` or add the banner.
+
+  # Shell scripts carry the same banner (boilerplate.sh.txt).
+  - id: k8s-shell-boilerplate-header
+    kind: file_header
+    paths:
+      include: ["hack/**/*.sh", "build/**/*.sh", "cluster/**/*.sh"]
+      exclude:
+        - "vendor/**"
+        - "third_party/**"
+    pattern: 'Licensed under the Apache License, Version 2\.0'
+    lines: 16
+    level: warning
+    message: >-
+      Shell script is missing the Apache-2.0 boilerplate header (see
+      hack/boilerplate/boilerplate.sh.txt).
+
+  # ════════════════════════════════════════════════════════════════
+  # A2 — Staging module metadata invariant (hack/verify-staging-meta-
+  # files.sh). Every staging/src/k8s.io/<repo> directory MUST contain a
+  # fixed set of governance files. This is a per-directory structure
+  # rule. (client-go ships its own README; excluded by the script —
+  # mirrored with a relaxed README rule scope.)
+  # ════════════════════════════════════════════════════════════════
+  - id: k8s-staging-meta-files
+    kind: for_each_dir
+    select: "staging/src/k8s.io/*"
+    require:
+      - kind: file_exists
+        paths: "{path}/OWNERS"
+      - kind: file_exists
+        paths: "{path}/LICENSE"
+      - kind: file_exists
+        paths: "{path}/SECURITY_CONTACTS"
+      - kind: file_exists
+        paths: "{path}/code-of-conduct.md"
+      - kind: file_exists
+        paths: "{path}/.github/PULL_REQUEST_TEMPLATE.md"
+    level: error
+    message: >-
+      Each staging/src/k8s.io/<repo> must carry the governance metadata
+      files (OWNERS, LICENSE, SECURITY_CONTACTS, code-of-conduct.md,
+      .github/PULL_REQUEST_TEMPLATE.md). See hack/verify-staging-meta-files.sh.
+
+  # Every staging repo needs a README.md too (client-go is the one
+  # documented exception in the script).
+  - id: k8s-staging-readme
+    kind: for_each_dir
+    select: "staging/src/k8s.io/*"
+    require:
+      - kind: file_exists
+        paths: "{path}/README.md"
+    level: error
+    message: >-
+      Each staging/src/k8s.io/<repo> must carry a README.md (see
+      hack/verify-staging-meta-files.sh; client-go is the only exception).
+
+  # ════════════════════════════════════════════════════════════════
+  # A3 — prometheus import firewall (hack/verify-prometheus-imports.sh).
+  # Only a fixed allowlist of files may import github.com/prometheus/*.
+  # The script is a pure `grep -RlEe '"github.com/prometheus/.*"'`
+  # against `allowed_prometheus_importers`. import_gate (go preset)
+  # forbids the import path everywhere except the allowlisted paths,
+  # which we express as `paths.exclude`. (The script's separate
+  # "allowlist must shrink" reverse check is not expressed — see C-list.)
+  # ════════════════════════════════════════════════════════════════
+  - id: k8s-prometheus-import-firewall
+    kind: import_gate
+    language: go
+    paths:
+      include: ["**/*.go"]
+      exclude:
+        - "vendor/**"
+        - "staging/src/k8s.io/component-base/metrics/**"
+        - "cluster/images/etcd-version-monitor/**"
+        - "hack/tools/instrumentation/**"
+        - "test/e2e/apimachinery/flowcontrol.go"
+        - "test/integration/apiserver/flowcontrol/**"
+        - "test/integration/metrics/**"
+    forbid: '^github\.com/prometheus/'
+    level: error
+    message: >-
+      Only the component-base/metrics allowlist may import
+      github.com/prometheus/* directly. Use k8s.io/component-base/metrics.
+      See hack/verify-prometheus-imports.sh.
+
+  # ════════════════════════════════════════════════════════════════
+  # A4 — net.ParseIP / net.ParseCIDR CVE firewall (hack/verify-netparse-
+  # cve.sh). The Go stdlib parsers must NOT be used (golang 1.17
+  # compatibility break); use k8s.io/utils/net instead. The script is a
+  # pure `grep -nE "net.ParseIP\(.*\)"` over *.go. -> file_content_forbidden.
+  # ════════════════════════════════════════════════════════════════
+  - id: k8s-no-stdlib-netparseip
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.go"]
+      exclude:
+        - "vendor/**"
+        - "third_party/**"
+    pattern: '\bnet\.ParseIP\('
+    level: error
+    message: >-
+      Use k8s.io/utils/net ParseIPSloppy, not the stdlib net.ParseIP
+      (golang 1.17 leading-zero compat break). See hack/verify-netparse-cve.sh.
+
+  - id: k8s-no-stdlib-netparsecidr
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.go"]
+      exclude:
+        - "vendor/**"
+        - "third_party/**"
+    pattern: '\bnet\.ParseCIDR\('
+    level: error
+    message: >-
+      Use k8s.io/utils/net ParseCIDRSloppy, not the stdlib net.ParseCIDR.
+      See hack/verify-netparse-cve.sh.
+
+  # ════════════════════════════════════════════════════════════════
+  # C1 — Large-BINARY firewall (hack/verify-file-sizes.sh). The repo
+  # caps only BINARY files >1 MiB (it uses `git ls-files --eol` and
+  # checks only `w/-text` entries); large generated TEXT files
+  # (swagger.json, *.pb.go, zz_generated.openapi.go) are intentionally
+  # permitted. alint's file_max_size caps ALL matched files by byte size
+  # with no binary/text discriminator, so a naive `**` over-fires on
+  # those big text files. Classified C (tuning: wants a binary-only /
+  # text-aware scope). Narrowed here to common binary extensions so it
+  # is useful without false positives. (1 allowlisted PNG excluded.)
+  # ════════════════════════════════════════════════════════════════
+  - id: k8s-no-large-binaries
+    kind: file_max_size
+    paths:
+      include:
+        - "**/*.png"
+        - "**/*.jpg"
+        - "**/*.jpeg"
+        - "**/*.gif"
+        - "**/*.gz"
+        - "**/*.tar"
+        - "**/*.zip"
+        - "**/*.bin"
+        - "**/*.pdf"
+        - "**/*.so"
+        - "**/*.a"
+      exclude:
+        - "vendor/**"
+        - "staging/src/k8s.io/kubectl/images/kubectl-logo-full.png"
+    max_bytes: 1048576
+    level: error
+    message: >-
+      Large binary files (>1 MiB) must not be committed (allowlist in
+      hack/verify-file-sizes.sh).
+
+  # ════════════════════════════════════════════════════════════════
+  # A6 — go.work / module-version coherence: the repo's Go toolchain
+  # version is pinned in .go-version and must match the `go` directive
+  # used across the workspace. The committed .go-version is the single
+  # source of truth consumed by hack/lib/golang.sh. Assert it is a clean
+  # semver line (shape guard; value coherence vs go.mod is enforced by
+  # the Go toolchain itself = D).
+  # ════════════════════════════════════════════════════════════════
+  - id: k8s-go-version-shape
+    kind: file_content_matches
+    paths: ".go-version"
+    pattern: '^\d+\.\d+\.\d+\s*$'
+    level: error
+    message: ".go-version must be a single bare Go semver line (e.g. 1.26.3)."
+
+  # ════════════════════════════════════════════════════════════════
+  # alint value-add (NOT enforced-surface coverage; structural
+  # assertions kubernetes does not itself gate on) — recorded so the
+  # config is useful, excluded from the A/B/C/D ratio per R3/R5.
+  # ════════════════════════════════════════════════════════════════
+  - id: k8s-root-governance-docs
+    kind: file_exists
+    paths: ["CONTRIBUTING.md", "code-of-conduct.md", "SECURITY_CONTACTS", "OWNERS", "OWNERS_ALIASES"]
+    root_only: true
+    level: warning
+    message: "Top-level governance docs (CONTRIBUTING/CoC/SECURITY_CONTACTS/OWNERS) should exist."
+
+  - id: k8s-go-work-exists
+    kind: file_exists
+    paths: "go.work"
+    root_only: true
+    level: info
+    message: "Go workspace manifest go.work is expected for the staging-module layout."
+
+  - id: k8s-dependencies-policy-declared
+    kind: file_exists
+    paths: "build/dependencies.yaml"
+    level: info
+    message: >-
+      build/dependencies.yaml (the zeitgeist external-dependency-version
+      policy) should be declared.
+
+  - id: k8s-no-trailing-whitespace-shell
+    kind: no_trailing_whitespace
+    paths:
+      include: ["hack/**/*.sh", "build/**/*.sh"]
+      exclude: ["vendor/**", "third_party/**"]
+    level: info
+    message: "Shell scripts should have no trailing whitespace."

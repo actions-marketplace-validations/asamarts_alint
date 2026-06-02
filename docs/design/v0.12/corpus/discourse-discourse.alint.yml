@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for discourse/discourse @ 85fc647f5f42f5082813eabe797b6c9ab1240d14
+# v0.12 case-study draft. Discourse is a large polyglot monorepo: a Rails
+# (Ruby) backend + an Ember (JS/TS) frontend + ~46 bundled plugins, managed
+# with bundler (Gemfile.lock) and pnpm (pnpm-lock.yaml). Its enforced surface
+# is dominated by tool execution (rubocop, syntax_tree, eslint, prettier,
+# stylelint, glint/ember-tsc, the rspec/qunit/system test matrix, `licensed`
+# + `licensee` dependency-license resolution, codegen-freshness git-diff
+# gates) — all D non-goals alint orchestrates but does not reimplement.
+#
+# The natively-expressible (A) slice is small and is what this config covers:
+#   - every pnpm patch path declared in package.json resolves to a real file
+#   - the i18n banned-phrase rule (the grep-shaped slice of script/i18n_lint.rb)
+#   - lockfile presence (via the node bundle + an explicit Gemfile.lock rule)
+# plus alint value-add assertions (NOT in the coverage denominator).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+
+# Discourse uses a single root LICENSE.txt + COPYRIGHT.md and NO per-file
+# license/SPDX headers, so no header bundle is enabled (R6 absent category).
+
+rules:
+  # ── A1 — pnpm patch registry resolves (file-graph edge source) ──────
+  # package.json#pnpm.patchedDependencies maps "<pkg>@<ver>" -> a patch
+  # file under patches/. `pnpm install --frozen-lockfile` (run by every CI
+  # job) fails if a declared patch path is missing, so this is repo-ENFORCED.
+  # registry -> on-disk-file existence: a file→file REFERENCE edge.
+  - id: discourse-pnpm-patches-resolve
+    kind: registry_paths_resolve
+    source: package.json
+    extract:
+      json: "$.pnpm.patchedDependencies[*]"
+    base: "."
+    expect: file
+    level: error
+    message: >-
+      Every patch path declared in package.json#pnpm.patchedDependencies must
+      resolve to a real file under patches/. A dangling entry breaks
+      `pnpm install --frozen-lockfile` (the install step in every CI workflow).
+
+  # ── A1b — pnpm workspace members resolve (file-graph edge source) ───
+  # pnpm-workspace.yaml#packages lists every workspace member directory
+  # (frontend/*, plugins/*, docs/developer-guides). `pnpm install
+  # --frozen-lockfile` errors if a listed member directory is missing, so
+  # this is repo-ENFORCED. registry -> on-disk-directory: a file→dir edge.
+  - id: discourse-pnpm-workspace-resolve
+    kind: registry_paths_resolve
+    source: pnpm-workspace.yaml
+    extract:
+      yaml: "$.packages[*]"
+    base: "."
+    entries_are_globs: true
+    expect: dir
+    level: error
+    message: >-
+      Every entry in pnpm-workspace.yaml#packages must resolve to a real
+      directory. A stale entry breaks `pnpm install --frozen-lockfile`.
+
+  # ── A2 — i18n banned-phrase locale lint (grep-shaped slice) ─────────
+  # script/i18n_lint.rb (CI: linting.yml "English locale lint") bans two
+  # phrases in English locale strings. The substring/banned-phrase part is
+  # cleanly file_content_forbidden; the rest of i18n_lint (pluralization
+  # sub-key structure, %{key} interpolation format, relative-link prefixes)
+  # is semantic YAML-tree validation -> classified B (see record).
+  - id: discourse-i18n-no-banned-color-scheme
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "config/**/locales/{client,server}.en.yml"
+        - "plugins/**/locales/{client,server}.en.yml"
+    pattern: "(?i)color scheme"
+    level: warning
+    message: >-
+      Banned phrase 'color scheme' in an English locale string — use
+      'color palette' (script/i18n_lint.rb BANNED_PHRASES).
+  - id: discourse-i18n-no-banned-private-message
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "config/**/locales/{client,server}.en.yml"
+        - "plugins/**/locales/{client,server}.en.yml"
+    pattern: "(?i)private message"
+    level: warning
+    message: >-
+      Banned phrase 'private message' in an English locale string — use
+      'personal message' (script/i18n_lint.rb BANNED_PHRASES).
+
+  # ── A3 — Ruby lockfile presence (frozen/deployment installs) ────────
+  # CI installs with `bundle config deployment true` + frozen lockfiles, so
+  # a tracked, non-empty Gemfile.lock is required. (The node bundle already
+  # covers pnpm-lock.yaml via node-has-lockfile.)
+  - id: discourse-gemfile-lock-exists
+    kind: file_exists
+    paths: Gemfile.lock
+    root_only: true
+    level: error
+    message: "Ruby project: Gemfile.lock must be committed (CI installs with --deployment)."
+
+  # ── value-add (NOT in the A/B/C/D coverage ratio, per R3/R5) ────────
+  # The repo enforces "use pnpm" via .npmrc engine-strict + pnpm reading
+  # engines; asserting the package.json declaration is alint policy value-add.
+  - id: discourse-package-manager-is-pnpm
+    kind: json_path_equals
+    paths: package.json
+    path: "$.engines.npm"
+    equals: "please-use-pnpm"
+    level: info
+    message: "package.json should steer contributors to pnpm (engines.npm = please-use-pnpm)."
+
+  # The .licensed.yml allow-list + .licensee.json allowed-SPDX list are the
+  # policy DECLARATIONS behind the D license-compliance gates; asserting they
+  # exist is value-add (the enforced check resolves the dep graph — D).
+  - id: discourse-license-policy-declared
+    kind: file_exists
+    paths: [".licensed.yml", ".licensee.json"]
+    root_only: true
+    level: info
+    message: "License-compliance policy files (.licensed.yml / .licensee.json) should be present."
+
+  # package.json is private + GPL-2.0-only (Discourse is not published to npm).
+  - id: discourse-package-json-private
+    kind: json_path_equals
+    paths: package.json
+    path: "$.private"
+    equals: true
+    level: info
+    message: "The root package.json should be marked private (Discourse is not an npm publish target)."

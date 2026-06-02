@@ -21,7 +21,8 @@ durable artifact and the configs are staged separately pending that decision.
 | batch 1 | 5 | 31 | 6 | 5 | 81 | **74%** | **21** |
 | batch 2 | 10 | 25 | 10 | 9 | 127 | 57% | 13 |
 | batch 3 | 20 | 85 | 30 | 25 | 305 | 61% | 48 |
-| **cumulative** | **36** | **146** | **48** | **39** | **~533** | **63%** | **82** |
+| batch 4 | 20 | 125 | 42 | 57 | 357 | 56% | 81 |
+| **cumulative** | **56** | **271** | **90** | **96** | **~890** | **59%** | **163** |
 
 ---
 
@@ -290,3 +291,57 @@ elasticsearch executable-bit, fastapi cross-dir rename pairing).
 
 20 validated draft configs at `/tmp/cs_out/` (all `config_validated: true`) — to
 append to [`corpus/`](./corpus/) with the next housekeeping commit.
+
+---
+
+## Batch 4 — 2026-06-02 (20 flagships: language/compiler + infra + new ecosystems)
+
+Workflow: 40 agents, ~4.2M tokens, ~21 min. Repos: kubernetes, golang/go, rust,
+cpython, flutter, kafka, spark, llvm, roslyn, react, vscode, discourse, elixir,
+postgrest, systemd, clickhouse, ruff, scikit-learn, okhttp, vim.
+
+Stage-B-reconciled **A=125 B=42 C=57 D=357, coverage 125/224 = 56%**. This batch
+had by far the **largest addressable surface** of the study — `ClickHouse` A34
+(its `utils/check-style` is a grep-rule goldmine), `rust` A18, `flutter` A10,
+`cpython`/`kubernetes` A8-9 — because flagship language/infra repos hand-roll
+huge bespoke validation suites. Stage B corrected **15/20** records. **Cumulative
+across 56 repos (~50% of the corpus): 271/457 = 59%.**
+
+### `file_dependency_graph`: +81 → 163 cumulative sources across 56 repos
+
+The decisive signal got more decisive. **kubernetes** contributed 9 (the 66
+`.import-restrictions` import-boss manifests + 8 codegen-freshness `git status
+--porcelain` verifiers — the canonical example of *both* major edge types in one
+repo); **flutter** 12, **golang/go** 8, **rust** 8, **ClickHouse** 7, **discourse**
+6, **cpython**/**vim** 5. There is no longer any question that `file_dependency_graph`
+is the #1 build candidate.
+
+### Backlog: Tier-1 locked; a few new Tier-2 candidates firming
+
+The Tier-1 set is unchanged and overwhelmingly validated. The **mutating
+`generated_file_fresh`** candidate is now the second-most-recurring need
+(llvm `worktree_clean_after`, roslyn `git_tree_clean_after`, react, spark,
+postgrest `dir_generated_fresh` — ~10 repos cumulative). New **Tier-2** signals
+this batch:
+
+- **charset allowlist** (`file_is_ascii` with permitted-codepoint exceptions /
+  `charset_forbidden`) — llvm, vscode, elixir (+ the curl proof earlier). The
+  `file_is_ascii` C-tuning has graduated to a recurring candidate.
+- **`git_file_mode` / no-executable-bit** — ClickHouse (+ elasticsearch earlier).
+- **dangling-symlink detection** + **`symlink_target_equals`** — ClickHouse,
+  serde, golang/go.
+- **binary-aware `file_max_size`** (cap only `git`-detected binaries) — kubernetes
+  `verify-file-sizes.sh`, ClickHouse.
+- **`every_X_has_Y` / cross-tree key-derived pairing** — golang/go, flutter.
+
+### Stage-B value
+
+15/20 corrected. Largest swings: kubernetes +2 A (missed prerelease-lifecycle-tag
++ test-image checks), spark +2 A, rust +2 A; llvm −1 A and react/roslyn
+re-bucketings (kind-misuses → C). ClickHouse's record (A30→34, C20→17) shows the
+adversarial pass refining a very large catalogue rather than overturning it.
+
+### Artifacts
+
+20 validated configs at `/tmp/cs_out/` (all `config_validated: true`), folded
+into [`corpus/`](./corpus/) (now 55).

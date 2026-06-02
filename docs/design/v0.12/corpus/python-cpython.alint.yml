@@ -1,0 +1,557 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# ════════════════════════════════════════════════════════════════════════
+# Proposed alint config for python/cpython — re-analysis against alint
+# v0.11 (was authored for v0.9.17; see examples/python-cpython/.alint.yml).
+#
+# WHAT CHANGED SINCE v0.9.17
+# The original config could only express the SHALLOW orchestration layer:
+# presence checks, filename grammar, whitespace/EOL, and `kind: command`
+# shellouts to ruff/black/actionlint/etc. Three whole classes of cpython
+# validation were explicitly catalogued as NON-replaceable gaps. Two of
+# those three now collapse onto real alint kinds:
+#
+#   1. `make regen-all` generated-file FRESHNESS (the build.yml "Check for
+#      changes" gate, the single biggest CI check) — was a static
+#      file_exists approximation. Now expressible via `command_idempotent`:
+#      it runs the MUTATING regenerator, then asserts the tree is unchanged.
+#      This is THE headline win on cpython.
+#
+#   2. ruff/black/whitespace re-formatters — were 11 separate `kind:
+#      command` rules each emitting "ran the tool" with no idempotence
+#      semantics. Several collapse to `command_idempotent` (run-the-
+#      formatter-then-assert-clean), which is what `--exit-non-zero-on-fix`
+#      already means.
+#
+#   3. configure.ac ↔ Include/patchlevel.h version COHERENCE — was a
+#      manual review item. Now a `cross_file_value_equals` one-liner.
+#
+# STILL NON-REPLACEABLE (genuine, with reasons at each site):
+#   - Argument Clinic SELF-CHECKSUM lines (`/*[clinic end generated code:
+#     output=<hash> input=<hash>]*/`). pair_hash hashes a SOURCE file and
+#     looks for the digest in a TARGET file; clinic embeds a checksum of a
+#     SLICE OF ITS OWN FILE in that same file, computed by clinic.py's
+#     bespoke algorithm over the clinic-block body. No alint kind models a
+#     self-referential intra-file checksum. NEW-KIND CANDIDATE (see footer).
+#   - The NEWS.d "every PR adds a blurb" requirement — a git-DIFF predicate
+#     ("the changeset must ADD a file under Misc/NEWS.d/next/"), not a tree
+#     predicate. scope_filter.changed_since tells a rule WHICH files to
+#     look at; it cannot assert "the changed set must CONTAIN a new file
+#     matching X". NEW-KIND CANDIDATE (see footer).
+#   - C-API semantic checks (stable_abi.py symbol export, smelly.py ELF
+#     symbol-prefix scan, check-c-api-docs greps, check-c-globals) — AST/
+#     binary analysis of a runtime. Permanently out of alint scope.
+#   - C compile, the test suite, refleak hunts, Sphinx HTML build —
+#     execution/build, not structural lint.
+# ════════════════════════════════════════════════════════════════════════
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+  - alint://bundled/tooling/editorconfig@v1   # NEW: honours cpython's .editorconfig
+                                              # (trim_trailing_whitespace + final
+                                              # newline) declaratively, replacing
+                                              # the hand-rolled whitespace rules below.
+
+rules:
+
+  # ══════════════════════════════════════════════════════════════════════
+  # ★ HEADLINE WIN #1 — `make regen-all` generated-file freshness
+  #   (command_idempotent — MUTATING regenerator + assert-clean-tree)
+  #
+  # The build.yml "Check for changes" job is cpython's single most
+  # important structural gate: it runs `make regen-all` (regen-cases,
+  # regen-token, regen-ast, regen-keyword, regen-sre, regen-frozen,
+  # regen-pegen, regen-global-objects, clinic, ...) then `git status
+  # --porcelain` and FAILS if anything changed — i.e. a generated file was
+  # stale. This is the definition of an idempotent mutating command, which
+  # is EXACTLY command_idempotent: run the regenerator, then verify the
+  # working tree did not move. (generated_file_fresh is WRONG here: it is
+  # for a single non-mutating stdout-diff generator; regen-all mutates ~50
+  # files in place across the tree.)
+  #
+  # NOTE: requires a configured build tree (`./configure` first), is slow
+  # (minutes), and needs PYTHON_FOR_REGEN + autoconf for the configure arm —
+  # so it is a heavyweight/local-or-CI rule, not a pre-commit rule. timeout
+  # is generous. This single rule subsumes the v0.9.17
+  # `cases-generator-outputs-exist` file_exists approximation entirely.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: cpython-regen-all-fresh
+    kind: command_idempotent
+    command: ["make", "-j4", "regen-all"]
+    timeout: 900
+    level: error
+    message: |
+      Generated files are not up to date. Run `make regen-all` (and
+      `make regen-stdlib-module-names regen-sbom regen-configure
+      regen-unicodedata` for the manual targets) and commit the result.
+      This replaces the build.yml "Check for changes" CI gate.
+
+  # The targets regen-all explicitly defers to "run manually". Each is its
+  # own mutating-then-clean command. Split out so a failure names the arm.
+  - id: cpython-regen-stdlib-module-names-fresh
+    kind: command_idempotent
+    command: ["make", "regen-stdlib-module-names"]
+    timeout: 300
+    level: error
+
+  - id: cpython-regen-sbom-fresh
+    # Misc/sbom.spdx.json is regenerated by Tools/build/generate_sbom.py.
+    # The CI check-sbom job runs it with a --check equivalent; the mutating
+    # `make regen-sbom` + clean-tree assertion is the same contract.
+    kind: command_idempotent
+    command: ["make", "regen-sbom"]
+    timeout: 300
+    level: error
+
+  - id: cpython-regen-configure-fresh
+    # configure / pyconfig.h.in / aclocal.m4 are regenerated from
+    # configure.ac by `make regen-configure` (a pinned autoconf in a
+    # container). patchcheck.py only asks the git-diff question "did you
+    # regenerate?"; command_idempotent asserts the STRONGER tree-state
+    # invariant directly. Requires the exact autoconf version, hence its
+    # own arm + a long timeout.
+    kind: command_idempotent
+    command: ["make", "regen-configure"]
+    timeout: 600
+    level: warning
+    message: |
+      configure/pyconfig.h.in/aclocal.m4 are stale relative to
+      configure.ac. Regenerate with `make regen-configure` (uses a pinned
+      autoconf). Supersedes patchcheck.py's git-diff "configure
+      regenerated?" probe with a direct tree-state check.
+
+  # ══════════════════════════════════════════════════════════════════════
+  # ★ HEADLINE WIN #2 — ruff / black collapse to idempotent formatters
+  #   (command_idempotent — run formatter, assert no diff)
+  #
+  # The 9 ruff-check + 5 ruff-format + 1 black pre-commit hooks all use
+  # `--exit-non-zero-on-fix` / `--check`, i.e. "running me must produce no
+  # change". That IS command_idempotent. The LINT arms (ruff check) below
+  # use plain `kind: command` because a lint finding is not a tree mutation;
+  # the FORMAT arms (ruff format / black) use command_idempotent because
+  # they rewrite files.
+  #
+  # Each ruff arm carries its own --config matching the per-tree .ruff.toml,
+  # exactly mirroring .pre-commit-config.yaml.
+  # ──────────────────────────────────────────────────────────────────────
+
+  # ---- ruff LINT arms (kind: command — finding, not mutation) ----
+  - id: cpython-ruff-check-doc
+    kind: command
+    paths: { include: ["Doc/**/*.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-ruff-check-lib-test
+    # NEW vs v0.9.17: the original missed the Lib/test/ ruff hook entirely.
+    kind: command
+    paths: { include: ["Lib/test/**/*.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-ruff-check-tools-build
+    kind: command
+    paths: { include: ["Tools/build/**/*.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "--config=Tools/build/.ruff.toml", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-ruff-check-tools-clinic
+    kind: command
+    paths: { include: ["Tools/clinic/**/*.py", "Lib/test/test_clinic.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "--config=Tools/clinic/.ruff.toml", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-ruff-check-tools-i18n
+    kind: command
+    paths: { include: ["Tools/i18n/**/*.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "--config=Tools/i18n/.ruff.toml", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-ruff-check-tools-peg
+    kind: command
+    paths: { include: ["Tools/peg_generator/**/*.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "--config=Tools/peg_generator/.ruff.toml", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-ruff-check-tools-wasm
+    kind: command
+    paths: { include: ["Tools/wasm/**/*.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "--config=Tools/wasm/.ruff.toml", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-ruff-check-platforms-apple
+    kind: command
+    paths: { include: ["Platforms/Apple/**/*.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "--config=Platforms/Apple/.ruff.toml", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-ruff-check-platforms-wasi
+    kind: command
+    paths: { include: ["Platforms/WASI/**/*.py"] }
+    command: ["ruff", "check", "--exit-non-zero-on-fix", "--config=Platforms/WASI/.ruff.toml", "{path}"]
+    timeout: 60
+    level: warning
+
+  # ---- ruff/black FORMAT arms (command_idempotent — rewrites files) ----
+  - id: cpython-ruff-format-doc
+    kind: command_idempotent
+    command: ["ruff", "format", "Doc/"]
+    timeout: 120
+    level: warning
+    message: "ruff format produced changes under Doc/; commit the formatted result."
+
+  - id: cpython-ruff-format-platforms-apple
+    kind: command_idempotent
+    command: ["ruff", "format", "--config=Platforms/Apple/.ruff.toml", "Platforms/Apple/"]
+    timeout: 120
+    level: warning
+
+  - id: cpython-ruff-format-platforms-wasi
+    kind: command_idempotent
+    command: ["ruff", "format", "--config=Platforms/WASI/.ruff.toml", "Platforms/WASI/"]
+    timeout: 120
+    level: warning
+
+  - id: cpython-ruff-format-tools-wasm
+    kind: command_idempotent
+    command: ["ruff", "format", "--config=Tools/wasm/.ruff.toml", "Tools/wasm/"]
+    timeout: 120
+    level: warning
+
+  - id: cpython-black-jit
+    # The black-pre-commit hook scoped to Tools/jit/ — `--check` is the
+    # idempotence assertion; command_idempotent expresses it natively.
+    kind: command_idempotent
+    command: ["black", "Tools/jit/"]
+    timeout: 120
+    level: warning
+    message: "black reformatted files under Tools/jit/; commit the result."
+
+  # ══════════════════════════════════════════════════════════════════════
+  # ★ HEADLINE WIN #3 — version coherence (cross_file_value_equals)
+  #
+  # configure.ac declares `m4_define([PYTHON_VERSION], [3.16])` and
+  # Include/patchlevel.h declares PY_MAJOR_VERSION 3 / PY_MINOR_VERSION 16
+  # and the string PY_VERSION "3.16.0a0". These MUST agree (a release-blocker
+  # if they drift). v0.9.17 listed this as a manual review item; it is now a
+  # two-rule cross_file_value_equals pair. We anchor on the canonical
+  # source (patchlevel.h major+minor) and check configure.ac matches.
+  #
+  # extract uses a single-capture-group regex on each side; the captured
+  # token must be byte-equal across files.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: cpython-version-minor-coherent
+    kind: cross_file_value_equals
+    source:
+      file: "Include/patchlevel.h"
+      extract: { regex: '#define PY_MINOR_VERSION\s+(\d+)' }
+    targets:
+      - file: "configure.ac"
+        # m4_define([PYTHON_VERSION], [3.16]) — capture the minor component.
+        extract: { regex: 'm4_define\(\[PYTHON_VERSION\],\s*\[\d+\.(\d+)\]\)' }
+    level: error
+    message: |
+      Minor version drift between Include/patchlevel.h (PY_MINOR_VERSION)
+      and configure.ac (PYTHON_VERSION). These are the two version sources
+      of truth and must agree before any build/release.
+
+  - id: cpython-version-major-coherent
+    kind: cross_file_value_equals
+    source:
+      file: "Include/patchlevel.h"
+      extract: { regex: '#define PY_MAJOR_VERSION\s+(\d+)' }
+    targets:
+      - file: "configure.ac"
+        extract: { regex: 'm4_define\(\[PYTHON_VERSION\],\s*\[(\d+)\.\d+\]\)' }
+    level: error
+
+  # ══════════════════════════════════════════════════════════════════════
+  # NEWS.d/next blurb filename grammar (filename_regex) — unchanged, still
+  # the single most alint-shaped tree-predicate in cpython. Encodes the
+  # FULL blurb grammar where the two pre-commit local hooks encode only
+  # "no spaces". (The "every PR must ADD an entry" arm is a git-diff
+  # predicate — NEW-KIND CANDIDATE, see footer.)
+  # ──────────────────────────────────────────────────────────────────────
+  - id: cpython-news-entry-filename
+    kind: filename_regex
+    paths:
+      include: ["Misc/NEWS.d/next/*/*.rst"]
+      exclude: ["Misc/NEWS.d/next/*/README.rst"]
+    # Accept both the modern `gh-issue-<n>` and the legacy `bpo-<n>`
+    # (bugs.python.org) prefixes — the tree still carries a handful of
+    # pre-migration bpo- blurbs (validated at the pin: without the bpo-
+    # alternation this rule fired x2 on legacy entries). The repo's own
+    # pre-commit gate only forbids spaced section dirs, not the prefix.
+    pattern: '^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.(gh-issue|bpo)-\d+\.[A-Za-z0-9_-]+\.rst$'
+    level: warning
+    message: |
+      Misc/NEWS.d/next entries must use the blurb-generated filename:
+        YYYY-MM-DD-HH-MM-SS.gh-issue-<NUMBER>.<NONCE>.rst
+      Run `blurb add` to create entries with the correct shape.
+
+  - id: cpython-news-no-spaces-in-path
+    # Direct expression of the two `language: fail` pre-commit local hooks
+    # (blurb-no-space-c-api, blurb-no-space-core-and-builtins): the legacy
+    # spaced section names must not exist.
+    kind: dir_absent
+    paths:
+      - "Misc/NEWS.d/next/C API"
+      - "Misc/NEWS.d/next/Core and Builtins"
+    level: error
+    message: |
+      Section directories under Misc/NEWS.d/next/ must use underscores
+      (C_API, Core_and_Builtins) — Sphinx and blurb cannot handle spaces.
+
+  - id: cpython-news-section-readme-exists
+    kind: for_each_dir
+    select: "Misc/NEWS.d/next/*"
+    require:
+      - kind: file_exists
+        paths: "{path}/README.rst"
+    level: warning
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Autoconf-version coherence (file_content_matches) — the CI-GATED arm of
+  # the check-autoconf-regen job ("Check Autoconf and aclocal versions"
+  # step, build.yml:71-76). Before regenerating, CI asserts the committed
+  # configure / aclocal.m4 carry the EXACT pinned tool versions + two marker
+  # macros. These are plain grep assertions — natively file_content_matches.
+  # (The regen+git-diff arm of that job is tool execution => stays D.)
+  # ──────────────────────────────────────────────────────────────────────
+  - id: cpython-configure-autoconf-version
+    kind: file_content_matches
+    paths: { include: ["configure"] }
+    pattern: 'Generated by GNU Autoconf 2\.72'
+    level: error
+    message: >-
+      `configure` must be generated by the pinned Autoconf 2.72 (CI gate
+      build.yml check-autoconf-regen). Regenerate with `make regen-configure`.
+
+  - id: cpython-configure-has-runstatedir
+    kind: file_content_matches
+    paths: { include: ["configure"] }
+    pattern: 'runstatedir'
+    level: error
+    message: "`configure` is missing the `runstatedir` support (pinned-autoconf marker)."
+
+  - id: cpython-aclocal-version
+    kind: file_content_matches
+    paths: { include: ["aclocal.m4"] }
+    pattern: 'aclocal 1\.16\.5'
+    level: error
+    message: "`aclocal.m4` must be generated by the pinned aclocal 1.16.5 (CI gate)."
+
+  - id: cpython-aclocal-has-pkg-config
+    kind: file_content_matches
+    paths: { include: ["aclocal.m4"] }
+    pattern: 'PKG_PROG_PKG_CONFIG'
+    level: error
+    message: "`aclocal.m4` is missing the PKG_PROG_PKG_CONFIG macro (pinned-autoconf marker)."
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Pre-commit shellouts with no idempotence semantics — plain `command`.
+  # actionlint/zizmor/sphinx-lint/check-jsonschema are pure linters
+  # (findings, not mutations) so command_idempotent does not apply.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: cpython-actionlint
+    kind: command
+    paths: { include: [".github/workflows/*.yml", ".github/workflows/*.yaml"] }
+    command: ["actionlint", "{path}"]
+    timeout: 30
+    level: warning
+
+  - id: cpython-zizmor
+    kind: command
+    paths: { include: [".github/workflows/*.yml", ".github/workflows/*.yaml"] }
+    command: ["zizmor", "{path}"]
+    timeout: 60
+    level: warning
+
+  - id: cpython-sphinx-lint
+    kind: command
+    paths: { include: ["Doc/**/*.rst", "Misc/NEWS.d/**/*.rst"] }
+    command: ["sphinx-lint", "--enable=default-role", "{path}"]
+    timeout: 30
+    level: warning
+
+  - id: cpython-check-dependabot
+    kind: command
+    paths: ".github/dependabot.yml"
+    command: ["check-jsonschema", "--builtin-schema", "vendor.dependabot", "{path}"]
+    timeout: 30
+    level: warning
+
+  - id: cpython-check-readthedocs
+    kind: command
+    paths: ".readthedocs.yml"
+    command: ["check-jsonschema", "--builtin-schema", "vendor.readthedocs", "{path}"]
+    timeout: 30
+    level: warning
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Whitespace / line-ending / tabs — now largely covered by the
+  # tooling/editorconfig@v1 bundle above; the LINE-ENDING per-class rules
+  # from .gitattributes are kept explicit because editorconfig does not
+  # model cpython's dos/lf split.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: cpython-rst-lf-line-endings
+    kind: line_endings
+    paths: { include: ["**/*.rst"], exclude: ["Lib/test/**"] }
+    target: lf
+    level: warning
+    fix: { file_normalize_line_endings: {} }
+
+  - id: cpython-windows-crlf
+    # `*.bat *.proj *.props *.ps1 *.sln *.vcxproj* dos` in .gitattributes.
+    kind: line_endings
+    paths:
+      include: ["**/*.bat", "**/*.vcxproj", "**/*.vcxproj.filters",
+                "**/*.props", "**/*.proj", "**/*.sln", "**/*.ps1"]
+    target: crlf
+    level: warning
+
+  - id: cpython-no-tabs-in-python
+    # pre-commit `remove-tabs` hook (types: [python]).
+    kind: indent_style
+    paths: { include: ["**/*.py"], exclude: ["Lib/test/**", "Modules/**"] }
+    style: spaces
+    level: warning
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Trojan Source defense — broader than the docs-only bundled baseline.
+  # ══════════════════════════════════════════════════════════════════════
+  - id: cpython-no-bidi-in-source
+    kind: no_bidi_controls
+    paths:
+      include: ["**/*.py", "**/*.c", "**/*.h", "**/*.cpp", "**/*.rst"]
+      exclude: ["Lib/test/**", "Modules/**"]
+    level: error
+    message: "Trojan Source (CVE-2021-42574): bidi override characters rejected."
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Generated-file PRESENCE — registry_paths_resolve over .gitattributes.
+  #
+  # NEW vs v0.9.17: the original listed ".gitattributes generated markers ↔
+  # on-disk presence" as a non-replaceable registry_paths_resolve gap. It
+  # now resolves: extract the path column of every line ending `generated`
+  # in .gitattributes and assert each resolves to a real file. Patterns with
+  # globs (**/clinic/*.c.h, Include/internal/pycore_*_generated.h) are
+  # marked entries_are_globs so each must match ≥1 file.
+  #
+  # This catches "someone added a `foo generated` marker but forgot to
+  # commit foo" AND "a generated file was deleted but its marker lingered".
+  # ──────────────────────────────────────────────────────────────────────
+  - id: cpython-gitattributes-generated-resolve
+    kind: registry_paths_resolve
+    source: ".gitattributes"
+    extract:
+      # First whitespace-delimited token on lines whose attribute list
+      # contains `generated`. One capture group = the path/glob column.
+      regex: '^(\S+)\s+.*\bgenerated\b'
+    base: "."
+    entries_are_globs: true
+    expect: file
+    level: error
+    message: |
+      A path marked `generated` in .gitattributes does not resolve to a
+      committed file. Either run the appropriate `make regen-*` target and
+      commit, or remove the stale .gitattributes marker.
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Core presence checks (autotools, SBOM, stable-ABI manifest, Doc build).
+  # Cheap tree-state guards that fail fast before a multi-minute build.
+  # ══════════════════════════════════════════════════════════════════════
+  - id: cpython-autotools-files-present
+    kind: file_exists
+    paths: ["configure", "configure.ac", "pyconfig.h.in", "aclocal.m4", "Makefile.pre.in"]
+    root_only: true
+    level: error
+
+  - id: cpython-sbom-present
+    kind: file_exists
+    paths: ["Misc/sbom.spdx.json", "Misc/externals.spdx.json"]
+    level: error
+
+  - id: cpython-stable-abi-manifest-present
+    kind: file_exists
+    paths: "Misc/stable_abi.toml"
+    level: error
+
+  - id: cpython-stable-abi-manifest-non-empty
+    # Malformed TOML surfaces as a parse violation here too.
+    kind: toml_path_matches
+    paths: "Misc/stable_abi.toml"
+    path: "$.function[*].name"
+    matches: '^[A-Za-z_][A-Za-z0-9_]*$'
+    if_present: true
+    level: warning
+
+  - id: cpython-doc-build-present
+    kind: file_exists
+    paths: ["Doc/Makefile", "Doc/conf.py", "Doc/requirements.txt", "Doc/.ruff.toml"]
+    level: error
+
+  # ══════════════════════════════════════════════════════════════════════
+  # OPTIONAL: scope_filter demo — run the heavy regen-all freshness gate
+  # ONLY when the changeset touches a known regen INPUT. This is how a fork
+  # would make win #1 affordable in pre-merge CI without a full configured
+  # build on every push. (PER-RULE scope_filter; ALINT_BASE_REF is the PR
+  # base.) Commented because it duplicates cpython-regen-all-fresh; enable
+  # ONE or the OTHER depending on CI vs local.
+  # ──────────────────────────────────────────────────────────────────────
+  # - id: cpython-regen-all-fresh-on-change
+  #   kind: command_idempotent
+  #   command: ["make", "-j4", "regen-all"]
+  #   timeout: 900
+  #   level: error
+  #   scope_filter:
+  #     changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
+
+# ════════════════════════════════════════════════════════════════════════
+# NEW-RULE-KIND CANDIDATES surfaced by this re-analysis
+# ════════════════════════════════════════════════════════════════════════
+#
+# 1. ARGUMENT CLINIC SELF-CHECKSUM (highest value, hardest)
+#    Every clinic block ends:
+#      /*[clinic end generated code: output=<hex> input=<hex>]*/
+#    where <output> is a checksum (clinic.py's own algorithm) of the
+#    GENERATED BODY THAT PRECEDES the marker, IN THE SAME FILE, and <input>
+#    a checksum of the clinic INPUT block. pair_hash is close in spirit
+#    (digest of source must appear in target) but assumes (a) source≠target
+#    files and (b) a standard sha256/sha512 over whole-file bytes. Clinic is
+#    SELF-referential (source slice and the embedded digest live in one
+#    file) with a TOOL-SPECIFIC hash. Proposed kind: `embedded_checksum` /
+#    `self_checksum` — block delimiters (start/end regex), a captured digest
+#    group, a hashed-region selector, and a pluggable algorithm. Until then
+#    clinic checksum integrity STAYS on `make clinic` (and is partially
+#    covered by win #1: regen-all → clinic → tree-clean assertion already
+#    catches a STALE checksum, just not a hand-corrupted one in isolation).
+#
+# 2. "CHANGESET MUST ADD A FILE MATCHING X" (the NEWS.d blurb-per-PR rule)
+#    patchcheck.py's reported_news() asserts the DIFF against the base
+#    branch ADDED a path under Misc/NEWS.d/next/. This is a predicate over
+#    the changed-set itself, not over tree state. scope_filter.changed_since
+#    scopes WHICH files a rule inspects; it cannot assert "the changed set
+#    must CONTAIN ≥1 added path matching <glob>". Proposed kind:
+#    `changeset_requires_path` (or a scope_filter mode `requires_added:
+#    <glob>`) parameterised by base ref + required-glob + an exempt-when
+#    fact-expression (cpython exempts doc-only / typo PRs). This is the most
+#    requested cpython predicate that alint still cannot express and ties
+#    directly to the v0.11 changed_since infrastructure.
+#
+# 3. (minor) COLUMN ALIGNMENT — CODEOWNERS mandates usernames at column 31.
+#    No alint kind models fixed-column alignment; low value, noted only for
+#    completeness. STAYS unenforced.

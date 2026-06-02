@@ -1,0 +1,181 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for rust-lang/rust @ c0bb140a37c81cf59a0b40c21c9413059644e294
+# v0.12 case study (Stage A). Expresses the A-bucket of rust-lang/rust's
+# bespoke-validation surface — the subset of `src/tools/tidy` + CI shell gates
+# that a native alint kind expresses directly. The dominant enforced surface
+# (rustfmt/clippy/test/miri/rustdoc/reuse/typos/ruff/shellcheck/clang-format,
+# cargo-deny-style license+dep allowlists, compiletest directive semantics,
+# error-code/feature derivation from compiler source) is D (non-goal): alint
+# orchestrates but does not reimplement it. See the case-study record.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+
+# rust-lang/rust deliberately uses non-snake-case filenames across doc + test
+# fixtures; the rust@v1 bundle already excludes these subtrees, but tidy's own
+# `style` skips an even broader set. Keep the case-study config quiet on those.
+# NOTE: the `tests/**` exclude is global hygiene noise control; the two
+# tests-scoped repo rules below (rr-crashes-known-bug, rr-no-borrowck-...) set
+# their own include globs and are unaffected by this top-level ignore.
+ignore:
+  - "src/llvm-project/**"
+  - "src/gcc/**"
+  - "RELEASES.md"
+
+rules:
+  # ── A8: workspace members resolve (Cargo.toml [workspace].members) ──────────
+  # tidy `deps`/`extdeps` walk every declared workspace; each member dir must
+  # exist and contain a Cargo.toml. registry_paths_resolve expresses this.
+  - id: rr-workspace-members-resolve
+    kind: registry_paths_resolve
+    source: Cargo.toml
+    extract: { toml: "$.workspace.members[*]" }
+    base: lint_root
+    expect: dir
+    must_contain: Cargo.toml
+    exclude_query: "$.workspace.exclude[*]"
+    level: error
+    message: "Every [workspace].members entry must be a directory containing Cargo.toml."
+
+  # ── A9: members list kept alphabetically sorted (tidy `alphabetical`) ───────
+  # The root Cargo.toml wraps members in tidy-alphabetical-start/-end.
+  - id: rr-cargo-toml-alphabetical
+    kind: ordered_block
+    paths: ["Cargo.toml"]
+    start: "# tidy-alphabetical-start"
+    end: "# tidy-alphabetical-end"
+    comparator: lexical
+    unique: false
+    level: warning
+    message: "Blocks marked tidy-alphabetical-start/-end must stay sorted (tidy `alphabetical`)."
+
+  # ── A10: typos.toml default-words list kept sorted (tidy `alphabetical`) ────
+  - id: rr-typos-toml-alphabetical
+    # NOTE: tidy uses a numeric-aware *version-sort* (9 before 12) plus a
+    # multi-line-join rule; alint's comparator: lexical matches for the simple
+    # one-entry-per-line lists here but would disagree on number-ordered entries
+    # (a C-tuning gap: ordered_block wants a version-sort comparator). The repo
+    # is sorted under tidy, so lexical agreeing here is the validation.
+    kind: ordered_block
+    paths: ["typos.toml"]
+    start: "# tidy-alphabetical-start"
+    end: "# tidy-alphabetical-end"
+    comparator: lexical
+    unique: false
+    level: warning
+    message: "typos.toml tidy-alphabetical blocks must stay sorted."
+
+  # ── A11: every package Cargo.toml pins edition 2021/2024 (tidy `edition`) ───
+  - id: rr-edition-pinned
+    kind: toml_path_matches
+    paths: ["**/Cargo.toml"]
+    path: "$.package.edition"
+    matches: "^(2021|2024)$"
+    if_present: true
+    level: warning
+    message: "Crate edition must be 2021 or 2024 (tidy `edition`)."
+
+  # ── A12: tests live under tests/, not src/test (tidy `tests_placement`) ─────
+  - id: rr-no-src-test-dir
+    kind: dir_absent
+    paths: "src/test"
+    level: error
+    message: "Tests were moved from src/test to tests/ (tidy `tests_placement`)."
+
+  # ── A13: no `:` / control-char filenames (tidy `filenames`, Windows compat) ─
+  - id: rr-no-illegal-filenames
+    kind: no_illegal_windows_names
+    paths: "**"
+    level: warning
+    message: "Filenames may not contain ':' or control chars (tidy `filenames`, Windows compat)."
+
+  # ── A14: triagebot.toml autolabel trigger_files must resolve (tidy `triagebot`)
+  # registry_paths_resolve covers the array-valued trigger_files entries. The
+  # [mentions.*]/[assign.owners] *table keys* as paths + glob semantics are the
+  # C-tuning remainder (keys-as-paths is awkward today) — see the case-study C1.
+  - id: rr-triagebot-trigger-files-resolve
+    kind: registry_paths_resolve
+    source: triagebot.toml
+    extract: { toml: "$.autolabel[*].trigger_files[*]" }
+    base: lint_root
+    expect: any
+    level: warning
+    message: "Paths in triagebot.toml [autolabel.*].trigger_files must exist (tidy `triagebot`)."
+
+  # ── C2 (was A15): Cargo.lock sources restricted to an allowlist (tidy extdeps)
+  # NOT RUN — recorded as C (expressible-but-awkward). This is an allowlist-
+  # membership check over every `source = "..."` line in Cargo.lock. alint's
+  # regex engine has no look-ahead, so "any source line NOT in {rust-lang
+  # crates.io-index, pinned rust-lang/team git}" can't be written as a single
+  # file_content_forbidden pattern. Wants an `every_line_matches`/allowlist mode.
+  # See extdeps.rs:10 (ALLOWED_SOURCES) for the two permitted values.
+
+  # ── A16: every tests/crashes/*.rs declares a //@ known-bug: (tidy `known_bug`)
+  - id: rr-crashes-known-bug
+    kind: file_content_matches
+    paths:
+      include: ["tests/crashes/**/*.rs"]
+      exclude: ["tests/crashes/auxiliary/**"]
+    pattern: '//@ known-bug: '
+    level: error
+    message: "Each tests/crashes test must carry a //@ known-bug: directive (tidy `known_bug`)."
+
+  # ── A17: no borrowck_graphviz_postflow debug attrs in tests (debug_artifacts) ─
+  - id: rr-no-borrowck-graphviz-postflow
+    kind: file_content_forbidden
+    paths: ["tests/**/*.rs"]
+    pattern: 'borrowck_graphviz_postflow'
+    level: error
+    message: "Debug attr borrowck_graphviz_postflow must not be committed in tests (tidy `debug_artifacts`)."
+
+  # ── A6: no TODO in codegen backend trees (tidy `codegen`); FIXME instead ─────
+  - id: rr-no-todo-in-codegen
+    kind: file_content_forbidden
+    paths:
+      include:
+        - "compiler/rustc_codegen_cranelift/**"
+        - "compiler/rustc_codegen_gcc/**"
+    pattern: '\bTODO\b'
+    level: warning
+    message: "Use FIXME, not TODO, in codegen backend trees (tidy `codegen`)."
+
+  # ── A7: no committed `dbg!` (tidy `style` dbg) ──────────────────────────────
+  - id: rr-no-committed-dbg
+    kind: file_content_forbidden
+    paths:
+      include: ["compiler/**/*.rs", "library/**/*.rs", "src/**/*.rs"]
+      exclude: ["**/tests/**", "src/tools/tidy/**"]
+    pattern: '\bdbg!\('
+    level: warning
+    message: "`dbg!` is a debugging tool and must not be committed (tidy `style`)."
+
+  # ── value-add: structural assertions rust-lang/rust does not itself gate on ──
+  # (recorded as value-add in the case-study record, NOT in the A/B/C ratio).
+  - id: va-reuse-toml-exists
+    kind: file_exists
+    paths: ["REUSE.toml"]
+    root_only: true
+    level: info
+    message: "REUSE.toml drives the `reuse` SPDX compliance gate."
+  - id: va-rustfmt-toml-exists
+    kind: file_exists
+    paths: ["rustfmt.toml"]
+    root_only: true
+    level: info
+    message: "rustfmt.toml pins the formatting config CI enforces."
+  - id: va-typos-toml-exists
+    kind: file_exists
+    paths: ["typos.toml"]
+    root_only: true
+    level: info
+    message: "typos.toml configures the spellcheck (typos) gate."
+  - id: va-dual-license-present
+    kind: file_exists
+    paths: ["LICENSE-APACHE"]
+    root_only: true
+    level: info
+    message: "rust-lang/rust is dual MIT/Apache-2.0; both license files must be present."

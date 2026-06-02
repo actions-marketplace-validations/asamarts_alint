@@ -1,0 +1,128 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for apache/spark @ 27187d6cbae943713be55b7846bfefc2c9c2fad3
+# (v0.12 case study, Stage A). Expresses the natively-addressable (A) slice of
+# Spark's bespoke-validation surface. The bulk of Spark's enforced surface is
+# tool execution (scalafmt/scalastyle/checkstyle, RAT, MiMa, mypy/ruff/flake8/
+# black, eslint, lintr, sphinx, Maven dependency manifest) = deliberate non-goals
+# (D), orchestrated but not reimplemented by alint.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  # Apache TLP governance: LICENSE/NOTICE/header artefacts. Provides
+  # apache-2-source-has-license-header (the RAT/scalastyle header behavior) +
+  # LICENSE-text + NOTICE-exists, composed of native kinds.
+  - alint://bundled/compliance/apache-2@v1
+
+rules:
+  # --- Apache license header on R sources (apache-2 bundle's header include
+  #     covers .scala/.java/.py/.js but NOT .R; RAT enforces .R too) ----------
+  - id: spark-r-apache-header
+    kind: file_header
+    paths:
+      include: ["**/*.R", "**/*.r"]
+      exclude:
+        - "**/target/**"
+        - "R/pkg/tests/fulltests/**"   # generated/fixture R may differ
+    pattern: '(Licensed to the Apache Software Foundation|Licensed under the Apache License)'
+    level: warning
+    message: "R source files should carry the Apache 2.0 license header (RAT-enforced)."
+
+  # --- Scalastyle banned-API RegexCheckers (scalastyle-config.xml). These are
+  #     pure file-content forbidden-pattern policies; alint expresses each
+  #     identically with file_content_forbidden over Scala sources. -----------
+  - id: spark-no-class-forname
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.scala"]
+      exclude: ["**/target/**"]
+    pattern: 'Class\.forName'
+    level: warning
+    message: "Use Utils.classForName instead of Class.forName (scalastyle: classforname)."
+
+  - id: spark-no-await-result
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.scala"]
+      exclude: ["**/target/**"]
+    pattern: 'Await\.result'
+    level: warning
+    message: "Use ThreadUtils.awaitResult instead of Await.result (scalastyle: awaitresult)."
+
+  - id: spark-no-await-ready
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.scala"]
+      exclude: ["**/target/**"]
+    pattern: 'Await\.ready'
+    level: warning
+    message: "Use ThreadUtils.awaitReady instead of Await.ready (scalastyle: awaitready)."
+
+  - id: spark-no-javaconversions
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.scala"]
+      exclude: ["**/target/**"]
+    pattern: 'JavaConversions'
+    level: warning
+    message: "Use scala.jdk.CollectionConverters, not JavaConversions (scalastyle: javaconversions)."
+
+  - id: spark-no-new-parvector
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.scala"]
+      exclude: ["**/target/**"]
+    pattern: 'new.*ParVector'
+    level: warning
+    message: "Avoid new ParVector (scalastyle: parvector)."
+
+  - id: spark-no-throw-new-error
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.scala"]
+      exclude: ["**/target/**"]
+    pattern: 'throw new \w+Error\('
+    level: warning
+    message: "Do not throw subclasses of Error (scalastyle: throwerror)."
+
+  - id: spark-no-files-createparentdirs
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.scala"]
+      exclude: ["**/target/**"]
+    pattern: '\bFiles\.createParentDirs\b'
+    level: warning
+    message: "Use SparkFileUtils/Utils.createParentDirs (scalastyle: createParentDirs)."
+
+  - id: spark-no-files-equal
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.scala"]
+      exclude: ["**/target/**"]
+    pattern: '\bFiles\.equal\b'
+    level: warning
+    message: "Use contentEquals of SparkFileUtils/Utils (scalastyle: filesequal)."
+
+  # --- Config-policy assertions (alint value-add; NOT Spark-enforced gates) ---
+  # Recorded here because they are real utility, but excluded from the coverage
+  # denominator per R3/R5.
+  - id: spark-scalastyle-config-exists
+    kind: file_exists
+    paths: ["scalastyle-config.xml"]
+    root_only: true
+    level: info
+    message: "scalastyle policy file present."
+
+  - id: spark-rat-excludes-exists
+    kind: file_exists
+    paths: ["dev/.rat-excludes"]
+    level: info
+    message: "RAT exclude manifest present."
+
+  - id: spark-committed-dep-manifest-exists
+    kind: file_exists
+    paths: ["dev/deps/spark-deps-hadoop-3-hive-2.3"]
+    level: info
+    message: "Committed Maven dependency manifest present (freshness gated by dev/test-dependencies.sh)."

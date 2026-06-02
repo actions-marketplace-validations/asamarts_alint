@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config for PostgREST/postgrest @ 1d6e0bd35f09a4045d5b6d18acb33344c5b13f1c
+# Shape: Haskell · API server · cabal + nix · community governance.
+#
+# ── Where PostgREST's bespoke-validation surface lives ─────────────
+# There is NO scripts/ / ci/ / hack/ dir and NO Makefile/justfile —
+# every dev tool is a nix `checkedShellScript` under nix/tools/*.nix,
+# invoked from .github/workflows/*.yaml. The enforced state-checks are:
+#
+#   check.yaml  lint-style job:
+#     postgrest-lint        -> actionlint, deadnix, vulture, ruff check,
+#                              hsie check-aliases (Haskell import-alias
+#                              consistency), hlint        ... all D (AST/NLP)
+#     postgrest-style-check -> statix/nixpkgs-fmt/stylish-haskell/black
+#                              THEN `git diff-index --exit-code` over
+#                              *.hs *.lhs *.nix *.py  (format-freshness) ... D
+#   check.yaml  commit job:  commitlint (type-enum + subject rules) ... D (NLP)
+#   docs.yaml   build job:   sphinx -W build THEN
+#                            `git diff --exit-code HEAD locales || echo`
+#                            (generated-locale freshness; NON-blocking) ... D
+#   docs.yaml   spellcheck:  aspell spellcheck + dictcheck (obsolete
+#                            postgrest.dict entries) ... D (NLP)
+#   test.yaml             :  hspec/pytest/doctest/idempotence/memory/
+#                            coverage(+weeder dead-code)/loadtest ... D (exec)
+#   build.yaml            :  nix-build / stack / cabal multi-platform ... D
+#   release.yaml github   :  assert git tag == "v$(cabal version)" ... runtime
+#   ci.yaml tag           :  auto-tag from cabal version ... runtime
+#
+# Almost the entire surface is D (tool execution: formatters, linters,
+# type-checked compiles, test suites, sphinx, spell-NLP). The thin
+# addressable surface is the cross-file VALUE coherence the repo
+# documents as "when you change X, also update Y", plus repo hygiene.
+#
+# ── alint value of this config ─────────────────────────────────────
+# Native A-items: GHC-version coherence + repo hygiene (bundles).
+# Orchestration value-add (NOT in the coverage ratio): single-entrypoint
+# shell-wraps of postgrest-lint / postgrest-style-check / postgrest-commitlint
+# so a contributor gets one `alint check` instead of a nix-shell.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1            # README/LICENSE/COC/gitignore/renovate + no-trailing-ws + final-newline + merge-markers + bidi
+  - alint://bundled/ci/github-actions@v1       # workflow name + contents:read + actions pinned to SHA (all 8 workflows already SHA-pinned)
+  - alint://bundled/tooling/editorconfig@v1    # .editorconfig + .gitattributes presence (both present)
+  - alint://bundled/hygiene/no-tracked-artifacts@v1  # no dist/coverage/__pycache__ etc. committed
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A — CROSS-FILE VALUE COHERENCE (the documented "also update" rules)
+  # ════════════════════════════════════════════════════════════════
+
+  # ── GHC version: stack.yaml resolver-comment  ==  build.yaml pin ──
+  # stack.yaml line 1: "# When updating, update GHC version in
+  #   .github/workflows/build.yaml as well." line 2 resolver carries the
+  #   trailing comment `# 2026-04-15, GHC 9.10.3`. build.yaml line ~133
+  #   `ghc-version: 9.10.3` has the comment "This must match the version
+  #   in stack.yaml's resolver". This is exactly the hand-sync drift
+  #   cross_file_value_equals guards. Both sites are extracted by regex
+  #   (the stack side lives inside a comment, the build side is a YAML
+  #   scalar); alint reads bytes so both resolve to "9.10.3".
+  - id: postgrest-ghc-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "stack.yaml"
+      extract: { regex: 'GHC ([0-9]+\.[0-9]+\.[0-9]+)' }
+    targets:
+      - file: ".github/workflows/build.yaml"
+        extract: { regex: 'ghc-version:\s*([0-9]+\.[0-9]+\.[0-9]+)' }
+    level: error
+    message: |
+      The GHC version in stack.yaml's resolver comment must match the
+      `ghc-version:` pin in .github/workflows/build.yaml's stack matrix.
+      Both files carry a "keep these in sync" comment (stack.yaml:1,
+      build.yaml stack job). This guards the documented hand-sync.
+
+  # ════════════════════════════════════════════════════════════════
+  # A — STRUCTURE / HYGIENE INVARIANTS the repo relies on
+  # ════════════════════════════════════════════════════════════════
+
+  # editorconfig declares trim_trailing_whitespace=true repo-wide and the
+  # style-check job enforces it for *.hs/*.nix/*.py via the formatters.
+  # oss-baseline already ships oss-no-trailing-whitespace, but it scopes
+  # to a default set; assert it explicitly over the source + config text
+  # so the .editorconfig promise is machine-checked beyond the formatted
+  # languages (e.g. *.yaml, *.rst, *.cabal).
+  - id: postgrest-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.hs", "**/*.nix", "**/*.py", "**/*.yaml", "**/*.yml", "**/*.cabal", "**/*.rst"]
+      exclude: [".git/**", "dist-newstyle/**", "result/**"]
+    level: warning
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  # .editorconfig: insert_final_newline = true. Assert it over the same
+  # text set (oss-final-newline from the bundle covers a default set).
+  - id: postgrest-final-newline
+    kind: file_ends_with
+    paths:
+      include: ["**/*.hs", "**/*.nix", "**/*.py", "**/*.yaml", "**/*.yml", "**/*.cabal"]
+      exclude: [".git/**", "dist-newstyle/**", "result/**"]
+    suffix: "\n"
+    level: warning
+    message: ".editorconfig declares insert_final_newline=true; files should end with a newline."
+
+  # The CI release gate (release.yaml github job) hard-fails unless the
+  # git tag equals "v<postgrest.cabal version>". The tag side is runtime
+  # git state (not a file), so the full check is D; what IS file-checkable
+  # is that the cabal version is a well-formed release identifier the tag
+  # logic understands (ci.yaml tag job branches on `== *.*`). Assert the
+  # version key is present + numeric-ish so a malformed bump is caught
+  # before the release workflow trips.
+  - id: postgrest-cabal-version-present
+    kind: file_content_matches
+    paths: "postgrest.cabal"
+    pattern: '(?m)^version:\s+\d'
+    level: error
+    message: |
+      postgrest.cabal must declare a numeric `version:` — the release
+      workflow (release.yaml) aborts unless the pushed tag equals
+      "v<version>", and the ci.yaml tag job branches on its shape.
+
+  # ════════════════════════════════════════════════════════════════
+  # ORCHESTRATION VALUE-ADD (NOT in the coverage ratio; per R3/R5)
+  # Single-entrypoint wraps of the nix dev tools so `alint check` can
+  # run the same gates a contributor would via nix-shell. These shell
+  # out to the project's own tools — they do not re-express the logic.
+  # Commented out by default: they require the nix-built tools on PATH.
+  # ════════════════════════════════════════════════════════════════
+  # - id: postgrest-lint-wrap
+  #   kind: command
+  #   paths: "postgrest.cabal"
+  #   command: ["postgrest-lint"]
+  #   timeout: 300
+  #   level: error
+  # - id: postgrest-style-check-wrap
+  #   kind: command_idempotent
+  #   paths: "postgrest.cabal"
+  #   command: ["postgrest-style-check"]
+  #   timeout: 300
+  #   level: error

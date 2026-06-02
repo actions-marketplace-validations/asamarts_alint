@@ -1,0 +1,133 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for flutter/flutter @ 2fc403d857f0f06791c25bb6c496d584702c3220
+# v0.12 case study (Stage A). Expresses the A-bucket of flutter's bespoke
+# validation surface (the dev/bots/analyze.dart "verify*" checks that map to a
+# native alint kind). The dominant enforced surface (the .ci.yaml LUCI test
+# matrix, dart analyze, the custom analyzer lints under dev/bots/custom_rules,
+# the dep-graph allowlist) is D (execution / AST / graph resolution) and lives
+# outside this config by design.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ── A1: BSD license header on every source file (analyze.dart
+  #        verifyNoMissingLicense / _generateLicense). Fixed template:
+  #        "Copyright 2014 The Flutter Authors. All rights reserved." +
+  #        "Use of this source code is governed by a BSD-style license ...".
+  #        Per-extension in the original; here scoped to the Dart corpus
+  #        (the largest cohort, ~6400 files) with a few content roots.
+  - id: flutter-bsd-license-header-dart
+    kind: file_header
+    paths:
+      include: ["packages/**/*.dart", "dev/**/*.dart", "examples/**/*.dart"]
+      exclude:
+        - "**/*.tmpl"
+        - "**/generated_plugin_registrant.dart"
+        - "**/*.g.dart"
+        # flutter excludes its own analyzer test-input fixtures + dart-fix data
+        - "dev/bots/test/analyze-test-input/**"
+        - "**/test_fixes/**"
+    pattern: "Copyright 2014 The Flutter Authors\\. All rights reserved\\."
+    lines: 3
+    level: error
+
+  # ── A2: framework test cross-import firewall
+  #        (dev/bots/check_tests_cross_imports.dart). Tests outside
+  #        test/material and test/cupertino must not import Material; only
+  #        Cupertino+Material may import Cupertino. Modeled as an import_gate
+  #        firewall over the framework test tree forbidding Material, with the
+  #        two design-language test dirs allow-listed. (The reverse "fixed
+  #        import must be removed from the allowlist" arm is not expressible.)
+  - id: flutter-tests-no-material-cross-import
+    kind: import_gate
+    paths:
+      include: ["packages/flutter/test/**/*.dart"]
+      exclude:
+        - "packages/flutter/test/material/**"
+        - "packages/flutter/test/cupertino/**"
+    language: dart
+    forbid: "package:flutter/material\\.dart"
+    # flutter's check carries a knownXxxCrossImports allowlist of pre-existing
+    # violations being burned down (issue 177028); encode them so the firewall
+    # is clean against the pin and only catches NEW cross-imports.
+    allow:
+      - "packages/flutter/test/painting/colors_test.dart"
+      - "packages/flutter/test/painting/continuous_rectangle_border_test.dart"
+      - "packages/flutter/test/painting/decoration_image_lerp_test.dart"
+      - "packages/flutter/test/painting/system_fonts_test.dart"
+      - "packages/flutter/test/rendering/**"
+      - "packages/flutter/test/widgets/**"
+    level: warning
+
+  # ── A3: flutter_tools internal package may not import itself by its own
+  #        package: URI (analyze.dart verifyNoBadImportsInFlutterTools).
+  - id: flutter-tools-no-self-package-import
+    kind: import_gate
+    paths: "packages/flutter_tools/lib/**/*.dart"
+    language: dart
+    forbid: "package:flutter_tools/"
+    level: warning
+
+  # ── A4: the foundation library must not import package:meta directly; it
+  #        should re-export via foundation.dart (analyze.dart
+  #        _findFlutterDependencies checkForMeta arm). framework-internal.
+  - id: flutter-no-direct-meta-import
+    kind: import_gate
+    paths:
+      include: ["packages/flutter/lib/src/**/*.dart"]
+      exclude: ["packages/flutter/lib/src/foundation/**"]
+    language: dart
+    forbid: "^package:meta/meta\\.dart$"
+    level: warning
+
+  # ── A5: no "checked mode" (use "debug mode"); analyze.dart verifyNoCheckedMode.
+  - id: flutter-no-checked-mode
+    kind: file_content_forbidden
+    paths: "packages/**/*.dart"
+    pattern: "(?i)checked mode"
+    level: warning
+
+  # ── A6: no direct GitHub new-issue links without a template
+  #        (analyze.dart verifyIssueLinks). The bare prefix is forbidden;
+  #        contributors must link to /choose or ?template=... .
+  - id: flutter-no-bare-new-issue-link
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.dart", "**/*.md"]
+      # flutter's verifyIssueLinks skips analyze.dart itself + all *_test.dart
+      exclude: ["dev/bots/analyze.dart", "**/*_test.dart"]
+    pattern: "https://github\\.com/flutter/flutter/issues/new[\\s'\")>]"
+    level: warning
+
+  # ── A7: gen_defaults token-template freshness, structural arm
+  #        (analyze.dart verifyTokenTemplatesUpdateCorrectFiles): every
+  #        materialLib target named in gen_defaults.dart must exist. Asserted
+  #        here as: the generator and its material target dir both exist.
+  - id: flutter-gen-defaults-generator-exists
+    kind: file_exists
+    paths: "dev/tools/gen_defaults/bin/gen_defaults.dart"
+    level: error
+
+  # ── A8 (value-add structure, recorded separately): every workspace package
+  #        declares a pubspec.yaml. Not a flutter-enforced gate; alint bonus.
+  - id: flutter-every-package-has-pubspec
+    kind: every_matching_has
+    select: "packages/*/"
+    require:
+      - kind: file_exists
+        paths: "{path}/pubspec.yaml"
+    level: warning
+
+  # ── A9 (value-add): root governance files flutter enforces by convention.
+  - id: flutter-patent-grant-exists
+    kind: file_exists
+    paths: "PATENT_GRANT"
+    level: warning
+  - id: flutter-codeowners-and-testowners-exist
+    kind: file_exists
+    paths: ["CODEOWNERS", "TESTOWNERS"]
+    level: warning

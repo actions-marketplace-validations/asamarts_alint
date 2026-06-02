@@ -32,5 +32,11 @@ trees, not current upstream.
   `gohugoio-hugo`, `grafana-grafana`, `sveltejs-svelte`, `serde-rs-serde`,
   `ansible-ansible`, `elastic-elasticsearch`, `neovim-neovim`,
   `composer-composer`, `fastapi-fastapi`, `NixOS-nix`.
+- **Batch 4:** `kubernetes-kubernetes`, `golang-go`, `rust-lang-rust`,
+  `python-cpython`, `flutter-flutter`, `apache-kafka`, `apache-spark`,
+  `llvm-llvm-project`, `dotnet-roslyn`, `facebook-react`, `microsoft-vscode`,
+  `discourse-discourse`, `elixir-lang-elixir`, `PostgREST-postgrest`,
+  `systemd-systemd`, `ClickHouse-ClickHouse`, `astral-sh-ruff`,
+  `scikit-learn-scikit-learn`, `square-okhttp`, `vim-vim`.
 
 Later batches append here as they pass their checkpoint.
