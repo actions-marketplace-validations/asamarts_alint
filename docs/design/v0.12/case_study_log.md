@@ -22,7 +22,8 @@ durable artifact and the configs are staged separately pending that decision.
 | batch 2 | 10 | 25 | 10 | 9 | 127 | 57% | 13 |
 | batch 3 | 20 | 85 | 30 | 25 | 305 | 61% | 48 |
 | batch 4 | 20 | 125 | 42 | 57 | 357 | 56% | 81 |
-| **cumulative** | **56** | **271** | **90** | **96** | **~890** | **59%** | **163** |
+| batch 5 | 20 | 95 | 30 | 33 | 380 | 60% | 45 |
+| **cumulative** | **76** | **366** | **120** | **129** | **~1270** | **60%** | **208** |
 
 ---
 
@@ -345,3 +346,26 @@ adversarial pass refining a very large catalogue rather than overturning it.
 
 20 validated configs at `/tmp/cs_out/` (all `config_validated: true`), folded
 into [`corpus/`](./corpus/) (now 55).
+
+---
+
+## Batch 5 — 2026-06-02 (20: remaining baseline-30 flagships + a few new)
+
+Workflow: 40 agents, ~4.1M tokens. Repos: airflow, arrow, angular, node, pytorch,
+tensorflow, deno, bazel, protobuf, prettier, helm, istio, dotnet/runtime,
+typescript, pnpm, mastodon, nixpkgs, valkey, quarkus, avalonia.
+
+Stage-B-reconciled **A=95 B=30 C=33 D=380, coverage 95/158 = 60%** (cumulative
+**76/111 repos (~68% of the corpus): 366/615 = 60%**). airflow A30 (a 117-hook
+pre-commit suite) and pytorch A28 (large bespoke lint suite) dominated the
+addressable surface. file-graph +45 → **208 cumulative sources**.
+
+**A pure confirmation batch — zero new Tier-1 or Tier-2 candidates.** All 39
+new-kind candidates this batch map onto the already-ranked backlog: the
+set-membership / `cross_file_set_equals` / `every_X_has_Y` cluster
+(`value_set_membership` + `file_dependency_graph` territory), `files_equal`, the
+mutating `generated_file_fresh` mode, `git_file_mode`. The backlog has now held
+unchanged for **three straight batches** (3, 4, 5).
+
+### Artifacts
+20 validated configs folded into [`corpus/`](./corpus/) (now 75).

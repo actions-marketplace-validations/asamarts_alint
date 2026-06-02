@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for protocolbuffers/protobuf
+# Pinned: 5e7e16f0329ff2eb14e07deed659a6c349d3aeda (depth-1 clone)
+# Shape: C++ + 9-language bindings · serialization lib · Bazel + CMake · Google
+#
+# v0.12 case-study Stage-A config. The repo's ENFORCED validation surface is
+# dominated by tool execution (Bazel/CMake/CTest per-language test matrices,
+# sanitizers, conformance suite) and a bespoke YAML validator — almost all D.
+# The two genuinely addressable, repo-enforced A-items are:
+#   * staleness/codegen-freshness (the 12 regenerate_stale_files.sh entrypoints)
+#     -> command_idempotent wrapping the repo's own staleness targets
+#   * .bcr/presubmit.yml <-> .bazelci/presubmit.yml keep-in-sync (LINT.IfChange)
+# Everything below the VALUE-ADD line is alint utility the repo does NOT gate on
+# (per the case-study denominator ruling R5) and is recorded separately.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1          # README/LICENSE/SECURITY/CODEOWNERS presence, merge-marker/bidi bans
+  - alint://bundled/ci/github-actions@v1      # contents:read + SHA-pinned actions (Scorecard-aligned; repo already mostly compliant)
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════════
+  # A (ENFORCED) — CODEGEN FRESHNESS via the repo's own staleness targets.
+  # regenerate_stale_files.sh + staleness_check.yml gate that checked-in
+  # generated files match freshly-generated output. Each Bazel staleness_test
+  # supports `--fix`; in check posture it exits non-zero iff stale. We wrap the
+  # repo's OWN entrypoints (R2: the wrap is the value; the freshness LOGIC is
+  # the repo's). Requires Bazel on PATH; PR-scoped to keep cost sane.
+  # NOTE: these do NOT run in this offline validation (no Bazel) — included as
+  # the faithful expression; they are command_idempotent (spawn-gated) kinds.
+  # ═══════════════════════════════════════════════════════════════════════
+  - id: protobuf-cmake-file-lists-fresh
+    kind: command_idempotent
+    command: ["bazel", "test", "//src:cmake_lists_staleness_test"]
+    paths: src/file_lists.cmake
+    timeout: 600
+    level: error
+    message: >-
+      src/file_lists.cmake is generated from the Bazel source-list globs and
+      must be regenerated when sources change. Run ./regenerate_stale_files.sh.
+
+  - id: protobuf-well-known-types-fresh
+    kind: command_idempotent
+    command: ["bazel", "test", "//src/google/protobuf:well_known_types_staleness_test"]
+    paths: src/google/protobuf/any.pb.cc
+    timeout: 600
+    level: error
+    message: >-
+      Checked-in well-known-type descriptors (any.pb.*, struct.pb.*, ...) must
+      match protoc output. Run ./regenerate_stale_files.sh.
+      (Stands in for the full set of 12 staleness_test targets — one behavior.)
+
+  # ═══════════════════════════════════════════════════════════════════════
+  # VALUE-ADD (NOT in the enforced denominator, per R5) ────────────────────
+  # The repo does NOT gate on any of the rules below. They are alint utility
+  # an adopter could turn on; recorded here so the config is useful, but
+  # EXCLUDED from coverage_today/gap in the case-study record.
+  # ═══════════════════════════════════════════════════════════════════════
+
+  # value-add: cross-language version coherence. version strings live in
+  # protobuf_version.bzl (PROTOBUF_*_VERSION = "4.36.0") and are propagated by
+  # genrules; the repo has NO gate asserting they agree across publish manifests.
+  # alint CAN assert it (verified: bzl 4.36.0 == pom 4.36.0 == gemspec 4.36.0).
+  # NOTE (validation finding, R4): a naive `<version>([0-9]...)` regex over
+  # java/bom/pom.xml extracts THREE versions (project 4.36.0 + plugin 1.6 + 1.6.6)
+  # and cross_file_value_equals requires ALL to equal the source -> false 2x fail.
+  # Anchoring to the project's own <version> requires either a maven_path /
+  # xml_path-on-pom extraction or first-match-only semantics (a tuning gap, C).
+  # Ruby's gemspec has a single s.version, so that target validates cleanly.
+  - id: protobuf-ruby-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: protobuf_version.bzl
+      extract:
+        regex: 'PROTOBUF_RUBY_VERSION\s*=\s*"([^"]+)"'
+    targets:
+      - file: ruby/google-protobuf.gemspec
+        extract:
+          regex: 's\.version\s*=\s*"([^"]+)"'
+    level: warning
+    message: >-
+      protobuf_version.bzl PROTOBUF_RUBY_VERSION should equal the gemspec
+      s.version (value-add: the repo does not gate this).
+
+  # value-add (DISABLED — validation finding, R4): the BSD-style Google header
+  # ("Protocol Buffers - Google's data interchange format") is present on MOST
+  # sources but NOT uniformly: even after excluding generated *.pb.* files, this
+  # rule fires on 99 hand-written files (236/251 java carry it; 15 newer ones,
+  # e.g. java/.../DebugFormat.java and several csharp tests, omit it). The repo
+  # has NO header gate, so the convention is un-gated AND inconsistently applied.
+  # Left as `off` so the config stays clean; turning it on is a real value-add
+  # only paired with a curated exclude list. (A prior pass mislabeled this "the
+  # biggest win" — it does not validate cleanly.)
+  - id: protobuf-bsd-header-slash
+    kind: file_header
+    paths:
+      include: ["src/**/*.{cc,h,cpp,inc}", "java/**/*.java", "objectivec/**/*.{m,h}", "csharp/**/*.cs"]
+      exclude: ["**/*.pb.cc", "**/*.pb.h", "**/*.pb.cs", "**/third_party/**"]
+    pattern: "Protocol Buffers - Google's data interchange format"
+    lines: 8
+    level: "off"
+    message: >-
+      Hand-written sources start with the canonical BSD-style Google header
+      (value-add, un-gated + inconsistently applied; disabled by default).
+
+  # value-add: structured manifest invariants (carried-forward presence/shape).
+  - id: protobuf-php-composer-name
+    kind: json_path_matches
+    paths: php/composer.json
+    path: "$.name"
+    matches: '^google/protobuf$'
+    level: info
+  - id: protobuf-php-composer-license
+    kind: json_path_matches
+    paths: php/composer.json
+    path: "$.license"
+    matches: '^BSD-3-Clause$'
+    level: info
+  - id: protobuf-csharp-sdk-pinned
+    kind: json_path_equals
+    paths: global.json
+    path: "$.sdk.version"
+    equals: "8.0.100"
+    level: info
+
+  # value-add: critical presence anchors (structure alint could assert).
+  - id: protobuf-version-manifest-present
+    kind: file_exists
+    paths: version.json
+    root_only: true
+    level: info
+  - id: protobuf-version-bzl-present
+    kind: file_exists
+    paths: protobuf_version.bzl
+    root_only: true
+    level: info
+  - id: protobuf-objc-privacy-manifest-present
+    kind: file_exists
+    paths: PrivacyInfo.xcprivacy
+    root_only: true
+    level: info

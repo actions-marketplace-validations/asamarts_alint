@@ -1,0 +1,149 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config — angular/angular @ 3cc9e2b7a9bd1eb45c9221a99e4b37119fbda223
+#
+# Shape: TS web-framework monorepo, Bazel 8.7.0 + pnpm 11.5.0, Google-governed.
+# ~68 package.json, ~4488 .ts/.mts under packages/.
+#
+# WHERE VALIDATION LIVES:
+#   .github/workflows/{ci,pr}.yml  -> the `lint` + (pr) extra steps:
+#       pnpm tslint                         (TS AST lint + custom rules, file-header, eofline)  [D + the file-header/eofline arms map to A]
+#       pnpm ts-circular-deps:check         (import cycle firewall over {packages,adev}/**/*.ts)  [D semantic; file-graph edge SOURCE]
+#       pnpm ng-dev pullapprove verify      (.pullapprove.yml schema/coverage)                  [D bespoke validator]
+#       pnpm ng-dev ngbot verify            (.github/angular-robot.yml schema)                  [D bespoke validator]
+#       pnpm ng-dev ai skills validate      (skills/**/SKILL.md frontmatter)                    [D bespoke validator]
+#       pnpm check-tooling-setup            (tsc --project scripts/tsconfig.json)               [D typecheck]
+#       (pr) ng-dev commit-message validate-range / format changed --check                     [D NLP/formatter]
+#       (pr) Check Package Licenses (dev-infra licenses action)                                 [D dep-license resolution]
+#   .husky/{pre-commit,commit-msg,prepare-commit-msg} -> ng-dev format / commit-message (advisory; warn-only)  [D]
+#   goldens/public-api + goldens/vscode-extension + tools/symbol-extractor  -> bazel golden-diff tests          [D]
+#   tslint.json  -> file-header (Copyright Google LLC) + eofline  -> the two repo-state arms alint expresses natively [A]
+#
+# alint expresses the file-STATE subset declaratively (license header, final newline,
+# hygiene, structure) and records the rest as D non-goals (build/test/AST/NLP execution),
+# orchestrated-but-not-reimplemented.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+  - alint://bundled/monorepo/pnpm-workspace@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A — natively expressible, REPO-ENFORCED state checks
+  # ════════════════════════════════════════════════════════════════
+
+  # A1 — License header on every source file.
+  # tslint.json `file-header` rule: pattern "Copyright Google LLC" with
+  # allow-single-line-comments:false. CI-enforced via `pnpm tslint`.
+  # alint expresses the same logic with file_header (no TS AST needed).
+  #
+  # SCOPE matches tslint's REAL enforced surface (tsconfig-tslint.json
+  # include + tslint.json exclude), verified against the clone: tslint
+  # excludes adev tutorial/example apps and the compiler-cli compliance
+  # test_cases fixtures (they contain intentionally non-conforming code).
+  # Without these excludes the rule over-fires ~1290x on un-enforced files
+  # — a textbook R4 scope-mismatch the `alint check` run surfaced.
+  - id: angular-license-header
+    kind: file_header
+    paths:
+      include:
+        - "packages/**/*.ts"
+        - "modules/**/*.ts"
+        - "tools/**/*.ts"
+        - "devtools/**/*.ts"
+        - "scripts/**/*.mts"
+      exclude:
+        - "**/node_modules/**"
+        - "**/third_party/**"
+        - "**/*.d.ts"            # generated; .prettierignore + tslint skip d.ts
+        - "**/*.ngtypecheck.ts"
+        - "packages/compiler-cli/test/compliance/test_cases/**"  # tslint.json exclude
+        - "packages/zone.js/**"  # zone.js carries its own banner convention
+        - "**/test/**/golden-test/**"   # migration before/after fixtures (header-free by design)
+        - "packages/localize/**/test/**" # localize message-extraction fixtures
+    pattern: "Copyright Google LLC"
+    lines: 10
+    level: error
+    message: >-
+      Every Angular source file must carry the MIT @license header
+      ("Copyright Google LLC All Rights Reserved."). Enforced by tslint
+      `file-header` in the CI lint job.
+
+  # A2 — Final newline on TS/JS source (tslint `eofline`, CI-enforced;
+  # also .editorconfig insert_final_newline=true for non-md files).
+  - id: angular-eofline
+    kind: final_newline
+    paths:
+      include:
+        - "packages/**/*.ts"
+        - "tools/**/*.ts"
+      exclude:
+        - "**/node_modules/**"
+        - "**/*.d.ts"
+        - "packages/compiler-cli/test/compliance/test_cases/**"  # tslint.json exclude (non-conforming fixtures)
+        - "**/test/**/golden-test/**"
+    level: warning
+    message: "tslint `eofline`: source files must end with a single newline."
+    fix:
+      file_append_final_newline: {}
+
+  # (A CRLF-forbidden rule was trialled here — .gitattributes pins
+  #  *.ts/*.js to eol=lf — but a literal "\r" content pattern proved
+  #  non-functional in file_content_forbidden against the clone (the rule
+  #  was silently dropped from the result set). Line-ending enforcement is
+  #  D anyway: Angular enforces it via prettier `end_of_line: lf` + git's
+  #  text=auto normalization, not a standalone repo-state assertion. Left
+  #  out rather than shipped as a dead rule. -> C/tuning: a dedicated
+  #  no_crlf / line_ending kind would express the .gitattributes intent.)
+
+  # ════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD — structure the repo does NOT explicitly gate on
+  # (recorded separately per R3/R5; NOT in the coverage ratio).
+  # These assert the EXISTENCE of the bespoke-validator config files
+  # whose CONTENTS ng-dev validates at runtime (the D checks above).
+  # ════════════════════════════════════════════════════════════════
+
+  - id: angular-pullapprove-config-exists
+    kind: file_exists
+    paths: ".pullapprove.yml"
+    root_only: true
+    level: info
+    message: "Code-ownership config (validated by `ng-dev pullapprove verify`)."
+
+  - id: angular-robot-config-exists
+    kind: file_exists
+    paths: ".github/angular-robot.yml"
+    level: info
+    message: "angular-robot config (validated by `ng-dev ngbot verify`)."
+
+  - id: angular-prettier-config-exists
+    kind: file_exists
+    paths: ".prettierrc"
+    root_only: true
+    level: info
+    message: "Prettier config — formatting is enforced by `ng-dev format`."
+
+  - id: angular-editorconfig-exists
+    kind: file_exists
+    paths: ".editorconfig"
+    root_only: true
+    level: info
+    message: "EditorConfig declares charset/indent/EOL conventions."
+
+  - id: angular-nvmrc-exists
+    kind: file_exists
+    paths: ".nvmrc"
+    root_only: true
+    level: info
+    message: "Pinned Node version for contributors (.nvmrc)."
+
+  # Package-manager coherence: package.json `packageManager` and
+  # `engines.pnpm` should agree. Angular does not gate on this, so it is
+  # value-add — but it is a clean cross_file_value_equals shape (same file,
+  # two JSONPaths). NOTE: packageManager is "pnpm@11.5.0", engines.pnpm is
+  # "11.5.0" (prefix differs) so a raw equals would FAIL; left as a future
+  # tuning item (wants a strip-prefix normalize) rather than a false A.

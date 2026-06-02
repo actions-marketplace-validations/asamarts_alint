@@ -1,0 +1,217 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# apache/arrow @ e2b44378edf0ccceda07e8a6823890bd4ecc1952  (v0.12 case study, Stage A)
+#
+# Shape: C++ + multi-lang (c_glib/python/r/ruby/matlab + format/ spec) data/ML
+# monorepo, CMake/Meson/vcpkg, ASF TLP. Enforcement hub = .pre-commit-config.yaml
+# (run by .github/workflows/dev.yml as `pre-commit run --all-files`) + the Apache
+# RAT license-audit (the one pre-commit hook that is NOT a generic formatter) +
+# `archery docker/crossbow check-config` (config self-consistency, the bespoke tool).
+#
+# Almost the entire pre-commit suite is tool execution (D, per ruling R2):
+# clang-format, cpplint, autopep8, flake8, cython-lint, numpydoc, lintr, air,
+# rubocop, cmake-format, sphinx-lint, shellcheck, shfmt, meson-fmt, hadolint.
+# alint does NOT reimplement those. The ASF source-license-header (RAT's
+# content layer) IS natively expressible and IS gated -> the one enforced A.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1            # README/LICENSE presence, no merge markers, no bidi
+  - alint://bundled/apache/governance@v1       # LICENSE+NOTICE+KEYS+RAT source-header+no-binaries (ASF TLP)
+  - alint://bundled/compliance/apache-2@v1     # Apache-2.0 LICENSE-text + NOTICE + canonical ASF header
+  - alint://bundled/python@v1                  # fact-gated; fires only under python/ (pyarrow)
+  - alint://bundled/ci/github-actions@v1       # workflow contents:read, SHA-pin, name: (28 workflows)
+  - alint://bundled/tooling/editorconfig@v1    # .editorconfig root=true + charset
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ── ENFORCED A: ASF source-license header, polyglot surface ──────────
+  # RAT (the `rat` pre-commit hook + release-vote run-rat.sh) enforces an
+  # Apache header on every source file; rat_exclude_files.txt carries the
+  # exemptions. The apache bundle's header rule defaults to a narrow set;
+  # widen to Arrow's languages and mirror the RAT exclude tree.
+  - id: apache-2-source-has-license-header
+    kind: file_header
+    paths:
+      include:
+        ["**/*.{py,pyx,pxd,pxi,c,cc,cpp,h,hpp,hh,rb,R,sh,fbs,proto,vala,cmake}"]
+      exclude:
+        - "cpp/src/arrow/vendored/**"
+        - "cpp/src/generated/**"
+        - "cpp/thirdparty/**"
+        - "cpp/submodules/**"
+        - "testing/**"
+        - "python/pyarrow/vendored/**"
+        - "r/src/arrowExports.cpp"
+        - "r/R/RcppExports.R"
+        - "ruby/red-arrow-format/lib/arrow-format/org/**"
+        - "dev/tasks/homebrew-formulae/**"
+        - "cpp/src/arrow/c/dlpack_abi.h"
+        - "cpp/src/arrow/io/mman.h"
+        - "cpp/src/arrow/util/random.h"
+        - "cpp/build-support/asan_symbolize.py"
+        - "cpp/build-support/cpplint.py"
+        - "cpp/cmake_modules/FindPythonLibsNew.cmake"
+    lines: 30
+    pattern: 'Licensed (to the Apache Software Foundation|under the Apache License,?\s*Version 2)'
+    level: warning
+    message: >-
+      Source files must carry the ASF-preamble Apache license header (the
+      `rat` pre-commit hook + dev/release/run-rat.sh enforce this; RAT fails
+      the release vote otherwise). Exemptions mirror dev/release/rat_exclude_files.txt.
+
+  # ── VALUE-ADD (not in the enforced A/B/C/D denominator, per R3/R5) ────
+  # These assert structure alint *can* lock but the repo does not gate on.
+
+  # format/ is the cross-language Arrow spec; a missing .fbs/.proto breaks
+  # interop + the archery integration suite (and the committed flatc output).
+  - id: arrow-format-spec-files-present
+    kind: file_exists
+    paths:
+      - format/Schema.fbs
+      - format/Message.fbs
+      - format/File.fbs
+      - format/Tensor.fbs
+      - format/SparseTensor.fbs
+      - format/Flight.proto
+      - format/FlightSql.proto
+    level: error
+    message: "format/ holds the cross-language Arrow schema (FlatBuffers + Protobuf); removing any breaks interop."
+
+  # 8 Ruby gems under ruby/red-* share a uniform layout the release scripts
+  # (dev/release/post-06-ruby.sh) walk by convention.
+  - id: arrow-ruby-gem-required-meta-files
+    kind: for_each_file
+    select: "ruby/red-*/Rakefile"
+    require:
+      - kind: file_exists
+        paths: "{dir}/LICENSE.txt"
+      - kind: file_exists
+        paths: "{dir}/NOTICE.txt"
+      - kind: file_exists
+        paths: "{dir}/README.md"
+      - kind: dir_exists
+        paths: "{dir}/lib"
+      - kind: dir_exists
+        paths: "{dir}/test"
+    level: warning
+    message: "Every Ruby gem under ruby/red-* must ship LICENSE.txt + NOTICE.txt + README.md + lib/ + test/."
+
+  # 7 C-GLib sub-libraries each subdir()'d from c_glib/meson.build.
+  - id: arrow-c-glib-sublibrary-has-meson-build
+    kind: for_each_dir
+    select: "c_glib/*-glib"
+    require:
+      - kind: file_exists
+        paths: "{path}/meson.build"
+    level: warning
+    message: "Every C-GLib sub-library must declare meson.build; the top-level c_glib/meson.build subdir()s into each."
+
+  # Cross-file VERSION coherence (shared `-SNAPSHOT` cluster only). The
+  # release bump (dev/release/utils-prepare.sh::update_versions) rewrites
+  # these in lockstep; python(a-form)/r(.9000-form) DIVERGE and are excluded.
+  - id: arrow-version-snapshot-cluster-coherent
+    kind: cross_file_value_equals
+    source:
+      file: cpp/CMakeLists.txt
+      extract:
+        regex: 'set\(ARROW_VERSION "([^"]+)"\)'
+    targets:
+      - file: matlab/CMakeLists.txt
+        extract:
+          regex: 'set\(MLARROW_VERSION "([^"]+)"\)'
+      - file: python/CMakeLists.txt
+        extract:
+          regex: 'set\(PYARROW_VERSION "([^"]+)"\)'
+      - file: cpp/vcpkg.json
+        extract:
+          regex: '"version-string":\s*"([^"]+)"'
+      - file: c_glib/vcpkg.json
+        extract:
+          regex: '"version-string":\s*"([^"]+)"'
+      - file: ruby/red-arrow/lib/arrow/version.rb
+        extract:
+          regex: 'VERSION = "([^"]+)"'
+    level: warning
+    message: >-
+      The C++/matlab/c_glib/ruby version cluster must all equal cpp/CMakeLists.txt's
+      ARROW_VERSION (e.g. 25.0.0-SNAPSHOT). dev/release/utils-prepare.sh rewrites
+      them together at release time; this catches drift between releases. Python
+      (PEP440 a-form) and R (.9000 dev-form) are derived and intentionally excluded.
+
+  # .asf.yaml infra config (governance bundle covers LICENSE/NOTICE, not this).
+  - id: arrow-asf-yaml-present
+    kind: file_exists
+    paths: .asf.yaml
+    level: error
+    message: ".asf.yaml is the ASF infra config (description, homepage, notification lists, branch protection)."
+
+  - id: arrow-asf-declares-homepage
+    kind: yaml_path_matches
+    paths: .asf.yaml
+    path: "$.github.homepage"
+    matches: '^https://arrow\.apache\.org/?$'
+    level: warning
+    message: ".asf.yaml github.homepage should be https://arrow.apache.org/ (propagated to the GitHub About sidebar)."
+
+  - id: arrow-asf-declares-commits-list
+    kind: yaml_path_matches
+    paths: .asf.yaml
+    path: "$.notifications.commits"
+    matches: '^commits@arrow\.apache\.org$'
+    level: warning
+    message: ".asf.yaml notifications.commits must be commits@arrow.apache.org (Apache commit-archive requirement)."
+
+  # RAT tooling shape (governance covers the header content; this pins the
+  # bespoke RAT runner + exclude allowlist + report checker).
+  - id: arrow-pre-commit-runs-rat
+    kind: file_content_matches
+    paths: .pre-commit-config.yaml
+    pattern: '(?m)^\s*-\s*id:\s*rat\b'
+    level: error
+    message: ".pre-commit-config.yaml must register the `rat` hook; without it a header drop only fails at release-vote time."
+
+  - id: arrow-rat-exclude-list-present
+    kind: file_exists
+    paths: dev/release/rat_exclude_files.txt
+    level: error
+    message: "dev/release/rat_exclude_files.txt is the RAT path-pattern exemption allowlist."
+
+  - id: arrow-rat-runner-present
+    kind: file_exists
+    paths: dev/release/run-rat.sh
+    level: error
+    message: "dev/release/run-rat.sh downloads apache-rat.jar and runs the license audit; the `rat` hook shells to it."
+
+  # Python published-package identity (PEP 621 / 639).
+  - id: arrow-python-pyproject-declares-name
+    kind: toml_path_matches
+    paths: python/pyproject.toml
+    path: "$.project.name"
+    matches: '^pyarrow$'
+    level: error
+    message: "python/pyproject.toml project.name must be pyarrow (the published PyPI distribution name)."
+
+  - id: arrow-python-pyproject-declares-license
+    kind: toml_path_matches
+    paths: python/pyproject.toml
+    path: "$.project.license"
+    matches: '^Apache-2\.0$'
+    level: warning
+    message: "python/pyproject.toml project.license should be the SPDX id Apache-2.0 (PEP 639)."
+
+  # R package identity (CRAN-required manifest fields).
+  - id: arrow-r-description-package-name
+    kind: file_content_matches
+    paths: r/DESCRIPTION
+    pattern: '(?m)^Package:\s*arrow$'
+    level: error
+    message: "r/DESCRIPTION Package: must be arrow (the CRAN package name)."
+
+  # Per-language out-of-tree build dirs must never be tracked.
+  - id: arrow-no-tracked-cpp-build
+    kind: dir_absent
+    paths: "cpp/build"
+    level: error
+    message: "cpp/build/ is the CMake out-of-tree build dir; never tracked."

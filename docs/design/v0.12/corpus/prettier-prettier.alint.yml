@@ -1,0 +1,101 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for prettier/prettier @ a5e7b7c3bd1e783ce33d8b0e335530317fe85bab
+# (v0.12 case-study draft). Bundles cover OSS-hygiene + Node/yarn baseline.
+# Repo rules below express the bespoke ENFORCED validations that are
+# natively addressable (A-items); everything else (jest/eslint/tsc/cspell/
+# knip/codeql/actionlint/bundle/size tests) is execution/AST/NLP (D) and is
+# orchestrated by CI, not reimplemented here.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+
+rules:
+  # --- A1: dependency versions must be PINNED (no ^ / ~) ------------------
+  # Enforced by `yarn lint:deps` (scripts/check-deps.js): every entry under
+  # dependencies / devDependencies / resolutions must not start with ^ or ~.
+  # `.yarnrc.yml` sets `defaultSemverRangePrefix: ""` to make `yarn add` pin
+  # by default. Expressed natively per-block with json_path_matches: the
+  # first char of every version string must NOT be a caret or tilde.
+  - id: prettier-deps-pinned-dependencies
+    kind: json_path_matches
+    paths: package.json
+    path: "$.dependencies.*"
+    matches: '^[^\^~]'
+    if_present: true
+    level: error
+    message: 'Dependencies must be pinned (no "^"/"~"); see scripts/check-deps.js.'
+
+  - id: prettier-deps-pinned-dev-dependencies
+    kind: json_path_matches
+    paths: package.json
+    path: "$.devDependencies.*"
+    matches: '^[^\^~]'
+    if_present: true
+    level: error
+    message: 'devDependencies must be pinned (no "^"/"~"); see scripts/check-deps.js.'
+
+  - id: prettier-deps-pinned-resolutions
+    kind: json_path_matches
+    paths: package.json
+    path: "$.resolutions.*"
+    matches: '^[^\^~]'
+    if_present: true
+    level: error
+    message: 'resolutions must be pinned (no "^"/"~"); see scripts/check-deps.js.'
+
+  # --- A2: yarn version coherence ----------------------------------------
+  # `package.json` packageManager must match the pinned release in
+  # `.yarnrc.yml` (yarnPath). A drift means Corepack and the committed
+  # release binary disagree. Both encode "4.15.0".
+  - id: prettier-yarn-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: package.json
+      extract: { regex: 'yarn@(\d+\.\d+\.\d+)' }
+    targets:
+      - file: .yarnrc.yml
+        extract: { regex: 'yarn-(\d+\.\d+\.\d+)\.cjs' }
+    level: error
+    message: "package.json packageManager and .yarnrc.yml yarnPath must pin the same yarn version."
+
+  # --- A3: changelog scaffolding present ---------------------------------
+  # `yarn lint:changelog` (scripts/lint-changelog.js) requires the template
+  # files and one directory per changelog category, each with a `.gitkeep`.
+  # NOTE: `file_exists` with multiple `paths` is ANY-of semantics, so each
+  # REQUIRED file needs its own rule (a single path = exact existence).
+  - id: prettier-changelog-template-exists
+    kind: file_exists
+    paths: "changelog_unreleased/TEMPLATE.md"
+    level: error
+    message: "changelog_unreleased/TEMPLATE.md is required (scripts/lint-changelog.js)."
+
+  - id: prettier-changelog-blog-intro-template-exists
+    kind: file_exists
+    paths: "changelog_unreleased/BLOG_POST_INTRO_TEMPLATE.md"
+    level: error
+    message: "changelog_unreleased/BLOG_POST_INTRO_TEMPLATE.md is required (scripts/lint-changelog.js)."
+
+  # Every changelog category directory must keep a `.gitkeep`. Expressed
+  # with for_each_dir so it scales to all category subdirectories.
+  - id: prettier-changelog-category-gitkeeps
+    kind: for_each_dir
+    select: "changelog_unreleased/*"
+    require:
+      - kind: file_exists
+        paths: "{path}/.gitkeep"
+    level: error
+    message: "Each changelog_unreleased/<category>/ must keep a .gitkeep (scripts/lint-changelog.js)."
+
+  # --- A4: changelog entry filenames must be {PR_NUMBER}.md --------------
+  # lint-changelog.js rejects any file in a category dir not matching
+  # /^(\d{4,})(-\d+)?\.md$/ (plus the allowed .gitkeep).
+  - id: prettier-changelog-entry-filename-form
+    kind: filename_regex
+    paths: "changelog_unreleased/{javascript,typescript,flow,json,css,scss,less,html,vue,angular,lwc,mjml,handlebars,graphql,markdown,mdx,yaml,api,cli,misc}/*.md"
+    pattern: '^\d{4,}(-\d+)?\.md$'
+    level: error
+    message: "Changelog entry filenames must be {PR_NUMBER}.md (scripts/lint-changelog.js)."

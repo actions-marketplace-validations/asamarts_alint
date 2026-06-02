@@ -38,5 +38,10 @@ trees, not current upstream.
   `discourse-discourse`, `elixir-lang-elixir`, `PostgREST-postgrest`,
   `systemd-systemd`, `ClickHouse-ClickHouse`, `astral-sh-ruff`,
   `scikit-learn-scikit-learn`, `square-okhttp`, `vim-vim`.
+- **Batch 5:** `apache-airflow`, `apache-arrow`, `angular-angular`, `nodejs-node`,
+  `pytorch-pytorch`, `tensorflow-tensorflow`, `denoland-deno`, `bazelbuild-bazel`,
+  `protocolbuffers-protobuf`, `prettier-prettier`, `helm-helm`, `istio-istio`,
+  `dotnet-runtime`, `microsoft-TypeScript`, `pnpm-pnpm`, `mastodon-mastodon`,
+  `NixOS-nixpkgs`, `valkey-io-valkey`, `quarkusio-quarkus`, `AvaloniaUI-Avalonia`.
 
 Later batches append here as they pass their checkpoint.

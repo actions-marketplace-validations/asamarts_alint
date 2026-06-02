@@ -1,0 +1,139 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config — nodejs/node @ 7af433b68e97471a94e665ffde63633d73849ce2
+#
+# SHAPE: the Node.js runtime — a C++ + JS *application* (NOT an npm package;
+# there is NO root package.json), built with make + GN/gyp, governed by the
+# OpenJS Foundation. ~35 GitHub Actions workflows; ALL repo-state validation is
+# orchestrated through the Makefile `lint-*` targets which shell out to
+# language-aware tools (eslint + ~32 custom eslint-rules, cpplint.py,
+# checkimports.py, ruff, yamllint, shellcheck, remark/lint-md, clang-format,
+# core-validate-commit). Those are tool/AST/NLP executions = D (R2): alint can
+# orchestrate them via command/command_idempotent but does not re-express them.
+#
+# The ADDRESSABLE (A/B/C) enforced surface — repo-STATE checks whose LOGIC a
+# native alint kind expresses — is small and is captured below. The denominator
+# (R5) is what the repo ENFORCES (CI gates + editorconfig/gitattributes review
+# conventions), NOT every structure alint could assert (those are value-add).
+#
+#   D non-goals (matrix-collapsed per R1): eslint+custom-rules (JS AST) ·
+#   cpplint.py (C++ style) · checkimports.py "using is used" (C++ semantic) ·
+#   ruff (py) · yamllint · shellcheck · remark lint-md · clang-format ·
+#   core-validate-commit (commit msg) · codeowners-validator dockerized tool ·
+#   codeql · scorecard · the whole test/coverage/build matrix (test-*, daily,
+#   coverage-*, build-tarball, doc test) · release-proposal commit-diff gate.
+#
+# NOTE the `node@v1` ecosystem bundle is DELIBERATELY NOT extended: it assumes a
+# root package.json + lockfile + engines field (an npm *library*). nodejs/node
+# is the runtime itself and has none — extending it would mis-fire (R6
+# absent-category). oss-baseline + ci/github-actions are the right fit.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ══════════════════════════════════════════════════════════════════════
+  # ADDRESSABLE — native kinds expressing repo-ENFORCED state checks (A)
+  # ══════════════════════════════════════════════════════════════════════
+
+  # A1 — CODEOWNERS path patterns all resolve to existing paths.
+  # ENFORCED by the `lint-codeowners` CI job (linters.yml) running
+  # mszostok/codeowners-validator with `checks: files`. The `files` check is
+  # exactly registry_paths_resolve: every pattern's left column must point at
+  # a real path. (The companion `duppatterns` check is the B1 gap below.)
+  - id: node-codeowners-paths-resolve
+    kind: registry_paths_resolve
+    source: ".github/CODEOWNERS"
+    extract: { regex: '^(/\S+?)/?\*?\s+@' }
+    base: lint_root
+    entries_are_globs: true
+    expect: any
+    level: warning
+    message: |
+      Every path pattern in .github/CODEOWNERS must resolve to an existing
+      path (CI: codeowners-validator `checks: files`). A pattern pointing at
+      a moved/deleted path is a silent dead entry.
+
+  # A2 — lib/ stays pure ASCII.
+  # ENFORCED by the custom eslint rule tools/eslint-rules/non-ascii-character.js
+  # (runs under `make lint-js`). The rule's stated rationale: "any non-ASCII
+  # character in lib/ increases the size of the compiled node binary." That is
+  # a pure byte-content forbiddance — file_is_ascii expresses the identical
+  # logic declaratively (the eslint rule additionally suggests replacements,
+  # which file_is_ascii intentionally does not).
+  - id: node-lib-is-ascii
+    kind: file_is_ascii
+    paths: "lib/**/*.js"
+    level: error
+    message: |
+      Files under lib/ must contain only ASCII bytes — non-ASCII characters
+      bloat the compiled node binary (tools/eslint-rules/non-ascii-character.js).
+
+  # A3 — no trailing whitespace on our own sources.
+  # ENFORCED by .editorconfig `trim_trailing_whitespace = true` (review/editor
+  # convention) and by eslint `no-trailing-spaces` on JS. no_trailing_whitespace
+  # expresses it across our hand-maintained trees (deps/ + fixtures excluded,
+  # mirroring .editorconfig's `[deps/**] ... = unset`).
+  - id: node-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths: "{lib,src,doc,tools,benchmark}/**/*.{js,mjs,cjs,cc,c,h,py,md}"
+    level: warning
+    message: |
+      No trailing whitespace on maintained sources (.editorconfig
+      trim_trailing_whitespace = true).
+
+  # A4 — files end with a single final newline.
+  # ENFORCED by .editorconfig `insert_final_newline = true`. final_newline
+  # expresses it on the same maintained trees.
+  - id: node-final-newline
+    kind: final_newline
+    paths: "{lib,src,doc,tools,benchmark}/**/*.{js,mjs,cjs,cc,c,h,py,md}"
+    level: warning
+    message: |
+      Maintained source files must end with a final newline
+      (.editorconfig insert_final_newline = true).
+
+  # A5 — vcbuild.bat must keep CRLF line endings.
+  # ENFORCED by .gitattributes (`vcbuild.bat text eol=crlf`) AND .editorconfig
+  # (`[vcbuild.bat] end_of_line = crlf`). A Windows batch file with LF endings
+  # breaks on cmd.exe. line_endings expresses the per-file requirement.
+  - id: node-vcbuild-crlf
+    kind: line_endings
+    paths: "vcbuild.bat"
+    target: crlf
+    level: error
+    message: |
+      vcbuild.bat must use CRLF line endings (.gitattributes `eol=crlf`;
+      .editorconfig `[vcbuild.bat] end_of_line = crlf`).
+
+  # ══════════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD (NOT in the coverage ratio, per R3/R5) — structure the
+  # repo does not gate on, plus orchestration wrappers for the D tools.
+  # ══════════════════════════════════════════════════════════════════════
+
+  # Governance files the OpenJS Foundation expects (existence is not CI-gated
+  # here; recorded as value-add, not in the A/B/C/D denominator).
+  - id: node-governance-files
+    kind: file_exists
+    paths:
+      - "GOVERNANCE.md"
+      - "CODE_OF_CONDUCT.md"
+      - "SECURITY.md"
+      - "CONTRIBUTING.md"
+    level: warning
+
+  # Orchestration wrapper: one entrypoint for the D linters (value-add, not A).
+  # `make lint-ci` runs eslint+cpplint+ruff+yamllint+lint-md+conflict-scan.
+  - id: node-lint-ci-wrapper
+    kind: command
+    paths: "Makefile"
+    command: ["make", "lint-ci"]
+    timeout: 600
+    level: warning
+    message: |
+      Single-entrypoint orchestration of Node's language-aware linters
+      (eslint + custom rules, cpplint.py, ruff, yamllint, lint-md). These are
+      AST/style/NLP tools (D) — alint orchestrates but does not re-express them.

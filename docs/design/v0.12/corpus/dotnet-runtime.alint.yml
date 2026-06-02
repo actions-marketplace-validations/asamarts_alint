@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for dotnet/runtime @ 0dfd787f3c16e18e1641d20d8cce1789c9488b00
+# (v0.12 case study — Stage A).
+#
+# Honest framing: dotnet/runtime is a hyperscale Microsoft monorepo whose
+# enforced-validation surface is DOMINATED by deliberate non-goals (D):
+# the entire Azure DevOps build/test matrix (eng/pipelines/**), Roslyn
+# analyzers driven by eng/CodeAnalysis.*.globalconfig, ApiCompat / package
+# validation, ILLink trim analysis, CodeQL, CredScan/TSA, clang-format,
+# `dotnet format` / jitformat.py, markdownlint-cli, and the skill-validator.
+# All of those are tool/AST/semantic execution alint does not reimplement.
+#
+# The bespoke *file-shaped* surface alint can express is small but real:
+#   - per-file .NET Foundation license header (CONTRIBUTING "File Headers")
+#   - no trailing whitespace, repo-wide (.editorconfig trim_trailing_whitespace)
+# plus tuning/gap items recorded in the case-study notes (final-newline-at-EOF;
+# the .gitattributes EOL policy, which needs a `line_endings` primitive).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1   # README + LICENSE.TXT (case-broadened) etc.
+  - alint://bundled/dotnet@v1         # global.json pins SDK; .editorconfig exists; CPM
+
+rules:
+  # ──────────────────────────────────────────────────────────────────────
+  # A2 — per-file license header (CONTRIBUTING.md "File Headers"; universal
+  # across .cs/.cpp/.h — 500/500 sampled .cs files carry it verbatim).
+  # The bundled apache/governance header rule does NOT match this text, so
+  # this is a repo rule. eng/LicenseHeader.txt is the canonical text.
+  # Scoped to the two source trees with the strongest convention.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: dotnet-runtime-license-header-cs
+    kind: file_header
+    paths:
+      - "src/libraries/**/*.cs"
+      - "src/coreclr/**/*.cs"
+      - "src/mono/**/*.cs"
+    lines: 2
+    pattern: 'Licensed to the \.NET Foundation under one or more agreements\.\s*\n.*The \.NET Foundation licenses this file to you under the MIT license\.'
+    level: warning
+    message: >-
+      Every source file must start with the .NET Foundation MIT license
+      header (CONTRIBUTING.md "File Headers"; see eng/LicenseHeader.txt).
+
+  - id: dotnet-runtime-license-header-native
+    kind: file_header
+    paths:
+      - "src/coreclr/vm/**/*.cpp"
+      - "src/coreclr/jit/**/*.cpp"
+    lines: 2
+    pattern: 'Licensed to the \.NET Foundation under one or more agreements\.\s*\n.*The \.NET Foundation licenses this file to you under the MIT license\.'
+    level: warning
+    message: >-
+      Every native source file must start with the .NET Foundation MIT
+      license header (CONTRIBUTING.md "File Headers").
+
+  # ──────────────────────────────────────────────────────────────────────
+  # A1 — no trailing whitespace, repo-wide (.editorconfig [*]
+  # trim_trailing_whitespace = true; also copilot-instructions.md line 40
+  # calls it out for .md; the `dotnet format whitespace` / jitformat flow
+  # enforces it on changed files). Scoped to text source to avoid binaries
+  # and vendored test corpora.
+  # ──────────────────────────────────────────────────────────────────────
+  - id: dotnet-runtime-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      - "src/**/*.cs"
+      - "src/**/*.cpp"
+      - "src/**/*.h"
+      - "**/*.md"
+    level: warning
+    message: >-
+      Trailing whitespace is disallowed (.editorconfig trim_trailing_whitespace).
+
+  # ──────────────────────────────────────────────────────────────────────
+  # VALUE-ADD (NOT in the coverage denominator, per R3/R5) — assertions the
+  # repo does not gate on, recorded as bonus structure alint can express.
+  # ──────────────────────────────────────────────────────────────────────
+
+  # global.json internal coherence: the SDK version the build pins
+  # ($.sdk.version) must equal the bootstrap tools entry ($.tools.dotnet).
+  # Verified equal at the pin. Arcade reads both; nothing CI-gates equality.
+  - id: dotnet-runtime-globaljson-sdk-tools-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "global.json"
+      extract: { json: "$.sdk.version" }
+    targets:
+      - file: "global.json"
+        extract: { json: "$.tools.dotnet" }
+    level: info
+    message: >-
+      global.json $.sdk.version and $.tools.dotnet should pin the same SDK.
+
+  # File->file PAIRING edge source (recorded for the file_dependency_graph
+  # harvest): eng/resolveContract.targets pairs each library's source tree
+  # with a sibling ref/ contract project that ApiCompat builds against.
+  # NOTE: this is intentionally a best-effort *value-add* hint, not a repo
+  # gate — implementation-only assemblies legitimately ship no public ref/
+  # contract, so this is expected to be noisy (info level). `{path}` is the
+  # iterated library dir; the require asserts a `ref/` child exists.
+  - id: dotnet-runtime-library-has-ref-contract
+    kind: every_matching_has
+    select: "src/libraries/System.*"
+    require:
+      - kind: dir_exists
+        paths: "{path}/ref"
+    level: info
+    message: >-
+      Library (src/libraries/<Lib>) commonly has a matching ref/ contract
+      project used by ApiCompat (eng/resolveContract.targets). Best-effort
+      hint; implementation-only assemblies legitimately have no ref/.
+
+  # Top-level legal/governance documents this repo ships.
+  - id: dotnet-runtime-third-party-notices
+    kind: file_exists
+    paths: "THIRD-PARTY-NOTICES.TXT"
+    root_only: true
+    level: info
+    message: "dotnet/runtime ships a THIRD-PARTY-NOTICES.TXT at the root."
+
+  - id: dotnet-runtime-patents-exists
+    kind: file_exists
+    paths: "PATENTS.TXT"
+    root_only: true
+    level: info
+    message: "dotnet/runtime ships PATENTS.TXT at the root."

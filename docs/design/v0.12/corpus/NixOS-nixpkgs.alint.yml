@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for NixOS/nixpkgs @ d9a85a232f55de20407277a09f475ba52d568f24
+# (v0.12 case-study Stage A artefact).
+#
+# Honest framing (per the calibration rulings R2/R3/R5): nixpkgs's *enforced*
+# validation surface is almost entirely DELIBERATE-NON-GOAL for alint —
+# nix eval / nix parse / nixpkgs-vet / treefmt (nixfmt+biome+yamlfmt+actionlint
+# +keep-sorted+nixf-diagnose+editorconfig-checker+zizmor) / codeowners-validator
+# / lib-tests / commit-message lint. alint orchestrates none of these here; they
+# are tool/semantic checks it does not reimplement.
+#
+# What follows is therefore mostly alint VALUE-ADD: structural + hygiene
+# assertions alint can express natively that overlap (but do not replace) what
+# nixpkgs-vet / editorconfig-checker enforce, plus the oss-baseline bundle.
+# These are recorded as value-add (NOT in the A/B/C/D coverage ratio) except
+# where noted.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # --- Structure invariant (overlaps nixpkgs-vet's structural slice; value-add) ---
+  # Every name-based package dir must contain a package.nix. nixpkgs-vet enforces
+  # this (plus shard-name derivation + reference firewall, which alint cannot
+  # express). This is the alint-expressible STRUCTURAL SLICE only.
+  - id: nixpkgs-by-name-has-package-nix
+    kind: for_each_dir
+    select: "pkgs/by-name/*/*"
+    require:
+      - kind: file_exists
+        paths: "{path}/package.nix"
+    level: error
+
+  # NOTE: the by-name shard directories are 2-char lowercase prefixes (or
+  # _<digit>). Asserting a DIRECTORY-NAME pattern is awkward today — filename_regex
+  # selects files and matches their basename, not directory names. Recorded as a
+  # C/tuning gap (a `dirname_regex` / directory-name predicate), not enforced here.
+
+  # --- Top-level structure presence (value-add) ---
+  - id: nixpkgs-flake-exists
+    kind: file_exists
+    paths: "flake.nix"
+    level: error
+
+  - id: nixpkgs-default-nix-exists
+    kind: file_exists
+    paths: "default.nix"
+    level: error
+
+  - id: nixpkgs-version-file-exists
+    kind: file_exists
+    paths: "lib/.version"
+    level: error
+
+  # --- Maintainer / governance assets (value-add) ---
+  - id: nixpkgs-maintainer-list-exists
+    kind: file_exists
+    paths: "maintainers/maintainer-list.nix"
+    level: error
+
+  - id: nixpkgs-owners-file-exists
+    kind: file_exists
+    paths: "ci/OWNERS"
+    level: error
+
+  # --- editorconfig declares the hygiene that editorconfig-checker enforces ---
+  # Asserting the .editorconfig DECLARES the repo-wide hygiene policy (the
+  # config-policy assertion of R3; the actual enforcement is the D tool).
+  - id: nixpkgs-editorconfig-declares-final-newline
+    kind: file_content_matches
+    paths: ".editorconfig"
+    pattern: "insert_final_newline = true"
+    level: warning
+
+  - id: nixpkgs-editorconfig-declares-trim-whitespace
+    kind: file_content_matches
+    paths: ".editorconfig"
+    pattern: "trim_trailing_whitespace = true"
+    level: warning
+
+  # --- CI / treefmt config presence (value-add: asserts the gate configs exist) ---
+  - id: nixpkgs-ci-default-nix-exists
+    kind: file_exists
+    paths: "ci/default.nix"
+    level: warning
+
+  - id: nixpkgs-pinned-json-exists
+    kind: file_exists
+    paths: "ci/pinned.json"
+    level: warning

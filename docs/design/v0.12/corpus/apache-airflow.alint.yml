@@ -1,0 +1,162 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config for apache/airflow
+# @ 33363d541851f3017ee96f94ceb328d684ed8360
+#
+# Airflow is a large polyglot ASF monorepo (Python core + task-sdk + go/java
+# SDKs + helm chart + 136 provider distributions). Its bespoke-validation
+# surface is almost entirely in ONE place: .pre-commit-config.yaml (117 hooks),
+# which the CI `static-checks` job runs via `prek`. Implementations live in
+# scripts/ci/prek/*.py (130 scripts) + a handful of pygrep regex hooks.
+#
+# The overwhelming majority of those hooks are AST/semantic Python validators
+# (import firewalls, deprecation bans, schema/codegen freshness) = D non-goals
+# alint orchestrates but does not reimplement. This config expresses the
+# ADDRESSABLE subset: hygiene, structure invariants, sorted blocks, the
+# pygrep content-forbidden patterns, cross-file version coherence, and the
+# ASF governance surface (via bundles).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/compliance/apache-2@v1     # RAT source headers + LICENSE/NOTICE
+  - alint://bundled/apache/governance@v1       # ASF TLP governance superset
+  - alint://bundled/hygiene/lockfiles@v1       # uv.lock IS tracked
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════════
+  # HYGIENE — enforced by the pre-commit `trailing-whitespace`,
+  # `end-of-file-fixer`, `mixed-line-ending` hooks + .editorconfig.
+  # (R1: one behavior each, repo-wide.)
+  # ════════════════════════════════════════════════════════════════════
+  - id: airflow-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.py", "**/*.rst", "**/*.yml", "**/*.yaml", "**/*.md", "**/*.toml"]
+      exclude: ["**/*.svg", "docs/spelling_wordlist.txt"]
+    level: warning
+
+  - id: airflow-final-newline
+    kind: final_newline
+    paths: ["**/*.py", "**/*.rst", "**/*.toml", "**/*.cfg"]
+    level: warning
+
+  - id: airflow-lf-line-endings
+    kind: line_endings
+    target: lf
+    paths: ["**/*.py", "**/*.rst", "**/*.toml", "**/*.yml", "**/*.yaml"]
+    level: warning
+
+  # ════════════════════════════════════════════════════════════════════
+  # STRUCTURE INVARIANTS (for_each_dir) — twins of the prek scripts.
+  # ════════════════════════════════════════════════════════════════════
+
+  # check-distribution-gitignore: every directory that holds a pyproject.toml
+  # (a "distribution") must ship a .gitignore that ignores *.iml
+  # (scripts/ci/prek/check_distribution_gitignore.py).
+  - id: airflow-distribution-has-gitignore
+    kind: for_each_dir
+    select: "providers/*"
+    when_iter: 'iter.has_file("pyproject.toml")'
+    require:
+      - kind: file_exists
+        paths: "{path}/.gitignore"
+    level: warning
+
+  # check-providers-subpackages-all-have-init: provider source subpackages
+  # must carry an __init__.py (scripts/ci/prek/check_providers_subpackages_all_have_init.py).
+  # NB: airflow's check excludes a small set of non-package dirs
+  # (3rd-party-licenses, doc, adr); mirror that with when_iter so the rule
+  # only requires __init__.py in dirs that actually look like packages.
+  - id: airflow-provider-pkg-has-init
+    kind: for_each_dir
+    select: "providers/*/src/airflow/providers/*"
+    when_iter: 'not (iter.basename matches "^(3rd-party-licenses|adr|doc)$")'
+    require:
+      - kind: file_exists
+        paths: "{path}/__init__.py"
+    level: warning
+
+  # ════════════════════════════════════════════════════════════════════
+  # SORTED BLOCKS — RECORDED AS TUNING (C), NOT EXPRESSED HERE.
+  # The `update-*-to-be-sorted` family (spelling_wordlist.txt,
+  # prod_image_installed_providers.txt, INTHEWILD.md) enforces
+  # whole-file / headerless sortedness. alint's `ordered_block` REQUIRES
+  # explicit `start:`/`end:` regex markers bracketing the sorted region;
+  # these airflow files have no end marker (sorted region runs to EOF after
+  # an optional comment header), so ordered_block can't bracket them. This
+  # is a `ordered_block` tuning gap (a "whole-file / start-to-EOF sorted"
+  # mode), tracked as C in the case-study record.
+  # ════════════════════════════════════════════════════════════════════
+
+  # ════════════════════════════════════════════════════════════════════
+  # CONTENT-FORBIDDEN (file_content_forbidden) — the 10 pygrep regex hooks.
+  # These map 1:1 onto alint's content-forbidden primitive. (R1: each is one
+  # behavior; the matrix of files they scan collapses to one rule.)
+  # ════════════════════════════════════════════════════════════════════
+
+  # check-pydevd-left-in-code
+  - id: airflow-no-pydevd-settrace
+    kind: file_content_forbidden
+    paths: ["**/*.py"]
+    pattern: "pydevd.*settrace\\("
+    level: error
+
+  # check-incorrect-use-of-LoggingMixin
+  - id: airflow-no-bare-loggingmixin
+    kind: file_content_forbidden
+    paths: ["**/*.py"]
+    pattern: "LoggingMixin\\(\\)"
+    level: error
+
+  # check-safe-filter-usage-in-html: Jinja `|safe` filter is forbidden.
+  - id: airflow-no-safe-filter
+    kind: file_content_forbidden
+    paths: ["**/*.html"]
+    pattern: "\\|\\s*safe"
+    level: error
+
+  # check-start-date-not-used-in-defaults
+  - id: airflow-no-start-date-in-default-args
+    kind: file_content_forbidden
+    paths: ["**/example_dags/**/*.py"]
+    pattern: "default_args\\s*=\\s*\\{\\s*[\"']start_date[\"']"
+    level: warning
+
+  # python-no-log-warn (deprecated logger.warn()); narrowed to the logging
+  # idioms so legitimate `warnings.warn(...)` is not flagged.
+  - id: airflow-no-log-warn
+    kind: file_content_forbidden
+    paths: ["**/*.py"]
+    pattern: "(log|logger|self\\.log)\\.warn\\("
+    level: warning
+
+  # ════════════════════════════════════════════════════════════════════
+  # CROSS-FILE VALUE COHERENCE (cross_file_value_equals)
+  # ════════════════════════════════════════════════════════════════════
+
+  # check-version-consistency: the airflow version declared in
+  # airflow-core/pyproject.toml [project.version] must equal __version__ in
+  # airflow-core/src/airflow/__init__.py
+  # (scripts/ci/prek/check_version_consistency.py — the airflow twin of
+  # tokio's MSRV coherence checklist).
+  - id: airflow-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: airflow-core/pyproject.toml
+      extract: { toml: "$.project.version" }
+    targets:
+      - file: airflow-core/src/airflow/__init__.py
+        extract: { regex: "__version__\\s*=\\s*[\"']([^\"']+)[\"']" }
+    level: error
+
+  # ════════════════════════════════════════════════════════════════════
+  # EXECUTABLE SHEBANGS — check-executables-have-shebangs.
+  # ════════════════════════════════════════════════════════════════════
+  - id: airflow-executables-have-shebangs
+    kind: executable_has_shebang
+    paths: ["scripts/**/*.py", "scripts/**/*.sh", "dev/**/*.py"]
+    level: warning
