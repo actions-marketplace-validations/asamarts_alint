@@ -1,0 +1,180 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for hashicorp/terraform @ 581ffab924bb71871e34b6198767202799957c36
+# (v0.12 case study — Stage A).
+#
+# Terraform is the Go CLI/core for HashiCorp Terraform, governed single-vendor
+# (HashiCorp/IBM), BUSL-1.1 licensed, built with `make` + `go tool` (Go 1.25).
+# It is a MULTI-MODULE repo: one root module github.com/hashicorp/terraform plus
+# 10 internal modules under internal/legacy and internal/backend/remote-state/*
+# ("one logical codebase split at code-ownership boundaries" — scripts/syncdeps.sh).
+#
+# The ENFORCED bespoke-validation surface (what this config models) lives in:
+#   .github/workflows/checks.yml   — the "Quick Checks" PR gate, esp. the
+#                                    consistency-checks job (codegen freshness)
+#   scripts/*.sh                   — gofmtcheck / goimportscheck / staticcheck /
+#                                    copyright (copywrite) / exhaustive / syncdeps /
+#                                    defect-detector
+#   .copywrite.hcl                 — BUSL-1.1 SPDX header policy (header_ignore globs)
+#   .changie.yaml + .changes/      — changelog-fragment workflow (changie)
+#
+# MOST of that surface is TOOL EXECUTION (gofmt, goimports, go vet, staticcheck,
+# exhaustive, copywrite, go mod tidy, go generate, protoc, the test/race/e2e/
+# equivalence suites) — alint can orchestrate these via command/command_idempotent
+# (recorded below) but does not reimplement them (Stage-A bucket D).
+#
+# What alint expresses NATIVELY (bucket A):
+#   - BUSL-1.1 SPDX file headers (the copywrite policy's on-disk shape)  -> file_header
+#   - Go toolchain-version coherence: .go-version vs every go.mod `go`   -> cross_file_value_equals
+# plus structural value-add the repo doesn't explicitly gate on, kept below the fold.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/go@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════════════
+  # A-ITEMS — checks alint expresses NATIVELY (the coverage_today numerator)
+  # ════════════════════════════════════════════════════════════════════════
+
+  # ── A1: SPDX license header on Go sources ────────────────────────────────
+  # CI runs `make copyright` -> scripts/copyright.sh -> `copywrite headers --plan`
+  # against .copywrite.hcl (project license = BUSL-1.1). copywrite is the TOOL
+  # (bucket D), but the on-disk INVARIANT it enforces — every non-ignored .go file
+  # opens with an `SPDX-License-Identifier:` header — is what file_header expresses.
+  # We mirror .copywrite.hcl's header_ignore globs as paths.exclude.
+  #
+  # NOTE (R4 — verified against the clone): asserting the *specific* `BUSL-1.1`
+  # string over-fires on this repo's legitimately multi-licensed files — vendored
+  # forks keep their upstream header (internal/ipaddr/*.go carry the Go-Authors
+  # BSD header; internal/backend/remote-state/azure/helpers.go is a copied
+  # provider file with SPDX MPL-2.0). copywrite tolerates these via its per-dir
+  # configs; alint's flat scope cannot, so we assert HEADER PRESENCE (any SPDX
+  # id), which is the true copywrite invariant. This still catches genuine misses
+  # (e.g. internal/command/init_test.go has NO header). The stricter "value must
+  # be BUSL-1.1" form is a tuning gap (bucket C) — see case-study record.
+  - id: tf-spdx-header-present
+    kind: file_header
+    paths:
+      include: ["**/*.go"]
+      exclude:
+        - "**/*.pb.go"            # generated protobuf (header_ignore)
+        - "**/*_string.go"        # stringer-generated (header_ignore)
+        - "**/mock*.go"           # generated mocks (header_ignore)
+        - "**/testdata/**"        # header_ignore
+        - "docs/plugin-protocol/**"     # own .copywrite.hcl
+        - "internal/tfplugin*/**"       # own .copywrite.hcl
+        - "internal/ipaddr/**"          # vendored Go-Authors BSD fork
+    lines: 2
+    pattern: '(?m)^// SPDX-License-Identifier: \S+'
+    level: error
+    message: |
+      Every Go source (outside the .copywrite.hcl header_ignore globs) must carry
+      an `SPDX-License-Identifier:` header. CI enforces this via `make copyright`
+      (scripts/copyright.sh -> copywrite headers --plan).
+
+  # ── A2: Go toolchain-version coherence across the multi-module tree ──────
+  # .go-version (here "1.25.10") is the single source of truth for the toolchain
+  # (.github/actions/go-version reads it; goenv reacts to it). Every go.mod in the
+  # 11-module tree declares `go 1.25.10`. A drift between .go-version and any
+  # module's `go` directive is a latent build/release-skew bug. cross_file_value_equals
+  # with a regex extractor normalises both sides to the captured version token.
+  - id: tf-go-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: ".go-version"
+      extract: { regex: '^\s*([0-9]+\.[0-9]+\.[0-9]+)' }
+    targets:
+      files: "**/go.mod"
+      extract: { regex: '(?m)^go\s+([0-9]+\.[0-9]+\.[0-9]+)' }
+    level: warning
+    message: |
+      .go-version (the toolchain source of truth that .github/actions/go-version
+      reads) must agree with the `go` directive in every module's go.mod. This
+      repo is split into 11 modules that scripts/syncdeps.sh keeps in lock-step;
+      a Go-version drift across them is a release-skew hazard.
+
+  # ════════════════════════════════════════════════════════════════════════
+  # ORCHESTRATION (value-add, NOT in the coverage ratio) — single-entrypoint
+  # wrappers for the D tools CI runs. Each is `make <target>` from checks.yml's
+  # consistency-checks job. alint can run these for a unified local gate; it does
+  # NOT reimplement their logic (gofmt/goimports/vet/staticcheck/exhaustive/
+  # copywrite/go-mod-tidy/go-generate/protoc are all out-of-scope, bucket D).
+  # ════════════════════════════════════════════════════════════════════════
+  - id: tf-make-fmtcheck
+    kind: command
+    paths: "Makefile"
+    command: ["make", "fmtcheck"]
+    timeout: 300
+    level: error
+  - id: tf-make-staticcheck
+    kind: command
+    paths: "Makefile"
+    command: ["make", "staticcheck"]
+    timeout: 600
+    level: error
+  - id: tf-make-copyright
+    kind: command
+    paths: "Makefile"
+    command: ["make", "copyright"]
+    timeout: 300
+    level: error
+
+  # ════════════════════════════════════════════════════════════════════════
+  # STRUCTURAL VALUE-ADD (NOT in the coverage ratio per R3/R5) — assertions the
+  # repo benefits from but does not itself gate on in CI.
+  # ════════════════════════════════════════════════════════════════════════
+
+  # The root VERSION file must be a bare semantic version (version/version.go
+  # //go:embed's it and parses it as semver; a malformed value panics at startup).
+  - id: tf-version-is-semver
+    kind: file_content_matches
+    paths: "version/VERSION"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?\s*$'
+    level: warning
+    message: "version/VERSION must be a bare semantic version (version.go //go:embed-parses it as semver)."
+
+  # changie's unreleased dir and the dev VERSION must track the same minor:
+  # .changie.yaml `unreleasedDir: v1.16` <-> version/VERSION `1.16.0-dev`.
+  # Both regex-extract to the bare `1.16` minor and must agree, else freshly
+  # `changie new`-d fragments land in a dir that no longer matches the dev line.
+  # (NOTE: file_exists matches FILES only, not directories — verified against the
+  # clone — so the "folder exists" form is not expressible; this value-coherence
+  # form is the better check anyway.)
+  - id: tf-changie-unreleased-dir-matches-version
+    kind: cross_file_value_equals
+    source:
+      file: "version/VERSION"
+      extract: { regex: '^([0-9]+\.[0-9]+)' }
+    targets:
+      - file: ".changie.yaml"
+        extract: { regex: '(?m)^unreleasedDir:\s*v([0-9]+\.[0-9]+)' }
+    level: info
+    message: ".changie.yaml unreleasedDir (e.g. v1.16) must track version/VERSION's dev minor (e.g. 1.16.0-dev), so `changie new` writes fragments into the live folder."
+
+  # The repo's bespoke check scripts must stay present (CI `make` targets call them).
+  - id: tf-check-scripts-present
+    kind: file_exists
+    paths:
+      - "scripts/gofmtcheck.sh"
+      - "scripts/goimportscheck.sh"
+      - "scripts/staticcheck.sh"
+      - "scripts/copyright.sh"
+      - "scripts/exhaustive.sh"
+      - "scripts/syncdeps.sh"
+      - "scripts/defect-detector.sh"
+    level: info
+    message: "The bespoke validator scripts invoked by Makefile targets must exist."
+
+  # copywrite + staticcheck config files the CI gates depend on.
+  - id: tf-tooling-config-present
+    kind: file_exists
+    paths:
+      - ".copywrite.hcl"
+      - "staticcheck.conf"
+      - ".changie.yaml"
+      - ".go-version"
+    level: info
+    message: "Tooling config (.copywrite.hcl, staticcheck.conf, .changie.yaml, .go-version) that CI relies on must be present."

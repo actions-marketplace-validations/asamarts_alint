@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+# ============================================================================
+# alint config for django/django @ 9383fae0d55a553be3bda620db87fa9ee8a81478
+# v0.12 case study (Stage A). Shape: Python web framework, tox/pre-commit, DSF.
+#
+# Django's enforced surface is dominated by TOOL EXECUTION (D, not scored):
+# flake8 / isort / black / biome / zizmor / blacken-docs / sphinx-lint /
+# aspell spelling / makemigrations --check / the test matrix. alint can
+# orchestrate those but does not re-express their logic (R2).
+#
+# The natively-addressable (A) surface is the hygiene + GHA-hardening already
+# carried by the bundles, plus a few repo structure/policy assertions
+# (value-add, not in the coverage denominator per R3/R5).
+# ============================================================================
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # --- R6 absent category: Django pins via tests/requirements/*.txt and has
+  # NO uv/poetry/pdm/Pipfile lockfile. Disable the python-bundle lockfile
+  # warning rather than false-fire it.
+  - id: python-has-lockfile
+    level: off
+
+  # --- A: most workflows declare permissions.contents: read. Kept at the
+  # bundle default (warning) NOT error: 3 automation workflows
+  # (coverage_comment / labels / new_contributor_pr) legitimately need
+  # issues/pull-requests: write and don't set contents: read at workflow level,
+  # so an `error` bump over-fires on them (verified via `alint check`). The
+  # security-relevant majority still surface as warnings.
+  # (left at bundle default; no override needed)
+
+  # --- C (tuning): oss-no-merge-conflict-markers fires on bare `=======`
+  # lines, but reStructuredText section-title UNDERLINES are exactly `=======`.
+  # Django docs use them pervasively (29 false hits across docs/**). Scope the
+  # check away from the docs tree; real conflict markers in code still fire.
+  # The `<<<<<<<`/`>>>>>>>` arms are unaffected (they require a trailing ref).
+  # do_django_release.py embeds a release-announcement template in a triple-
+  # quoted string whose `Git tag\n=======` Setext underline also trips the bare
+  # `=======` arm -> same false-positive class, excluded too.
+  - id: oss-no-merge-conflict-markers
+    kind: no_merge_conflict_markers
+    paths:
+      include: "**"
+      exclude: ["docs/**", "**/*.txt", "scripts/do_django_release.py"]
+    level: error
+
+  # --- C (tuning): Django pins actions to a tag/ref, NOT a full SHA (its
+  # zizmor.yml policy is `ref-pin`, not `hash-pin`). The bundled
+  # gha-pin-actions-to-sha demands a 40-hex SHA and would over-fire on every
+  # `@v6` use. Relax to off; the real gate is zizmor's ref-pin policy (D).
+  - id: gha-pin-actions-to-sha
+    level: off
+
+  # ====================================================================
+  # Repo-specific A-items (alint value-add; recorded separately per R3/R5)
+  # ====================================================================
+
+  # Top-level governance/structure files the project ships and relies on.
+  - id: django-editorconfig-exists
+    kind: file_exists
+    paths: [".editorconfig"]
+    root_only: true
+    level: warning
+    message: ".editorconfig is the cross-editor source of truth for indent/EOL/whitespace."
+
+  - id: django-flake8-config-exists
+    kind: file_exists
+    paths: [".flake8"]
+    root_only: true
+    level: warning
+    message: "flake8 config (.flake8) is required: it sets max-line-length 88 and per-file ignores enforced in CI."
+
+  - id: django-precommit-config-exists
+    kind: file_exists
+    paths: [".pre-commit-config.yaml"]
+    root_only: true
+    level: warning
+    message: "Django gates black/isort/flake8/biome/zizmor through pre-commit; the config must be present."
+
+  - id: django-tox-exists
+    kind: file_exists
+    paths: ["tox.ini"]
+    root_only: true
+    level: warning
+    message: "tox.ini is the canonical multi-env entrypoint (py3/black/flake8/isort/docs/zizmor)."
+
+  - id: django-biome-config-exists
+    kind: file_exists
+    paths: ["biome.json"]
+    root_only: true
+    level: info
+    message: "biome.json drives the JS/CSS lint+format gate (linters.yml `npx biome ci`)."
+
+  - id: django-zizmor-config-exists
+    kind: file_exists
+    paths: ["zizmor.yml"]
+    root_only: true
+    level: info
+    message: "zizmor.yml declares the workflow-security policy enforced in CI."
+
+  # Licensing: Django ships BSD-3 + the bundled CPython license + AUTHORS, and
+  # declares all three as license-files in pyproject. Assert they exist.
+  - id: django-license-files-present
+    kind: file_exists
+    paths: ["LICENSE", "LICENSE.python", "AUTHORS"]
+    root_only: true
+    level: warning
+    message: "pyproject license-files names LICENSE, LICENSE.python and AUTHORS; all three must be present."
+
+  # pyproject coherence: the build pins BSD-3-Clause and a requires-python floor.
+  - id: django-pyproject-license-spdx
+    kind: toml_path_equals
+    paths: pyproject.toml
+    path: "$.project.license"
+    equals: "BSD-3-Clause"
+    level: warning
+    message: "pyproject [project].license must remain the SPDX BSD-3-Clause expression."
+
+  - id: django-pyproject-requires-python
+    kind: toml_path_matches
+    paths: pyproject.toml
+    path: "$.project['requires-python']"
+    matches: '>=\s*3\.\d+'
+    level: info
+    message: "pyproject must declare a requires-python floor (currently >= 3.12)."
+
+  # The check_migrations gate keys off scripts/check_migrations.py existing;
+  # assert the bespoke validators the CI workflows invoke are present so a
+  # rename can't silently disable the gate.
+  # NOTE: these target NESTED paths, so `root_only` must NOT be set (root_only
+  # restricts the search to the repo root and the rule would never find a
+  # scripts/* file -> false failure; caught by `alint check` per R4).
+  - id: django-check-migrations-script-exists
+    kind: file_exists
+    paths: ["scripts/check_migrations.py"]
+    level: info
+    message: "check-migrations.yml runs scripts/check_migrations.py; the script must exist for the gate to fire."
+
+  - id: django-pr-quality-script-exists
+    kind: file_exists
+    paths: ["scripts/pr_quality/check_pr.py"]
+    level: info
+    message: "check_pr_quality.yml runs scripts/pr_quality/check_pr.py; keep the entrypoint in place."
+
+  # Hygiene the repo gates via .editorconfig + biome but alint can assert
+  # directly across the docs reST sources (79-col docs are NLP/AST-checked by
+  # sphinx-lint = D; trailing-whitespace is natively expressible).
+  - id: django-docs-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["docs/**/*.txt"]
+      exclude: ["docs/_build/**", "docs/_theme/**"]
+    level: info
+    message: "Django docs .txt sources should carry no trailing whitespace (.editorconfig trim_trailing_whitespace)."

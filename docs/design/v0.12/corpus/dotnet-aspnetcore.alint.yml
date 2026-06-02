@@ -1,0 +1,123 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for dotnet/aspnetcore @ 423a8c2d505d19c6a9b8eb80bc07aaa4d472556e
+# (v0.12 100-repo case study — Stage A worked example)
+#
+# Shape: large .NET / C# web-framework monorepo, Microsoft-governed,
+# Arcade-based build (eng/), Azure DevOps pipelines + GitHub Actions.
+#
+# The enforced bespoke-validation surface lives almost entirely in
+# `eng/scripts/CodeCheck.ps1` (the repo's home-grown analysis gate, wired
+# into .azure/pipelines/ci-public.yml + ci.yml) plus a handful of GitHub
+# Actions workflows. The dominant enforcement (build, xUnit, dotnet format,
+# the IDE0073/RS0016 Roslyn analyzers, markdownlint) is tool/AST execution =
+# deliberate non-goal (D); see the case-study record for the A/B/C/D split.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/dotnet@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ──────────────────────────────────────────────────────────────────
+  # A-ITEMS — enforced repo checks alint expresses natively
+  # ──────────────────────────────────────────────────────────────────
+
+  # A1 — npm source-feed lockdown (CodeCheck.ps1 lines 93-108).
+  # CodeCheck scans `src\package-lock.json -Recurse` and FAILS if any
+  # `resolved` line points anywhere other than the dnceng dotnet-public-npm
+  # feed. Scoped to src/** on purpose: the ROOT package-lock.json legitimately
+  # resolves from registry.npmjs.org (validated separately by `npm ci` in
+  # .github/workflows/validate-npm-package-lock-json.yml). The Rust regex
+  # engine has no negative-lookahead, so we forbid the canonical wrong feed
+  # (registry.npmjs.org) rather than "anything but the dnceng feed" — the
+  # exact violation CodeCheck guards against in src/.
+  - id: aspnetcore-src-npm-uses-internal-feed
+    kind: file_content_forbidden
+    paths:
+      include: ["src/**/package-lock.json"]
+      exclude: ["**/node_modules/**"]
+    pattern: '"resolved":\s*"https://registry\.npmjs\.org/'
+    level: error
+    message: >-
+      src/**/package-lock.json must resolve every package from the dnceng
+      dotnet-public-npm feed, not registry.npmjs.org. Re-restore against the
+      configured .npmrc feed. (Mirrors eng/scripts/CodeCheck.ps1.)
+
+  # A2 — SignalR TS changelog anchor (CodeCheck.ps1 lines 212-229).
+  # CodeCheck enforces "if src/SignalR/clients/ts/* changed, CHANGELOG.md
+  # must change too (or a [no changelog] commit marker)". The diff-gated part
+  # is execution (D), but the structural anchor — the CHANGELOG file must
+  # exist at that exact path — is natively assertable and is what the gate
+  # presupposes.
+  - id: aspnetcore-signalr-ts-changelog-exists
+    kind: file_exists
+    paths: ["src/SignalR/clients/ts/CHANGELOG.md"]
+    level: error
+    message: >-
+      src/SignalR/clients/ts/CHANGELOG.md must exist — CodeCheck.ps1 requires
+      it to be updated whenever the SignalR TypeScript clients change.
+
+  # ──────────────────────────────────────────────────────────────────
+  # VALUE-ADD — structure alint can assert but the repo does NOT gate on
+  # (recorded separately; NOT in the A/B/C/D coverage ratio, per R3/R5)
+  # ──────────────────────────────────────────────────────────────────
+
+  # Codegen-output registry presence: GenerateProjectList.ps1 regenerates
+  # these eng/*.props from the src/**.csproj tree; CodeCheck git-diffs them.
+  # alint can at least assert the generated outputs are present (the freshness
+  # itself is a `generated_file_fresh`/command_idempotent shell-out = D).
+  - id: aspnetcore-generated-project-props-exist
+    kind: file_exists
+    paths:
+      - "eng/ProjectReferences.props"
+      - "eng/SharedFramework.Local.props"
+      - "eng/TrimmableProjects.props"
+    level: warning
+    message: >-
+      The generated eng/*.props project lists (produced by
+      eng/scripts/GenerateProjectList.ps1) should be present and committed.
+
+  # Arcade version-flow anchors — the dependency-flow manifests darc/Arcade
+  # operate on. alint asserts presence; value coherence with Versions.props is
+  # enforced by Arcade tooling (D), not a bespoke repo gate.
+  - id: aspnetcore-arcade-version-manifests-exist
+    kind: file_exists
+    paths:
+      - "eng/Versions.props"
+      - "eng/Version.Details.xml"
+    level: warning
+    message: >-
+      eng/Versions.props and eng/Version.Details.xml (Arcade dependency-flow
+      manifests) must exist.
+
+  # global.json must pin a concrete SDK version. The dotnet bundle already
+  # checks `$.sdk.version` is a semver; aspnetcore additionally declares an
+  # SDK *band* paths array — assert the version is the concrete preview build.
+  - id: aspnetcore-global-json-sdk-pinned
+    kind: json_path_matches
+    paths: ["global.json"]
+    path: "$.sdk.version"
+    matches: '^\d+\.\d+\.\d+'
+    level: warning
+    message: "global.json must pin a concrete .NET SDK version."
+
+  # Third-party notices (compliance): a large vendored-dependency repo should
+  # ship aggregate attribution. Not gated, but a strong hygiene signal.
+  - id: aspnetcore-third-party-notices-exist
+    kind: file_exists
+    paths: ["THIRD-PARTY-NOTICES.txt", "THIRD-PARTY-NOTICES.md"]
+    root_only: true
+    level: info
+    message: "A repo that vendors third-party code should ship THIRD-PARTY-NOTICES."
+
+  # The bespoke analysis gate itself must stay present + the editorconfig that
+  # drives the IDE0073 license-header + formatting analyzers.
+  - id: aspnetcore-codecheck-and-editorconfig-present
+    kind: file_exists
+    paths: ["eng/scripts/CodeCheck.ps1"]
+    level: warning
+    message: "eng/scripts/CodeCheck.ps1 (the repo's analysis gate) must be present."

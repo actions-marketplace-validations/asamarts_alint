@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for curl/curl @ ba600296d2a1d8a4e53a36eb4bd30c1f0d0152cc
+# v0.12 100-repo case study, Stage A. Expresses the A-items of curl's
+# bespoke-validation surface (mostly the `scripts/spacecheck.pl` hygiene
+# battery + REUSE/SPDX headers). curl's heavy surface is checksrc.pl,
+# codespell/typos/proselint, the doc<->source consistency test suite, and
+# autotools-vs-cmake parity — all D (tool / AST / compile execution).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ------------------------------------------------------------------
+  # REUSE / SPDX headers (gate: `reuse lint` in checksrc.yml).
+  # Every committable source file carries `SPDX-License-Identifier:`.
+  # The full REUSE-spec resolution is D; the per-file header PRESENCE
+  # is natively `file_content_matches`. Scoped to the source trees that
+  # are uniformly annotated (lib/src/include + the C/H test units).
+  # ------------------------------------------------------------------
+  - id: curl-spdx-header-c-sources
+    kind: file_content_matches
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h"]
+    pattern: "SPDX-License-Identifier:"
+    level: error
+    message: "Every curl C/H source file must carry an SPDX-License-Identifier header (enforced by `reuse lint`)."
+    policy_url: "https://reuse.software/spec-3.2/"
+
+  - id: curl-spdx-header-scripts
+    kind: file_content_matches
+    paths:
+      include: ["scripts/**/*.pl", "scripts/**/*.sh", ".github/scripts/**/*.pl", ".github/scripts/**/*.sh"]
+    pattern: "SPDX-License-Identifier:"
+    level: error
+    message: "curl helper scripts must carry an SPDX-License-Identifier header (`reuse lint`)."
+
+  # ------------------------------------------------------------------
+  # Hygiene battery — a subset of scripts/spacecheck.pl, now natively
+  # expressible by the v0.11 hygiene kinds.
+  # ------------------------------------------------------------------
+
+  # spacecheck.pl: max_line_len = 192, repo-wide (with a small skip-list).
+  - id: curl-max-line-192
+    kind: line_max_width
+    paths:
+      include: ["**/*"]
+      exclude:
+        - ".github/workflows/windows.yml"
+        - "renovate.json"
+        - "docs/DISTROS.md"
+        - "tests/data/**"
+        - "tests/certs/**"
+        - "projects/Windows/**"
+    max_width: 192
+    level: warning
+    message: "Line exceeds curl's 192-column hard cap (scripts/spacecheck.pl)."
+
+  # spacecheck.pl: no triple (3+) consecutive empty lines (default files).
+  - id: curl-no-3-blank-lines
+    kind: max_consecutive_blank_lines
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h"]
+    max: 2
+    level: warning
+    message: "3 or more consecutive blank lines (scripts/spacecheck.pl)."
+
+  # spacecheck.pl: source must be ASCII (non-ASCII only on an allow-list).
+  - id: curl-c-sources-ascii
+    kind: file_is_ascii
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h"]
+    level: warning
+    message: "curl C/H sources must be ASCII (scripts/spacecheck.pl non-ASCII gate)."
+
+  # spacecheck.pl / .gitattributes: shell/m4/autotools sources are LF-only.
+  - id: curl-lf-line-endings
+    kind: line_endings
+    paths:
+      include: ["**/*.sh", "**/*.m4", "**/*.am", "**/*.in", "configure.ac"]
+    target: lf
+    level: warning
+    message: "These file types must use LF line endings (.gitattributes / spacecheck.pl)."
+
+  # spacecheck.pl: no tabs in C/H sources (.gitattributes whitespace=tab-in-indent;
+  # editorconfig indent_style=space). spacecheck excludes Makefile.am etc.
+  - id: curl-no-tabs-in-c
+    kind: file_content_forbidden
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h"]
+    pattern: "\t"
+    level: warning
+    message: "Tabs are not allowed in curl C/H sources (spacecheck.pl / .editorconfig)."
+
+  # spacecheck.pl: every non-empty file ends with exactly one newline.
+  # `final_newline` covers the "no EOL at EOF" half; spacecheck also
+  # forbids a *trailing blank line* at EOF, which has no native kind (C).
+  - id: curl-final-newline
+    kind: final_newline
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h", "scripts/**", "**/*.md"]
+    level: warning
+    message: "File must end with a newline (scripts/spacecheck.pl no-EOL-at-EOF gate)."
+
+  # spacecheck.pl: trailing-whitespace gate, repo-wide.
+  - id: curl-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h", "**/*.md"]
+    level: warning
+    message: "Trailing whitespace (scripts/spacecheck.pl / .editorconfig trim_trailing_whitespace)."
+
+  # spacecheck.pl: tracked filenames restricted to [A-Za-z0-9/._-].
+  # filename_regex matches the basename, so the slash isn't needed here.
+  - id: curl-filename-charset
+    kind: filename_regex
+    paths:
+      include: ["**/*"]
+    pattern: "[A-Za-z0-9._-]+"
+    level: warning
+    message: "Tracked filenames must only use [A-Za-z0-9/._-] (scripts/spacecheck.pl)."
+
+  # ------------------------------------------------------------------
+  # No build artifacts committed (.gitignore discipline; curl ships a
+  # clean source tree — distfiles.sh also guards the tarball side).
+  # ------------------------------------------------------------------
+  - id: curl-no-object-files
+    kind: file_absent
+    paths:
+      include: ["**/*.o", "**/*.obj", "**/*.a", "**/*.lib", "**/*.exe", "**/*.dll", "**/*.pyc"]
+    level: error
+    message: "Compiled artifacts must not be committed (see .gitignore)."

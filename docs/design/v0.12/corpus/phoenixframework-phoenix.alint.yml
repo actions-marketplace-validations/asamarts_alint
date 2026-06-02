@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for phoenixframework/phoenix @ e1e7912418dc243faddd71d1136bd743eb84835f
+# v0.12 case-study Stage-A artifact. Shape: Elixir web framework, mix build,
+# community governance, with a co-located Node.js JS client (assets/js) + a
+# nested `installer/` mix project (phx_new) + an `integration_test/` mix project.
+#
+# The headline alint unlock for Phoenix is CROSS-FILE VERSION COHERENCE: the
+# release version `1.8.7` is hand-duplicated across mix.exs, installer/mix.exs,
+# and package.json, and RELEASE.md + installer/mix.exs are literal "when you
+# bump this, also update these files" review checklists (no tool gates the
+# equality). That is exactly cross_file_value_equals (the tokio-A1 analog).
+#
+# Genuine non-replaceables (correctly left to the right tool, recorded as D):
+#   - `mix test` (root + installer + integration_test), `npm test`/jest,
+#     `mix compile --warnings-as-errors`, eslint, `mix format`/.formatter.exs
+#       -> the BEAM/Elixir compiler, ExUnit, Jest, ESLint AST.
+#   - the installer/integration test.sh DB-backed integration suite -> runtime.
+#   - npm trusted-publish / hex.publish / git-auto-commit asset rebuild -> CD.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1                       # assets/js is a published npm pkg
+  - alint://bundled/ci/github-actions@v1          # workflows pin actions by SHA already
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ───────────────────────────────────────────────────────────────────
+  # A-items: cross-file version / requirement COHERENCE.
+  # RELEASE.md "## Files with version" lists mix.exs, installer/mix.exs,
+  # package.json (+ assets/package.json, CHANGELOG) as the bump set;
+  # installer/mix.exs documents the Elixir-requirement sync set. These
+  # are the review-convention checks alint expresses natively.
+  # ───────────────────────────────────────────────────────────────────
+
+  - id: phx-version-coherent-installer
+    kind: cross_file_value_equals
+    source:
+      file: mix.exs
+      extract: { regex: '(?m)^\s*@version\s+"([^"]+)"' }
+    targets:
+      files: "installer/mix.exs"
+      extract: { regex: '(?m)^\s*@version\s+"([^"]+)"' }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      installer/mix.exs @version ({{ctx.target_value}}) must equal the
+      root mix.exs @version ({{ctx.source_value}}). RELEASE.md lists both
+      under "Files with version" — bump them together.
+
+  - id: phx-version-coherent-package-json
+    kind: cross_file_value_equals
+    source:
+      file: mix.exs
+      extract: { regex: '(?m)^\s*@version\s+"([^"]+)"' }
+    targets:
+      files: "package.json"
+      extract: { json: "$.version" }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      package.json version ({{ctx.target_value}}) must equal the root
+      mix.exs @version ({{ctx.source_value}}). The JS client and the Hex
+      package release in lockstep (RELEASE.md "Files with version").
+
+  - id: phx-elixir-requirement-coherent-installer
+    kind: cross_file_value_equals
+    source:
+      file: mix.exs
+      extract: { regex: '(?m)^\s*@elixir_requirement\s+"([^"]+)"' }
+    targets:
+      files: "installer/mix.exs"
+      extract: { regex: '(?m)^\s*@elixir_requirement\s+"([^"]+)"' }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      installer/mix.exs @elixir_requirement ({{ctx.target_value}}) must
+      equal Phoenix's @elixir_requirement ({{ctx.source_value}}). The
+      installer comment lists this as a hand-sync invariant.
+
+  # ───────────────────────────────────────────────────────────────────
+  # A-items: structure / metadata invariants the repo relies on but no
+  # tool gates (alint value-add beyond what CI enforces, recorded as
+  # value-add in the study; kept here because they are cheap + true).
+  # ───────────────────────────────────────────────────────────────────
+
+  - id: phx-mix-lock-tracked
+    # Phoenix is an application-style repo (not a bare library): mix.lock
+    # IS committed for reproducible deps. Assert it stays tracked.
+    kind: file_exists
+    paths: mix.lock
+    root_only: true
+    level: warning
+    message: "mix.lock must be committed for reproducible dependency resolution."
+
+  - id: phx-formatter-config-exists
+    kind: file_exists
+    paths: .formatter.exs
+    root_only: true
+    level: warning
+    message: ".formatter.exs defines the canonical `mix format` rules; it is also a published package file."
+
+  - id: phx-no-trailing-whitespace-elixir
+    kind: no_trailing_whitespace
+    paths: ["lib/**/*.ex", "lib/**/*.exs", "installer/lib/**/*.ex"]
+    level: info
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  - id: phx-final-newline-elixir
+    kind: final_newline
+    paths: ["lib/**/*.ex", "installer/lib/**/*.ex"]
+    level: info
+    fix:
+      file_append_final_newline: {}
+
+  - id: phx-mix-exs-mit-license
+    # mix.exs package() declares licenses: ["MIT"]; the repo ships a
+    # single MIT LICENSE.md. Assert the manifest declares MIT.
+    kind: file_content_matches
+    paths: mix.exs
+    pattern: 'licenses:\s*\["MIT"\]'
+    level: info
+    message: "mix.exs should declare the MIT license to match LICENSE.md."

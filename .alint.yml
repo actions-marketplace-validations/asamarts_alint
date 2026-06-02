@@ -22,6 +22,12 @@ ignore:
   # trailing whitespace) so the test can assert a diagnostic and an
   # apply-fix. Dogfooding alint over it would re-fire those rules.
   - "editors/vscode/src/test/fixtures/**"
+  # v0.12 case-study corpus: agent-drafted .alint.yml configs for the
+  # 100-repo study, kept as research artifacts. They are OTHER repos'
+  # configs (not alint's own source), so dogfooding alint over them is
+  # meaningless and would re-fire those repos' rules. See
+  # docs/design/v0.12/case_study_log.md.
+  - "docs/design/v0.12/corpus/**"
 
 facts:
   - id: has_rust

@@ -1,0 +1,268 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — pallets/flask @ 36e4a824f340fdee7ed50937ba8e7f6bc7d17f81
+# (v0.12 100-repo study, Stage A). Flask is a single-package Python web-framework
+# library (src/flask layout, flit_core build, uv.lock, tox env matrix, pre-commit).
+#
+# ALL bespoke validation lives in:
+#   .pre-commit-config.yaml ... ruff-check + ruff-format + uv-lock + codespell
+#                               + check-merge-conflict + debug-statements
+#                               + fix-byte-order-marker + trailing-whitespace
+#                               + end-of-file-fixer
+#   .github/workflows/        ... tests.yaml (tox matrix + typing), pre-commit.yaml
+#                               (runs the hooks), zizmor.yaml (GHA security scan),
+#                               publish.yaml (build + PyPI), lock.yaml (issue lock)
+#   pyproject.toml [tool.tox]  ... style/typing/docs/tests envs; tests-min pins
+#   .readthedocs.yaml          ... sphinx -W docs build
+#   src/flask/sansio/README.md ... architectural firewall (no IO / no Flask globals)
+#
+# The pre-commit hooks and the tox test/type/docs envs are all TOOL EXECUTION
+# (ruff, codespell, mypy, pyright, pytest, sphinx, uv-lock, zizmor) — bucket D,
+# out of alint's no-build scope; pre-commit-uv runs them as the single entrypoint.
+# What alint expresses NATIVELY (repo-STATE you can answer by reading the tree):
+#   - the cosmetic hygiene the pre-commit-hooks enforce (trailing-ws / final
+#     newline / no-BOM / no-merge-markers) declaratively;
+#   - the tests-min exact pins == [project.dependencies] lower bounds coherence;
+#   - the requires-python / mypy / pyright interpreter-floor coherence;
+#   - the sansio import firewall documented in sansio/README.md.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A — cosmetic hygiene the pre-commit-hooks enforce, declaratively
+  # (pre-commit ids: trailing-whitespace, end-of-file-fixer,
+  #  fix-byte-order-marker, check-merge-conflict). oss-baseline +
+  # python@v1 cover the text/py subset already; widen to the .rst /
+  # docs surface flask actually ships (79 .rst files) + .cfg/.in.
+  # ════════════════════════════════════════════════════════════════
+  - id: flask-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.py", "**/*.rst", "**/*.md", "**/*.toml", "**/*.yaml", "**/*.yml", "**/*.txt", "**/*.cfg"]
+      exclude: [".tox/**", "docs/_build/**", ".git/**"]
+    level: warning
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  - id: flask-final-newline
+    kind: final_newline
+    paths:
+      include: ["**/*.py", "**/*.rst", "**/*.md", "**/*.toml", "**/*.yaml", "**/*.yml"]
+      exclude: [".tox/**", "docs/_build/**", ".git/**"]
+    level: warning
+    fix:
+      file_append_final_newline: {}
+
+  - id: flask-no-bom
+    # pre-commit hook `fix-byte-order-marker` strips a leading UTF-8 BOM.
+    kind: no_bom
+    paths:
+      include: ["**/*.py", "**/*.rst", "**/*.md", "**/*.toml", "**/*.yaml", "**/*.yml"]
+      exclude: [".tox/**", "docs/_build/**"]
+    level: warning
+
+  - id: flask-no-merge-conflict-markers
+    # pre-commit hook `check-merge-conflict`. NOTE: `.rst`/`.md` are
+    # EXCLUDED — reST/Markdown setext title underlines (`=======`,
+    # `-------`) collide with conflict-marker syntax and false-positive
+    # (e.g. docs/changes.rst line 2 is the H1 underline under "Changes").
+    # This is a C-tuning gap recorded in the study; scope to code/config.
+    kind: no_merge_conflict_markers
+    paths:
+      include: ["**/*.py", "**/*.toml", "**/*.yaml", "**/*.yml"]
+      exclude: [".tox/**", "docs/_build/**"]
+    level: error
+
+  # ════════════════════════════════════════════════════════════════
+  # A — tests-min exact pins == [project.dependencies] lower bounds
+  #     [cross_file_value_equals, same-file source+target]
+  # The `[tool.tox.env.tests-min]` step `uv pip install blinker==1.9.0 ...`
+  # exists to prove the declared lower bounds (`blinker>=1.9.0`) actually
+  # work. If a maintainer bumps a floor but forgets the tests-min pin
+  # (or vice-versa) the two silently drift — tests-min would keep
+  # installing the OLD pin and pass. This is Flask's MSRV-coherence
+  # analogue. One behavior, six per-dependency rule instances (each
+  # extracts a distinct version string, so cfve's "source must resolve
+  # to exactly one value" forces per-dep rules).
+  # ════════════════════════════════════════════════════════════════
+  - id: flask-min-pin-blinker
+    kind: cross_file_value_equals
+    source:
+      file: "pyproject.toml"
+      extract: { regex: 'blinker==([0-9][0-9.]*)' }
+    targets:
+      - file: "pyproject.toml"
+        extract: { regex: 'blinker>=([0-9][0-9.]*)' }
+    level: warning
+    message: |
+      tests-min pins `blinker==X` but [project.dependencies] declares a
+      different `blinker>=X` floor. The exact pin must equal the declared
+      lower bound (CI runs tests-min against these pins to prove the floor).
+
+  - id: flask-min-pin-click
+    kind: cross_file_value_equals
+    source:
+      file: "pyproject.toml"
+      extract: { regex: 'click==([0-9][0-9.]*)' }
+    targets:
+      - file: "pyproject.toml"
+        extract: { regex: 'click>=([0-9][0-9.]*)' }
+    level: warning
+    message: |
+      tests-min `click==X` must equal the `click>=X` floor in
+      [project.dependencies].
+
+  - id: flask-min-pin-itsdangerous
+    kind: cross_file_value_equals
+    source:
+      file: "pyproject.toml"
+      extract: { regex: 'itsdangerous==([0-9][0-9.]*)' }
+    targets:
+      - file: "pyproject.toml"
+        extract: { regex: 'itsdangerous>=([0-9][0-9.]*)' }
+    level: warning
+    message: |
+      tests-min `itsdangerous==X` must equal the `itsdangerous>=X` floor.
+
+  - id: flask-min-pin-jinja2
+    kind: cross_file_value_equals
+    source:
+      file: "pyproject.toml"
+      extract: { regex: 'jinja2==([0-9][0-9.]*)' }
+    targets:
+      - file: "pyproject.toml"
+        extract: { regex: 'jinja2>=([0-9][0-9.]*)' }
+    level: warning
+    message: |
+      tests-min `jinja2==X` must equal the `jinja2>=X` floor.
+
+  - id: flask-min-pin-markupsafe
+    kind: cross_file_value_equals
+    source:
+      file: "pyproject.toml"
+      extract: { regex: 'markupsafe==([0-9][0-9.]*)' }
+    targets:
+      - file: "pyproject.toml"
+        extract: { regex: 'markupsafe>=([0-9][0-9.]*)' }
+    level: warning
+    message: |
+      tests-min `markupsafe==X` must equal the `markupsafe>=X` floor.
+
+  - id: flask-min-pin-werkzeug
+    kind: cross_file_value_equals
+    source:
+      file: "pyproject.toml"
+      extract: { regex: 'werkzeug==([0-9][0-9.]*)' }
+    targets:
+      - file: "pyproject.toml"
+        extract: { regex: 'werkzeug>=([0-9][0-9.]*)' }
+    level: warning
+    message: |
+      tests-min `werkzeug==X` must equal the `werkzeug>=X` floor.
+
+  # ════════════════════════════════════════════════════════════════
+  # A — interpreter-floor coherence  [cross_file_value_equals, same file]
+  # [project] requires-python = ">=3.10" must agree with the mypy and
+  # pyright python_version/pythonVersion = "3.10" type-check targets.
+  # If the floor is raised without bumping the type-checkers, mypy/pyright
+  # keep validating against a Python the project no longer supports.
+  # Extract the bare "3.10" from each so the >= prefix doesn't perturb.
+  # ════════════════════════════════════════════════════════════════
+  - id: flask-python-floor-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "pyproject.toml"
+      extract: { regex: 'requires-python\s*=\s*">=([0-9]+\.[0-9]+)"' }
+    targets:
+      - file: "pyproject.toml"
+        # [tool.mypy] python_version = "3.10"
+        extract: { regex: 'python_version\s*=\s*"([0-9]+\.[0-9]+)"' }
+      - file: "pyproject.toml"
+        # [tool.pyright] pythonVersion = "3.10"
+        extract: { regex: 'pythonVersion\s*=\s*"([0-9]+\.[0-9]+)"' }
+    level: warning
+    message: |
+      [project] requires-python floor must equal the mypy `python_version`
+      and pyright `pythonVersion` type-check targets (all "3.10"); raising
+      the floor without bumping the checkers leaves them validating an
+      unsupported interpreter.
+
+  # ════════════════════════════════════════════════════════════════
+  # A — sansio architectural import firewall  [import_gate]
+  # src/flask/sansio/README.md: "This code cannot do any IO ... cannot
+  # use the Flask globals." Enforced by maintainer review only (no CI
+  # gate). The machine-checkable half is the globals firewall: forbid
+  # any import whose dotted target ends in `globals` (covers both the
+  # relative `..globals` and absolute `flask.globals` forms). The
+  # docstring example `from flask import Flask` captures `flask`, which
+  # this forbid does NOT match, so the clean tree passes.
+  # ════════════════════════════════════════════════════════════════
+  - id: flask-sansio-no-globals
+    kind: import_gate
+    paths: "src/flask/sansio/**/*.py"
+    language: python
+    forbid: 'globals$'
+    level: warning
+    message: |
+      src/flask/sansio code must not import the Flask request/app-context
+      globals (current_app/request/g/session live in flask.globals). The
+      sansio layer is shared with alternative implementations (e.g. Quart)
+      and cannot touch IO or the proxies — see src/flask/sansio/README.md.
+
+  # ════════════════════════════════════════════════════════════════
+  # A — .pre-commit-config.yaml hooks pinned to frozen SHAs
+  #     [yaml_path_matches]  (the pre-commit twin of gha-pin-actions-to-sha)
+  # Flask enforces this via the `update-pre_commit` tox env
+  # (`pre-commit autoupdate --freeze`): every `rev:` is a 40-hex SHA with
+  # a `# frozen: vX` comment. The ci/github-actions bundle only pins the
+  # GH-workflow `uses:`; this asserts the same supply-chain posture for
+  # the pre-commit hook repos.
+  # ════════════════════════════════════════════════════════════════
+  - id: flask-precommit-hooks-sha-pinned
+    kind: yaml_path_matches
+    paths: ".pre-commit-config.yaml"
+    path: "$.repos[*].rev"
+    matches: '^[a-f0-9]{40}$'
+    level: warning
+    message: |
+      Every `.pre-commit-config.yaml` `rev:` should be a 40-char commit
+      SHA (flask freezes them via `pre-commit autoupdate --freeze`), so a
+      moved tag can't silently change what the hook runs.
+
+  # ════════════════════════════════════════════════════════════════
+  # A — value-add structural assertions (NOT repo-enforced; recorded
+  #     separately in the study as value-add, kept here as live config)
+  # ════════════════════════════════════════════════════════════════
+  # pyproject declares the BSD-3-Clause SPDX license expression.
+  - id: flask-license-declared
+    kind: toml_path_equals
+    paths: "pyproject.toml"
+    path: "$.project.license"
+    equals: "BSD-3-Clause"
+    level: info
+
+  # py.typed marker ships (PEP 561) — Flask advertises "Typing :: Typed".
+  - id: flask-py-typed-marker
+    kind: file_exists
+    paths: "src/flask/py.typed"
+    level: info
+
+  # The committed uv.lock the CI `--locked` runs depend on.
+  - id: flask-uv-lock-exists
+    kind: file_exists
+    paths: "uv.lock"
+    root_only: true
+    level: warning
+
+  # CHANGES.rst exists and is non-trivial (release notes are mandatory).
+  - id: flask-changelog-exists
+    kind: file_exists
+    paths: "CHANGES.rst"
+    root_only: true
+    level: warning

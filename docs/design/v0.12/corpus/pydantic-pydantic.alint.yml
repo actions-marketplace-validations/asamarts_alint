@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+# ============================================================================
+# pydantic/pydantic @ cf50ed2ac36d1ee3ec942ad630af860f295eb3ec
+# v0.12 case-study Stage-A config.
+#
+# Shape: Python validation library (hatchling build) with a VENDORED Rust
+# extension `pydantic-core/` (maturin/cargo, its own Makefile + lockfiles).
+#
+# The enforced surface is overwhelmingly TOOL EXECUTION (D): ruff lint+format,
+# pyright/mypy/pyrefly type-checking, codespell, markdownlint, yamlfmt, zizmor,
+# cargo fmt/clippy, the pytest suite (incl. mypy/pyright integration + memray +
+# benchmarks), coverage>=91, twine wheel checks, and many cross-platform builds.
+# alint does not reimplement those.
+#
+# What alint expresses NATIVELY here (the addressable A-surface):
+#   - cross_file_value_equals: the pydantic-core version is pinned in THREE
+#     files that the repo documents must stay in sync (Cargo.toml is canonical;
+#     pyproject.toml dep + pydantic/version.py both carry "Keep this in sync"
+#     comments).
+#   - cross_file_value_equals: pydantic VERSION (version.py) == CITATION.cff
+#     version (release/prepare.py writes both; they must agree at rest).
+#   - hygiene the pre-commit hooks enforce (trailing-whitespace / EOF newline)
+#     -> covered by the oss-baseline + python bundles.
+# Bundles also add structural value-add (lockfile/manifest/dependabot/etc.)
+# that pydantic does not itself gate on (recorded separately, not in coverage).
+# ============================================================================
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/rust@v1
+
+facts:
+  - id: has_pydantic_core
+    any_file_exists: ["pydantic-core/Cargo.toml"]
+
+rules:
+  # --------------------------------------------------------------------------
+  # A-ITEM (headline): pydantic-core version coherence across THREE files.
+  # `pydantic-core/Cargo.toml [package].version` is the canonical source of
+  # truth for the vendored extension; the parent `pyproject.toml` pins it as a
+  # runtime dependency, and `pydantic/version.py` repeats it as
+  # `_COMPATIBLE_PYDANTIC_CORE_VERSION`. Both python sites carry explicit
+  # "Keep this in sync ..." comments -> a documented review convention with no
+  # CI gate, which alint can turn into a hard check.
+  # --------------------------------------------------------------------------
+  - id: pydantic-core-version-coherent
+    when: facts.has_pydantic_core
+    kind: cross_file_value_equals
+    source:
+      file: "pydantic-core/Cargo.toml"
+      extract: { toml: "$.package.version" }
+    targets:
+      - file: "pyproject.toml"
+        # dependencies = [ ... 'pydantic-core==2.47.0', ... ]
+        extract: { regex: "pydantic-core==([0-9]+\\.[0-9]+\\.[0-9]+[A-Za-z0-9.]*)" }
+      - file: "pydantic/version.py"
+        # _COMPATIBLE_PYDANTIC_CORE_VERSION = '2.47.0'
+        extract: { regex: "_COMPATIBLE_PYDANTIC_CORE_VERSION\\s*=\\s*'([^']+)'" }
+    normalize: none
+    level: error
+    message: >-
+      pydantic-core version drift: pydantic-core/Cargo.toml [package].version
+      ({{ctx.source_value}}) must equal the `pydantic-core==` pin in
+      pyproject.toml and `_COMPATIBLE_PYDANTIC_CORE_VERSION` in
+      pydantic/version.py (both carry "Keep this in sync" comments).
+
+  # --------------------------------------------------------------------------
+  # A-ITEM: pydantic VERSION == CITATION.cff version.
+  # release/prepare.py bumps `pydantic/version.py` VERSION and then rewrites
+  # `CITATION.cff` `version:` to `v<VERSION>` in the same step, so at any
+  # committed state the two must agree. CITATION carries the `v` prefix, so we
+  # capture the bare version token on each side.
+  # --------------------------------------------------------------------------
+  - id: pydantic-version-matches-citation
+    kind: cross_file_value_equals
+    source:
+      file: "pydantic/version.py"
+      # VERSION = '2.14.0a1'  (line-anchored so _COMPATIBLE_PYDANTIC_CORE_VERSION
+      # on a later line does NOT also match)
+      extract: { regex: "(?m)^VERSION\\s*=\\s*'([^']+)'" }
+    targets:
+      - file: "CITATION.cff"
+        # version: v2.14.0a1   (strip the leading v; line-anchored so the
+        # `cff-version: 1.2.0` line does NOT match first)
+        extract: { regex: "(?m)^version:\\s*v?([0-9][A-Za-z0-9.]*)" }
+    normalize: none
+    level: warning
+    message: >-
+      CITATION.cff version ({{ctx.target_value}}) is out of sync with
+      pydantic/version.py VERSION ({{ctx.source_value}}); release/prepare.py
+      keeps these in lockstep.
+
+  # --------------------------------------------------------------------------
+  # VALUE-ADD (not enforced by the repo; recorded as a structural assertion):
+  # the vendored Rust extension keeps a committed Cargo.lock for reproducible
+  # builds (CI runs everything with UV_FROZEN; the lockfiles are load-bearing).
+  # --------------------------------------------------------------------------
+  - id: pydantic-core-cargo-lock-exists
+    when: facts.has_pydantic_core
+    kind: file_exists
+    paths: ["pydantic-core/Cargo.lock"]
+    level: info
+    message: "pydantic-core vends a Cargo.lock for reproducible extension builds."
+
+  # --------------------------------------------------------------------------
+  # VALUE-ADD: the parent uv workspace keeps a committed uv.lock (CI uses
+  # `uv sync --frozen`; a stale lock breaks every job). python@v1 already
+  # checks a root lockfile; this pins the workspace member's lock too.
+  # --------------------------------------------------------------------------
+  - id: pydantic-core-uv-lock-exists
+    when: facts.has_pydantic_core
+    kind: file_exists
+    paths: ["pydantic-core/uv.lock"]
+    level: info
+    message: "pydantic-core workspace member keeps its own uv.lock."
