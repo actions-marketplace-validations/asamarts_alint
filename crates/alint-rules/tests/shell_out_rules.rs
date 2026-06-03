@@ -762,3 +762,116 @@ fn command_reports_spawn_failure_as_violation() {
         v[0].message
     );
 }
+
+// ─── changeset_requires_path ────────────────────────────────
+//
+// The e2e testkit's `git: { commits }` block makes *empty* commits,
+// so a diff that *adds* files can't be expressed there. These native
+// tests stand up a real two-commit repo and exercise the firing /
+// silent / gated paths (the firing case is referenced from
+// `coverage_audit_pass_fail`'s NATIVE_FIRES_ALLOWLIST).
+
+fn git_base_commit(root: &Path) {
+    std::fs::write(root.join("README.md"), b"# base\n").unwrap();
+    run_git(root, &["add", "README.md"]);
+    run_git(root, &["commit", "-q", "-m", "base"]);
+}
+
+const CHANGELOG_RULE: &str = "id: needs-changelog\n\
+     kind: changeset_requires_path\n\
+     add_glob: \".changeset/*.md\"\n\
+     since: HEAD~1\n\
+     level: error\n";
+
+#[test]
+fn changeset_requires_path_fires_when_no_matching_file_added() {
+    if !git_available() {
+        eprintln!("git unavailable; skipping changeset_requires_path test");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    git_base_commit(root);
+    // Second commit changes src/ but adds no changeset entry.
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), b"code\n").unwrap();
+    run_git(root, &["add", "src/lib.rs"]);
+    run_git(root, &["commit", "-q", "-m", "feat: change"]);
+
+    let engine = build_engine_from_yaml(CHANGELOG_RULE);
+    let report = run_engine(&engine, root);
+    let v = collect_violations(&report);
+    assert_eq!(v.len(), 1, "no changeset entry added: {v:?}");
+    assert!(v[0].message.contains(".changeset/*.md"), "{}", v[0].message);
+}
+
+#[test]
+fn changeset_requires_path_silent_when_matching_file_added() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    git_base_commit(root);
+    // Second commit adds a changeset entry alongside the change.
+    std::fs::create_dir(root.join(".changeset")).unwrap();
+    std::fs::write(root.join(".changeset/cool.md"), b"bump\n").unwrap();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), b"code\n").unwrap();
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-q", "-m", "feat + changeset"]);
+
+    let engine = build_engine_from_yaml(CHANGELOG_RULE);
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "a changeset entry was added; rule must stay silent"
+    );
+}
+
+#[test]
+fn changeset_requires_path_when_changed_gates_the_requirement() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    git_base_commit(root);
+    // A docs-only change, no changeset; the `when_changed: src/**`
+    // gate is not met, so the requirement does not apply.
+    std::fs::create_dir(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/guide.md"), b"docs\n").unwrap();
+    run_git(root, &["add", "docs/guide.md"]);
+    run_git(root, &["commit", "-q", "-m", "docs: tweak"]);
+
+    let engine = build_engine_from_yaml(
+        "id: needs-changelog\n\
+         kind: changeset_requires_path\n\
+         add_glob: \".changeset/*.md\"\n\
+         when_changed: \"src/**\"\n\
+         since: HEAD~1\n\
+         level: error\n",
+    );
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "src/ did not change; the changelog requirement must not apply"
+    );
+}
+
+#[test]
+fn changeset_requires_path_silent_outside_git() {
+    // No git_init: the diff-scoped rule no-ops without a repo.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("README.md"), b"x").unwrap();
+    let engine = build_engine_from_yaml(CHANGELOG_RULE);
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "no repo: changeset_requires_path must no-op"
+    );
+}

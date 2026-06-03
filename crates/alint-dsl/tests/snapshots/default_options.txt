@@ -1,5 +1,19 @@
 # Default-option snapshot — see default_options_snapshot.rs
 
+=== kind: changeset_requires_path | id: changelog-per-pr ===
+ChangesetRequiresPathRule {
+    id: "changelog-per-pr",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    add_glob: ".changeset/*.md",
+    add_scope: Scope { ... },
+    when_changed: Some(
+        Scope { ... },
+    ),
+    since: "origin/main",
+}
+
 === kind: command | id: shellcheck-shell-scripts ===
 CommandRule {
     id: "shellcheck-shell-scripts",

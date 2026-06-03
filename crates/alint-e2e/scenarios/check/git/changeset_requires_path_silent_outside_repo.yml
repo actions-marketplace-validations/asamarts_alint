@@ -1,0 +1,23 @@
+name: changeset_requires_path no-ops outside a git repo
+tags: [check, changeset_requires_path, git, passing]
+
+# Diff-scoped rule: with no git repo there is no changeset to assert
+# on, so it silently no-ops (the firing path needs a real two-commit
+# repo and is covered natively in shell_out_rules.rs).
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: needs-changelog
+        kind: changeset_requires_path
+        add_glob: ".changeset/*.md"
+        since: HEAD~1
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

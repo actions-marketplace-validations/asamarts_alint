@@ -153,6 +153,10 @@ const NATIVE_FIRES_ALLOWLIST: &[(&str, &str)] = &[
         "git_commit_message",
         "crates/alint-rules/tests/shell_out_rules.rs (testkit runner uses a fixed commit message)",
     ),
+    (
+        "changeset_requires_path",
+        "crates/alint-rules/tests/shell_out_rules.rs (testkit `git: {commits}` makes empty commits; an added-file diff can't be expressed)",
+    ),
 ];
 
 /// Same alias map as `coverage_audit.rs`. Normalise before

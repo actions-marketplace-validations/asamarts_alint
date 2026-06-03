@@ -1,7 +1,17 @@
 # Diff "must-add" family: `changeset_requires_path` + `pair_changed_together`
 
-Status: **Planned (v0.12).** Builds directly on v0.11's
-`scope_filter.changed_since` machinery.
+Status: **`changeset_requires_path` SHIPPED — 2026-06-03** (`crate::changeset_requires_path`,
+rule count 86 → 87, CHANGELOG `[Unreleased]`). Builds on v0.11's
+`scope_filter.changed_since` machinery via a new `alint-core` git helper
+`collect_changed_paths_filtered` (`--diff-filter=A`). Decisions locked in the
+build: `since:` is **required** (a diff rule without a base ref is a config
+error, not a silent pass); added-only (status `A`) semantics, no `change_type:`
+knob; no-base / no-repo / empty-diff / gate-not-met all no-op gracefully; a bad
+`since:` hard-fails with the family's shallow-clone hint. The sibling
+**`pair_changed_together` stays PLANNED** (the `if_changed → then_changed`
+co-change rule). The firing path needs a real two-commit repo (the testkit's
+`git: { commits }` makes empty commits), so it is covered by a native test in
+`shell_out_rules.rs` + the `NATIVE_FIRES_ALLOWLIST`.
 
 ## Motivation / demand
 

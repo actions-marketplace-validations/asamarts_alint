@@ -139,6 +139,31 @@ pub fn collect_changed_paths_checked(
     root: &Path,
     since: &str,
 ) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
+    diff_name_only(root, since, None)
+}
+
+/// Like [`collect_changed_paths_checked`] but restricted to a git
+/// `--diff-filter` (e.g. `"A"` for added paths, `"M"` for modified).
+/// Same posture: `Ok(None)` outside a repo / `git` missing,
+/// `Err(BadRange)` on an unresolvable `since`. Used by
+/// `changeset_requires_path` to find files *added* in `<since>...HEAD`.
+pub fn collect_changed_paths_filtered(
+    root: &Path,
+    since: &str,
+    diff_filter: &str,
+) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
+    diff_name_only(root, since, Some(diff_filter))
+}
+
+/// Shared `git diff --name-only --relative -z <since>...HEAD`
+/// (optionally `--diff-filter=<…>`), with the git-repo probe and NUL
+/// parsing both [`collect_changed_paths_checked`] and
+/// [`collect_changed_paths_filtered`] need.
+fn diff_name_only(
+    root: &Path,
+    since: &str,
+    diff_filter: Option<&str>,
+) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
     // Probe: are we in a git repo at all? If not, silent None —
     // matching the advisory posture of the rest of this module.
     let Ok(probe) = Command::new("git")
@@ -152,13 +177,15 @@ pub fn collect_changed_paths_checked(
     if !probe.status.success() {
         return Ok(None);
     }
-    let Ok(output) = Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(root)
-        .args(["diff", "--name-only", "--relative", "-z"])
-        .arg(format!("{since}...HEAD"))
-        .output()
-    else {
+        .args(["diff", "--name-only", "--relative", "-z"]);
+    if let Some(filter) = diff_filter {
+        cmd.arg(format!("--diff-filter={filter}"));
+    }
+    cmd.arg(format!("{since}...HEAD"));
+    let Ok(output) = cmd.output() else {
         return Ok(None);
     };
     if !output.status.success() {

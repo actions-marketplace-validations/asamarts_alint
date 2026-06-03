@@ -6,6 +6,7 @@
 use alint_core::RuleRegistry;
 
 pub mod case;
+pub mod changeset_requires_path;
 pub mod command;
 pub mod command_idempotent;
 pub mod commented_out_code;
@@ -155,6 +156,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     );
     registry.register("git_commit_gpg_signed", git_commit_gpg_signed::build);
     registry.register("git_blame_age", git_blame_age::build);
+    registry.register("changeset_requires_path", changeset_requires_path::build);
     registry.register("file_is_text", file_is_text::build);
     registry.register("is_text", file_is_text::build);
 
@@ -288,6 +290,7 @@ mod registry_tests {
             "git_commit_author_allowlist",
             "git_commit_gpg_signed",
             "git_blame_age",
+            "changeset_requires_path",
             "file_is_text",
             "is_text",
             // Short-only.

@@ -454,6 +454,12 @@ rules:
     pattern: '\b(TODO|FIXME)\b'
     max_age_days: 180
     level: warning
+  - id: changelog-per-pr
+    kind: changeset_requires_path
+    add_glob: ".changeset/*.md"
+    when_changed: "src/**"
+    since: origin/main
+    level: warning
 
   # ─── Git-aware family ──────────────────────────────────────────
   - id: no-tracked-secrets
