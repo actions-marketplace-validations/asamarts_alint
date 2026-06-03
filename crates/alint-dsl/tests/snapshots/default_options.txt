@@ -72,8 +72,29 @@ FileContentMatchesRule {
     fixer: None,
 }
 
+=== kind: cross_file | id: catalog-refs-resolve ===
+CrossFileRule {
+    id: "catalog-refs-resolve",
+    level: Error,
+    policy_url: None,
+    message: None,
+    source_file: "pnpm-workspace.yaml",
+    source_extract: Yaml(
+        "$.catalog.*",
+    ),
+    targets: Glob {
+        scope: Scope { ... },
+        extract: Json(
+            "$.dependencies.*",
+        ),
+    },
+    relation: Subset,
+    normalize: None,
+    allow_missing: false,
+}
+
 === kind: cross_file_value_equals | id: workspace-versions-coherent ===
-CrossFileValueEqualsRule {
+CrossFileRule {
     id: "workspace-versions-coherent",
     level: Error,
     policy_url: None,
@@ -88,6 +109,7 @@ CrossFileValueEqualsRule {
             "$.package.version",
         ),
     },
+    relation: Equals,
     normalize: None,
     allow_missing: false,
 }

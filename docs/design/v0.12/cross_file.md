@@ -1,6 +1,8 @@
 # The unified `cross_file` relation kind
 
-Status: **Design (2026-06-03), pre-implementation.** Realises **primitive A**
+Status: **Increment 1 (value relations) shipped — 2026-06-03** (`equals` default
++ `subset` / `superset` / `set_equals`; `cross_file_value_equals` → byte-compatible
+alias; rule count 84 → 85, CHANGELOG `[Unreleased]`). Realises **primitive A**
 of the [architecture synthesis](./architecture_synthesis.md): one kind,
 parameterised by `relation:`, over the shared `extract:` (`crate::extract`) +
 `normalize:`. Supersedes [`value_set_membership.md`](./value_set_membership.md)
@@ -58,7 +60,7 @@ kind count moves +1 (the new `cross_file` behaviour), not -1+1.
 
 ## Build order (increment-per-relation-class, design-doc-first)
 
-1. **Value relations (this increment):** `equals` (default; the migrated
+1. **Value relations — SHIPPED 2026-06-03:** `equals` (default; the migrated
    `cross_file_value_equals` logic, byte-identical) + `subset` / `superset` /
    `set_equals`. Reuses `crate::extract` and the existing `Normalize`
    (`none|trim|lower|semver-major`). `source` is a single `{file, extract}`;

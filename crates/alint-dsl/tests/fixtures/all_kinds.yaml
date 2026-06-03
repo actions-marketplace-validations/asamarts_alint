@@ -154,6 +154,18 @@ rules:
     allow_missing_target: false
     level: error
 
+  - id: catalog-refs-resolve
+    kind: cross_file
+    source:
+      file: pnpm-workspace.yaml
+      extract: { yaml: "$.catalog.*" }
+    targets:
+      files: "packages/*/package.json"
+      extract: { json: "$.dependencies.*" }
+    relation: subset
+    normalize: none
+    level: error
+
   - id: domain-not-depend-on-infra
     kind: file_graph
     nodes: "src/**/*.ts"

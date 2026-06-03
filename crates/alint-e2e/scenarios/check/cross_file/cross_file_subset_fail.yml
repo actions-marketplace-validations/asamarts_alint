@@ -1,0 +1,28 @@
+name: cross_file subset fires when a source value is missing from the target set
+tags: [check, cross_file, cross_file]
+
+given:
+  tree:
+    needs.json: |
+      {"need": ["a", "b"]}
+    have.json: |
+      {"have": ["a", "c"]}
+  config: |
+    version: 1
+    rules:
+      - id: refs-resolve
+        kind: cross_file
+        source:
+          file: needs.json
+          extract: { json: "$.need[*]" }
+        targets:
+          files: "have.json"
+          extract: { json: "$.have[*]" }
+        relation: subset
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: refs-resolve, level: error, path: have.json}

@@ -10,7 +10,7 @@ pub mod command;
 pub mod command_idempotent;
 pub mod commented_out_code;
 mod commit_range;
-pub mod cross_file_value_equals;
+pub mod cross_file;
 pub mod dir_absent;
 pub mod dir_contains;
 pub mod dir_exists;
@@ -164,7 +164,10 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("dir_contains", dir_contains::build);
     registry.register("every_matching_has", every_matching_has::build);
     registry.register("registry_paths_resolve", registry_paths_resolve::build);
-    registry.register("cross_file_value_equals", cross_file_value_equals::build);
+    // The unified cross-file value-relation kind; `cross_file_value_equals`
+    // (v0.10) is a byte-compatible alias with `relation` defaulting to `equals`.
+    registry.register("cross_file", cross_file::build);
+    registry.register("cross_file_value_equals", cross_file::build);
     registry.register("file_graph", file_graph::build);
     registry.register("ordered_block", ordered_block::build);
     registry.register("generated_file_fresh", generated_file_fresh::build);
@@ -293,6 +296,7 @@ mod registry_tests {
             "dir_contains",
             "every_matching_has",
             "registry_paths_resolve",
+            "cross_file",
             "cross_file_value_equals",
             "file_graph",
             "ordered_block",
@@ -358,6 +362,12 @@ mod registry_tests {
                  extract:\n  toml: \"$.x\"\nlevel: error\n",
             ),
             (
+                "cross_file",
+                "id: t\nkind: cross_file\nsource:\n  file: a.json\n  \
+                 extract:\n    json: \"$.x[*]\"\ntargets:\n  files: \"b/*.json\"\n  \
+                 extract:\n    json: \"$.y[*]\"\nrelation: subset\nlevel: error\n",
+            ),
+            (
                 "cross_file_value_equals",
                 "id: t\nkind: cross_file_value_equals\nsource:\n  file: a.toml\n  \
                  extract:\n    toml: \"$.x\"\ntargets:\n  files: \"b/*.toml\"\n  \
@@ -387,7 +397,7 @@ mod registry_tests {
             let spec = spec_yaml(yaml);
             let built: alint_core::Result<Box<dyn Rule>> = match *kind {
                 "registry_paths_resolve" => crate::registry_paths_resolve::build(&spec),
-                "cross_file_value_equals" => crate::cross_file_value_equals::build(&spec),
+                "cross_file" | "cross_file_value_equals" => crate::cross_file::build(&spec),
                 "generated_file_fresh" => crate::generated_file_fresh::build(&spec),
                 "command_idempotent" => crate::command_idempotent::build(&spec),
                 "pair_hash" => crate::pair_hash::build(&spec),

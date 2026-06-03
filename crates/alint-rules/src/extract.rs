@@ -1,6 +1,6 @@
 //! Shared structured / line / regex extraction for the
 //! manifest-driven cross-file rules (`registry_paths_resolve`,
-//! `cross_file_value_equals`). One place so the one-of decode
+//! `cross_file`, `file_graph`). One place so the one-of decode
 //! (`serde_yaml` can't decode an externally-tagged enum from a
 //! `{ key: value }` map; an untagged enum can't tell the three
 //! `JSONPath` string variants apart) and the non-literal skip
