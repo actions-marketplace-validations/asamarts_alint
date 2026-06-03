@@ -355,6 +355,29 @@ FileFooterRule {
     fixer: None,
 }
 
+=== kind: file_graph | id: domain-not-depend-on-infra ===
+FileGraphRule {
+    id: "domain-not-depend-on-infra",
+    level: Error,
+    policy_url: None,
+    message: None,
+    nodes: Scope { ... },
+    extract: Regex(
+        "from\\s+\"(\\.[^\"]+)\"",
+    ),
+    resolve: RelativeToFile,
+    require: ForbiddenEdges(
+        [
+            ForbiddenPattern {
+                from: Scope { ... },
+                to: Scope { ... },
+                from_glob: "src/domain/**",
+                to_glob: "src/infra/**",
+            },
+        ],
+    ),
+}
+
 === kind: file_hash | id: rust-fixture-hash ===
 FileHashRule {
     id: "rust-fixture-hash",

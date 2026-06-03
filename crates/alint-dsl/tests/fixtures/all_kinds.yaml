@@ -154,6 +154,18 @@ rules:
     allow_missing_target: false
     level: error
 
+  - id: domain-not-depend-on-infra
+    kind: file_graph
+    nodes: "src/**/*.ts"
+    edges:
+      from_content:
+        extract: { regex: 'from\s+"(\.[^"]+)"' }
+        resolve: relative_to_file
+    require:
+      forbidden_edges:
+        - { from: "src/domain/**", to: "src/infra/**" }
+    level: error
+
   - id: keep-sorted
     kind: ordered_block
     paths: ["**/.gitignore", "CODEOWNERS"]

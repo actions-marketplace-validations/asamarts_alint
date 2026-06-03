@@ -1,6 +1,9 @@
 # Generic file-dependency-graph family
 
-Status: **Approved for build — 2026-06-02.** The study gate is satisfied: the
+Status: **First increment shipped — 2026-06-02** (`forbidden_edges` + `acyclic`;
+the `crate::file_graph` kind, rule count 83 → 84, CHANGELOG `[Unreleased]`). The
+`no_dangling` / `no_orphans` and content-hash `fresh` modes remain. The study gate
+is satisfied: the
 [100-repo study](./case_study_log.md) surfaced **257 file-reference-graph edge
 sources across 56 repos** — `file_graph` is the **#1 demand-ranked new-kind** of
 the cut ([`architecture_synthesis.md`](./architecture_synthesis.md) primitive ⑤).
@@ -242,9 +245,15 @@ non-goal. The DSL held; no reshape needed.
    Prototype section above; the DSL held, no reshape).
 4. **Build (GO).** Ship in this sub-order, each `require:` mode as an atomic
    increment on CHANGELOG `[Unreleased]`:
-   1. **`acyclic` + `forbidden_edges`** first — the two clearest, both pure-parse
-      O(V+E), and the best-evidenced layering case (flask, rails, uv). One node
-      glob + the `from_content` edge extractor + canonical-cycle output.
+   1. **`acyclic` + `forbidden_edges`** first — **SHIPPED 2026-06-02** (the two
+      clearest, both pure-parse O(V+E), the best-evidenced layering case). One
+      node glob + the `from_content` edge extractor (`relative_to_file` /
+      `relative_to_repo_root`) + iterative-DFS rotation-canonical cycle output.
+      Path-based resolution only: explicitly-relative refs (leading `.`) under
+      `relative_to_file`, repo-root paths under `relative_to_repo_root`; bare
+      module names / absolute / URL / computed refs are dropped. (Python dotted
+      relative imports — flask `from ..globals` — need a future Python-aware
+      `resolve:` mode and are *not* covered by this path-based increment.)
    2. **`no_dangling` / `no_orphans`** — reference integrity (doc-xref, registry
       orphans); shares the edge extractor, adds reverse-edge / reachability.
    3. **`fresh`** (content-hash-marker) — codegen freshness via `derive_target`;

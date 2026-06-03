@@ -1,0 +1,32 @@
+name: file_graph fires on a forbidden domain->infra dependency edge
+tags: [check, file_graph, cross_file]
+
+given:
+  tree:
+    src:
+      domain:
+        order.ts: |
+          import { db } from "../infra/db";
+      infra:
+        db.ts: |
+          export const db = 1;
+  config: |
+    version: 1
+    rules:
+      - id: domain-not-depend-on-infra
+        kind: file_graph
+        nodes: "src/**/*.ts"
+        edges:
+          from_content:
+            extract: { regex: 'from\s+"(\.[^"]+)"' }
+            resolve: relative_to_file
+        require:
+          forbidden_edges:
+            - { from: "src/domain/**", to: "src/infra/**" }
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: domain-not-depend-on-infra, level: error, path: src/domain/order.ts}

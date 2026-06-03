@@ -25,6 +25,7 @@ pub mod file_content_matches;
 pub mod file_ends_with;
 pub mod file_exists;
 pub mod file_footer;
+pub mod file_graph;
 pub mod file_hash;
 pub mod file_header;
 pub mod file_is_ascii;
@@ -164,6 +165,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("every_matching_has", every_matching_has::build);
     registry.register("registry_paths_resolve", registry_paths_resolve::build);
     registry.register("cross_file_value_equals", cross_file_value_equals::build);
+    registry.register("file_graph", file_graph::build);
     registry.register("ordered_block", ordered_block::build);
     registry.register("generated_file_fresh", generated_file_fresh::build);
     registry.register("import_gate", import_gate::build);
@@ -292,6 +294,7 @@ mod registry_tests {
             "every_matching_has",
             "registry_paths_resolve",
             "cross_file_value_equals",
+            "file_graph",
             "ordered_block",
             "generated_file_fresh",
             "import_gate",
@@ -373,6 +376,11 @@ mod registry_tests {
                 "pair_hash",
                 "id: t\nkind: pair_hash\nsource: a\ntarget: b\nlevel: error\n",
             ),
+            (
+                "file_graph",
+                "id: t\nkind: file_graph\nnodes: \"src/**/*.ts\"\nedges:\n  \
+                 from_content:\n    extract:\n      lines: {}\nrequire: acyclic\nlevel: error\n",
+            ),
         ];
 
         for (kind, yaml) in cases {
@@ -383,6 +391,7 @@ mod registry_tests {
                 "generated_file_fresh" => crate::generated_file_fresh::build(&spec),
                 "command_idempotent" => crate::command_idempotent::build(&spec),
                 "pair_hash" => crate::pair_hash::build(&spec),
+                "file_graph" => crate::file_graph::build(&spec),
                 _ => unreachable!(),
             };
             let rule = built.unwrap_or_else(|e| panic!("{kind} build failed: {e}"));
