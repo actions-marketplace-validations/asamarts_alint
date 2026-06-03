@@ -268,12 +268,13 @@ Content is detected as text (magic bytes + UTF-8 validity check) — fails on bi
 
 ### `file_is_ascii`
 
-Every byte in the file must be < 0x80. Strict variant of `is_text` for configs that must round-trip through strictly-ASCII tools.
+Every byte in the file must be < 0x80 (pure ASCII), except codepoints listed in `allow:`. Strict variant of `is_text` for configs that must round-trip through strictly-ASCII tools. `allow:` exempts specific non-ASCII codepoints — each entry a single character (`"ö"`), a `U+XXXX` codepoint, or a `U+XXXX-U+YYYY` inclusive range (curl keeps its source ASCII but allows `ö` in "Björn"; the recurring need across llvm / vscode / elixir). With `allow:` the file is decoded as UTF-8 and checked per character; without it, the strict byte-level fast path is used.
 
 ```yaml
-- id: licences-are-ascii
+- id: source-ascii-but-allow-accents
   kind: file_is_ascii
-  paths: "LICENSE*"
+  paths: "src/**"
+  allow: ["ö", "U+00E9", "U+2010-U+2015"]   # ö, é, and the dash block
   level: error
 ```
 
@@ -1120,7 +1121,7 @@ Assemble the repo's *file → file* reference graph and assert a global structur
 
 ### `ordered_block`
 
-The lines between a `start` / `end` marker pair must stay sorted (and, with `unique: true`, free of duplicates) under `comparator` (`lexical` / `lexical-ci` / `numeric`). The generic form of per-project keep-sorted scripts (protobuf `failure_lists`, sorted `.gitignore` / `CODEOWNERS` / dependency lists). Per-file: a file with no `start` marker is silently fine; markers match the trimmed line; blank lines inside a block are ignored; one violation per out-of-order block.
+The lines between a `start` / `end` marker pair must stay sorted (and, with `unique: true`, free of duplicates) under `comparator` (`lexical` / `lexical-ci` / `numeric`). The generic form of per-project keep-sorted scripts (protobuf `failure_lists`, sorted `.gitignore` / `CODEOWNERS` / dependency lists). Per-file: a file with no `start` marker is silently fine; markers match the trimmed line; blank lines inside a block are ignored; one violation per out-of-order block. An optional `select:` regex restricts the sortable entries to lines matching it — other lines inside the block (comments, group headers) pass through untouched (the sectioned / keep-sorted-subset shape).
 
 ```yaml
 - id: keep-sorted
@@ -1130,6 +1131,7 @@ The lines between a `start` / `end` marker pair must stay sorted (and, with `uni
   end: "# keep-sorted end"
   comparator: lexical
   unique: false
+  select: '^\s*require '   # sort only the `require '…'` lines
   level: warning
 ```
 

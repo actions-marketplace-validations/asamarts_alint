@@ -466,9 +466,11 @@ resolution.
 ## alint sharp-edges (C-tuning, shippable as polish independent of new kinds)
 
 Recurring, corpus-proven: `no_merge_conflict_markers` false-fires on reST/MD
-setext `=====` underlines (flask, git); `file_is_ascii` needs an `allow:` list
-(curl-proven, recurs llvm/vscode/elixir); `ordered_block`/`every_matching_has`
-want a `select:` line-filter; `import_gate language: js` over-matches JSDoc
+setext `=====` underlines (flask, git); **`file_is_ascii` `allow:` list —
+SHIPPED 2026-06-03** (single char | `U+XXXX` | `U+XXXX-U+YYYY` range;
+curl-proven, recurs llvm/vscode/elixir); **`ordered_block` `select:` line-filter
+— SHIPPED 2026-06-03** (`every_matching_has` `select:` include/exclude still
+wants doing); `import_gate language: js` over-matches JSDoc
 `@typedef`; test-fixture / `test-data/` default excludes for the hygiene bundles;
 ASF source-header exclude tuning.
 

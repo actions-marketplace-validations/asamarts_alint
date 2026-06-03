@@ -185,6 +185,7 @@ rules:
     end: "# keep-sorted end"
     comparator: lexical
     unique: false
+    select: '^\s*[A-Za-z]'
     level: warning
 
   - id: bindings-fresh
@@ -374,6 +375,7 @@ rules:
   - id: rust-must-be-ascii
     kind: file_is_ascii
     paths: "src/**/*.rs"
+    allow: ["U+00A0-U+00FF"]
     level: info
 
   # ─── Structured-query family ───────────────────────────────────

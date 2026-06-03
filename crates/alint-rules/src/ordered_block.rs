@@ -23,6 +23,7 @@ use std::path::Path;
 use alint_core::{
     Context, Error, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation, eval_per_file,
 };
+use regex::Regex;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
@@ -78,6 +79,10 @@ struct Options {
     comparator: Comparator,
     #[serde(default)]
     unique: bool,
+    /// When set, only lines matching this regex are sortable
+    /// entries; other lines inside the block pass through.
+    #[serde(default)]
+    select: Option<String>,
 }
 
 #[derive(Debug)]
@@ -91,6 +96,7 @@ pub struct OrderedBlockRule {
     end: String,
     comparator: Comparator,
     unique: bool,
+    select: Option<Regex>,
 }
 
 /// In-flight block state while scanning a file.
@@ -157,6 +163,12 @@ impl PerFileRule for OrderedBlockRule {
             }
             // Blank lines inside a block are not entries.
             if trimmed.is_empty() || b.reported {
+                continue;
+            }
+            // With `select:`, only matching lines are sortable
+            // entries; non-matching lines (comments, group headers)
+            // pass through untouched.
+            if self.select.as_ref().is_some_and(|re| !re.is_match(raw)) {
                 continue;
             }
 
@@ -233,6 +245,15 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "ordered_block `start` and `end` markers must differ",
         ));
     }
+    let select = opts
+        .select
+        .as_deref()
+        .map(|p| {
+            Regex::new(p).map_err(|e| {
+                Error::rule_config(&spec.id, format!("invalid `select:` regex `{p}`: {e}"))
+            })
+        })
+        .transpose()?;
     Ok(Box::new(OrderedBlockRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -243,6 +264,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         end: opts.end.trim().to_string(),
         comparator: opts.comparator,
         unique: opts.unique,
+        select,
     }))
 }
 
@@ -261,6 +283,7 @@ mod tests {
             end: "# keep-sorted end".into(),
             comparator,
             unique,
+            select: None,
         }
     }
 
@@ -343,5 +366,24 @@ mod tests {
     fn blank_lines_inside_a_block_are_ignored() {
         let t = "# keep-sorted start\nalpha\n\nbravo\n\ncharlie\n# keep-sorted end\n";
         assert!(eval(&rule(Comparator::Lexical, false), t).is_empty());
+    }
+
+    #[test]
+    fn select_sorts_only_matching_lines() {
+        let mut r = rule(Comparator::Lexical, false);
+        // Only `require '…'` lines must be sorted; other lines pass.
+        r.select = Some(Regex::new(r"^\s*require ").unwrap());
+        // The `require` lines are in order; the interleaved comments
+        // and the out-of-order `gem` line are ignored.
+        let ok = "# keep-sorted start\n\
+                  require 'a'\n# a comment\nrequire 'b'\ngem 'z'\nrequire 'c'\n\
+                  # keep-sorted end\n";
+        assert!(eval(&r, ok).is_empty(), "{:?}", eval(&r, ok));
+        // Out-of-order `require` lines fire even with non-require
+        // lines interleaved.
+        let bad = "# keep-sorted start\nrequire 'c'\ngem 'z'\nrequire 'a'\n# keep-sorted end\n";
+        let v = eval(&r, bad);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("require 'a'"));
     }
 }

@@ -516,6 +516,12 @@ FileIsAsciiRule {
     policy_url: None,
     message: None,
     scope: Scope { ... },
+    allow: [
+        (
+            160,
+            255,
+        ),
+    ],
 }
 
 === kind: file_is_text | id: all-text ===
@@ -1219,6 +1225,11 @@ OrderedBlockRule {
     end: "# keep-sorted end",
     comparator: Lexical,
     unique: false,
+    select: Some(
+        Regex(
+            "^\\s*[A-Za-z]",
+        ),
+    ),
 }
 
 === kind: pair | id: c-requires-h ===

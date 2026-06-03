@@ -1,0 +1,22 @@
+name: file_is_ascii allow exempts listed codepoints but still flags others
+tags: [check, file_is_ascii, encoding]
+
+given:
+  tree:
+    src:
+      name.rs: "// by Björn\npub fn ok() {}\n"
+      cold.rs: "// The ☃ is here\npub fn cold() {}\n"
+  config: |
+    version: 1
+    rules:
+      - id: ascii-with-accents
+        kind: file_is_ascii
+        paths: "src/**/*.rs"
+        allow: ["ö"]
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: ascii-with-accents, level: error, path: src/cold.rs}
