@@ -1,17 +1,21 @@
 # Diff "must-add" family: `changeset_requires_path` + `pair_changed_together`
 
-Status: **`changeset_requires_path` SHIPPED — 2026-06-03** (`crate::changeset_requires_path`,
-rule count 86 → 87, CHANGELOG `[Unreleased]`). Builds on v0.11's
-`scope_filter.changed_since` machinery via a new `alint-core` git helper
-`collect_changed_paths_filtered` (`--diff-filter=A`). Decisions locked in the
-build: `since:` is **required** (a diff rule without a base ref is a config
-error, not a silent pass); added-only (status `A`) semantics, no `change_type:`
-knob; no-base / no-repo / empty-diff / gate-not-met all no-op gracefully; a bad
-`since:` hard-fails with the family's shallow-clone hint. The sibling
-**`pair_changed_together` stays PLANNED** (the `if_changed → then_changed`
-co-change rule). The firing path needs a real two-commit repo (the testkit's
-`git: { commits }` makes empty commits), so it is covered by a native test in
-`shell_out_rules.rs` + the `NATIVE_FIRES_ALLOWLIST`.
+Status: **BOTH SHIPPED — 2026-06-03** (`changeset_requires_path` rule count
+86 → 87; `pair_changed_together` 87 → 88; CHANGELOG `[Unreleased]`). Build on
+v0.11's `scope_filter.changed_since` machinery (`changeset_requires_path` adds
+the `collect_changed_paths_filtered` `--diff-filter=A` helper;
+`pair_changed_together` reuses `collect_changed_paths_checked` for the full
+changed set). Decisions locked: `since:` is **required** on both (a diff rule
+without a base ref is a config error, not a silent pass); `changeset_requires_path`
+is added-only (status `A`, no `change_type:` knob); `pair_changed_together` is
+**directional** (the trigger is `if_changed`, the obligation `then_changed`; a
+`then_changed`-only change never fires it — swap the globs in a second rule for
+a bidirectional pact); no-base / no-repo / empty-diff / gate-not-met all no-op
+gracefully; a bad `since:` hard-fails with the family's shallow-clone hint. The
+firing paths need a real two-commit repo (the testkit's `git: { commits }` makes
+empty commits), so both are covered by native tests in `shell_out_rules.rs` +
+the `NATIVE_FIRES_ALLOWLIST` (a silent no-repo e2e satisfies `coverage_audit`).
+**The diff "must-add" family is now complete.**
 
 ## Motivation / demand
 

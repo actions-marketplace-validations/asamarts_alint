@@ -875,3 +875,107 @@ fn changeset_requires_path_silent_outside_git() {
         "no repo: changeset_requires_path must no-op"
     );
 }
+
+// ─── pair_changed_together ──────────────────────────────────
+//
+// Same testkit limitation: `git: {commits}` makes empty commits, so a
+// real two-commit co-change diff needs a native repo. The firing case
+// is referenced from `coverage_audit_pass_fail`'s NATIVE_FIRES_ALLOWLIST.
+
+const CO_CHANGE_RULE: &str = "id: format-co-change\n\
+     kind: pair_changed_together\n\
+     if_changed: \"src/format.rs\"\n\
+     then_changed: \"FORMAT_VERSION\"\n\
+     since: HEAD~1\n\
+     level: error\n";
+
+fn co_change_base(root: &Path) {
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::write(root.join("src/format.rs"), b"v1\n").unwrap();
+    std::fs::write(root.join("FORMAT_VERSION"), b"1\n").unwrap();
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-q", "-m", "base"]);
+}
+
+#[test]
+fn pair_changed_together_fires_when_only_if_changed() {
+    if !git_available() {
+        eprintln!("git unavailable; skipping pair_changed_together test");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    co_change_base(root);
+    // Bump the format struct WITHOUT bumping FORMAT_VERSION.
+    std::fs::write(root.join("src/format.rs"), b"v2\n").unwrap();
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-q", "-m", "feat: change format"]);
+
+    let engine = build_engine_from_yaml(CO_CHANGE_RULE);
+    let report = run_engine(&engine, root);
+    let v = collect_violations(&report);
+    assert_eq!(v.len(), 1, "if_changed changed without then_changed: {v:?}");
+    assert!(v[0].message.contains("FORMAT_VERSION"), "{}", v[0].message);
+}
+
+#[test]
+fn pair_changed_together_silent_when_both_change() {
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    co_change_base(root);
+    std::fs::write(root.join("src/format.rs"), b"v2\n").unwrap();
+    std::fs::write(root.join("FORMAT_VERSION"), b"2\n").unwrap();
+    run_git(root, &["add", "."]);
+    run_git(
+        root,
+        &["commit", "-q", "-m", "feat: change format + bump version"],
+    );
+
+    let engine = build_engine_from_yaml(CO_CHANGE_RULE);
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "both changed; rule must stay silent"
+    );
+}
+
+#[test]
+fn pair_changed_together_silent_when_only_then_changes() {
+    // Directional: a `then_changed`-only change never triggers the rule.
+    if !git_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    co_change_base(root);
+    std::fs::write(root.join("FORMAT_VERSION"), b"2\n").unwrap();
+    run_git(root, &["add", "."]);
+    run_git(root, &["commit", "-q", "-m", "chore: bump version only"]);
+
+    let engine = build_engine_from_yaml(CO_CHANGE_RULE);
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "if_changed did not change; the co-change obligation must not apply"
+    );
+}
+
+#[test]
+fn pair_changed_together_silent_outside_git() {
+    // No git_init: the diff-scoped rule no-ops without a repo.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("README.md"), b"x").unwrap();
+    let engine = build_engine_from_yaml(CO_CHANGE_RULE);
+    let report = run_engine(&engine, root);
+    assert!(
+        collect_violations(&report).is_empty(),
+        "no repo: pair_changed_together must no-op"
+    );
+}

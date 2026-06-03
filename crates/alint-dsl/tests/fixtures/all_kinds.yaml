@@ -473,6 +473,12 @@ rules:
     when_changed: "src/**"
     since: origin/main
     level: warning
+  - id: format-version-bumped
+    kind: pair_changed_together
+    if_changed: "src/rustdoc-json-types/lib.rs"
+    then_changed: "src/rustdoc-json-types/FORMAT_VERSION"
+    since: origin/main
+    level: error
 
   # ─── Git-aware family ──────────────────────────────────────────
   - id: no-tracked-secrets

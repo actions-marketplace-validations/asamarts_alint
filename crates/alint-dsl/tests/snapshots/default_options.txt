@@ -1271,6 +1271,19 @@ PairRule {
     partner_template: "{dir}/{stem}.h",
 }
 
+=== kind: pair_changed_together | id: format-version-bumped ===
+PairChangedTogetherRule {
+    id: "format-version-bumped",
+    level: Error,
+    policy_url: None,
+    message_override: None,
+    if_changed: "src/rustdoc-json-types/lib.rs",
+    if_scope: Scope { ... },
+    then_changed: "src/rustdoc-json-types/FORMAT_VERSION",
+    then_scope: Scope { ... },
+    since: "origin/main",
+}
+
 === kind: pair_hash | id: fips-sum-pins-sources ===
 PairHashRule {
     id: "fips-sum-pins-sources",

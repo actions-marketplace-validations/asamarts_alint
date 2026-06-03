@@ -157,6 +157,10 @@ const NATIVE_FIRES_ALLOWLIST: &[(&str, &str)] = &[
         "changeset_requires_path",
         "crates/alint-rules/tests/shell_out_rules.rs (testkit `git: {commits}` makes empty commits; an added-file diff can't be expressed)",
     ),
+    (
+        "pair_changed_together",
+        "crates/alint-rules/tests/shell_out_rules.rs (testkit `git: {commits}` makes empty commits; a real two-commit co-change diff can't be expressed)",
+    ),
 ];
 
 /// Same alias map as `coverage_audit.rs`. Normalise before
