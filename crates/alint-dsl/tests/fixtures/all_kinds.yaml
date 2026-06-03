@@ -207,6 +207,12 @@ rules:
     normalize: final-newline
     timeout: 30
     level: error
+  - id: generated-tree-fresh
+    kind: generated_file_fresh
+    outputs: ["gen/**", "src/generated.rs"]
+    command: ["make", "gen"]
+    normalize: final-newline
+    level: warning
 
   - id: no-internal-imports
     kind: import_gate

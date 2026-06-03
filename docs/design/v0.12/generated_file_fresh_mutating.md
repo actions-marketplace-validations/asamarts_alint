@@ -1,6 +1,12 @@
 # `generated_file_fresh` — mutating / in-place mode
 
-Status: **Design (drafted 2026-06-03), pre-implementation.** Resolves the
+Status: **Implemented — 2026-06-03** (`crate::generated_file_fresh`, mode added,
+rule count unchanged, CHANGELOG `[Unreleased]`). The `outputs:` field selects the
+mutating mode; snapshot → run → diff → restore via a Drop-guard `OutputRestorer`;
+shape-validated at load (exactly one of `file` / `outputs`); covered by native
+unit tests (fresh-silent + tree-untouched · stale-fires-then-restores ·
+new-file-flagged-and-deleted · final-newline normalize · generator-failure
+rolls back) + two e2e scenarios. Resolves the
 **Q1 "in-place / temp-sandbox" open question explicitly deferred** by the v0.10
 [`generated_file_fresh`](../v0.10/generated_file_fresh.md) doc. The **#1 residual
 of the post-v0.12 [coverage re-analysis](./post_build_coverage_analysis.md)
@@ -118,8 +124,9 @@ The mode is selected by **which output field is present**, validated at load
 - **Re-walk cost.** Catching new files needs a post-run enumeration of the
   `outputs:` scope. Single-shot, and the generator run dominates; acceptable. (A
   later optimisation can walk only the scope's base dirs.)
-- **Testability.** Like `changeset_requires_path`, the firing path needs a real
-  generator + on-disk mutation — covered by native tests in
-  `crates/alint-rules/tests/shell_out_rules.rs` (a `sh -c` generator that rewrites
-  a file) + the `NATIVE_FIRES_ALLOWLIST`; a silent (fresh) e2e satisfies
-  `coverage_audit`.
+- **Testability.** Covered the same way as the stdout mode: native unit tests
+  (a `sh -c` generator that rewrites a tempdir file — fresh-silent, stale-fires,
+  new-file-flagged, generator-failure-rolls-back, each asserting the tree is
+  restored) + a fire/silent pair of e2e scenarios under
+  `scenarios/check/plugin/`. No `NATIVE_FIRES_ALLOWLIST` entry needed — the e2e
+  scenarios run a real generator through the engine.

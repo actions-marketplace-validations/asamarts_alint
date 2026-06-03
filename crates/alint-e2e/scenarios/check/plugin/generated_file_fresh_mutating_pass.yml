@@ -1,0 +1,24 @@
+name: generated_file_fresh mutating mode is silent when the in-place output is fresh
+tags: [check, generated_file_fresh, plugin, passing]
+
+# The generator rewrites gen/list.txt with the SAME content it already
+# holds → no change → silent. The snapshot/restore leaves the tree
+# untouched either way.
+
+given:
+  tree:
+    gen/list.txt: "fresh\n"
+  config: |
+    version: 1
+    rules:
+      - id: list-regen-fresh
+        kind: generated_file_fresh
+        outputs: "gen/list.txt"
+        command: ["sh", "-c", "printf 'fresh\\n' > gen/list.txt"]
+        normalize: none
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

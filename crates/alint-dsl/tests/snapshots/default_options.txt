@@ -783,13 +783,37 @@ GeneratedFileFreshRule {
     level: Error,
     policy_url: None,
     message: None,
-    file: "docs/rules.md",
+    mode: Stdout {
+        file: "docs/rules.md",
+    },
     command: [
         "true",
     ],
     workdir: ".",
     normalize: FinalNewline,
     timeout: 30,
+}
+
+=== kind: generated_file_fresh | id: generated-tree-fresh ===
+GeneratedFileFreshRule {
+    id: "generated-tree-fresh",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    mode: Mutating {
+        outputs: Scope { ... },
+        globs: [
+            "gen/**",
+            "src/generated.rs",
+        ],
+    },
+    command: [
+        "make",
+        "gen",
+    ],
+    workdir: ".",
+    normalize: FinalNewline,
+    timeout: 120,
 }
 
 === kind: git_blame_age | id: stale-todos ===
