@@ -1,0 +1,29 @@
+name: cross_file resolves fires when a declared path does not exist on disk
+tags: [check, cross_file, cross_file]
+
+given:
+  tree:
+    Cargo.toml: |
+      [workspace]
+      members = ["crates/a", "crates/gone"]
+    crates:
+      a:
+        Cargo.toml: |
+          [package]
+          name = "a"
+  config: |
+    version: 1
+    rules:
+      - id: members-exist
+        kind: cross_file
+        source:
+          file: Cargo.toml
+          extract: { toml: "$.workspace.members[*]" }
+        relation: resolves
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: members-exist, level: error, path: Cargo.toml}

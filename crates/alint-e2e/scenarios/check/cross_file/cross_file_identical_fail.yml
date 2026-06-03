@@ -1,0 +1,30 @@
+name: cross_file identical fires when a mirrored file drifts byte-for-byte
+tags: [check, cross_file, cross_file]
+
+given:
+  tree:
+    README.md: |
+      # Project
+      Hello.
+    crates:
+      a:
+        README.md: |
+          # Project
+          Hello!
+  config: |
+    version: 1
+    rules:
+      - id: readme-mirrors-root
+        kind: cross_file
+        source:
+          file: README.md
+        targets:
+          files: "crates/*/README.md"
+        relation: identical
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: readme-mirrors-root, level: error, path: crates/a/README.md}

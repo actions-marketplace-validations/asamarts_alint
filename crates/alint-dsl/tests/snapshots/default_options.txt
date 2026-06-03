@@ -79,18 +79,25 @@ CrossFileRule {
     policy_url: None,
     message: None,
     source_file: "pnpm-workspace.yaml",
-    source_extract: Yaml(
-        "$.catalog.*",
-    ),
-    targets: Glob {
-        scope: Scope { ... },
-        extract: Json(
-            "$.dependencies.*",
+    source_extract: Some(
+        Yaml(
+            "$.catalog.*",
         ),
-    },
+    ),
+    targets: Some(
+        Glob {
+            scope: Scope { ... },
+            extract: Some(
+                Json(
+                    "$.dependencies.*",
+                ),
+            ),
+        },
+    ),
     relation: Subset,
     normalize: None,
     allow_missing: false,
+    skip_header_lines: 0,
 }
 
 === kind: cross_file_value_equals | id: workspace-versions-coherent ===
@@ -100,18 +107,25 @@ CrossFileRule {
     policy_url: None,
     message: None,
     source_file: "Cargo.toml",
-    source_extract: Toml(
-        "$.workspace.package.version",
-    ),
-    targets: Glob {
-        scope: Scope { ... },
-        extract: Toml(
-            "$.package.version",
+    source_extract: Some(
+        Toml(
+            "$.workspace.package.version",
         ),
-    },
+    ),
+    targets: Some(
+        Glob {
+            scope: Scope { ... },
+            extract: Some(
+                Toml(
+                    "$.package.version",
+                ),
+            ),
+        },
+    ),
     relation: Equals,
     normalize: None,
     allow_missing: false,
+    skip_header_lines: 0,
 }
 
 === kind: dir_absent | id: no-target ===

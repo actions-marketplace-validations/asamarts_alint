@@ -1,8 +1,10 @@
 # The unified `cross_file` relation kind
 
-Status: **Increment 1 (value relations) shipped — 2026-06-03** (`equals` default
-+ `subset` / `superset` / `set_equals`; `cross_file_value_equals` → byte-compatible
-alias; rule count 84 → 85, CHANGELOG `[Unreleased]`). Realises **primitive A**
+Status: **Increments 1–2 shipped — 2026-06-03** (value relations `equals`
+default + `subset`/`superset`/`set_equals`, `cross_file_value_equals` →
+byte-compatible alias, count 84 → 85; then `identical` whole-file + `resolves`
+path-existence). Only the `normalize:` promotion + the `whole_file`/`file_set`
+extract sources remain. CHANGELOG `[Unreleased]`. Realises **primitive A**
 of the [architecture synthesis](./architecture_synthesis.md): one kind,
 parameterised by `relation:`, over the shared `extract:` (`crate::extract`) +
 `normalize:`. Supersedes [`value_set_membership.md`](./value_set_membership.md)
@@ -67,12 +69,14 @@ kind count moves +1 (the new `cross_file` behaviour), not -1+1.
    `targets` is a `{files, extract}` glob or a `[{file, extract}]` list — the
    `cross_file_value_equals` shape, unchanged. Delivers the whole
    `value_set_membership` demand and the unification in one cohesive landing.
-2. **`identical`** (whole-file `files_equal`) — a different source/target shape
-   (whole content, no `extract`; optional skip-header). The tokio-README-mirror
-   / symfony case.
-3. **`resolves`** (1-level path existence) — the forward half of
-   `registry_paths_resolve`; `registry_paths_resolve` keeps its name + rich
-   `base`/`must_contain`/`orphans` ergonomics, documented as composing with this.
+2. **`identical` — SHIPPED 2026-06-03** (whole-file `files_equal`) — byte
+   identity (no `extract`; optional `skip_header_lines`). The tokio-README-mirror
+   / symfony case. `source.extract` must be absent; `targets` carry no `extract`
+   (validated in `build`'s `validate_shape`).
+3. **`resolves` — SHIPPED 2026-06-03** (1-level path existence) — each source
+   path resolves relative to the source file's dir and must exist (file or dir);
+   no `targets`. The forward half of `registry_paths_resolve`, which keeps its
+   name + rich `base`/`must_contain`/`orphans` ergonomics (use it for those).
 4. **`normalize:` promotion** ([`cross_file_normalize.md`](./cross_file_normalize.md))
    — `semver_floor` / `strip_prefix|suffix` / `casefold`, scalar-or-list, pushed
    into the shared post-extract transform so every cross-file kind benefits.

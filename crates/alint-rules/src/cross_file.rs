@@ -1,39 +1,41 @@
-//! `cross_file` — a value (or set of values) extracted from one
-//! authoritative `source` file must hold a `relation:` to the
-//! values extracted from one or more `targets`. The unified
-//! cross-file value-relation kind (architecture-synthesis
-//! primitive A): one kind, a `relation:` knob, over the shared
-//! `crate::extract` + `normalize`. Design + open questions:
-//! `docs/design/v0.12/cross_file.md`.
+//! `cross_file` — a value (or set of values, or the whole content,
+//! or a set of paths) extracted from one authoritative `source`
+//! file must hold a `relation:` to one or more `targets` (or the
+//! filesystem). The unified cross-file value-relation kind
+//! (architecture-synthesis primitive A): one kind, a `relation:`
+//! knob, over the shared `crate::extract` + `normalize`. Design +
+//! open questions: `docs/design/v0.12/cross_file.md`.
 //!
 //! `cross_file_value_equals` (v0.10) is a registered **alias** for
 //! this kind with `relation` defaulting to `equals`; every existing
 //! config is byte-compatible.
 //!
+//! `relation` groups into three shapes, validated in `build`:
+//! - **value** (`equals` | `subset` | `superset` | `set_equals`):
+//!   `source.extract` + `targets` (each with `extract`).
+//! - **`identical`**: whole-file byte identity — `targets` with NO
+//!   `extract`, no `source.extract` (optional `skip_header_lines`).
+//! - **`resolves`**: each extracted source path must exist on disk —
+//!   `source.extract`, NO `targets` (the forward half of
+//!   `registry_paths_resolve`, which keeps its richer ergonomics).
+//!
 //! ```yaml
 //! - id: workspace-versions-coherent
 //!   kind: cross_file
-//!   source:
-//!     file: Cargo.toml
-//!     extract: { toml: "$.workspace.package.version" }
-//!   targets:                       # form (a): glob + one extract
-//!     files: "crates/*/Cargo.toml"
-//!     extract: { toml: "$.package.version" }
+//!   source:  { file: Cargo.toml, extract: { toml: "$.workspace.package.version" } }
+//!   targets: { files: "crates/*/Cargo.toml", extract: { toml: "$.package.version" } }
 //!   relation: equals               # equals (default) | subset | superset | set_equals
-//!   normalize: none                # none (default) | trim | lower | semver-major
-//!   allow_missing_target: false
-//!   level: error
 //!
-//! # Set membership — every catalog reference must resolve to a key.
-//! - id: pnpm-catalog-refs-resolve
+//! # identical — the crate README must mirror the workspace README byte-for-byte.
+//! - id: readme-mirrors-root
 //!   kind: cross_file
-//!   source:  { file: pnpm-workspace.yaml, extract: { yaml: "$.catalog.*" } }
-//!   targets: { files: "packages/**/package.json", extract: { regex: 'catalog:(\S+)' } }
-//!   relation: subset               # source refs ⊆ target's keys
+//!   source:  { file: README.md }
+//!   targets: { files: "crates/*/README.md" }
+//!   relation: identical
 //! ```
 
-use std::collections::BTreeSet;
-use std::path::Path;
+use std::collections::{BTreeSet, HashSet};
+use std::path::{Component, Path, PathBuf};
 
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
 use serde::Deserialize;
@@ -44,32 +46,39 @@ use crate::extract::{Extract, ExtractSpec, extract_values, is_non_literal};
 #[serde(deny_unknown_fields)]
 struct SourceSpec {
     file: String,
-    extract: ExtractSpec,
+    /// Absent for `identical` (whole-file); required otherwise.
+    #[serde(default)]
+    extract: Option<ExtractSpec>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TargetEntrySpec {
     file: String,
-    extract: ExtractSpec,
+    #[serde(default)]
+    extract: Option<ExtractSpec>,
 }
 
 /// `targets:` is either a `{ files: <glob>, extract: … }` map
 /// (form a — one query applied per glob match) or a sequence of
 /// `{ file, extract }` (form b — heterogeneous pins). A YAML map
 /// vs a sequence are structurally distinct, so an untagged enum
-/// decodes them unambiguously.
+/// decodes them unambiguously. `extract` is absent for `identical`.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum TargetsSpec {
-    Glob { files: String, extract: ExtractSpec },
+    Glob {
+        files: String,
+        #[serde(default)]
+        extract: Option<ExtractSpec>,
+    },
     List(Vec<TargetEntrySpec>),
 }
 
-/// The relation the source value(s) must hold to each target's
-/// value(s). `equals` is the 1:1 scalar case (the released
-/// `cross_file_value_equals`); the set relations compare the
-/// source's extracted set `S` to each target's extracted set `T`.
+/// The relation the source must hold to each target. `equals` is the
+/// 1:1 scalar case (the released `cross_file_value_equals`); the set
+/// relations compare extracted sets; `identical` compares whole
+/// files; `resolves` checks path existence on the filesystem.
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Relation {
@@ -84,6 +93,19 @@ enum Relation {
     Superset,
     /// `S == T` — the sets match exactly.
     SetEquals,
+    /// Whole-file byte identity (optional `skip_header_lines`).
+    Identical,
+    /// Each extracted source path must exist on disk (file or dir).
+    Resolves,
+}
+
+impl Relation {
+    fn is_value(self) -> bool {
+        matches!(
+            self,
+            Self::Equals | Self::Subset | Self::Superset | Self::SetEquals
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
@@ -119,20 +141,30 @@ impl Normalize {
 #[serde(deny_unknown_fields)]
 struct Options {
     source: SourceSpec,
-    targets: TargetsSpec,
+    /// Absent for `resolves` (the target is the filesystem).
+    #[serde(default)]
+    targets: Option<TargetsSpec>,
     #[serde(default)]
     relation: Relation,
     #[serde(default)]
     normalize: Normalize,
     #[serde(default)]
     allow_missing_target: bool,
+    /// `identical` only: drop the first N lines of both files
+    /// before comparison (skip a license / generated header).
+    #[serde(default)]
+    skip_header_lines: Option<usize>,
 }
 
-/// Resolved target shape.
+/// Resolved target shape. `extract` is `None` for `identical`
+/// (whole-file), `Some` for the value relations.
 #[derive(Debug)]
 enum Targets {
-    Glob { scope: Scope, extract: Extract },
-    List(Vec<(String, Extract)>),
+    Glob {
+        scope: Scope,
+        extract: Option<Extract>,
+    },
+    List(Vec<(String, Option<Extract>)>),
 }
 
 /// Per-target callback for `each_target`: receives the target's
@@ -146,11 +178,14 @@ pub struct CrossFileRule {
     policy_url: Option<String>,
     message: Option<String>,
     source_file: String,
-    source_extract: Extract,
-    targets: Targets,
+    /// `Some` for value relations + `resolves`; `None` for `identical`.
+    source_extract: Option<Extract>,
+    /// `Some` for value relations + `identical`; `None` for `resolves`.
+    targets: Option<Targets>,
     relation: Relation,
     normalize: Normalize,
     allow_missing: bool,
+    skip_header_lines: usize,
 }
 
 impl Rule for CrossFileRule {
@@ -164,19 +199,23 @@ impl Rule for CrossFileRule {
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut out = Vec::new();
-        let Some(source_values) = self.source_values(ctx, &mut out) else {
-            return Ok(out);
-        };
-
         match self.relation {
-            Relation::Equals => self.check_equals(ctx, &source_values, &mut out),
-            Relation::Subset | Relation::Superset | Relation::SetEquals => {
-                let source_set: BTreeSet<String> = source_values
-                    .iter()
-                    .map(|v| self.normalize.apply(v))
-                    .collect();
-                self.check_set(ctx, &source_set, &mut out);
+            Relation::Equals => {
+                if let Some(source_values) = self.source_values(ctx, &mut out) {
+                    self.check_equals(ctx, &source_values, &mut out);
+                }
             }
+            Relation::Subset | Relation::Superset | Relation::SetEquals => {
+                if let Some(source_values) = self.source_values(ctx, &mut out) {
+                    let source_set: BTreeSet<String> = source_values
+                        .iter()
+                        .map(|v| self.normalize.apply(v))
+                        .collect();
+                    self.check_set(ctx, &source_set, &mut out);
+                }
+            }
+            Relation::Identical => self.check_identical(ctx, &mut out),
+            Relation::Resolves => self.check_resolves(ctx, &mut out),
         }
         Ok(out)
     }
@@ -186,8 +225,10 @@ impl CrossFileRule {
     /// Read + extract the source file's literal values (raw, not
     /// normalised — callers normalise as the relation needs).
     /// `None` (with a violation pushed) when the source can't be
-    /// read or parsed.
+    /// read or parsed. Only the value relations + `resolves` call
+    /// this; `build` guarantees `source_extract` is `Some` for them.
     fn source_values(&self, ctx: &Context<'_>, out: &mut Vec<Violation>) -> Option<Vec<String>> {
+        let extract = self.source_extract.as_ref()?;
         let src = Path::new(&self.source_file);
         let text = match read_rel(ctx, src) {
             Ok(t) => t,
@@ -206,7 +247,7 @@ impl CrossFileRule {
                 return None;
             }
         };
-        let values = match extract_values(&self.source_extract, &text) {
+        let values = match extract_values(extract, &text) {
             Ok(v) => v,
             Err(e) => {
                 out.push(Self::violation(src, &format!("source extract failed: {e}")));
@@ -316,13 +357,112 @@ impl CrossFileRule {
         Some(Violation::new(msg).with_path(target.to_path_buf()))
     }
 
-    /// Iterate the targets (glob expansion or explicit list),
-    /// calling `f(target_path, raw_literal_values, out)` for each
-    /// readable target. Read/extract errors and a zero-match glob
-    /// are reported here, so `f` sees only resolvable targets.
+    /// `relation: identical` — every target file's bytes (after
+    /// dropping `skip_header_lines` leading lines) must equal the
+    /// source file's. Binary-accurate; `normalize` does not apply.
+    fn check_identical(&self, ctx: &Context<'_>, out: &mut Vec<Violation>) {
+        let src = Path::new(&self.source_file);
+        let src_bytes = match crate::io::read_capped(&ctx.root.join(src)) {
+            Ok(b) => b,
+            Err(e) => {
+                out.push(Self::violation(src, &read_cap_reason("source file", &e)));
+                return;
+            }
+        };
+        let src_cmp = skip_header(&src_bytes, self.skip_header_lines);
+
+        let paths = self.identical_target_paths(ctx);
+        if paths.is_empty() {
+            if !self.allow_missing {
+                out.push(Self::violation(src, "targets matched no files"));
+            }
+            return;
+        }
+        for target in &paths {
+            let tgt_bytes = match crate::io::read_capped(&ctx.root.join(target)) {
+                Ok(b) => b,
+                Err(crate::io::ReadCapError::TooLarge(n)) => {
+                    out.push(Self::violation(
+                        target,
+                        &format!("target file is too large to analyze ({n} bytes; 256 MiB cap)"),
+                    ));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(_)) => {
+                    if !self.allow_missing {
+                        out.push(Self::violation(
+                            target,
+                            "target file is missing or unreadable",
+                        ));
+                    }
+                    continue;
+                }
+            };
+            if skip_header(&tgt_bytes, self.skip_header_lines) != src_cmp {
+                let msg = self.message.clone().unwrap_or_else(|| {
+                    format!(
+                        "{} is not byte-identical to {}",
+                        target.display(),
+                        self.source_file,
+                    )
+                });
+                out.push(Violation::new(msg).with_path(target.clone()));
+            }
+        }
+    }
+
+    /// The target paths for `identical` (glob expansion or the
+    /// explicit list), ignoring `extract` (which is absent).
+    fn identical_target_paths(&self, ctx: &Context<'_>) -> Vec<PathBuf> {
+        match &self.targets {
+            Some(Targets::Glob { scope, .. }) => ctx
+                .index
+                .files()
+                .filter(|e| scope.matches(&e.path, ctx.index))
+                .map(|e| e.path.to_path_buf())
+                .collect(),
+            Some(Targets::List(list)) => list.iter().map(|(f, _)| PathBuf::from(f)).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// `relation: resolves` — each path the source extracts must
+    /// exist on disk (file or dir), resolved relative to the source
+    /// file's directory. The 1-level forward half of
+    /// `registry_paths_resolve`.
+    fn check_resolves(&self, ctx: &Context<'_>, out: &mut Vec<Violation>) {
+        let Some(paths) = self.source_values(ctx, out) else {
+            return;
+        };
+        let src = Path::new(&self.source_file);
+        let base = src.parent().map(Path::to_path_buf).unwrap_or_default();
+        let dirs: HashSet<&Path> = ctx.index.dirs().map(|e| &*e.path).collect();
+        for entry in &paths {
+            let resolved = normalise(&base.join(entry));
+            if !ctx.index.contains_file(&resolved) && !dirs.contains(resolved.as_path()) {
+                let msg = self.message.clone().unwrap_or_else(|| {
+                    format!(
+                        "{}: declared path {entry:?} does not resolve to a file or directory",
+                        src.display(),
+                    )
+                });
+                out.push(Violation::new(msg).with_path(src.to_path_buf()));
+            }
+        }
+    }
+
+    /// Iterate the value-relation targets, calling
+    /// `f(target_path, raw_literal_values, out)` for each readable
+    /// target. Read/extract errors and a zero-match glob are
+    /// reported here, so `f` sees only resolvable targets. `build`
+    /// guarantees `targets` is `Some` and every `extract` is `Some`
+    /// for the value relations that call this.
     fn each_target(&self, ctx: &Context<'_>, out: &mut Vec<Violation>, f: &mut TargetFn<'_>) {
         match &self.targets {
-            Targets::Glob { scope, extract } => {
+            Some(Targets::Glob {
+                scope,
+                extract: Some(extract),
+            }) => {
                 let mut matched = 0usize;
                 for e in ctx.index.files() {
                     if !scope.matches(&e.path, ctx.index) {
@@ -340,14 +480,16 @@ impl CrossFileRule {
                     ));
                 }
             }
-            Targets::List(list) => {
+            Some(Targets::List(list)) => {
                 for (file, extract) in list {
+                    let Some(extract) = extract else { continue };
                     let target = Path::new(file);
                     if let Some(values) = self.target_values(ctx, target, extract, out) {
                         f(target, &values, out);
                     }
                 }
             }
+            _ => {}
         }
     }
 
@@ -434,42 +576,78 @@ fn render(set: &BTreeSet<&String>) -> String {
         .join(", ")
 }
 
+/// Drop the first `n` newline-delimited lines of `bytes` (for
+/// `identical`'s `skip_header_lines`). Fewer than `n` lines ⇒ the
+/// whole file is header, so the comparison is over the empty slice.
+fn skip_header(bytes: &[u8], n: usize) -> &[u8] {
+    if n == 0 {
+        return bytes;
+    }
+    let mut seen = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            seen += 1;
+            if seen == n {
+                return &bytes[i + 1..];
+            }
+        }
+    }
+    &[]
+}
+
+/// Collapse `a/./b` and `a/b/../c` without touching the filesystem,
+/// so resolved paths key into the index. Mirrors the same helper in
+/// `registry_paths_resolve` / `file_graph`.
+fn normalise(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(c) => out.push(c),
+            Component::RootDir | Component::Prefix(_) => out.push(comp.as_os_str()),
+        }
+    }
+    out
+}
+
+/// The user-facing reason fragment for a capped-read failure.
+fn read_cap_reason(what: &str, e: &crate::io::ReadCapError) -> String {
+    match e {
+        crate::io::ReadCapError::TooLarge(n) => {
+            format!("{what} is too large to analyze ({n} bytes; 256 MiB cap)")
+        }
+        crate::io::ReadCapError::Io(e) => format!("{what} is unreadable: {e}"),
+    }
+}
+
 /// Read a tree-relative path as text (the index stores paths, not
 /// contents, so the cross-file rules read the file themselves).
 fn read_rel(ctx: &Context<'_>, rel: &Path) -> Result<String, crate::io::ReadCapError> {
     crate::io::read_capped(&ctx.root.join(rel)).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
-pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
-    alint_core::reject_scope_filter_on_cross_file(spec, "cross_file")?;
-    let opts: Options = spec
-        .deserialize_options()
-        .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
-
-    let cfg = |msg: String| Error::rule_config(&spec.id, msg);
-
-    if opts.source.file.trim().is_empty() {
-        return Err(cfg("`source.file` must not be empty".into()));
-    }
-    let source_extract = opts
-        .source
-        .extract
-        .resolve()
-        .map_err(|e| cfg(format!("invalid `source.extract`: {e}")))?;
-
-    let targets = match opts.targets {
+/// Resolve a `targets:` spec, validating each glob / list entry.
+/// `extract` stays `Option` (absent for `identical`); the
+/// relation-shape coupling is checked in `validate_shape`.
+fn resolve_targets(ts: TargetsSpec, cfg: &impl Fn(String) -> Error) -> Result<Targets> {
+    match ts {
         TargetsSpec::Glob { files, extract } => {
             if files.trim().is_empty() {
                 return Err(cfg("`targets.files` must not be empty".into()));
             }
             let scope = Scope::from_patterns(std::slice::from_ref(&files))
                 .map_err(|e| cfg(format!("invalid `targets.files` glob: {e}")))?;
-            Targets::Glob {
-                scope,
-                extract: extract
-                    .resolve()
-                    .map_err(|e| cfg(format!("invalid `targets.extract`: {e}")))?,
-            }
+            let extract = match extract {
+                Some(e) => Some(
+                    e.resolve()
+                        .map_err(|e| cfg(format!("invalid `targets.extract`: {e}")))?,
+                ),
+                None => None,
+            };
+            Ok(Targets::Glob { scope, extract })
         }
         TargetsSpec::List(list) => {
             if list.is_empty() {
@@ -480,15 +658,108 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 if t.file.trim().is_empty() {
                     return Err(cfg(format!("`targets[{i}].file` must not be empty")));
                 }
-                let ex = t
-                    .extract
-                    .resolve()
-                    .map_err(|e| cfg(format!("invalid `targets[{i}].extract`: {e}")))?;
+                let ex = match t.extract {
+                    Some(e) => Some(
+                        e.resolve()
+                            .map_err(|e| cfg(format!("invalid `targets[{i}].extract`: {e}")))?,
+                    ),
+                    None => None,
+                };
                 resolved.push((t.file, ex));
             }
-            Targets::List(resolved)
+            Ok(Targets::List(resolved))
         }
+    }
+}
+
+/// Enforce the per-relation shape: value relations need
+/// `source.extract` + `targets` (with `extract`); `identical` needs
+/// `targets` without `extract` and no `source.extract`; `resolves`
+/// needs `source.extract` and no `targets`.
+fn validate_shape(
+    relation: Relation,
+    source_extract: Option<&Extract>,
+    targets: Option<&Targets>,
+    cfg: &impl Fn(String) -> Error,
+) -> Result<()> {
+    let (any_target_extract, all_target_extract) = match targets {
+        Some(Targets::Glob { extract, .. }) => (extract.is_some(), extract.is_some()),
+        Some(Targets::List(list)) => (
+            list.iter().any(|(_, e)| e.is_some()),
+            list.iter().all(|(_, e)| e.is_some()),
+        ),
+        None => (false, false),
     };
+    if relation.is_value() {
+        if source_extract.is_none() {
+            return Err(cfg(format!(
+                "`relation: {relation:?}` (a value relation) needs `source.extract`"
+            )));
+        }
+        if targets.is_none() {
+            return Err(cfg("a value relation needs `targets`".into()));
+        }
+        if !all_target_extract {
+            return Err(cfg("a value relation's `targets` need `extract`".into()));
+        }
+    } else if relation == Relation::Identical {
+        if source_extract.is_some() {
+            return Err(cfg(
+                "`relation: identical` compares whole files; remove `source.extract`".into(),
+            ));
+        }
+        if targets.is_none() {
+            return Err(cfg("`relation: identical` needs `targets`".into()));
+        }
+        if any_target_extract {
+            return Err(cfg(
+                "`relation: identical` compares whole files; remove `targets.extract`".into(),
+            ));
+        }
+    } else {
+        // resolves
+        if source_extract.is_none() {
+            return Err(cfg(
+                "`relation: resolves` needs `source.extract` (the paths to check)".into(),
+            ));
+        }
+        if targets.is_some() {
+            return Err(cfg(
+                "`relation: resolves` checks the filesystem; remove `targets`".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    alint_core::reject_scope_filter_on_cross_file(spec, "cross_file")?;
+    let opts: Options = spec
+        .deserialize_options()
+        .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
+    let cfg = |msg: String| Error::rule_config(&spec.id, msg);
+
+    if opts.source.file.trim().is_empty() {
+        return Err(cfg("`source.file` must not be empty".into()));
+    }
+    let source_extract = match opts.source.extract {
+        Some(spec) => Some(
+            spec.resolve()
+                .map_err(|e| cfg(format!("invalid `source.extract`: {e}")))?,
+        ),
+        None => None,
+    };
+    let targets = match opts.targets {
+        Some(ts) => Some(resolve_targets(ts, &cfg)?),
+        None => None,
+    };
+
+    validate_shape(
+        opts.relation,
+        source_extract.as_ref(),
+        targets.as_ref(),
+        &cfg,
+    )?;
 
     Ok(Box::new(CrossFileRule {
         id: spec.id.clone(),
@@ -501,6 +772,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         relation: opts.relation,
         normalize: opts.normalize,
         allow_missing: opts.allow_missing_target,
+        skip_header_lines: opts.skip_header_lines.unwrap_or(0),
     }))
 }
 
@@ -522,8 +794,7 @@ mod tests {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn rule(
+    fn value_rule(
         source_file: &str,
         source: Extract,
         targets: Targets,
@@ -536,11 +807,12 @@ mod tests {
             policy_url: None,
             message: None,
             source_file: source_file.into(),
-            source_extract: source,
-            targets,
+            source_extract: Some(source),
+            targets: Some(targets),
             relation,
             normalize,
             allow_missing: false,
+            skip_header_lines: 0,
         }
     }
 
@@ -581,12 +853,12 @@ mod tests {
         )
         .unwrap();
         let idx = index(&["Cargo.toml", "crates/a/Cargo.toml", "crates/b/Cargo.toml"]);
-        let r = rule(
+        let r = value_rule(
             "Cargo.toml",
             Extract::Toml("$.workspace.package.version".into()),
             Targets::Glob {
                 scope: Scope::from_patterns(&["crates/*/Cargo.toml".to_string()]).unwrap(),
-                extract: Extract::Toml("$.package.version".into()),
+                extract: Some(Extract::Toml("$.package.version".into())),
             },
             Relation::Equals,
             Normalize::None,
@@ -603,10 +875,13 @@ mod tests {
         let root = dir.path();
         std::fs::write(root.join("m.json"), "{\"v\":[\"1\",\"2\"]}").unwrap();
         let idx = index(&["m.json"]);
-        let r = rule(
+        let r = value_rule(
             "m.json",
             Extract::Json("$.v[*]".into()),
-            Targets::List(vec![("m.json".into(), Extract::Json("$.v[0]".into()))]),
+            Targets::List(vec![(
+                "m.json".into(),
+                Some(Extract::Json("$.v[0]".into())),
+            )]),
             Relation::Equals,
             Normalize::None,
         );
@@ -626,12 +901,12 @@ mod tests {
         .unwrap();
         std::fs::write(root.join("Directory.Build.props"), "8.0.100\n").unwrap();
         let idx = index(&["global.json", "Directory.Build.props"]);
-        let r = rule(
+        let r = value_rule(
             "global.json",
             Extract::Json("$.sdk.version".into()),
             Targets::List(vec![(
                 "Directory.Build.props".into(),
-                Extract::Lines(crate::extract::LinesOpts::default()),
+                Some(Extract::Lines(crate::extract::LinesOpts::default())),
             )]),
             Relation::Equals,
             Normalize::SemverMajor,
@@ -642,7 +917,7 @@ mod tests {
     // ─── set relations ──────────────────────────────────────────
 
     fn set_rule(source: Extract, targets: Targets, relation: Relation) -> CrossFileRule {
-        rule("src.json", source, targets, relation, Normalize::None)
+        value_rule("src.json", source, targets, relation, Normalize::None)
     }
 
     fn write_sets(root: &Path, source: &str, target: &str) {
@@ -651,7 +926,10 @@ mod tests {
     }
 
     fn set_targets() -> Targets {
-        Targets::List(vec![("tgt.json".into(), Extract::Json("$.have[*]".into()))])
+        Targets::List(vec![(
+            "tgt.json".into(),
+            Some(Extract::Json("$.have[*]".into())),
+        )])
     }
 
     #[test]
@@ -761,5 +1039,171 @@ mod tests {
             Relation::Subset,
         );
         assert!(eval(&r, root, &idx).is_empty());
+    }
+
+    // ─── identical ──────────────────────────────────────────────
+
+    fn identical_rule(targets: Targets, skip_header_lines: usize) -> CrossFileRule {
+        CrossFileRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            source_file: "README.md".into(),
+            source_extract: None,
+            targets: Some(targets),
+            relation: Relation::Identical,
+            normalize: Normalize::None,
+            allow_missing: false,
+            skip_header_lines,
+        }
+    }
+
+    #[test]
+    fn identical_fires_on_byte_difference_silent_on_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("README.md"), "# Project\n\nHello.\n").unwrap();
+        std::fs::create_dir_all(root.join("crates/a")).unwrap();
+        std::fs::create_dir_all(root.join("crates/b")).unwrap();
+        // a mirrors exactly; b drifts by a byte.
+        std::fs::write(root.join("crates/a/README.md"), "# Project\n\nHello.\n").unwrap();
+        std::fs::write(root.join("crates/b/README.md"), "# Project\n\nHello!\n").unwrap();
+        let idx = index(&["README.md", "crates/a/README.md", "crates/b/README.md"]);
+        let r = identical_rule(
+            Targets::Glob {
+                scope: Scope::from_patterns(&["crates/*/README.md".to_string()]).unwrap(),
+                extract: None,
+            },
+            0,
+        );
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "only crates/b drifts: {v:?}");
+        assert!(v[0].message.contains("crates/b/README.md"));
+        assert!(v[0].message.contains("not byte-identical"));
+    }
+
+    #[test]
+    fn identical_skip_header_lines_ignores_a_differing_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Two leading lines differ; the body is identical.
+        std::fs::write(root.join("README.md"), "// 2024 Acme\n// gen\nBODY\n").unwrap();
+        std::fs::write(root.join("mirror.md"), "// 2025 Acme\n// gen2\nBODY\n").unwrap();
+        let idx = index(&["README.md", "mirror.md"]);
+        let mk = |skip| identical_rule(Targets::List(vec![("mirror.md".into(), None)]), skip);
+        // skip 2 -> bodies match.
+        assert!(eval(&mk(2), root, &idx).is_empty());
+        // skip 0 -> headers differ -> fires.
+        assert_eq!(eval(&mk(0), root, &idx).len(), 1);
+    }
+
+    // ─── resolves ───────────────────────────────────────────────
+
+    fn resolves_rule(source_file: &str, extract: Extract) -> CrossFileRule {
+        CrossFileRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            source_file: source_file.into(),
+            source_extract: Some(extract),
+            targets: None,
+            relation: Relation::Resolves,
+            normalize: Normalize::None,
+            allow_missing: false,
+            skip_header_lines: 0,
+        }
+    }
+
+    fn index_with_dirs(files: &[&str], dirs: &[&str]) -> FileIndex {
+        let mut e: Vec<FileEntry> = files
+            .iter()
+            .map(|p| FileEntry {
+                path: Path::new(p).into(),
+                is_dir: false,
+                size: 1,
+            })
+            .collect();
+        e.extend(dirs.iter().map(|p| FileEntry {
+            path: Path::new(p).into(),
+            is_dir: true,
+            size: 0,
+        }));
+        FileIndex::from_entries(e)
+    }
+
+    #[test]
+    fn resolves_fires_on_a_declared_path_that_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/a\", \"crates/gone\"]\n",
+        )
+        .unwrap();
+        // crates/a exists (a dir); crates/gone does not.
+        let idx = index_with_dirs(&["Cargo.toml"], &["crates/a"]);
+        let r = resolves_rule("Cargo.toml", Extract::Toml("$.workspace.members[*]".into()));
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("crates/gone"));
+        assert!(v[0].message.contains("does not resolve"));
+    }
+
+    #[test]
+    fn resolves_silent_when_every_path_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("manifest.txt"), "src/a.rs\nsrc/b.rs\n").unwrap();
+        let idx = index(&["manifest.txt", "src/a.rs", "src/b.rs"]);
+        let r = resolves_rule(
+            "manifest.txt",
+            Extract::Lines(crate::extract::LinesOpts::default()),
+        );
+        assert!(eval(&r, root, &idx).is_empty());
+    }
+
+    // ─── build-time shape validation ────────────────────────────
+
+    #[test]
+    fn build_enforces_per_relation_shape() {
+        use crate::test_support::spec_yaml;
+        // identical with a stray source.extract -> rejected.
+        let bad_identical = "id: t\nkind: cross_file\nsource:\n  file: a\n  \
+            extract:\n    lines: {}\ntargets:\n  files: \"b/*\"\nrelation: identical\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(bad_identical)).is_err(),
+            "identical must not take source.extract"
+        );
+        // resolves with targets -> rejected.
+        let bad_resolves = "id: t\nkind: cross_file\nsource:\n  file: a\n  \
+            extract:\n    lines: {}\ntargets:\n  files: \"b/*\"\n  extract:\n    lines: {}\n\
+            relation: resolves\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(bad_resolves)).is_err(),
+            "resolves must not take targets"
+        );
+        // value relation missing source.extract -> rejected.
+        let bad_value = "id: t\nkind: cross_file\nsource:\n  file: a\ntargets:\n  \
+            files: \"b/*\"\n  extract:\n    lines: {}\nrelation: subset\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(bad_value)).is_err(),
+            "value relation needs source.extract"
+        );
+        // valid identical (no extract anywhere) -> builds.
+        let ok_identical = "id: t\nkind: cross_file\nsource:\n  file: README.md\n\
+            targets:\n  files: \"crates/*/README.md\"\nrelation: identical\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(ok_identical)).is_ok(),
+            "valid identical should build"
+        );
+        // valid resolves (source extract, no targets) -> builds.
+        let ok_resolves = "id: t\nkind: cross_file\nsource:\n  file: Cargo.toml\n  \
+            extract:\n    toml: \"$.workspace.members[*]\"\nrelation: resolves\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(ok_resolves)).is_ok(),
+            "valid resolves should build"
+        );
     }
 }
