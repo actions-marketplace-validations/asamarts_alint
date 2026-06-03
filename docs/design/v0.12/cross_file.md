@@ -4,7 +4,9 @@ Status: **Increments 1–2 shipped — 2026-06-03** (value relations `equals`
 default + `subset`/`superset`/`set_equals`, `cross_file_value_equals` →
 byte-compatible alias, count 84 → 85; then `identical` whole-file + `resolves`
 path-existence; then the `normalize:` promotion — `semver-minor` + composable
-lists). Only the `whole_file`/`file_set` extract sources remain. CHANGELOG
+lists; then the `whole_file` extract source — increment 5a). Only the optional
+`file_set` source (increment 5b) remains, pending a scope confirmation (it
+overlaps `registry_paths_resolve`'s `resolves`+orphans surface). CHANGELOG
 `[Unreleased]`. Realises **primitive A**
 of the [architecture synthesis](./architecture_synthesis.md): one kind,
 parameterised by `relation:`, over the shared `extract:` (`crate::extract`) +
@@ -85,8 +87,18 @@ kind count moves +1 (the new `cross_file` behaviour), not -1+1.
    deferred (not corpus-proven). Currently `cross_file`-local; pushing it into
    the shared `crate::extract` post-processing for every cross-file kind is a
    later refactor.
-5. **Convenience source extensions** — `whole_file` / `file_set` (a glob → the
-   set of matching paths) `extract` sources; a multi-file source glob.
+5. **Convenience source extensions** —
+   - **5a `whole_file` (SHIPPED 2026-06-03)** — an `extract: { whole_file: {} }`
+     source/target yielding the entire file content as one value. Makes
+     `relation: equals`/`subset`/etc. operate on whole-file content without an
+     `identical` byte-compare (e.g. a `LICENSE` that must equal `LICENSE-MIT`
+     even though both carry `${YEAR}` interpolation markers). The non-literal
+     skip (for interpolated *paths*) is bypassed for `whole_file` — content is
+     compared verbatim. No new kind/count change; an extract source on the
+     existing cross-file kinds.
+   - **5b `file_set` (deferred, pending scope)** — a glob → the set of matching
+     paths as a source. Overlaps `registry_paths_resolve`'s resolve+orphan
+     surface; confirm a non-redundant use-case before building.
 
 Each increment: design-doc-first, atomic rule+wiring commit on CHANGELOG
 `[Unreleased]` toward the v0.12 minor. The 110 corpus configs + the study log are

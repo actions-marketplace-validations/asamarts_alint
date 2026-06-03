@@ -322,6 +322,11 @@ impl CrossFileRule {
                 return None;
             }
         };
+        // Whole-file content is compared verbatim — the non-literal
+        // skip (for interpolated *paths*) does not apply.
+        if matches!(extract, Extract::WholeFile) {
+            return Some(values);
+        }
         let (skipped, literal): (Vec<String>, Vec<String>) =
             values.into_iter().partition(|v| is_non_literal(v));
         for v in &skipped {
@@ -605,6 +610,11 @@ impl CrossFileRule {
                 return None;
             }
         };
+        // Whole-file content is compared verbatim — the non-literal
+        // skip (for interpolated *paths*) does not apply.
+        if matches!(extract, Extract::WholeFile) {
+            return Some(values);
+        }
         let (skipped, literal): (Vec<String>, Vec<String>) =
             values.into_iter().partition(|v| is_non_literal(v));
         for v in &skipped {
@@ -937,6 +947,32 @@ mod tests {
         assert_eq!(v.len(), 1, "only crates/b drifts: {v:?}");
         assert!(v[0].message.contains("crates/b/Cargo.toml"));
         assert!(v[0].message.contains("1.3.0"));
+    }
+
+    #[test]
+    fn whole_file_equals_compares_verbatim_despite_interpolation_markers() {
+        // The body carries `${...}`/`{{...}}` — markers the non-literal
+        // skip would normally drop. whole_file must compare verbatim.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let body = "Copyright ${YEAR} Acme\nAll rights {{ reserved }}.\n";
+        std::fs::write(root.join("LICENSE"), body).unwrap();
+        std::fs::write(root.join("LICENSE-MIT"), body).unwrap();
+        std::fs::write(root.join("LICENSE-APACHE"), "different text\n").unwrap();
+        let idx = index(&["LICENSE", "LICENSE-MIT", "LICENSE-APACHE"]);
+        let r = value_rule(
+            "LICENSE",
+            Extract::WholeFile,
+            Targets::Glob {
+                scope: Scope::from_patterns(&["LICENSE-*".to_string()]).unwrap(),
+                extract: Some(Extract::WholeFile),
+            },
+            Relation::Equals,
+            Normalize::None,
+        );
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "only LICENSE-APACHE drifts: {v:?}");
+        assert!(v[0].message.contains("LICENSE-APACHE"));
     }
 
     #[test]

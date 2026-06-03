@@ -114,6 +114,30 @@ CrossFileRule {
     skip_header_lines: 0,
 }
 
+=== kind: cross_file | id: license-copies-have-identical-content ===
+CrossFileRule {
+    id: "license-copies-have-identical-content",
+    level: Error,
+    policy_url: None,
+    message: None,
+    source_file: "LICENSE",
+    source_extract: Some(
+        WholeFile,
+    ),
+    targets: Some(
+        Glob {
+            scope: Scope { ... },
+            extract: Some(
+                WholeFile,
+            ),
+        },
+    ),
+    relation: Equals,
+    normalize: [],
+    allow_missing: false,
+    skip_header_lines: 0,
+}
+
 === kind: cross_file_value_equals | id: workspace-versions-coherent ===
 CrossFileRule {
     id: "workspace-versions-coherent",

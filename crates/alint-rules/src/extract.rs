@@ -23,6 +23,9 @@ pub(crate) enum Extract {
     Lines(LinesOpts),
     /// Capture group 1 of each match is the value.
     Regex(String),
+    /// The whole file content as a single value (e.g. for a
+    /// `cross_file` `equals` + `normalize` whole-file compare).
+    WholeFile,
 }
 
 /// The deserialised `extract:` block — exactly one field set,
@@ -40,6 +43,8 @@ pub(crate) struct ExtractSpec {
     lines: Option<LinesOpts>,
     #[serde(default)]
     regex: Option<String>,
+    #[serde(default)]
+    whole_file: Option<WholeFileOpts>,
 }
 
 impl ExtractSpec {
@@ -50,13 +55,14 @@ impl ExtractSpec {
             ("yaml", self.yaml.is_some()),
             ("lines", self.lines.is_some()),
             ("regex", self.regex.is_some()),
+            ("whole_file", self.whole_file.is_some()),
         ]
         .into_iter()
         .filter_map(|(n, on)| on.then_some(n))
         .collect();
         match set.as_slice() {
             [] => Err(
-                "`extract` must set exactly one of toml/json/yaml/lines/regex (none set)"
+                "`extract` must set exactly one of toml/json/yaml/lines/regex/whole_file (none set)"
                     .to_string(),
             ),
             [_] => Ok(if let Some(q) = self.toml {
@@ -67,11 +73,13 @@ impl ExtractSpec {
                 Extract::Yaml(q)
             } else if let Some(o) = self.lines {
                 Extract::Lines(o)
+            } else if let Some(q) = self.regex {
+                Extract::Regex(q)
             } else {
-                Extract::Regex(self.regex.expect("exactly-one ensures regex set"))
+                Extract::WholeFile
             }),
             many => Err(format!(
-                "`extract` must set exactly one of toml/json/yaml/lines/regex (got {})",
+                "`extract` must set exactly one of toml/json/yaml/lines/regex/whole_file (got {})",
                 many.join(", ")
             )),
         }
@@ -87,10 +95,18 @@ impl From<Extract> for ExtractSpec {
             Extract::Yaml(q) => s.yaml = Some(q),
             Extract::Lines(o) => s.lines = Some(o),
             Extract::Regex(q) => s.regex = Some(q),
+            Extract::WholeFile => s.whole_file = Some(WholeFileOpts::default()),
         }
         s
     }
 }
+
+/// `whole_file:` carries no options today (an empty `{}` map, like a
+/// marker); kept as a struct so options can be added without a
+/// breaking change.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WholeFileOpts {}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -163,6 +179,7 @@ pub(crate) fn extract_values(
                 .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
                 .collect()
         }
+        Extract::WholeFile => vec![text.to_string()],
     })
 }
 
@@ -210,5 +227,23 @@ mod tests {
         ] {
             assert!(!is_non_literal(e), "{e:?} must be literal");
         }
+    }
+
+    #[test]
+    fn whole_file_resolves_and_yields_full_text() {
+        let spec: super::ExtractSpec =
+            serde_yaml_ng::from_str("whole_file: {}").expect("parse whole_file spec");
+        let extract = spec.resolve().expect("resolve whole_file");
+        assert!(matches!(extract, super::Extract::WholeFile));
+        let text = "line one\nline two\n";
+        let got = super::extract_values(&extract, text).expect("extract whole file");
+        assert_eq!(got, vec![text.to_string()]);
+    }
+
+    #[test]
+    fn whole_file_conflicts_with_another_source() {
+        let spec: super::ExtractSpec =
+            serde_yaml_ng::from_str("whole_file: {}\nregex: '(x)'").expect("parse spec");
+        assert!(spec.resolve().is_err(), "two sources must be rejected");
     }
 }

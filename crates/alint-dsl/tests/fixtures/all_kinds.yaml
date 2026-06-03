@@ -166,6 +166,17 @@ rules:
     normalize: none
     level: error
 
+  - id: license-copies-have-identical-content
+    kind: cross_file
+    source:
+      file: LICENSE
+      extract: { whole_file: {} }
+    targets:
+      files: "LICENSE-*"
+      extract: { whole_file: {} }
+    relation: equals
+    level: error
+
   - id: domain-not-depend-on-infra
     kind: file_graph
     nodes: "src/**/*.ts"
