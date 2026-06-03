@@ -1,0 +1,22 @@
+name: git_commit_subject_matches is silent when the subject follows the grammar
+tags: [check, git_commit_subject_matches, git, passing]
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: subject-grammar
+        kind: git_commit_subject_matches
+        matches: '^[a-z0-9_/.-]+: [a-z].*$'
+        level: error
+  git:
+    init: true
+    commits:
+      - "pkg/net: add a thing"
+
+when: [check]
+
+expect:
+  - violations: []

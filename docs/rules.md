@@ -875,6 +875,18 @@ Fail on residual `fixup!` / `squash!` / `amend!` commits left in scope — the o
 
 No configuration knobs — the matched subject prefixes are exactly what `--autosquash` understands. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes.
 
+### `git_commit_subject_matches`
+
+Each commit's subject line (the first line of its message) must match the `matches:` regex — the subject-grammar member of the commit family. Enforces a prefix + shape convention like go / Gerrit's `pkg/path: lowercase summary`, node's `subsystem: description`, or conventional-commit types. The regex is anchored to the **subject alone** (so `^…$` describes the first line exactly), unlike `git_commit_message`'s `pattern:` which matches the whole subject + body; for a subject-length cap use `git_commit_message`'s `subject_max_length:`. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes (HEAD-only when `since:` is unset, `<since>..HEAD` when set; silent outside a git repo; a bad `since:` ref hard-fails with a shallow-clone hint).
+
+```yaml
+- id: subject-grammar
+  kind: git_commit_subject_matches
+  matches: '^[a-z0-9_/.-]+: [a-z].{0,70}$'   # `component: lowercase summary`
+  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
+  level: error
+```
+
 ### `git_commit_author_allowlist`
 
 Assert every commit author in scope matches an allowed email and/or name pattern. At least one of `email_pattern:` / `name_pattern:` is required; specifying both means BOTH must match (AND). A commit whose author fails any specified pattern fires one violation. Demand: enterprise repos enforcing contributor identity against a corporate domain; OSS projects catching commits from sock-puppet or compromised accounts.

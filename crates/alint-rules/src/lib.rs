@@ -49,6 +49,7 @@ pub mod git_commit_gpg_signed;
 pub mod git_commit_message;
 pub mod git_commit_no_fixup;
 pub mod git_commit_signed_off;
+pub mod git_commit_subject_matches;
 pub mod git_no_denied_paths;
 pub mod import_gate;
 pub mod indent_style;
@@ -143,6 +144,10 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("git_no_denied_paths", git_no_denied_paths::build);
     registry.register("git_commit_message", git_commit_message::build);
     registry.register("git_commit_signed_off", git_commit_signed_off::build);
+    registry.register(
+        "git_commit_subject_matches",
+        git_commit_subject_matches::build,
+    );
     registry.register("git_commit_no_fixup", git_commit_no_fixup::build);
     registry.register(
         "git_commit_author_allowlist",
@@ -278,6 +283,7 @@ mod registry_tests {
             "git_no_denied_paths",
             "git_commit_message",
             "git_commit_signed_off",
+            "git_commit_subject_matches",
             "git_commit_no_fixup",
             "git_commit_author_allowlist",
             "git_commit_gpg_signed",

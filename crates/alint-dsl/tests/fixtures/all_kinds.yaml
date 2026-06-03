@@ -467,6 +467,10 @@ rules:
   - id: dco-sign-off
     kind: git_commit_signed_off
     level: warning
+  - id: subject-grammar
+    kind: git_commit_subject_matches
+    matches: '^[a-z0-9_/.-]+: [a-z].{0,70}$'
+    level: warning
   - id: no-fixup-commits
     kind: git_commit_no_fixup
     level: warning

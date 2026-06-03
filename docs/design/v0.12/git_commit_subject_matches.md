@@ -1,6 +1,11 @@
 # `git_commit_subject_matches`
 
-Status: **Planned (v0.12).** Top-ranked gap from the 30-repo pass; the
+Status: **Shipped — 2026-06-03** (`crate::git_commit_subject_matches`, rule count
+85 → 86, CHANGELOG `[Unreleased]`). The 5th commit-validation family member,
+reusing `commit_range`. Built minimal: `matches:` (subject-line regex) + the
+family `since:`/`include_merges:`; the proposed `max_length:` sugar was DROPPED to
+avoid duplicating `git_commit_message`'s `subject_max_length:` (compose the two
+rules, or encode length in the regex). Top-ranked gap from the 30-repo pass; the
 cheapest, clearest single win.
 
 ## Motivation / demand

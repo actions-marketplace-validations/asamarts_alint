@@ -824,6 +824,19 @@ GitCommitSignedOffRule {
     include_merges: false,
 }
 
+=== kind: git_commit_subject_matches | id: subject-grammar ===
+GitCommitSubjectMatchesRule {
+    id: "subject-grammar",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    matches: Regex(
+        "^[a-z0-9_/.-]+: [a-z].{0,70}$",
+    ),
+    since_raw: None,
+    include_merges: false,
+}
+
 === kind: git_no_denied_paths | id: no-tracked-secrets ===
 GitNoDeniedPathsRule {
     id: "no-tracked-secrets",

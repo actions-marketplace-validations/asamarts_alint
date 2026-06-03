@@ -1,0 +1,26 @@
+name: git_commit_subject_matches fires on a subject that breaks the grammar
+tags: [check, git_commit_subject_matches, git, failing]
+
+# HEAD mode (no `since:`): the tip commit's subject is uppercase /
+# wrong shape, so the `component: lowercase summary` grammar fails.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: subject-grammar
+        kind: git_commit_subject_matches
+        matches: '^[a-z0-9_/.-]+: [a-z].*$'
+        level: error
+  git:
+    init: true
+    commits:
+      - "WIP: Capitalised and the wrong shape"
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: subject-grammar, level: error}
