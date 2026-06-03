@@ -1,12 +1,14 @@
 # The unified `cross_file` relation kind
 
-Status: **Increments 1–2 shipped — 2026-06-03** (value relations `equals`
+Status: **COMPLETE — 2026-06-03** (value relations `equals`
 default + `subset`/`superset`/`set_equals`, `cross_file_value_equals` →
 byte-compatible alias, count 84 → 85; then `identical` whole-file + `resolves`
 path-existence; then the `normalize:` promotion — `semver-minor` + composable
-lists; then the `whole_file` extract source — increment 5a). Only the optional
-`file_set` source (increment 5b) remains, pending a scope confirmation (it
-overlaps `registry_paths_resolve`'s `resolves`+orphans surface). CHANGELOG
+lists; then the `whole_file` extract source — increment 5a). The optional
+`file_set` source (increment 5b) was **dropped** after a dedicated scan of the
+111-repo corpus: every parity shape the corpus actually expresses is already
+covered (see §5b), and not one repo asked for `file_set`'s only unique
+capability (bidirectional glob-vs-glob path-set parity). CHANGELOG
 `[Unreleased]`. Realises **primitive A**
 of the [architecture synthesis](./architecture_synthesis.md): one kind,
 parameterised by `relation:`, over the shared `extract:` (`crate::extract`) +
@@ -96,9 +98,31 @@ kind count moves +1 (the new `cross_file` behaviour), not -1+1.
      skip (for interpolated *paths*) is bypassed for `whole_file` — content is
      compared verbatim. No new kind/count change; an extract source on the
      existing cross-file kinds.
-   - **5b `file_set` (deferred, pending scope)** — a glob → the set of matching
-     paths as a source. Overlaps `registry_paths_resolve`'s resolve+orphan
-     surface; confirm a non-redundant use-case before building.
+   - **5b `file_set` (DROPPED 2026-06-03 — corpus-unjustified)** — would have
+     added a glob → path-set source for bidirectional glob-vs-glob path-set
+     parity. A dedicated scan of all 111 corpus repos showed every parity shape
+     repos *actually* express is already covered, two in production configs:
+     - "every X has sibling Y by stem" → `every_matching_has`/`for_each_file` +
+       `{stem}` (eslint `lib/rules/*.js` → `docs/src/rules/{stem}.md` +
+       `tests/lib/rules/{stem}.js`, `eslint-eslint.alint.yml:45`);
+     - "Y exists AND Y.value == f(X)" → `for_each_dir` + nested `json_path_equals`
+       `equals: "{path}"` (docusaurus `packages/*` repository.directory,
+       `facebook-docusaurus.alint.yml:84`);
+     - sibling pairing (.c↔.h) → the released `pair` kind + `{stem}` (vapor
+       `Sources/CVaporBcrypt/*.c` → `{stem}.h`, `vapor-vapor.alint.yml:89`);
+     - manifest→disk + orphans → `registry_paths_resolve` (TypeScript `libs.json`);
+     - value set-equality → `cross_file set_equals` (istio dependabot lists).
+
+     `file_set`'s *only* unique capability — bidirectional path-set parity in one
+     rule with set-diff reporting — was requested by **zero** of the 111 repos (a
+     targeted search for the reverse/orphan direction: `stray`, `orphan test`,
+     `bidirectional`, `set_equals.*path` found nothing beyond vapor's `pair`
+     case). Building it would add surface ahead of *and past* demand, against the
+     study-gated v0.12 method. The real new-kind candidates the scan surfaced are
+     different kinds (`registry_orphans_from_text_list` B1,
+     `cross_file_symbol_set_equals` B2 — both source extensions, not path-set
+     parity; see `case_study_log.md`). **`cross_file` is therefore complete** with
+     `whole_file` as its final increment.
 
 Each increment: design-doc-first, atomic rule+wiring commit on CHANGELOG
 `[Unreleased]` toward the v0.12 minor. The 110 corpus configs + the study log are
