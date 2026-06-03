@@ -3,8 +3,9 @@
 Status: **Increments 1–2 shipped — 2026-06-03** (value relations `equals`
 default + `subset`/`superset`/`set_equals`, `cross_file_value_equals` →
 byte-compatible alias, count 84 → 85; then `identical` whole-file + `resolves`
-path-existence). Only the `normalize:` promotion + the `whole_file`/`file_set`
-extract sources remain. CHANGELOG `[Unreleased]`. Realises **primitive A**
+path-existence; then the `normalize:` promotion — `semver-minor` + composable
+lists). Only the `whole_file`/`file_set` extract sources remain. CHANGELOG
+`[Unreleased]`. Realises **primitive A**
 of the [architecture synthesis](./architecture_synthesis.md): one kind,
 parameterised by `relation:`, over the shared `extract:` (`crate::extract`) +
 `normalize:`. Supersedes [`value_set_membership.md`](./value_set_membership.md)
@@ -77,9 +78,13 @@ kind count moves +1 (the new `cross_file` behaviour), not -1+1.
    path resolves relative to the source file's dir and must exist (file or dir);
    no `targets`. The forward half of `registry_paths_resolve`, which keeps its
    name + rich `base`/`must_contain`/`orphans` ergonomics (use it for those).
-4. **`normalize:` promotion** ([`cross_file_normalize.md`](./cross_file_normalize.md))
-   — `semver_floor` / `strip_prefix|suffix` / `casefold`, scalar-or-list, pushed
-   into the shared post-extract transform so every cross-file kind benefits.
+4. **`normalize:` promotion — SHIPPED 2026-06-03**
+   ([`cross_file_normalize.md`](./cross_file_normalize.md)) — `semver-minor`
+   (the `MAJOR.MINOR` band, which alone reconciled both corpus signals) +
+   the composable scalar-or-list form. `strip_prefix`/`strip_suffix`/`casefold`
+   deferred (not corpus-proven). Currently `cross_file`-local; pushing it into
+   the shared `crate::extract` post-processing for every cross-file kind is a
+   later refactor.
 5. **Convenience source extensions** — `whole_file` / `file_set` (a glob → the
    set of matching paths) `extract` sources; a multi-file source glob.
 

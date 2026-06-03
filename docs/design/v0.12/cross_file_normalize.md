@@ -1,7 +1,14 @@
 # `normalize:` value-transform on `cross_file_value_equals`
 
-Status: **Planned (v0.12).** 2 corpus signals; small, contained
-extension of an existing kind (not a new kind).
+Status: **Shipped — 2026-06-03** (`crate::cross_file`, rule count unchanged,
+CHANGELOG `[Unreleased]`). Both corpus signals are reconciled by a SINGLE new
+transform — `semver-minor` (the `MAJOR.MINOR` band, each token's leading digits
+with a non-digit prefix stripped: `4.36-dev`/`4.36.0`/`pnpm@11.3.0`/`>=22.13`
+all collapse to one band), so the `strip_prefix`/`strip_suffix` transforms below
+turned out unnecessary and are **deferred** (add only if a non-version case
+appears). The "promotion" delivered is the **composable list** form
+(`normalize: [trim, semver-minor]`, applied left-to-right; scalar back-compat
+preserved) + `semver-minor`. `casefold` also deferred (`lower` covers ASCII).
 
 ## Motivation / demand
 

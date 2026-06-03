@@ -118,6 +118,12 @@ enum Normalize {
     /// Compare only the leading `MAJOR` token (the dotnet/runtime
     /// SDK-band shape: same feature band, not exact patch).
     SemverMajor,
+    /// Compare only the leading `MAJOR.MINOR` band — drops patch and
+    /// pre-release and takes the leading digits of each token, so
+    /// `4.36-dev`, `4.36.0`, `pnpm@11.3.0` (→ `11.3`) and `>=22.13`
+    /// all reconcile to one band (the protobuf / pnpm version-format
+    /// case the v0.12 study surfaced).
+    SemverMinor,
 }
 
 impl Normalize {
@@ -126,6 +132,8 @@ impl Normalize {
             Self::None => v.to_string(),
             Self::Trim => v.trim().to_string(),
             Self::Lower => v.trim().to_lowercase(),
+            // Unchanged released behaviour: leading token, leading
+            // non-digits stripped.
             Self::SemverMajor => v
                 .trim()
                 .split('.')
@@ -133,8 +141,67 @@ impl Normalize {
                 .unwrap_or("")
                 .trim_start_matches(|c: char| !c.is_ascii_digit())
                 .to_string(),
+            Self::SemverMinor => semver_minor(v),
         }
     }
+}
+
+/// Leading digits of a semver token after stripping a non-digit
+/// prefix (`pnpm@11` → `11`, `>=22` → `22`, `36-dev` → `36`).
+fn token_digits(tok: &str) -> String {
+    tok.trim_start_matches(|c: char| !c.is_ascii_digit())
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect()
+}
+
+/// The `MAJOR.MINOR` band of a version string.
+fn semver_minor(v: &str) -> String {
+    let mut it = v.trim().split('.');
+    let major = token_digits(it.next().unwrap_or(""));
+    if major.is_empty() {
+        return String::new();
+    }
+    match it.next().map(token_digits).filter(|m| !m.is_empty()) {
+        Some(minor) => format!("{major}.{minor}"),
+        None => major,
+    }
+}
+
+/// `normalize:` accepts a single transform (`trim`) or an ordered
+/// list (`[trim, semver-minor]`), applied left-to-right. A scalar
+/// vs a sequence are structurally distinct, so an untagged enum
+/// decodes them unambiguously.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum NormalizeSpec {
+    One(Normalize),
+    Many(Vec<Normalize>),
+}
+
+impl Default for NormalizeSpec {
+    fn default() -> Self {
+        Self::One(Normalize::None)
+    }
+}
+
+impl NormalizeSpec {
+    /// The ordered transform list, with `None` (a no-op marker)
+    /// dropped — so an empty list means "no normalization".
+    fn into_list(self) -> Vec<Normalize> {
+        let raw = match self {
+            Self::One(n) => vec![n],
+            Self::Many(v) => v,
+        };
+        raw.into_iter().filter(|n| *n != Normalize::None).collect()
+    }
+}
+
+/// Apply an ordered list of transforms to a value (left-to-right).
+fn apply_normalize(transforms: &[Normalize], v: &str) -> String {
+    transforms
+        .iter()
+        .fold(v.to_string(), |acc, t| t.apply(&acc))
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,7 +214,7 @@ struct Options {
     #[serde(default)]
     relation: Relation,
     #[serde(default)]
-    normalize: Normalize,
+    normalize: NormalizeSpec,
     #[serde(default)]
     allow_missing_target: bool,
     /// `identical` only: drop the first N lines of both files
@@ -183,7 +250,8 @@ pub struct CrossFileRule {
     /// `Some` for value relations + `identical`; `None` for `resolves`.
     targets: Option<Targets>,
     relation: Relation,
-    normalize: Normalize,
+    /// Ordered transform list (empty = no normalization).
+    normalize: Vec<Normalize>,
     allow_missing: bool,
     skip_header_lines: usize,
 }
@@ -209,7 +277,7 @@ impl Rule for CrossFileRule {
                 if let Some(source_values) = self.source_values(ctx, &mut out) {
                     let source_set: BTreeSet<String> = source_values
                         .iter()
-                        .map(|v| self.normalize.apply(v))
+                        .map(|v| apply_normalize(&self.normalize, v))
                         .collect();
                     self.check_set(ctx, &source_set, &mut out);
                 }
@@ -287,7 +355,7 @@ impl CrossFileRule {
                 return;
             }
         };
-        let source_norm = self.normalize.apply(&source);
+        let source_norm = apply_normalize(&self.normalize, &source);
         self.each_target(ctx, out, &mut |target, values, out| {
             if values.is_empty() {
                 if !self.allow_missing {
@@ -299,7 +367,7 @@ impl CrossFileRule {
                 return;
             }
             for value in values {
-                if self.normalize.apply(value) != source_norm {
+                if apply_normalize(&self.normalize, value) != source_norm {
                     out.push(self.mismatch(target, &source, value));
                 }
             }
@@ -315,8 +383,10 @@ impl CrossFileRule {
         out: &mut Vec<Violation>,
     ) {
         self.each_target(ctx, out, &mut |target, values, out| {
-            let target_set: BTreeSet<String> =
-                values.iter().map(|v| self.normalize.apply(v)).collect();
+            let target_set: BTreeSet<String> = values
+                .iter()
+                .map(|v| apply_normalize(&self.normalize, v))
+                .collect();
             if let Some(v) = self.set_violation(target, source_set, &target_set) {
                 out.push(v);
             }
@@ -770,7 +840,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         source_extract,
         targets,
         relation: opts.relation,
-        normalize: opts.normalize,
+        normalize: opts.normalize.into_list(),
         allow_missing: opts.allow_missing_target,
         skip_header_lines: opts.skip_header_lines.unwrap_or(0),
     }))
@@ -810,7 +880,7 @@ mod tests {
             source_extract: Some(source),
             targets: Some(targets),
             relation,
-            normalize,
+            normalize: NormalizeSpec::One(normalize).into_list(),
             allow_missing: false,
             skip_header_lines: 0,
         }
@@ -912,6 +982,81 @@ mod tests {
             Normalize::SemverMajor,
         );
         assert!(eval(&r, root, &idx).is_empty());
+    }
+
+    #[test]
+    fn semver_minor_reconciles_version_formats() {
+        // The protobuf / pnpm version-format cases all collapse to
+        // one MAJOR.MINOR band.
+        assert_eq!(semver_minor("4.36-dev"), "4.36");
+        assert_eq!(semver_minor("4.36.0"), "4.36");
+        assert_eq!(semver_minor("pnpm@11.3.0"), "11.3");
+        assert_eq!(semver_minor(">=22.13"), "22.13");
+        assert_eq!(semver_minor("4"), "4");
+        assert_eq!(semver_minor(""), "");
+        // SemverMajor keeps its unchanged released behaviour.
+        assert_eq!(Normalize::SemverMajor.apply("8.0.402"), "8");
+    }
+
+    #[test]
+    fn normalize_list_applies_in_order_and_filters_none() {
+        assert_eq!(
+            apply_normalize(&[Normalize::Trim, Normalize::Lower], "  ABC  "),
+            "abc"
+        );
+        // An empty list is the identity.
+        assert_eq!(apply_normalize(&[], "  ABC  "), "  ABC  ");
+        // `none` is dropped from the resolved list.
+        assert!(NormalizeSpec::One(Normalize::None).into_list().is_empty());
+        assert_eq!(
+            NormalizeSpec::Many(vec![Normalize::None, Normalize::Trim]).into_list(),
+            vec![Normalize::Trim]
+        );
+    }
+
+    #[test]
+    fn equals_semver_minor_reconciles_dev_and_patch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // protobuf: `4.36-dev` (version.json) vs `4.36.0` (the .bzl).
+        std::fs::write(root.join("version.json"), "{\"v\":\"4.36-dev\"}").unwrap();
+        std::fs::write(root.join("protobuf_version.bzl"), "4.36.0\n").unwrap();
+        let idx = index(&["version.json", "protobuf_version.bzl"]);
+        let r = value_rule(
+            "version.json",
+            Extract::Json("$.v".into()),
+            Targets::List(vec![(
+                "protobuf_version.bzl".into(),
+                Some(Extract::Lines(crate::extract::LinesOpts::default())),
+            )]),
+            Relation::Equals,
+            Normalize::SemverMinor,
+        );
+        assert!(
+            eval(&r, root, &idx).is_empty(),
+            "{:?}",
+            eval(&r, root, &idx)
+        );
+    }
+
+    #[test]
+    fn build_accepts_scalar_and_list_normalize() {
+        use crate::test_support::spec_yaml;
+        let base = "id: t\nkind: cross_file\nsource:\n  file: a\n  extract:\n    lines: {}\n\
+                    targets:\n  files: \"b/*\"\n  extract:\n    lines: {}\nrelation: equals\n";
+        // Scalar (the released form) and a list both build.
+        assert!(
+            build(&spec_yaml(&format!(
+                "{base}normalize: semver-minor\nlevel: error\n"
+            )))
+            .is_ok()
+        );
+        assert!(
+            build(&spec_yaml(&format!(
+                "{base}normalize: [trim, semver-minor]\nlevel: error\n"
+            )))
+            .is_ok()
+        );
     }
 
     // ─── set relations ──────────────────────────────────────────
@@ -1053,7 +1198,7 @@ mod tests {
             source_extract: None,
             targets: Some(targets),
             relation: Relation::Identical,
-            normalize: Normalize::None,
+            normalize: Vec::new(),
             allow_missing: false,
             skip_header_lines,
         }
@@ -1110,7 +1255,7 @@ mod tests {
             source_extract: Some(extract),
             targets: None,
             relation: Relation::Resolves,
-            normalize: Normalize::None,
+            normalize: Vec::new(),
             allow_missing: false,
             skip_header_lines: 0,
         }

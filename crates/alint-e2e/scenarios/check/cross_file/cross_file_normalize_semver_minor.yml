@@ -1,0 +1,34 @@
+name: cross_file normalize semver-minor reconciles version formats
+tags: [check, cross_file, cross_file, passing]
+
+# protobuf shape: version.json carries `4.36-dev`, the .bzl carries
+# `4.36.0` — the same release in two formats. `normalize:
+# [trim, semver-minor]` collapses both to the `4.36` band, so the
+# `equals` relation stays silent.
+
+given:
+  tree:
+    version.json: |
+      {"v": "4.36-dev"}
+    bazel:
+      protobuf_version.bzl: |
+        PROTOBUF_VERSION = "4.36.0"
+  config: |
+    version: 1
+    rules:
+      - id: version-coherent
+        kind: cross_file
+        source:
+          file: version.json
+          extract: { json: "$.v" }
+        targets:
+          files: "bazel/protobuf_version.bzl"
+          extract: { regex: '"([0-9][0-9.]*)"' }
+        relation: equals
+        normalize: [trim, semver-minor]
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

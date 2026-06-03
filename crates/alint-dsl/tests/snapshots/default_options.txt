@@ -109,7 +109,7 @@ CrossFileRule {
         },
     ),
     relation: Subset,
-    normalize: None,
+    normalize: [],
     allow_missing: false,
     skip_header_lines: 0,
 }
@@ -137,7 +137,10 @@ CrossFileRule {
         },
     ),
     relation: Equals,
-    normalize: None,
+    normalize: [
+        Trim,
+        SemverMinor,
+    ],
     allow_missing: false,
     skip_header_lines: 0,
 }
