@@ -1,0 +1,31 @@
+name: every_matching_has select list excludes a !-negated entry
+tags: [check, every_matching_has, cross_file, passing]
+
+# `select:` as a list with a `!`-prefixed exclude: every package
+# except `beta` must have a package.json. `beta` lacks one but is
+# excluded, so the rule stays silent.
+
+given:
+  tree:
+    packages:
+      alpha:
+        package.json: "{}"
+      beta:
+        README.md: "# beta, intentionally no package.json"
+      gamma:
+        package.json: "{}"
+  config: |
+    version: 1
+    rules:
+      - id: every-pkg-has-package-json
+        kind: every_matching_has
+        select: ["packages/*", "!packages/beta"]
+        require:
+          - kind: file_exists
+            paths: "{path}/package.json"
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

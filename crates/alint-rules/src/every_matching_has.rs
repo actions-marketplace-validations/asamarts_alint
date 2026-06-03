@@ -22,13 +22,14 @@ use alint_core::{
 use serde::Deserialize;
 
 use crate::for_each_dir::{
-    IterateMode, compile_nested_require, evaluate_for_each, parse_when_iter,
+    IterateMode, SelectSpec, compile_nested_require, evaluate_for_each, parse_when_iter,
+    resolve_select,
 };
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    select: String,
+    select: SelectSpec,
     #[serde(default)]
     when_iter: Option<String>,
     require: Vec<NestedRuleSpec>,
@@ -79,7 +80,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "every_matching_has requires at least one nested rule under `require:`",
         ));
     }
-    let select_scope = Scope::from_patterns(&[opts.select])?;
+    let select_scope = resolve_select(opts.select, &spec.id)?;
     let when_iter = parse_when_iter(spec, opts.when_iter.as_deref())?;
     let require = compile_nested_require(&spec.id, opts.require)?;
     Ok(Box::new(EveryMatchingHasRule {
@@ -183,5 +184,46 @@ scope_filter:
             err.contains("every_matching_has"),
             "expected message to name the cross-file kind, got: {err}",
         );
+    }
+
+    #[test]
+    fn select_list_excludes_negated_entries() {
+        // `select:` as a list with a `!`-prefixed exclude: iterate
+        // packages/* but skip packages/internal.
+        let yaml = "id: t\nkind: every_matching_has\n\
+                    select: [\"packages/*\", \"!packages/internal\"]\n\
+                    require:\n  - kind: file_exists\n    paths: \"{path}\"\nlevel: error\n";
+        let rule = build(&crate::test_support::spec_yaml(yaml)).unwrap();
+        let idx = index(&[
+            ("packages", true),
+            ("packages/a", true),
+            ("packages/internal", true),
+        ]);
+        let reg = registry();
+        let ctx = Context {
+            root: Path::new("/"),
+            index: &idx,
+            registry: Some(&reg),
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+        };
+        let v = rule.evaluate(&ctx).unwrap();
+        // packages/a is iterated (a dir, not a file → file_exists
+        // fires); packages/internal is excluded, so it is not.
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].path.as_deref(), Some(Path::new("packages/a")));
+    }
+
+    #[test]
+    fn select_requires_at_least_one_include() {
+        // Only excludes → build error.
+        let yaml = "id: t\nkind: every_matching_has\nselect: [\"!packages/internal\"]\n\
+                    require:\n  - kind: file_exists\n    paths: \"{path}\"\nlevel: error\n";
+        let err = build(&crate::test_support::spec_yaml(yaml))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("include pattern"), "{err}");
     }
 }

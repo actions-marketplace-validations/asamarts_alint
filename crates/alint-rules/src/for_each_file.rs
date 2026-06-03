@@ -24,13 +24,14 @@ use alint_core::{
 use serde::Deserialize;
 
 use crate::for_each_dir::{
-    IterateMode, compile_nested_require, evaluate_for_each, parse_when_iter,
+    IterateMode, SelectSpec, compile_nested_require, evaluate_for_each, parse_when_iter,
+    resolve_select,
 };
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    select: String,
+    select: SelectSpec,
     /// Optional per-iteration filter — typical shapes:
     /// `iter.basename matches "^[a-z]"` to skip uppercase-named
     /// files, or `not iter.has_file(...)` (always false for
@@ -77,7 +78,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "for_each_file requires at least one nested rule under `require:`",
         ));
     }
-    let select_scope = Scope::from_patterns(&[opts.select])?;
+    let select_scope = resolve_select(opts.select, &spec.id)?;
     let when_iter = parse_when_iter(spec, opts.when_iter.as_deref())?;
     let require = compile_nested_require(&spec.id, opts.require)?;
     Ok(Box::new(ForEachFileRule {

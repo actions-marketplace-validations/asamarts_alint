@@ -37,10 +37,43 @@ use alint_core::{
 };
 use serde::Deserialize;
 
+/// `select:` accepts a single glob (`"src/*"`) or a list with
+/// `!`-prefixed excludes (`["packages/*", "!packages/internal"]`).
+/// A YAML string vs sequence are structurally distinct, so an
+/// untagged enum decodes them unambiguously. Shared by the
+/// select-family (`for_each_dir`, `for_each_file`,
+/// `every_matching_has`).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum SelectSpec {
+    One(String),
+    Many(Vec<String>),
+}
+
+/// Resolve a `select:` spec to a validated `Scope`: non-empty, with
+/// at least one include (non-`!`) pattern; `!`-prefixed patterns
+/// become excludes (handled by `Scope::from_patterns`).
+pub(crate) fn resolve_select(spec: SelectSpec, rule_id: &str) -> Result<Scope> {
+    let patterns = match spec {
+        SelectSpec::One(s) => vec![s],
+        SelectSpec::Many(v) => v,
+    };
+    if patterns.is_empty() {
+        return Err(Error::rule_config(rule_id, "`select:` must not be empty"));
+    }
+    if !patterns.iter().any(|p| !p.trim_start().starts_with('!')) {
+        return Err(Error::rule_config(
+            rule_id,
+            "`select:` needs at least one include pattern (a non-`!` glob)",
+        ));
+    }
+    Scope::from_patterns(&patterns)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    select: String,
+    select: SelectSpec,
     /// Optional per-iteration filter — evaluated against each
     /// iterated entry's `iter` context. Common shape:
     /// `iter.has_file("Cargo.toml")` to scope the iteration to
@@ -96,7 +129,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "for_each_dir requires at least one nested rule under `require:`",
         ));
     }
-    let select_scope = Scope::from_patterns(&[opts.select])?;
+    let select_scope = resolve_select(opts.select, &spec.id)?;
     let when_iter = parse_when_iter(spec, opts.when_iter.as_deref())?;
     let require = compile_nested_require(&spec.id, opts.require)?;
     Ok(Box::new(ForEachDirRule {

@@ -1194,7 +1194,7 @@ top-level config.
 
 ### `for_each_dir` / `for_each_file`
 
-For every matching directory / file, evaluate a nested `require:` block with the entry as context. Template tokens (`{dir}`, `{stem}`, `{ext}`, `{basename}`, `{path}`, `{parent_name}`) expand against each match.
+For every matching directory / file, evaluate a nested `require:` block with the entry as context. Template tokens (`{dir}`, `{stem}`, `{ext}`, `{basename}`, `{path}`, `{parent_name}`) expand against each match. `select:` is a single glob or a list with `!`-prefixed excludes (e.g. `["src/*", "!src/internal"]`).
 
 ```yaml
 - id: every-pkg-has-readme
@@ -1270,7 +1270,7 @@ No two files matching `paths` may share the value of `key` (a path template). Ca
 
 ### `every_matching_has`
 
-For every file or directory matching `select:`, every nested rule under `require:` must be satisfied. Lightweight sibling of `pair` that iterates both file and directory entries.
+For every file or directory matching `select:`, every nested rule under `require:` must be satisfied. Lightweight sibling of `pair` that iterates both file and directory entries. `select:` is a single glob or a list with `!`-prefixed excludes (e.g. `["packages/*", "!packages/internal"]`).
 
 ```yaml
 - id: every-pkg-has-readme
