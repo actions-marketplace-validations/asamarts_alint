@@ -258,6 +258,7 @@ rules:
     kind: unique_by
     select: "**/*.rs"
     key: "{stem}"
+    case_insensitive: true
     level: warning
     message: "{{ctx.count}} files share stem {{ctx.key}}: {{ctx.paths}}"
 

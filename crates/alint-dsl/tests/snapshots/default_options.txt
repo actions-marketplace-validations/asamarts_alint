@@ -1467,6 +1467,7 @@ UniqueByRule {
     ),
     select_scope: Scope { ... },
     key_template: "{stem}",
+    case_insensitive: true,
 }
 
 === kind: xml_path_equals | id: csproj-targets-net8 ===

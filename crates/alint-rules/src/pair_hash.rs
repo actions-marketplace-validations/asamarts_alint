@@ -179,8 +179,23 @@ impl PairHashRule {
                 let want = src.to_string_lossy();
                 for line in b.lines() {
                     let mut tok = line.split_whitespace();
-                    let (Some(hex), Some(path_tok)) = (tok.next(), tok.next()) else {
+                    let (Some(a), Some(rest)) = (tok.next(), tok.next()) else {
                         continue;
+                    };
+                    // The manifest may be hex-first (coreutils / go
+                    // `.sum`: `<hex>  <path>`) or path-first (the Go
+                    // FIPS snapshot manifest: `<path> <hex>`). The
+                    // algorithm fixes the digest's hex length, so
+                    // identify the digest token by shape and either
+                    // order parses; an ambiguous line (both or neither
+                    // hex-shaped) assumes the hex-first default.
+                    let n = digest.len();
+                    let (hex, path_tok) = if is_hex_digest(a, n) && !is_hex_digest(rest, n) {
+                        (a, rest)
+                    } else if is_hex_digest(rest, n) && !is_hex_digest(a, n) {
+                        (rest, a)
+                    } else {
+                        (a, rest)
                     };
                     // Normalise the coreutils binary-mode `*`
                     // marker and a `find`-style `./` prefix
@@ -226,6 +241,13 @@ fn encode_hex(bytes: &[u8]) -> String {
         write!(s, "{b:02x}").unwrap();
     }
     s
+}
+
+/// True when `tok` is shaped like a digest of the expected hex length
+/// (used to tell the hex token from the path token in a `sums-line`
+/// manifest, regardless of which comes first).
+fn is_hex_digest(tok: &str, expected_len: usize) -> bool {
+    tok.len() == expected_len && tok.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
@@ -351,6 +373,33 @@ mod tests {
             r.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty(),
             "a ./-prefixed sums-line path must match the index path"
         );
+    }
+
+    #[test]
+    fn sums_line_tolerates_path_first_order() {
+        // The Go FIPS snapshot manifest writes `<path> <hex>` — the
+        // reverse of the coreutils `<hex>  <path>` order. The digest
+        // token is identified by shape, so both orders parse.
+        let manifest = format!("a.txt {HELLO_SHA256}\n");
+        let (tmp, idx) =
+            tempdir_with_files(&[("a.txt", b"hello"), ("fips140.sum", manifest.as_bytes())]);
+        let r = rule("a.txt", "fips140.sum", Algorithm::Sha256, Format::SumsLine);
+        assert!(
+            r.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty(),
+            "a path-first sums-line must match"
+        );
+    }
+
+    #[test]
+    fn sums_line_path_first_detects_mismatch() {
+        // Path-first order must still catch a wrong digest.
+        let manifest = "a.txt 0000000000000000000000000000000000000000000000000000000000000000\n";
+        let (tmp, idx) =
+            tempdir_with_files(&[("a.txt", b"hello"), ("fips140.sum", manifest.as_bytes())]);
+        let r = rule("a.txt", "fips140.sum", Algorithm::Sha256, Format::SumsLine);
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(v[0].message.contains("digest mismatch"), "{}", v[0].message);
     }
 
     #[test]
