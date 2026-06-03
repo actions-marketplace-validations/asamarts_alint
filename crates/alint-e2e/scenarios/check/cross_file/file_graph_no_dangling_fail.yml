@@ -1,0 +1,28 @@
+name: file_graph no_dangling fires when a doc cross-link target is missing
+tags: [check, file_graph, cross_file]
+
+given:
+  tree:
+    docs:
+      a.md: |
+        See [the real one](./real.md) and [the missing one](./missing.md).
+      real.md: |
+        # Real
+  config: |
+    version: 1
+    rules:
+      - id: docs-links-resolve
+        kind: file_graph
+        nodes: "docs/**/*.md"
+        edges:
+          from_content:
+            extract: { regex: '\]\((\.[^)]+\.md)\)' }
+            resolve: relative_to_file
+        require: no_dangling
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: docs-links-resolve, level: error, path: docs/a.md}

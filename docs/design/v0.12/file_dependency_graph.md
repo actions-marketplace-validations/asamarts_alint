@@ -1,9 +1,10 @@
 # Generic file-dependency-graph family
 
-Status: **First increment shipped — 2026-06-02** (`forbidden_edges` + `acyclic`;
-the `crate::file_graph` kind, rule count 83 → 84, CHANGELOG `[Unreleased]`). The
-`no_dangling` / `no_orphans` and content-hash `fresh` modes remain. The study gate
-is satisfied: the
+Status: **Four `require:` modes shipped — 2026-06-02** (`forbidden_edges` +
+`acyclic`, then `no_dangling` + `no_orphans`; the `crate::file_graph` kind, rule
+count 83 → 84, CHANGELOG `[Unreleased]`). Only the content-hash `fresh` mode
+remains, plus a 1M-file macro bench scenario before the v0.12 release. The study
+gate is satisfied: the
 [100-repo study](./case_study_log.md) surfaced **257 file-reference-graph edge
 sources across 56 repos** — `file_graph` is the **#1 demand-ranked new-kind** of
 the cut ([`architecture_synthesis.md`](./architecture_synthesis.md) primitive ⑤).
@@ -254,8 +255,14 @@ non-goal. The DSL held; no reshape needed.
       module names / absolute / URL / computed refs are dropped. (Python dotted
       relative imports — flask `from ..globals` — need a future Python-aware
       `resolve:` mode and are *not* covered by this path-based increment.)
-   2. **`no_dangling` / `no_orphans`** — reference integrity (doc-xref, registry
-      orphans); shares the edge extractor, adds reverse-edge / reachability.
+   2. **`no_dangling` / `no_orphans`** — **SHIPPED 2026-06-02** — reference
+      integrity (doc-xref, registry orphans); shares the edge extractor.
+      `no_dangling`: every path-shaped edge must resolve to a path in the index
+      (file or dir). `no_orphans`: reverse-edge analysis over the node→node
+      sub-graph — a node referenced by no *other* node is an orphan, unless it
+      matches a `roots:` glob (a bare `require: no_orphans` = no roots; the map
+      form `{ no_orphans: { roots: [...] } }` declares entry points). Both reuse
+      the per-node read+extract+resolve from increment 1.
    3. **`fresh`** (content-hash-marker) — codegen freshness via `derive_target`;
       reuses the `pair_hash` digest machinery over an edge.
    Standalone kind (`crate::file_graph`), `requires_full_index` cross-file dispatch,

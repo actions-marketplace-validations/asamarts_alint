@@ -1,0 +1,30 @@
+name: file_graph no_orphans fires on a node with no inbound reference
+tags: [check, file_graph, cross_file]
+
+given:
+  tree:
+    proto:
+      a.proto: |
+        import "proto/b.proto";
+      b.proto: |
+        import "proto/c.proto";
+      c.proto: |
+        // leaf node, imports nothing
+  config: |
+    version: 1
+    rules:
+      - id: no-orphan-proto
+        kind: file_graph
+        nodes: "proto/**/*.proto"
+        edges:
+          from_content:
+            extract: { regex: 'import\s+"([^"]+)"' }
+            resolve: relative_to_repo_root
+        require: no_orphans
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: no-orphan-proto, level: error, path: proto/a.proto}

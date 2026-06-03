@@ -2,7 +2,10 @@
 //! graph from path-based edges and assert a global structural
 //! property. The graph layer the 1-level cross-file kinds
 //! (`registry_paths_resolve`, `import_gate`, `pair_hash`) can't
-//! express: cycles and forbidden transitive layering.
+//! express. `require:` modes: `acyclic` (no dependency cycle),
+//! `forbidden_edges` (layering firewall), `no_dangling` (every
+//! edge resolves to an existing path), `no_orphans` (no
+//! unreferenced node, save declared `roots`).
 //!
 //! Nodes are repo files selected by a glob; edges are extracted
 //! from each node's content (`crate::extract`, regex/structured/
@@ -41,7 +44,7 @@
 //!   require: acyclic
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::slice;
 
@@ -103,17 +106,35 @@ enum RequireSpec {
 #[serde(rename_all = "snake_case")]
 enum NamedRequire {
     Acyclic,
+    /// Every path-shaped reference must resolve to a path on disk.
+    NoDangling,
+    /// No node is unreferenced (bare form — no entry-point roots).
+    NoOrphans,
 }
 
 /// The map form of `require:`. A struct-of-options (validated to
 /// exactly-one in `build`) rather than an externally-tagged enum,
-/// so it decodes from a YAML map cleanly. Future modes
-/// (`fresh: { … }`) join here as additional `Option` fields.
+/// so it decodes from a YAML map cleanly. The bare-string modes
+/// (`acyclic`, `no_dangling`, `no_orphans` with no roots) live in
+/// `NamedRequire`; the configured modes live here, and future ones
+/// (`fresh: { … }`) join as additional `Option` fields.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RequireMap {
     #[serde(default)]
     forbidden_edges: Option<Vec<ForbiddenEdgeSpec>>,
+    #[serde(default)]
+    no_orphans: Option<NoOrphansSpec>,
+}
+
+/// Options for the `no_orphans` map form: `roots` lists globs whose
+/// nodes are allowed to be unreferenced (graph entry points). Bare
+/// `require: no_orphans` (no roots) is the `NamedRequire` form.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoOrphansSpec {
+    #[serde(default)]
+    roots: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +160,12 @@ struct ForbiddenPattern {
 #[derive(Debug)]
 enum Require {
     Acyclic,
+    /// Every path-shaped edge must resolve to an existing path.
+    NoDangling,
+    /// No node is unreferenced, except those matching a `roots` glob.
+    NoOrphans {
+        roots: Option<Scope>,
+    },
     ForbiddenEdges(Vec<ForbiddenPattern>),
 }
 
@@ -179,6 +206,8 @@ impl Rule for FileGraphRule {
         Ok(match &self.require {
             Require::ForbiddenEdges(pats) => self.check_forbidden(ctx, &nodes, pats),
             Require::Acyclic => self.check_acyclic(ctx, &nodes),
+            Require::NoDangling => self.check_no_dangling(ctx, &nodes),
+            Require::NoOrphans { roots } => self.check_no_orphans(ctx, &nodes, roots.as_ref()),
         })
     }
 }
@@ -240,6 +269,57 @@ impl FileGraphRule {
 
         for cycle in collect_cycles(&adj, nodes.len()) {
             out.push(self.cycle_violation(nodes, &cycle));
+        }
+        out
+    }
+
+    /// One violation per path-shaped edge whose resolved target
+    /// exists nowhere in the index (as a file or a directory).
+    /// References that aren't path-shaped (bare module names, URLs)
+    /// are dropped, not flagged — `no_dangling` is a
+    /// reference-integrity check, not a module resolver.
+    fn check_no_dangling(&self, ctx: &Context<'_>, nodes: &[PathBuf]) -> Vec<Violation> {
+        let mut out = Vec::new();
+        let dirs: HashSet<&Path> = ctx.index.dirs().map(|e| &*e.path).collect();
+        for node in nodes {
+            for target in self.node_targets(ctx, node, &mut out) {
+                let exists = ctx.index.contains_file(&target) || dirs.contains(target.as_path());
+                if !exists {
+                    out.push(self.dangling_violation(node, &target));
+                }
+            }
+        }
+        out
+    }
+
+    /// One violation per node that no *other* node references, unless
+    /// it matches a `roots` glob (a declared graph entry point).
+    /// Reverse-edge analysis over the node → node sub-graph.
+    fn check_no_orphans(
+        &self,
+        ctx: &Context<'_>,
+        nodes: &[PathBuf],
+        roots: Option<&Scope>,
+    ) -> Vec<Violation> {
+        let mut out = Vec::new();
+        let node_set: HashSet<&Path> = nodes.iter().map(PathBuf::as_path).collect();
+
+        let mut referenced: HashSet<PathBuf> = HashSet::new();
+        for node in nodes {
+            for target in self.node_targets(ctx, node, &mut out) {
+                // A self-reference can't un-orphan a node; only an
+                // edge from a *different* node counts.
+                if target.as_path() != node.as_path() && node_set.contains(target.as_path()) {
+                    referenced.insert(target);
+                }
+            }
+        }
+
+        for node in nodes {
+            if referenced.contains(node) || roots.is_some_and(|r| r.matches(node, ctx.index)) {
+                continue;
+            }
+            out.push(self.orphan_violation(node));
         }
         out
     }
@@ -319,6 +399,27 @@ impl FileGraphRule {
             .clone()
             .unwrap_or_else(|| format!("dependency cycle ({} files): {rendered}", cycle.len()));
         Violation::new(msg).with_path(nodes[cycle[0]].clone())
+    }
+
+    fn dangling_violation(&self, src: &Path, target: &Path) -> Violation {
+        let msg = self.message.clone().unwrap_or_else(|| {
+            format!(
+                "{} references {}, which does not resolve to any path on disk",
+                src.display(),
+                target.display(),
+            )
+        });
+        Violation::new(msg).with_path(src.to_path_buf())
+    }
+
+    fn orphan_violation(&self, node: &Path) -> Violation {
+        let msg = self.message.clone().unwrap_or_else(|| {
+            format!(
+                "{} is an orphan: no other node references it (and it is not a declared root)",
+                node.display(),
+            )
+        });
+        Violation::new(msg).with_path(node.to_path_buf())
     }
 }
 
@@ -443,6 +544,63 @@ fn canonical_cycle(cycle: &[usize]) -> Vec<usize> {
     out
 }
 
+/// Resolve the map form of `require:` — exactly one of
+/// `forbidden_edges` / `no_orphans` (the bare-string modes are
+/// resolved in `build`).
+fn resolve_map_require(map: RequireMap, cfg: &impl Fn(String) -> Error) -> Result<Require> {
+    match (map.forbidden_edges, map.no_orphans) {
+        (Some(_), Some(_)) => Err(cfg(
+            "`require` map must set exactly one of `forbidden_edges` / `no_orphans`".into(),
+        )),
+        (None, None) => Err(cfg(
+            "`require` map must set a known mode (`forbidden_edges` or `no_orphans`)".into(),
+        )),
+        (Some(edges), None) => {
+            if edges.is_empty() {
+                return Err(cfg(
+                    "`require.forbidden_edges` must list at least one {from, to} pattern".into(),
+                ));
+            }
+            let mut pats = Vec::with_capacity(edges.len());
+            for (i, e) in edges.into_iter().enumerate() {
+                if e.from.trim().is_empty() || e.to.trim().is_empty() {
+                    return Err(cfg(format!(
+                        "`require.forbidden_edges[{i}]` needs a non-empty `from` and `to`"
+                    )));
+                }
+                let from = Scope::from_patterns(slice::from_ref(&e.from)).map_err(|err| {
+                    cfg(format!("invalid `forbidden_edges[{i}].from` glob: {err}"))
+                })?;
+                let to = Scope::from_patterns(slice::from_ref(&e.to))
+                    .map_err(|err| cfg(format!("invalid `forbidden_edges[{i}].to` glob: {err}")))?;
+                pats.push(ForbiddenPattern {
+                    from,
+                    to,
+                    from_glob: e.from,
+                    to_glob: e.to,
+                });
+            }
+            Ok(Require::ForbiddenEdges(pats))
+        }
+        (None, Some(spec)) => {
+            if spec.roots.iter().any(|r| r.trim().is_empty()) {
+                return Err(cfg(
+                    "`require.no_orphans.roots` entries must not be empty".into()
+                ));
+            }
+            let roots = if spec.roots.is_empty() {
+                None
+            } else {
+                Some(
+                    Scope::from_patterns(&spec.roots)
+                        .map_err(|err| cfg(format!("invalid `no_orphans.roots` glob: {err}")))?,
+                )
+            };
+            Ok(Require::NoOrphans { roots })
+        }
+    }
+}
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "file_graph")?;
     let opts: Options = spec
@@ -469,38 +627,9 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 
     let require = match opts.require {
         RequireSpec::Named(NamedRequire::Acyclic) => Require::Acyclic,
-        RequireSpec::Map(map) => {
-            let Some(edges) = map.forbidden_edges else {
-                return Err(cfg(
-                    "`require` map must set a known mode (`forbidden_edges`)".into(),
-                ));
-            };
-            if edges.is_empty() {
-                return Err(cfg(
-                    "`require.forbidden_edges` must list at least one {from, to} pattern".into(),
-                ));
-            }
-            let mut pats = Vec::with_capacity(edges.len());
-            for (i, e) in edges.into_iter().enumerate() {
-                if e.from.trim().is_empty() || e.to.trim().is_empty() {
-                    return Err(cfg(format!(
-                        "`require.forbidden_edges[{i}]` needs a non-empty `from` and `to`"
-                    )));
-                }
-                let from = Scope::from_patterns(slice::from_ref(&e.from)).map_err(|err| {
-                    cfg(format!("invalid `forbidden_edges[{i}].from` glob: {err}"))
-                })?;
-                let to = Scope::from_patterns(slice::from_ref(&e.to))
-                    .map_err(|err| cfg(format!("invalid `forbidden_edges[{i}].to` glob: {err}")))?;
-                pats.push(ForbiddenPattern {
-                    from,
-                    to,
-                    from_glob: e.from,
-                    to_glob: e.to,
-                });
-            }
-            Require::ForbiddenEdges(pats)
-        }
+        RequireSpec::Named(NamedRequire::NoDangling) => Require::NoDangling,
+        RequireSpec::Named(NamedRequire::NoOrphans) => Require::NoOrphans { roots: None },
+        RequireSpec::Map(map) => resolve_map_require(map, &cfg)?,
     };
 
     Ok(Box::new(FileGraphRule {
@@ -762,6 +891,116 @@ mod tests {
         assert_eq!(
             resolve_ref("https://x/y", f, Resolve::RelativeToRepoRoot),
             None
+        );
+    }
+
+    /// Generic constructor for the require modes the `forbidden` /
+    /// `acyclic` helpers don't cover.
+    fn mk(nodes: &str, regex: &str, resolve: Resolve, require: Require) -> FileGraphRule {
+        FileGraphRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            nodes: scope(nodes),
+            extract: Extract::Regex(regex.into()),
+            resolve,
+            require,
+        }
+    }
+
+    #[test]
+    fn no_dangling_fires_on_missing_then_silent_when_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/real.md"), "# real\n").unwrap();
+        let r = mk(
+            "docs/**/*.md",
+            r"\]\((\.[^)]+)\)",
+            Resolve::RelativeToFile,
+            Require::NoDangling,
+        );
+
+        // a.md links a sibling that doesn't exist -> dangling.
+        std::fs::write(root.join("docs/a.md"), "see [x](./missing.md)\n").unwrap();
+        let idx = index(&["docs/a.md", "docs/real.md"]);
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("docs/missing.md"));
+        assert!(v[0].message.contains("docs/a.md"));
+
+        // a.md links the existing real.md -> silent.
+        std::fs::write(root.join("docs/a.md"), "see [r](./real.md)\n").unwrap();
+        assert!(eval(&r, root, &idx).is_empty());
+    }
+
+    #[test]
+    fn no_orphans_fires_on_unreferenced_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("proto")).unwrap();
+        // a -> b -> c. Nothing references a, so a is the orphan.
+        std::fs::write(root.join("proto/a.proto"), "import \"proto/b.proto\";\n").unwrap();
+        std::fs::write(root.join("proto/b.proto"), "import \"proto/c.proto\";\n").unwrap();
+        std::fs::write(root.join("proto/c.proto"), "// leaf\n").unwrap();
+        let idx = index(&["proto/a.proto", "proto/b.proto", "proto/c.proto"]);
+        let r = mk(
+            "proto/**/*.proto",
+            r#"import\s+"([^"]+)""#,
+            Resolve::RelativeToRepoRoot,
+            Require::NoOrphans { roots: None },
+        );
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "only proto/a.proto is unreferenced: {v:?}");
+        assert!(v[0].message.contains("proto/a.proto"));
+        assert!(v[0].message.contains("orphan"));
+    }
+
+    #[test]
+    fn no_orphans_roots_exempts_entry_point() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("proto")).unwrap();
+        std::fs::write(root.join("proto/a.proto"), "import \"proto/b.proto\";\n").unwrap();
+        std::fs::write(root.join("proto/b.proto"), "import \"proto/c.proto\";\n").unwrap();
+        std::fs::write(root.join("proto/c.proto"), "// leaf\n").unwrap();
+        let idx = index(&["proto/a.proto", "proto/b.proto", "proto/c.proto"]);
+        let r = mk(
+            "proto/**/*.proto",
+            r#"import\s+"([^"]+)""#,
+            Resolve::RelativeToRepoRoot,
+            Require::NoOrphans {
+                roots: Some(scope("proto/a.proto")),
+            },
+        );
+        assert!(
+            eval(&r, root, &idx).is_empty(),
+            "the declared root is exempt from the orphan check"
+        );
+    }
+
+    #[test]
+    fn build_accepts_named_and_map_require_forms() {
+        use crate::test_support::spec_yaml;
+        let base = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  \
+                    from_content:\n    extract:\n      regex: 'x'\n";
+        for tail in [
+            "require: no_dangling\nlevel: error\n",
+            "require: no_orphans\nlevel: error\n",
+            "require:\n  no_orphans:\n    roots: [\"src/main.rs\"]\nlevel: error\n",
+        ] {
+            let yaml = format!("{base}{tail}");
+            assert!(build(&spec_yaml(&yaml)).is_ok(), "should build: {yaml}");
+        }
+        // Two map modes at once -> rejected.
+        let bad = format!(
+            "{base}require:\n  forbidden_edges:\n    - {{from: a, to: b}}\n  \
+             no_orphans: {{}}\nlevel: error\n"
+        );
+        assert!(
+            build(&spec_yaml(&bad)).is_err(),
+            "setting two map modes must be rejected"
         );
     }
 }
