@@ -5,15 +5,20 @@
 //! express. `require:` modes: `acyclic` (no dependency cycle),
 //! `forbidden_edges` (layering firewall), `no_dangling` (every
 //! edge resolves to an existing path), `no_orphans` (no
-//! unreferenced node, save declared `roots`).
+//! unreferenced node, save declared `roots`), and `fresh` (a
+//! generated file embeds its source's current content hash).
 //!
-//! Nodes are repo files selected by a glob; edges are extracted
-//! from each node's content (`crate::extract`, regex/structured/
-//! lines) and *resolved as paths* — relative to the referencing
-//! file or the repo root. Bare module specifiers (no leading `.`
-//! under `relative_to_file`), absolute paths, URLs, and computed/
-//! interpolated references are **dropped, not mis-resolved**:
-//! resolving module *names* is the package-graph non-goal.
+//! The four reference-graph modes use `from_content` edges: edges
+//! are extracted from each node's content (`crate::extract`,
+//! regex/structured/lines) and *resolved as paths* — relative to
+//! the referencing file or the repo root. Bare module specifiers
+//! (no leading `.` under `relative_to_file`), absolute paths,
+//! URLs, and computed/interpolated references are **dropped, not
+//! mis-resolved**: resolving module *names* is the package-graph
+//! non-goal. `fresh` instead uses `derive_target` edges (a name
+//! template, source → generated file) and a content-hash marker —
+//! never mtime, which is meaningless on a fresh clone (see
+//! `pair_hash`, whose digest machinery it reuses).
 //!
 //! Pure-parse and extraction-based — it never shells out, so it
 //! stays out of `SPAWNING_RULE_KINDS`. Cross-file: needs the whole
@@ -53,6 +58,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::extract::{Extract, ExtractSpec, extract_values, is_non_literal};
+use crate::pair_hash::Algorithm;
 
 /// How a content-extracted reference string is turned into a path.
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
@@ -76,10 +82,28 @@ struct FromContentSpec {
     resolve: Resolve,
 }
 
+/// The `edges:` block — exactly one extractor (validated in
+/// `build`): `from_content` (the reference-graph modes) or
+/// `derive_target` (the codegen-freshness `fresh` mode).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EdgesSpec {
-    from_content: FromContentSpec,
+    #[serde(default)]
+    from_content: Option<FromContentSpec>,
+    #[serde(default)]
+    derive_target: Option<DeriveTargetSpec>,
+}
+
+/// Name-template edges: derive the generated target's path from the
+/// source node's path — `from` is a regex matched against the node
+/// path, `to` is a replacement template using its captures (e.g.
+/// `from: '(.*)\.proto'`, `to: '$1.pb.go'`; a constant `to` maps
+/// many sources to one target). The `fresh` mode's edge.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeriveTargetSpec {
+    from: String,
+    to: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,6 +149,8 @@ struct RequireMap {
     forbidden_edges: Option<Vec<ForbiddenEdgeSpec>>,
     #[serde(default)]
     no_orphans: Option<NoOrphansSpec>,
+    #[serde(default)]
+    fresh: Option<FreshSpec>,
 }
 
 /// Options for the `no_orphans` map form: `roots` lists globs whose
@@ -135,6 +161,18 @@ struct RequireMap {
 struct NoOrphansSpec {
     #[serde(default)]
     roots: Vec<String>,
+}
+
+/// Options for the `fresh` map form: the `derive_target` output must
+/// embed the source's current `hash` digest, captured by `marker`
+/// (a regex whose group 1 is the hex digest). Content-hash, never
+/// mtime — portable on a fresh clone.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FreshSpec {
+    #[serde(default)]
+    hash: Algorithm,
+    marker: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +205,21 @@ enum Require {
         roots: Option<Scope>,
     },
     ForbiddenEdges(Vec<ForbiddenPattern>),
+    /// The `derive_target` output must embed the source's current
+    /// digest, captured by `marker` (group 1).
+    Fresh {
+        algo: Algorithm,
+        marker: Regex,
+    },
+}
+
+/// How edges are formed — paired with `require` in `build`:
+/// `FromContent` ⇒ the reference-graph modes; `DeriveTarget` ⇒
+/// `fresh`.
+#[derive(Debug)]
+enum EdgeSource {
+    FromContent { extract: Extract, resolve: Resolve },
+    DeriveTarget { from: Regex, to: String },
 }
 
 #[derive(Debug)]
@@ -176,8 +229,7 @@ pub struct FileGraphRule {
     policy_url: Option<String>,
     message: Option<String>,
     nodes: Scope,
-    extract: Extract,
-    resolve: Resolve,
+    edges: EdgeSource,
     require: Require,
 }
 
@@ -208,6 +260,7 @@ impl Rule for FileGraphRule {
             Require::Acyclic => self.check_acyclic(ctx, &nodes),
             Require::NoDangling => self.check_no_dangling(ctx, &nodes),
             Require::NoOrphans { roots } => self.check_no_orphans(ctx, &nodes, roots.as_ref()),
+            Require::Fresh { algo, marker } => self.check_fresh(ctx, &nodes, *algo, marker),
         })
     }
 }
@@ -327,12 +380,17 @@ impl FileGraphRule {
     /// Read one node and resolve every content reference to a path.
     /// Unreadable / unparseable nodes push a violation and yield no
     /// edges; references that don't resolve to a path are dropped.
+    /// Only the `from_content` modes call this; the `fresh` path
+    /// uses `derive_target` and never reaches here.
     fn node_targets(
         &self,
         ctx: &Context<'_>,
         node: &Path,
         out: &mut Vec<Violation>,
     ) -> Vec<PathBuf> {
+        let EdgeSource::FromContent { extract, resolve } = &self.edges else {
+            return Vec::new();
+        };
         let abs = ctx.root.join(node);
         let text = match crate::io::read_capped(&abs) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
@@ -351,7 +409,7 @@ impl FileGraphRule {
                 return Vec::new();
             }
         };
-        let refs = match extract_values(&self.extract, &text) {
+        let refs = match extract_values(extract, &text) {
             Ok(v) => v,
             Err(e) => {
                 out.push(Self::node_violation(
@@ -363,8 +421,71 @@ impl FileGraphRule {
         };
         refs.iter()
             .filter(|r| !is_non_literal(r))
-            .filter_map(|r| resolve_ref(r, node, self.resolve))
+            .filter_map(|r| resolve_ref(r, node, *resolve))
             .collect()
+    }
+
+    /// One violation per stale `derive_target` output: the source's
+    /// current digest is not present as a `marker`-captured value in
+    /// the derived file (or the derived file is missing). Sources
+    /// whose path doesn't match the `from` regex are skipped.
+    fn check_fresh(
+        &self,
+        ctx: &Context<'_>,
+        nodes: &[PathBuf],
+        algo: Algorithm,
+        marker: &Regex,
+    ) -> Vec<Violation> {
+        let EdgeSource::DeriveTarget { from, to } = &self.edges else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for source in nodes {
+            let src_str = source.to_string_lossy();
+            let Some(caps) = from.captures(&src_str) else {
+                continue; // not a codegen source this template covers
+            };
+            let mut target = String::new();
+            caps.expand(to, &mut target);
+            let target = normalise(Path::new(&target));
+
+            let src_bytes = match crate::io::read_capped(&ctx.root.join(source)) {
+                Ok(b) => b,
+                Err(e) => {
+                    out.push(Self::node_violation(source, &read_cap_reason(&e)));
+                    continue;
+                }
+            };
+            let digest = algo.hex(&src_bytes);
+
+            let Ok(tgt_bytes) = crate::io::read_capped(&ctx.root.join(&target)) else {
+                out.push(self.fresh_violation(
+                    &target,
+                    &format!(
+                        "is missing or unreadable (the derived output for {})",
+                        source.display()
+                    ),
+                ));
+                continue;
+            };
+            let tgt_text = String::from_utf8_lossy(&tgt_bytes).into_owned();
+            let fresh = marker
+                .captures_iter(&tgt_text)
+                .filter_map(|c| c.get(1))
+                .any(|m| m.as_str() == digest);
+            if !fresh {
+                out.push(self.fresh_violation(
+                    &target,
+                    &format!(
+                        "is out of date with {}: it carries no {} freshness marker matching the \
+                         source's current digest (regenerate it)",
+                        source.display(),
+                        algo.label(),
+                    ),
+                ));
+            }
+        }
+        out
     }
 
     fn node_violation(node: &Path, reason: &str) -> Violation {
@@ -420,6 +541,27 @@ impl FileGraphRule {
             )
         });
         Violation::new(msg).with_path(node.to_path_buf())
+    }
+
+    /// A stale / missing `derive_target` output. Anchored on the
+    /// target (the file that needs regenerating); `reason` already
+    /// names the source.
+    fn fresh_violation(&self, target: &Path, reason: &str) -> Violation {
+        let msg = self
+            .message
+            .clone()
+            .unwrap_or_else(|| format!("{} {reason}", target.display()));
+        Violation::new(msg).with_path(target.to_path_buf())
+    }
+}
+
+/// The user-facing reason fragment for a capped-read failure.
+fn read_cap_reason(e: &crate::io::ReadCapError) -> String {
+    match e {
+        crate::io::ReadCapError::TooLarge(n) => {
+            format!("is too large to analyze ({n} bytes; 256 MiB cap)")
+        }
+        crate::io::ReadCapError::Io(e) => format!("could not be read: {e}"),
     }
 }
 
@@ -548,55 +690,113 @@ fn canonical_cycle(cycle: &[usize]) -> Vec<usize> {
 /// `forbidden_edges` / `no_orphans` (the bare-string modes are
 /// resolved in `build`).
 fn resolve_map_require(map: RequireMap, cfg: &impl Fn(String) -> Error) -> Result<Require> {
-    match (map.forbidden_edges, map.no_orphans) {
+    let set = [
+        map.forbidden_edges.is_some(),
+        map.no_orphans.is_some(),
+        map.fresh.is_some(),
+    ];
+    if set.iter().filter(|&&on| on).count() != 1 {
+        return Err(cfg(
+            "`require` map must set exactly one of `forbidden_edges` / `no_orphans` / `fresh`"
+                .into(),
+        ));
+    }
+
+    if let Some(edges) = map.forbidden_edges {
+        if edges.is_empty() {
+            return Err(cfg(
+                "`require.forbidden_edges` must list at least one {from, to} pattern".into(),
+            ));
+        }
+        let mut pats = Vec::with_capacity(edges.len());
+        for (i, e) in edges.into_iter().enumerate() {
+            if e.from.trim().is_empty() || e.to.trim().is_empty() {
+                return Err(cfg(format!(
+                    "`require.forbidden_edges[{i}]` needs a non-empty `from` and `to`"
+                )));
+            }
+            let from = Scope::from_patterns(slice::from_ref(&e.from))
+                .map_err(|err| cfg(format!("invalid `forbidden_edges[{i}].from` glob: {err}")))?;
+            let to = Scope::from_patterns(slice::from_ref(&e.to))
+                .map_err(|err| cfg(format!("invalid `forbidden_edges[{i}].to` glob: {err}")))?;
+            pats.push(ForbiddenPattern {
+                from,
+                to,
+                from_glob: e.from,
+                to_glob: e.to,
+            });
+        }
+        return Ok(Require::ForbiddenEdges(pats));
+    }
+
+    if let Some(spec) = map.no_orphans {
+        if spec.roots.iter().any(|r| r.trim().is_empty()) {
+            return Err(cfg(
+                "`require.no_orphans.roots` entries must not be empty".into()
+            ));
+        }
+        let roots = if spec.roots.is_empty() {
+            None
+        } else {
+            Some(
+                Scope::from_patterns(&spec.roots)
+                    .map_err(|err| cfg(format!("invalid `no_orphans.roots` glob: {err}")))?,
+            )
+        };
+        return Ok(Require::NoOrphans { roots });
+    }
+
+    let fresh = map.fresh.expect("exactly-one ensures `fresh` is set");
+    if fresh.marker.trim().is_empty() {
+        return Err(cfg("`require.fresh.marker` must not be empty".into()));
+    }
+    let marker = Regex::new(&fresh.marker)
+        .map_err(|e| cfg(format!("invalid `require.fresh.marker` regex: {e}")))?;
+    if marker.captures_len() < 2 {
+        return Err(cfg(
+            "`require.fresh.marker` needs a capture group for the digest \
+             (e.g. 'sha256:([0-9a-f]{64})')"
+                .into(),
+        ));
+    }
+    Ok(Require::Fresh {
+        algo: fresh.hash,
+        marker,
+    })
+}
+
+/// Resolve the `edges:` block to its single extractor.
+fn resolve_edges(edges: EdgesSpec, cfg: &impl Fn(String) -> Error) -> Result<EdgeSource> {
+    match (edges.from_content, edges.derive_target) {
         (Some(_), Some(_)) => Err(cfg(
-            "`require` map must set exactly one of `forbidden_edges` / `no_orphans`".into(),
+            "`edges` must set exactly one of `from_content` / `derive_target`".into(),
         )),
         (None, None) => Err(cfg(
-            "`require` map must set a known mode (`forbidden_edges` or `no_orphans`)".into(),
+            "`edges` must set `from_content` or `derive_target`".into()
         )),
-        (Some(edges), None) => {
-            if edges.is_empty() {
-                return Err(cfg(
-                    "`require.forbidden_edges` must list at least one {from, to} pattern".into(),
-                ));
+        (Some(fc), None) => {
+            let extract = fc
+                .extract
+                .resolve()
+                .map_err(|e| cfg(format!("invalid `edges.from_content.extract`: {e}")))?;
+            if let Extract::Regex(p) = &extract {
+                Regex::new(p)
+                    .map_err(|e| cfg(format!("invalid `edges.from_content.extract.regex`: {e}")))?;
             }
-            let mut pats = Vec::with_capacity(edges.len());
-            for (i, e) in edges.into_iter().enumerate() {
-                if e.from.trim().is_empty() || e.to.trim().is_empty() {
-                    return Err(cfg(format!(
-                        "`require.forbidden_edges[{i}]` needs a non-empty `from` and `to`"
-                    )));
-                }
-                let from = Scope::from_patterns(slice::from_ref(&e.from)).map_err(|err| {
-                    cfg(format!("invalid `forbidden_edges[{i}].from` glob: {err}"))
-                })?;
-                let to = Scope::from_patterns(slice::from_ref(&e.to))
-                    .map_err(|err| cfg(format!("invalid `forbidden_edges[{i}].to` glob: {err}")))?;
-                pats.push(ForbiddenPattern {
-                    from,
-                    to,
-                    from_glob: e.from,
-                    to_glob: e.to,
-                });
-            }
-            Ok(Require::ForbiddenEdges(pats))
+            Ok(EdgeSource::FromContent {
+                extract,
+                resolve: fc.resolve,
+            })
         }
-        (None, Some(spec)) => {
-            if spec.roots.iter().any(|r| r.trim().is_empty()) {
+        (None, Some(dt)) => {
+            if dt.from.trim().is_empty() || dt.to.trim().is_empty() {
                 return Err(cfg(
-                    "`require.no_orphans.roots` entries must not be empty".into()
+                    "`edges.derive_target` needs a non-empty `from` and `to`".into(),
                 ));
             }
-            let roots = if spec.roots.is_empty() {
-                None
-            } else {
-                Some(
-                    Scope::from_patterns(&spec.roots)
-                        .map_err(|err| cfg(format!("invalid `no_orphans.roots` glob: {err}")))?,
-                )
-            };
-            Ok(Require::NoOrphans { roots })
+            let from = Regex::new(&dt.from)
+                .map_err(|e| cfg(format!("invalid `edges.derive_target.from` regex: {e}")))?;
+            Ok(EdgeSource::DeriveTarget { from, to: dt.to })
         }
     }
 }
@@ -614,17 +814,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let nodes = Scope::from_patterns(slice::from_ref(&opts.nodes))
         .map_err(|e| cfg(format!("invalid `nodes` glob: {e}")))?;
 
-    let extract = opts
-        .edges
-        .from_content
-        .extract
-        .resolve()
-        .map_err(|e| cfg(format!("invalid `edges.from_content.extract`: {e}")))?;
-    if let Extract::Regex(p) = &extract {
-        Regex::new(p)
-            .map_err(|e| cfg(format!("invalid `edges.from_content.extract.regex`: {e}")))?;
-    }
-
+    let edges = resolve_edges(opts.edges, &cfg)?;
     let require = match opts.require {
         RequireSpec::Named(NamedRequire::Acyclic) => Require::Acyclic,
         RequireSpec::Named(NamedRequire::NoDangling) => Require::NoDangling,
@@ -632,14 +822,29 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         RequireSpec::Map(map) => resolve_map_require(map, &cfg)?,
     };
 
+    // The edge type and the assertion must agree: `fresh` is the
+    // `derive_target` mode; every other mode is `from_content`.
+    match (&edges, &require) {
+        (EdgeSource::FromContent { .. }, Require::Fresh { .. }) => {
+            return Err(cfg(
+                "`require: fresh` needs `edges.derive_target`, not `edges.from_content`".into(),
+            ));
+        }
+        (EdgeSource::DeriveTarget { .. }, r) if !matches!(r, Require::Fresh { .. }) => {
+            return Err(cfg(
+                "`edges.derive_target` only supports `require: fresh`".into()
+            ));
+        }
+        _ => {}
+    }
+
     Ok(Box::new(FileGraphRule {
         id: spec.id.clone(),
         level: spec.level,
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
         nodes,
-        extract,
-        resolve: opts.edges.from_content.resolve,
+        edges,
         require,
     }))
 }
@@ -679,8 +884,10 @@ mod tests {
             policy_url: None,
             message: None,
             nodes: scope(nodes),
-            extract: Extract::Regex(regex.into()),
-            resolve,
+            edges: EdgeSource::FromContent {
+                extract: Extract::Regex(regex.into()),
+                resolve,
+            },
             require: Require::ForbiddenEdges(vec![ForbiddenPattern {
                 from: scope(from),
                 to: scope(to),
@@ -697,8 +904,10 @@ mod tests {
             policy_url: None,
             message: None,
             nodes: scope(nodes),
-            extract: Extract::Regex(regex.into()),
-            resolve,
+            edges: EdgeSource::FromContent {
+                extract: Extract::Regex(regex.into()),
+                resolve,
+            },
             require: Require::Acyclic,
         }
     }
@@ -903,8 +1112,10 @@ mod tests {
             policy_url: None,
             message: None,
             nodes: scope(nodes),
-            extract: Extract::Regex(regex.into()),
-            resolve,
+            edges: EdgeSource::FromContent {
+                extract: Extract::Regex(regex.into()),
+                resolve,
+            },
             require,
         }
     }
@@ -1001,6 +1212,131 @@ mod tests {
         assert!(
             build(&spec_yaml(&bad)).is_err(),
             "setting two map modes must be rejected"
+        );
+    }
+
+    fn fresh_rule(nodes: &str, from: &str, to: &str, marker: &str) -> FileGraphRule {
+        FileGraphRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            nodes: scope(nodes),
+            edges: EdgeSource::DeriveTarget {
+                from: Regex::new(from).expect("valid from regex"),
+                to: to.into(),
+            },
+            require: Require::Fresh {
+                algo: Algorithm::Sha256,
+                marker: Regex::new(marker).expect("valid marker regex"),
+            },
+        }
+    }
+
+    #[test]
+    fn fresh_silent_when_marker_matches_then_stale_when_source_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("proto")).unwrap();
+        let src = "message A {}\n";
+        std::fs::write(root.join("proto/a.proto"), src).unwrap();
+        let hash = Algorithm::Sha256.hex(src.as_bytes());
+        std::fs::write(
+            root.join("proto/a.pb.go"),
+            format!("// @generated sha256:{hash}\npackage a\n"),
+        )
+        .unwrap();
+        let idx = index(&["proto/a.proto", "proto/a.pb.go"]);
+        let r = fresh_rule(
+            "proto/**/*.proto",
+            r"(.*)\.proto",
+            "$1.pb.go",
+            r"sha256:([0-9a-f]{64})",
+        );
+        assert!(eval(&r, root, &idx).is_empty(), "marker matches -> fresh");
+
+        // The source changes; the generated marker is now stale.
+        std::fs::write(root.join("proto/a.proto"), "message A { reserved 1; }\n").unwrap();
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("proto/a.pb.go"));
+        assert!(v[0].message.contains("out of date"));
+    }
+
+    #[test]
+    fn fresh_fires_when_derived_target_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("proto")).unwrap();
+        std::fs::write(root.join("proto/a.proto"), "message A {}\n").unwrap();
+        let idx = index(&["proto/a.proto"]);
+        let r = fresh_rule(
+            "proto/**/*.proto",
+            r"(.*)\.proto",
+            "$1.pb.go",
+            r"sha256:([0-9a-f]{64})",
+        );
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("proto/a.pb.go"));
+        assert!(v[0].message.contains("missing or unreadable"));
+    }
+
+    #[test]
+    fn fresh_skips_sources_not_matching_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("proto")).unwrap();
+        std::fs::write(root.join("proto/notes.txt"), "not generated\n").unwrap();
+        let idx = index(&["proto/notes.txt"]);
+        // `from` matches only *.proto, so notes.txt is skipped.
+        let r = fresh_rule(
+            "proto/**/*",
+            r"(.*)\.proto",
+            "$1.pb.go",
+            r"sha256:([0-9a-f]{64})",
+        );
+        assert!(
+            eval(&r, root, &idx).is_empty(),
+            "a source not matching `from` is skipped"
+        );
+    }
+
+    #[test]
+    fn build_fresh_mode_and_edge_coupling() {
+        use crate::test_support::spec_yaml;
+        let ok = "id: t\nkind: file_graph\nnodes: \"**/*.proto\"\nedges:\n  \
+                  derive_target:\n    from: '(.*)\\.proto'\n    to: '$1.pb.go'\nrequire:\n  \
+                  fresh:\n    marker: 'sha256:([0-9a-f]{64})'\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(ok)).is_ok(),
+            "derive_target + fresh should build: {ok}"
+        );
+
+        // `fresh` with `from_content` -> rejected (wrong edge type).
+        let bad_fc = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  from_content:\n    \
+                      extract:\n      regex: 'x'\nrequire:\n  fresh:\n    \
+                      marker: 'h:([0-9a-f])'\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(bad_fc)).is_err(),
+            "fresh needs derive_target"
+        );
+
+        // `derive_target` with a graph mode -> rejected.
+        let bad_dt = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  derive_target:\n    \
+                      from: 'a'\n    to: 'b'\nrequire: acyclic\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(bad_dt)).is_err(),
+            "derive_target only supports fresh"
+        );
+
+        // A marker with no capture group -> rejected.
+        let bad_marker = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  \
+                          derive_target:\n    from: 'a'\n    to: 'b'\nrequire:\n  fresh:\n    \
+                          marker: 'nogroup'\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(bad_marker)).is_err(),
+            "marker needs a capture group"
         );
     }
 }

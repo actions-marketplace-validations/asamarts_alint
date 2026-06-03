@@ -1,0 +1,32 @@
+name: file_graph fresh fires when the generated file's hash marker is stale
+tags: [check, file_graph, cross_file]
+
+given:
+  tree:
+    proto:
+      a.proto: |
+        message A {}
+      a.pb.go: |
+        // @generated from a.proto sha256:0000000000000000000000000000000000000000000000000000000000000000
+        package a
+  config: |
+    version: 1
+    rules:
+      - id: generated-stays-fresh
+        kind: file_graph
+        nodes: "proto/**/*.proto"
+        edges:
+          derive_target:
+            from: '(.*)\.proto'
+            to: '$1.pb.go'
+        require:
+          fresh:
+            hash: sha256
+            marker: 'sha256:([0-9a-f]{64})'
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: generated-stays-fresh, level: error, path: proto/a.pb.go}

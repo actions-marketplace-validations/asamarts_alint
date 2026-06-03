@@ -1,10 +1,10 @@
 # Generic file-dependency-graph family
 
-Status: **Four `require:` modes shipped — 2026-06-02** (`forbidden_edges` +
-`acyclic`, then `no_dangling` + `no_orphans`; the `crate::file_graph` kind, rule
-count 83 → 84, CHANGELOG `[Unreleased]`). Only the content-hash `fresh` mode
-remains, plus a 1M-file macro bench scenario before the v0.12 release. The study
-gate is satisfied: the
+Status: **All five `require:` modes shipped — 2026-06 (`crate::file_graph`
+COMPLETE)** (`forbidden_edges` + `acyclic`, then `no_dangling` + `no_orphans`, then
+`fresh` over `derive_target` edges; rule count 83 → 84, CHANGELOG `[Unreleased]`).
+The kind's surface is done; only a **1M-file macro bench scenario** (extends
+S11-S13) remains before the v0.12 release. The study gate is satisfied: the
 [100-repo study](./case_study_log.md) surfaced **257 file-reference-graph edge
 sources across 56 repos** — `file_graph` is the **#1 demand-ranked new-kind** of
 the cut ([`architecture_synthesis.md`](./architecture_synthesis.md) primitive ⑤).
@@ -263,11 +263,17 @@ non-goal. The DSL held; no reshape needed.
       matches a `roots:` glob (a bare `require: no_orphans` = no roots; the map
       form `{ no_orphans: { roots: [...] } }` declares entry points). Both reuse
       the per-node read+extract+resolve from increment 1.
-   3. **`fresh`** (content-hash-marker) — codegen freshness via `derive_target`;
-      reuses the `pair_hash` digest machinery over an edge.
+   3. **`fresh`** (content-hash-marker) — **SHIPPED 2026-06** — codegen freshness
+      via `derive_target` edges (a `from` regex on the node path → a `to` template,
+      e.g. `$1.pb.go`; a constant `to` maps many sources to one target). The derived
+      file must embed the source's current digest, captured by `marker` (group 1);
+      reuses the `pair_hash` `Algorithm` (now `pub(crate)`) over the edge. The edge
+      type and `require` mode are coupled in `build` (`derive_target` ⟺ `fresh`;
+      `from_content` ⟺ the four graph modes). Content-hash only — never mtime.
    Standalone kind (`crate::file_graph`), `requires_full_index` cross-file dispatch,
-   never in `SPAWNING_RULE_KINDS` (pure-parse). Needs a 1M-file bench scenario
-   (a new macro scenario, extends the S11-S13 pattern) before the v0.12 release.
+   never in `SPAWNING_RULE_KINDS` (pure-parse). **All five `require:` modes are now
+   shipped; only the 1M-file bench scenario** (a new macro scenario, extends the
+   S11-S13 pattern) remains before the v0.12 release.
 
 ## Open questions
 

@@ -25,9 +25,12 @@ use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 
+// `pub(crate)` so the `file_graph` `fresh` mode reuses one digest
+// enum instead of triplicating it (the third sha consumer after
+// `file_hash` / `pair_hash`).
 #[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-enum Algorithm {
+pub(crate) enum Algorithm {
     #[default]
     Sha256,
     Sha512,
@@ -35,14 +38,14 @@ enum Algorithm {
 
 impl Algorithm {
     /// Lowercase hex digest of `bytes`.
-    fn hex(self, bytes: &[u8]) -> String {
+    pub(crate) fn hex(self, bytes: &[u8]) -> String {
         match self {
             Self::Sha256 => encode_hex(Sha256::digest(bytes).as_slice()),
             Self::Sha512 => encode_hex(Sha512::digest(bytes).as_slice()),
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Sha256 => "sha256",
             Self::Sha512 => "sha512",

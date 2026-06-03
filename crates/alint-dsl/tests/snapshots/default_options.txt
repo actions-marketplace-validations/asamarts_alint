@@ -362,10 +362,12 @@ FileGraphRule {
     policy_url: None,
     message: None,
     nodes: Scope { ... },
-    extract: Regex(
-        "from\\s+\"(\\.[^\"]+)\"",
-    ),
-    resolve: RelativeToFile,
+    edges: FromContent {
+        extract: Regex(
+            "from\\s+\"(\\.[^\"]+)\"",
+        ),
+        resolve: RelativeToFile,
+    },
     require: ForbiddenEdges(
         [
             ForbiddenPattern {
