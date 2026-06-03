@@ -931,6 +931,7 @@ ImportGateRule {
     allow: Some(
         Scope { ... },
     ),
+    strip_comments: false,
 }
 
 === kind: indent_style | id: indent-style ===

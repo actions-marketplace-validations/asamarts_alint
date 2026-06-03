@@ -104,6 +104,13 @@ pub struct ImportGateRule {
     forbid: Regex,
     import_re: Regex,
     allow: Option<Scope>,
+    /// Blank `//` and `/* … */` comments before matching. Set only
+    /// for the `language: js` preset, whose pattern is unanchored and
+    /// so matches `import("…")` inside a `JSDoc` `@typedef {import(…)}`
+    /// — a type-only annotation, not a real import (eslint / svelte).
+    /// The anchored presets (`^\s*import …`) can't match a comment
+    /// line, so they don't need it.
+    strip_comments: bool,
 }
 
 impl Rule for ImportGateRule {
@@ -145,8 +152,17 @@ impl PerFileRule for ImportGateRule {
         let Ok(text) = std::str::from_utf8(bytes) else {
             return Ok(Vec::new());
         };
+        // Blank comments first for the `js` preset (line numbers are
+        // preserved, so violation locations stay correct).
+        let stripped;
+        let scan_text = if self.strip_comments {
+            stripped = strip_js_comments(text);
+            stripped.as_str()
+        } else {
+            text
+        };
         let mut violations = Vec::new();
-        for (i, line) in text.lines().enumerate() {
+        for (i, line) in scan_text.lines().enumerate() {
             let Some(caps) = self.import_re.captures(line) else {
                 continue;
             };
@@ -169,6 +185,78 @@ impl PerFileRule for ImportGateRule {
         }
         Ok(violations)
     }
+}
+
+/// Replace `//` line comments and `/* … */` block comments (incl.
+/// `JSDoc` `/** … */`) with spaces, preserving newlines so line
+/// numbers and the per-line scanner are unaffected. String literals
+/// (`'…'`, `"…"`, `` `…` ``) are passed through verbatim — the import
+/// *target* is itself a quoted string, so blanking strings would
+/// erase what we extract. Not a full JS lexer: regex literals are
+/// treated as code, so a regex containing `//` or `/*` could be
+/// mis-stripped (vanishingly rare on an import-bearing line). Enough
+/// to stop the `js` preset matching `import(…)` inside a comment.
+fn strip_js_comments(src: &str) -> String {
+    enum S {
+        Code,
+        Line,
+        Block,
+        Str(char),
+    }
+    let mut out = String::with_capacity(src.len());
+    let mut state = S::Code;
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        match state {
+            S::Code => match c {
+                '/' if chars.peek() == Some(&'/') => {
+                    chars.next();
+                    out.push_str("  ");
+                    state = S::Line;
+                }
+                '/' if chars.peek() == Some(&'*') => {
+                    chars.next();
+                    out.push_str("  ");
+                    state = S::Block;
+                }
+                '\'' | '"' | '`' => {
+                    out.push(c);
+                    state = S::Str(c);
+                }
+                _ => out.push(c),
+            },
+            S::Line => {
+                if c == '\n' {
+                    out.push('\n');
+                    state = S::Code;
+                } else {
+                    out.push(if c == '\r' { '\r' } else { ' ' });
+                }
+            }
+            S::Block => {
+                if c == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    out.push_str("  ");
+                    state = S::Code;
+                } else if c == '\n' || c == '\r' {
+                    out.push(c);
+                } else {
+                    out.push(' ');
+                }
+            }
+            S::Str(q) => {
+                out.push(c);
+                if c == '\\' {
+                    if let Some(n) = chars.next() {
+                        out.push(n);
+                    }
+                } else if c == q {
+                    state = S::Code;
+                }
+            }
+        }
+    }
+    out
 }
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
@@ -215,6 +303,12 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         )
     };
 
+    // The `js` preset's pattern is unanchored, so it matches
+    // `import(…)` inside a JSDoc comment; blank comments first. A
+    // custom `import_pattern` or any other (anchored) preset opts out.
+    let strip_comments =
+        opts.import_pattern.is_none() && matches!(opts.language, Some(Language::Js));
+
     Ok(Box::new(ImportGateRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -225,6 +319,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         forbid,
         import_re,
         allow,
+        strip_comments,
     }))
 }
 
@@ -253,6 +348,7 @@ mod tests {
                     .unwrap(),
                 )
             },
+            strip_comments: matches!(language, Language::Js),
         }
     }
 
@@ -337,6 +433,43 @@ mod tests {
         let r = rule(Language::Js, r"^lodash", &[]);
         let src = "import _ from \"lodash\";\nconst x = require('lodash/fp');\nimport y from \"react\";\n";
         assert_eq!(eval(&r, "src/a.js", src).len(), 2);
+    }
+
+    #[test]
+    fn js_jsdoc_type_import_is_ignored_but_real_import_fires() {
+        // The `language: js` preset must not treat a JSDoc type-only
+        // `import(...)` as a real import (eslint `@typedef {import(...)}`
+        // / svelte `import('../compiler/...')` in JSDoc) — but a genuine
+        // import of the same path on a code line still fires.
+        let r = rule(Language::Js, r"^\.\./compiler", &[]);
+        let src = "/**\n\
+                   * @typedef {import('../compiler/types').Foo} Foo\n\
+                   * @param {Array<import(\"../compiler/x\")>} a\n\
+                   */\n\
+                   export function f(a) { return a; }\n";
+        assert!(
+            eval(&r, "src/runtime.js", src).is_empty(),
+            "JSDoc type-imports must not fire the gate"
+        );
+        // The real static import is still caught.
+        let src2 = "import { x } from '../compiler/internal';\n";
+        assert_eq!(eval(&r, "src/runtime.js", src2).len(), 1);
+    }
+
+    #[test]
+    fn js_line_comment_import_is_ignored() {
+        let r = rule(Language::Js, r"^lodash", &[]);
+        let src = "// import _ from \"lodash\";\nconst ok = 1;\n";
+        assert!(eval(&r, "src/a.js", src).is_empty());
+    }
+
+    #[test]
+    fn js_block_comment_does_not_swallow_a_trailing_real_import() {
+        // A `/* … */` on the same line as a real import must blank only
+        // the comment, leaving the import matchable.
+        let r = rule(Language::Js, r"^lodash", &[]);
+        let src = "/* uses */ import _ from \"lodash\";\n";
+        assert_eq!(eval(&r, "src/a.js", src).len(), 1);
     }
 
     #[test]

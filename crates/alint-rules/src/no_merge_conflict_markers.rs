@@ -65,20 +65,40 @@ impl PerFileRule for NoMergeConflictMarkersRule {
     }
 }
 
+/// True when the file carries an unambiguous conflict *anchor* — a
+/// line starting with `<<<<<<< `, `>>>>>>> `, or `||||||| ` (each
+/// followed by a ref, so it never collides with prose). A bare
+/// `=======` is only treated as a separator when such an anchor is
+/// present: on its own, a seven-character `=======` is identical to
+/// a reST/Markdown setext heading underline (`Changes` and `Git tag`
+/// are both exactly seven characters), and a real conflict always
+/// carries a `<<<<<<<` start anyway.
+fn has_conflict_anchor(text: &str) -> bool {
+    text.split('\n').any(|line| {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let head = line.as_bytes();
+        head.len() >= 8
+            && (head.starts_with(b"<<<<<<< ")
+                || head.starts_with(b">>>>>>> ")
+                || head.starts_with(b"||||||| "))
+    })
+}
+
 /// Scan `text` for the first line that matches one of the four
 /// git conflict marker prefixes. Returns (1-based line number,
 /// the marker token).
 fn first_marker(text: &str) -> Option<(usize, &'static str)> {
+    let separator_armed = has_conflict_anchor(text);
     for (idx, line) in text.split('\n').enumerate() {
         let trimmed_cr = line.strip_suffix('\r').unwrap_or(line);
-        if let Some(marker) = classify_marker(trimmed_cr) {
+        if let Some(marker) = classify_marker(trimmed_cr, separator_armed) {
             return Some((idx + 1, marker));
         }
     }
     None
 }
 
-fn classify_marker(line: &str) -> Option<&'static str> {
+fn classify_marker(line: &str, separator_armed: bool) -> Option<&'static str> {
     // `<<<<<<< `, `>>>>>>> `, `||||||| ` are 7 + space + ref.
     // `=======` is 7 chars, EXACTLY the whole line.
     if line.len() >= 8 {
@@ -93,7 +113,9 @@ fn classify_marker(line: &str) -> Option<&'static str> {
             return Some("|||||||");
         }
     }
-    if line == "=======" {
+    // Only a real separator inside an actual conflict; standalone it
+    // is a setext heading underline. See `has_conflict_anchor`.
+    if separator_armed && line == "=======" {
         return Some("=======");
     }
     None
@@ -171,6 +193,39 @@ mod tests {
         assert_eq!(
             first_marker("clean\r\n<<<<<<< HEAD\r\nconflict\r\n"),
             Some((2, "<<<<<<<"))
+        );
+    }
+
+    #[test]
+    fn bare_separator_alone_is_setext_not_conflict() {
+        // A 7-char reST/Markdown setext heading underline — "Changes"
+        // and "Git tag" are each exactly seven chars — is NOT a
+        // conflict separator absent any anchor marker. This is the
+        // flask/django `docs/**` false-positive class.
+        assert_eq!(first_marker("Changes\n=======\n\nThe changes.\n"), None);
+        assert_eq!(first_marker("Git tag\n=======\n"), None);
+    }
+
+    #[test]
+    fn real_conflict_with_a_setext_heading_still_fires() {
+        // The file carries a genuine conflict AND a setext heading;
+        // the anchor arms detection so it is still flagged (at the
+        // `<<<` start, which precedes the heading here).
+        assert_eq!(
+            first_marker("<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> b\n\nChanges\n=======\n"),
+            Some((1, "<<<<<<<"))
+        );
+    }
+
+    #[test]
+    fn separator_without_ours_is_caught_when_anchor_present() {
+        // A conflict missing its `<<<` start but keeping `=======` +
+        // `>>>>>>>` is still a conflict — the `>>>>>>>` anchor arms
+        // the bare separator (this is why we keep the `=======` arm
+        // rather than dropping it).
+        assert_eq!(
+            first_marker("=======\ntheirs\n>>>>>>> branch\n"),
+            Some((1, "======="))
         );
     }
 }
