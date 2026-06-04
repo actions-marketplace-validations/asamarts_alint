@@ -1530,6 +1530,21 @@ Baseline conventions for .NET projects. Tree-level gate: `when: facts.has_dotnet
 
 **Central Package Management:** the ruleset deliberately does **not** require a `Version` on each `<PackageReference>` — CPM (`Directory.Packages.props`) makes that attribute absent by design, so enforcing it would false-positive across CPM repos (dotnet/runtime). It instead checks that, *if* a `Directory.Packages.props` exists, CPM is actually enabled. Composes with `hygiene/no-tracked-artifacts@v1` (namespaced `dotnet-*` ids; `dotnet-no-build-output-committed` is the .NET-gated `bin/`/`obj/` companion).
 
+### `alint://bundled/php@v1`
+
+Baseline conventions for PHP / Composer projects. Tree-level gate: `when: facts.has_php` — any `composer.json` (root or nested), so the ruleset is a silent no-op in non-PHP repos (and in the non-PHP parts of a polyglot monorepo). Its heart is the **"Composer-fatals" invariants**: `composer.json` declares autoload roots and console binaries, and Composer aborts at install/autoload time if any path is missing — pure cross-file path-existence checks (`registry_paths_resolve`) alint expresses natively, without running Composer (the same checks laravel and phpstan hand-roll). The structured-query `name` check is `if_present: true` (an application `composer.json` may omit a published `name`); the path-resolve rules are naturally silent when their field is absent. Levels are non-blocking (no `error`) given the broad adopter surface.
+
+| Rule id | Kind | Default level |
+|---|---|---|
+| `php-composer-name-format` | `json_path_matches` | warning |
+| `php-composer-psr4-dirs-resolve` | `registry_paths_resolve` | warning |
+| `php-composer-autoload-files-resolve` | `registry_paths_resolve` | warning |
+| `php-composer-autoload-dev-files-resolve` | `registry_paths_resolve` | info |
+| `php-composer-bin-resolve` | `registry_paths_resolve` | warning |
+| `php-no-vendor-committed` | `dir_absent` | warning |
+
+**Scope:** the path-resolve rules read the *root* `composer.json`; in a monorepo of sub-packages each carrying its own `composer.json`, add per-package rules (or a `for_each_dir`) in your own config. Composes with `hygiene/no-tracked-artifacts@v1` (namespaced `php-*` ids; `php-no-vendor-committed` is the Composer-gated `vendor/` companion).
+
 ### `alint://bundled/ci/github-actions@v1`
 
 Hardening for `.github/workflows/*.y{,a}ml`, guided by the two OpenSSF Scorecard checks with the strongest supply-chain signal (Token-Permissions + Pinned-Dependencies) plus a readability nudge. Scoped to workflow files, so the ruleset is a safe no-op in repos that don't use GitHub Actions.

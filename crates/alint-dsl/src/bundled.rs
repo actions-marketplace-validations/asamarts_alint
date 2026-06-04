@@ -47,6 +47,7 @@ const REGISTRY: &[(&str, &str, &str)] = &[
     ("go", "v1", include_str!("../rulesets/v1/go.yml")),
     ("java", "v1", include_str!("../rulesets/v1/java.yml")),
     ("dotnet", "v1", include_str!("../rulesets/v1/dotnet.yml")),
+    ("php", "v1", include_str!("../rulesets/v1/php.yml")),
     // Namespaced utility rulesets. Slash-separated names are
     // resolved through the usual `alint://bundled/<name>@<rev>`
     // URI — the `@` separator splits name from rev, so slashes

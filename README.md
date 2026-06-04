@@ -8,7 +8,7 @@
 
 - ⚡ **Fast at scale.** ~1.1 s on a 100K-file workspace bundle, ~12 s at 1M files. [Public benchmarks per release.](docs/benchmarks/HISTORY.md)
 - 🤖 **Agent-aware.** First-class `agent` output format with per-violation `agent_instruction` strings; bundled `agent-hygiene` and `agent-context` rulesets for AI-touched repos.
-- 🧰 **Powerful + extensible.** 88 rule kinds across 13 families, 21 bundled ecosystem rulesets, 12 auto-fix ops, 8 output formats, structured-query rules with full RFC 9535 JSONPath, cross-file relational rules, conditional `when:` gates over per-run facts, and `extends:` composition with SRI-pinned URLs.
+- 🧰 **Powerful + extensible.** 88 rule kinds across 13 families, 22 bundled ecosystem rulesets, 12 auto-fix ops, 8 output formats, structured-query rules with full RFC 9535 JSONPath, cross-file relational rules, conditional `when:` gates over per-run facts, and `extends:` composition with SRI-pinned URLs.
 - 📦 **One static Rust binary.** Any language, any repo. No plugin install, no Node/JVM/Python runtime needed.
 
 Working `.alint.yml` configs for 30 OSS repos (single-language workspaces, polyglot monorepos, scale stress-tests) live under [`examples/`](examples/README.md), each with a writeup of what alint catches that the repo's existing tooling misses.
@@ -41,7 +41,7 @@ Bundled rulesets are gated by ecosystem facts (`has_rust`, `has_node`, `has_pyth
 ## Core capabilities
 
 - **88 rule kinds** across 13 families: existence, content, naming, structured query (RFC 9535 JSONPath over JSON/YAML/TOML/XML), text hygiene, security/unicode, encoding, structure, portable metadata, Unix metadata, git hygiene, cross-file relations, plugin (`command` shellout). Full reference: [`docs/rules.md`](docs/rules.md).
-- **21 bundled rulesets**: `oss-baseline` (a strict superset of [Repolinter](https://github.com/todogroup/repolinter)'s default ruleset for users migrating from that tool, archived 2026-02), language sets (`rust`, `node`, `python`, `go`, `java`, `dotnet`), `ci/github-actions`, monorepo overlays (`cargo-workspace`, `pnpm-workspace`, `yarn-workspace`), hygiene (`no-tracked-artifacts`, `lockfiles`), tooling (`editorconfig`), docs (`adr`), compliance (`reuse`, `apache-2`), `apache/governance` (Apache TLP governance discipline), agent (`hygiene`, `context`). Built into the binary, no network round-trip; ecosystem-gated, so listing one for an absent ecosystem is a silent no-op.
+- **22 bundled rulesets**: `oss-baseline` (a strict superset of [Repolinter](https://github.com/todogroup/repolinter)'s default ruleset for users migrating from that tool, archived 2026-02), language sets (`rust`, `node`, `python`, `go`, `java`, `dotnet`, `php`), `ci/github-actions`, monorepo overlays (`cargo-workspace`, `pnpm-workspace`, `yarn-workspace`), hygiene (`no-tracked-artifacts`, `lockfiles`), tooling (`editorconfig`), docs (`adr`), compliance (`reuse`, `apache-2`), `apache/governance` (Apache TLP governance discipline), agent (`hygiene`, `context`). Built into the binary, no network round-trip; ecosystem-gated, so listing one for an absent ecosystem is a silent no-op.
 - **Auto-fix**: 12 ops covering content edits (whitespace, newlines, line endings, BOM/bidi/zero-width strip, blank-line collapse) and path ops (create/remove/rename/prepend/append). Preview with `alint fix --dry-run`. Configurable `fix_size_limit` (default 1 MiB) skips oversize files rather than rewriting them.
 - **Conditional rules**: a bounded `when:` expression language (boolean logic, comparisons, `matches`, `in`) gates rules on *facts* evaluated once per run (`any_file_exists`, `all_files_exist`, `count_files`).
 - **Composition**: `extends:` pulls in other configs by local path, HTTPS URL (SRI-pinned), or `alint://bundled/<name>@<rev>`. Children override field-by-field. Monorepos can opt into `nested_configs: true` for auto-discovered subtree-scoped `.alint.yml` files.
@@ -218,7 +218,7 @@ Read at [alint.org/docs/cookbook/](https://alint.org/docs/cookbook/) (source: [`
 
 ## Bundled rulesets
 
-Nineteen rulesets ship in the binary, with zero network round-trip, pinned to the version of alint you're running:
+Twenty-two rulesets ship in the binary, with zero network round-trip, pinned to the version of alint you're running:
 
 **Ecosystem + project-shape baselines**
 
@@ -228,6 +228,8 @@ Nineteen rulesets ship in the binary, with zero network round-trip, pinned to th
 - **`python@v1`**: manifest (pyproject.toml / setup.py / setup.cfg) exists; lockfile (uv / poetry / Pipenv / PDM); pyproject.toml declares `project.name` + `project.requires-python` via structured-query; PEP 8 snake_case module filenames; Trojan-Source defenses. Gated with `when: facts.has_python`.
 - **`go@v1`**: go.mod + go.sum at root; go.mod declares `module <path>` + `go <version>`; Trojan-Source defenses on `*.go`. Gated with `when: facts.has_go`.
 - **`java@v1`**: Maven (`pom.xml`) or Gradle (`build.gradle` / `build.gradle.kts`) manifest; build wrapper (`mvnw` / `gradlew`); no committed `target/` / `build/` (using `git_tracked_only` so locally-built dirs stay silent); no committed `*.class`; PascalCase Java filenames; Trojan-Source defenses. Gated with `when: facts.has_java`.
+- **`dotnet@v1`**: root `global.json` exists + pins a concrete SDK version; SDK-style `.csproj`; nullable reference types enabled; Central Package Management actually enabled when `Directory.Packages.props` exists; no committed `bin/` / `obj/`; root `.editorconfig`. Gated with `when: facts.has_dotnet`.
+- **`php@v1`**: composer.json `name` is a valid lowercase `vendor/package`; the **Composer-fatals invariants** (every `autoload.psr-4` directory, `autoload.files` entry, and `bin` script resolves on disk); no committed `vendor/`. Gated with `when: facts.has_php`.
 - **`monorepo@v1`**: every `packages/*`, `crates/*`, `apps/*`, `services/*` directory has a README + ecosystem manifest; unique basenames.
 
 **Workspace-aware overlays** (use `when_iter:` to scope per-member checks to actual package directories, so non-package dirs under `crates/` / `packages/` don't fire false positives)
