@@ -106,13 +106,33 @@ rules:
     level: warning
     message: "Paths in triagebot.toml [autolabel.*].trigger_files must exist (tidy `triagebot`)."
 
-  # ── C2 (was A15): Cargo.lock sources restricted to an allowlist (tidy extdeps)
-  # NOT RUN — recorded as C (expressible-but-awkward). This is an allowlist-
-  # membership check over every `source = "..."` line in Cargo.lock. alint's
-  # regex engine has no look-ahead, so "any source line NOT in {rust-lang
-  # crates.io-index, pinned rust-lang/team git}" can't be written as a single
-  # file_content_forbidden pattern. Wants an `every_line_matches`/allowlist mode.
-  # See extdeps.rs:10 (ALLOWED_SOURCES) for the two permitted values.
+  # ── A15 (was C2): Cargo.lock sources restricted to an allowlist (tidy extdeps)
+  # CLOSED by the v0.12 `for_each_match` kind. This is an allowlist-membership
+  # check over every `source = "..."` line in Cargo.lock: tidy `extdeps` errors
+  # on any source NOT in a hardcoded 2-element allowlist. The old C-note was that
+  # alint's RE2 engine has no look-ahead, so "any source line NOT in {…}" could
+  # not be written as a single file_content_forbidden pattern. for_each_match
+  # inverts that cleanly — `select:` picks the `source = ` element lines and
+  # `require.matches:` asserts each value is exactly one of the two allowlisted
+  # strings (an alternation, not a negation), one violation per offending line.
+  # The two values are extdeps.rs:10 ALLOWED_SOURCES verbatim: the rust-lang
+  # crates.io-index registry and the SHA-pinned rust-lang/team git dep (the
+  # latter lives in the rustc-perf submodule, absent from a plain checkout — so
+  # at this pin only the registry source appears tree-wide and the rule is
+  # latent). Scoped tree-wide (**/Cargo.lock) rather than to tidy's exact
+  # WORKSPACES list: the no-unvetted-source invariant holds for every lockfile,
+  # and the vendored llvm/gcc subtrees are already excluded by the top-level
+  # ignore. (C-remainder retired here; the version-sort/multi-line-join nuance of
+  # the *alphabetical* blocks below stays C — ordered_block has no version-sort.)
+  - id: rr-cargo-lock-source-allowlist
+    kind: for_each_match
+    paths: ["**/Cargo.lock"]
+    select: '^source = '
+    require:
+      matches:
+        - '^source = "(registry\+https://github\.com/rust-lang/crates\.io-index|git\+https://github\.com/rust-lang/team#a5260e76d3aa894c64c56e6ddc8545b9a98043ec)"$'
+    level: error
+    message: "Cargo.lock `source` must be the rust-lang crates.io-index or the pinned rust-lang/team git dep (tidy `extdeps`)."
 
   # ── A16: every tests/crashes/*.rs declares a //@ known-bug: (tidy `known_bug`)
   - id: rr-crashes-known-bug

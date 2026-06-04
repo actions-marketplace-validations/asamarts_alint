@@ -209,6 +209,44 @@ rules:
     root_only: true
     level: info
 
+  # ════════════════════════════════════════════════════════════════
+  # B2 (PARTIALLY CLOSED, v0.12 cross_file set relations) — hlgroups
+  # doc<->highlight.c coherence. ci/hlgroups.make computes:
+  #   hlgroups  = every `*hl-X*` tag across runtime/doc/*.txt
+  #   deflinks  = every `default link X` group in src/highlight.c
+  # then `diff (hlgroups MINUS hlgroups.ignore) deflinks` — a bidirectional
+  # set_equals AFTER subtracting the ~70-entry hlgroups.ignore allow-list.
+  #
+  # The FULL set_equals stays a B candidate: cross_file has no "subtract a
+  # third file's set from the source" operator, so the ignore-list arm is
+  # not expressible (verbatim B2 is still deferred — see the note below).
+  #
+  # But ONE arm needs no ignore-list and is now a REAL rule: every group
+  # that highlight.c gives a `default link X` to MUST be documented as
+  # `*hl-X*` (deflinks ⊆ hlgroups). That is the `superset` relation —
+  # source (the union of `*hl-X*` across the doc glob) ⊇ targets (the
+  # `default link X` set in highlight.c). Verified at this pin: 91 doc-side
+  # groups cover all 24 default-link groups, zero uncovered. The ignore-list
+  # only ever subtracts from the OTHER direction (groups documented but not
+  # default-linked), so the superset arm is unaffected by it.
+  # ════════════════════════════════════════════════════════════════
+  - id: vim-hlgroups-default-links-are-documented
+    kind: cross_file
+    source:
+      files: "runtime/doc/*.txt"
+      extract: { regex: '\*hl-(\w+)\*' }
+    targets:
+      files: "src/highlight.c"
+      extract: { regex: '"default link (\w+)' }
+    relation: superset
+    level: warning
+    message: |
+      Every highlight group that src/highlight.c gives a `default link` to
+      must be documented with a `*hl-<group>*` tag under runtime/doc/*.txt
+      (the deflinks ⊆ hlgroups arm of ci/hlgroups.make). The reverse arm
+      (groups documented but intentionally not default-linked) is governed
+      by ci/hlgroups.ignore and is left to the CI `hlgroups` gate.
+
 # ══════════════════════════════════════════════════════════════════
 # DELIBERATE NON-GOALS (D) — recorded so the denominator is honest
 # ══════════════════════════════════════════════════════════════════
@@ -247,6 +285,12 @@ rules:
 #     R1 in file set A must equal the set matched by R2 in file B (minus an
 #     ignore-list)". Evidence: ci/hlgroups.make:8-18 (doc `*hl-X*` vs
 #     highlight.c `default link X`, minus ci/hlgroups.ignore).
+#     PARTIALLY CLOSED by v0.12 cross_file `superset`: the ignore-free arm
+#     (every `default link X` group is documented as `*hl-X*`,
+#     deflinks ⊆ hlgroups) is now the real rule
+#     vim-hlgroups-default-links-are-documented above. The FULL bidirectional
+#     set_equals still needs a "subtract ci/hlgroups.ignore from the source
+#     set" operator that cross_file does not provide → that arm stays B.
 #  B3 file_encoding_valid — "files matching a glob are valid <encoding>"
 #     (round-trip iconv). Evidence: ci-linux.yml:153-162 (utf-8 runtime
 #     files). no_bom is adjacent but not the same.

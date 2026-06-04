@@ -107,10 +107,39 @@ rules:
   #        (analyze.dart verifyTokenTemplatesUpdateCorrectFiles): every
   #        materialLib target named in gen_defaults.dart must exist. Asserted
   #        here as: the generator and its material target dir both exist.
+  #        GAP (still deferred): the per-target existence arm is NOT
+  #        registry_paths_resolve-able — every target is written as
+  #        '$materialLib/foo.dart' (Dart string interpolation, materialLib =
+  #        'packages/flutter/lib/src/material'); a regex capture yields the bare
+  #        'foo.dart' and alint has no $var-substitution, so the resolver would
+  #        skip every entry as non-literal. The regeneration/content arm is
+  #        execution. So this stays a structural file_exists, by design.
   - id: flutter-gen-defaults-generator-exists
     kind: file_exists
     paths: "dev/tools/gen_defaults/bin/gen_defaults.dart"
     level: error
+
+  # ── A10 (v0.12 file_graph, NEWLY CLOSED): the structural sibling arm of
+  #        analyze.dart verifyNoBadImportsInFlutter — every public framework
+  #        barrel `packages/flutter/lib/<X>.dart` must have a matching source
+  #        directory `packages/flutter/lib/src/<X>/` (flutter's
+  #        `_listEquals(packages, directories)`). Expressed as a file_graph
+  #        derive_target whose derived sibling is a *directory*
+  #        (no_dangling checks the index as file OR dir). Pre-v0.12 this needed
+  #        the Dart-side directory walk; now native. (The reverse half — an
+  #        orphan src/<X>/ dir with no barrel — plus the import-cycle / well-
+  #        ordered-imports arms of the same check remain D-bucket: the import
+  #        edges are `package:flutter/<X>.dart` module URIs, which file_graph
+  #        drops by design, so `acyclic` cannot see them.)
+  - id: flutter-lib-barrel-has-src-dir
+    kind: file_graph
+    nodes: "packages/flutter/lib/*.dart"
+    edges:
+      derive_target:
+        from: '^packages/flutter/lib/([^/]+)\.dart$'
+        to: 'packages/flutter/lib/src/${1}'
+    require: no_dangling
+    level: warning
 
   # ── A8 (value-add structure, recorded separately): every workspace package
   #        declares a pubspec.yaml. Not a flutter-enforced gate; alint bonus.

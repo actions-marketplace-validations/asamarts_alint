@@ -56,13 +56,20 @@ rules:
   #   rg '## pandoc $(VERSION) \(\d\d\d\d-\d\d-\d\d\)' changelog.md
   # The released version must have a changelog heading. This is a PRESENCE
   # check ("does this heading appear anywhere"), NOT value equality.
-  # cross_file_value_equals does NOT fit: changelog.md is an append-only
-  # ledger of all 219 historical `## pandoc X (...)` headings, so asserting
-  # "every extracted version equals the cabal version" produces 204 false
-  # violations. The clean expression is file_content_matches on the literal
-  # current version. The GAP — a cross-file "source value appears >=1 time
-  # in target" primitive that extracts the version from the cabal instead
-  # of inlining it — is recorded as a new-kind candidate.
+  # cross_file_value_equals (the `equals` relation) does NOT fit: changelog.md
+  # is an append-only ledger of all 219 historical `## pandoc X (...)` headings,
+  # so asserting "every extracted version equals the cabal version" produces 204
+  # false violations.
+  #
+  # GAP CLOSED (v0.12 cross_file `subset` relation, singleton-source membership):
+  # the source extracts the SINGLE cabal version into a singleton set S; the
+  # target extracts the SET T of every `## pandoc X` changelog heading; `subset`
+  # asserts S ⊆ T — i.e. "the current cabal version appears at least once among
+  # the changelog headings". This is exactly the cross-file "value-present-in-
+  # target" primitive the original gap recorded, and it tracks pandoc.cabal
+  # automatically (no inlined version literal). See `pandoc-changelog-version-
+  # present` below. The literal-pattern rule is kept too: it additionally pins
+  # the `(YYYY-MM-DD)` date-shape that the version-set membership does not see.
   # ════════════════════════════════════════════════════════════════
   - id: pandoc-changelog-has-version
     kind: file_content_matches
@@ -71,9 +78,32 @@ rules:
     level: error
     message: |
       changelog.md must carry a `## pandoc <VERSION> (YYYY-MM-DD)` heading
-      for the current version (Makefile check-changelog). NOTE: the version
-      literal is inlined here; a cross-file "value-present-in-target" kind
-      would let this track pandoc.cabal automatically.
+      for the current version (Makefile check-changelog). The version literal
+      is pinned here for the date-shape; the membership (version tracks the
+      cabal automatically) is enforced by pandoc-changelog-version-present.
+
+  # NEW (v0.12 cross_file `subset` — singleton source = membership): the
+  # pandoc.cabal `version:` value must appear as one of changelog.md's
+  # `## pandoc <X>` headings. Closes the documented "value-present-in-target"
+  # gap above — derives the version from the cabal instead of inlining it, so
+  # bumping pandoc.cabal without adding the changelog heading now fails. The
+  # target regex tolerates the older double-space `## pandoc  X` headings so the
+  # heading set T is complete; membership of the single-space current version is
+  # unaffected either way (Makefile check-changelog, tracked automatically).
+  - id: pandoc-changelog-version-present
+    kind: cross_file
+    source:
+      file: "pandoc.cabal"
+      extract: { regex: '(?m)^version:\s*([0-9][0-9.]*)' }
+    targets:
+      files: "changelog.md"
+      extract: { regex: '## pandoc\s+([0-9][0-9.]*)' }
+    relation: subset
+    level: error
+    message: |
+      The pandoc.cabal `version:` must have a matching `## pandoc <VERSION>`
+      heading in changelog.md (Makefile check-changelog). The version is read
+      from the cabal, so a release bump that forgets the changelog entry fails.
 
   # ════════════════════════════════════════════════════════════════
   # MAN-PAGE VERSION (Makefile check-manversion)

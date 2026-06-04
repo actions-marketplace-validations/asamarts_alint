@@ -76,10 +76,17 @@ rules:
   # (Vault is the sanctioned secret source). The EXACT check needs an
   # allow-list exception for GITHUB_TOKEN -- file_content_forbidden has no
   # `allow:` field and the Rust `regex` crate has no negative-lookahead, so
-  # the precise "secrets.X where X != GITHUB_TOKEN" cannot be expressed (gap;
-  # see new_kind_candidates). This approximation forbids credential-shaped
-  # secret names that never collide with GITHUB_TOKEN; grafana is clean at the
-  # pin (only GITHUB_TOKEN is referenced), so this PASSES and guards regressions.
+  # the precise "secrets.X where X != GITHUB_TOKEN" cannot be expressed.
+  # GAP STILL DEFERRED (v0.12 for_each_match does NOT close it): for_each_match's
+  # forbid/matches are also RE2 (no negative-lookbehind), and a clean tree at
+  # this pin already references `secrets` as a plain JSON property inside a
+  # sanctioned Vault step -- `fromJSON(steps.vault-secrets.outputs.secrets)` in
+  # .github/workflows/relyance-scan.yml -- so any "every secrets-line must be
+  # GITHUB_TOKEN" for_each_match rule FALSE-POSITIVES on that legitimate line
+  # (the `-secrets.outputs` substring). Needs a real allow-exception field; left
+  # documented. This approximation forbids credential-shaped secret names that
+  # never collide with GITHUB_TOKEN; grafana is clean at the pin (only
+  # GITHUB_TOKEN is referenced as a GH context), so this PASSES and guards regressions.
   - id: grafana-no-credential-secrets
     kind: file_content_forbidden
     paths: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
@@ -114,3 +121,24 @@ rules:
     paths: [.github/renovate.json5]
     level: info
     message: "renovate config should exist (dependency automation)."
+
+  # --- A: CHANGELOG per-entry grammar (CLOSED by v0.12 for_each_match) ---
+  # GAP (was deferred as "repeating-block / per-line CHANGELOG entry grammar",
+  # the for-all-over-entries shape no file_content_* kind expresses; see
+  # case_study_log Tier-2 "repeating-block / every_element_has"). The release
+  # CHANGELOG is tool-generated; every PR-cited entry renders the PR number
+  # twice -- the displayed `[#N]` and the `.../pull/M` URL -- and they MUST be
+  # equal. RE2 has no backreferences, so file_content_matches cannot assert the
+  # display number == URL number; for_each_match's `equal:` over named select
+  # captures is exactly this case (the canonical example in docs/rules.md).
+  # Verified at the pin: 2216 PR-linked entries tree-wide, 0 disp/url mismatches.
+  # Security-only entries (`- **Security**: CVE-...`) and issue links carry no
+  # `pull/` token, so `select:` never matches them -> no false positives.
+  - id: grafana-changelog-pr-number-coherent
+    kind: for_each_match
+    paths: [CHANGELOG.md]
+    select: '\[#(?P<disp>\d+)\]\(https://github\.com/grafana/grafana/pull/(?P<url>\d+)\)'
+    require:
+      equal: [disp, url]
+    level: warning
+    message: "CHANGELOG entry's displayed PR number must equal its /pull/ URL number (copy-paste drift)."

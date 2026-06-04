@@ -26,7 +26,13 @@ rules:
   # with the DuckDB ASCII-art header (the "//   DuckDB" banner + the file's
   # own relative path on line 4). Enforced via `make format-check-silent`
   # in Main.yml:238. We assert the static banner frame; the per-file path
-  # line is dynamic and not byte-checkable here (see new-kind candidates).
+  # line is dynamic and not byte-checkable here.
+  # GAP STILL OPEN after the v0.12 kinds: line 4 must EQUAL this file's own
+  # path (relative to src/include/, e.g. `// duckdb/parser/column_list.hpp`).
+  # That is self-referential content==own-path. None of the v0.12 kinds reach
+  # it: for_each_match `equal:` compares named captures WITHIN one line (no
+  # access to the file's path); file_graph `derive_target` asserts a sibling
+  # FILE exists, not that a content line equals the path. Genuinely deferred.
   # ════════════════════════════════════════════════════════════════════
   - id: duckdb-public-header-banner
     kind: file_header
@@ -61,7 +67,14 @@ rules:
   # scripts/format_test_benchmark.py rewrites every .test/.test_slow to carry
   # `# name: <path>` and `# group: [<dir>]`. Enforced via format.py --check.
   # We assert the header markers are present (the exact path/group values are
-  # self-referential and dir-derived — see new-kind candidates).
+  # self-referential and dir-derived).
+  # GAP STILL OPEN after the v0.12 kinds: `# name:` must equal the test's own
+  # repo-relative path and `# group:` is derived from the parent dir name
+  # (verified at the pinned SHA: every test/sql/create/*.test carries
+  # `# group: [create]`). Both are self-referential / dir-derived content —
+  # not expressible by for_each_match (intra-line capture equality only),
+  # cross_file (set parity across a glob, not per-file path identity),
+  # ordered_block, or file_graph derive_target. Genuinely deferred.
   # ════════════════════════════════════════════════════════════════════
   - id: duckdb-test-has-name-header
     kind: file_content_matches

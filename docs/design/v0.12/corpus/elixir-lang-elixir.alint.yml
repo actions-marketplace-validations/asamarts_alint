@@ -103,14 +103,25 @@ rules:
     level: error
 
   # ----- Version coherence (RELEASE.md step 2: CHANGELOG.md is versioned to the
-  # current VERSION). NOTE: classified C, not A — cross_file_value_equals
-  # requires EVERY extracted target value to equal the source, but CHANGELOG.md
-  # legitimately lists multiple version headings (`## v1.21.0-dev` AND the older
-  # `## v1.20` branch pointer), so an all-must-match rule false-positives on the
-  # second heading. A "first/topmost match only" extract mode (or a major.minor
-  # prefix compare, VERSION=1.21.0-dev vs the `# Changelog for Elixir v1.21`
-  # title) is needed. Left here as a documented gap; the launcher-coherence
-  # rule above is the clean (A) version-coherence example.
+  # current VERSION). The CHANGELOG legitimately lists multiple version headings
+  # (`## v1.21.0-dev` AND the older `## v1.20` branch pointer), so a naive
+  # all-must-match extract false-positives on the second heading. CLOSED in v0.12
+  # via the cross_file "first/topmost match only" extract idiom: anchor the
+  # target regex with `(?s)\A.*?` so the lazy reach captures ONLY the first
+  # `## v<ver>` heading (`## v1.21.0-dev`) and the trailing `## v1.20` pointer is
+  # never seen. `equals` requires the source to extract exactly one value (VERSION
+  # holds a single token), and the single first-heading target value must equal it.
+  - id: elixir-changelog-versioned-to-current
+    kind: cross_file
+    source:
+      file: VERSION
+      extract: { regex: "^([^\\s]+)" }
+    targets:
+      files: CHANGELOG.md
+      extract: { regex: '(?s)\A.*?## v(\S+)' }
+    relation: equals
+    allow_missing_target: false
+    level: error
 
   # ----- Structure invariant: every first-party app under lib/ ships a mix.exs
   # (the six umbrella apps: eex/elixir/ex_unit/iex/logger/mix). Documented value

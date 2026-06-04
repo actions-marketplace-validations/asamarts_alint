@@ -154,6 +154,36 @@ rules:
     level: info
     message: ".changie.yaml unreleasedDir (e.g. v1.16) must track version/VERSION's dev minor (e.g. 1.16.0-dev), so `changie new` writes fragments into the live folder."
 
+  # ── Codegen-existence: every protoc INPUT has its committed Go OUTPUT ─────
+  # The checks.yml consistency-checks job runs `make protobuf` then
+  # `git diff --exit-code` to guarantee the generated *.pb.go is in lock-step
+  # with its *.proto source (the codegen-freshness gate). alint can't run protoc
+  # (bucket D / orchestration), and the *.pb.go output embeds no sha256 of its
+  # source, so the FULL freshness (fresh:) and regen halves stay deferred. But
+  # the EXISTENCE half — every protoc-input *.proto must ship a sibling *.pb.go,
+  # so a newly-added proto isn't merged with its generated Go missing — is now
+  # expressible NATIVELY (no spawn) via file_graph + derive_target + no_dangling.
+  # PROVENANCE: v0.12 case study logged this as one of the "terraform ×3"
+  # file_dependency_graph codegen-freshness edges (case_study_log.md); the
+  # derived-sibling-existence mode shipped in v0.12, so this edge is CLOSED here.
+  # Scope is internal/**: docs/plugin-protocol/{tfplugin5,tfplugin6}.proto are
+  # human-facing protocol DOCS with no generated sibling (verified vs the clone),
+  # so they're deliberately out of `nodes` to avoid a false dangling.
+  - id: tf-proto-has-generated-go
+    kind: file_graph
+    nodes: "internal/**/*.proto"
+    edges:
+      derive_target:
+        from: '(.*)\.proto'
+        to: '$1.pb.go'
+    require: no_dangling
+    level: warning
+    message: |
+      Every protoc input (internal/**/*.proto) must ship its generated sibling
+      (the same path with a .pb.go suffix). CI keeps these in lock-step via
+      `make protobuf` + `git diff --exit-code` (checks.yml consistency-checks);
+      a *.proto merged without its committed *.pb.go is a codegen-freshness miss.
+
   # The repo's bespoke check scripts must stay present (CI `make` targets call them).
   - id: tf-check-scripts-present
     kind: file_exists

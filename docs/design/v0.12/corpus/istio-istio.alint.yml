@@ -60,15 +60,55 @@ rules:
       Apache header missing (lint-copyright-banner). Run
       `make fix-copyright-banner`.
 
-  # B GAP (NOT expressible today) — recorded, NOT enforced:
+  # B GAP — PARTIALLY closed by v0.12 `cross_file` set relations.
   # dependabot.yml `ignore:` and `groups.exclude-patterns:` MUST mirror
   # each other (the file's own comment: "Must mirror the ignore list
-  # above — see comment there for why both are needed"). This is a
-  # LIST-vs-LIST set-equality across two JSONPaths in one file.
-  # cross_file_value_equals rejects it: "source must resolve to exactly
-  # one value (the query matched several)" — it compares single scalars
-  # only, no set/list-equality mode. Needs a new `cross_file_set_equals`
-  # primitive. (Left out of the active ruleset; see new_kind_candidates.)
+  # above — see comment there for why both are needed"). The shipped
+  # v0.12 `cross_file` `set_equals`/`superset` relations gave us the
+  # list-vs-list set primitive the original note asked for — but the
+  # TRUE invariant is a *per-stanza* bidirectional mirror and that exact
+  # shape is STILL unexpressible:
+  #   * istio's dependabot.yml has 8 `updates[*]` stanzas. The 4 gomod
+  #     branch stanzas (master/release-1.30/-1.29/-1.28) each carry both
+  #     an `ignore` list AND a `groups.all-dependencies.exclude-patterns`
+  #     list; the 4 samples stanzas (pip/npm/bundler/gomod) carry
+  #     `ignore: [{dependency-name: "*"}]` and NO `groups:` block.
+  #   * A whole-file UNION `set_equals` therefore FALSE-POSITIVES on the
+  #     correct tree (verified at the pin: `missing: "*"` — the samples
+  #     stanzas' "*" is on the ignore side with no exclude counterpart).
+  #   * alint's JSONPath is RFC 9535 WITHOUT filter selectors
+  #     (`$.updates[?(@.groups)]` => parser error), so we cannot scope
+  #     the union to the stanzas that actually carry a groups block, and
+  #     there is no per-array-element (per-stanza) set-equality mode.
+  # So full closure stays deferred (needs per-stanza set pairing or a
+  # JSONPath filter selector; see new_kind_candidates). What IS now
+  # enforceable and TRUE at the pin is the dangerous half-direction:
+  # every `exclude-patterns` token (union across stanzas) must also be a
+  # known `ignore` token (a stray exclude with no matching ignore would
+  # let Dependabot still raise standalone PRs for it). That is a
+  # whole-file `superset` (ignore-union ⊇ exclude-union) — it does NOT
+  # catch a per-stanza ignore-without-exclude omission that some OTHER
+  # stanza's exclude happens to cover, but it does catch the inverse.
+  # NOTE the dashed YAML keys require RFC-9535 bracket notation
+  # (`['dependency-name']`, `['all-dependencies']`, `['exclude-patterns']`).
+  # Provenance: v0.12 cross_file set relations (set_equals/superset).
+  - id: istio-dependabot-exclude-known-to-ignore
+    kind: cross_file
+    source:
+      file: ".github/dependabot.yml"
+      extract: { yaml: "$.updates[*].ignore[*]['dependency-name']" }
+    targets:
+      - file: ".github/dependabot.yml"
+        extract:
+          yaml: "$.updates[*].groups['all-dependencies']['exclude-patterns'][*]"
+    relation: superset
+    level: warning
+    message: >-
+      Every dependabot `groups.all-dependencies.exclude-patterns` entry must
+      also appear in some stanza's `ignore:` list (otherwise Dependabot can
+      still open standalone PRs for it). NOTE: this is the one-directional
+      union check; the full per-stanza bidirectional mirror is not yet
+      expressible — keep the two lists in sync per stanza by hand.
 
   # ════════════════════════════════════════════════════════════════
   # VALUE-ADD — structural assertions istio does NOT gate on but that

@@ -3,9 +3,12 @@
 # alint config for curl/curl @ ba600296d2a1d8a4e53a36eb4bd30c1f0d0152cc
 # v0.12 100-repo case study, Stage A. Expresses the A-items of curl's
 # bespoke-validation surface (mostly the `scripts/spacecheck.pl` hygiene
-# battery + REUSE/SPDX headers). curl's heavy surface is checksrc.pl,
-# codespell/typos/proselint, the doc<->source consistency test suite, and
-# autotools-vs-cmake parity — all D (tool / AST / compile execution).
+# battery + REUSE/SPDX headers) plus the now-native cross-file value-
+# coherence edges (option<->help set-equality + documented-error<->enum
+# membership; see the `cross_file` rules below). curl's remaining heavy
+# surface is checksrc.pl, codespell/typos/proselint, the codegen-freshness
+# half of the doc<->source consistency suite, and autotools-vs-cmake
+# parity — all D (tool / AST / compile execution).
 
 version: 1
 
@@ -132,3 +135,56 @@ rules:
       include: ["**/*.o", "**/*.obj", "**/*.a", "**/*.lib", "**/*.exe", "**/*.dll", "**/*.pyc"]
     level: error
     message: "Compiled artifacts must not be committed (see .gitignore)."
+
+  # ------------------------------------------------------------------
+  # Cross-file value-coherence (set relations).
+  #
+  # Closed by v0.12 `cross_file` set relations (was a documented Stage-A/B
+  # gap requiring a "value / set-equality edge" kind that did not yet exist).
+  # ------------------------------------------------------------------
+
+  # GAP CLOSED (v0.12 cross_file set_equals): the command-line option set must
+  # be the SAME on the doc side and in the generated --help table. curl's own
+  # `tests/test1139.pl` enforces option<->docs<->tool_listhelp.c parity; the
+  # set-equality half is now native. Source = the `Long:` name in every
+  # cmdline-opt's frontmatter; target = the leading `--<name>` label in each
+  # `tool_listhelp.c` help entry. Both regexes are line-anchored (`(?m)^`) and
+  # require a lowercase-letter start so the `Long: (long form name ...)`
+  # template line in `docs/cmdline-opts/MANPAGE.md` is excluded; the name class
+  # `[a-z0-9.-]+` keeps the dotted options (`--http1.1`, `--tlsv1.2`).
+  # NOTE: tool_listhelp.c is itself generated (`make listhelp`); the codegen-
+  # FRESHNESS half of test1139 (regenerate + diff) stays D — `cross_file`
+  # asserts set parity of the committed pair, not regeneration.
+  - id: curl-cmdline-opts-help-parity
+    kind: cross_file
+    source:
+      files: "docs/cmdline-opts/*.md"
+      extract: { regex: '(?m)^Long: ([a-z][a-z0-9.-]+)' }
+    targets:
+      files: "src/tool_listhelp.c"
+      extract: { regex: '(?m)^\s*\{ "[^"]*--([a-z][a-z0-9.-]+)' }
+    relation: set_equals
+    level: error
+    message: "The documented option set (cmdline-opts `Long:`) and the `--help` table (src/tool_listhelp.c) must match (tests/test1139.pl)."
+    policy_url: "https://github.com/curl/curl/blob/master/tests/test1139.pl"
+
+  # GAP PARTIALLY CLOSED (v0.12 cross_file subset): every CURLE_* error name
+  # documented in `docs/libcurl/libcurl-errors.md` must be a real enum constant
+  # in the public header. Catches a documented error that was renamed/removed
+  # (stale man page) without running a compiler. Only the SUBSET direction is
+  # enforceable: full set-equality does NOT hold here — the header carries ~53
+  # obsolete/aliased CURLE_* constants deliberately kept for ABI that the man
+  # page (correctly) does not list, so `set_equals` would false-positive on a
+  # healthy tree. The "every enum is documented" reverse + the CURL_DISABLE_*
+  # feature-gate parity remain D (need the build's actual symbol/feature matrix).
+  - id: curl-documented-errors-are-real-enums
+    kind: cross_file
+    source:
+      files: "docs/libcurl/libcurl-errors.md"
+      extract: { regex: '(CURLE_[A-Z0-9_]+)' }
+    targets:
+      files: "include/curl/curl.h"
+      extract: { regex: '(CURLE_[A-Z0-9_]+)' }
+    relation: subset
+    level: error
+    message: "Every CURLE_* error documented in libcurl-errors.md must be a real enum constant in include/curl/curl.h."

@@ -240,19 +240,30 @@ rules:
     level: warning
 
   # ════════════════════════════════════════════════════════════════
-  # CODEGEN FRESHNESS (B gap — see notes): translations XLIFF must be in sync.
+  # CODEGEN FRESHNESS (B gap — NOW CLOSED): translations XLIFF must be in sync.
   # integration-tests.yml:249-251 runs `php .github/sync-translations.php`
-  # then `git diff --exit-code src/`. This is a "run a MUTATING generator,
-  # then assert the working tree is git-clean" shape. `generated_file_fresh`
-  # only diffs ONE generator's stdout against ONE committed file (non-mutating)
-  # — it does NOT express run-mutator-then-git-clean. So alint can only WRAP
-  # the whole gate as a command shell-out (orchestration value-add, R2 = D),
-  # not express the freshness logic. New-kind candidate: `regen_git_clean`.
+  # then `git diff --exit-code src/`. This is the "run a MUTATING generator,
+  # then assert the working tree is git-clean" shape.
+  # v0.12 `generated_file_fresh` gained the MUTATING / in-place mode (`outputs:`):
+  # it SNAPSHOTS the `outputs` glob, runs the generator (which rewrites those
+  # files in place), DIFFS each output (stale / newly-created / removed = one
+  # violation), then RESTORES the snapshot — i.e. it expresses exactly
+  # run-mutator-then-git-clean natively (the alint form of `make gen && git diff
+  # --exit-code`), leaving the tree byte-identical. The `regen_git_clean`
+  # new-kind candidate is retired by this mode; alint now expresses the
+  # freshness logic, not just an opaque `command` wrapper.
+  # `outputs:` is scoped to exactly the dirs sync-translations.php writes —
+  # the generator iterates {Security/Core, Form, Validator}, all under
+  # Component/**/Resources/translations/*.xlf (the two test-fixture translation
+  # dirs live under Bundle/, outside this glob, so they are not snapshotted).
+  # Spawn-gated kind (declarable only in this top-level config); like the
+  # other shell-outs below it needs `composer install` (vendor/autoload.php)
+  # to actually run — a spawn failure is itself a distinct violation.
   # ════════════════════════════════════════════════════════════════
   - id: symfony-translations-in-sync
-    kind: command
-    paths: ".github/sync-translations.php"
-    command: ["bash", "-c", "php .github/sync-translations.php && git diff --exit-code src/"]
+    kind: generated_file_fresh
+    outputs: "src/Symfony/Component/**/Resources/translations/*.xlf"
+    command: ["php", ".github/sync-translations.php"]
     timeout: 300
     level: warning
     message: >-
