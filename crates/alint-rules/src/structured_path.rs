@@ -98,7 +98,16 @@ pub enum Format {
 impl Format {
     pub(crate) fn parse(self, text: &str) -> std::result::Result<Value, String> {
         match self {
-            Self::Json => serde_json::from_str(text).map_err(|e| e.to_string()),
+            // Try strict JSON first (the common, fast path — plain
+            // JSON is byte-for-byte unchanged). Only on failure retry
+            // tolerating JSONC: `//` + `/* */` comments and trailing
+            // commas, which the JS/TS ecosystem uses pervasively in
+            // `.json` files (tsconfig.json, `.vscode/*.json`). If the
+            // tolerant retry also fails, surface the *original* strict
+            // error so genuinely-broken JSON reports accurately.
+            Self::Json => serde_json::from_str(text).or_else(|strict_err| {
+                serde_json::from_str(&strip_jsonc(text)).map_err(|_| strict_err.to_string())
+            }),
             Self::Yaml => serde_yaml_ng::from_str(text).map_err(|e| e.to_string()),
             Self::Toml => toml::from_str(text).map_err(|e| e.to_string()),
             Self::Xml => xml_to_value(text),
@@ -129,6 +138,99 @@ impl Format {
             _ => None,
         }
     }
+}
+
+/// Make a JSONC document parseable as strict JSON: drop `//` and
+/// `/* … */` comments and trailing commas (a `,` immediately before a
+/// `]` / `}`). String-aware — markers inside `"…"` (with `\` escapes)
+/// are preserved, so a `"https://…"` URL or a `","` literal is
+/// untouched. Only invoked when strict parsing already failed, so
+/// plain JSON never pays for it.
+fn strip_jsonc(src: &str) -> String {
+    // Pass 1: remove comments.
+    let mut decommented = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            decommented.push(c);
+            if c == '\\' {
+                if let Some(n) = chars.next() {
+                    decommented.push(n);
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                decommented.push(c);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        decommented.push('\n');
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = '\0';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        break;
+                    }
+                    prev = n;
+                }
+            }
+            _ => decommented.push(c),
+        }
+    }
+    // Pass 2: drop trailing commas (`,` then whitespace then `]`/`}`).
+    let cs: Vec<char> = decommented.chars().collect();
+    let mut out = String::with_capacity(cs.len());
+    let mut in_string = false;
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        if in_string {
+            out.push(c);
+            if c == '\\' {
+                i += 1;
+                if i < cs.len() {
+                    out.push(cs[i]);
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        if c == ',' {
+            let mut j = i + 1;
+            while j < cs.len() && cs[j].is_whitespace() {
+                j += 1;
+            }
+            if j < cs.len() && (cs[j] == ']' || cs[j] == '}') {
+                // Drop the comma; keep the intervening whitespace.
+                out.extend(&cs[i + 1..j]);
+                i = j;
+                continue;
+            }
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 /// Comparison op — keeps the rule builders thin.
@@ -562,6 +664,35 @@ fn build_matches(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Bo
 mod tests {
     use super::*;
     use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
+
+    // ─── JSONC tolerance ──────────────────────────────────────
+
+    #[test]
+    fn json_parse_tolerates_jsonc() {
+        // tsconfig.json-style: `//` + `/* */` comments and trailing
+        // commas. Strict parse fails, the tolerant retry succeeds.
+        let jsonc = "{\n  // line comment\n  \"a\": 1, /* block */\n  \"b\": [1, 2,],\n}\n";
+        let v = Format::Json.parse(jsonc).expect("JSONC should parse");
+        assert_eq!(v["a"], serde_json::json!(1));
+        assert_eq!(v["b"], serde_json::json!([1, 2]));
+    }
+
+    #[test]
+    fn json_parse_preserves_comment_markers_inside_strings() {
+        // `//` and `,` inside string values must NOT be stripped.
+        let s = "{ \"url\": \"https://x/y\", \"note\": \"a,b\" }";
+        let v = Format::Json.parse(s).expect("plain JSON");
+        assert_eq!(v["url"], serde_json::json!("https://x/y"));
+        assert_eq!(v["note"], serde_json::json!("a,b"));
+    }
+
+    #[test]
+    fn broken_json_keeps_the_strict_error() {
+        // A genuinely-malformed document (not JSONC) must still fail,
+        // and report the *strict* parser's message.
+        let err = Format::Json.parse("{ \"x\": 1, \"y\" }").unwrap_err();
+        assert!(err.contains("expected"), "strict error preserved: {err}");
+    }
 
     // ─── build-path errors ────────────────────────────────────
 
