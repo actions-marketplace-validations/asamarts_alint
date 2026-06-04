@@ -93,6 +93,7 @@ CrossFileRule {
     policy_url: None,
     message: None,
     source_file: "pnpm-workspace.yaml",
+    source_glob: None,
     source_extract: Some(
         Yaml(
             "$.catalog.*",
@@ -114,6 +115,41 @@ CrossFileRule {
     skip_header_lines: 0,
 }
 
+=== kind: cross_file | id: hl-groups-doc-matches-code ===
+CrossFileRule {
+    id: "hl-groups-doc-matches-code",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    source_file: "runtime/doc/*.txt",
+    source_glob: Some(
+        Scope { ... },
+    ),
+    source_extract: Some(
+        Regex(
+            "\\*hl-(\\w+)\\*",
+        ),
+    ),
+    targets: Some(
+        List(
+            [
+                (
+                    "src/highlight.c",
+                    Some(
+                        Regex(
+                            "default link (\\w+)",
+                        ),
+                    ),
+                ),
+            ],
+        ),
+    ),
+    relation: SetEquals,
+    normalize: [],
+    allow_missing: false,
+    skip_header_lines: 0,
+}
+
 === kind: cross_file | id: license-copies-have-identical-content ===
 CrossFileRule {
     id: "license-copies-have-identical-content",
@@ -121,6 +157,7 @@ CrossFileRule {
     policy_url: None,
     message: None,
     source_file: "LICENSE",
+    source_glob: None,
     source_extract: Some(
         WholeFile,
     ),
@@ -145,6 +182,7 @@ CrossFileRule {
     policy_url: None,
     message: None,
     source_file: "Cargo.toml",
+    source_glob: None,
     source_extract: Some(
         Toml(
             "$.workspace.package.version",

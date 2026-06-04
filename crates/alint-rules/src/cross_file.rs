@@ -45,7 +45,15 @@ use crate::extract::{Extract, ExtractSpec, extract_values, is_non_literal};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceSpec {
-    file: String,
+    /// A single source file. Exactly one of `file` / `files`.
+    #[serde(default)]
+    file: Option<String>,
+    /// A glob whose matches are read and whose extracted values are
+    /// **unioned** into one set — for the set relations only
+    /// (`subset` / `superset` / `set_equals`). The "every `*hl-X*`
+    /// across `runtime/doc/*.txt`" shape.
+    #[serde(default)]
+    files: Option<String>,
     /// Absent for `identical` (whole-file); required otherwise.
     #[serde(default)]
     extract: Option<ExtractSpec>,
@@ -244,7 +252,13 @@ pub struct CrossFileRule {
     level: Level,
     policy_url: Option<String>,
     message: Option<String>,
+    /// The source path (single-file mode) or the glob string (used
+    /// for display in messages when `source_glob` is set).
     source_file: String,
+    /// `Some` ⇒ glob-union source: `source_file` is the glob, and
+    /// `source_values` unions the extracted values across every
+    /// matching file. Set-relations only.
+    source_glob: Option<Scope>,
     /// `Some` for value relations + `resolves`; `None` for `identical`.
     source_extract: Option<Extract>,
     /// `Some` for value relations + `identical`; `None` for `resolves`.
@@ -297,7 +311,31 @@ impl CrossFileRule {
     /// this; `build` guarantees `source_extract` is `Some` for them.
     fn source_values(&self, ctx: &Context<'_>, out: &mut Vec<Violation>) -> Option<Vec<String>> {
         let extract = self.source_extract.as_ref()?;
-        let src = Path::new(&self.source_file);
+        if let Some(scope) = &self.source_glob {
+            // Glob-union source: extract from every matching file and
+            // union the values into one set (the set relations only).
+            let mut all = Vec::new();
+            for entry in ctx.index.files() {
+                if scope.matches(&entry.path, ctx.index)
+                    && let Some(vals) = Self::source_values_from(ctx, &entry.path, extract, out)
+                {
+                    all.extend(vals);
+                }
+            }
+            return Some(all);
+        }
+        Self::source_values_from(ctx, Path::new(&self.source_file), extract, out)
+    }
+
+    /// Read one source file + extract its literal values — the
+    /// per-file body shared by the single-`file` and `files:`
+    /// glob-union forms.
+    fn source_values_from(
+        ctx: &Context<'_>,
+        src: &Path,
+        extract: &Extract,
+        out: &mut Vec<Violation>,
+    ) -> Option<Vec<String>> {
         let text = match read_rel(ctx, src) {
             Ok(t) => t,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
@@ -819,15 +857,53 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
     let cfg = |msg: String| Error::rule_config(&spec.id, msg);
 
-    if opts.source.file.trim().is_empty() {
-        return Err(cfg("`source.file` must not be empty".into()));
-    }
     let source_extract = match opts.source.extract {
         Some(spec) => Some(
             spec.resolve()
                 .map_err(|e| cfg(format!("invalid `source.extract`: {e}")))?,
         ),
         None => None,
+    };
+    // Source: exactly one of `file` (single) or `files` (glob-union,
+    // set relations only). For the glob form `source_file` holds the
+    // glob string so violation messages still name a source.
+    let (source_file, source_glob) = match (opts.source.file, opts.source.files) {
+        (Some(f), None) => {
+            if f.trim().is_empty() {
+                return Err(cfg("`source.file` must not be empty".into()));
+            }
+            (f, None)
+        }
+        (None, Some(g)) => {
+            if g.trim().is_empty() {
+                return Err(cfg("`source.files` must not be empty".into()));
+            }
+            if !matches!(
+                opts.relation,
+                Relation::Subset | Relation::Superset | Relation::SetEquals
+            ) {
+                return Err(cfg(format!(
+                    "`source.files` (glob-union) requires a set relation \
+                     (subset / superset / set_equals), not `{:?}`",
+                    opts.relation
+                )));
+            }
+            let scope = Scope::from_patterns(std::slice::from_ref(&g))
+                .map_err(|e| cfg(format!("invalid `source.files` glob: {e}")))?;
+            (g, Some(scope))
+        }
+        (Some(_), Some(_)) => {
+            return Err(cfg(
+                "set exactly one of `source.file` (a path) or `source.files` (a glob), not both"
+                    .into(),
+            ));
+        }
+        (None, None) => {
+            return Err(cfg(
+                "`source` needs `file` (a path) or `files` (a glob-union over set relations)"
+                    .into(),
+            ));
+        }
     };
     let targets = match opts.targets {
         Some(ts) => Some(resolve_targets(ts, &cfg)?),
@@ -846,7 +922,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         level: spec.level,
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
-        source_file: opts.source.file,
+        source_file,
+        source_glob,
         source_extract,
         targets,
         relation: opts.relation,
@@ -887,6 +964,7 @@ mod tests {
             policy_url: None,
             message: None,
             source_file: source_file.into(),
+            source_glob: None,
             source_extract: Some(source),
             targets: Some(targets),
             relation,
@@ -1204,6 +1282,71 @@ mod tests {
     }
 
     #[test]
+    fn glob_union_source_set_equals_unions_across_the_glob() {
+        // The vim hlgroups shape: the union of `*hl-X*` across every
+        // doc file must equal the `default link X` set in one file.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("doc")).unwrap();
+        std::fs::write(root.join("doc/a.txt"), "see *hl-Comment* and *hl-String*\n").unwrap();
+        std::fs::write(root.join("doc/b.txt"), "also *hl-Number*\n").unwrap();
+        std::fs::write(
+            root.join("highlight.c"),
+            "default link Comment\ndefault link String\ndefault link Number\n",
+        )
+        .unwrap();
+        let idx = index(&["doc/a.txt", "doc/b.txt", "highlight.c"]);
+        let r = CrossFileRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            source_file: "doc/*.txt".into(),
+            source_glob: Some(Scope::from_patterns(&["doc/*.txt".to_string()]).unwrap()),
+            source_extract: Some(Extract::Regex(r"\*hl-(\w+)\*".into())),
+            targets: Some(Targets::List(vec![(
+                "highlight.c".into(),
+                Some(Extract::Regex(r"default link (\w+)".into())),
+            )])),
+            relation: Relation::SetEquals,
+            normalize: vec![],
+            allow_missing: false,
+            skip_header_lines: 0,
+        };
+        // union {Comment, String, Number} == highlight.c set → silent.
+        assert!(eval(&r, root, &idx).is_empty(), "matched union should pass");
+        // A doc declares an extra group the code lacks → set_equals fires.
+        std::fs::write(root.join("doc/b.txt"), "also *hl-Number* and *hl-Extra*\n").unwrap();
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("Extra"), "{}", v[0].message);
+    }
+
+    #[test]
+    fn build_glob_source_requires_a_set_relation() {
+        let yaml = "id: t\nkind: cross_file\n\
+                    source: { files: \"doc/*.txt\", extract: { regex: 'x(.)' } }\n\
+                    targets: [{ file: c, extract: { regex: 'y(.)' } }]\n\
+                    relation: equals\nlevel: error\n";
+        let err = build(&crate::test_support::spec_yaml(yaml))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("set relation"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_both_source_file_and_files() {
+        let yaml = "id: t\nkind: cross_file\n\
+                    source: { file: a, files: \"b/*\", extract: { regex: 'x(.)' } }\n\
+                    targets: [{ file: c, extract: { regex: 'y(.)' } }]\n\
+                    relation: set_equals\nlevel: error\n";
+        let err = build(&crate::test_support::spec_yaml(yaml))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("exactly one"), "{err}");
+    }
+
+    #[test]
     fn subset_singleton_is_a_membership_check() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -1231,6 +1374,7 @@ mod tests {
             policy_url: None,
             message: None,
             source_file: "README.md".into(),
+            source_glob: None,
             source_extract: None,
             targets: Some(targets),
             relation: Relation::Identical,
@@ -1288,6 +1432,7 @@ mod tests {
             policy_url: None,
             message: None,
             source_file: source_file.into(),
+            source_glob: None,
             source_extract: Some(extract),
             targets: None,
             relation: Relation::Resolves,

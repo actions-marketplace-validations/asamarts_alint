@@ -177,6 +177,17 @@ rules:
     relation: equals
     level: error
 
+  - id: hl-groups-doc-matches-code
+    kind: cross_file
+    source:
+      files: "runtime/doc/*.txt"
+      extract: { regex: '\*hl-(\w+)\*' }
+    targets:
+      - file: src/highlight.c
+        extract: { regex: 'default link (\w+)' }
+    relation: set_equals
+    level: warning
+
   - id: domain-not-depend-on-infra
     kind: file_graph
     nodes: "src/**/*.ts"
