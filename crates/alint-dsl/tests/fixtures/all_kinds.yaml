@@ -210,6 +210,16 @@ rules:
     select: '^\s*[A-Za-z]'
     level: warning
 
+  - id: changelog-entries-well-formed
+    kind: for_each_match
+    paths: ["CHANGELOG.md"]
+    select: '^[*-] .*\[#(?P<disp>\d+)\]\([^)]*pull/(?P<url>\d+)\)'
+    require:
+      matches: ['\)\.$']
+      forbid: ['\[Fix #\d+\]']
+      equal: [disp, url]
+    level: warning
+
   - id: bindings-fresh
     kind: generated_file_fresh
     file: docs/rules.md

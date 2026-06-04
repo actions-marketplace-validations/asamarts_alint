@@ -8,6 +8,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`for_each_match` — the in-file line quantifier (new rule kind).** For each
+  line matching `select:` (a regex), the line must satisfy the nested `require:`
+  predicates: `matches` (the line matches **all** listed regexes), `forbid` (the
+  line matches **none**), and `equal` (the listed named `select` captures are all
+  **equal**). The dual of `ordered_block`'s `select:` — where `ordered_block`
+  *orders* selected lines, this asserts a *conjunction of predicates* over each.
+  It closes two shapes no `file_content_*` kind can express, both reproduced
+  against the shipped binary first: a **per-line changelog grammar** ("every
+  `* ` entry must *also* end with a linked PR ref" — `file_content_matches` is
+  existence, `is_match`, not a per-line conjunction) and **intra-line capture
+  equality** ("the display number must equal the `/pull/` URL number" — the Rust
+  `regex` engine is RE2, with no backreferences). One violation per offending
+  line; lines `select` does not match are ignored. Per-file (the `PerFileRule`
+  fast path). Rule-kind count +1.
 - **`file_graph` — the file-dependency-graph rule kind (new).**
   Assembles the repo's *file → file* reference graph from path-based
   edges and asserts a global structural property no 1-level kind can

@@ -43,6 +43,7 @@ pub mod final_newline;
 pub mod fixers;
 pub mod for_each_dir;
 pub mod for_each_file;
+pub mod for_each_match;
 pub mod generated_file_fresh;
 pub mod git_blame_age;
 pub mod git_commit_author_allowlist;
@@ -179,6 +180,7 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
     registry.register("cross_file_value_equals", cross_file::build);
     registry.register("file_graph", file_graph::build);
     registry.register("ordered_block", ordered_block::build);
+    registry.register("for_each_match", for_each_match::build);
     registry.register("generated_file_fresh", generated_file_fresh::build);
     registry.register("import_gate", import_gate::build);
     registry.register("command_idempotent", command_idempotent::build);
@@ -312,6 +314,7 @@ mod registry_tests {
             "cross_file_value_equals",
             "file_graph",
             "ordered_block",
+            "for_each_match",
             "generated_file_fresh",
             "import_gate",
             "command_idempotent",

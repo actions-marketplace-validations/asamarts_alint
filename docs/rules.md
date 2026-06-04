@@ -1150,6 +1150,22 @@ The lines between a `start` / `end` marker pair must stay sorted (and, with `uni
   level: warning
 ```
 
+### `for_each_match`
+
+For each line matching `select` (a regex), the line must satisfy the nested `require:` predicates. The in-file line quantifier — the dual of `ordered_block`'s `select:` (where `ordered_block` *orders* selected lines, this asserts a *conjunction of predicates* over each). `require:` takes at least one of: `matches` (the line must match **all** listed regexes), `forbid` (the line must match **none**), and `equal` (the listed named `select` captures must all be **equal**). One violation per offending line; lines `select` does not match are ignored. It closes two shapes no `file_content_*` kind can: a per-line changelog grammar ("**every** `* ` entry must *also* end with a linked PR ref" — `file_content_matches` asserts existence, not a per-line conjunction) and intra-line capture equality ("the display number must equal the `/pull/` URL number" — the Rust `regex` engine is RE2: no backreferences). Per-file (the `PerFileRule` fast path).
+
+```yaml
+- id: changelog-entries-well-formed
+  kind: for_each_match
+  paths: ["CHANGELOG.md"]
+  select: '^[*-] .*\[#(?P<disp>\d+)\]\([^)]*pull/(?P<url>\d+)\)'
+  require:
+    matches: ['\)\.$']            # every entry line ends with ").":
+    forbid:  ['\[Fix #\d+\]']     # ...never uses the "[Fix #N]" form
+    equal:   [disp, url]          # ...and its display number == its URL number
+  level: warning
+```
+
 ### `generated_file_fresh`
 
 A committed artefact must equal what a declared `command` generator produces, in one of two modes (exactly one of `file` / `outputs`). **alint never leaves regenerated files behind** — it *verifies* freshness, it does not run codegen as a build step. Either mode runs a user-declared, maintainer-trusted process, so the kind is trust-gated to your own top-level config (same tier as the `command` rule). Single-shot, opt-in. Spawn-failure / non-zero exit / timeout are each a clear, distinct violation. `normalize` (`none` / `trim` / `final-newline`) absorbs trailing-newline churn.

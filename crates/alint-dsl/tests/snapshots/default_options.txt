@@ -815,6 +815,38 @@ ForEachFileRule {
     ],
 }
 
+=== kind: for_each_match | id: changelog-entries-well-formed ===
+ForEachMatchRule {
+    id: "changelog-entries-well-formed",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    select: Regex(
+        "^[*-] .*\\[#(?P<disp>\\d+)\\]\\([^)]*pull/(?P<url>\\d+)\\)",
+    ),
+    matches: [
+        (
+            "\\)\\.$",
+            Regex(
+                "\\)\\.$",
+            ),
+        ),
+    ],
+    forbid: [
+        (
+            "\\[Fix #\\d+\\]",
+            Regex(
+                "\\[Fix #\\d+\\]",
+            ),
+        ),
+    ],
+    equal: [
+        "disp",
+        "url",
+    ],
+}
+
 === kind: generated_file_fresh | id: bindings-fresh ===
 GeneratedFileFreshRule {
     id: "bindings-fresh",

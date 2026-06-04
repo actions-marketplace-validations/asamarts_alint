@@ -471,6 +471,7 @@
         { "$ref": "#/$defs/rule_cross_file" },
         { "$ref": "#/$defs/rule_file_graph" },
         { "$ref": "#/$defs/rule_ordered_block" },
+        { "$ref": "#/$defs/rule_for_each_match" },
         { "$ref": "#/$defs/rule_generated_file_fresh" },
         { "$ref": "#/$defs/rule_import_gate" },
         { "$ref": "#/$defs/rule_command_idempotent" },
@@ -1503,6 +1504,43 @@
         "select": {
           "type": "string",
           "description": "Regex; when set, only lines inside a block matching it are sortable entries (others — comments, group headers — pass through). The sectioned / keep-sorted-subset shape."
+        }
+      }
+    },
+
+    "rule_for_each_match": {
+      "description": "For each line matching `select` (a regex), the line must satisfy the nested `require:` predicates. The in-file line quantifier (the dual of `ordered_block`'s `select:`): one violation per offending line. Closes per-line changelog grammars ('every entry line must ALSO match Q1..Qn', which `file_content_matches` cannot express — its match is existence, not a per-line conjunction) and intra-line capture equality (RE2 has no backreference). Per-file.",
+      "type": "object",
+      "required": ["select", "require"],
+      "properties": {
+        "kind": { "const": "for_each_match" },
+        "paths": { "$ref": "#/$defs/paths_spec" },
+        "select": {
+          "type": "string",
+          "description": "Regex; a line is a checked element iff it matches. Named captures are available to `require.equal`."
+        },
+        "require": {
+          "type": "object",
+          "description": "Predicates applied to each selected line; at least one of `matches` / `forbid` / `equal` is required.",
+          "properties": {
+            "matches": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "The selected line must match ALL of these regexes."
+            },
+            "forbid": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "The selected line must match NONE of these regexes."
+            },
+            "equal": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 2,
+              "description": "These named `select` captures must all be equal (the only way to assert intra-line capture equality, since RE2 has no backreference)."
+            }
+          },
+          "additionalProperties": false
         }
       }
     },
