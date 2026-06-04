@@ -84,7 +84,8 @@ struct FromContentSpec {
 
 /// The `edges:` block — exactly one extractor (validated in
 /// `build`): `from_content` (the reference-graph modes) or
-/// `derive_target` (the codegen-freshness `fresh` mode).
+/// `derive_target` (a name template → `fresh` codegen-freshness or
+/// `no_dangling` derived-sibling existence).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EdgesSpec {
@@ -377,17 +378,31 @@ impl FileGraphRule {
         out
     }
 
-    /// Read one node and resolve every content reference to a path.
-    /// Unreadable / unparseable nodes push a violation and yield no
-    /// edges; references that don't resolve to a path are dropped.
-    /// Only the `from_content` modes call this; the `fresh` path
-    /// uses `derive_target` and never reaches here.
+    /// Resolve a node to its outgoing edge targets. For `from_content`
+    /// edges this reads the node and resolves every content reference
+    /// to a path (unreadable / unparseable nodes push a violation and
+    /// yield no edges; references that don't resolve to a path are
+    /// dropped). For `derive_target` edges it derives the single target
+    /// from the node *path* (no file read): the node through the
+    /// `from`→`to` capture template; a node the `from` regex doesn't
+    /// match has no edge. The reference-graph modes (`no_dangling`,
+    /// `acyclic`, `no_orphans`, `forbidden`) all flow through here;
+    /// `fresh` uses `check_fresh` directly (it also needs the digest).
     fn node_targets(
         &self,
         ctx: &Context<'_>,
         node: &Path,
         out: &mut Vec<Violation>,
     ) -> Vec<PathBuf> {
+        if let EdgeSource::DeriveTarget { from, to } = &self.edges {
+            let node_str = node.to_string_lossy();
+            let Some(caps) = from.captures(&node_str) else {
+                return Vec::new();
+            };
+            let mut derived = String::new();
+            caps.expand(to, &mut derived);
+            return vec![normalise(Path::new(&derived))];
+        }
         let EdgeSource::FromContent { extract, resolve } = &self.edges else {
             return Vec::new();
         };
@@ -830,9 +845,14 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 "`require: fresh` needs `edges.derive_target`, not `edges.from_content`".into(),
             ));
         }
-        (EdgeSource::DeriveTarget { .. }, r) if !matches!(r, Require::Fresh { .. }) => {
+        (EdgeSource::DeriveTarget { .. }, r)
+            if !matches!(r, Require::Fresh { .. } | Require::NoDangling) =>
+        {
             return Err(cfg(
-                "`edges.derive_target` only supports `require: fresh`".into()
+                "`edges.derive_target` supports `require: fresh` (codegen freshness) \
+                 and `require: no_dangling` (the derived target must exist), not the \
+                 content-graph modes (acyclic / no_orphans / forbidden_edges)"
+                    .into(),
             ));
         }
         _ => {}
@@ -1302,6 +1322,65 @@ mod tests {
         );
     }
 
+    fn derive_dangling_rule(nodes: &str, from: &str, to: &str) -> FileGraphRule {
+        FileGraphRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            nodes: scope(nodes),
+            edges: EdgeSource::DeriveTarget {
+                from: Regex::new(from).expect("valid from regex"),
+                to: to.into(),
+            },
+            require: Require::NoDangling,
+        }
+    }
+
+    #[test]
+    fn derive_target_no_dangling_requires_the_derived_sibling() {
+        // The elasticsearch shape: every licenses/X-LICENSE.txt must
+        // be accompanied by a sibling X-NOTICE.txt. No file read — the
+        // edge is derived purely from the node path.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("licenses")).unwrap();
+        std::fs::write(root.join("licenses/arrow-LICENSE.txt"), "A\n").unwrap();
+        std::fs::write(root.join("licenses/arrow-NOTICE.txt"), "N\n").unwrap();
+        let r = derive_dangling_rule("licenses/**", r"(.+)-LICENSE\.txt", "$1-NOTICE.txt");
+
+        // sibling present -> silent.
+        let idx = index(&["licenses/arrow-LICENSE.txt", "licenses/arrow-NOTICE.txt"]);
+        assert!(eval(&r, root, &idx).is_empty(), "sibling present -> silent");
+
+        // a second license with no NOTICE sibling -> dangling.
+        let idx = index(&[
+            "licenses/arrow-LICENSE.txt",
+            "licenses/arrow-NOTICE.txt",
+            "licenses/lucene-LICENSE.txt",
+        ]);
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("licenses/lucene-NOTICE.txt"));
+        assert!(v[0].message.contains("licenses/lucene-LICENSE.txt"));
+    }
+
+    #[test]
+    fn derive_target_no_dangling_skips_nodes_not_matching_from() {
+        // A node the `from` regex doesn't capture has no derived edge,
+        // so it can't dangle (README.md is not an `*-LICENSE.txt`).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("licenses")).unwrap();
+        std::fs::write(root.join("licenses/README.md"), "# licenses\n").unwrap();
+        let idx = index(&["licenses/README.md"]);
+        let r = derive_dangling_rule("licenses/**", r"(.+)-LICENSE\.txt", "$1-NOTICE.txt");
+        assert!(
+            eval(&r, root, &idx).is_empty(),
+            "a node not matching `from` has no edge"
+        );
+    }
+
     #[test]
     fn build_fresh_mode_and_edge_coupling() {
         use crate::test_support::spec_yaml;
@@ -1322,12 +1401,22 @@ mod tests {
             "fresh needs derive_target"
         );
 
-        // `derive_target` with a graph mode -> rejected.
+        // `derive_target` with a content-graph mode (acyclic) -> rejected.
         let bad_dt = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  derive_target:\n    \
                       from: 'a'\n    to: 'b'\nrequire: acyclic\nlevel: error\n";
         assert!(
             build(&spec_yaml(bad_dt)).is_err(),
-            "derive_target only supports fresh"
+            "derive_target rejected for the content-graph modes"
+        );
+
+        // `derive_target` with `no_dangling` -> builds (v0.12 decouple:
+        // the derived sibling must merely exist).
+        let dt_nd = "id: t\nkind: file_graph\nnodes: \"licenses/**\"\nedges:\n  \
+                     derive_target:\n    from: '(.+)-LICENSE\\.txt'\n    to: '$1-NOTICE.txt'\n\
+                     require: no_dangling\nlevel: error\n";
+        assert!(
+            build(&spec_yaml(dt_nd)).is_ok(),
+            "derive_target + no_dangling should build: {dt_nd}"
         );
 
         // A marker with no capture group -> rejected.

@@ -268,8 +268,10 @@ non-goal. The DSL held; no reshape needed.
       e.g. `$1.pb.go`; a constant `to` maps many sources to one target). The derived
       file must embed the source's current digest, captured by `marker` (group 1);
       reuses the `pair_hash` `Algorithm` (now `pub(crate)`) over the edge. The edge
-      type and `require` mode are coupled in `build` (`derive_target` ⟺ `fresh`;
-      `from_content` ⟺ the four graph modes). Content-hash only — never mtime.
+      type and `require` mode *were* coupled in `build` (`derive_target` ⟺ `fresh`;
+      `from_content` ⟺ the four graph modes); v0.12 widens this so `derive_target`
+      also composes with `no_dangling` (the decouple section below). Content-hash
+      only — never mtime.
    Standalone kind (`crate::file_graph`), `requires_full_index` cross-file dispatch,
    never in `SPAWNING_RULE_KINDS` (pure-parse). **All five `require:` modes are now
    shipped; only the 1M-file bench scenario** (a new macro scenario, extends the
@@ -288,3 +290,50 @@ non-goal. The DSL held; no reshape needed.
   the v1.0 unification question.
 - Virtual / non-file nodes (e.g. a package name as a node) — explicitly
   **out** for v0.12; would reopen the resolver / non-goal line.
+
+## v0.12: decouple `derive_target` from `fresh` (SHIPPED)
+
+The deep v0.12 case study (`deep_case_study_v2.md`, the "capture-aware
+name-template" cluster) surfaced a recurring shape the coupling blocked:
+**a derived sibling that must merely EXIST**, not be content-fresh.
+
+- elasticsearch `DependencyLicensesTask`: every `licenses/X-LICENSE.txt`
+  must be accompanied by `licenses/X-NOTICE.txt` — capture the dep name,
+  rewrite the `-LICENSE` suffix to `-NOTICE`, assert existence.
+- the same shape recurs across 16 corpus configs (proto→`*.pb.go` presence,
+  `.d.ts` siblings, generated-file co-presence).
+
+Reproduce-first (2026-06): neither `pair` nor `from_content` can express it.
+`pair`'s partner template is path-component tokens only (`{stem}` of
+`X-LICENSE.txt` is `X-LICENSE`, so `{dir}/{stem}.txt` resolves to the file
+itself — pair even guards against that). `from_content` resolves an extracted
+reference *verbatim* with no `to:` rewrite. Only `derive_target` carries the
+`from`→`to` regex-capture template (`caps.expand`) — but it was hard-coupled
+to `fresh`.
+
+**The fix is the strict superset of pair-capture for existence-pairing, and
+near-free:** `node_targets` (the single edge-resolution chokepoint shared by
+`no_dangling`/`acyclic`/`no_orphans`/`forbidden`) now derives the target from
+the node *path* for `DeriveTarget` edges (no file read — pure
+`from.captures(node) → caps.expand(to)`), and `build` permits `derive_target`
+with `require: no_dangling` (the derived target must exist) as well as `fresh`.
+The content-graph modes (`acyclic`/`no_orphans`/`forbidden_edges`) keep
+rejecting `derive_target`: a 1:1 name-derivation isn't a content reference
+graph, so cycle/orphan/forbidden analysis over it is meaningless.
+
+```yaml
+# every licenses/X-LICENSE.txt needs a sibling X-NOTICE.txt
+- id: license-has-notice
+  kind: file_graph
+  nodes: "licenses/**"
+  edges:  { derive_target: { from: '(.+)-LICENSE\.txt', to: '$1-NOTICE.txt' } }
+  require: no_dangling
+```
+
+**Subsumed / deferred siblings in the same cluster** (reproduce-first, behind
+the ≥2-3-repo recurrence bar): capture on `pair.partner` / nested `paths`
+(redundant — `derive_target`+`no_dangling` is the more general form);
+`unique_by` key-capture (git `tNNNN` numeric-prefix dedup, ~2 repos);
+`from_content` content-token `to:` rewrite (git `gitlink:` → `Documentation/
+*.adoc`, 1 repo, a distinct mechanism). Documented as workaround idioms in
+`docs/rules.md`; revisit on recurrence.
