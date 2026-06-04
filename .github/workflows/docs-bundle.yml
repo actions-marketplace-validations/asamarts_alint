@@ -37,6 +37,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Full history + tags: the bundle is built from the latest
+          # *release* tag (next step), not the ref that triggered the
+          # run, so the tags must be present.
+          fetch-depth: 0
+
+      - name: Check out the latest published release
+        # The docs bundle — and therefore alint.org — documents the
+        # latest *released* alint, not main. Between releases, main can
+        # be ahead (new rule kinds, new bundled rulesets); those must
+        # not surface on the site as if they had shipped. Building
+        # docs-export from the release tag makes the manifest's version
+        # AND its rule-kind / ruleset counts match what users can
+        # actually install. `releases/latest` excludes drafts and
+        # prereleases, matching alint.org's check-version-pins.sh.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          echo "Building docs bundle from latest release: ${LATEST_TAG}"
+          git checkout --detach "${LATEST_TAG}"
+          echo "BUNDLE_SOURCE=${LATEST_TAG}" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -83,7 +106,7 @@ jobs:
           git add -A
           git -c user.name="alint docs bot" \
               -c user.email="asamarts@alint.org" \
-              commit -m "Docs bundle from ${SOURCE_SHA}" || {
+              commit -m "Docs bundle from release ${BUNDLE_SOURCE} (run triggered by ${SOURCE_SHA})" || {
             echo "No bundle changes; skipping push."
             exit 0
           }
