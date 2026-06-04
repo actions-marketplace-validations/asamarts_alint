@@ -1,9 +1,12 @@
 //! `ordered_block` — the lines between a `start` / `end` marker
 //! pair must stay sorted (optionally unique) under a configurable
-//! comparator. The generic form of the per-project `keep-sorted`
-//! / `keep_sorted` scripts (protobuf `failure_lists` is the
-//! highest-stakes source). Per-file rule (the `PerFileRule` fast
-//! path), not cross-file. Design + open-question resolutions:
+//! comparator. Both markers are **optional**: omit `end` to sort
+//! from `start` to EOF, omit both to sort the whole file (the
+//! markerless "this file is one sorted list" form — dictionaries,
+//! `CODEOWNERS`, allow-lists). The generic form of the per-project
+//! `keep-sorted` / `keep_sorted` scripts (protobuf `failure_lists`
+//! is the highest-stakes source). Per-file rule (the `PerFileRule`
+//! fast path), not cross-file. Design + open-question resolutions:
 //! `docs/design/v0.10/ordered_block.md`.
 //!
 //! ```yaml
@@ -73,8 +76,14 @@ fn leading_int(s: &str) -> Option<i64> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    start: String,
-    end: String,
+    /// Block start marker (matched on the trimmed line). Omit to
+    /// anchor the block at the start of the file.
+    #[serde(default)]
+    start: Option<String>,
+    /// Block end marker (matched on the trimmed line). Omit to run
+    /// the block to EOF.
+    #[serde(default)]
+    end: Option<String>,
     #[serde(default)]
     comparator: Comparator,
     #[serde(default)]
@@ -92,8 +101,8 @@ pub struct OrderedBlockRule {
     policy_url: Option<String>,
     message: Option<String>,
     scope: Scope,
-    start: String,
-    end: String,
+    start: Option<String>,
+    end: Option<String>,
     comparator: Comparator,
     unique: bool,
     select: Option<Regex>,
@@ -140,14 +149,22 @@ impl PerFileRule for OrderedBlockRule {
             return Ok(Vec::new());
         };
         let mut violations = Vec::new();
-        let mut block: Option<Block> = None;
+        // With no `start` marker the block is open from line 1 (the
+        // markerless whole-file / sort-to-EOF form); otherwise it
+        // opens when the `start` line is seen.
+        let mut block: Option<Block> = self.start.is_none().then_some(Block {
+            start_line: 1,
+            prev: None,
+            reported: false,
+        });
 
         for (i, raw) in text.lines().enumerate() {
             let line_no = i + 1;
             let trimmed = raw.trim();
 
             let Some(b) = block.as_mut() else {
-                if trimmed == self.start {
+                // Only reached when a `start` marker is configured.
+                if Some(trimmed) == self.start.as_deref() {
                     block = Some(Block {
                         start_line: line_no,
                         prev: None,
@@ -157,7 +174,7 @@ impl PerFileRule for OrderedBlockRule {
                 continue;
             };
 
-            if trimmed == self.end {
+            if self.end.as_deref() == Some(trimmed) {
                 block = None;
                 continue;
             }
@@ -196,15 +213,18 @@ impl PerFileRule for OrderedBlockRule {
             b.prev = Some(entry);
         }
 
-        if let Some(b) = block {
+        // A fully-delimited block (both markers set) that opened but
+        // never saw its `end` is unclosed. A block with an absent
+        // `end` (or no `start` at all) intentionally runs to EOF and
+        // is not a violation.
+        if let Some(b) = block
+            && let (Some(_), Some(end)) = (&self.start, &self.end)
+        {
             violations.push(self.violation(
                 path,
                 b.start_line,
                 b.start_line,
-                &format!(
-                    "unclosed ordered_block — no {:?} line after the start",
-                    self.end
-                ),
+                &format!("unclosed ordered_block — no {end:?} line after the start"),
             ));
         }
         Ok(violations)
@@ -233,13 +253,20 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
-    if opts.start.trim().is_empty() || opts.end.trim().is_empty() {
+    // Markers are optional: omit `end` to sort from `start` to EOF,
+    // omit both to sort the whole file. When given, a marker must be
+    // non-empty, and a configured start/end pair must differ.
+    let start = opts.start.map(|s| s.trim().to_string());
+    let end = opts.end.map(|s| s.trim().to_string());
+    if start.as_deref() == Some("") || end.as_deref() == Some("") {
         return Err(Error::rule_config(
             &spec.id,
-            "ordered_block `start` and `end` marker lines must not be empty",
+            "ordered_block `start` / `end` marker, when given, must not be empty",
         ));
     }
-    if opts.start.trim() == opts.end.trim() {
+    if let (Some(s), Some(e)) = (&start, &end)
+        && s == e
+    {
         return Err(Error::rule_config(
             &spec.id,
             "ordered_block `start` and `end` markers must differ",
@@ -260,8 +287,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
         scope: Scope::from_spec(spec)?,
-        start: opts.start.trim().to_string(),
-        end: opts.end.trim().to_string(),
+        start,
+        end,
         comparator: opts.comparator,
         unique: opts.unique,
         select,
@@ -279,10 +306,29 @@ mod tests {
             policy_url: None,
             message: None,
             scope: Scope::from_patterns(&["**/*".to_string()]).unwrap(),
-            start: "# keep-sorted start".into(),
-            end: "# keep-sorted end".into(),
+            start: Some("# keep-sorted start".into()),
+            end: Some("# keep-sorted end".into()),
             comparator,
             unique,
+            select: None,
+        }
+    }
+
+    fn markerless_rule(
+        start: Option<&str>,
+        end: Option<&str>,
+        comparator: Comparator,
+    ) -> OrderedBlockRule {
+        OrderedBlockRule {
+            id: "t".into(),
+            level: Level::Warning,
+            policy_url: None,
+            message: None,
+            scope: Scope::from_patterns(&["**/*".to_string()]).unwrap(),
+            start: start.map(Into::into),
+            end: end.map(Into::into),
+            comparator,
+            unique: false,
             select: None,
         }
     }
@@ -351,6 +397,46 @@ mod tests {
                  # keep-sorted start\nz\nq\n# keep-sorted end\n";
         let v = eval(&rule(Comparator::Lexical, false), t);
         assert_eq!(v.len(), 1, "only the 2nd block (z, q) is unsorted: {v:?}");
+    }
+
+    #[test]
+    fn markerless_sorts_the_whole_file() {
+        // No start/end: every line is a sortable entry.
+        let sorted = "alpha\nbravo\ncharlie\n";
+        assert!(eval(&markerless_rule(None, None, Comparator::Lexical), sorted).is_empty());
+        let unsorted = "banana\napple\ncherry\n";
+        let v = eval(&markerless_rule(None, None, Comparator::Lexical), unsorted);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].line, Some(2), "apple (line 2) is out of order");
+        assert!(v[0].message.contains("apple"));
+    }
+
+    #[test]
+    fn start_only_sorts_to_eof_and_is_never_unclosed() {
+        // `start` but no `end`: sort from the marker to EOF; an open
+        // block at EOF is intentional, not an "unclosed" violation.
+        let r = markerless_rule(Some("# sorted below"), None, Comparator::Lexical);
+        let ok = "preamble\n# sorted below\nalpha\nbravo\n";
+        assert!(
+            eval(&r, ok).is_empty(),
+            "no unclosed at EOF: {:?}",
+            eval(&r, ok)
+        );
+        let bad = "# sorted below\nbravo\nalpha\n";
+        let v = eval(&r, bad);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("alpha"));
+    }
+
+    #[test]
+    fn end_only_sorts_from_bof_until_the_marker() {
+        // No `start`, with `end`: the block opens at BOF and closes at
+        // the end marker; lines after it are not entries.
+        let r = markerless_rule(None, Some("# end"), Comparator::Lexical);
+        let ok = "alpha\nbravo\n# end\nzeta\naardvark\n"; // post-`end` unsorted, ignored
+        assert!(eval(&r, ok).is_empty());
+        let bad = "bravo\nalpha\n# end\n";
+        assert_eq!(eval(&r, bad).len(), 1);
     }
 
     #[test]

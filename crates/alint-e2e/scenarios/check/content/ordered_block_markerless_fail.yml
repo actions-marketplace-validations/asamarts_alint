@@ -1,0 +1,23 @@
+name: ordered_block with no markers sorts the whole file
+tags: [check, ordered_block, content]
+
+given:
+  tree:
+    dictionary.txt: |
+      apple
+      cherry
+      banana
+  config: |
+    version: 1
+    rules:
+      - id: dictionary-sorted
+        kind: ordered_block
+        paths: "dictionary.txt"
+        comparator: lexical
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: dictionary-sorted, level: error, path: dictionary.txt}

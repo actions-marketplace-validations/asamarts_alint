@@ -1311,8 +1311,12 @@ OrderedBlockRule {
     policy_url: None,
     message: None,
     scope: Scope { ... },
-    start: "# keep-sorted start",
-    end: "# keep-sorted end",
+    start: Some(
+        "# keep-sorted start",
+    ),
+    end: Some(
+        "# keep-sorted end",
+    ),
     comparator: Lexical,
     unique: false,
     select: Some(
