@@ -1,7 +1,7 @@
 # Deep case study v2 — synthesis + comprehensive plan (111 repos)
 
 Status: **Analysis — 2026-06-03.** The deeper, more critical successor to the
-v0.12 [post-build coverage re-analysis](../v0.12/post_build_coverage_analysis.md):
+v0.12 [post-build coverage re-analysis](./post_build_coverage_analysis.md):
 a fresh, adversarial per-repo pass over all 111 case-study repos against the
 *current* (post-v0.12-build) alint, under the reproduce-first lens. Produced by a
 50-agent workflow — 28 deep per-repo dossier agents → cross-repo gap/idea
@@ -161,25 +161,17 @@ the linear-time guarantee).
 
 **State (2026-06-03):** 88 distinct rule kinds, 10 bundled rulesets, the 5-axis
 architecture intact, **~85% of addressable corpus surface natively covered, the
-dominant residual (mutating codegen-freshness) closed.** The v0.12 rule surface is
-**essentially feature-complete** — every verified gap is medium/low priority and
-most are workable today.
+dominant residual (mutating codegen-freshness) closed.** Every verified gap is
+medium/low priority and most are workable today.
 
-### Phase 0 — Close out v0.12 (no new features required)
-The remaining v0.12-release work is the **1M-file macro bench** (extend the S11–S13
-scenarios; the D5 release gate) → the **release cut**. Optionally precede with the
-*validation-debt* win (below). This can ship now: the rule surface is mature and
-the coverage claim is solid.
+**These remaining items are not a new cycle — they are the deferred tail of the
+*same* study-gated v0.12 work:** glob-union (#6), the extract/normalize refinements
+(#4), `for_each_match` (#2; the architecture synthesis nominated exactly this), and
+the study-surfaced PHP ruleset. v0.12 is still on `[Unreleased]`, so they fold in
+directly. Shipping the full study-driven surface in one coherent v0.12 beats
+cutting at 85% and deferring the rest to a separate minor.
 
-### Phase 0.5 — Make the win visible (validation debt; cheap, high-credibility)
-The corpus configs were authored pre-build and **understate** coverage
-(`file_graph` appears in zero configs). Re-author the ~15 monorepos whose B-gaps
-`file_graph` silently closed (angular/k8s/spring/eslint/flutter/helm/airflow + the
-`set_equals` repos istio/mypy/numpy), re-pin + `alint check` each against a fresh
-clone (the calibration gotcha catches latent config bugs). Output: the "85% of
-addressable" claim demonstrated in runnable configs, not just asserted.
-
-### Post-v0.12 roadmap (v0.13), in leverage order
+### The v0.12 finish-line backlog (the study's remaining deferrals), in leverage order
 1. **`php@v1`/`composer@v1` bundled ruleset** — highest leverage, zero engine code.
 2. **The two load-bearing axis-extensions:** glob-union source + `entry_template:`
    (closes the #6 bucket); capture-aware name-template + `derive_target` decouple.
@@ -194,6 +186,20 @@ addressable" claim demonstrated in runnable configs, not just asserted.
    the `(?s)\A.*?` occurrence idiom, the `dir_absent` directory-name recipe, the
    `$..`+filter violator-selector) — they are the immediate answers and are
    currently undocumented.
+
+### Validation-debt win (cheap, high-credibility — do alongside)
+The corpus configs were authored pre-build and **understate** coverage
+(`file_graph` appears in zero configs). Re-author the ~15 monorepos whose B-gaps
+`file_graph` silently closed (angular/k8s/spring/eslint/flutter/helm/airflow + the
+`set_equals` repos istio/mypy/numpy), re-pin + `alint check` each against a fresh
+clone (the calibration gotcha catches latent config bugs). Output: the "85% of
+addressable" claim demonstrated in runnable configs, not just asserted.
+
+### Then cut v0.12
+Build the backlog above on `[Unreleased]`, then the release gate: the **1M-file
+macro bench** (extend S11–S13 to cover `for_each_match`'s dispatch class — the only
+item here that adds one; the rest are axis-enrichments with no bench impact) → the
+**release cut**. Run the bench *once* over the final surface, then tag.
 
 ### Release / validation discipline (unchanged, proven)
 - **Design-doc-first** per increment (draft commit flips a Status line → atomic
@@ -211,7 +217,7 @@ addressable" claim demonstrated in runnable configs, not just asserted.
 
 **Bottom line.** alint is at ~85% of *addressable* corpus coverage with the
 dominant residual already closed; the rule surface is mature and the architecture
-thesis held. The finish line for v0.12 is the bench + release. The post-v0.12
-opportunity set is one product move (the PHP ruleset, zero engine risk), a small
-set of clean shared-axis enrichments, and one deliberate new quantifier
-(`for_each_match`). **The corpus, not the engine, now understates the win.**
+thesis held. The remaining v0.12 work — folded in from the study's own deferrals —
+is one product move (the PHP ruleset, zero engine risk), a small set of clean
+shared-axis enrichments, and one deliberate new quantifier (`for_each_match`), then
+the bench + cut. **The corpus, not the engine, now understates the win.**
