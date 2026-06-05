@@ -228,7 +228,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         for n in &equal {
             if !names.contains(n.as_str()) {
                 return Err(cfg(format!(
-                    "`require.equal` names capture `{n}` which `select` does not define"
+                    "`require.equal` requires named captures; `{n}` is not a named \
+                     group in `select` (use `(?P<{n}>...)`)"
                 )));
             }
         }

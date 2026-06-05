@@ -200,6 +200,16 @@ rules:
         - { from: "src/domain/**", to: "src/infra/**" }
     level: error
 
+  - id: proto-has-generated-sibling
+    kind: file_graph
+    nodes: "proto/**/*.proto"
+    edges:
+      derive_target:
+        from: '(.*)\.proto'
+        to: '$1.pb.go'
+    require: no_dangling
+    level: warning
+
   - id: keep-sorted
     kind: ordered_block
     paths: ["**/.gitignore", "CODEOWNERS"]

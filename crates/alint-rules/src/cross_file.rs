@@ -717,6 +717,12 @@ impl CrossFileRule {
 
 /// Render a sorted value set for a violation message.
 fn render(set: &BTreeSet<&String>) -> String {
+    if set.is_empty() {
+        // `set_equals` renders both sides; an empty one reads `none`
+        // rather than a dangling `(missing: ; extra: "x")`. The
+        // subset/superset paths only call this on a non-empty side.
+        return "none".to_string();
+    }
     set.iter()
         .map(|v| format!("{v:?}"))
         .collect::<Vec<_>>()
@@ -925,6 +931,17 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             ));
         }
     };
+    // Glob-union + `whole_file` would union whole-file CONTENTS as set
+    // members — semantically odd and never useful; reject it so the
+    // misconfiguration fails loudly at build time.
+    if source_glob.is_some() && matches!(source_extract, Some(Extract::WholeFile)) {
+        return Err(cfg(
+            "`source.files` (glob-union) cannot use a `whole_file` extract \
+             (it would union file contents as set members); use a structured / \
+             regex / lines extract"
+                .into(),
+        ));
+    }
     let targets = match opts.targets {
         Some(ts) => Some(resolve_targets(ts, &cfg)?),
         None => None,
@@ -1386,6 +1403,19 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("set relation"), "{err}");
+    }
+
+    #[test]
+    fn build_glob_source_rejects_whole_file_extract() {
+        // Unioning whole-file CONTENTS as set members is never useful.
+        let yaml = "id: t\nkind: cross_file\n\
+                    source: { files: \"doc/*.txt\", extract: { whole_file: {} } }\n\
+                    targets: [{ file: c, extract: { whole_file: {} } }]\n\
+                    relation: set_equals\nlevel: error\n";
+        let err = build(&crate::test_support::spec_yaml(yaml))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("whole_file"), "{err}");
     }
 
     #[test]

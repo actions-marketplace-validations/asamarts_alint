@@ -539,7 +539,7 @@ mod tests {
     }
 
     /// `Scenario::all()` must enumerate every variant — the
-    /// `parse` / `label` match arms cover S1..S13, so `all()`
+    /// `parse` / `label` match arms cover S1..S14, so `all()`
     /// must too. Detects "added an enum variant, forgot to
     /// update `all()`".
     #[test]

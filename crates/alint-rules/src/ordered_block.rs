@@ -369,7 +369,10 @@ mod tests {
     }
 
     #[test]
-    fn no_markers_is_silent() {
+    fn absent_markers_in_delimited_mode_is_silent() {
+        // A delimited rule (both markers set) over a file that contains
+        // NEITHER marker forms no block -> silent. (Markerless mode is
+        // covered by `markerless_sorts_the_whole_file`.)
         let t = "just\nsome\nunsorted\nlines\nz\na\n";
         assert!(eval(&rule(Comparator::Lexical, false), t).is_empty());
     }
