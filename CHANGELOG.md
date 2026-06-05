@@ -8,6 +8,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Macro bench scenario `S14` — comprehensive v0.12 featureset coverage.** One
+  deliberately-mixed `xtask bench-scale` scenario exercises every file-shape
+  rule kind/mode added in v0.12 over the synthetic macro tree (so a single bench
+  row catches a regression anywhere in the v0.12 surface): `file_graph` +
+  `no_dangling` over both `from_content` and `derive_target` edges,
+  `for_each_match`, `cross_file` glob-union `source.files`, markerless
+  `ordered_block`, and `generated_file_fresh` mutating mode. All six run silent
+  on the clean tree, so the row measures dispatch work, not violation emission.
+  Wired into `Scenario::all()` + the publish-grade `bench-record.yml` matrix
+  (now S1-S14 = 112 cells). The git-extract kinds are excluded (they need a
+  `since:` diff base the one-commit synthetic tree doesn't model — their
+  git-dispatch cost is the S8 git-tree class).
 - **`for_each_match` — the in-file line quantifier (new rule kind).** For each
   line matching `select:` (a regex), the line must satisfy the nested `require:`
   predicates: `matches` (the line matches **all** listed regexes), `forbid` (the
