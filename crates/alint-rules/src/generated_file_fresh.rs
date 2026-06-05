@@ -180,6 +180,13 @@ impl GeneratedFileFreshRule {
 
     fn eval_stdout(&self, ctx: &Context<'_>, file: &str) -> Vec<Violation> {
         let file = Path::new(file);
+        // Confine the committed-output path before we spawn or read. This
+        // kind is spawn-gated (an untrusted `extends:` can't introduce it),
+        // so this is defense-in-depth keeping the "every config-derived
+        // path read is confined" invariant total.
+        let Some(file_rel) = crate::pathsafe::normalize_confined(file) else {
+            return vec![self.violation(file, "escapes the repo root")];
+        };
         let (status, stdout, stderr) = match self.run(ctx) {
             crate::spawn::SpawnOutcome::Exited {
                 status,
@@ -208,7 +215,7 @@ impl GeneratedFileFreshRule {
             return vec![self.violation(file, &exit_desc(status, &stderr))];
         }
 
-        let committed = match crate::io::read_capped(&ctx.root.join(file)) {
+        let committed = match crate::io::read_capped(&ctx.root.join(&file_rel)) {
             Ok(b) => b,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
                 return vec![self.violation(
@@ -566,6 +573,21 @@ mod tests {
             git_blame: None,
         };
         r.evaluate(&ctx).unwrap()
+    }
+
+    #[test]
+    fn stdout_file_escape_fires_without_spawning() {
+        // Defense-in-depth (v0.12 path-confinement): an absolute / escaping
+        // `file:` fires "escapes the repo root" before the generator runs.
+        let dir = tempfile::tempdir().unwrap();
+        let r = stdout_rule("/etc/hostname", &["true"], Normalize::None);
+        let v = eval_in(&r, dir.path());
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
     }
 
     // ─── stdout mode (unchanged) ─────────────────────────────────

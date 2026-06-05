@@ -83,7 +83,17 @@ impl Rule for JsonSchemaPassesRule {
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
 
-        let schema_abs = ctx.root.join(&self.schema_path);
+        // Confine the (config-author-controlled) schema path before any
+        // read: an absolute / `../../` `schema_path:` must never read a
+        // file outside the repo root.
+        let Some(schema_rel) = crate::pathsafe::normalize_confined(&self.schema_path) else {
+            violations.push(Violation::new(format!(
+                "schema path {} escapes the repo root",
+                self.schema_path.display()
+            )));
+            return Ok(violations);
+        };
+        let schema_abs = ctx.root.join(&schema_rel);
         let validator_res = self.compiled.get_or_init(|| compile_schema(&schema_abs));
         let validator = match validator_res {
             Ok(v) => v,
@@ -243,6 +253,32 @@ mod tests {
         let instance = json!({ "name": "alint" });
         let errors: Vec<_> = v.iter_errors(&instance).collect();
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn schema_path_escape_fires_without_reading() {
+        use crate::test_support::{ctx, tempdir_with_files};
+        // Security regression (v0.12 path-confinement): an absolute
+        // `schema_path:` must produce an "escapes the repo root"
+        // violation, never read/compile an out-of-tree file.
+        let r = JsonSchemaPassesRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::from_patterns(&["**/*.json".to_string()]).unwrap(),
+            schema_path: "/etc/hostname".into(),
+            format_override: None,
+            compiled: OnceLock::new(),
+        };
+        let (tmp, idx) = tempdir_with_files(&[("data.json", b"{}")]);
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
     }
 
     #[test]

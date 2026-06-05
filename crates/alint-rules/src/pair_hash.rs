@@ -102,7 +102,19 @@ impl Rule for PairHashRule {
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let target_path = Path::new(&self.target);
-        let b_bytes = match crate::io::read_capped(&ctx.root.join(target_path)) {
+        // Confine the (config-author-controlled) target manifest path
+        // before reading it: an absolute / `../../` `target:` must never
+        // read a file outside the repo root.
+        let Some(target_rel) = crate::pathsafe::normalize_confined(target_path) else {
+            return Ok(vec![
+                Violation::new(format!(
+                    "pair_hash target {:?} escapes the repo root",
+                    self.target
+                ))
+                .with_path(std::sync::Arc::<Path>::from(target_path)),
+            ]);
+        };
+        let b_bytes = match crate::io::read_capped(&ctx.root.join(&target_rel)) {
             Ok(b) => b,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
                 return Ok(vec![
@@ -331,6 +343,27 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].path.as_deref(), Some(Path::new("a.txt")));
         assert!(v[0].message.contains("not found in"));
+    }
+
+    #[test]
+    fn target_escape_fires_without_reading() {
+        // Security regression (v0.12 path-confinement): an absolute
+        // `target:` must produce an "escapes the repo root" violation,
+        // never read an out-of-tree file.
+        let (tmp, idx) = tempdir_with_files(&[("a.txt", b"hello")]);
+        let r = rule(
+            "a.txt",
+            "/etc/hostname",
+            Algorithm::Sha256,
+            Format::Contains,
+        );
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
     }
 
     #[test]

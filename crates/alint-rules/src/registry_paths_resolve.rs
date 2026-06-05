@@ -142,6 +142,20 @@ impl Rule for RegistryPathsResolveRule {
         };
 
         for registry_rel in self.registry_files(ctx) {
+            // Confine the (config-author-controlled) registry path before
+            // reading it: an absolute / `../../` literal `source:` must
+            // never read a file outside the repo root. The glob-source arm
+            // yields in-tree index paths, for which this is a no-op.
+            let Some(registry_rel) = crate::pathsafe::normalize_confined(&registry_rel) else {
+                violations.push(
+                    Violation::new(format!(
+                        "registry source {} escapes the repo root",
+                        registry_rel.display()
+                    ))
+                    .with_path(registry_rel.clone()),
+                );
+                continue;
+            };
             let abs = ctx.root.join(&registry_rel);
             let text = match crate::io::read_capped(&abs) {
                 Ok(b) => String::from_utf8_lossy(&b).into_owned(),
@@ -176,21 +190,8 @@ impl Rule for RegistryPathsResolveRule {
                 }
             };
             // Non-literal (computed/interpolated) entries are
-            // intentionally skipped, not failed — surfaced as
-            // informational notes (v0.11; see
-            // docs/design/v0.11/informational_findings.md) so the
-            // skip is no longer silent.
-            for entry in &skipped {
-                violations.push(
-                    Violation::new(format!(
-                        "registry {}: skipped non-literal entry {entry:?} \
-                         (cannot statically resolve an interpolated/computed path)",
-                        registry_rel.display()
-                    ))
-                    .with_path(registry_rel.clone())
-                    .as_note(),
-                );
-            }
+            // intentionally skipped, not failed — surfaced as notes.
+            Self::note_skipped(&registry_rel, &skipped, &mut violations);
 
             let excluded = self.excluded_entries(&text);
             let base_dir = self.base_dir(&registry_rel);
@@ -391,6 +392,23 @@ impl RegistryPathsResolveRule {
         None
     }
 
+    /// Surface each non-literal (interpolated/computed) entry as an
+    /// informational note rather than a silent skip (v0.11; see
+    /// `docs/design/v0.11/informational_findings.md`).
+    fn note_skipped(registry: &Path, skipped: &[String], out: &mut Vec<Violation>) {
+        for entry in skipped {
+            out.push(
+                Violation::new(format!(
+                    "registry {}: skipped non-literal entry {entry:?} \
+                     (cannot statically resolve an interpolated/computed path)",
+                    registry.display()
+                ))
+                .with_path(registry.to_path_buf())
+                .as_note(),
+            );
+        }
+    }
+
     fn violation(&self, registry: &Path, entry: &str, reason: &str) -> Violation {
         let msg = self
             .message
@@ -540,6 +558,24 @@ mod tests {
         let v = eval(&r, dir.path(), &index(&["src/a.rs", "MANIFEST"], &[]));
         assert_eq!(v.len(), 1);
         assert!(v[0].message.contains("src/b.rs"));
+    }
+
+    #[test]
+    fn source_escape_fires_without_reading() {
+        // Security regression (v0.12 path-confinement): an absolute literal
+        // `source:` registry path must produce an "escapes the repo root"
+        // violation, never read an out-of-tree file.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("MANIFEST"), "src/a.rs\n").unwrap();
+        let r = rule(opts("/etc/hostname", Extract::Lines(LinesOpts::default())));
+        let v = eval(&r, root, &index(&["src/a.rs", "MANIFEST"], &[]));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
     }
 
     #[test]
