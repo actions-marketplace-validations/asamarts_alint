@@ -424,6 +424,31 @@ fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<WalkBuilder> {
         .build()
         .map_err(|e| Error::Other(format!("failed to build overrides: {e}")))?;
     builder.overrides(overrides);
+
+    // Prune symlinks whose target escapes the repo root. With
+    // `follow_links(true)`, a followed out-of-tree symlink would
+    // otherwise be indexed under its in-tree path — and an out-of-tree
+    // symlink-to-dir would have its children descended and indexed too
+    // — letting content rules read outside the tree (the untrusted-PR-
+    // content half of the path-confinement threat; see
+    // `docs/design/v0.12/path-confinement.md`). In-tree symlinks are
+    // still followed. Canonicalising both sides also handles a root
+    // that itself lives under a symlink (e.g. macOS `/tmp` →
+    // `/private/tmp`). Only symlink entries pay the `canonicalize`
+    // syscall; the common non-symlink path is a bare `true`, so the
+    // walk's cost is unchanged for trees without symlinks.
+    let canonical_root = root.canonicalize().ok();
+    builder.filter_entry(move |entry| {
+        if !entry.path_is_symlink() {
+            return true;
+        }
+        match (&canonical_root, entry.path().canonicalize()) {
+            (Some(root), Ok(target)) => target.starts_with(root),
+            // Broken / unresolvable symlink (or an un-canonicalisable
+            // root) — can't be safely read anyway; prune it.
+            _ => false,
+        }
+    });
     Ok(builder)
 }
 
@@ -577,6 +602,46 @@ mod tests {
         let files: Vec<_> = idx.files().collect();
         assert_eq!(files.len(), 1);
         assert_eq!(&*files[0].path, Path::new("a/x.rs"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_prunes_symlinks_that_escape_the_root() {
+        // Security (untrusted-PR content): a committed symlink whose
+        // target escapes the repo root must NOT be indexed — otherwise a
+        // content rule would read out-of-tree bytes via `root.join(link)`.
+        // In-tree symlinks are still followed.
+        use std::os::unix::fs::symlink;
+        let outside = td();
+        touch(outside.path(), "secret.txt", b"TOPSECRET");
+        touch(outside.path(), "secretdir/inner.txt", b"INNER");
+
+        let root = td();
+        touch(root.path(), "real.txt", b"in-tree");
+        symlink(
+            outside.path().join("secret.txt"),
+            root.path().join("link-file"),
+        )
+        .unwrap();
+        symlink(outside.path(), root.path().join("link-dir")).unwrap();
+        symlink(root.path().join("real.txt"), root.path().join("link-in")).unwrap();
+
+        let idx = walk(root.path(), &WalkOptions::default()).unwrap();
+        let p = paths(&idx);
+
+        assert!(
+            !p.iter().any(|x| x == "link-file"),
+            "escaping symlink-to-file was indexed: {p:?}"
+        );
+        assert!(
+            !p.iter().any(|x| x.starts_with("link-dir")),
+            "escaping symlink-to-dir was descended into: {p:?}"
+        );
+        assert!(
+            p.iter().any(|x| x == "link-in"),
+            "in-tree symlink should still be followed/indexed: {p:?}"
+        );
+        assert!(p.iter().any(|x| x == "real.txt"), "{p:?}");
     }
 
     #[test]

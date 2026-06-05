@@ -318,6 +318,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **Walker — a committed symlink whose target escapes the repo root is no longer
+  followed into the file index.** With `follow_links(true)` the walker indexed a
+  symlink under its in-tree path while reading the link's *target*, so a symlink
+  like `link -> /etc/passwd` committed to a linted tree was indexed as an in-tree
+  file — and a symlink to a *directory* had its out-of-tree children descended
+  and indexed too — letting any content rule read out-of-tree bytes. This is the
+  untrusted-repo-*content* half of the path-confinement threat (it bites CI that
+  lints fork PRs with a trusted config). The walker now prunes any symlink whose
+  canonicalized target is not under the canonicalized repo root
+  (`build_walk_builder`'s `filter_entry`); pruning a symlink-dir also stops
+  descent, so its children are never indexed. In-tree symlinks are still followed
+  (byte-compatible for trees without out-of-root symlinks); broken symlinks are
+  pruned. Pre-existing since v0.1; pre-release hardening — no released version is
+  affected. See `docs/design/v0.12/path-confinement.md`.
+
 - **Path confinement — config-derived paths can no longer read or resolve
   outside the repo root.** Several rule kinds turn a config-author-controlled
   string into a filesystem path that is then read or resolved: `file_graph`

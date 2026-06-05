@@ -89,7 +89,12 @@ Every read/resolve site routes its config-derived path through
 Inherently safe (no change needed): the `cross_file` glob-union `source.files`
 form and every other index-driven rule only iterate `ctx.index.files()`
 (in-tree paths). Symlink targets that escape the root are a **separate** vector
-(the walker's `follow_links`), tracked outside this confinement work.
+(the walker's `follow_links`) — now closed by pruning out-of-tree symlinks in the
+walker itself (`build_walk_builder`'s `filter_entry`): a symlink whose
+canonicalized target is not under the canonicalized root is dropped, and pruning
+a symlink-dir also stops descent, so a committed `link -> /etc/passwd` (or
+`link -> /some/dir`) can't pull out-of-tree files into the index. In-tree
+symlinks are still followed.
 
 Each newly-confined site has a "fires and is never read" regression test
 (`source_escape_fires_without_reading`,
