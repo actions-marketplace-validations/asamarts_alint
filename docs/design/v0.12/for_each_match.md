@@ -78,7 +78,10 @@ reproduced end-to-end against the shipped binary before this build:
   - `matches: [<regex>...]` — the element line must match **all** of these.
   - `forbid: [<regex>...]` — the element line must match **none** of these.
   - `equal: [<name>...]` — the listed named `select` captures must all be equal
-    (string equality; ≥2 names; each name must exist in `select`).
+    (string equality; ≥2 names; each name must exist in `select`). Checked on
+    **every** `select` match on the line (a line can carry more than one);
+    captures absent on a match compare equal to each other (all-absent → a
+    vacuous pass, a mix of present/absent → a mismatch).
 - One violation per (line, failing predicate). Per-file fast path
   (`PerFileRule`), line-oriented; non-UTF-8 files are skipped.
 

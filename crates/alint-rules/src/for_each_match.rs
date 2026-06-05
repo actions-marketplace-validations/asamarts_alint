@@ -97,9 +97,9 @@ impl PerFileRule for ForEachMatchRule {
         let mut violations = Vec::new();
         for (i, line) in text.lines().enumerate() {
             let line_no = i + 1;
-            let Some(caps) = self.select.captures(line) else {
+            if !self.select.is_match(line) {
                 continue; // not a selected element
-            };
+            }
             // `matches`: every pattern must match the element line.
             for (src, re) in &self.matches {
                 if !re.is_match(line) {
@@ -120,9 +120,15 @@ impl PerFileRule for ForEachMatchRule {
                     ));
                 }
             }
-            // `equal`: the named captures must all agree.
-            if let Some(desc) = self.equal_mismatch(&caps) {
-                violations.push(self.violation(path, line_no, &desc));
+            // `equal`: EVERY `select` match on the line must have
+            // agreeing captures — a line can carry more than one
+            // (e.g. two PR links), and each is checked.
+            if !self.equal.is_empty() {
+                for caps in self.select.captures_iter(line) {
+                    if let Some(desc) = self.equal_mismatch(&caps) {
+                        violations.push(self.violation(path, line_no, &desc));
+                    }
+                }
             }
         }
         Ok(violations)
@@ -131,8 +137,10 @@ impl PerFileRule for ForEachMatchRule {
 
 impl ForEachMatchRule {
     /// `None` when the `equal` captures all agree (or there is no
-    /// `equal` check); otherwise a description of the mismatch. A
-    /// capture that did not participate compares as distinct.
+    /// `equal` check); otherwise a description of the mismatch.
+    /// Captures absent on a match compare equal to each other
+    /// (all-absent → vacuous pass); a mix of present and absent values
+    /// is a mismatch.
     fn equal_mismatch(&self, caps: &Captures<'_>) -> Option<String> {
         if self.equal.is_empty() {
             return None;
@@ -319,6 +327,42 @@ mod tests {
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].message.contains("differ"));
         assert!(v[0].message.contains("55") && v[0].message.contains("99"));
+    }
+
+    #[test]
+    fn equal_checks_every_match_on_a_line() {
+        // A line can carry more than one `select` match; each is
+        // checked, not just the first (the v0.12 C1 correctness fix).
+        let r = rule(
+            r"\[#(?P<disp>\d+)\]\(pull/(?P<url>\d+)\)",
+            &[],
+            &[],
+            &["disp", "url"],
+        );
+        // First link agrees, second disagrees -> exactly one violation
+        // (on the second occurrence), not a silent pass.
+        let line = "see [#1](pull/1) and [#2](pull/9)\n";
+        let v = eval(&r, line);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("differ"));
+        assert!(v[0].message.contains('2') && v[0].message.contains('9'));
+        // Both agree -> silent.
+        assert!(eval(&r, "[#3](pull/3) and [#4](pull/4)\n").is_empty());
+    }
+
+    #[test]
+    fn equal_all_absent_passes_mixed_fires() {
+        // Optional capture groups: a match where NEITHER participates
+        // is a vacuous pass; a mix of present + absent is a mismatch.
+        let r = rule(r"^item (?P<a>x)?(?P<b>y)?", &[], &[], &["a", "b"]);
+        assert!(
+            eval(&r, "item zzz\n").is_empty(),
+            "all-absent -> vacuous pass"
+        );
+        // `a` present (x), `b` absent -> a mix -> mismatch.
+        let v = eval(&r, "item x\n");
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("unmatched"), "{}", v[0].message);
     }
 
     #[test]

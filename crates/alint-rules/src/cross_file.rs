@@ -315,12 +315,27 @@ impl CrossFileRule {
             // Glob-union source: extract from every matching file and
             // union the values into one set (the set relations only).
             let mut all = Vec::new();
+            let mut matched = 0usize;
             for entry in ctx.index.files() {
-                if scope.matches(&entry.path, ctx.index)
-                    && let Some(vals) = Self::source_values_from(ctx, &entry.path, extract, out)
-                {
-                    all.extend(vals);
+                if scope.matches(&entry.path, ctx.index) {
+                    matched += 1;
+                    if let Some(vals) = Self::source_values_from(ctx, &entry.path, extract, out) {
+                        all.extend(vals);
+                    }
                 }
+            }
+            // A glob that matches nothing is a misconfiguration (a
+            // typo'd path) — fire, mirroring the target-glob behaviour,
+            // rather than silently passing `subset` / yielding a
+            // confusing empty-set `set_equals` diff.
+            if matched == 0 {
+                if !self.allow_missing {
+                    out.push(Self::violation(
+                        Path::new(&self.source_file),
+                        "`source.files` glob matched no files",
+                    ));
+                }
+                return None;
             }
             return Some(all);
         }
@@ -1325,6 +1340,40 @@ mod tests {
         let v = eval(&r, root, &idx);
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].message.contains("Extra"), "{}", v[0].message);
+    }
+
+    #[test]
+    fn glob_union_source_matching_no_files_fires() {
+        // C2: a `source.files` glob that matches nothing is a
+        // misconfiguration — it fires, not a silent `subset` pass.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("highlight.c"), "default link Comment\n").unwrap();
+        let idx = index(&["highlight.c"]);
+        let r = CrossFileRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            source_file: "doc/*.txt".into(),
+            source_glob: Some(Scope::from_patterns(&["doc/*.txt".to_string()]).unwrap()),
+            source_extract: Some(Extract::Regex(r"\*hl-(\w+)\*".into())),
+            targets: Some(Targets::List(vec![(
+                "highlight.c".into(),
+                Some(Extract::Regex(r"default link (\w+)".into())),
+            )])),
+            relation: Relation::Subset,
+            normalize: vec![],
+            allow_missing: false,
+            skip_header_lines: 0,
+        };
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("matched no files"),
+            "{}",
+            v[0].message
+        );
     }
 
     #[test]

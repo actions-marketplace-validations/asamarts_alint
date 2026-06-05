@@ -162,16 +162,21 @@ impl PerFileRule for OrderedBlockRule {
             let line_no = i + 1;
             let trimmed = raw.trim();
 
-            let Some(b) = block.as_mut() else {
-                // Only reached when a `start` marker is configured.
-                if Some(trimmed) == self.start.as_deref() {
-                    block = Some(Block {
-                        start_line: line_no,
-                        prev: None,
-                        reported: false,
-                    });
-                }
+            // A `start` line always (re)opens a fresh block, closing any
+            // active one — uniform across delimited / start-only /
+            // markerless, so a repeated `start` (e.g. start-only mode)
+            // delimits sections rather than being treated as an entry.
+            if Some(trimmed) == self.start.as_deref() {
+                block = Some(Block {
+                    start_line: line_no,
+                    prev: None,
+                    reported: false,
+                });
                 continue;
+            }
+
+            let Some(b) = block.as_mut() else {
+                continue; // no active block, and not a `start` line
             };
 
             if self.end.as_deref() == Some(trimmed) {
@@ -426,6 +431,27 @@ mod tests {
         let v = eval(&r, bad);
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].message.contains("alpha"));
+    }
+
+    #[test]
+    fn start_only_repeated_marker_reopens_a_fresh_block() {
+        // C3: a repeated `start` in start-only mode delimits a NEW
+        // section (re-opens), it is not flagged as out-of-order data.
+        let r = markerless_rule(Some("# S"), None, Comparator::Lexical);
+        // Two independently-sorted sections, the marker re-opening each.
+        let ok = "# S\nalpha\nbravo\n# S\nyak\nzed\n";
+        assert!(eval(&r, ok).is_empty(), "{:?}", eval(&r, ok));
+        // Only the second section is unsorted -> exactly one violation,
+        // anchored on the second section's start (the marker itself is
+        // never reported as an entry).
+        let bad = "# S\nalpha\nbravo\n# S\nzed\nyak\n";
+        let v = eval(&r, bad);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("yak"));
+        assert!(
+            !v.iter().any(|x| x.message.contains("\"# S\"")),
+            "marker must not be an entry"
+        );
     }
 
     #[test]
