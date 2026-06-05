@@ -56,6 +56,28 @@
       "type": "boolean",
       "default": false,
       "description": "Opt in to discovery of nested `.alint.yml` / `.alint.yaml` files in subdirectories. When true, the loader walks the tree from this config's directory (honoring `.gitignore` + `ignore`) and finds any nested config files. Each nested rule's path-like scope fields (`paths`, `select`, `primary`) are automatically prefixed with the nested config's relative directory, so rules declared in `packages/frontend/.alint.yml` apply only under `packages/frontend/**`. Id collisions across configs are rejected with a clear error — per-subtree overrides aren't supported in this release (use `when:` on the root rule for that). Only the root config sets this; nested configs can't spawn further nested discovery."
+    },
+    "allow_out_of_root": {
+      "description": "Top-level-only escape hatch for path confinement: permit rules to read a config-declared path that escapes the repo root. `true` allows every rule; a map `{ kinds: [...], rules: [...] }` allows only the listed rule kinds / ids. Absent or `false` keeps the secure default (every config-derived path read is confined). REJECTED from `extends:`'d rulesets — only the user's own top-level config may set it. Applies to file reads (currently `registry_paths_resolve` source, `json_schema_passes` schema_path, `pair_hash` target); resolve/index checks stay confined. Permitted reads emit an informational note. See docs/design/v0.12/allow_out_of_root.md.",
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kinds": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Rule kinds permitted to read out of the repo root."
+            },
+            "rules": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Rule ids permitted to read out of the repo root."
+            }
+          }
+        }
+      ]
     }
   },
 

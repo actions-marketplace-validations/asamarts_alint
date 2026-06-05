@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use alint_core::{Error, Result};
 
 use crate::extends;
-use crate::{LoadOptions, RawConfig, apply_rule_filter, merge, reject_command_rules_in};
+use crate::{
+    LoadOptions, RawConfig, apply_rule_filter, merge, reject_allow_out_of_root_in,
+    reject_command_rules_in,
+};
 
 /// Parse a local config file's `contents` into a [`RawConfig`],
 /// resolving `{{env.X}}` interpolation first. Shared by
@@ -99,6 +102,7 @@ pub(crate) fn load_recursive(
         // write. Same trust model on both sides.
         alint_core::facts::reject_custom_facts_in(&parent.facts, url)?;
         reject_command_rules_in(&parent.rules, url)?;
+        reject_allow_out_of_root_in(&parent.allow_out_of_root, url)?;
         parent.rules = apply_rule_filter(parent.rules, entry)?;
         merged = merge(merged, parent);
     }

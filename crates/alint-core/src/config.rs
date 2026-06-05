@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -57,6 +57,15 @@ pub struct Config {
     /// configs themselves cannot spawn further nested discovery.
     #[serde(default)]
     pub nested_configs: bool,
+    /// Resolved `allow_out_of_root:` policy — which rules may read a
+    /// config-declared path that escapes the repo root. Set by the
+    /// loader's `finalize()` from the user's *top-level* config only
+    /// (rejected from `extends:`); `#[serde(skip)]` so a directly
+    /// deserialized or bundled `Config` can never set it. Default
+    /// [`AllowOutOfRoot::Confined`]. See
+    /// `docs/design/v0.12/allow_out_of_root.md`.
+    #[serde(skip)]
+    pub allow_out_of_root: AllowOutOfRoot,
 }
 
 // Returning `Option<u64>` (rather than bare `u64`) keeps the
@@ -75,6 +84,79 @@ fn default_respect_gitignore() -> bool {
 
 impl Config {
     pub const CURRENT_VERSION: u32 = 1;
+}
+
+/// Which rules may *read* a config-declared path that escapes the
+/// repo root — the parsed form of the top-level `allow_out_of_root:`
+/// key. Default [`Confined`](Self::Confined) (hard confinement, the
+/// secure default). Honored only from the user's own top-level config;
+/// the loader rejects it from any `extends:`'d ruleset (the same trust
+/// model as the spawning-rule gate). See
+/// `docs/design/v0.12/allow_out_of_root.md`.
+///
+/// YAML forms: `true` (all rules), or `{ kinds: [...], rules: [...] }`
+/// (a rule is permitted if its kind or id is listed). Absent / `false`
+/// → `Confined`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AllowOutOfRoot {
+    /// No rule may read outside the repo root (default).
+    #[default]
+    Confined,
+    /// Every rule may (`allow_out_of_root: true`).
+    All,
+    /// Only rules whose `kind` ∈ `kinds` or `id` ∈ `rules` may.
+    Selective {
+        kinds: HashSet<String>,
+        rules: HashSet<String>,
+    },
+}
+
+impl AllowOutOfRoot {
+    /// Whether a rule with this `id` / `kind` may read out of root.
+    #[must_use]
+    pub fn allows(&self, id: &str, kind: &str) -> bool {
+        match self {
+            Self::Confined => false,
+            Self::All => true,
+            Self::Selective { kinds, rules } => kinds.contains(kind) || rules.contains(id),
+        }
+    }
+
+    /// `true` when nothing is permitted (the default). The `extends:`
+    /// trust gate rejects an inherited ruleset whose value is not this.
+    #[must_use]
+    pub fn is_confined(&self) -> bool {
+        matches!(self, Self::Confined)
+    }
+}
+
+impl<'de> Deserialize<'de> for AllowOutOfRoot {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SelectiveSpec {
+            #[serde(default)]
+            kinds: Vec<String>,
+            #[serde(default)]
+            rules: Vec<String>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Selective(SelectiveSpec),
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Flag(true) => Self::All,
+            Raw::Flag(false) => Self::Confined,
+            Raw::Selective(s) => Self::Selective {
+                kinds: s.kinds.into_iter().collect(),
+                rules: s.rules.into_iter().collect(),
+            },
+        })
+    }
 }
 
 /// A single `extends:` entry. Accepts either a bare string (the
@@ -636,6 +718,39 @@ mod tests {
     use super::*;
     use crate::template::PathTokens;
     use std::path::Path;
+
+    #[test]
+    fn allow_out_of_root_policy_resolves() {
+        assert!(!AllowOutOfRoot::Confined.allows("r", "k"));
+        assert!(AllowOutOfRoot::All.allows("r", "k"));
+        let sel = AllowOutOfRoot::Selective {
+            kinds: ["json_schema_passes".to_string()].into_iter().collect(),
+            rules: ["my-rule".to_string()].into_iter().collect(),
+        };
+        assert!(sel.allows("anything", "json_schema_passes"), "by kind");
+        assert!(sel.allows("my-rule", "other_kind"), "by id");
+        assert!(!sel.allows("nope", "other_kind"), "neither id nor kind");
+        assert!(AllowOutOfRoot::Confined.is_confined());
+        assert!(!AllowOutOfRoot::All.is_confined());
+    }
+
+    #[test]
+    fn allow_out_of_root_deserializes_bool_and_map() {
+        let t: AllowOutOfRoot = serde_yaml_ng::from_str("true").unwrap();
+        assert_eq!(t, AllowOutOfRoot::All);
+        let f: AllowOutOfRoot = serde_yaml_ng::from_str("false").unwrap();
+        assert_eq!(f, AllowOutOfRoot::Confined);
+        let m: AllowOutOfRoot = serde_yaml_ng::from_str("kinds: [pair_hash]\nrules: [x]").unwrap();
+        match m {
+            AllowOutOfRoot::Selective { kinds, rules } => {
+                assert!(kinds.contains("pair_hash"));
+                assert!(rules.contains("x"));
+            }
+            other => panic!("expected Selective, got {other:?}"),
+        }
+        // an unknown key in the map form is rejected.
+        assert!(serde_yaml_ng::from_str::<AllowOutOfRoot>("bogus: 1").is_err());
+    }
 
     #[test]
     fn config_default_respects_gitignore_and_caps_fix_size() {

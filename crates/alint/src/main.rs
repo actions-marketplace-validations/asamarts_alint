@@ -1168,9 +1168,14 @@ fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
         if matches!(spec.level, alint_core::Level::Off) {
             continue;
         }
-        let rule = registry
+        let mut rule = registry
             .build(spec)
             .with_context(|| format!("building rule {:?}", spec.id))?;
+        // Apply the top-level `allow_out_of_root:` policy (parsed from
+        // the user's own config only — never from `extends:`). A rule
+        // not opted in stays confined (the setter is a no-op for every
+        // kind that doesn't honor the flag).
+        rule.set_allow_out_of_root(config.allow_out_of_root.allows(&spec.id, &spec.kind));
         let mut entry = alint_core::RuleEntry::new(rule);
         if let Some(when_src) = &spec.when {
             let expr = alint_core::when::parse(when_src)

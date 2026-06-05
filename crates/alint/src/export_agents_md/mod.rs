@@ -284,6 +284,7 @@ mod tests {
             ignore: Vec::new(),
             fix_size_limit: None,
             nested_configs: false,
+            allow_out_of_root: alint_core::AllowOutOfRoot::default(),
         }
     }
 

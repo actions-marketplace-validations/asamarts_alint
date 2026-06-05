@@ -571,9 +571,13 @@ fn build_session(root: &Path) -> Result<Option<Session>, String> {
         if matches!(spec.level, Level::Off) {
             continue;
         }
-        let rule = registry
+        let mut rule = registry
             .build(spec)
             .map_err(|e| format!("building rule {:?}: {e}", spec.id))?;
+        // Apply the top-level `allow_out_of_root:` policy (top-level
+        // config only; never via `extends:`). No-op for kinds that
+        // don't honor the flag.
+        rule.set_allow_out_of_root(config.allow_out_of_root.allows(&spec.id, &spec.kind));
         let mut entry = RuleEntry::new(rule);
         if let Some(when_src) = &spec.when {
             let expr = alint_core::when::parse(when_src)

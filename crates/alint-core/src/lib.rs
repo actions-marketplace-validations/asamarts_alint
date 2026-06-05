@@ -21,10 +21,10 @@ mod walker;
 pub mod when;
 
 pub use config::{
-    CompiledNestedSpec, Config, ContentSourceSpec, ExtendsEntry, FileAppendFinalNewlineFixSpec,
-    FileAppendFixSpec, FileCollapseBlankLinesFixSpec, FileCreateFixSpec,
-    FileNormalizeLineEndingsFixSpec, FilePrependFixSpec, FileRemoveFixSpec, FileRenameFixSpec,
-    FileStripBidiFixSpec, FileStripBomFixSpec, FileStripZeroWidthFixSpec,
+    AllowOutOfRoot, CompiledNestedSpec, Config, ContentSourceSpec, ExtendsEntry,
+    FileAppendFinalNewlineFixSpec, FileAppendFixSpec, FileCollapseBlankLinesFixSpec,
+    FileCreateFixSpec, FileNormalizeLineEndingsFixSpec, FilePrependFixSpec, FileRemoveFixSpec,
+    FileRenameFixSpec, FileStripBidiFixSpec, FileStripBomFixSpec, FileStripZeroWidthFixSpec,
     FileTrimTrailingWhitespaceFixSpec, FixSpec, NestedRuleSpec, PathsSpec, RuleSpec,
     resolve_content_source,
 };

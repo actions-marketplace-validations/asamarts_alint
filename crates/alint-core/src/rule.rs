@@ -300,6 +300,18 @@ pub trait Rule: Send + Sync + std::fmt::Debug {
         false
     }
 
+    /// Permit this rule's *read* sites to read a config-declared path
+    /// that escapes the repo root. Default no-op (hard confinement).
+    /// The loader calls this post-build with the result of the
+    /// top-level `allow_out_of_root:` policy for the rule's id/kind;
+    /// only the read-confinement rule kinds override it to store the
+    /// flag. NEVER reachable from an `extends:`'d ruleset — the policy
+    /// is parsed from the user's own top-level config only, mirroring
+    /// the `SPAWNING_RULE_KINDS` trust gate. A build site that forgets
+    /// to call this leaves the rule confined (the safe default). See
+    /// `docs/design/v0.12/allow_out_of_root.md`.
+    fn set_allow_out_of_root(&mut self, _allow: bool) {}
+
     /// In `--changed` mode, return `true` to evaluate this rule
     /// against the **full** [`FileIndex`] rather than the
     /// changed-only filtered subset. Default `false` (per-file

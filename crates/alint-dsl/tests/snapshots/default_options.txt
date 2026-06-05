@@ -1142,6 +1142,7 @@ JsonSchemaPassesRule {
     message: None,
     scope: Scope { ... },
     schema_path: "schemas/package.schema.json",
+    allow_out_of_root: false,
     format_override: None,
     compiled: OnceLock(
         <uninit>,
@@ -1409,6 +1410,7 @@ PairHashRule {
     target: "src/fips/fips140.sum",
     algorithm: Sha256,
     format: SumsLine,
+    allow_out_of_root: false,
 }
 
 === kind: registry_paths_resolve | id: workspace-members-resolve ===
@@ -1437,6 +1439,7 @@ RegistryPathsResolveRule {
             unreferenced: Warn,
         },
     ),
+    allow_out_of_root: false,
 }
 
 === kind: shebang | id: shebang-alias ===

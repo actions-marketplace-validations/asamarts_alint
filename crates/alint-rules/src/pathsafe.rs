@@ -44,6 +44,42 @@ pub(crate) fn normalize_confined(p: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
+/// The verdict for a config-derived *read* path, accounting for the
+/// rule's `allow_out_of_root` permission (see
+/// `docs/design/v0.12/allow_out_of_root.md`).
+pub(crate) enum Confined {
+    /// In-tree (lexically normalised) — read as today.
+    In(PathBuf),
+    /// Escapes the root, but the rule is permitted to read it. The
+    /// caller reads `root.join(path)` (absolute → itself; `../../x` →
+    /// up) and emits an informational note via [`out_of_root_note`].
+    AllowedEscape(PathBuf),
+    /// Escapes the root and the rule is not permitted — the caller
+    /// emits an "escapes the repo root" violation and does not read.
+    Denied,
+}
+
+/// Confine a config-derived read path, honouring an
+/// `allow_out_of_root` permission. `allow_escape` is the per-rule
+/// flag the loader resolved from the top-level policy; it is `false`
+/// for every rule unless the user's own top-level config opted the
+/// rule (or its kind) in.
+pub(crate) fn confine(path: &Path, allow_escape: bool) -> Confined {
+    match normalize_confined(path) {
+        Some(p) => Confined::In(p),
+        None if allow_escape => Confined::AllowedEscape(path.to_path_buf()),
+        None => Confined::Denied,
+    }
+}
+
+/// The informational-note message for a permitted out-of-root read.
+pub(crate) fn out_of_root_note(path: &Path) -> String {
+    format!(
+        "reading out-of-root path {} — permitted by `allow_out_of_root`",
+        path.display()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalize_confined;

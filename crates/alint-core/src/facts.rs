@@ -559,6 +559,7 @@ mod tests {
             rules: Vec::new(),
             fix_size_limit: None,
             nested_configs: false,
+            allow_out_of_root: crate::AllowOutOfRoot::default(),
         };
         let err = reject_custom_facts(&config, "./base.yml").unwrap_err();
         assert!(err.to_string().contains("custom"), "{err}");
@@ -578,6 +579,7 @@ mod tests {
             rules: Vec::new(),
             fix_size_limit: None,
             nested_configs: false,
+            allow_out_of_root: crate::AllowOutOfRoot::default(),
         };
         assert!(reject_custom_facts(&config, "./base.yml").is_ok());
     }

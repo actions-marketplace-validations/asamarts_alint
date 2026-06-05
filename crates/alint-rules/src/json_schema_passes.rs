@@ -65,6 +65,9 @@ pub struct JsonSchemaPassesRule {
     message: Option<String>,
     scope: Scope,
     schema_path: PathBuf,
+    /// Permit reading a `schema_path:` that escapes the repo root —
+    /// set post-build from the top-level `allow_out_of_root:` policy.
+    allow_out_of_root: bool,
     /// Explicit format, if the user passed `format:`. When
     /// `None`, the format is detected per-file from the
     /// extension.
@@ -80,18 +83,32 @@ pub struct JsonSchemaPassesRule {
 impl Rule for JsonSchemaPassesRule {
     alint_core::rule_common_impl!();
 
+    fn set_allow_out_of_root(&mut self, allow: bool) {
+        self.allow_out_of_root = allow;
+    }
+
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
 
         // Confine the (config-author-controlled) schema path before any
-        // read: an absolute / `../../` `schema_path:` must never read a
-        // file outside the repo root.
-        let Some(schema_rel) = crate::pathsafe::normalize_confined(&self.schema_path) else {
-            violations.push(Violation::new(format!(
-                "schema path {} escapes the repo root",
-                self.schema_path.display()
-            )));
-            return Ok(violations);
+        // read: an absolute / `../../` `schema_path:` reads outside the
+        // repo root only when the user's top-level config opted this rule
+        // into `allow_out_of_root`.
+        let schema_rel = match crate::pathsafe::confine(&self.schema_path, self.allow_out_of_root) {
+            crate::pathsafe::Confined::In(p) => p,
+            crate::pathsafe::Confined::AllowedEscape(p) => {
+                violations.push(
+                    Violation::new(crate::pathsafe::out_of_root_note(&self.schema_path)).as_note(),
+                );
+                p
+            }
+            crate::pathsafe::Confined::Denied => {
+                violations.push(Violation::new(format!(
+                    "schema path {} escapes the repo root",
+                    self.schema_path.display()
+                )));
+                return Ok(violations);
+            }
         };
         let schema_abs = ctx.root.join(&schema_rel);
         let validator_res = self.compiled.get_or_init(|| compile_schema(&schema_abs));
@@ -229,6 +246,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         message: spec.message.clone(),
         scope: Scope::from_spec(spec)?,
         schema_path: opts.schema_path,
+        allow_out_of_root: false,
         format_override,
         compiled: OnceLock::new(),
     }))
@@ -268,6 +286,7 @@ mod tests {
             message: None,
             scope: Scope::from_patterns(&["**/*.json".to_string()]).unwrap(),
             schema_path: "/etc/hostname".into(),
+            allow_out_of_root: false,
             format_override: None,
             compiled: OnceLock::new(),
         };
@@ -278,6 +297,38 @@ mod tests {
             v[0].message.contains("escapes the repo root"),
             "{}",
             v[0].message
+        );
+    }
+
+    #[test]
+    fn schema_path_out_of_root_read_when_allowed() {
+        use crate::test_support::{ctx, tempdir_with_files};
+        // With `allow_out_of_root`, an absolute out-of-tree schema is
+        // read + compiled; the in-tree file validates and a note records
+        // the escape.
+        let ext = tempfile::tempdir().unwrap();
+        let schema = ext.path().join("schema.json");
+        std::fs::write(&schema, r#"{"type":"object"}"#).unwrap();
+        let r = JsonSchemaPassesRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::from_patterns(&["**/*.json".to_string()]).unwrap(),
+            schema_path: schema.clone(),
+            allow_out_of_root: true,
+            format_override: None,
+            compiled: OnceLock::new(),
+        };
+        let (tmp, idx) = tempdir_with_files(&[("data.json", b"{}")]);
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(
+            v.iter().all(|x| x.is_note),
+            "only an out-of-root note: {v:?}"
+        );
+        assert!(
+            v.iter().any(|x| x.message.contains("allow_out_of_root")),
+            "{v:?}"
         );
     }
 

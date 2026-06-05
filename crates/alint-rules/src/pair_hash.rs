@@ -87,6 +87,9 @@ pub struct PairHashRule {
     target: String,
     algorithm: Algorithm,
     format: Format,
+    /// Permit reading a `target:` that escapes the repo root — set
+    /// post-build from the top-level `allow_out_of_root:` policy.
+    allow_out_of_root: bool,
 }
 
 impl Rule for PairHashRule {
@@ -100,31 +103,49 @@ impl Rule for PairHashRule {
         true
     }
 
+    fn set_allow_out_of_root(&mut self, allow: bool) {
+        self.allow_out_of_root = allow;
+    }
+
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let target_path = Path::new(&self.target);
+        let mut violations = Vec::new();
         // Confine the (config-author-controlled) target manifest path
-        // before reading it: an absolute / `../../` `target:` must never
-        // read a file outside the repo root.
-        let Some(target_rel) = crate::pathsafe::normalize_confined(target_path) else {
-            return Ok(vec![
-                Violation::new(format!(
-                    "pair_hash target {:?} escapes the repo root",
-                    self.target
-                ))
-                .with_path(std::sync::Arc::<Path>::from(target_path)),
-            ]);
+        // before reading it: an absolute / `../../` `target:` reads a
+        // file outside the repo root only when the user's top-level
+        // config opted this rule into `allow_out_of_root`.
+        let target_rel = match crate::pathsafe::confine(target_path, self.allow_out_of_root) {
+            crate::pathsafe::Confined::In(p) => p,
+            crate::pathsafe::Confined::AllowedEscape(p) => {
+                violations.push(
+                    Violation::new(crate::pathsafe::out_of_root_note(target_path))
+                        .as_note()
+                        .with_path(std::sync::Arc::<Path>::from(target_path)),
+                );
+                p
+            }
+            crate::pathsafe::Confined::Denied => {
+                return Ok(vec![
+                    Violation::new(format!(
+                        "pair_hash target {:?} escapes the repo root",
+                        self.target
+                    ))
+                    .with_path(std::sync::Arc::<Path>::from(target_path)),
+                ]);
+            }
         };
         let b_bytes = match crate::io::read_capped(&ctx.root.join(&target_rel)) {
             Ok(b) => b,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
-                return Ok(vec![
+                violations.push(
                     Violation::new(format!(
                         "pair_hash target {:?} is too large to analyze \
                          ({n} bytes; 256 MiB cap)",
                         self.target
                     ))
                     .with_path(std::sync::Arc::<Path>::from(target_path)),
-                ]);
+                );
+                return Ok(violations);
             }
             Err(crate::io::ReadCapError::Io(_)) => {
                 let msg = self.message.clone().unwrap_or_else(|| {
@@ -133,15 +154,14 @@ impl Rule for PairHashRule {
                         self.target
                     )
                 });
-                return Ok(vec![
-                    Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)),
-                ]);
+                violations
+                    .push(Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)));
+                return Ok(violations);
             }
         };
         let b_text = String::from_utf8_lossy(&b_bytes);
         let b_lower = b_text.to_ascii_lowercase();
 
-        let mut violations = Vec::new();
         for entry in ctx.index.files() {
             if !self.source_scope.matches(&entry.path, ctx.index) {
                 continue;
@@ -296,6 +316,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         target: opts.target,
         algorithm: opts.algorithm,
         format: opts.format,
+        allow_out_of_root: false,
     }))
 }
 
@@ -317,6 +338,7 @@ mod tests {
             target: target.into(),
             algorithm,
             format,
+            allow_out_of_root: false,
         }
     }
 
@@ -363,6 +385,32 @@ mod tests {
             v[0].message.contains("escapes the repo root"),
             "{}",
             v[0].message
+        );
+    }
+
+    #[test]
+    fn target_out_of_root_read_when_allowed() {
+        // With `allow_out_of_root`, an absolute out-of-tree `target:` is
+        // read; the digest is found there and a note records the escape.
+        let (tmp, idx) = tempdir_with_files(&[("a.txt", b"hello")]);
+        let ext = tempfile::tempdir().unwrap();
+        let manifest = ext.path().join("pin.txt");
+        std::fs::write(&manifest, format!("HASH = {HELLO_SHA256}\n")).unwrap();
+        let mut r = rule(
+            "a.txt",
+            manifest.to_str().unwrap(),
+            Algorithm::Sha256,
+            Format::Contains,
+        );
+        r.set_allow_out_of_root(true);
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(
+            v.iter().all(|x| x.is_note),
+            "only an out-of-root note: {v:?}"
+        );
+        assert!(
+            v.iter().any(|x| x.message.contains("allow_out_of_root")),
+            "{v:?}"
         );
     }
 

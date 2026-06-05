@@ -114,6 +114,10 @@ pub struct RegistryPathsResolveRule {
     must_contain: Option<String>,
     exclude_query: Option<String>,
     orphans: Option<OrphansSpec>,
+    /// Permit reading a `source:` registry file that escapes the repo
+    /// root — set post-build from the top-level `allow_out_of_root:`
+    /// policy. (The declared *entries* stay confined regardless.)
+    allow_out_of_root: bool,
 }
 
 impl Rule for RegistryPathsResolveRule {
@@ -124,6 +128,10 @@ impl Rule for RegistryPathsResolveRule {
         // target exists anywhere in the tree, and the orphan
         // check needs the whole index — never `--changed`-scoped.
         true
+    }
+
+    fn set_allow_out_of_root(&mut self, allow: bool) {
+        self.allow_out_of_root = allow;
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -143,17 +151,9 @@ impl Rule for RegistryPathsResolveRule {
 
         for registry_rel in self.registry_files(ctx) {
             // Confine the (config-author-controlled) registry path before
-            // reading it: an absolute / `../../` literal `source:` must
-            // never read a file outside the repo root. The glob-source arm
-            // yields in-tree index paths, for which this is a no-op.
-            let Some(registry_rel) = crate::pathsafe::normalize_confined(&registry_rel) else {
-                violations.push(
-                    Violation::new(format!(
-                        "registry source {} escapes the repo root",
-                        registry_rel.display()
-                    ))
-                    .with_path(registry_rel.clone()),
-                );
+            // reading it (the glob-source arm yields in-tree index paths,
+            // for which this is a no-op).
+            let Some(registry_rel) = self.confine_source(registry_rel, &mut violations) else {
                 continue;
             };
             let abs = ctx.root.join(&registry_rel);
@@ -392,6 +392,34 @@ impl RegistryPathsResolveRule {
         None
     }
 
+    /// Confine the registry `source:` path, honoring `allow_out_of_root`.
+    /// Returns the path to read; `None` (with a violation or note already
+    /// pushed to `out`) when the source escapes the root and isn't
+    /// permitted. The declared *entries* stay confined regardless.
+    fn confine_source(&self, rel: PathBuf, out: &mut Vec<Violation>) -> Option<PathBuf> {
+        match crate::pathsafe::confine(&rel, self.allow_out_of_root) {
+            crate::pathsafe::Confined::In(p) => Some(p),
+            crate::pathsafe::Confined::AllowedEscape(p) => {
+                out.push(
+                    Violation::new(crate::pathsafe::out_of_root_note(&rel))
+                        .as_note()
+                        .with_path(rel),
+                );
+                Some(p)
+            }
+            crate::pathsafe::Confined::Denied => {
+                out.push(
+                    Violation::new(format!(
+                        "registry source {} escapes the repo root",
+                        rel.display()
+                    ))
+                    .with_path(rel),
+                );
+                None
+            }
+        }
+    }
+
     /// Surface each non-literal (interpolated/computed) entry as an
     /// informational note rather than a silent skip (v0.11; see
     /// `docs/design/v0.11/informational_findings.md`).
@@ -468,6 +496,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         must_contain: opts.must_contain,
         exclude_query: opts.exclude_query,
         orphans: opts.orphans,
+        allow_out_of_root: false,
     }))
 }
 
@@ -509,6 +538,7 @@ mod tests {
             must_contain: opts.must_contain,
             exclude_query: opts.exclude_query,
             orphans: opts.orphans,
+            allow_out_of_root: false,
         }
     }
 
@@ -575,6 +605,33 @@ mod tests {
             v[0].message.contains("escapes the repo root"),
             "{}",
             v[0].message
+        );
+    }
+
+    #[test]
+    fn source_out_of_root_read_when_allowed() {
+        // With `allow_out_of_root`, an absolute out-of-tree `source:`
+        // manifest is read; its entries still resolve against the lint
+        // root (base: lint_root) and a note records the escape.
+        let ext = tempfile::tempdir().unwrap();
+        std::fs::write(ext.path().join("MANIFEST"), "src/a.rs\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut o = opts(
+            ext.path().join("MANIFEST").to_str().unwrap(),
+            Extract::Lines(LinesOpts::default()),
+        );
+        o.base = Some("lint_root".into());
+        let mut r = rule(o);
+        r.set_allow_out_of_root(true);
+        let v = eval(&r, root, &index(&["src/a.rs"], &[]));
+        assert!(
+            v.iter().all(|x| x.is_note),
+            "only an out-of-root note: {v:?}"
+        );
+        assert!(
+            v.iter().any(|x| x.message.contains("allow_out_of_root")),
+            "{v:?}"
         );
     }
 

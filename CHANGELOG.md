@@ -8,6 +8,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`allow_out_of_root:` — a top-level opt-in to read config-declared paths
+  outside the repo root.** Path confinement is the secure default (a rule can
+  never read or resolve a config-declared path outside the tree); this
+  top-level-only key relaxes it for *reads* when a trusted config needs to
+  reference an external file (a shared schema, a manifest in a sibling checkout).
+  `allow_out_of_root: true` permits every rule; `{ kinds: [...], rules: [...] }`
+  permits only the listed rule kinds / ids; absent or `false` keeps full
+  confinement. **Rejected from `extends:`'d rulesets** — only the user's own
+  top-level config may open the hatch (the same trust model as the spawning-rule
+  gate), so adopting a ruleset can never grant it out-of-tree reads. Honored by
+  the non-spawn-gated read kinds `registry_paths_resolve` (`source:`),
+  `json_schema_passes` (`schema_path:`), and `pair_hash` (`target:`); a permitted
+  read emits an informational note. Resolve/index checks, the spawn-gated
+  `generated_file_fresh`, and (for now) `cross_file`/`file_graph` reads stay
+  confined. Design: `docs/design/v0.12/allow_out_of_root.md`.
+
 - **Macro bench scenario `S14` — comprehensive v0.12 featureset coverage.** One
   deliberately-mixed `xtask bench-scale` scenario exercises every file-shape
   rule kind/mode added in v0.12 over the synthetic macro tree (so a single bench

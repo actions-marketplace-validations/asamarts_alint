@@ -197,6 +197,13 @@ pub(crate) struct RawConfig {
     fix_size_limit: Option<u64>,
     #[serde(default)]
     nested_configs: bool,
+    /// `allow_out_of_root:` — the top-level escape hatch for path
+    /// confinement. Parsed here (the YAML-facing form); the loader
+    /// rejects a non-default value from any `extends:`'d ruleset, and
+    /// `finalize()` carries the surviving (top-level) value onto
+    /// `Config`. See `docs/design/v0.12/allow_out_of_root.md`.
+    #[serde(default)]
+    allow_out_of_root: alint_core::AllowOutOfRoot,
 }
 
 fn default_respect_gitignore() -> bool {
@@ -254,6 +261,7 @@ impl RawConfig {
             rules,
             fix_size_limit: self.fix_size_limit,
             nested_configs: self.nested_configs,
+            allow_out_of_root: self.allow_out_of_root,
         })
     }
 }
@@ -464,6 +472,23 @@ pub fn reject_command_rules_in(rules: &[Mapping], source: &str) -> Result<()> {
     Ok(())
 }
 
+/// Reject a non-default `allow_out_of_root:` in an inherited ruleset.
+/// Like [`reject_command_rules_in`], the path-confinement escape hatch
+/// may only be opened by the user's own top-level config — an
+/// `extends:`'d ruleset granting itself reads outside the repo root is
+/// the exact threat confinement exists to stop. `source` names the
+/// offending config. See `docs/design/v0.12/allow_out_of_root.md`.
+pub fn reject_allow_out_of_root_in(allow: &alint_core::AllowOutOfRoot, source: &str) -> Result<()> {
+    if !allow.is_confined() {
+        return Err(Error::Other(format!(
+            "`allow_out_of_root:` is only allowed in the user's top-level config; \
+             declaring it in an extended config ({source}) is refused because it would \
+             let a ruleset grant itself reads outside the repo root"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn apply_rule_filter(
     rules: Vec<serde_yaml_ng::Mapping>,
     entry: &alint_core::ExtendsEntry,
@@ -567,6 +592,17 @@ pub(crate) fn merge(a: RawConfig, b: RawConfig) -> RawConfig {
     let respect_gitignore = b.respect_gitignore;
     let fix_size_limit = b.fix_size_limit;
     let nested_configs = b.nested_configs;
+    // `allow_out_of_root` is top-level-only: `b` (the later / child
+    // config) wins when it sets a non-default value; an inherited
+    // (`a`-side) value only survives if the child is silent. Extended
+    // rulesets are rejected upstream (`reject_allow_out_of_root_in`),
+    // so in practice only the user's top-level config carries a
+    // non-default value here.
+    let allow_out_of_root = if b.allow_out_of_root.is_confined() {
+        a.allow_out_of_root
+    } else {
+        b.allow_out_of_root
+    };
 
     let mut ignore = a.ignore;
     ignore.extend(b.ignore);
@@ -660,6 +696,7 @@ pub(crate) fn merge(a: RawConfig, b: RawConfig) -> RawConfig {
         rules,
         fix_size_limit,
         nested_configs,
+        allow_out_of_root,
     }
 }
 
@@ -898,6 +935,41 @@ rules:
             Some(alint_core::Level::Warning)
         );
         assert_eq!(cfg.rules.len(), 2);
+    }
+
+    #[test]
+    fn extends_with_allow_out_of_root_is_rejected() {
+        // Security: an inherited ruleset may not open the
+        // path-confinement escape hatch — only the user's own top-level
+        // config can (the same trust model as command/custom kinds).
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("base.yml"),
+            "version: 1\nallow_out_of_root: true\nrules: []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join(".alint.yml"),
+            "version: 1\nextends: [./base.yml]\nrules: []\n",
+        )
+        .unwrap();
+        let err = load(&tmp.path().join(".alint.yml")).unwrap_err();
+        assert!(err.to_string().contains("allow_out_of_root"), "{err}");
+    }
+
+    #[test]
+    fn top_level_allow_out_of_root_is_honored() {
+        // The same key in the user's own top-level config is accepted
+        // and resolves onto `Config`.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".alint.yml"),
+            "version: 1\nallow_out_of_root:\n  kinds: [pair_hash]\nrules: []\n",
+        )
+        .unwrap();
+        let cfg = load(&tmp.path().join(".alint.yml")).unwrap();
+        assert!(cfg.allow_out_of_root.allows("any", "pair_hash"));
+        assert!(!cfg.allow_out_of_root.allows("any", "json_schema_passes"));
     }
 
     #[test]
