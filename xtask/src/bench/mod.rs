@@ -344,13 +344,29 @@ impl Scenario {
             .with_context(|| format!("writing S12 sample.csproj to {}", root.display()))?,
             Self::S13 => std::fs::write(root.join(".gff_target"), b"")
                 .with_context(|| format!("writing S13 .gff_target to {}", root.display()))?,
-            Self::S14 => std::fs::write(
-                root.join(".v012_editions"),
+            Self::S14 => {
                 // The single value every member crate's edition unions
                 // to, so the glob-union `set_equals` rule stays silent.
-                "2024\n",
-            )
-            .with_context(|| format!("writing S14 .v012_editions to {}", root.display()))?,
+                std::fs::write(root.join(".v012_editions"), "2024\n")
+                    .with_context(|| format!("writing S14 .v012_editions to {}", root.display()))?;
+                // A small fixed CYCLIC file_graph so the `acyclic` rule
+                // exercises the cycle-detection DFS + edge resolution —
+                // the synthetic lorem `.rs` form an EMPTY graph, so the
+                // traversal code would otherwise never run. 24 nodes in
+                // one ring: g{i} -> g{(i+1) % 24}. The one cycle is a
+                // deterministic violation (like S11's pair_hash).
+                let graph = root.join("graph");
+                std::fs::create_dir_all(&graph)
+                    .with_context(|| format!("creating S14 graph/ in {}", root.display()))?;
+                for i in 0u32..24 {
+                    let next = (i + 1) % 24;
+                    std::fs::write(
+                        graph.join(format!("g{i:02}.rs")),
+                        format!("// dep: graph/g{next:02}.rs\n"),
+                    )
+                    .with_context(|| format!("writing S14 graph/g{i:02}.rs"))?;
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -374,6 +390,17 @@ impl Scenario {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
                     return Err(e).with_context(|| format!("removing overlay {}", p.display()));
+                }
+            }
+        }
+        // S14 also writes a `graph/` subtree (the cyclic file_graph).
+        if self == Self::S14 {
+            match std::fs::remove_dir_all(root.join("graph")) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("removing S14 graph/ in {}", root.display()));
                 }
             }
         }

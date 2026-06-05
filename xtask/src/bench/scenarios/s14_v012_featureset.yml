@@ -6,8 +6,9 @@
 # class; this one is per-feature-set — the v0.12 analogue of "run the
 # whole new vocabulary over the macro tree once".)
 #
-# Covered (all six run SILENT on the synthetic tree, so the row measures
-# the dispatch WORK, not violation emission):
+# Covered (rules 1-6 run SILENT so the row measures dispatch WORK, not
+# violation emission; rule 7 deterministically flags its one injected
+# cycle, like S11's pair_hash):
 #   1. file_graph + require: no_dangling (from_content edges)   [the new
 #      whole-index graph dispatch class — reads every node, extracts +
 #      resolves refs; the per-node read+extract+resolve is the dominant
@@ -26,6 +27,11 @@
 #   6. generated_file_fresh mutating `outputs:` mode             [the in-
 #      place snapshot -> run -> diff -> restore path; command: ["true"]
 #      so the row measures the snapshot/restore I/O, not a user tool].
+#   7. file_graph + require: acyclic                             [the graph
+#      TRAVERSAL dispatch — cycle-detection DFS + edge resolution. Runs
+#      over the overlay's small CYCLIC `graph/` subtree (the lorem .rs
+#      form an empty graph, so the DFS would otherwise never execute);
+#      flags the one injected 24-node ring deterministically].
 #
 # Excluded by design: the git-extract kinds (pair_changed_together /
 # changeset_requires_path) compare against a `since:` ref (origin/main)
@@ -116,4 +122,21 @@ rules:
     kind: generated_file_fresh
     outputs: "Cargo.toml"
     command: ["true"]
+    level: info
+
+  # 7. file_graph acyclic — the graph TRAVERSAL dispatch (cycle-detection
+  #    DFS). Runs over the overlay's `graph/` ring (g00 -> g01 -> ... ->
+  #    g23 -> g00); each node declares its edge as a repo-root path in a
+  #    `// dep:` comment. The lorem crates/ sources form an empty graph,
+  #    so this is the only rule that actually executes the DFS + edge
+  #    resolution. It flags the one injected cycle (deterministic).
+  - id: v012-graph-acyclic
+    kind: file_graph
+    nodes: "graph/*.rs"
+    edges:
+      from_content:
+        extract:
+          regex: '// dep: (\S+)'
+        resolve: relative_to_repo_root
+    require: acyclic
     level: info
