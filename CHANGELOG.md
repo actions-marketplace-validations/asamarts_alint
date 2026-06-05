@@ -291,6 +291,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one of these. This is a pure false-positive reduction, so the bundles
   stay `@v1`: a tree that passed before still passes.
 
+### Security
+
+- **Path confinement — config-derived paths can no longer read or resolve
+  outside the repo root.** Three rule kinds turn a config-author-controlled
+  string into a filesystem path: `file_graph` (`fresh` reads the
+  `derive_target` output; `derive_target`/`from_content` resolve edges) and
+  `cross_file` (`identical` + the value relations read `source.file` /
+  `targets[].file`; `resolves` resolves extracted paths). The per-kind
+  `normalise()` helpers had two escapes (both reproduced): an **absolute**
+  `to:`/`file:` was read via `root.join(absolute)` (Rust discards `root`),
+  giving a `fresh`/`identical` **out-of-tree read oracle** reachable from an
+  untrusted `extends:`'d ruleset (these kinds are not spawn-gated); and
+  **`..` double-dot cancellation** (`../../x`) collapsed to an in-tree path
+  that a first-component escape check missed, resolving references to the wrong
+  file. A single `crate::pathsafe::normalize_confined` now rejects absolute
+  paths and every `..` escape (caught during the walk, not after); every read
+  site refuses to read and emits an "escapes the repo root" violation, and every
+  resolve site treats the path as unresolved. Pre-release hardening — no
+  released version is affected (all v0.12 work is `[Unreleased]`). Design:
+  `docs/design/v0.12/path-confinement.md`.
+
 ## [0.11.1] - 2026-05-31
 
 A JetBrains-plugin patch that clears JetBrains Marketplace moderation.

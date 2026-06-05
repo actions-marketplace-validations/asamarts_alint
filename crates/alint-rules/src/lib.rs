@@ -77,6 +77,7 @@ pub mod ordered_block;
 pub mod pair;
 pub mod pair_changed_together;
 pub mod pair_hash;
+mod pathsafe;
 pub mod registry_paths_resolve;
 pub mod shebang_has_executable;
 mod spawn;

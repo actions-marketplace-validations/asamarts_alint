@@ -35,7 +35,7 @@
 //! ```
 
 use std::collections::{BTreeSet, HashSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
 use serde::Deserialize;
@@ -474,7 +474,14 @@ impl CrossFileRule {
     /// dropping `skip_header_lines` leading lines) must equal the
     /// source file's. Binary-accurate; `normalize` does not apply.
     fn check_identical(&self, ctx: &Context<'_>, out: &mut Vec<Violation>) {
-        let src = Path::new(&self.source_file);
+        let Some(src) = crate::pathsafe::normalize_confined(Path::new(&self.source_file)) else {
+            out.push(Self::violation(
+                Path::new(&self.source_file),
+                "source file escapes the repo root",
+            ));
+            return;
+        };
+        let src = src.as_path();
         let src_bytes = match crate::io::read_capped(&ctx.root.join(src)) {
             Ok(b) => b,
             Err(e) => {
@@ -492,11 +499,15 @@ impl CrossFileRule {
             return;
         }
         for target in &paths {
-            let tgt_bytes = match crate::io::read_capped(&ctx.root.join(target)) {
+            let Some(target) = crate::pathsafe::normalize_confined(target) else {
+                out.push(Self::violation(target, "target file escapes the repo root"));
+                continue;
+            };
+            let tgt_bytes = match crate::io::read_capped(&ctx.root.join(&target)) {
                 Ok(b) => b,
                 Err(crate::io::ReadCapError::TooLarge(n)) => {
                     out.push(Self::violation(
-                        target,
+                        &target,
                         &format!("target file is too large to analyze ({n} bytes; 256 MiB cap)"),
                     ));
                     continue;
@@ -504,7 +515,7 @@ impl CrossFileRule {
                 Err(crate::io::ReadCapError::Io(_)) => {
                     if !self.allow_missing {
                         out.push(Self::violation(
-                            target,
+                            &target,
                             "target file is missing or unreadable",
                         ));
                     }
@@ -551,8 +562,11 @@ impl CrossFileRule {
         let base = src.parent().map(Path::to_path_buf).unwrap_or_default();
         let dirs: HashSet<&Path> = ctx.index.dirs().map(|e| &*e.path).collect();
         for entry in &paths {
-            let resolved = normalise(&base.join(entry));
-            if !ctx.index.contains_file(&resolved) && !dirs.contains(resolved.as_path()) {
+            // A confined-out (absolute / root-escaping) declared path
+            // can never resolve to an in-tree file → treated as unresolved.
+            let exists = crate::pathsafe::normalize_confined(&base.join(entry))
+                .is_some_and(|r| ctx.index.contains_file(&r) || dirs.contains(r.as_path()));
+            if !exists {
                 let msg = self.message.clone().unwrap_or_else(|| {
                     format!(
                         "{}: declared path {entry:?} does not resolve to a file or directory",
@@ -713,24 +727,6 @@ fn skip_header(bytes: &[u8], n: usize) -> &[u8] {
     &[]
 }
 
-/// Collapse `a/./b` and `a/b/../c` without touching the filesystem,
-/// so resolved paths key into the index. Mirrors the same helper in
-/// `registry_paths_resolve` / `file_graph`.
-fn normalise(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::Normal(c) => out.push(c),
-            Component::RootDir | Component::Prefix(_) => out.push(comp.as_os_str()),
-        }
-    }
-    out
-}
-
 /// The user-facing reason fragment for a capped-read failure.
 fn read_cap_reason(what: &str, e: &crate::io::ReadCapError) -> String {
     match e {
@@ -744,6 +740,15 @@ fn read_cap_reason(what: &str, e: &crate::io::ReadCapError) -> String {
 /// Read a tree-relative path as text (the index stores paths, not
 /// contents, so the cross-file rules read the file themselves).
 fn read_rel(ctx: &Context<'_>, rel: &Path) -> Result<String, crate::io::ReadCapError> {
+    // Confine to the repo root before any read — an absolute or
+    // root-escaping `source.file` / `targets[].file` must never read a
+    // file outside the tree.
+    let Some(rel) = crate::pathsafe::normalize_confined(rel) else {
+        return Err(crate::io::ReadCapError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "path escapes the repo root",
+        )));
+    };
     crate::io::read_capped(&ctx.root.join(rel)).map(|b| String::from_utf8_lossy(&b).into_owned())
 }
 
@@ -1406,6 +1411,25 @@ mod tests {
         assert_eq!(v.len(), 1, "only crates/b drifts: {v:?}");
         assert!(v[0].message.contains("crates/b/README.md"));
         assert!(v[0].message.contains("not byte-identical"));
+    }
+
+    #[test]
+    fn identical_root_escape_target_fires_without_reading() {
+        // Security regression (v0.12 path-confinement): an absolute
+        // targets[].file must produce an "escapes the repo root"
+        // violation, never read an out-of-tree file.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("README.md"), "# Project\n").unwrap();
+        let idx = index(&["README.md"]);
+        let r = identical_rule(Targets::List(vec![("/etc/hostname".into(), None)]), 0);
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
     }
 
     #[test]

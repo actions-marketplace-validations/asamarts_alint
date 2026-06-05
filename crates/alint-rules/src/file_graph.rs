@@ -50,7 +50,7 @@
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::slice;
 
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
@@ -401,7 +401,14 @@ impl FileGraphRule {
             };
             let mut derived = String::new();
             caps.expand(to, &mut derived);
-            return vec![normalise(Path::new(&derived))];
+            let Some(target) = crate::pathsafe::normalize_confined(Path::new(&derived)) else {
+                out.push(Self::node_violation(
+                    node,
+                    &format!("derives the out-of-repo target {derived:?} (escapes the repo root)"),
+                ));
+                return Vec::new();
+            };
+            return vec![target];
         }
         let EdgeSource::FromContent { extract, resolve } = &self.edges else {
             return Vec::new();
@@ -462,7 +469,17 @@ impl FileGraphRule {
             };
             let mut target = String::new();
             caps.expand(to, &mut target);
-            let target = normalise(Path::new(&target));
+            // Confine before any read: an absolute or root-escaping
+            // `to:` template must never read a file outside the tree.
+            let Some(target) = crate::pathsafe::normalize_confined(Path::new(&target)) else {
+                out.push(Self::node_violation(
+                    source,
+                    &format!(
+                        "derives the out-of-repo freshness target {target:?} (escapes the repo root)"
+                    ),
+                ));
+                continue;
+            };
 
             let src_bytes = match crate::io::read_capped(&ctx.root.join(source)) {
                 Ok(b) => b,
@@ -596,42 +613,19 @@ fn resolve_ref(reference: &str, from_file: &Path, mode: Resolve) -> Option<PathB
                 return None;
             }
             let base = from_file.parent().unwrap_or_else(|| Path::new(""));
-            normalise(&base.join(reference))
+            base.join(reference)
         }
         Resolve::RelativeToRepoRoot => {
             if reference.starts_with('/') || reference.contains("://") {
                 return None;
             }
-            normalise(Path::new(reference))
+            PathBuf::from(reference)
         }
     };
-    // Empty, or escaping the repo root via a leading `..` → drop.
-    if joined.as_os_str().is_empty() || joined.components().next() == Some(Component::ParentDir) {
-        return None;
-    }
-    Some(joined)
-}
-
-/// Collapse `a/./b` and `a/b/../c` without touching the filesystem,
-/// so resolved paths key into the index (which stores walked
-/// relative paths). Mirrors `registry_paths_resolve::normalise`.
-fn normalise(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() {
-                    // Preserve a leading `..` so `resolve_ref` can
-                    // detect (and drop) a root-escaping reference.
-                    out.push("..");
-                }
-            }
-            Component::Normal(c) => out.push(c),
-            Component::RootDir | Component::Prefix(_) => out.push(comp.as_os_str()),
-        }
-    }
-    out
+    // Confine to the repo root: rejects absolute paths and every `..`
+    // escape (including the double-dot cancellation `../../x` a
+    // first-component check misses). `None` → not a path we follow.
+    crate::pathsafe::normalize_confined(&joined)
 }
 
 /// Every distinct directed cycle in `adj` (node indices `0..n`),
@@ -1363,6 +1357,51 @@ mod tests {
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].message.contains("licenses/lucene-NOTICE.txt"));
         assert!(v[0].message.contains("licenses/lucene-LICENSE.txt"));
+    }
+
+    #[test]
+    fn derive_target_root_escape_fires_and_is_never_read() {
+        // Security regression (v0.12 path-confinement): an absolute or
+        // `..`-escaping `to:` must produce an "escapes the repo root"
+        // violation, never a filesystem read of the out-of-tree path.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("proto")).unwrap();
+        std::fs::write(root.join("proto/a.proto"), "x").unwrap();
+        let idx = index(&["proto/a.proto"]);
+
+        // no_dangling + absolute `to:` -> escapes (the read oracle shape).
+        let r = derive_dangling_rule("proto/**/*.proto", r"(.*)\.proto", "/etc/passwd");
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
+
+        // no_dangling + `..`-escape -> escapes.
+        let r2 = derive_dangling_rule("proto/**/*.proto", r"(.*)/(.*)\.proto", "../../$2.out");
+        assert!(
+            eval(&r2, root, &idx)
+                .iter()
+                .any(|x| x.message.contains("escapes")),
+        );
+
+        // fresh + absolute `to:` -> escapes, WITHOUT reading the abs file.
+        let f = fresh_rule(
+            "proto/**/*.proto",
+            r"(.*)\.proto",
+            "/etc/hostname",
+            r"sha256:([0-9a-f]{64})",
+        );
+        let vf = eval(&f, root, &idx);
+        assert_eq!(vf.len(), 1, "{vf:?}");
+        assert!(
+            vf[0].message.contains("escapes the repo root"),
+            "{}",
+            vf[0].message
+        );
     }
 
     #[test]
