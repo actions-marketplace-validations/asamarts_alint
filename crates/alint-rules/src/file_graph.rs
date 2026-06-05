@@ -284,10 +284,13 @@ impl FileGraphRule {
             if applicable.is_empty() {
                 continue;
             }
-            for target in self.node_targets(ctx, node, &mut out) {
+            let mut targets = self.node_targets(ctx, node, &mut out);
+            targets.sort_unstable();
+            targets.dedup();
+            for target in &targets {
                 for p in &applicable {
-                    if p.to.matches(&target, ctx.index) {
-                        out.push(self.forbidden_violation(node, &target, p));
+                    if p.to.matches(target, ctx.index) {
+                        out.push(self.forbidden_violation(node, target, p));
                     }
                 }
             }
@@ -336,10 +339,13 @@ impl FileGraphRule {
         let mut out = Vec::new();
         let dirs: HashSet<&Path> = ctx.index.dirs().map(|e| &*e.path).collect();
         for node in nodes {
-            for target in self.node_targets(ctx, node, &mut out) {
-                let exists = ctx.index.contains_file(&target) || dirs.contains(target.as_path());
+            let mut targets = self.node_targets(ctx, node, &mut out);
+            targets.sort_unstable();
+            targets.dedup();
+            for target in &targets {
+                let exists = ctx.index.contains_file(target) || dirs.contains(target.as_path());
                 if !exists {
-                    out.push(self.dangling_violation(node, &target));
+                    out.push(self.dangling_violation(node, target));
                 }
             }
         }
@@ -1158,6 +1164,30 @@ mod tests {
         // a.md links the existing real.md -> silent.
         std::fs::write(root.join("docs/a.md"), "see [r](./real.md)\n").unwrap();
         assert!(eval(&r, root, &idx).is_empty());
+    }
+
+    #[test]
+    fn no_dangling_dedups_a_repeated_edge() {
+        // A node that references the same missing target twice yields ONE
+        // dangling violation, not two (the duplicate edge is deduped).
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        let r = mk(
+            "docs/**/*.md",
+            r"\]\((\.[^)]+)\)",
+            Resolve::RelativeToFile,
+            Require::NoDangling,
+        );
+        std::fs::write(
+            root.join("docs/a.md"),
+            "[x](./missing.md) and [y](./missing.md)\n",
+        )
+        .unwrap();
+        let idx = index(&["docs/a.md"]);
+        let v = eval(&r, root, &idx);
+        assert_eq!(v.len(), 1, "repeated dangling edge deduped: {v:?}");
+        assert!(v[0].message.contains("docs/missing.md"));
     }
 
     #[test]

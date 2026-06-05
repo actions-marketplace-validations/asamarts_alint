@@ -121,4 +121,15 @@ mod tests {
         assert_eq!(confined("."), None);
         assert_eq!(confined("a/.."), None); // collapses to the root itself
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_prefix_and_unc_paths_are_rejected() {
+        // On Windows a drive-letter `Prefix` or a UNC `\\server\share`
+        // is absolute → escapes the root, same as a Unix `/etc`. (On
+        // Unix these parse as ordinary `Normal` components, so the test
+        // is Windows-only.)
+        assert_eq!(confined(r"C:\Windows\System32"), None);
+        assert_eq!(confined(r"\\server\share\x"), None);
+    }
 }

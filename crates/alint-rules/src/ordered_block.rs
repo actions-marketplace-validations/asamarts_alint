@@ -167,6 +167,19 @@ impl PerFileRule for OrderedBlockRule {
             // markerless, so a repeated `start` (e.g. start-only mode)
             // delimits sections rather than being treated as an entry.
             if Some(trimmed) == self.start.as_deref() {
+                // In fully-delimited mode (both markers set) a fresh
+                // `start` before the previous block's `end` means that
+                // block was never closed — flag it before reopening.
+                // (In start-only / markerless mode a repeated `start` is
+                // the intended section delimiter, not an error.)
+                if let (Some(b), Some(end)) = (&block, &self.end) {
+                    violations.push(self.violation(
+                        path,
+                        b.start_line,
+                        b.start_line,
+                        &format!("unclosed ordered_block — no {end:?} line after the start"),
+                    ));
+                }
                 block = Some(Block {
                     start_line: line_no,
                     prev: None,
@@ -455,6 +468,17 @@ mod tests {
             !v.iter().any(|x| x.message.contains("\"# S\"")),
             "marker must not be an entry"
         );
+    }
+
+    #[test]
+    fn delimited_repeated_start_flags_unclosed() {
+        // In fully-delimited mode a 2nd `start` before the `end` means the
+        // first block was never closed — flag it, don't silently swallow
+        // it. The 2nd block here is properly closed.
+        let t = "# keep-sorted start\na\n# keep-sorted start\nb\n# keep-sorted end\n";
+        let v = eval(&rule(Comparator::Lexical, false), t);
+        assert_eq!(v.len(), 1, "the first unterminated block is flagged: {v:?}");
+        assert!(v[0].message.contains("unclosed"), "{}", v[0].message);
     }
 
     #[test]

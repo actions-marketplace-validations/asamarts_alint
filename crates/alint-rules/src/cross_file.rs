@@ -876,6 +876,34 @@ fn validate_shape(
     Ok(())
 }
 
+/// Reject a malformed regex extract at build time (like `file_graph` /
+/// `registry_paths_resolve`), so a bad pattern is a clean config error
+/// rather than an error-level eval-time violation.
+fn validate_extract_regexes(
+    source_extract: Option<&Extract>,
+    targets: Option<&Targets>,
+    cfg: &impl Fn(String) -> Error,
+) -> Result<()> {
+    let check = |e: Option<&Extract>| -> Result<()> {
+        if let Some(Extract::Regex(p)) = e {
+            regex::Regex::new(p).map_err(|err| cfg(format!("invalid `extract.regex`: {err}")))?;
+        }
+        Ok(())
+    };
+    check(source_extract)?;
+    if let Some(t) = targets {
+        match t {
+            Targets::Glob { extract, .. } => check(extract.as_ref())?,
+            Targets::List(list) => {
+                for (_, e) in list {
+                    check(e.as_ref())?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "cross_file")?;
     let opts: Options = spec
@@ -947,12 +975,32 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         None => None,
     };
 
+    // Pre-validate regex extracts at build time (clean config error,
+    // not an error-level eval-time violation).
+    validate_extract_regexes(source_extract.as_ref(), targets.as_ref(), &cfg)?;
+
     validate_shape(
         opts.relation,
         source_extract.as_ref(),
         targets.as_ref(),
         &cfg,
     )?;
+
+    // Reject options the chosen relation ignores, so a misconfiguration
+    // fails loudly at build rather than silently doing nothing.
+    if opts.skip_header_lines.is_some() && opts.relation != Relation::Identical {
+        return Err(cfg(
+            "`skip_header_lines` only applies to `relation: identical`".into(),
+        ));
+    }
+    let normalize = opts.normalize.into_list();
+    if !normalize.is_empty() && matches!(opts.relation, Relation::Identical | Relation::Resolves) {
+        return Err(cfg(format!(
+            "`normalize` does not apply to `relation: {:?}` \
+             (it compares whole files / paths, not extracted values)",
+            opts.relation
+        )));
+    }
 
     Ok(Box::new(CrossFileRule {
         id: spec.id.clone(),
@@ -964,7 +1012,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         source_extract,
         targets,
         relation: opts.relation,
-        normalize: opts.normalize.into_list(),
+        normalize,
         allow_missing: opts.allow_missing_target,
         skip_header_lines: opts.skip_header_lines.unwrap_or(0),
     }))
@@ -1450,6 +1498,53 @@ mod tests {
     }
 
     // ─── identical ──────────────────────────────────────────────
+
+    #[test]
+    fn build_rejects_invalid_extract_regex() {
+        use crate::test_support::spec_yaml;
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: cross_file\n\
+             relation: equals\n\
+             source: { file: a.txt, extract: { regex: \"(unclosed\" } }\n\
+             targets: { files: \"**/*.txt\", extract: { regex: \".*\" } }\n\
+             level: error\n",
+        );
+        let err = build(&spec).unwrap_err();
+        assert!(err.to_string().contains("regex"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_skip_header_on_non_identical() {
+        use crate::test_support::spec_yaml;
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: cross_file\n\
+             relation: equals\n\
+             source: { file: a.txt, extract: { regex: \"(.*)\" } }\n\
+             targets: { files: \"**/*.txt\", extract: { regex: \"(.*)\" } }\n\
+             skip_header_lines: 2\n\
+             level: error\n",
+        );
+        let err = build(&spec).unwrap_err();
+        assert!(err.to_string().contains("skip_header_lines"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_normalize_on_identical() {
+        use crate::test_support::spec_yaml;
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: cross_file\n\
+             relation: identical\n\
+             source: { file: a.txt }\n\
+             targets: { files: \"**/*.txt\" }\n\
+             normalize: trim\n\
+             level: error\n",
+        );
+        let err = build(&spec).unwrap_err();
+        assert!(err.to_string().contains("normalize"), "{err}");
+    }
 
     fn identical_rule(targets: Targets, skip_header_lines: usize) -> CrossFileRule {
         CrossFileRule {
