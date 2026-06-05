@@ -1,0 +1,26 @@
+name: cross_file glob-union source.files is silent when the union matches
+tags: [check, cross_file, passing]
+
+given:
+  tree:
+    doc:
+      a.txt: "see *hl-Comment* and *hl-String*\n"
+      b.txt: "also *hl-Number*\n"
+    highlight.c: |
+      default link Comment
+      default link String
+      default link Number
+  config: |
+    version: 1
+    rules:
+      - id: hlgroups-doc-matches-code
+        kind: cross_file
+        source: { files: "doc/*.txt", extract: { regex: '\*hl-(\w+)\*' } }
+        targets: [{ file: highlight.c, extract: { regex: 'default link (\w+)' } }]
+        relation: set_equals
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

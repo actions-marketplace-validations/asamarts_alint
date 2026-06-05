@@ -1,0 +1,24 @@
+name: for_each_match forbid fires when a selected line matches a banned pattern
+tags: [check, for_each_match, content]
+
+given:
+  tree:
+    CHANGELOG.md: |
+      - Add a feature ([#12](https://github.com/x/pull/12)).
+      - Closes [Fix #7] the thing ([#8](https://github.com/x/pull/8)).
+  config: |
+    version: 1
+    rules:
+      - id: changelog-no-fix-directive
+        kind: for_each_match
+        paths: ["CHANGELOG.md"]
+        select: '^- '
+        require:
+          forbid: ['\[Fix #\d+\]']
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: changelog-no-fix-directive, level: error, path: CHANGELOG.md}

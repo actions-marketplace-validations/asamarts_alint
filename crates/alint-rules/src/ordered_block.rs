@@ -469,6 +469,32 @@ mod tests {
     }
 
     #[test]
+    fn end_only_with_no_marker_present_sorts_to_eof() {
+        // No `start`, `end` configured but the marker never appears:
+        // the BOF-opened block runs to EOF (no "unclosed" — end is the
+        // only marker, and start is absent).
+        let r = markerless_rule(None, Some("# end"), Comparator::Lexical);
+        assert!(eval(&r, "alpha\nbravo\ncherry\n").is_empty());
+        assert_eq!(eval(&r, "cherry\nalpha\n").len(), 1);
+    }
+
+    #[test]
+    fn empty_and_all_blank_files_are_silent() {
+        let r = markerless_rule(None, None, Comparator::Lexical);
+        assert!(eval(&r, "").is_empty(), "empty file");
+        assert!(eval(&r, "\n\n\n").is_empty(), "all-blank file");
+    }
+
+    #[test]
+    fn crlf_lines_sort_like_lf() {
+        // `str::lines()` strips the trailing `\r`, so CRLF content
+        // compares the same as LF.
+        let r = markerless_rule(None, None, Comparator::Lexical);
+        assert!(eval(&r, "apple\r\nbanana\r\ncherry\r\n").is_empty());
+        assert_eq!(eval(&r, "banana\r\napple\r\n").len(), 1);
+    }
+
+    #[test]
     fn unclosed_start_is_a_violation() {
         let t = "before\n# keep-sorted start\nalpha\nbravo\n";
         let v = eval(&rule(Comparator::Lexical, false), t);

@@ -1,0 +1,22 @@
+name: ordered_block markerless is silent on an already-sorted whole file
+tags: [check, ordered_block, content, passing]
+
+given:
+  tree:
+    dictionary.txt: |
+      apple
+      banana
+      cherry
+  config: |
+    version: 1
+    rules:
+      - id: dictionary-sorted
+        kind: ordered_block
+        paths: "dictionary.txt"
+        comparator: lexical
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

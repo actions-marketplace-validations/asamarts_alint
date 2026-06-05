@@ -1,0 +1,27 @@
+name: cross_file glob-union source.files fires when the union diverges
+tags: [check, cross_file]
+
+given:
+  tree:
+    doc:
+      a.txt: "see *hl-Comment* and *hl-String*\n"
+      b.txt: "also *hl-Number* and *hl-Extra*\n"
+    highlight.c: |
+      default link Comment
+      default link String
+      default link Number
+  config: |
+    version: 1
+    rules:
+      - id: hlgroups-doc-matches-code
+        kind: cross_file
+        source: { files: "doc/*.txt", extract: { regex: '\*hl-(\w+)\*' } }
+        targets: [{ file: highlight.c, extract: { regex: 'default link (\w+)' } }]
+        relation: set_equals
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: hlgroups-doc-matches-code, level: error, path: highlight.c}

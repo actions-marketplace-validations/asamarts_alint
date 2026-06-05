@@ -367,6 +367,25 @@ mod tests {
     }
 
     #[test]
+    fn multiline_select_no_ops_under_per_line_iteration() {
+        // A `(?s)`-spanning select cannot match a single line, so the
+        // rule silently selects nothing (the documented line-oriented
+        // design — a user porting a whole-file regex gets a no-op).
+        let r = rule(r"(?s)BEGIN.*END", &[r"WONTMATCH"], &[], &[]);
+        assert!(eval(&r, "BEGIN\nmiddle\nEND\n").is_empty());
+    }
+
+    #[test]
+    fn empty_and_no_selected_lines_are_silent() {
+        let r = rule(r"^ENTRY ", &[r"WONTMATCH"], &[], &[]);
+        assert!(eval(&r, "").is_empty(), "empty file");
+        assert!(
+            eval(&r, "alpha\nbravo\n").is_empty(),
+            "no line matches select"
+        );
+    }
+
+    #[test]
     fn non_selected_lines_are_ignored() {
         let r = rule(r"^\* ", &[r"\.$"], &[], &[]);
         // Only the `* ` line is an element; the prose line is ignored
