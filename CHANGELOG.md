@@ -250,6 +250,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The pass count ("All N rule(s) passed") now includes silently-passing
+  per-file rules.** A per-file rule (`for_each_match`, `ordered_block`,
+  `file_content_matches`, …) that ran over matching files and found nothing was
+  dropped from the report, so `alint check` printed "All 0 rule(s) passed" (and
+  JSON `passing_rules: 0`) even though the rule passed — only cross-file passing
+  rules were counted. Per-file passing rules are now emitted as passing results,
+  matching the cross-file path. Cosmetic / observability only — exit codes,
+  violations, and the failing-rule report were always correct; the v0.12
+  per-file kinds just made the miscount far more visible.
 - **`pair_hash` `sums-line` now accepts a path-first manifest.** The
   parser handled only the coreutils / go-`.sum` `<hex>  <path>` order;
   the Go FIPS snapshot manifest (`lib/fips140/fips140.sum`) writes
@@ -308,7 +317,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file. A single `crate::pathsafe::normalize_confined` now rejects absolute
   paths and every `..` escape (caught during the walk, not after); every read
   site refuses to read and emits an "escapes the repo root" violation, and every
-  resolve site treats the path as unresolved. Pre-release hardening — no
+  resolve site treats the path as unresolved. `registry_paths_resolve`
+  (index-lookup only — never a read oracle, but it shared the same
+  `..`-cancellation bug) now uses the same confiner, so an escaping declared
+  path fires rather than silently mis-resolving; the three divergent per-kind
+  `normalise` copies are now one shared helper. Pre-release hardening — no
   released version is affected (all v0.12 work is `[Unreleased]`). Design:
   `docs/design/v0.12/path-confinement.md`.
 

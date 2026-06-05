@@ -534,12 +534,13 @@ impl Engine {
         }
         let mut results = when_errors;
         for (idx, entry) in live {
-            let Some(violations) = bucket.remove(&idx) else {
-                // Rule was applicable to zero files (or every
-                // file was empty / unreadable) — passing rule;
-                // omit, matching today's behaviour.
-                continue;
-            };
+            // A live per-file rule that produced no violations is a
+            // passing rule — emit an empty-violations `RuleResult` so
+            // it appears in the pass count, matching the cross-file
+            // path (which always emits a result). Previously these
+            // were dropped, so a silently-passing per-file rule was
+            // missing from "All N rule(s) passed" (the count read as 0).
+            let violations = bucket.remove(&idx).unwrap_or_default();
             results.push((
                 idx,
                 RuleResult::new(
@@ -1488,11 +1489,13 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_flip_passes_when_no_violations() {
-        // A per-file rule that finds no violations in any file
-        // should be omitted from the report entirely (matching
-        // the rule-major path's "passing rules omitted"
-        // semantics).
+    fn passing_per_file_rule_appears_in_the_report() {
+        // A live per-file rule that finds no violations is a PASSING
+        // rule — it now appears in the report with empty violations,
+        // so the pass count ("All N rule(s) passed") includes it,
+        // matching the cross-file path (which always emits a result).
+        // Previously these were dropped, so a silently-passing
+        // per-file rule read as "All 0 rule(s) passed".
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"MAGIC ok").unwrap();
 
@@ -1507,7 +1510,9 @@ mod tests {
         let index = crate::walk(tmp.path(), &opts).unwrap();
         let report = engine.run(tmp.path(), &index).unwrap();
 
-        assert!(report.results.is_empty(), "results: {:?}", report.results);
+        assert_eq!(report.results.len(), 1, "results: {:?}", report.results);
+        assert!(report.results[0].violations.is_empty());
+        assert_eq!(report.passing_rules(), 1);
     }
 
     #[test]

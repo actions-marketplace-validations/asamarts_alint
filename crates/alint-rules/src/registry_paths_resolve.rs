@@ -200,7 +200,13 @@ impl Rule for RegistryPathsResolveRule {
                 if excluded.contains(entry) {
                     continue;
                 }
-                let resolved = normalise(&base_dir.join(entry));
+                let Some(resolved) = crate::pathsafe::normalize_confined(&base_dir.join(entry))
+                else {
+                    // An absolute / root-escaping declared path can never
+                    // resolve to an in-tree path.
+                    violations.push(self.violation(&registry_rel, entry, "escapes the repo root"));
+                    continue;
+                };
                 if self.entries_are_globs {
                     let matches = Self::glob_matches(ctx, &resolved);
                     if matches.is_empty() {
@@ -392,25 +398,6 @@ impl RegistryPathsResolveRule {
             .unwrap_or_else(|| format!("{}: entry {entry:?} {reason}", registry.display()));
         Violation::new(msg).with_path(registry.to_path_buf())
     }
-}
-
-/// Collapse `a/./b` and `a/b/../c` so index lookups (which key on
-/// the walked relative path) match. Does not touch the
-/// filesystem.
-fn normalise(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        use std::path::Component::{CurDir, Normal, ParentDir, Prefix, RootDir};
-        match comp {
-            CurDir => {}
-            ParentDir => {
-                out.pop();
-            }
-            Normal(c) => out.push(c),
-            RootDir | Prefix(_) => out.push(comp.as_os_str()),
-        }
-    }
-    out
 }
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
