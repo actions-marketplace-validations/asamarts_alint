@@ -61,6 +61,26 @@ rules:
       src/SignalR/clients/ts/CHANGELOG.md must exist — CodeCheck.ps1 requires
       it to be updated whenever the SignalR TypeScript clients change.
 
+  # A2 co-change — SignalR TS clients must be accompanied by a CHANGELOG
+  # edit (eng/scripts/CodeCheck.ps1 lines 212-224: if anything under
+  # src/SignalR/clients/ts/ changed, CHANGELOG.md must change too). This is
+  # `pair_changed_together`, NOT `changeset_requires_path`: the changelog is
+  # one living file edited IN PLACE (git status M), and
+  # `changeset_requires_path` only matches ADDED (status A) paths — verified
+  # against the pinned tree, there are no per-change changelog fragments to
+  # add. The `file_exists` rule above is the existence baseline; this enforces
+  # the co-change. Diff-scoped: fires only with a real `since:` range
+  # (PR/CI), silently no-ops on a shallow clone with no history.
+  - id: aspnetcore-signalr-ts-changelog-cochange
+    kind: pair_changed_together
+    if_changed: "src/SignalR/clients/ts/**"
+    then_changed: "src/SignalR/clients/ts/CHANGELOG.md"
+    since: origin/main
+    level: warning
+    message: >-
+      SignalR TypeScript clients changed but src/SignalR/clients/ts/CHANGELOG.md
+      was not updated in the same change (eng/scripts/CodeCheck.ps1).
+
   # ──────────────────────────────────────────────────────────────────
   # VALUE-ADD — structure alint can assert but the repo does NOT gate on
   # (recorded separately; NOT in the A/B/C/D coverage ratio, per R3/R5)
