@@ -415,4 +415,25 @@ mod tests {
                    select: '\\[#(?P<disp>\\d+)\\]'\nrequire:\n  equal: [disp, url]\nlevel: error\n";
         assert!(build(&spec_yaml(bad)).is_err());
     }
+
+    #[test]
+    fn build_rejects_invalid_select_regex() {
+        use crate::test_support::spec_yaml;
+        let bad = "id: t\nkind: for_each_match\npaths: [\"CHANGELOG.md\"]\n\
+                   select: '(unclosed'\nrequire:\n  matches: ['x']\nlevel: error\n";
+        let err = build(&spec_yaml(bad)).unwrap_err();
+        assert!(err.to_string().contains("select"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_equal_with_fewer_than_two_names() {
+        use crate::test_support::spec_yaml;
+        // `equal` compares captures pairwise; a single name has
+        // nothing to compare against -> a config error, caught before
+        // the named-capture validation.
+        let bad = "id: t\nkind: for_each_match\npaths: [\"CHANGELOG.md\"]\n\
+                   select: '(?P<a>\\d+)'\nrequire:\n  equal: [a]\nlevel: error\n";
+        let err = build(&spec_yaml(bad)).unwrap_err();
+        assert!(err.to_string().contains("at least two"), "{err}");
+    }
 }

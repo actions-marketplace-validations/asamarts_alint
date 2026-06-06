@@ -551,4 +551,36 @@ mod tests {
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].message.contains("require 'a'"));
     }
+
+    #[test]
+    fn build_requires_paths() {
+        use crate::test_support::spec_yaml;
+        let no_paths = "id: t\nkind: ordered_block\nlevel: error\n";
+        assert!(build(&spec_yaml(no_paths)).is_err(), "paths is required");
+    }
+
+    #[test]
+    fn build_rejects_an_empty_marker() {
+        use crate::test_support::spec_yaml;
+        let bad = "id: t\nkind: ordered_block\npaths: [\"x\"]\nstart: ''\nlevel: error\n";
+        let err = build(&spec_yaml(bad)).unwrap_err();
+        assert!(err.to_string().contains("must not be empty"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_identical_start_and_end_markers() {
+        use crate::test_support::spec_yaml;
+        let bad =
+            "id: t\nkind: ordered_block\npaths: [\"x\"]\nstart: SAME\nend: SAME\nlevel: error\n";
+        let err = build(&spec_yaml(bad)).unwrap_err();
+        assert!(err.to_string().contains("must differ"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_invalid_select_regex() {
+        use crate::test_support::spec_yaml;
+        let bad = "id: t\nkind: ordered_block\npaths: [\"x\"]\nselect: '(unclosed'\nlevel: error\n";
+        let err = build(&spec_yaml(bad)).unwrap_err();
+        assert!(err.to_string().contains("select"), "{err}");
+    }
 }

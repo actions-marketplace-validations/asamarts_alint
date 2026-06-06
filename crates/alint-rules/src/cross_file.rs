@@ -1113,6 +1113,43 @@ mod tests {
     }
 
     #[test]
+    fn equals_target_query_matching_nothing_fires_unless_allow_missing() {
+        // A target file that resolves no value (the query names an
+        // absent key) is a drift by default, but `allow_missing_target`
+        // makes it a tolerated absence.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("source.toml"), "v = \"1.0\"\n").unwrap();
+        std::fs::write(root.join("target.toml"), "other = \"x\"\n").unwrap();
+        let idx = index(&["source.toml", "target.toml"]);
+        let make = || {
+            value_rule(
+                "source.toml",
+                Extract::Toml("$.v".into()),
+                Targets::Glob {
+                    scope: Scope::from_patterns(&["target.toml".to_string()]).unwrap(),
+                    extract: Some(Extract::Toml("$.missing".into())),
+                },
+                Relation::Equals,
+                Normalize::None,
+            )
+        };
+        // Default (`allow_missing_target: false`): the empty target
+        // query fires.
+        let strict = make();
+        let v = eval(&strict, root, &idx);
+        assert_eq!(v.len(), 1, "missing target value fires: {v:?}");
+        assert!(v[0].message.contains("matched nothing"), "{}", v[0].message);
+        // `allow_missing_target: true`: the absence is tolerated.
+        let mut lax = make();
+        lax.allow_missing = true;
+        assert!(
+            eval(&lax, root, &idx).is_empty(),
+            "allow_missing silences the empty target"
+        );
+    }
+
+    #[test]
     fn whole_file_equals_compares_verbatim_despite_interpolation_markers() {
         // The body carries `${...}`/`{{...}}` — markers the non-literal
         // skip would normally drop. whole_file must compare verbatim.
