@@ -95,6 +95,10 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
             .arg("-C")
             .arg(root)
             .args(["diff", "--name-only", "--relative", "-z"])
+            // `--end-of-options` so a `base`/`since` starting with `-`
+            // can't be parsed as a git OPTION (e.g. `--output=…`, which
+            // would write/truncate an arbitrary file).
+            .arg("--end-of-options")
             .arg(format!("{base}...HEAD"))
             .output()
             .ok()?,
@@ -181,9 +185,19 @@ fn diff_name_only(
     cmd.arg("-C")
         .arg(root)
         .args(["diff", "--name-only", "--relative", "-z"]);
+    if since.starts_with('-') {
+        return Err(CommitRangeError::BadRange {
+            stderr: format!("`since` must not start with '-' (got {since:?})"),
+        });
+    }
     if let Some(filter) = diff_filter {
         cmd.arg(format!("--diff-filter={filter}"));
     }
+    // `--end-of-options`: a config-controlled `since` starting with `-`
+    // (e.g. `--output=…`) must never be parsed as a git OPTION — that
+    // would write/truncate an arbitrary out-of-tree file. Force it into
+    // the revision-range slot.
+    cmd.arg("--end-of-options");
     cmd.arg(format!("{since}...HEAD"));
     let Ok(output) = cmd.output() else {
         return Ok(None);
@@ -356,6 +370,11 @@ pub fn commit_messages_in_range(
     // Now invoke `git log <since>..HEAD`. If THIS fails, it's a bad
     // ref / shallow-clone case, not a "no git" case — bubble the
     // BadRange error.
+    if since.starts_with('-') {
+        return Err(CommitRangeError::BadRange {
+            stderr: format!("`since` must not start with '-' (got {since:?})"),
+        });
+    }
     let range = format!("{since}..HEAD");
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(root).args([
@@ -367,6 +386,10 @@ pub fn commit_messages_in_range(
     if !include_merges {
         cmd.arg("--no-merges");
     }
+    // `--end-of-options`: a config `since` starting with `-` (e.g.
+    // `--output=…`) must never be parsed as a git OPTION (which would
+    // write/truncate an arbitrary file); force it to the range slot.
+    cmd.arg("--end-of-options");
     cmd.arg(&range);
 
     let Ok(output) = cmd.output() else {
@@ -831,6 +854,40 @@ filename a.rs
     /// Uses `git commit --allow-empty` so the test doesn't need to
     /// write fixture files. Disables GPG signing and sets a fixed
     /// author so the commits are deterministic.
+    #[test]
+    fn commit_range_rejects_dash_since_and_writes_no_file() {
+        // Security regression (git arg-injection): a config-controlled
+        // `since` starting with `-` (e.g. `--output=…`) must be rejected
+        // before git runs — it must never write/truncate a file. (Affects
+        // the released `git_commit_message` `since:` path.)
+        let outdir = tempfile::tempdir().unwrap();
+        let stem = outdir.path().join("sentinel");
+        let would_write = outdir.path().join("sentinel..HEAD");
+        let evil = format!("--output={}", stem.display());
+        let err = commit_messages_in_range(Path::new("."), &evil, false).unwrap_err();
+        assert!(matches!(err, CommitRangeError::BadRange { .. }), "{err:?}");
+        assert!(
+            !would_write.exists(),
+            "git must not have written {would_write:?}"
+        );
+    }
+
+    #[test]
+    fn collect_changed_paths_dash_base_writes_no_file() {
+        // The `--changed` / `changed_since` diff path: `--end-of-options`
+        // forces a dash-leading base into the revision slot, so git never
+        // parses `--output=…` and writes nothing.
+        let outdir = tempfile::tempdir().unwrap();
+        let stem = outdir.path().join("sentinel");
+        let would_write = outdir.path().join("sentinel...HEAD");
+        let evil = format!("--output={}", stem.display());
+        let _ = collect_changed_paths(Path::new("."), Some(&evil));
+        assert!(
+            !would_write.exists(),
+            "git diff must not have written {would_write:?}"
+        );
+    }
+
     fn make_repo_with_commits(subjects: &[&str]) -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         let init_dir = tmp.path();

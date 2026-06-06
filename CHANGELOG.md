@@ -334,6 +334,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **A git rule's `since:` could write or truncate an arbitrary file (argument
+  injection).** The commit-range / diff helpers interpolated the
+  config-controlled `since:` (a revision ref) into a `git log` / `git diff`
+  argument with **no `--end-of-options` separator**, so a `since:` beginning with
+  `-` — e.g. `since: "--output=/path"` — was parsed by git as an *option*, letting
+  it **create or truncate an arbitrary out-of-tree file** (git-log content via
+  `git log --output=`; a 0-byte truncation via `git diff`). It is reachable from
+  an untrusted `extends:`'d ruleset — the git kinds correctly aren't
+  process-spawn gated (git is a fixed program), but the *argument* was
+  unvalidated, so the spawn gate gave no cover. The git invocations now pass
+  `--end-of-options` before the range, and a `since:` / `base` starting with `-`
+  is rejected with a clear error. **Unlike the other v0.12 Security entries, this
+  one affected released versions** — `git_commit_message`'s `since:` range mode
+  shipped in v0.9.21 (and `git_commit_signed_off` / `_no_fixup` /
+  `_author_allowlist` via the shared range helper); the v0.12
+  `changeset_requires_path` / `pair_changed_together` diff kinds were affected on
+  `[Unreleased]`.
+
 - **`file_exists` with `respect_gitignore: false` no longer stats outside the
   repo root.** The per-rule gitignore-bypass (the bazel-style "tracked AND
   gitignored" case) stat'd a literal `paths:` entry on disk directly, so an
