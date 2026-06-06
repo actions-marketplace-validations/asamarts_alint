@@ -196,9 +196,9 @@ the eligible-site stat fallback + tests.
   `allows(id, kind)` matrix.
 - **Trust gate**: an `extends:`'d config with `allow_out_of_root` → load error
   (local + bundled).
-- **Per-rule**: for each of the 6 read sites — permitted + escaping path → reads
-  the out-of-root file + emits the note (point at a real out-of-tree sentinel);
-  not-permitted + escaping → still "escapes the repo root" (the existing Phase 1
-  regression tests stay green).
+- **Per-rule**: for each of the 3 v1 read sites — permitted + escaping path →
+  reads the out-of-root file + emits the note (point at a real out-of-tree
+  sentinel); not-permitted + escaping → still "escapes the repo root" (the
+  existing Phase 1 regression tests stay green).
 - **Schema**: `allow_out_of_root` (bool | `{kinds, rules}`) in both schema copies.
-- **Snapshot**: regen `default_options.txt` (the 6 rule structs gain a bool).
+- **Snapshot**: regen `default_options.txt` (the 3 v1 rule structs gain a bool).

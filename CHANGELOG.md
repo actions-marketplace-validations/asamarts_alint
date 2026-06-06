@@ -315,8 +315,34 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   case-study corpus (airflow, helm, istio, kubernetes, tensorflow) hit
   one of these. This is a pure false-positive reduction, so the bundles
   stay `@v1`: a tree that passed before still passes.
+- **`cross_file` build-validates its config (was silent / late).** A malformed
+  `extract.regex` is now a clean config error at load — previously it built fine
+  and surfaced as an error-level *eval-time* violation reading like a content
+  failure. And options the chosen relation ignores are now rejected at build:
+  `skip_header_lines` on any relation but `identical`, and `normalize` on
+  `identical` / `resolves`. A config that previously loaded then misbehaved now
+  fails fast with a clear message.
+- **`ordered_block` flags an abandoned block in fully-delimited mode.** With both
+  markers set, a second `start` before the `end` now emits an "unclosed"
+  violation for the unterminated first block instead of silently swallowing it.
+  (Start-only / markerless mode is unchanged — a repeated `start` there is the
+  intended section delimiter.)
+- **`file_graph` no longer double-reports a repeated edge.** `no_dangling` and
+  `forbidden_edges` now emit one violation per *distinct* dangling/forbidden
+  target (a node referencing the same target twice produced two identical
+  violations), matching `acyclic` / `no_orphans`. A violation-count change.
 
 ### Security
+
+- **`file_exists` with `respect_gitignore: false` no longer stats outside the
+  repo root.** The per-rule gitignore-bypass (the bazel-style "tracked AND
+  gitignored" case) stat'd a literal `paths:` entry on disk directly, so an
+  absolute or `../` literal (e.g. `paths: "/etc/passwd"`) probed a host path — an
+  *existence* oracle reachable from an `extends:`'d ruleset. The literal is now
+  confined via `normalize_confined` before the stat (an escaping literal is
+  treated as absent), matching `structured_path` / `for_each_dir`. Pre-existing
+  since v0.9.16; existence-only (no content read); pre-release hardening — no
+  released version is affected.
 
 - **Walker — a committed symlink whose target escapes the repo root is no longer
   followed into the file index.** With `follow_links(true)` the walker indexed a

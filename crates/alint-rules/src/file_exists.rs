@@ -127,7 +127,15 @@ impl Rule for FileExistsRule {
                 if ctx.index.contains_file(p) {
                     return true;
                 }
-                if bypass_walker_for_ignored && ctx.root.join(p).is_file() {
+                // Confine the literal before the gitignore-bypass stat:
+                // an absolute / `../` `paths:` entry (with
+                // `respect_gitignore: false`) must not stat a host path
+                // outside the repo root — that would be an existence
+                // oracle reachable from an `extends:`'d ruleset.
+                if bypass_walker_for_ignored
+                    && let Some(confined) = crate::pathsafe::normalize_confined(p)
+                    && ctx.root.join(&confined).is_file()
+                {
                     return true;
                 }
                 false
@@ -373,6 +381,33 @@ mod tests {
         let idx = index(&["README.md"]);
         let v = rule.evaluate(&ctx(Path::new("/fake"), &idx)).unwrap();
         assert_eq!(v.len(), 1, "expected one violation; got: {v:?}");
+    }
+
+    #[test]
+    fn gitignore_bypass_does_not_stat_outside_root() {
+        // Security: `respect_gitignore: false` must not turn an absolute
+        // `paths:` literal into a host-path existence oracle. The
+        // out-of-tree sentinel EXISTS, but the rule must still fire
+        // "missing" — the gitignore-bypass stat is confined to the root.
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel.txt");
+        std::fs::write(&sentinel, b"exists").unwrap();
+        let spec = spec_yaml(&format!(
+            "id: t\n\
+             kind: file_exists\n\
+             paths: [{:?}]\n\
+             respect_gitignore: false\n\
+             level: error\n",
+            sentinel.to_str().unwrap()
+        ));
+        let rule = build(&spec).unwrap();
+        let idx = index(&[]);
+        let v = rule.evaluate(&ctx(Path::new("/fake"), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "an existing out-of-tree path must NOT satisfy file_exists: {v:?}"
+        );
     }
 
     #[test]
