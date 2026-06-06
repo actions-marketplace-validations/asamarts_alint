@@ -1,0 +1,20 @@
+name: a config-declared path escaping the repo root is confined (no out-of-tree read)
+
+given:
+  tree:
+    data.json: |
+      {}
+  config: |
+    version: 1
+    rules:
+      - id: schema-confined
+        kind: json_schema_passes
+        paths: "**/*.json"
+        schema_path: "../escape.json"
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: schema-confined, level: error}

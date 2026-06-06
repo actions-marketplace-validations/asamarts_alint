@@ -1,0 +1,27 @@
+name: cross_file whole_file source is silent when the file content matches the target value
+
+given:
+  tree:
+    expected-name.txt: |
+      my-project
+    package.json: |
+      {"name": "my-project"}
+  config: |
+    version: 1
+    rules:
+      - id: name-matches
+        kind: cross_file
+        source:
+          file: expected-name.txt
+          extract: { whole_file: {} }
+        targets:
+          files: "package.json"
+          extract: { json: "$.name" }
+        relation: equals
+        normalize: trim
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []
