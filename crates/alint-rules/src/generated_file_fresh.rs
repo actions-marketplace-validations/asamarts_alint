@@ -220,7 +220,7 @@ impl GeneratedFileFreshRule {
             Err(crate::io::ReadCapError::TooLarge(n)) => {
                 return vec![self.violation(
                     file,
-                    &format!("is too large to diff ({n} bytes; 256 MiB cap)"),
+                    &format!("is too large to diff ({})", crate::io::over_cap(n)),
                 )];
             }
             Err(crate::io::ReadCapError::Io(_)) => {
@@ -262,8 +262,9 @@ impl GeneratedFileFreshRule {
                     Ok(bytes) => restorer.snapshot(entry.path.clone(), bytes),
                     Err(crate::io::ReadCapError::TooLarge(n)) => {
                         return vec![self.fail(&format!(
-                            "output `{}` is too large to snapshot ({n} bytes; 256 MiB cap)",
-                            entry.path.display()
+                            "output `{}` is too large to snapshot ({})",
+                            entry.path.display(),
+                            crate::io::over_cap(n)
                         ))];
                     }
                     // In the index but unreadable now — skip it.
@@ -424,7 +425,16 @@ impl<'a> OutputRestorer<'a> {
 impl Drop for OutputRestorer<'_> {
     fn drop(&mut self) {
         for (path, bytes) in &self.snapshots {
-            let _ = std::fs::write(self.root.join(path), bytes);
+            let full = self.root.join(path);
+            // Only rewrite when the generator actually changed the
+            // file. An unconditional write bumps the mtime on every
+            // `alint check` — even an idempotent generator that left
+            // the output untouched — which needlessly invalidates
+            // build caches and trips file watchers.
+            if matches!(std::fs::read(&full), Ok(current) if current == *bytes) {
+                continue;
+            }
+            let _ = std::fs::write(&full, bytes);
         }
         for path in &self.new_files {
             let _ = std::fs::remove_file(self.root.join(path));

@@ -139,9 +139,9 @@ impl Rule for PairHashRule {
             Err(crate::io::ReadCapError::TooLarge(n)) => {
                 violations.push(
                     Violation::new(format!(
-                        "pair_hash target {:?} is too large to analyze \
-                         ({n} bytes; 256 MiB cap)",
-                        self.target
+                        "pair_hash target {:?} is too large to analyze ({})",
+                        self.target,
+                        crate::io::over_cap(n)
                     ))
                     .with_path(std::sync::Arc::<Path>::from(target_path)),
                 );
@@ -171,8 +171,9 @@ impl Rule for PairHashRule {
                 Err(crate::io::ReadCapError::TooLarge(n)) => {
                     violations.push(
                         Violation::new(format!(
-                            "{} is too large to hash ({n} bytes; 256 MiB cap)",
-                            entry.path.display()
+                            "{} is too large to hash ({})",
+                            entry.path.display(),
+                            crate::io::over_cap(n)
                         ))
                         .with_path(entry.path.clone()),
                     );
@@ -576,12 +577,12 @@ mod tests {
             }
         };
         assert_eq!(n, 10, "TooLarge must carry the real file size");
-        // Byte-identical to the format string in
-        // `pair_hash::evaluate` (target branch, ~line 107).
-        let cap_mib = crate::io::MAX_ANALYZE_BYTES / (1024 * 1024);
+        // Byte-identical to the message `pair_hash::evaluate` emits
+        // for the target branch — whose cap suffix now comes from
+        // `crate::io::over_cap`, exercised here as the oracle.
         let canonical = format!(
-            "pair_hash target {p:?} is too large to analyze \
-             ({n} bytes; {cap_mib} MiB cap)",
+            "pair_hash target {p:?} is too large to analyze ({})",
+            crate::io::over_cap(n),
         );
         assert!(
             canonical.contains("too large to analyze (10 bytes; 256 MiB cap)"),

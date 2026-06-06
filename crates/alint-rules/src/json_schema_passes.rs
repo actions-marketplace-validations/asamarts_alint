@@ -98,15 +98,20 @@ impl Rule for JsonSchemaPassesRule {
             crate::pathsafe::Confined::In(p) => p,
             crate::pathsafe::Confined::AllowedEscape(p) => {
                 violations.push(
-                    Violation::new(crate::pathsafe::out_of_root_note(&self.schema_path)).as_note(),
+                    Violation::new(crate::pathsafe::out_of_root_note(&self.schema_path))
+                        .as_note()
+                        .with_path(self.schema_path.clone()),
                 );
                 p
             }
             crate::pathsafe::Confined::Denied => {
-                violations.push(Violation::new(format!(
-                    "schema path {} escapes the repo root",
-                    self.schema_path.display()
-                )));
+                violations.push(
+                    Violation::new(format!(
+                        "schema path {} escapes the repo root",
+                        self.schema_path.display()
+                    ))
+                    .with_path(self.schema_path.clone()),
+                );
                 return Ok(violations);
             }
         };
@@ -139,8 +144,8 @@ impl Rule for JsonSchemaPassesRule {
                     // candidate files).
                     violations.push(
                         Violation::new(format!(
-                            "file is too large to analyze ({n} bytes; {} MiB cap)",
-                            crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+                            "file is too large to analyze ({})",
+                            crate::io::over_cap(n),
                         ))
                         .with_path(entry.path.clone()),
                     );
@@ -193,9 +198,9 @@ impl Rule for JsonSchemaPassesRule {
 fn compile_schema(schema_abs: &std::path::Path) -> std::result::Result<Validator, String> {
     let bytes = crate::io::read_capped(schema_abs).map_err(|e| match e {
         crate::io::ReadCapError::TooLarge(n) => format!(
-            "schema {} is too large to read ({n} bytes; {} MiB cap)",
+            "schema {} is too large to read ({})",
             schema_abs.display(),
-            crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+            crate::io::over_cap(n),
         ),
         crate::io::ReadCapError::Io(e) => {
             format!("could not read schema {}: {e}", schema_abs.display())

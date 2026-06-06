@@ -73,6 +73,21 @@ pub(crate) fn format_commit_violation(commit: &CommitRecord, what: &str) -> Stri
     )
 }
 
+/// The shared "could not resolve `<since>...HEAD`" diff-range error
+/// (with the shallow-clone hint) for the changeset rules
+/// — `changeset_requires_path` and `pair_changed_together` — whose
+/// `since:` drives a `git diff` rather than a commit walk.
+pub(crate) fn bad_diff_range(rule_id: &str, since: &str, stderr: &str) -> Error {
+    Error::rule_config(
+        rule_id,
+        format!(
+            "could not resolve diff range `{since}...HEAD`: {stderr}. Common cause: shallow \
+             clone. In a GitHub Actions PR workflow, use `actions/checkout@v4` with \
+             `fetch-depth: 0` so the base ref is reachable."
+        ),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

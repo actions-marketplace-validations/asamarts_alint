@@ -414,9 +414,9 @@ fn evaluate_one_per_file_rule(
             return vec![
                 Violation::new(format!(
                     "{parent_id}: nested rule #{nested_i} cannot analyze {} \
-                     — file is too large ({n} bytes; {} MiB cap)",
+                     — file is too large ({})",
                     literal.display(),
-                    crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+                    crate::io::over_cap(n),
                 ))
                 .with_path(literal),
             ];

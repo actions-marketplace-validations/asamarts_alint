@@ -78,6 +78,15 @@ pub enum ReadCapError {
     Io(std::io::Error),
 }
 
+/// The canonical `"<n> bytes; <cap> MiB cap"` tail shared by every
+/// over-cap violation message, so the cap is rendered from
+/// [`MAX_ANALYZE_BYTES`] in one place instead of a hardcoded `256`
+/// scattered across the rule kinds. Callers supply the verb, e.g.
+/// `format!("is too large to analyze ({})", over_cap(n))`.
+pub fn over_cap(n: u64) -> String {
+    format!("{n} bytes; {} MiB cap", MAX_ANALYZE_BYTES / (1024 * 1024))
+}
+
 /// Read a whole file, refusing (via a cheap `metadata` stat, so
 /// the oversized bytes are never read) anything larger than
 /// `max`. `pub(crate)` so rule-level tests can inject a tiny

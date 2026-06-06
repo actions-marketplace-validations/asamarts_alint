@@ -634,10 +634,19 @@ fn resolve_ref(reference: &str, from_file: &Path, mode: Resolve) -> Option<PathB
     crate::pathsafe::normalize_confined(&joined)
 }
 
-/// Every distinct directed cycle in `adj` (node indices `0..n`),
-/// each canonicalised (rotated to start at its smallest index, so
-/// the same cycle always reports identically) and the whole set
-/// sorted. Iterative DFS — no recursion-depth limit on deep graphs.
+/// A representative set of directed cycles in `adj` (node indices
+/// `0..n`), each canonicalised (rotated to start at its smallest
+/// index, so the same cycle always reports identically) and the
+/// whole set sorted. Iterative DFS — no recursion-depth limit on
+/// deep graphs.
+///
+/// This is *not* an enumeration of every distinct simple cycle
+/// (that is exponential and needs Johnson's algorithm); it records
+/// one cycle per DFS back-edge — enough to surface every file that
+/// participates in a cycle. A node already fully explored (BLACK)
+/// is not revisited, so a cycle reachable only through it from a
+/// later DFS root may go unlisted even though its members are
+/// flagged via another cycle.
 fn collect_cycles(adj: &BTreeMap<usize, Vec<usize>>, n: usize) -> Vec<Vec<usize>> {
     const WHITE: u8 = 0;
     const GRAY: u8 = 1;

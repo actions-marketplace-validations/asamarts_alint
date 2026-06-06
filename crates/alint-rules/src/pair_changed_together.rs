@@ -90,15 +90,7 @@ impl Rule for PairChangedTogetherRule {
 
 impl PairChangedTogetherRule {
     fn bad_range(&self, stderr: &str) -> Error {
-        Error::rule_config(
-            &self.id,
-            format!(
-                "could not resolve diff range `{}...HEAD`: {stderr}. Common cause: shallow \
-                 clone. In a GitHub Actions PR workflow, use `actions/checkout@v4` with \
-                 `fetch-depth: 0` so the base ref is reachable.",
-                self.since,
-            ),
-        )
+        crate::commit_range::bad_diff_range(&self.id, &self.since, stderr)
     }
 }
 
