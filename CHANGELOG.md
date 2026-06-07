@@ -6,6 +6,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-07
+
+The case-study-driven rule-kind expansion, paired with a security cycle that
+hardens path handling into a real boundary. New kinds: `file_graph`
+(file-dependency-graph firewalls plus cycle / orphan / dangling-edge checks),
+`for_each_match` (a per-line predicate quantifier), a unified `cross_file`
+value-relation kind, `pair_changed_together` (a co-change gate), and
+`generated_file_fresh` mutating / in-place mode — plus markerless
+`ordered_block`, a `php@v1` bundled ruleset, JSONC-tolerant structured parsing,
+and more `import_gate` language presets. On the security side, every
+config-declared path a rule reads or resolves is now confined to the repo root
+(the untrusted-`extends:` threat model), with `allow_out_of_root:` as the
+explicit top-level opt-in, the file walker pruning symlinks that escape the
+tree, and — most notably — a fixed **git argument-injection** in the `since:`
+range mode that could write or truncate an arbitrary out-of-tree file and
+affected released versions back to v0.9.21.
+
 ### Added
 
 - **`allow_out_of_root:` — a top-level opt-in to read config-declared paths
@@ -5762,7 +5779,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/asamarts/alint/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/asamarts/alint/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/asamarts/alint/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/asamarts/alint/compare/v0.10.1...v0.10.2
