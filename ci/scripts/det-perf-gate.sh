@@ -10,9 +10,11 @@
 # the comparison is always against a freshly-built base, so there is zero
 # baseline drift.
 #
-# gungraun's per-bench `soft_limits` (Ir +2%, branch Bcm/Bim +50%) ARE the gate:
-# a breach makes `cargo bench` exit non-zero. Advisory while DET_PERF_ADVISORY=1
-# (warn, don't fail); set it to 0 to enforce. Design:
+# gungraun's per-bench `soft_limits` (Ir +2%, EstimatedCycles +5%) ARE the gate:
+# a breach makes `cargo bench` exit non-zero. Branch mispredicts (Bcm/Bim) are
+# collected + printed but NOT gated — they false-positive on benign branch-pattern
+# shifts. Advisory while DET_PERF_ADVISORY=1 (warn, don't fail); 0 to enforce.
+# Design:
 # docs/design/deterministic-perf-gating.md.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1

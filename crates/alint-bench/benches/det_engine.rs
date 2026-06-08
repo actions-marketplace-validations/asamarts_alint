@@ -5,10 +5,11 @@
 //! reproducible REGRESSION GATE that runs in CI on every PR (no quiet box
 //! needed). Design: `docs/design/deterministic-perf-gating.md`.
 //!
-//! Gate: `Ir` (instruction count) is hard-gated at +2% vs the committed
-//! baseline. Branch mispredicts (`Bcm`/`Bim`) carry a high-ceiling soft limit
-//! (advisory below it; the +2-3% v0.12 drift was a benign ~+7-23% mispredict
-//! delta, so only a genuine blowup trips it).
+//! Gate: `Ir` (instruction count, +2%) and `EstimatedCycles` (net work + cache +
+//! branch penalties, +5%) are hard-gated vs the committed baseline. Branch
+//! mispredicts (`Bcm`/`Bim`) are diagnostic-only — collected + printed, but not
+//! gated (they false-positive on benign branch-pattern shifts; the +2-3% v0.12
+//! drift was a benign ~+7-23% mispredict delta at <1% net cycles).
 
 use std::path::PathBuf;
 
@@ -119,15 +120,12 @@ main!(
     config = LibraryBenchmarkConfig::default().tool(
         Callgrind::default()
             .args(["--cache-sim=yes", "--branch-sim=yes"])
-            // Ir is the primary GATE (+2% vs baseline fails). Branch mispredicts
-            // (Bcm/Bim) are advisory — reported always, but carry a high ceiling
-            // so only a genuine blowup trips them (the v0.12 +2-3% drift was a
-            // benign ~+7-23% mispredict delta). See the design doc.
-            .soft_limits([
-                (EventKind::Ir, 2.0),
-                (EventKind::Bcm, 50.0),
-                (EventKind::Bim, 50.0),
-            ]),
+            // Gate on Ir (work, +2%) and EstimatedCycles (net work + cache +
+            // branch penalties, +5%). Branch mispredicts (Bcm/Bim) are
+            // diagnostic-only — reported always, but NOT gated: they false-positive
+            // on benign branch-pattern shifts (v0.12's walker symlink-security
+            // closure moved them +73..217% at <1% net cycles). See the design doc.
+            .soft_limits([(EventKind::Ir, 2.0), (EventKind::EstimatedCycles, 5.0)]),
     ),
     library_benchmark_groups = engine
 );

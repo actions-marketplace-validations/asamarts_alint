@@ -15,8 +15,10 @@
 //! cargo bench -p alint-bench --bench det_check
 //! ```
 //!
-//! Gate: `Ir` soft-limited at +2% vs baseline; branch mispredicts (`Bcm`/`Bim`)
-//! at a +50% advisory ceiling. Design: `docs/design/deterministic-perf-gating.md`.
+//! Gate: `Ir` (+2%) and `EstimatedCycles` (+5%) vs baseline. Branch mispredicts
+//! (`Bcm`/`Bim`) are DIAGNOSTIC-ONLY — collected + printed via `--branch-sim`,
+//! but not gated (they false-positive on benign branch-pattern shifts). Design:
+//! `docs/design/deterministic-perf-gating.md`.
 
 use std::path::{Path, PathBuf};
 
@@ -138,11 +140,13 @@ main!(
     config = BinaryBenchmarkConfig::default().tool(
         Callgrind::default()
             .args(["--cache-sim=yes", "--branch-sim=yes"])
-            .soft_limits([
-                (EventKind::Ir, 2.0),
-                (EventKind::Bcm, 50.0),
-                (EventKind::Bim, 50.0),
-            ]),
+            // Gate on Ir (work, +2%) and EstimatedCycles (net work + cache +
+            // branch penalties, +5%). Branch mispredicts (Bcm/Bim) are
+            // diagnostic-only — collected + printed, NOT gated: they swing wildly
+            // (+73..217% for v0.12's benign walker symlink-security closure — see
+            // docs/benchmarks/investigations/2026-06-v0.12-perf-validation/) while
+            // moving net cycles <1%, so gating them only false-positives.
+            .soft_limits([(EventKind::Ir, 2.0), (EventKind::EstimatedCycles, 5.0)]),
     ),
     binary_benchmark_groups = check_grp
 );

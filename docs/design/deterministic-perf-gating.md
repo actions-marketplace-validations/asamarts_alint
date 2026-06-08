@@ -27,7 +27,9 @@ noise"), runs each bench once (fast), and has built-in regression gates
 
 (Decisions locked 2026-06-07: (1) adopt gungraun; (2) widen scenario coverage +
 add 100k at release time; (3) branch mispredicts ADVISORY with gating only at
-very-high deltas.)
+very-high deltas — RECALIBRATED 2026-06-08 to diagnostic-only + an `EstimatedCycles`
++5% gate, after the +50% ceiling false-positived on benign v0.12 walker drift
+(investigation Phase 1c).)
 
 ## Architecture — two deterministic layers
 
@@ -52,9 +54,10 @@ very-high deltas.)
 
 | Metric (source) | Role |
 |---|---|
-| **Instruction count `Ir`** (callgrind) | **GATING**, tight (~+1–2%/bench) — the real-work signal; proved the +300% external (+0.08%). |
-| **Branch mispredicts** (cachegrind `Bcm`+`Bim`) | **ADVISORY**, with a **hard gate at very-high deltas** (decision 3): report Δ always; fail only when Δ exceeds a high ceiling (e.g. > +50%), so a genuine misprediction blowup still trips while benign feature drift (the +2–3%) does not. |
-| **D1 / LL cache misses** (cachegrind) | ADVISORY |
+| **Instruction count `Ir`** (callgrind) | **GATING**, tight (+2%/bench) — the real-work signal; proved the +300% external (+0.08%). |
+| **`EstimatedCycles`** (callgrind: work + cache + branch penalties) | **GATING**, +5% — the net-effect signal; catches a real cycle regression that flat `Ir` would miss, while absorbing benign branch noise (S12's +217% `Bim` is <1% here). |
+| **Branch mispredicts** (cachegrind `Bcm`+`Bim`) | **DIAGNOSTIC-ONLY** (recalibrated 2026-06-08, investigation Phase 1c): collected + printed, NOT gated. The original +50% ceiling (decision 3) still false-positived — v0.12's benign walker symlink-security closure moved `Bim` +73–217% at <1% net cycles. `EstimatedCycles` is the gate that catches a *real* branch blowup instead. |
+| **D1 / LL cache misses** (cachegrind) | DIAGNOSTIC-ONLY |
 | **Syscalls** (strace, supplementary) | optional check — new per-file syscall (H1 `lstat`) |
 
 ## Automation — load-immune per-PR CI gate
@@ -109,7 +112,8 @@ trustworthy too.
 
 - **Phase 1a — library bench DONE + pushed (`4fa13774`).** `det_engine` measures
   `Engine::run` over a fixed in-memory `FileIndex` (1k/10k) under Callgrind w/
-  cache+branch sim; `Ir` gated +2%, branch (`Bcm`/`Bim`) +50% advisory ceiling.
+  cache+branch sim; `Ir` gated +2% (branch `Bcm`/`Bim` shipped at a +50% ceiling —
+  later recalibrated to diagnostic-only + an `EstimatedCycles` +5% gate, see above).
   **Gotcha found + fixed:** the workspace `[profile.release] strip = true` zeroes
   all counts (gungraun's `--toggle-collect=<bench-fn>` matches no symbol) →
   added `[profile.bench]` (symbols + no LTO-inlining of the toggle target).
