@@ -7,9 +7,10 @@ name: bench-record
 # Two layers per run:
 # - macro: `xtask bench-scale --include-1m --warmup 3 --runs 10` over
 #   the full S1-S14 × {1k,10k,100k,1m} × {full,changed} matrix.
-# - micro: `cargo bench -p alint-bench --features fs-benches` against
-#   the criterion harness, then `xtask publish-benches` to land the
-#   trim'd criterion snapshot under
+# - micro: `cargo bench -p alint-bench --features fs-benches` over the
+#   12 criterion benches EXPLICITLY (not a bare `-p alint-bench`, which
+#   would also fire the gungraun det_engine/det_check benches), then
+#   `xtask publish-benches` to land the trim'd criterion snapshot under
 #   `docs/benchmarks/micro/results/<arch>/v<tag>/criterion/`.
 #
 # Output: a PR adding both directories plus a HISTORY.md update for
@@ -204,7 +205,17 @@ jobs:
       - name: micro cargo bench
         run: |
           set -euo pipefail
-          cargo bench -p alint-bench --features fs-benches
+          # Criterion micro-benches ONLY (explicit list). A bare
+          # `cargo bench -p alint-bench` would also fire the gungraun
+          # det_engine/det_check benches, which run under Valgrind (slow) and
+          # det_check needs a release binary + baseline. Those are the load-immune
+          # deterministic gate (ci/scripts/det-perf-gate.sh, per-PR; det-100k at
+          # release) and are NOT part of the criterion micro corpus.
+          cargo bench -p alint-bench --features fs-benches \
+            --bench glob_compile --bench glob_match --bench regex_content \
+            --bench rule_engine --bench walker --bench single_file_rules \
+            --bench cross_file_rules --bench output_formats --bench fix_throughput \
+            --bench dsl_extends --bench structured_query --bench blame_cache
 
       - name: publish micro snapshot
         env:
