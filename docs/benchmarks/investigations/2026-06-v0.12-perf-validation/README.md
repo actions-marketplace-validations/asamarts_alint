@@ -305,6 +305,15 @@ The only thing the deterministic A/B flagged was **`Bim`** (indirect-branch
 walker `filter_entry` symlink-security closure from Phase 1b, whose net cycle cost
 is the **<1%** Estimated-Cycles delta above. Benign, as established.
 
+**Independent corroboration — the version trajectory.** Regenerating `HISTORY.md`
+from the clean macro puts v0.12.0's S12/100k at **368 ms**, exactly in line with
+the whole v0.10.x lineage (v0.10.0 **368 ms**, v0.10.1 **368 ms**, v0.10.2
+**379 ms**). It is **v0.11.0 (313 ms) that is the outlier** — its bench-record
+landed in an unusually fast window — so v0.12.0 is the *normal* value and v0.11.0
+was the anomalously-fast baseline that made v0.12 read "+16%". Two independent
+signals now agree there is no regression: the load-immune instruction counts
+(+0.34%) and the multi-release wall-clock trajectory (v0.12 == v0.10.x lineage).
+
 **Consequences (2026-06-08):**
 - The clean v0.12.0 numbers are folded as **characterization** under
   `docs/benchmarks/macro/results/linux-x86_64/v0.12.0/` (with a README documenting
