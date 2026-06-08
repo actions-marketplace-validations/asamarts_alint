@@ -107,4 +107,30 @@ trustworthy too.
 
 ## Findings / progress
 
-_(filled as phases land)_
+- **Phase 1a — library bench DONE + pushed (`4fa13774`).** `det_engine` measures
+  `Engine::run` over a fixed in-memory `FileIndex` (1k/10k) under Callgrind w/
+  cache+branch sim; `Ir` gated +2%, branch (`Bcm`/`Bim`) +50% advisory ceiling.
+  **Gotcha found + fixed:** the workspace `[profile.release] strip = true` zeroes
+  all counts (gungraun's `--toggle-collect=<bench-fn>` matches no symbol) →
+  added `[profile.bench]` (symbols + no LTO-inlining of the toggle target).
+- **Phase 1b — binary bench DONE + pushed (`da22d832`).** `det_check` runs the
+  REAL release `alint check` over fixed `gen-monorepo` trees (S1/S6/S12 @ 1k/10k,
+  configs via `include_str!` of the xtask scenario YAMLs — one source of truth).
+  Separate process ⇒ no toggle/inlining concern; trees materialized to a fixed
+  path so `Ir` is byte-stable. Verified: s1_10k=322M Ir (walk), s6_10k=1.76B
+  (content), branch live. gungraun-runner + valgrind installed (passwordless sudo).
+- **Remaining (automation layer):** committed baselines (`--save-baseline` →
+  `docs/benchmarks/deterministic/<rustc>-<valgrind>/`); the load-immune per-PR CI
+  `perf-gate` job (GitHub-hosted; advisory first, then gating `Ir`); pin valgrind
+  in `bench/Dockerfile`; widen scenarios + 100k-at-release; demote wall-clock
+  `bench-scale` to characterization in RELEASING.md.
+
+### Reusable notes
+- gungraun crate = **`gungraun` 0.19.1** (renamed from `iai-callgrind`); runner =
+  `cargo install gungraun-runner --version 0.19.1` (must version-match). cargo-deny
+  clean. `Callgrind::default().args(["--cache-sim=yes","--branch-sim=yes"])`
+  (append — `with_args` REPLACES gungraun's collection toggle → 0 counts).
+- Library bench: `#[library_benchmark(setup = fixture)]` + `#[bench::id(args)]`.
+  Binary bench: `#[binary_benchmark(setup = materialize)]` + `#[bench::id(args)]`
+  where the SAME args go to BOTH `setup` and the bench fn (which returns a
+  `gungraun::Command`); setup's return is ignored.
