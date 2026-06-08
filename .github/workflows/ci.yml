@@ -181,6 +181,35 @@ jobs:
           key: ci-bench-smoke
       - run: ci/scripts/bench-smoke.sh
 
+  # ── Deterministic perf gate ───────────────────────────────────────
+  # Load-immune instruction / cache / branch counts (Valgrind) for the PR vs its
+  # merge-base, built + benched in this same run. Unlike wall-clock bench-scale,
+  # it is NOT affected by the shared runner's co-tenant load, so it can gate
+  # every rust-touching PR deterministically. Advisory (DET_PERF_ADVISORY=1)
+  # during rollout — flip to "0" to enforce. Design:
+  # docs/design/deterministic-perf-gating.md.
+  perf-gate:
+    name: Perf Gate (deterministic)
+    needs: [changes, build]
+    if: >-
+      !cancelled() && !failure()
+      && github.event_name == 'pull_request'
+      && needs.changes.outputs.rust == 'true'
+    runs-on: [self-hosted, linux, alint]
+    env:
+      DET_PERF_ADVISORY: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-perf-gate
+      - env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ci/scripts/det-perf-gate.sh
+
   # ── Examples validate ────────────────────────────────────────────
   # Run `alint validate-config` against every examples/*/.alint.yml.
   # Catches schema regressions in the 30 case-study configs (visible
