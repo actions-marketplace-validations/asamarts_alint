@@ -78,6 +78,11 @@ required-features = ["fs-benches"]
 name = "det_engine"
 harness = false
 
+# End-to-end: needs the release binary first (`cargo build --release -p alint`).
+[[bench]]
+name = "det_check"
+harness = false
+
 [dependencies]
 alint-core.workspace = true
 alint-dsl.workspace = true
