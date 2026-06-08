@@ -1,6 +1,6 @@
 # v0.12 performance validation & inner-loop deep-dive
 
-**Status:** IN PROGRESS (opened 2026-06-07)
+**Status:** CLOSED (2026-06-08) — both questions answered; see Phase 1c.
 
 ## Two open questions — NEITHER assumed
 
@@ -266,3 +266,54 @@ with CI + `jobz_*`, so wall-clock benches contaminate chronically. The durable f
 is a dedicated/isolated runner or a cpuset-pinned bench window. Deterministic
 profiling (callgrind/strace) should be the *primary* regression signal going
 forward, with wall-clock as corroboration on a verified-quiet box.
+
+### Phase 1c — the clean full-matrix run + S12 "+16%": load-immune confirmation, investigation CLOSED (2026-06-08)
+
+The clean overnight run (`~/clean-bench-v0.12.0.sh`, S1–S14 × {1k,10k,100k,1M} ×
+{full,changed}) finally ran on a **verified-quiet** kbox (mid-run 1-min load
+**0.89**, after stopping the co-tenant CI runners + the openprovision `minikube`
+cluster). It finished in 83 min, and `xtask bench-gate` flagged **3 cells, all
+S12** (`min_ms` +15.2% / +16.1% / +16.4% at 10k/100k/1M vs the v0.11.0 *published*
+baseline) — with the *passing* cells uniformly elevated too (S1 +8.0%, S4 +6.3%,
+S13 +4.9%), the tell-tale signature of a baseline recorded under faster conditions,
+not a localized code regression.
+
+**Decisive load-immune A/B (binary-swap det_check).** `det_check.rs` did not exist
+at v0.11.0, so we kept the HEAD harness fixed (identical trees, identical Valgrind
+config) and swapped only the measured binary: built the **v0.11.0** release `alint`
+in an isolated worktree, ran det_check against it (`--save-baseline`), then against
+the **v0.12.0** binary (`--baseline`). Raw output: `s12-loadimmune-confirmation.txt`.
+Instructions (work) and Estimated Cycles (work + cache + branch penalties) are
+**flat across every scenario**:
+
+| cell | `Ir` Δ (work) | Est. Cycles Δ |
+|---|---|---|
+| **S12 1k** | **+0.72%** | **+0.85%** |
+| **S12 10k** | **+0.34%** | **+0.37%** |
+| S1 10k (pure walker) | +0.56% | +0.50% |
+| S2 10k | +0.31% | +0.16% |
+| S6 10k | +0.08% | +0.01% |
+| S7 10k | +0.24% | +0.15% |
+
+S12 executes **+0.34% more instructions** in v0.12 — a +16% wall-clock slowdown is
+arithmetically impossible on +0.34% more work. **The macro gate's S12 "+16%" is a
+stale-baseline / box-conditions artifact, not a regression** — the same verdict as
+Phase 1, now confirmed on the clean run itself.
+
+The only thing the deterministic A/B flagged was **`Bim`** (indirect-branch
+*mispredicts*: s1/s2/s12 +73% to +217%) — the exact load-immune fingerprint of the
+walker `filter_entry` symlink-security closure from Phase 1b, whose net cycle cost
+is the **<1%** Estimated-Cycles delta above. Benign, as established.
+
+**Consequences (2026-06-08):**
+- The clean v0.12.0 numbers are folded as **characterization** under
+  `docs/benchmarks/macro/results/linux-x86_64/v0.12.0/` (with a README documenting
+  this artifact). PR #46 (contaminated) is closed superseded.
+- The det_check `Bim` +50% soft-limit is demoted to **diagnostic-only** (it
+  false-positives on exactly this benign branch-pattern shift); the deterministic
+  gate now gates on `Ir` (+2%) and `EstimatedCycles` (+5%), with branch metrics
+  reported but ungated.
+- **This investigation is CLOSED.** Both opening questions are answered: the
+  +300–638% was contamination (Phase 1); the residual +2–3% is benign
+  branch-mispredict cost of v0.12's security + rule features (Phase 1b); the clean
+  run's S12 +16% is a stale published baseline (Phase 1c).
