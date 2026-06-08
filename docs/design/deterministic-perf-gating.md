@@ -119,11 +119,20 @@ trustworthy too.
   Separate process ⇒ no toggle/inlining concern; trees materialized to a fixed
   path so `Ir` is byte-stable. Verified: s1_10k=322M Ir (walk), s6_10k=1.76B
   (content), branch live. gungraun-runner + valgrind installed (passwordless sudo).
-- **Remaining (automation layer):** committed baselines (`--save-baseline` →
-  `docs/benchmarks/deterministic/<rustc>-<valgrind>/`); the load-immune per-PR CI
-  `perf-gate` job (GitHub-hosted; advisory first, then gating `Ir`); pin valgrind
-  in `bench/Dockerfile`; widen scenarios + 100k-at-release; demote wall-clock
-  `bench-scale` to characterization in RELEASING.md.
+- **Phase 1c — CI gate DONE + pushed (`24915fdb`).** `perf-gate` CI job +
+  `ci/scripts/det-perf-gate.sh`: PR vs merge-base, gungraun `soft_limits` gate,
+  load-immune (runs on the self-hosted runner regardless of co-tenants),
+  ADVISORY-first (`DET_PERF_ADVISORY=1`). **No committed baseline** — the raw
+  gungraun output is ~18 MB, so the in-CI fresh merge-base comparison is used
+  (zero drift, exact same-env; user approved 2026-06-07).
+- **Polish DONE:** `det_check` widened to S1/S2/S6/S7/S12 (× 1k/10k); the 100k
+  tier added behind the `det-100k` cargo feature (release-time, via `cfg_attr` on
+  the bench cells — compile-verified both ways); valgrind pinned in
+  `bench/Dockerfile` (bookworm base = 3.19); RELEASING.md demotes wall-clock
+  `bench-scale` to characterization + names the deterministic gate primary.
+- **Remaining:** flip `Ir` advisory→gating (`DET_PERF_ADVISORY=0`) after the
+  rollout calibrates against real PR noise; optional strace syscall check;
+  runner-isolation (separate track).
 
 ### Reusable notes
 - gungraun crate = **`gungraun` 0.19.1** (renamed from `iai-callgrind`); runner =

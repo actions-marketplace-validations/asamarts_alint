@@ -60,12 +60,17 @@ ARG LS_LINT_VERSION
 
 # Findutils for `find`; ca-certificates + curl for the Node
 # nodesource installer; git for `git init` inside `--changed`
-# mode; build-essential is already in `rust:` base.
+# mode; build-essential is already in `rust:` base. `valgrind` powers
+# the deterministic (load-immune) perf benches — its version is pinned
+# by the `rust:${RUST_VERSION}-bookworm` base (Debian bookworm ships
+# valgrind 3.19), so the cachegrind cache/branch model is reproducible
+# across image rebuilds. See docs/design/deterministic-perf-gating.md.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         findutils \
         git \
+        valgrind \
     && rm -rf /var/lib/apt/lists/*
 
 # Node 20 LTS via NodeSource — newer than Debian's default 18,

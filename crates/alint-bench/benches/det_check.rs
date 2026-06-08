@@ -29,15 +29,25 @@ use gungraun::{
 const SEED: u64 = 10_559_047;
 
 // The real scenario configs, shared with the wall-clock bench (minimal drift —
-// one source of truth). S1 = filename-only (isolates the walker); S6 = dense
-// per-file content; S12 = the v0.10 per-file dispatch class.
+// one source of truth). A spread of dispatch classes that exercise the regular
+// gen-monorepo tree: S1 = filename-only (isolates the walker); S2 = existence +
+// content; S6 = dense per-file content; S7 = cross-file relational; S12 = the
+// v0.10 per-file dispatch class.
 const S1: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../xtask/src/bench/scenarios/s1_filename.yml"
 ));
+const S2: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../xtask/src/bench/scenarios/s2_existence_content.yml"
+));
 const S6: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../xtask/src/bench/scenarios/s6_per_file_content.yml"
+));
+const S7: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../xtask/src/bench/scenarios/s7_cross_file_relational.yml"
 ));
 const S12: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -95,13 +105,25 @@ fn materialize(scenario: &str, config: &str, n: usize) {
     std::fs::write(dest.join(".alint.yml"), config).unwrap();
 }
 
+// Per-PR gate runs 1k + 10k (seconds under valgrind). The 100k tier is heavier
+// (~100s/cell) and gated behind the `det-100k` feature for release-time runs
+// (`cargo bench -p alint-bench --bench det_check --features det-100k`).
 #[binary_benchmark(setup = materialize)]
 #[bench::s1_1k("s1", S1, 1_000)]
 #[bench::s1_10k("s1", S1, 10_000)]
+#[cfg_attr(feature = "det-100k", bench::s1_100k("s1", S1, 100_000))]
+#[bench::s2_1k("s2", S2, 1_000)]
+#[bench::s2_10k("s2", S2, 10_000)]
+#[cfg_attr(feature = "det-100k", bench::s2_100k("s2", S2, 100_000))]
 #[bench::s6_1k("s6", S6, 1_000)]
 #[bench::s6_10k("s6", S6, 10_000)]
+#[cfg_attr(feature = "det-100k", bench::s6_100k("s6", S6, 100_000))]
+#[bench::s7_1k("s7", S7, 1_000)]
+#[bench::s7_10k("s7", S7, 10_000)]
+#[cfg_attr(feature = "det-100k", bench::s7_100k("s7", S7, 100_000))]
 #[bench::s12_1k("s12", S12, 1_000)]
 #[bench::s12_10k("s12", S12, 10_000)]
+#[cfg_attr(feature = "det-100k", bench::s12_100k("s12", S12, 100_000))]
 fn check(scenario: &str, config: &str, n: usize) -> Command {
     let _ = config; // consumed by `materialize` (setup); not needed to build the command
     Command::new(alint_bin())

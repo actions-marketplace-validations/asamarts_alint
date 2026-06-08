@@ -176,12 +176,30 @@ Helix / Eclipse are docs-only (config snippets): nothing to publish.
 
 ## Bench-record review (the human gate)
 
+> **Regression detection is now the deterministic `perf-gate` CI job**
+> (`ci/scripts/det-perf-gate.sh`, per-PR; design:
+> [`docs/design/deterministic-perf-gating.md`](docs/design/deterministic-perf-gating.md)).
+> It compares Valgrind instruction/cache/branch counts PR-vs-merge-base and is
+> **load-immune**, so it catches regressions deterministically where wall-clock
+> `bench-scale` cannot. The 2026-06 investigation proved the contaminated shared
+> runner makes wall-clock regression %s unreliable (v0.11.1 AND v0.12.0 both
+> contaminated; see
+> [`docs/benchmarks/investigations/2026-06-v0.12-perf-validation/`](docs/benchmarks/investigations/2026-06-v0.12-perf-validation/)).
+>
+> So **`bench-record` / `bench-scale` is now CHARACTERIZATION** (the published
+> absolute throughput + cross-tool numbers), **not the regression gate.** The
+> wall-clock `bench-gate` (below) is **only meaningful on a verified-quiet
+> runner**: treat a wall-clock "regression" on a busy runner as contamination
+> until the deterministic gate (or a quiescent re-run) confirms it. At release
+> time also run the 100k deterministic tier:
+> `cargo bench -p alint-bench --bench det_check --features det-100k`.
+
 `bench-record.yml` opens a PR titled `docs(bench): <tag> bench-scale results`
 when its run completes. Review checklist:
 
-1. **Run the gate.** `xtask bench-gate` is the publish
-   criterion. It supersedes the old "skim the PR body for any
-   cell with `stddev_ms / mean_ms > 0.10`" eyeball: that flat
+1. **Run the wall-clock gate (characterization; quiescence-sensitive).**
+   `xtask bench-gate` records absolute throughput. It supersedes the old "skim
+   the PR body for any cell with `stddev_ms / mean_ms > 0.10`" eyeball: that flat
    per-cell CV rule was never met by any shipped release (chronic
    small/10k measurement-floor noise) and was never enforced in
    code. Evidence + the validated thresholds:
