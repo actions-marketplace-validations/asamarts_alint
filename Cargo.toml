@@ -100,3 +100,16 @@ must_use_candidate = "allow"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Bench profile: gungraun's deterministic (Valgrind) benches need symbols for the
+# `--toggle-collect=<bench-fn>` collection toggle, and LTO must not inline the
+# toggle target away. Release strips symbols + thin-LTOs, so override here. The
+# absolute counts are bench-profile (not release-identical), which is fine for a
+# RELATIVE gate (delta vs a same-profile baseline). The end-to-end `det_check`
+# binary bench measures the real release `alint` binary, so it stays
+# release-representative. See docs/design/deterministic-perf-gating.md.
+[profile.bench]
+strip = false
+debug = "line-tables-only"
+lto = false
+codegen-units = 1
