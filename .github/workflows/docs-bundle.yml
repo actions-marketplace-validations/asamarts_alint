@@ -66,6 +66,21 @@ jobs:
         with:
           key: docs-bundle
 
+      - name: Overlay reference docs from main
+        run: |
+          set -euo pipefail
+          # docs-export (next step) builds from the release TAG checked out
+          # above, but docs/site/reference is hand-written reference for
+          # already-released behaviour (e.g. the output formats). Overlaying it
+          # from main lets reference-doc additions and fixes ship without
+          # waiting for the next release. Keep reference pages to released
+          # behaviour so this can't surface anything unreleased; all other
+          # docs/site prose stays pinned to the tag, so count- or version-
+          # sensitive pages can't drift ahead of the release.
+          git fetch --quiet origin main
+          git checkout origin/main -- docs/site/reference
+          echo "Reference docs overlaid from origin/main ($(git rev-parse --short origin/main))."
+
       - name: Generate docs-bundle/
         run: cargo run -q -p xtask -- docs-export
         # Output lives at target/docs-bundle/.
