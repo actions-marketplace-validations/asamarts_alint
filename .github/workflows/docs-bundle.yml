@@ -70,6 +70,21 @@ jobs:
         run: cargo run -q -p xtask -- docs-export
         # Output lives at target/docs-bundle/.
 
+      - name: Refresh cross-version trajectory from main's bench results
+        run: |
+          set -euo pipefail
+          # The bundle's docs are built from the release TAG (above), but the
+          # cross-version BENCH TRAJECTORY is cumulative — and each release's
+          # macro results.json lands on main as a POST-RELEASE bench-record
+          # follow-up, so it is ABSENT at the tag. Without this, /benchmarks/ on
+          # alint.org is always a release behind. Overlay main's bench results +
+          # renderer and regenerate just the trajectory JSON in the bundle.
+          git fetch --quiet origin main
+          git checkout origin/main -- docs/benchmarks xtask/scripts/render-history.py
+          python3 xtask/scripts/render-history.py \
+            --json-out "$(pwd)/target/docs-bundle/benchmarks-trajectory.json"
+          echo "Trajectory refreshed from origin/main ($(git rev-parse --short origin/main))."
+
       - name: Push to docs-bundle branch
         env:
           GH_TOKEN: ${{ github.token }}
