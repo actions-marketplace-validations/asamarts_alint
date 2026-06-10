@@ -66,7 +66,7 @@ jobs:
         with:
           key: docs-bundle
 
-      - name: Overlay reference docs from main
+      - name: Overlay main-tracked docs (reference + architecture)
         run: |
           set -euo pipefail
           # docs-export (next step) builds from the release TAG checked out
@@ -77,9 +77,14 @@ jobs:
           # behaviour so this can't surface anything unreleased; all other
           # docs/site prose stays pinned to the tag, so count- or version-
           # sensitive pages can't drift ahead of the release.
+          #
+          # docs/design/ARCHITECTURE.md is overlaid too: it is a living design
+          # document for contributors (the /docs/about/architecture/ page) that
+          # describes already-released internals, so it tracks main rather than
+          # waiting for the next tag.
           git fetch --quiet origin main
-          git checkout origin/main -- docs/site/reference
-          echo "Reference docs overlaid from origin/main ($(git rev-parse --short origin/main))."
+          git checkout origin/main -- docs/site/reference docs/design/ARCHITECTURE.md
+          echo "Overlaid reference + architecture docs from origin/main ($(git rev-parse --short origin/main))."
 
       - name: Generate docs-bundle/
         run: cargo run -q -p xtask -- docs-export
