@@ -57,7 +57,31 @@ mod docs_paths {
     pub const FACTS_JSON: &str = "facts.json";
     pub const ROADMAP_JSON: &str = "roadmap.json";
     pub const CRATE_GRAPH_MD: &str = "docs/design/architecture/crate-graph.md";
+    pub const MODEL_DIR: &str = "docs/design/architecture/model";
     pub const RULESETS_DIR: &str = "crates/alint-dsl/rulesets/v1";
+}
+
+/// Copy the `LikeC4` architecture model (`*.c4`) into the bundle so alint.org can
+/// build the interactive web-component views and re-export Mermaid. Lands under
+/// `architecture-model/` in the bundle; the sync routes non-markdown files to
+/// `public/_alint/`.
+fn copy_c4_model(workspace: &Path, target_dir: &Path) -> Result<()> {
+    let src = workspace.join(docs_paths::MODEL_DIR);
+    let dest = target_dir.join("architecture-model");
+    fs::create_dir_all(&dest)?;
+    let mut copied = 0;
+    for entry in fs::read_dir(&src).with_context(|| format!("read_dir {}", src.display()))? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("c4") {
+            let name = path.file_name().context("c4 path has a file name")?;
+            fs::copy(&path, dest.join(name)).with_context(|| format!("copy {}", path.display()))?;
+            copied += 1;
+        }
+    }
+    if copied == 0 {
+        bail!("no .c4 files found under {}", docs_paths::MODEL_DIR);
+    }
+    Ok(())
 }
 
 pub(crate) fn docs_export(out: Option<PathBuf>, check: bool) -> Result<()> {
@@ -168,6 +192,13 @@ pub(crate) fn docs_export(out: Option<PathBuf>, check: bool) -> Result<()> {
         Some("Crate dependency graph"),
     )?;
 
+    // 4d. The LikeC4 architecture model (*.c4 source). Shipped so alint.org can
+    //     build the interactive system + flow views (LikeC4 web component) and
+    //     re-export Mermaid. Non-markdown, so the sync routes it to
+    //     public/_alint/architecture-model/. Hand-authored alint.c4 + generated
+    //     *.gen.c4 (gen-model); validated by ci/scripts/likec4.sh.
+    copy_c4_model(&workspace, &target_dir)?;
+
     // 5. CLI reference, captured from the alint binary's --help.
     generate_cli_reference(&workspace, &target_dir)?;
 
@@ -184,6 +215,8 @@ pub(crate) fn docs_export(out: Option<PathBuf>, check: bool) -> Result<()> {
     write_manifest(&target_dir)?;
 
     if check {
+        crate::family_index::check_ascii(&target_dir)?;
+        crate::docs_checks::check_titles_no_backticks(&target_dir)?;
         eprintln!("[xtask] docs-export --check OK");
     } else {
         eprintln!("[xtask] docs-export wrote {}", target_dir.display());
@@ -502,9 +535,9 @@ fn process_family_h3s(
 }
 
 #[derive(Clone)]
-struct RuleEntry {
-    kind: String,
-    summary: String,
+pub(crate) struct RuleEntry {
+    pub(crate) kind: String,
+    pub(crate) summary: String,
 }
 
 #[derive(Clone)]
@@ -805,33 +838,10 @@ fn emit_family_index(
     family_slug: &str,
     rules: &[RuleEntry],
 ) -> Result<()> {
-    let mut page = String::new();
-    let _ = writeln!(&mut page, "---");
-    let _ = writeln!(&mut page, "title: '{}'", escape_yaml_string(family_title));
-    let _ = writeln!(
-        &mut page,
-        "description: 'Rule reference: the {} family.'",
-        family_title.to_lowercase()
-    );
-    let _ = writeln!(&mut page, "sidebar:");
-    let _ = writeln!(&mut page, "  order: {family_order}");
-    let _ = writeln!(&mut page, "  label: '{}'", escape_yaml_string(family_title));
-    let _ = writeln!(&mut page, "---");
-    let _ = writeln!(&mut page);
-    let _ = writeln!(
-        &mut page,
-        "Rule kinds in the **{family_title}** family. Each entry below has its own page with options, an example, and any auto-fix support."
-    );
-    let _ = writeln!(&mut page);
-    for r in rules {
-        let _ = writeln!(
-            &mut page,
-            "- [`{kind}`](/docs/rules/{family_slug}/{kind}/) — {summary}",
-            kind = r.kind,
-            summary = r.summary
-        );
-    }
-    fs::write(family_dir.join("index.md"), page)?;
+    fs::write(
+        family_dir.join("index.md"),
+        crate::family_index::render(family_title, family_order, family_slug, rules),
+    )?;
     Ok(())
 }
 
@@ -909,6 +919,15 @@ fn emit_rules_master_index(
     Ok(())
 }
 
+/// The architecture view embedded atop a generated concept page, if any.
+pub(crate) fn concept_view_id(slug: &str) -> Option<&'static str> {
+    match slug {
+        "fix-operations" => Some("fixFlow"),
+        "nested-configs" => Some("monorepoNesting"),
+        _ => None,
+    }
+}
+
 /// Emit a non-rule concept page (Fix operations, Nested
 /// configs). Lives under `concepts/` rather than `rules/` so
 /// the rules tree is purely about rule kinds.
@@ -925,6 +944,10 @@ fn emit_concept_page(target_dir: &Path, slug: &str, title: &str, body: &str) -> 
     );
     let _ = writeln!(&mut page, "---");
     let _ = writeln!(&mut page);
+    if let Some(view) = concept_view_id(slug) {
+        let _ = writeln!(&mut page, "<likec4-view view-id=\"{view}\"></likec4-view>");
+        let _ = writeln!(&mut page);
+    }
     page.push_str(body.trim_start_matches('\n'));
     if !page.ends_with('\n') {
         page.push('\n');
@@ -968,7 +991,7 @@ fn split_h2_sections(src: &str) -> Vec<H2Section> {
 /// URL-safe slug from a heading. Lowercases, drops any character
 /// that isn't `[a-z0-9-]`, collapses runs of `-`. Adequate for
 /// headings like "Security / Unicode sanity" → "security-unicode-sanity".
-fn slugify(s: &str) -> String {
+pub(crate) fn slugify(s: &str) -> String {
     let lc = s.to_lowercase();
     let mut out = String::with_capacity(lc.len());
     let mut last_dash = false;
@@ -990,7 +1013,7 @@ fn slugify(s: &str) -> String {
 /// Quote a string safely for a single-quoted YAML scalar — only
 /// `'` needs escaping (doubled). Frontmatter titles like
 /// `Security / Unicode sanity` need this.
-fn escape_yaml_string(s: &str) -> String {
+pub(crate) fn escape_yaml_string(s: &str) -> String {
     s.replace('\'', "''")
 }
 
@@ -1406,6 +1429,20 @@ pub(crate) fn first_overview_sentence(overview_md: &str) -> String {
     paragraph.trim().to_string()
 }
 
+/// The architecture flow embedded atop a generated `cli/<sub>` page, if any.
+/// The architecture view embedded on a `cli/<sub>` reference page, with a
+/// one-line caption. `facts` is intentionally absent: factsFlow depicts
+/// fact-evaluation *plus* rule gating, but `alint facts` only evaluates and
+/// prints facts, so the diagram would over-reach.
+pub(crate) fn cli_view(sub: &str) -> Option<(&'static str, &'static str)> {
+    match sub {
+        "check" => Some(("checkFlow", "The pipeline `alint check` runs:")),
+        "fix" => Some(("fixFlow", "How `alint fix` applies fixes and re-checks:")),
+        "lsp" => Some(("lspFlow", "How `alint lsp` serves an editor over LSP:")),
+        _ => None,
+    }
+}
+
 /// Build the alint binary in release mode, then capture
 /// `alint --help` and `alint <subcmd> --help` for each subcommand.
 /// Each captured help text becomes its own markdown page under
@@ -1461,6 +1498,12 @@ fn generate_cli_reference(workspace: &Path, target_dir: &Path) -> Result<()> {
         );
         let _ = writeln!(&mut page, "---");
         let _ = writeln!(&mut page);
+        if let Some((view, caption)) = cli_view(sub) {
+            let _ = writeln!(&mut page, "{caption}");
+            let _ = writeln!(&mut page);
+            let _ = writeln!(&mut page, "<likec4-view view-id=\"{view}\"></likec4-view>");
+            let _ = writeln!(&mut page);
+        }
         let _ = writeln!(&mut page, "```");
         page.push_str(&help);
         let _ = writeln!(&mut page, "```");
