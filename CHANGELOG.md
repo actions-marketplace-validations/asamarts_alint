@@ -53,6 +53,37 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Auto-fixers no longer corrupt binaries or risk truncation on failure.**
+  The byte-level fixers (`line_endings`, `no_bom`, `final_newline`, and the
+  `file_prepend` / `file_append` content injectors) rewrote raw bytes with no
+  binary guard, so a `paths: "**"` glob could corrupt a matched binary file
+  (a CRLF rewrite inserting `\r` into a `.png`, a stray final `\n`, a stripped
+  leading BOM-shaped byte). They now skip files detected as binary. Separately,
+  every content-rewriting fixer wrote in-place via `std::fs::write`
+  (open-truncate-then-write), so a crash or `ENOSPC` mid-write could leave the
+  original truncated or lost; writes now go through a shared atomic helper
+  (sibling temp + `fsync` + rename, preserving the file mode — and writing
+  *through* an in-tree symlink so the link survives, not the rename clobbering
+  it into a regular file). `final_newline`'s
+  on-disk path is reconciled with its editor path (it no longer double-appends
+  to an already-terminated or empty file). (H3)
+- **`--config` is honest about being single-valued.** The flag help promised
+  "repeatable; later overrides earlier", but every consumer read only the
+  first `-c`, so a second was silently dropped — and worse, was position-
+  sensitive across the subcommand boundary, so `-c base.yml -c override.yml`
+  could use `base`. A second `--config` is now a hard error pointing at
+  `extends:` for composition, and the help text is corrected. (H4)
+- **SARIF file paths are now valid URI references.** `artifactLocation.uri`
+  emitted the raw OS path, so a `\`-separated path on Windows broke GitHub
+  Code Scanning's repo-file mapping, and a path containing a space / `#` /
+  `%` was non-conformant. Paths are now forward-slashed and percent-encoded
+  per RFC 3986 (plain-ASCII paths are unchanged). (M9)
+- **The baseline flags fail loudly off `check`.** `--baseline`,
+  `--strict-baseline`, and `--show-baselined` are global but only `check`
+  honored them; on `fix` / `list` / `baseline` / … they were silently
+  ignored, breaking the flag's "a missing baseline is an error, never a
+  silent no-op" contract. They're now rejected on any subcommand but
+  `check` (the `baseline` subcommand writes via its own `--output`). (M12)
 - **The `is_text` rule kind no longer silently accepts unknown options.** The
   `is_text` alias of `file_is_text` was registered without the
   `deny_unknown_options` wrapper its canonical name carries, so a typo'd option
@@ -133,6 +164,72 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the `/docs/rules/` cross-links in `ARCHITECTURE.md` (now absolute
   `https://alint.org` URLs), and a "full reference at alint.org" banner on
   the GitHub view of `docs/rules.md`.
+
+### Security
+
+- **Closed three RCE bypasses of the `extends:`/nested spawn gate.** The gate
+  that confines process-spawning rule kinds (`command`,
+  `command_idempotent`, `generated_file_fresh`) to the user's own top-level
+  config inspected only `rules[].kind` at each inherited source, so three
+  paths slipped past it: (1) an `extends:`'d ruleset could hide a spawning
+  kind in a `templates:` block and reference it from a `kind`-less
+  `extends_template:` rule that expands into a `command` rule *after* the
+  gate runs — meaning a single SRI-pinned `extends:` line could run
+  arbitrary code; (2) a nested `subdir/.alint.yml` (under
+  `nested_configs: true`) was never spawn-gated at all, so any subtree
+  config — addable via an untrusted monorepo PR, vendored dir, or submodule
+  — could declare `kind: command` and execute on `alint check`; and (3) the
+  `require:` block of `for_each_dir` / `for_each_file` / `every_matching_has`
+  carries *nested* rule specs whose `kind` flattens into the parent rule's
+  options, which neither the top-level check nor a post-`finalize` scan
+  inspects (found in pre-merge review). Fix: a spawning kind may no longer
+  appear in *any* `templates:` block (enforced source-agnostically in
+  `finalize`, and earlier with the offending ruleset named); nested configs
+  are now spawn-gated like `extends:` and may not declare `templates:`; and
+  the gate recurses into `require:` blocks at the raw-mapping level (the only
+  place that catches the nested kind, which never becomes a top-level rule).
+  A spawning kind in a top-level `rules:` entry — the intended, allowed case
+  — is unchanged. Seven regression tests encode the three PoCs plus the
+  allowed paths. See `docs/design/v0.14/post_v0.13_audit.md` (C1, C2, and the
+  `require:` vector).
+- **Path confinement now follows symlinks for config-derived reads.**
+  `normalize_confined` is purely lexical, so an in-repo symlink (`link ->
+  /etc`) let a lexically-confined `link/secret` escape the repo root at
+  read time and bypass the `allow_out_of_root` gate — a content/existence
+  disclosure oracle reachable from an `extends:`'d ruleset (notably
+  `json_schema_passes`, which echoes schema-compile errors into a
+  violation). Every config-derived read (`json_schema_passes`, `pair_hash`,
+  `cross_file`, `registry_paths_resolve`, and the `file_exists`
+  gitignore-bypass stat) now resolves symlinks and re-verifies containment
+  before reading; an escape is reported as out-of-root and honored only
+  under a top-level `allow_out_of_root`. The Kani proof and its prose are
+  corrected to scope the guarantee to the *lexical* policy (the filesystem
+  layer is guarded by code + tests, not the proof). (H1)
+- **`when:` expressions are depth-bounded.** A crafted `when:` from an
+  untrusted `extends:` ruleset — deeply nested parens, or a long flat
+  `a and a and …` chain — could overflow the parser or evaluator stack (an
+  uncatchable abort). Both now fail loudly past a generous depth cap. (H5)
+- **Structured-query rules no longer panic on a multibyte value.** The
+  `*_path_*` error renderer byte-sliced an untrusted matched value at
+  offset 80, which panics when a codepoint straddles that boundary —
+  crashing the whole parallel `check` run (and the LSP server). It now
+  truncates on a char boundary. (H2)
+- **Remote `extends:` no longer follows redirects (SSRF hardening).** ureq's
+  defaults (up to 10 redirects, downgrade to `http` allowed on a redirect hop)
+  let a pinned-but-malicious HTTPS host `302` a fetch to
+  `http://169.254.169.254/…` (cloud metadata) or any internal address. The
+  fetcher now refuses redirects outright; an `extends:` URL is SRI-pinned to
+  specific content, so it must point at the final resource and a redirect
+  surfaces as a clear error. (M1)
+- **A non-UTF-8 commit can no longer bypass commit linting.** `parse_commit_log`
+  silently dropped any commit whose author name, email, or message was not
+  valid UTF-8, so a contributor could dodge `git_commit_subject_matches` /
+  author-allowlist / forbidden-pattern checks by using non-UTF-8 metadata.
+  Commits are now lossily decoded and still linted. (M6)
+- **`git_blame_age` no longer panics on a crafted author timestamp.** A commit
+  carrying a 19-digit author-time (parses as `u64`, overflows `SystemTime` on
+  `+`) aborted the run; the addition is now checked and a malformed timestamp
+  is dropped. (M7)
 
 ### Internal
 

@@ -516,6 +516,48 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn deeply_nested_input_is_a_parse_error_not_a_stack_overflow() {
+        // Untrusted `extends:` rulesets reach the `when:` parser; deeply
+        // nested parens must fail loudly here, never overflow the parser
+        // stack (an uncatchable abort). Run on a deliberately small (1 MiB)
+        // stack so this asserts the depth cap is low enough for a constrained
+        // stack — a rayon worker, or a debug build on a macOS test thread —
+        // not only the 8 MiB main thread. (Regression: this overflowed on
+        // macOS CI at depth 256; the parser's six-frame-per-level recursion
+        // through the large `parse_primary` is the cost driver.)
+        let err = std::thread::Builder::new()
+            .stack_size(1 << 20)
+            .spawn(|| {
+                let src = format!("{}true{}", "(".repeat(10_000), ")".repeat(10_000));
+                parse(&src)
+            })
+            .unwrap()
+            .join()
+            .expect("parser must not overflow a 1 MiB stack")
+            .unwrap_err();
+        assert!(matches!(err, WhenError::Parse { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn long_and_chain_is_an_eval_error_not_a_stack_overflow() {
+        // A flat `a and a and …` chain parses iteratively but builds a tall
+        // left-nested tree; `eval` recurses on tree height, so a crafted
+        // chain must bail with an error rather than abort the process.
+        let chain = vec!["facts.x"; 10_000].join(" and ");
+        let expr = parse(&chain).expect("a flat and-chain parses");
+        let (facts, vars) = env();
+        let err = expr
+            .evaluate(&WhenEnv {
+                facts: &facts,
+                vars: &vars,
+                iter: None,
+                env: None,
+            })
+            .unwrap_err();
+        assert!(matches!(err, WhenError::Eval(_)), "{err:?}");
+    }
+
     // ─── env namespace ───────────────────────────────────────────
 
     fn check_env(src: &str, vars_env: &[(&str, &str)]) -> bool {

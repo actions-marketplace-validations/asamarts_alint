@@ -233,6 +233,29 @@ impl RawConfig {
     /// instance's `vars:` map, and the instance's own
     /// non-template fields field-merge on top.
     fn finalize(self) -> Result<Config> {
+        // A process-spawning kind must never hide inside a `templates:`
+        // block. Templates are expanded here, *after* the extends/nested
+        // spawn gate (`reject_command_rules_in`) has run — and an
+        // `extends_template:` instance carries no `kind` of its own — so a
+        // spawning template would smuggle code execution straight past the
+        // gate (the original C1 RCE bypass). Spawning kinds are confined to
+        // a top-level `rules:` entry: declare the command rule directly,
+        // never via a template. Checked for every source (top-level too) so
+        // the invariant holds regardless of where the template came from;
+        // the extends/nested loaders also reject spawning templates earlier
+        // with the offending source named.
+        for t in &self.templates {
+            let kind = t.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            if SPAWNING_RULE_KINDS.contains(&kind) {
+                let id = t.get("id").and_then(|v| v.as_str()).unwrap_or("(unknown)");
+                return Err(Error::Other(format!(
+                    "template {id:?}: `kind: {kind}` spawns a process and is not allowed \
+                     in a `templates:` block — a template is expanded after the spawn \
+                     gate, so this would let a ruleset run arbitrary code. Declare the \
+                     command rule directly in your top-level `rules:`."
+                )));
+            }
+        }
         let templates_by_id: std::collections::HashMap<String, &Mapping> = self
             .templates
             .iter()
@@ -464,16 +487,68 @@ pub const SPAWNING_RULE_KINDS: &[&str] = &["command", "generated_file_fresh", "c
 /// whole spawning-kind set, not only `kind: command`.)
 pub fn reject_command_rules_in(rules: &[Mapping], source: &str) -> Result<()> {
     for rule in rules {
-        let kind = rule.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        reject_spawning_in_rule(rule, source)?;
+    }
+    Ok(())
+}
+
+/// Reject a spawning `kind` in `rule` OR in any of its nested `require:`
+/// specs, recursively. `for_each_dir` / `for_each_file` /
+/// `every_matching_has` carry a `require:` block of nested rules
+/// (`Vec<NestedRuleSpec>`) whose `kind`/`command` flatten into the parent
+/// rule's options — a third spawn vector the top-level `kind` check (and a
+/// post-`finalize` scan) would miss, since the nested spec is buried in the
+/// parent's options and never becomes a top-level `RuleSpec`. We must scan
+/// the raw mappings here, before instantiation, at every depth. (If a new
+/// rule kind ever adds another `Vec<NestedRuleSpec>` option field, gate it
+/// here too.)
+fn reject_spawning_in_rule(rule: &Mapping, source: &str) -> Result<()> {
+    let kind = rule.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    if SPAWNING_RULE_KINDS.contains(&kind) {
+        let id = rule
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(unknown)");
+        return Err(Error::Other(format!(
+            "rule {id:?}: `kind: {kind}` spawns a process and is only allowed in the \
+             user's top-level config; declaring one in an extended config ({source}) — \
+             including inside a `require:` block — is refused because it would let a \
+             ruleset run arbitrary code"
+        )));
+    }
+    if let Some(require) = rule.get("require").and_then(|v| v.as_sequence()) {
+        for nested in require {
+            if let Some(nested_map) = nested.as_mapping() {
+                reject_spawning_in_rule(nested_map, source)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject any process-spawning rule kind (see [`SPAWNING_RULE_KINDS`])
+/// declared inside a `templates:` block of an inherited ruleset. A
+/// template instance (`extends_template:`) carries no `kind` of its own,
+/// so a spawning template would slip past [`reject_command_rules_in`]
+/// (which inspects `rules[].kind`) and expand into a `command` rule at
+/// `finalize` time — the C1 code-execution bypass. Spawning kinds are
+/// confined to the user's own top-level `rules:`, never a template.
+/// `finalize` enforces the same invariant for every source; this earlier
+/// per-source check names the offending ruleset (`source`) in the error.
+pub fn reject_spawning_templates_in(templates: &[Mapping], source: &str) -> Result<()> {
+    for template in templates {
+        let kind = template.get("kind").and_then(|v| v.as_str()).unwrap_or("");
         if SPAWNING_RULE_KINDS.contains(&kind) {
-            let id = rule
+            let id = template
                 .get("id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("(unknown)");
             return Err(Error::Other(format!(
-                "rule {id:?}: `kind: {kind}` spawns a process and is only allowed in the \
-                 user's top-level config; declaring one in an extended config ({source}) \
-                 is refused because it would let a ruleset run arbitrary code"
+                "template {id:?}: `kind: {kind}` spawns a process and is not allowed in \
+                 an inherited ruleset ({source}); a spawning kind may only appear in a \
+                 top-level `rules:` entry, never in a `templates:` block, because a \
+                 template instance expands after the spawn gate and would let the \
+                 ruleset run arbitrary code"
             )));
         }
     }
@@ -1529,6 +1604,66 @@ rules:
     }
 
     #[test]
+    fn load_rejects_spawning_template_smuggled_via_extends() {
+        // C1 (RCE bypass): an extended ruleset can't carry a spawning
+        // `kind` directly (caught by `reject_command_rules_in`), but it
+        // could hide one in a `templates:` block and reference it from a
+        // `kind`-less `extends_template:` rule. The template expands into a
+        // `command` rule at finalize, *after* the gate — so without the
+        // template gate the consumer gets arbitrary code execution by
+        // adding a single SRI-pinned `extends:` line. Body is
+        // self-contained, mirroring a real published ruleset.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("base.yml");
+        let child = tmp.path().join(".alint.yml");
+        std::fs::write(
+            &base,
+            "version: 1\ntemplates:\n  - id: t\n    kind: command\n    command: [\"sh\", \"-c\", \"echo pwn\"]\n    paths: \"**/*\"\n    level: error\nrules:\n  - id: pwned\n    extends_template: t\n",
+        )
+        .unwrap();
+        std::fs::write(&child, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+        let err = load(&child).unwrap_err().to_string();
+        assert!(err.contains("command"), "kind not named: {err}");
+        assert!(err.contains("base.yml"), "source not named: {err}");
+        assert!(err.contains("arbitrary code"), "{err}");
+    }
+
+    #[test]
+    fn finalize_rejects_a_top_level_spawning_template() {
+        // The invariant holds with no `extends:` at all: a spawning kind
+        // may never live in a `templates:` block (it would be a latent
+        // bypass the moment the config is extended or a nested config
+        // references it), so even a top-level spawning template is a hard
+        // error. `finalize` is the source-agnostic backstop.
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".alint.yml");
+        std::fs::write(
+            &cfg,
+            "version: 1\ntemplates:\n  - id: t\n    kind: generated_file_fresh\n    file: out.txt\n    command: [\"sh\", \"-c\", \"echo pwn\"]\n    level: error\nrules:\n  - id: x\n    extends_template: t\n",
+        )
+        .unwrap();
+        let err = load(&cfg).unwrap_err().to_string();
+        assert!(err.contains("generated_file_fresh"), "{err}");
+        assert!(err.contains("templates"), "{err}");
+    }
+
+    #[test]
+    fn top_level_command_rule_still_loads() {
+        // Guard against over-rejection: a process-spawning rule declared
+        // directly in the user's own top-level `rules:` is the allowed case
+        // and must keep working.
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = tmp.path().join(".alint.yml");
+        std::fs::write(
+            &cfg,
+            "version: 1\nrules:\n  - id: run-true\n    kind: command\n    command: [\"true\"]\n    paths: \"**/*\"\n    level: error\n",
+        )
+        .unwrap();
+        let loaded = load(&cfg).expect("a top-level command rule should still load");
+        assert_eq!(loaded.rules.len(), 1);
+    }
+
+    #[test]
     fn load_allows_command_rule_in_top_level_config() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".alint.yml");
@@ -1803,6 +1938,90 @@ rules:
         .unwrap();
         let err = load(&root_cfg).unwrap_err();
         assert!(err.to_string().contains("allow_out_of_root"), "{err}");
+    }
+
+    #[test]
+    fn nested_command_rule_is_rejected() {
+        // C2 (RCE bypass): a nested `.alint.yml` is untrusted like an
+        // `extends:`'d ruleset (anyone who can open a monorepo PR can add
+        // one), so it may not declare a process-spawning rule. Without this
+        // gate a subtree config running `kind: command` achieved arbitrary
+        // code execution on `alint check`. Parallels the `extends:` gate and
+        // the root-only `nested_baseline`/`nested_allow_out_of_root` checks.
+        let tmp = tempfile::tempdir().unwrap();
+        let root_cfg = tmp.path().join(".alint.yml");
+        std::fs::write(&root_cfg, "version: 1\nnested_configs: true\nrules: []\n").unwrap();
+        let pkg_dir = tmp.path().join("packages/foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join(".alint.yml"),
+            "version: 1\nrules:\n  - id: sneaky\n    kind: command\n    command: [\"sh\", \"-c\", \"echo pwn\"]\n    paths: \"**/*\"\n    level: error\n",
+        )
+        .unwrap();
+        let err = load(&root_cfg).unwrap_err().to_string();
+        assert!(err.contains("command"), "{err}");
+        assert!(err.contains("arbitrary code"), "{err}");
+    }
+
+    #[test]
+    fn nested_templates_are_rejected() {
+        // A nested config may not declare `templates:` — they're root-only
+        // (a nested template would be silently dropped), and refusing them
+        // closes the nested variant of the spawning-template smuggle.
+        let tmp = tempfile::tempdir().unwrap();
+        let root_cfg = tmp.path().join(".alint.yml");
+        std::fs::write(&root_cfg, "version: 1\nnested_configs: true\nrules: []\n").unwrap();
+        let pkg_dir = tmp.path().join("packages/foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join(".alint.yml"),
+            "version: 1\ntemplates:\n  - id: t\n    kind: file_exists\n    paths: \"README.md\"\n    level: error\nrules: []\n",
+        )
+        .unwrap();
+        let err = load(&root_cfg).unwrap_err().to_string();
+        assert!(err.contains("templates"), "{err}");
+    }
+
+    #[test]
+    fn load_rejects_spawning_kind_nested_in_a_require_block() {
+        // Third spawn vector (found in adversarial review): `for_each_dir` /
+        // `for_each_file` / `every_matching_has` carry a `require:` block of
+        // nested rules whose `kind` flattens into the parent's options. An
+        // extends:'d ruleset could hide a `command` there — the top-level
+        // `kind` check (and a post-finalize scan) miss it, so the gate must
+        // recurse into `require:`.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("base.yml");
+        let child = tmp.path().join(".alint.yml");
+        std::fs::write(
+            &base,
+            "version: 1\nrules:\n  - id: pwn\n    kind: for_each_dir\n    select: \"**/\"\n    require:\n      - kind: command\n        command: [\"sh\", \"-c\", \"echo pwn\"]\n        level: error\n    level: error\n",
+        )
+        .unwrap();
+        std::fs::write(&child, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+        let err = load(&child).unwrap_err().to_string();
+        assert!(err.contains("command"), "kind not named: {err}");
+        assert!(err.contains("arbitrary code"), "{err}");
+    }
+
+    #[test]
+    fn nested_config_rejects_spawning_kind_in_a_require_block() {
+        // The same `require:` vector via a nested `.alint.yml` (under
+        // nested_configs). The spawn gate runs before scoping, so it catches
+        // the buried `command`.
+        let tmp = tempfile::tempdir().unwrap();
+        let root_cfg = tmp.path().join(".alint.yml");
+        std::fs::write(&root_cfg, "version: 1\nnested_configs: true\nrules: []\n").unwrap();
+        let pkg_dir = tmp.path().join("packages/foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join(".alint.yml"),
+            "version: 1\nrules:\n  - id: pwn\n    kind: for_each_dir\n    select: \"**/\"\n    require:\n      - kind: command\n        command: [\"sh\", \"-c\", \"echo pwn\"]\n        level: error\n    level: error\n",
+        )
+        .unwrap();
+        let err = load(&root_cfg).unwrap_err().to_string();
+        assert!(err.contains("command"), "{err}");
+        assert!(err.contains("arbitrary code"), "{err}");
     }
 
     #[test]
