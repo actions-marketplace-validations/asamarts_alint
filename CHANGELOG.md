@@ -67,12 +67,61 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it into a regular file). `final_newline`'s
   on-disk path is reconciled with its editor path (it no longer double-appends
   to an already-terminated or empty file). (H3)
+- **GitLab Code Quality no longer drops duplicate findings.** The
+  `fingerprint` was `SHA256(rule_id|path|message)`, so two genuinely-distinct
+  findings sharing all three (a generic-message per-line rule firing on
+  several lines of one file) produced the same fingerprint — and the Code
+  Climate spec GitLab consumes requires per-report uniqueness, so GitLab
+  silently kept only one. The fingerprint now folds in a per-report
+  `occurrence` discriminator. The line number is still deliberately excluded,
+  so a finding that drifts up/down stays the same issue across runs; only true
+  duplicates are disambiguated. (M10)
 - **`--config` is honest about being single-valued.** The flag help promised
   "repeatable; later overrides earlier", but every consumer read only the
   first `-c`, so a second was silently dropped — and worse, was position-
   sensitive across the subcommand boundary, so `-c base.yml -c override.yml`
   could use `base`. A second `--config` is now a hard error pointing at
   `extends:` for composition, and the help text is corrected. (H4)
+- **`file_header` / `file_footer` fixers no longer stack duplicates.** When a
+  configured header/footer's content didn't satisfy the rule's own pattern,
+  the violation never cleared, so each `--fix` re-prepended/appended it. The
+  prepend/append fixers now skip when the file already begins/ends with that
+  content (idempotent across runs). (L4)
+- **`{token}` path templates no longer re-substitute.** `render_path` ran a
+  sequence of `String::replace` passes, so a token that appeared in an earlier
+  substitution's value (e.g. a file literally named `a{ext}.c`, stem `a{ext}`)
+  was wrongly re-expanded by a later pass. It now does a single left-to-right
+  scan, emitting each value once. (L8)
+- **The JSONPath dashed-key hint no longer false-fires inside string
+  literals.** A dash in a comparison literal (`@.x == 'a.dashed-value'`) used
+  to trigger the "use bracket notation" hint; quoted spans are now masked
+  before the check. (L11)
+- **`custom` facts now honor a 30s timeout.** The doc promised that a timing-out
+  custom-fact command resolves to the empty string, but the implementation used
+  a blocking `Command::output()` with no timeout — a hanging command froze the
+  run. It now drains output on a thread and kills the child at the deadline
+  (matching the `command` rule's 30s default). (L6)
+- **`when:` `matches` on a missing fact is falsy, not an error.** `null == "x"`
+  was already falsy, but `<missing fact> matches "x"` hard-errored — an
+  inconsistency. A missing (null) left-hand side now evaluates to `false`; a
+  non-string *value* is still a config-type error. (L10)
+- **`when:` string literals are decoded as UTF-8.** The lexer cast each byte to
+  `char` (Latin-1), so a non-ASCII literal like `vars.x == "café"` was lexed as
+  mojibake and could never match. Multi-byte scalars now lex correctly. (L3)
+- **`no_case_conflicts` folds case the Unicode way.** It lowercased ASCII-only,
+  so `É.txt`/`é.txt` (and other non-ASCII case pairs) slipped past — yet a
+  case-insensitive filesystem folds them. It now uses Unicode `to_lowercase`,
+  the strict portable default. (L2)
+- **`command` argv is guarded against option-injection via filenames.** A repo
+  file named like a flag (e.g. `--write`) rendered from `{path}` could turn a
+  trusted `command: ["prettier", "--check", "{path}"]` into a destructive
+  `--write`. A path token that would render to a leading dash is now prefixed
+  with `./`; flags you wrote yourself are untouched. (L13)
+- **Unreadable files are reported, not silently skipped.** A non-`NotFound`
+  read error (permission denied, I/O) during the per-file walk was
+  indistinguishable from "file absent." Such errors are now logged at `warn`
+  (visible with `-v` / `RUST_LOG`); a genuinely-absent file still skips
+  silently and the run stays resilient. (L7)
 - **SARIF file paths are now valid URI references.** `artifactLocation.uri`
   emitted the raw OS path, so a `\`-separated path on Windows broke GitHub
   Code Scanning's repo-file mapping, and a path containing a space / `#` /
@@ -221,6 +270,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fetcher now refuses redirects outright; an `extends:` URL is SRI-pinned to
   specific content, so it must point at the final resource and a redirect
   surfaces as a clear error. (M1)
+- **Local `extends:` targets are confined to the config's directory.** A local
+  `extends: ../../../../etc/shadow` (or an absolute path) in a shared ruleset
+  committed to the repo was read off the host, and a YAML-parse error could
+  echo file content back — a read/exfil oracle. The loader now rejects any
+  local `extends:` target that resolves outside the top-level config's
+  directory; both sides are canonicalized so `..` and symlinks (an in-tree
+  symlink pointing out) are caught. A top-level `allow_out_of_root: true`
+  lifts it for the whole chain (the same blanket escape that lifts per-rule
+  read confinement); `extends:`'d and nested configs still cannot grant it. (M2)
 - **A non-UTF-8 commit can no longer bypass commit linting.** `parse_commit_log`
   silently dropped any commit whose author name, email, or message was not
   valid UTF-8, so a contributor could dodge `git_commit_subject_matches` /
@@ -230,6 +288,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carrying a 19-digit author-time (parses as `u64`, overflows `SystemTime` on
   `+`) aborted the run; the addition is now checked and a malformed timestamp
   is dropped. (M7)
+- **`git_no_denied_paths` denylist patterns are anchored to any depth.** A
+  bare denied pattern (no `/`) like `*.pem` or `id_rsa` was root-anchored by
+  globset, so `secrets/server.pem` evaded the denylist — a dangerous default
+  for a secrets control. Bare patterns are now auto-anchored to `**/<pattern>`
+  (matching any depth, root included); explicit-path patterns
+  (`secrets/*.key`, `**/*.pem`) are taken as written. (M5)
+- **Completed the Unicode control-character sets for the obfuscation rules.**
+  `no_bidi_controls` now also flags the implicit directional marks U+061C
+  (ALM), U+200E (LRM), and U+200F (RLM) — completing the Trojan-Source
+  (CVE-2021-42574) set that rustc's own lint covers; `no_zero_width_chars`
+  now also flags U+2060 (WORD JOINER) and U+180E. The strip fixers extend in
+  lockstep. Note: U+200D (ZWJ) stays flagged even though it joins emoji
+  sequences, so its strip fixer will break a literal emoji ZWJ sequence —
+  scope the rule away from files that legitimately carry such emoji. (L1)
+- **Resource-exhaustion hardening (several spots).** A few unbounded
+  operations on attacker-influenced input are now capped: the `extends:`
+  chain has a depth cap (`MAX_EXTENDS_DEPTH = 64`) so a deeply-nested acyclic
+  chain errors instead of overflowing the recursion stack (L5); the remote-
+  `extends:` disk cache writes a PID-unique temp file instead of a fixed
+  `<sri>.yml.tmp` (no concurrent-run race) (L5); the "did you mean" suggester
+  skips length-mismatched candidates before building its edit-distance matrix,
+  bounding work on a multi-kilobyte unknown field name (L9); and a spawned
+  rule's captured stdout/stderr is capped at 64 MiB with the excess drained,
+  so a runaway generator can't OOM the run (L12). (L5, L9, L12)
+- **Human output neutralizes terminal escapes in untrusted text.** A repo
+  file named with an `\x1b[…]` sequence — or a `kind: command` rule whose
+  subprocess output carries ANSI codes — could clear the screen, hide
+  findings below the fold, or forge an "all rules passed." banner when a
+  human lints an untrusted repo (alint's `anstream` stream passes raw bytes
+  through on a TTY, exactly where the escapes fire). The grouped, compact,
+  and fix renderers now replace every control char (except the intentional
+  newline) in attacker-controlled paths/messages with a visible `\xNN`
+  escape. alint's own styling is unaffected, machine formats (JSON/SARIF/…)
+  are unchanged, and clean output is byte-identical (no TTY-conditional
+  divergence). (M8)
 
 ### Internal
 

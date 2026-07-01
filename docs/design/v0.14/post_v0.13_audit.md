@@ -52,9 +52,9 @@ three classes at once.
 | 1 | CRITICAL — spawn-gate RCE | C1, C2 | `[x]` |
 | 2 | HIGH — security | H1, H2, H5 | `[x]` |
 | 3 | HIGH — correctness | H3, H4 | `[x]` |
-| 4 | MEDIUM — security cluster | M1–M8 | `[~]` (M1/M6/M7 done; M2–M5,M8 deferred) |
-| 5 | MEDIUM — output / CLI / baseline | M9–M14 | `[~]` (M9/M12 done; M10,M11,M13,M14 deferred) |
-| 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[~]` (D1–D10,D12 done; D11 + L/dogfood deferred) |
+| 4 | MEDIUM — security cluster | M1–M8 | `[~]` (M1/M2/M5/M6/M7/M8 done; M3,M4 deferred) |
+| 5 | MEDIUM — output / CLI / baseline | M9–M14 | `[~]` (M9/M10/M12/M14 done; M11,M13 deferred) |
+| 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[~]` (D1–D10,D12 + L1,L3–L14 done; L2 partial; D11 + Dog1/Dog2 deferred) |
 | 7 | alint.org drift | W1–W7 | `[x]` (W1–W5,W7 done on the site branch; W6 partial) |
 
 Phases land security-first. Each is one atomic commit (or a small group)
@@ -296,18 +296,25 @@ the way `https_only(true)` would. An `extends:` URL is SRI-pinned to
 specific content, so it must be the final resource; a redirect now
 surfaces as a clear status error.
 
-### M2 — `extends:` target paths are unconfined `[-]`
-**Where:** `loader.rs:192` (`resolve_relative`). `extends:
-[/etc/hostname]` or `../../x` is read and YAML-parse errors echo content
-→ exfil. **Fix:** confine local extends-target resolution to the repo
-root (reuse `normalize_confined`), subject to the same top-level-only
-trust as `allow_out_of_root`. **Deferred (design call):** confining
-`extends:` would break a legitimate monorepo `extends: [../shared/base.yml]`
-unless `allow_out_of_root` is honored here too, and the exploit needs an
-attacker-controlled local config already inside a trusted chain (narrow).
-Wants the confine-vs-`allow_out_of_root` decision; a lighter alternative
-is to stop echoing file content in extends parse errors. Tracked for the
-focused extends pass.
+### M2 — `extends:` target paths are unconfined `[x]`
+**Where:** `loader.rs` (`resolve_relative` / `load_recursive`). `extends:
+[/etc/hostname]` or `../../x` was read and YAML-parse errors echo content
+→ exfil. **Decision (user):** *Confine + `allow_out_of_root`.*
+**Done:** `load_recursive` now threads a confinement root — the top-level
+config's directory — and a new `confine_extends_target` rejects any local
+`extends:` target that resolves outside it. Both sides are `canonicalize`d,
+so `..`, `.`, and symlinks are resolved (a symlink inside the tree pointing
+out is caught too); a missing target defers to the existing not-found error
+rather than being mislabelled an escape. The boundary is the config's *dir*
+(not the lint root), so a `-c` pointing at an external bundle still works
+while a sub-config in the chain can't escape that bundle. The top-level
+`allow_out_of_root: true` (the blanket `All` form only — a `Selective`
+allowlist names rule kinds/ids and has no meaning for an extends *path*)
+lifts it for the whole chain; sub-configs still can't set the flag
+(`reject_allow_out_of_root_in`). Nested configs reject `extends:` outright,
+so no confinement is needed there. Tests: 4 unit (`confine_*`) + 2
+integration (`local_extends_outside_lint_root_is_rejected`,
+`local_extends_out_of_root_allowed_with_top_level_flag`).
 
 ### M3 — per-file reads bypass the 256 MiB OOM guard `[-]`
 **Where:** `structured_path.rs:365,376`, `core/engine.rs:499`,
@@ -334,16 +341,15 @@ flagged. **Deferred:** needs a walker/`FileIndex` change — a per-entry
 symlinks the walker currently prunes. Core + determinism-sensitive;
 wants its own pass.
 
-### M5 — `git_no_denied_paths` denylist is root-anchored `[-]`
-**Where:** `git_no_denied_paths.rs:99`. For a *secrets* control,
-`*.pem`/`id_rsa` match only repo root, so `secrets/server.pem` evades.
-**Fix:** auto-anchor bare/`*` denied patterns to `**/` (or emit a
-loud build-time warning when a denied pattern lacks `**/`), documented as
-a security-control default distinct from the general glob footgun.
-**Deferred (semantics call):** auto-anchoring silently changes glob
-matching for everyone (a user who wrote `*.env` expecting root-only would
-suddenly match any depth). Wants a decision on auto-anchor vs
-warn-at-build vs doc-only before landing. Tracked.
+### M5 — `git_no_denied_paths` denylist is root-anchored `[x]`
+**Where:** `git_no_denied_paths.rs`. For a *secrets* control, `*.pem` /
+`id_rsa` matched only the repo root, so `secrets/server.pem` evaded.
+**Done (maintainer chose auto-anchor):** a bare denied pattern (no `/`) is
+rewritten to `**/<pattern>` so it bans a match at any depth; explicit-path
+patterns (`secrets/*.key`, `**/*.pem`) are taken as written; the violation
+message keeps the original spelling. The semantics change (a bare `*.env`
+now matches any depth) is the intended secure default for a denylist.
+Tested (`anchor_denied_pattern` + a nested-match check).
 
 ### M6 — non-UTF-8 git data silently collapses checks `[~]`
 **Where:** `core/git.rs:60,135` (one non-UTF-8 path → whole tracked/
@@ -365,17 +371,25 @@ A 19-digit author-time panics. Reachable via `git_blame_age` on an
 untrusted repo. **Done:** `UNIX_EPOCH.checked_add(...)`; on overflow the
 block is dropped (matching the adjacent posture), no panic.
 
-### M8 — terminal-escape injection in the human formatter `[-]`
-**Severity:** Medium (needs a TTY / `--color=always`; CI formats are
-already safe). **Where:** `output/human.rs:85,162,331,360,446`
-(unsanitized paths/messages). A repo file named with `\x1b[…]` can hide
-findings or forge an "all passed" banner when a human lints an untrusted
-repo. **Fix:** a control-char/ANSI sanitizer applied to all attacker-
-controlled spans (paths, messages, snippets) on the human/compact/fix
-paths; preserve intentional styling emitted by alint itself. **Deferred:**
-needs a shared sanitizer across three render paths with care not to strip
-alint's own styling; conditional on a TTY / `--color=always` (every CI
-format is already neutralized). Wants its own focused pass. Tracked.
+### M8 — terminal-escape injection in the human formatter `[x]`
+**Severity:** Medium. **Where:** `output/human.rs` (unsanitized
+paths/messages). A repo file named with `\x1b[…]` can hide findings or
+forge an "all passed" banner when a human lints an untrusted repo.
+**Done:** new `output/sanitize.rs` with `sanitize_terminal(&str) -> Cow`
+— replaces every control char (C0, DEL, C1) *except* the intentional `\n`
+(which `wrap_message` honors as a paragraph break) with a visible, inert
+`\xNN` escape; borrows unchanged on clean input so the common path
+allocates nothing. Applied to all attacker-controlled spans on the three
+render paths: the grouped section-header path label, the wrapped violation
+message (sanitized before `wrap_message`, so the embedded `kind: command`
+subprocess output is neutralized too), the compact `<path>` + `<message>`,
+and the fix `content` (sanitized whole — alint's styling is applied as
+separate tokens, never inside `content`). Runs unconditionally (not
+TTY-gated), so output is byte-identical to a terminal or a pipe — which
+also keeps the trycmd snapshots stable (verified: no drift). alint's own
+SGR is untouched. Tests: 5 unit (`sanitize::tests`) + 3 end-to-end
+(`*_format_neutralizes_terminal_escapes`, asserting a raw `\x1b[2J`
+clear-screen never survives while its `\x1b[2J` text form does).
 
 ---
 
@@ -389,24 +403,36 @@ slashes `\`→`/` and percent-encodes space/`#`/`%`/controls/non-ASCII per
 RFC 3986; plain-ASCII paths are unchanged (existing snapshots stable);
 unit-tested.
 
-### M10 — GitLab fingerprint omits line; ADR-0006 overclaims unification `[-]`
-**Deferred:** the code half (add `line` to the gitlab fingerprint) is
-small, but it pairs with the ADR-0006 / `baseline.md` reconciliation and
-the deferred gitlab fingerprint-unification work (baseline.md §5/§7); do
-together so the fingerprint isn't changed twice. Tracked.
-**Where:** `output/gitlab.rs:115` (`SHA256(rule_id|path|message)`,
-excludes line). Distinct findings with identical messages collapse →
-count disagrees with json/junit/sarif. `docs/adr/0006:74` claims this
-fingerprint was unified onto `violation_fingerprint`; it wasn't. **Fix:**
-include line (and/or a per-occurrence discriminator) in the gitlab
-fingerprint; reconcile ADR-0006 §Decision with `baseline.md` (the
-unification is deferred, not done — say so).
+### M10 — GitLab fingerprint omits line; ADR-0006 overclaims unification `[x]`
+**Where:** `output/gitlab.rs` (`SHA256(rule_id|path|message)`, excludes
+line). Distinct findings with identical rule+path+message collapse to one
+fingerprint — and the Code Climate spec requires *per-report uniqueness*,
+so GitLab silently drops the duplicates (a generic-message per-line rule
+firing on several lines of one file loses all but one). **Done (code):**
+added a per-report `occurrence` discriminator (0-based index among
+findings sharing `rule|path|message`) folded into the hash. This was
+chosen over including the *line* deliberately: the existing
+`fingerprint_independent_of_line_number` test encodes a real design goal
+(a finding that drifts up/down stays the same issue across runs), and the
+discriminator preserves it (single-occurrence findings keep a
+line-independent fingerprint) while still disambiguating true duplicates.
+New test `distinct_findings_same_message_get_distinct_fingerprints`; the
+two existing stability tests still pass. **Done (docs):** ADR-0006 §74
+claimed the gitlab fingerprint was migrated onto `violation_fingerprint`
+— it wasn't. Corrected to say SARIF integration shipped but the gitlab
+unification is **deferred** (report-fingerprint plumbing, `baseline.md`
+§5/§7), matching what `baseline.md` already states. The full unification
+remains the tracked follow-up.
 
 ### M11 — exit codes: documented `3` never produced; `2` overloaded `[-]`
-**Deferred (doc-coordination):** the README half overlaps the parallel
-doc-drift pass; §Open decisions leans "document the real 2-code contract"
-(a 2/3 split is a public-contract change, low value). Do after the doc
-branch merges.
+**Deferred (needs error-model work; maintainer chose to implement exit 3):**
+a clean config-vs-internal split is NOT type-inferrable — `alint_core::Error::
+Other` is overloaded for *config* errors (the spawn-gate rejections, extends
+errors, cycle errors all use it), so mapping by variant would mislabel config
+as internal. Implementing exit 3 honestly needs an explicit `Error::Internal`
+variant tagged at the genuinely-internal sites (output-write failures, engine
+invariants) and `main()` classifying on it — a focused error-model change, not
+a funnel tweak. Tracked for a dedicated CLI/error pass.
 **Where:** README:212 documents `3` (internal); `main.rs:380` funnels
 every `anyhow` error to exit `2`. **Fix:** either implement distinct
 exit codes (`2` config, `3` internal) or correct the README + the
@@ -422,29 +448,41 @@ except `check` (the `baseline` subcommand writes via its own `--output`,
 not this flag), mirroring the `--only` rejection; trycmd-tested.
 
 ### M13 — global `--format` bypasses per-subcommand value gate by position `[-]`
-**Deferred:** validate `--format` against each subcommand's allowed set in
-the handler (fail loudly regardless of position) — clean but multi-site;
-next CLI pass.
+**Deferred (CLI-surface change; attempted + reverted):** the root cause is
+the *dual* `--format` — a global arg and a per-subcommand arg with the same
+long name. clap MERGES them, so `cli.format` already reflects the local value
+(`markdown` for export-agents-md, `yaml` for suggest); a naive "reject a
+non-default global format" gate fires on those subcommands' normal operation
+(it broke `export-agents-md-markdown` / `suggest-rust-yaml`, reverted). The
+real fix unifies the surface — drop the per-subcommand `--format`, validate
+the single global against each subcommand's allowed set, special-case
+export-agents-md's non-`human` default — a deliberate CLI change, own pass.
 **Where:** global `--format` is an unrestricted `String` (`main.rs:54`);
 `alint --format sarif validate-config` → exit 0, silently ignored.
 **Fix:** validate `--format` against the subcommand's allowed set in the
 handler (fail loudly on an unsupported value regardless of position).
 
-### M14 — baseline first-offender masking under-disclosed `[-]`
-**Deferred (doc + decision):** the disclosure note lands in
-`docs/design/baseline.md` §4, which the parallel doc-drift pass touches —
-do after merge. The keying question (switch `line_max_width` /
-`file_content_forbidden` to a path key, or keep + document the fail-closed
-churn) is the open decision below.
+### M14 — baseline first-offender masking under-disclosed `[x]`
+**Decision (user):** *Doc + path-key the two kinds.*
 **Where:** first-offender/first-match kinds (`no_trailing_whitespace`,
 `line_endings`, `line_max_width`, `file_content_forbidden`) emit only the
-first offender per file, so a *new* same-file offense is never emitted
-once baselined. `docs/design/baseline.md:266` calls the masking window
-"narrowest possible"; §4 doesn't list this for the content-keyed pair.
-**Fix:** document the file-level acceptance window honestly in
-`baseline.md` §4; assess whether `line_max_width`/`file_content_forbidden`
-should switch to a path key for consistency with the other two (or accept
-the churn). Likely a doc + small keying change, not a deep redesign.
+first offender per file. The first two were already path-keyed; the latter
+two fell to the default *line-content* discriminator — inconsistent, and
+churny (editing the offending line re-fires). **Done (code):**
+`line_max_width` + `file_content_forbidden` now set
+`.with_baseline_key(crate::slash(path))`, mirroring the other two, so all
+four share a `(rule, file)` identity. Compatible with the dynamic
+`coverage_audit_baseline_safety` invariant (non-empty key, no collision,
+not message-reliant) — audit still green. **Done (docs):** reconciled the
+self-contradiction in `baseline.md` §2.4 (it listed `line_max_width` as
+both a path-keyed first-offender candidate *and* a content-keyed
+"default covers it" rule) — moved both kinds to the first-offender bucket;
+§3.2 now scopes "narrowest possible window" to content-keyed rules; §4
+gains an explicit **file-level acceptance window** disclosure for the
+path-keyed first-offender rules (honest about the wider-than-content
+window + why it's the right trade vs. churn). Test:
+`line_max_width_first_offender_keyed_on_file_no_content_churn` proves the
+edit-the-offending-line case no longer re-fires.
 
 ---
 
@@ -488,44 +526,86 @@ Doc drift (D):
 
 LOW correctness cleanup (L):
 
-- `[ ]` **L1** `no_bidi_controls.rs:31` add U+200E/200F/061C (complete
-  the Trojan-Source set); `no_zero_width_chars.rs:25` add U+2060/U+180E;
-  decide ZWJ-in-grapheme handling for the strip fixer.
-- `[ ]` **L2** `no_case_conflicts.rs:38`, `case.rs:69`,
-  `filename_case.rs:48` — ASCII-only case-folding misses real macOS/NTFS
-  Unicode collisions; `file_ops.rs:112` rename guard false-positives
-  case-only renames on case-insensitive FS. Use Unicode-aware folding;
-  special-case same-inode case-only renames.
-- `[ ]` **L3** `when/lexer.rs:136` `byte as char` lexes string literals
-  as Latin-1 → non-ASCII `when:` comparisons silently never match. Decode
-  UTF-8 properly.
-- `[ ]` **L4** `file_header`/`file_footer` append/prepend fixers don't
-  verify the regex is satisfied → can stack duplicates across `--fix`
-  runs (`file_starts_with` refuses a fixer for exactly this reason).
-  Make them verify-then-skip or refuse like the siblings.
-- `[ ]` **L5** extends cache fixed `<sri>.yml.tmp` temp name races
-  concurrent runs (`extends/cache.rs:83`); unbounded acyclic local-extends
-  recursion (`loader.rs:48`). PID/rand-suffix the temp; add a depth cap.
-- `[ ]` **L6** `custom` fact has no timeout despite the doc claiming one
-  (`facts.rs:134`); implement a timeout or fix the doc.
-- `[ ]` **L7** non-`NotFound` `fs::read` errors silently swallowed
-  (`engine.rs:499`, `rule.rs:490`, `facts.rs:254`) — distinguish
-  `NotFound` (skip) from real I/O errors (surface).
-- `[ ]` **L8** `template.rs:71` `render_path` re-substitutes injected
-  `{ext}`/`{dir}` tokens from repo-named paths → wrong path for forbidding
-  rules. Single left-to-right scan into a fresh buffer.
-- `[ ]` **L9** `did_you_mean.rs:105` levenshtein matrix unbounded on a
-  huge unknown-field name; cap input length.
-- `[ ]` **L10** `eval.rs:61` `null matches …` hard-errors while `null ==`
-  is falsy — make `matches` on a missing fact falsy (or document).
-- `[ ]` **L11** `jsonpath_diagnostics.rs:34` dashed-key hint fires inside
-  string literals (cosmetic); skip quoted spans.
-- `[ ]` **L12** `spawn.rs:89,96` unbounded `read_to_end` on child output
-  — cap with a loud over-cap note (trust-gated, so low risk).
-- `[ ]` **L13** `command.rs:112,153` no `--`/`./` guard before path
-  tokens → leading-dash filenames become options. Insert `--` or `./`.
-- `[ ]` **L14** `scope.rs:45` empty `paths: []` is fail-open (match-all);
-  document, and consider warning.
+- `[x]` **L1** `no_bidi_controls` now also flags U+061C/200E/200F (the
+  implicit directional marks — completes the Trojan-Source set, matching
+  rustc); `no_zero_width_chars` now also flags U+2060/U+180E. Both predicates
+  back the strip fixers, so detection + fix extend together. ZWJ-in-grapheme:
+  kept flagged (suspicious in source) with an honest doc note that the strip
+  fixer breaks legit emoji ZWJ sequences (scope away from such files);
+  grapheme-aware refinement noted as a future, not done (out of contained
+  scope). Tests added for all five new codepoints.
+- `[~]` **L2** `no_case_conflicts` now folds with Unicode `to_lowercase`
+  (not ASCII-only), so `É`/`é` and `Ω`/`ω` collisions are caught — the strict,
+  portable default for a case-conflict detector (test added). **Deferred
+  (rest):** `case.rs`/`filename_case.rs` are *documented* as ASCII-scoped by
+  design (camel/pascal/snake are defined on ASCII letters), so Unicode-izing
+  them is a semantics change, not a bug fix; the `file_ops.rs` same-inode
+  rename special-case is filesystem-semantics needing cross-platform care.
+  Both want a deliberate pass.
+- `[x]` **L3** the `when:` lexer now decodes the full UTF-8 scalar instead of
+  casting one byte to `char` (Latin-1 mojibake), so a non-ASCII literal like
+  `== "café"` matches. Escapes still work; tests cover accents, Cyrillic, emoji.
+- `[x]` **L4** `FilePrependFixer`/`FileAppendFixer` (backing
+  `file_header`/`file_footer`) gained an idempotency guard: if the file
+  already begins/ends with exactly the content, the fixer skips instead of
+  stacking a duplicate on every `--fix` (the failure mode when the configured
+  content doesn't satisfy the rule's pattern, so the violation never clears).
+  Both the on-disk `apply` and the editor `fix_edit` paths. Tests added.
+- `[x]` **L5** Cache temp file is now PID+counter-unique (`extends/cache.rs`,
+  + cleanup-on-failed-rename), so concurrent runs caching the same SRI don't
+  race a fixed `<sri>.yml.tmp`. The local-extends recursion is depth-capped
+  (`MAX_EXTENDS_DEPTH = 64`, checked via `visiting.len()`) so a hostile deep
+  acyclic chain errors instead of overflowing the stack. Tests added.
+- `[x]` **L6** `run_custom` now spawns + drains on a thread + waits on a
+  30s deadline (matching the `command` rule's default), killing the child and
+  resolving to the empty string on timeout — making the doc's long-standing
+  timeout claim true instead of weakening it. Output is also capped (1 MiB).
+  Tests (injectable timeout) cover both the timeout and the capture paths.
+- `[x]` **L7** a shared `walker::read_or_skip` now skips a genuinely-absent
+  file silently (the benign deleted-mid-walk race) but logs any *other* read
+  error (permission/I-O) at `warn`, so it's observable with `-v`/`RUST_LOG`
+  instead of silently mistaken for "file absent". Used at all three sites
+  (`engine.rs`, `rule.rs`, `facts.rs`). The run stays resilient (no abort on
+  one bad file — the long-standing per-file-read contract), only louder.
+- `[x]` **L8** `render_path` now does a single left-to-right scan into a fresh
+  buffer (matching known `{token}`s by prefix), so a value substituted for one
+  token is never re-scanned for another — a repo file literally named
+  `a{ext}.c` (stem `a{ext}`) no longer has its embedded `{ext}` wrongly
+  expanded by the later `{ext}` pass. Unknown `{tokens}` still preserved. Test
+  added.
+- `[x]` **L9** `levenshtein_suggestion` skips any candidate whose length
+  differs from the unknown field by more than `MAX_SUGGEST_DISTANCE` (2)
+  *before* building the O(n*m) matrix — edit distance >= length diff, so this
+  is correctness-preserving and bounds a hostile multi-KB field name (every
+  real field is short -> no matrix built). Test added.
+- `[x]` **L10** `matches` on a missing fact (Null LHS) is now falsy, mirroring
+  how `null == "x"` is falsy (`==`/`!=` are total) — instead of a hard error.
+  A non-string *value* (bool/int/list) is still a config-type error. The
+  more-lenient direction, so no previously-valid config breaks. Test added.
+- `[x]` **L11** the dashed-key hint now matches against a copy with quoted
+  string literals masked to spaces (byte-length-preserving, escape-aware), so a
+  dash *inside* a literal (`@.x == 'a.dashed-value'`) no longer triggers a
+  false hint; a genuine dashed key alongside a literal still does. Tests added.
+- `[x]` **L12** `spawn.rs` captures each child stream through `capture_capped`
+  (64 MiB cap + drain-excess-to-sink, preserving the concurrent-drain
+  no-deadlock property) so a runaway/compromised generator can't OOM the run.
+  Truncation past the generous cap is silent-but-bounded; surfacing it to the
+  caller (a user-facing note) needs `SpawnOutcome` plumbing — noted as a
+  follow-up. (`command.rs` already capped its own drain.)
+- `[x]` **L13** new `template::render_path_argv` (used by the `command` rule)
+  prefixes `./` when substituting a path token turns a *non-flag* argv template
+  into a leading-dash string — so a repo file named `--write` rendered from
+  `{path}` can't flip `prettier --check {path}` into a destructive `--write`.
+  A flag the user wrote (`--check`, `--file={path}`) is left untouched. Test
+  added; the sibling spawning kinds don't render paths into argv.
+- `[x]` **L14** (decision: document + consider warn) Documented the empty /
+  exclude-only `paths` = match-all (fail-open) behavior authoritatively on the
+  `Scope` type + `matches` (the spec sites): an explicit `paths: []` applies to
+  the whole tree, not nothing. The exclude-only idiom (`["!vendor/**"]`) is
+  *intentionally* fail-open, so a load-time warning must target only the
+  truly-empty case — that needs an absent-vs-`[]` signal at the spec layer + a
+  load-warning channel the loader doesn't expose yet, so it's a tracked
+  follow-up (considered, deferred with reason).
 
 Dogfooding (Dog):
 
