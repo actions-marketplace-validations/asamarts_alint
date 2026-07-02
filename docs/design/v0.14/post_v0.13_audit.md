@@ -52,8 +52,8 @@ three classes at once.
 | 1 | CRITICAL — spawn-gate RCE | C1, C2 | `[x]` |
 | 2 | HIGH — security | H1, H2, H5 | `[x]` |
 | 3 | HIGH — correctness | H3, H4 | `[x]` |
-| 4 | MEDIUM — security cluster | M1–M8 | `[~]` (M1/M2/M5/M6/M7/M8 done; M3,M4 deferred) |
-| 5 | MEDIUM — output / CLI / baseline | M9–M14 | `[~]` (M9/M10/M12/M14 done; M11,M13 deferred) |
+| 4 | MEDIUM — security cluster | M1–M8 | `[~]` (M1/M2/M3/M5/M6/M7/M8 done; M4 partial — dir symlinks done, escaping deferred) |
+| 5 | MEDIUM — output / CLI / baseline | M9–M14 | `[x]` (M9–M14 all done) |
 | 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[~]` (D1–D10,D12 + L1,L3–L14 + Dog1/Dog2 done; L2 partial; D11 deferred) |
 | 7 | alint.org drift | W1–W7 | `[x]` (W1–W5,W7 done on the site branch; W6 partial) |
 
@@ -316,30 +316,44 @@ so no confinement is needed there. Tests: 4 unit (`confine_*`) + 2
 integration (`local_extends_outside_lint_root_is_rejected`,
 `local_extends_out_of_root_allowed_with_top_level_flag`).
 
-### M3 — per-file reads bypass the 256 MiB OOM guard `[-]`
+### M3 — per-file reads bypass the 256 MiB OOM guard `[x]`
 **Where:** `structured_path.rs:365,376`, `core/engine.rs:499`,
 `core/rule.rs:490` (raw `std::fs::read`). The per-file family
-(`file_hash`, `import_gate`, all `*_path_*`) can be OOM'd by one in-tree
-multi-GB file; only cross-file kinds call `read_capped`. **Fix:** route
-per-file reads through `read_capped` (stat-then-read), emitting the
-over-cap violation the guard already defines. **Deferred:** the cap +
-`read_capped` live in `alint-rules`, but `engine.rs`/`rule.rs` are in
-`alint-core` (which can't depend on `alint-rules`), so the fix needs the
-cap hoisted to `alint-core` and a consistent over-cap outcome across all
-four read sites (the index already carries `size`, so no extra stat).
-Touches the dispatch hot path — wants its own pass. Self-limiting (needs
-a committed multi-GB file).
+(`file_hash`, `import_gate`, all `*_path_*`) could be OOM'd by one in-tree
+multi-GB file; only cross-file kinds called `read_capped`. **Done:** the
+256 MiB `MAX_ANALYZE_BYTES` cap is hoisted to `alint-core` (walker.rs) —
+one source of truth, `alint-rules`'s `io.rs` re-exports it. New
+`walker::read_capped_or_skip(path, size)` skips (loudly, at `warn`) a file
+whose *index* size exceeds the cap **before** reading — no extra `stat`,
+since the walk already recorded `FileEntry::size`. The two `alint-core`
+per-file loops (`engine.rs`, `rule.rs`) call it with `entry.size`; the two
+`structured_path.rs` reads (which lack an entry at one site) route through
+the existing stat-based `io::read_capped`. All four sites now bounded.
+Tests: `read_capped_or_skip_gates_on_the_passed_size` (proves the gate
+uses the passed size, so no multi-GB fixture is needed) + missing-file.
+Consistent with the L7 resilient-skip contract (one bad file never aborts
+the run).
 
-### M4 — `no_symlinks` misses directory + escaping symlinks `[-]`
-**Where:** `no_symlinks.rs:29` (iterates `index.files()`, which excludes
-dir entries; the walker prunes escaping symlinks pre-index). **Fix:**
-detect symlinks via `symlink_metadata` during the walk and surface them
-to `no_symlinks` (a dedicated symlink list on the index, or have the rule
-re-stat candidate paths), so dir symlinks and root-escaping symlinks are
-flagged. **Deferred:** needs a walker/`FileIndex` change — a per-entry
-`is_symlink` flag plus recording dir-symlinks and the root-escaping
-symlinks the walker currently prunes. Core + determinism-sensitive;
-wants its own pass.
+### M4 — `no_symlinks` misses directory + escaping symlinks `[~]`
+**Where:** `no_symlinks.rs:29` (iterated `index.files()`, which excludes
+dir entries; the walker prunes escaping symlinks pre-index). **Done (dir
+symlinks):** the rule now iterates *all* index entries (`index.entries`,
+not just `files()`) and re-stats each with `symlink_metadata`. An in-tree
+symlink-to-directory is indexed as a dir entry (the walk follows it), so
+it was silently missed before; it is now flagged. A regular directory is
+never flagged (the re-stat decides). Verified with a **real-walk** test
+(`evaluate_fires_on_directory_symlink_via_real_walk`) — not a hand-built
+index — that both indexes and flags the dir symlink; the dogfood's
+`no-tracked-symlinks` stays green. **Deferred (escaping symlinks):** a
+symlink whose target escapes the repo root is *pruned by the walker
+before indexing* (`filter_entry`, the path-confinement guard), so it never
+reaches the rule. Recording it — without re-enabling the out-of-tree read
+that H1/ADR-0004 close — needs a "yielded but non-readable" entry concept
+(detect in the visitor, `WalkState::Skip` to prevent descent, an
+`is_symlink` flag the per-file read path honors). That's a
+security-sensitive walk/read-path change that genuinely wants its own
+reviewed pass; rushing it risks reintroducing the confinement threat.
+Tracked.
 
 ### M5 — `git_no_denied_paths` denylist is root-anchored `[x]`
 **Where:** `git_no_denied_paths.rs`. For a *secrets* control, `*.pem` /
@@ -424,20 +438,23 @@ unification is **deferred** (report-fingerprint plumbing, `baseline.md`
 §5/§7), matching what `baseline.md` already states. The full unification
 remains the tracked follow-up.
 
-### M11 — exit codes: documented `3` never produced; `2` overloaded `[-]`
-**Deferred (needs error-model work; maintainer chose to implement exit 3):**
-a clean config-vs-internal split is NOT type-inferrable — `alint_core::Error::
-Other` is overloaded for *config* errors (the spawn-gate rejections, extends
-errors, cycle errors all use it), so mapping by variant would mislabel config
-as internal. Implementing exit 3 honestly needs an explicit `Error::Internal`
-variant tagged at the genuinely-internal sites (output-write failures, engine
-invariants) and `main()` classifying on it — a focused error-model change, not
-a funnel tweak. Tracked for a dedicated CLI/error pass.
-**Where:** README:212 documents `3` (internal); `main.rs:380` funnels
-every `anyhow` error to exit `2`. **Fix:** either implement distinct
-exit codes (`2` config, `3` internal) or correct the README + the
-in-code `validate-config` doc-comment (`main.rs:1543`) to the actual
-contract. Decision recorded in §Open decisions.
+### M11 — exit codes: documented `3` never produced; `2` overloaded `[x]`
+**Decision (maintainer):** *implement exit 3.* **Where:** README:212
+documents `3` (internal); `main.rs:380` funnelled every error to exit `2`,
+so `3` was never produced. **Done:** added an explicit
+`alint_core::Error::Internal` variant (+ `internal()` / `is_internal()`)
+— distinct from the `Other`/config errors it can't be type-inferred from —
+and tagged the genuinely-internal sites (the two "bug in alint"
+bundled-ruleset failures in `loader.rs`, where a ruleset shipped *inside*
+the binary fails to parse or declares its own `extends:`). `main()` now
+searches the error chain (so a `.context(...)`-wrapped internal error is
+still caught) and returns exit `3` for an internal error, `2` for a
+fixable config / usage error. The README's `2 config / 3 internal`
+contract is now accurate (was aspirational). Tests: `is_internal`
+(core) + `error_is_internal_classifies_the_exit_code` (CLI, incl. the
+context-wrapped chain). Genuine internal errors are rare (bundled rulesets
+are tested), so `3` seldom fires — but the contract is now honestly wired
+rather than documented-but-dead.
 
 ### M12 — `--baseline` family silently ignored on non-`check` subcommands `[x]`
 **Where:** only `cmd_check` reads `cli.baseline` (`main.rs:787`); `fix`/
@@ -447,20 +464,27 @@ contract. Decision recorded in §Open decisions.
 except `check` (the `baseline` subcommand writes via its own `--output`,
 not this flag), mirroring the `--only` rejection; trycmd-tested.
 
-### M13 — global `--format` bypasses per-subcommand value gate by position `[-]`
-**Deferred (CLI-surface change; attempted + reverted):** the root cause is
-the *dual* `--format` — a global arg and a per-subcommand arg with the same
-long name. clap MERGES them, so `cli.format` already reflects the local value
-(`markdown` for export-agents-md, `yaml` for suggest); a naive "reject a
-non-default global format" gate fires on those subcommands' normal operation
-(it broke `export-agents-md-markdown` / `suggest-rust-yaml`, reverted). The
-real fix unifies the surface — drop the per-subcommand `--format`, validate
-the single global against each subcommand's allowed set, special-case
-export-agents-md's non-`human` default — a deliberate CLI change, own pass.
-**Where:** global `--format` is an unrestricted `String` (`main.rs:54`);
-`alint --format sarif validate-config` → exit 0, silently ignored.
-**Fix:** validate `--format` against the subcommand's allowed set in the
-handler (fail loudly on an unsupported value regardless of position).
+### M13 — global `--format` bypasses per-subcommand value gate by position `[x]`
+**Where:** `alint --format sarif validate-config` → exit 0, silently
+emitting *human* output. **Done:** the earlier attempt failed because it
+used a *blanket* "reject a non-default global format" gate that fired on
+subcommands with their own `--format` default (broke
+`export-agents-md-markdown` / `suggest-rust-yaml`). The correct fix — the
+one `list` / `facts` / `explain` already use — is per-handler: validate
+the *effective* format (clap merges the global into the subcommand's
+value, so it's caught regardless of position) against **that** handler's
+allowed set and bail on an unsupported value. Only `validate-config`
+lacked this gate; it now rejects any format other than `human` / `json`
+(exit 2). Audited the rest: `check` renders all formats;
+`export-agents-md` / `suggest` parse into their **own** `OutputFormat`
+enum (which already rejects `sarif`); `fix` has a *documented* human
+fallback (agent → human is intentional). So the surface *unification* the
+prior note proposed turned out unnecessary — per-handler validation is the
+right shape. trycmd `validate-config-format-rejected`; verified both the
+global-position and subcommand-position invocations exit 2. (The M11 + M13
+additions pushed `main.rs` over the 2000-line self-lint threshold, so its
+test module was moved to `src/tests.rs` — Dog2-style — keeping the dogfood
+green.)
 
 ### M14 — baseline first-offender masking under-disclosed `[x]`
 **Decision (user):** *Doc + path-key the two kinds.*
@@ -738,3 +762,72 @@ lexical policy). The roxmltree 0.20 pin is load-bearing — do not bump.
 3. **M14 baseline keying:** doc-only disclosure vs also switch
    `line_max_width`/`file_content_forbidden` to a path key. Leaning
    doc + keep keys (the churn is fail-closed). Confirm.
+
+---
+
+## Post-audit review (#110, M-cluster)
+
+Four independent adversarial reviewers + a first-principles pass audited the
+M-cluster PR (M3/M4/M11/M13). Real findings were fixed in the same PR; the
+rest are recorded here.
+
+**Fixed in review:**
+- **rustdoc private-intra-doc-link** — `read_capped_or_skip`'s doc linked the
+  `pub(crate)` `read_or_skip`; failed the `-D warnings` `Docs` job (which
+  bypasses check/clippy). Delinked. (The `cargo doc` preflight gap again.)
+- **M3-F1 (HIGH) — the "all read sites bounded" claim was incomplete.** The
+  four content rules (`file_content_forbidden`, `file_content_matches`,
+  `file_header`, `file_footer`) each have a *standalone* `evaluate()` with a
+  raw `std::fs::read`, reachable via `for_each_*` nesting when the nested rule
+  isn't a single literal (`for_each_dir.rs:375` → `nested_rule.evaluate(ctx)`)
+  — the exact OOM M3 set out to close. All four now read via `io::read_capped`,
+  skipping an over-cap file to match the engine batch (same rule, same outcome
+  nested or top-level).
+- **M4 test under-verified** — the dir-symlink test used `.any()`; tightened to
+  `assert_eq!(v.len(), 1)` + the path, proving the regular dir and the
+  descended child are *not* flagged.
+- **M11-F1 — `validate-config` violated the 2/3 contract.** It routed all load
+  errors to exit `1` ("Config invalid"), so an internal error there exited 1,
+  not 3. `emit_validate_failure` now returns 3 for an internal error.
+- **M11-F3/F4 docs** — `Error::Internal`'s doc no longer claims untagged
+  "serialization" sites; its Display restores "please file an issue" (exit 3 is
+  a returned error, so the panic hook's issue URL doesn't fire).
+- **M13 test coverage** — added `validate-config` to the systematic
+  `cli_consistency` format matrix (was only a single-format trycmd).
+- **Doc accuracy** — `io.rs` cap doc now states the over-cap outcome varies by
+  site (violation vs skip); M13 wording corrected (the *subcommand*-position
+  flag is rejected by clap's `PossibleValuesParser`, only the *global* position
+  needs the handler gate; `fix` still silently falls back sarif→human — a
+  pre-existing, separately-decidable behavior, now disclosed not hand-waved;
+  `main.rs` was already >2000 lines at M11, so the split isn't solely M13's).
+
+**Design decisions recorded (not bugs):**
+- **M3-F3 fail-open skip.** Over-cap files are *skipped* (fail-open) on the
+  engine/rule/content-rule paths — a linter leaves an un-analyzable file
+  un-analyzed rather than failing the build — vs the *violation* (fail-closed)
+  the cross-file/`for_each`-literal paths emit. The `alint-core` loops `warn`;
+  the `alint-rules` paths skip silently (no `tracing` dep). A security-relevant
+  residual (a secret inside a >256 MiB file evades a content scan) — accepted,
+  observable via `-v` on the core paths.
+
+**Deferred with corrected framing:**
+- **M4 escaping symlinks** — the review showed a *simpler* safe path than the
+  "read-path redesign" I first described: record escaping symlinks in a
+  **side-list** on `FileIndex` (kept out of `entries`, so no content rule can
+  `root.join()` through them), populated by the `filter_entry` prune;
+  `no_symlinks` consults it. No read-path change. Still deferred (a walker +
+  `FileIndex` + determinism-sort change), but tractable — a good next item.
+- **M3-F2 (TOCTOU)** — the size gate uses the walk-time index size, then does an
+  unbounded read; a file that grows past the cap between walk and read defeats
+  it. Narrow (needs concurrent growth mid-run); a static checkout is safe.
+- **M3-F7** — `generated_file_fresh.rs:300,436` have two uncapped whole-file
+  reads (its other reads use `read_capped`); a spawning kind, gated, out of
+  M3's stated scope but worth capping for consistency.
+
+**Adversarially verified NOT bugs:** symlink cap-bypass (index records the
+*target* size — probed), `--fix` on a dir symlink (`remove_file` unlinks the
+link node, no data loss), M4 determinism (entries are path-sorted), M11
+misclassification (only alint-controlled bundled bytes reach the `Internal`
+sites; a user's bad `extends:` URL stays `Other`/exit 2), the chain-search
+classifier, the exhaustive-match fallout of the new variant, the byte-identical
+`main.rs`→`tests.rs` move, and that no `status.code = 2` snapshot flips to 3.

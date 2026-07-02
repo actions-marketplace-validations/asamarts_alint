@@ -67,6 +67,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it into a regular file). `final_newline`'s
   on-disk path is reconciled with its editor path (it no longer double-appends
   to an already-terminated or empty file). (H3)
+- **`validate-config` rejects an output format it can't render.** `alint
+  --format sarif validate-config` (or `validate-config --format sarif`) silently
+  fell through to human output; it now fails loudly (exit 2) for any format
+  other than `human` / `json`, regardless of flag position — matching how
+  `list` / `facts` / `explain` already gate their formats. (M13)
+- **Exit code `3` (internal error) is now actually produced.** The README
+  documented `3` for an internal alint error vs `2` for a config/usage error,
+  but every error funnelled to `2`, so a script could never tell "fix your
+  config" from "file an alint bug." A new internal-error class is tagged at the
+  genuinely-internal sites (a bundled ruleset shipped inside the binary failing
+  to parse), and the CLI now returns `3` for those and `2` for everything a user
+  can fix. (M11)
+- **`no_symlinks` now flags directory symlinks.** It scanned only file
+  entries, so an in-tree symlink whose target is a *directory* (indexed as a
+  dir entry when the walk follows it) slipped through. It now scans all indexed
+  entries and re-stats each. (A symlink whose target escapes the repo root is
+  pruned by the walker before indexing and is still not flagged — recording
+  those safely is a tracked follow-up.) (M4)
 - **GitLab Code Quality no longer drops duplicate findings.** The
   `fingerprint` was `SHA256(rule_id|path|message)`, so two genuinely-distinct
   findings sharing all three (a generic-message per-line rule firing on
@@ -302,6 +320,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lockstep. Note: U+200D (ZWJ) stays flagged even though it joins emoji
   sequences, so its strip fixer will break a literal emoji ZWJ sequence —
   scope the rule away from files that legitimately carry such emoji. (L1)
+- **Per-file reads are bounded so a giant file can't OOM the run.** Only the
+  cross-file rule kinds capped their reads; the per-file engine/rule loops and
+  the structured-query kinds read whole files unbounded, so one committed
+  multi-GB blob could exhaust memory. The 256 MiB analysis cap now lives in
+  `alint-core` and gates every per-file read — the engine/rule loops skip an
+  over-cap file up front using the walk-time index size (no extra `stat`) and
+  log it at `warn`; the run stays resilient (one oversized file never aborts
+  the lint). (M3)
 - **Resource-exhaustion hardening (several spots).** A few unbounded
   operations on attacker-influenced input are now capped: the `extends:`
   chain has a depth cap (`MAX_EXTENDS_DEPTH = 64`) so a deeply-nested acyclic
