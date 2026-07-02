@@ -40,6 +40,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file suppresses the total, not the last writer's count); regeneration is
   byte-identical across runs and its guard counts new *occurrences* (a higher
   count on an existing finding is fresh debt too, not just new fingerprints).
+  The baseline file is excluded from the walk, so a broad-glob content rule
+  (`**/*.json`, `line_max_width`, …) can't lint alint's own JSON-Lines artifact
+  as a new violation — the adopt-flow stays clean.
   See `docs/design/baseline.md` / ADR-0006.
 - `--only <RULE_ID>` on `check` and `fix` (repeatable): restrict the run to the
   named rule id(s) from the effective config. An id that matches no loaded rule
@@ -72,6 +75,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fell through to human output; it now fails loudly (exit 2) for any format
   other than `human` / `json`, regardless of flag position — matching how
   `list` / `facts` / `explain` already gate their formats. (M13)
+- **`fix` rejects an output format it can't render, before touching files.**
+  `alint fix --format sarif` (or `github` / `junit` / `gitlab` / `agent`)
+  silently degraded to human output with a *success* exit code — those formats
+  describe findings, not fixes, and have no fix-report renderer. It now fails
+  loudly (exit 2), and because `fix` mutates the tree the gate runs *before* any
+  fix is applied, so a rejected format never leaves a half-fixed repo. `fix`
+  still renders `human` / `json` / `markdown`; the error points `agent` users at
+  `check --format agent`, whose per-violation `fix_command` drives the agentic
+  fix loop. (E2E sweep)
 - **Exit code `3` (internal error) is now actually produced.** The README
   documented `3` for an internal alint error vs `2` for a config/usage error,
   but every error funnelled to `2`, so a script could never tell "fix your
@@ -100,6 +112,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sensitive across the subcommand boundary, so `-c base.yml -c override.yml`
   could use `base`. A second `--config` is now a hard error pointing at
   `extends:` for composition, and the help text is corrected. (H4)
+- **The GitHub Action's `config:` input matches the single-valued `--config`.**
+  The action advertised "config file path(s), one per line" and emitted one
+  `--config` per line — but the H4 fix above made a second `--config` a hard
+  error, so any workflow passing two config paths broke (exit 2 from the
+  binary). The input is now documented as a single path pointing at `extends:`
+  for composition, and the action rejects more than one path itself with a clear
+  GitHub-annotated `::error::` rather than surfacing a raw CLI stderr. New
+  `action-selftest` jobs cover both the single-path happy path and the
+  multi-path rejection. (E2E sweep)
+- **A long flat `when:` chain fails loudly instead of aborting the process.**
+  The expression parser capped `(`/`[`/call nesting at depth 64, but a *flat*
+  chain — `a and a and …` (or `or`) — is parsed iteratively and never re-enters
+  the guarded recursion, so it slipped past the cap. An adversarial ~100k-operator
+  `when:` from an untrusted `extends:` ruleset built a deeply left-nested AST that
+  overflowed the stack on its recursive `Drop`/eval — an uncatchable abort, the
+  strongest determinism violation. Both chain loops now bound length the same way
+  nesting is bounded, so the chain fails with a normal parse error. (H5)
+- **The zero-width fixer strips the full set the rule flags.**
+  `no_zero_width_chars` flags U+2060 (WORD JOINER) and U+180E (MONGOLIAN VOWEL
+  SEPARATOR) alongside U+200B/C/D and body-internal U+FEFF, but the
+  `file_strip_zero_width` fixer hard-coded only the latter four — so a file
+  containing U+2060/U+180E was reported on every run yet never repaired, and
+  `--fix` never converged. Both fix paths now defer to the rule's own
+  `is_flagged_zero_width`, so detector and fixer can't drift apart again. (L1)
 - **`file_header` / `file_footer` fixers no longer stack duplicates.** When a
   configured header/footer's content didn't satisfy the rule's own pattern,
   the violation never cleared, so each `--fix` re-prepended/appended it. The

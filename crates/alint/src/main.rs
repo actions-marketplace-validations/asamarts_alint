@@ -785,6 +785,18 @@ fn require_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The baseline file's path relative to the lint `root`, as a walk-exclude
+/// pattern — so a broad-glob content rule can't lint alint's own committed
+/// JSON-Lines baseline artifact as a spurious "new" violation. Returns `None`
+/// when the baseline lives outside the lint root (then it isn't walked anyway)
+/// or doesn't exist yet (the missing-baseline error surfaces at load time).
+fn baseline_walk_exclude(root: &Path, baseline: &Path) -> Option<String> {
+    let root_abs = root.canonicalize().ok()?;
+    let base_abs = baseline.canonicalize().ok()?;
+    let rel = base_abs.strip_prefix(&root_abs).ok()?;
+    Some(rel.to_string_lossy().replace('\\', "/"))
+}
+
 fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> Result<ExitCode> {
     require_directory(path)?;
     let loaded = load_rules(path, cli)?;
@@ -792,6 +804,9 @@ fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> 
     // The `--baseline` flag (used as given) overrides it; either one turns on
     // baseline suppression. No silent auto-detect of `.alint-baseline.json`.
     let config_baseline = loaded.baseline.as_ref().map(|b| path.join(b));
+    // Resolved early (was below the walk) so the baseline file can be excluded
+    // from the walk. The `--baseline` flag (used as given) overrides the key.
+    let effective_baseline = cli.baseline.clone().or(config_baseline);
     let entries = apply_only_filter(loaded.entries, only)?;
     let rule_count = entries.len();
     let mut engine = Engine::from_entries(entries, loaded.registry)
@@ -810,9 +825,20 @@ fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> 
     } else {
         loaded.respect_gitignore
     };
+    // Exclude alint's own baseline file from the walk. It's a committed
+    // JSON-Lines artifact, so a broad-glob content rule (`**/*.json`,
+    // `line_max_width`, `no_trailing_whitespace`, …) would otherwise flag it as
+    // a NEW violation the baseline can't contain — breaking the canonical
+    // adopt-flow (`check` → `baseline` → `check --baseline` never reaches 0).
+    let mut extra_ignores = loaded.extra_ignores;
+    if let Some(bp) = effective_baseline.as_deref()
+        && let Some(rel) = baseline_walk_exclude(path, bp)
+    {
+        extra_ignores.push(rel);
+    }
     let walk_opts = WalkOptions {
         respect_gitignore: effective_gitignore,
-        extra_ignores: loaded.extra_ignores,
+        extra_ignores,
     };
 
     let index = walk(path, &walk_opts).context("walking repository")?;
@@ -825,7 +851,6 @@ fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> 
     // Baseline suppression (when --baseline is in effect): grandfather
     // recorded violations, leaving only new ones to format + gate on.
     let mut strict_stale_fail = false;
-    let effective_baseline = cli.baseline.clone().or(config_baseline);
     let (report, baseline_marks) = if let Some(baseline_path) = &effective_baseline {
         let baseline = load_baseline(baseline_path)?;
         let mut reader = FileReader::new(path);
@@ -1167,6 +1192,26 @@ fn cmd_fix(
     cli: &Cli,
 ) -> Result<ExitCode> {
     require_directory(path)?;
+    // Gate the output format *before* touching the tree: `fix` mutates files,
+    // so a format we can't render must fail here, not after the write. Only
+    // `human`, `json`, and `markdown` have dedicated fix-report renderers. The
+    // finding-oriented formats (SARIF / GitHub / JUnit / GitLab) and the
+    // check-side `agent` format would otherwise degrade *silently* to human
+    // output with exit 0 — a machine consumer asking for `sarif` and getting
+    // human text is the same trap M13 closed for `validate-config`. Fail loudly
+    // instead, and point `agent` at its real home: `check --format agent`
+    // (whose per-violation `fix_command` drives the agentic fix loop; `fix`
+    // itself has no agent report).
+    let format: Format = cli.format.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+    if !matches!(format, Format::Human | Format::Json | Format::Markdown) {
+        bail!(
+            "`alint fix` supports only `--format human`, `--format json`, or \
+             `--format markdown` (got {fmt:?}); the SARIF/GitHub/JUnit/GitLab/agent \
+             formats describe findings, not fixes — run `alint check --format {fmt}` \
+             for those",
+            fmt = cli.format,
+        );
+    }
     let loaded = load_rules(path, cli)?;
     let entries = apply_only_filter(loaded.entries, only)?;
     let mut engine = Engine::from_entries(entries, loaded.registry)
@@ -1192,7 +1237,6 @@ fn cmd_fix(
         .fix(path, &index, dry_run)
         .context("applying fixes")?;
 
-    let format: Format = cli.format.parse().map_err(|e: String| anyhow::anyhow!(e))?;
     let (mut out, opts) = render_env(cli)?;
     format
         .write_fix_with_options(&report, &mut out, opts)
