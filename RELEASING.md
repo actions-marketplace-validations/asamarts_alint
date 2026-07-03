@@ -87,6 +87,39 @@ points are explicit.
    cross-platform build matrix; recovered via tag-move after
    amending the bump commit to include `Cargo.lock`).
 
+## Documentation and site-drift (per release)
+
+Release-aware documentation is enforced mechanically (ADR-0007; see
+`docs/design/v0.14/documentation-drift.md`), but a cut still has a short
+checklist so the release-gated pieces land and nothing drifts:
+
+1. **Newly-released options and prose.** Any option gated with an `x-since` for
+   this version now ships. Drop its `x-since` keyword from
+   `schemas/v1/config.json` (then `gen-schema`), and unwrap its
+   `<!-- alint:since=X -->` prose in `docs/rules.md` / `docs/site/reference/**`.
+   The gates strip these pre-release and `--released-version` catches up at the
+   tag, so unwrapping is cosmetic, but it keeps the source honest. For v0.14:
+   `root_only` on `file_absent` / `dir_exists` / `dir_absent` (add its prose to
+   `file_absent` / `dir_absent`, which currently only carry it in the table).
+2. **Claims whose scope changed.** Narrow any published claim the cut walked
+   back. The Kani proof is scoped to the *lexical* path-confinement policy since
+   the post-v0.13 H1 fix, so `roadmap.json` / CHANGELOG wording must not imply
+   the filesystem layer is machine-checked (E2).
+3. **New user-facing features need narrative site docs.** A new subcommand
+   auto-documents from clap `--help` and counts flow from `facts.json`, but
+   guide/reference prose does not. For v0.14: baseline mode needs a concept
+   page, the `baseline:` configuration-reference entry, and an output-formats
+   suppression note. Pages under tag-pinned `docs/site/**` (configuration,
+   cookbook, getting-started) are safe to pre-write; the output-formats note is
+   under the main-overlaid `docs/site/reference/**`, so wrap any unreleased part
+   in `<!-- alint:since=X -->`.
+4. **Reconcile the trackers.** Bump `alint.org`'s pins (four install sites plus
+   prose claims), and reconcile `alint.org` `marketing/STATE.md` to the new
+   version and counts so it never drifts weeks behind again (P5.2).
+5. **Confirm the gates are green.** `gen-schema` / `gen-facts` / `docs-export`
+   `--check` and the `docs/adr@v1` dogfood here; the `check-counts.mjs` count
+   gate and `check-version-pins.sh` pin gate on the alint.org side.
+
 ## What fires on the tag push
 
 | Workflow | Triggered by | What it does | Time |
