@@ -258,8 +258,12 @@ Each fix ships with a revert-sensitive regression test (repo convention).
   paired-sentinel stripper (factor out `elide_internal_blocks` from
   `roadmap_generator.rs:29-30` and gate it on the released version) applied to the
   rules.md body before `emit_rule_page` injects it (`docs_export.rs:867-868`). Wrap the
-  existing unreleased prose: `dir_exists` root_only (rules.md:92), the zero-width additions,
-  the no_symlinks caveat.
+  `dir_exists` root_only paragraph (rules.md:92) — the clean, block-level case. NOTE (from
+  implementation): the `no_zero_width_chars` (U+2060/U+180E) and `no_symlinks` changes are
+  mid-SENTENCE detection-scope refinements, not block-wrappable without hiding the whole
+  released sentence; they are low-severity (description accuracy, not a config capability)
+  and left as an A3 residual for a v0.14 doc pass — the authoritative Options tables are
+  already release-gated regardless.
 - `[ ]` **P1.4 Regression test (revert-sensitive).** Unit test `options_section`: given a
   branch whose option carries `x-since: "0.14"` and released_version `0.13.0`, assert the
   row is dropped; with released_version `0.14.0`, assert it is kept. Add a sentinel-strip
@@ -391,3 +395,20 @@ Each fix ships with a revert-sensitive regression test (repo convention).
    optional; the allowlist covers the scenario counts now.
 6. **D-a removed** (adding unreleased prose that would itself need a sentinel); D1 stripping
    already yields pre-release consistency, and the prose is added at release (§6).
+
+## 10. Execution status (branch `v0.14-doc-drift`)
+
+- `[x]` **P-C4** LANDED — `docs-bundle.yml` no longer overlays the LikeC4 model / crate-graph
+  from main; they are tag-pinned. Clears A4 (the `f_baseline` diagram leak) on the next
+  docs-bundle push. (YAML validated; the tag's docs-export already emits both artifacts.)
+- `[x]` **P1** LANDED — the `x-since` schema keyword + `--released-version` +
+  `options_section` filter + the `<!-- alint:since=X -->` prose stripper. Clears A1/A2
+  (root_only Options rows + the `dir_exists` prose) for `file_absent`/`dir_exists`/`dir_absent`
+  while leaving released `file_exists` untouched. Verified end-to-end (export at 0.13.0 vs
+  0.14.0 vs local), revert-sensitive unit tests, gen-schema/docs-export gates, dogfood,
+  clippy, fmt all green. A3 zero-width/no_symlinks residual noted in P1.3.
+- `[ ]` **Next (not yet started):** the alint.org immediate fixes (§4 items 4-7: deploy the
+  audit branch, ls-lint `83`, benchmarks conflation, STATE.md), then the prevention P2/P4/P-REF
+  and the deferred §6 v0.14 work. P1.1 landed via the base-schema hand-edit route (the fast
+  path); migrating the existence kinds to schemars (the type-derived route, also fills their
+  empty Options descriptions) remains an optional follow-up.
