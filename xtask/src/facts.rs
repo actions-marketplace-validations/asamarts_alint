@@ -16,7 +16,7 @@
 //! Phase 3 / `WS1e`). The build-time `manifest.json` is a separate,
 //! deliberately-untouched artifact.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -35,6 +35,7 @@ struct Facts {
     rule_kinds: Vec<String>,
     families: Vec<String>,
     bundled_rulesets: Vec<String>,
+    bundled_ruleset_sizes: BTreeMap<String, usize>,
     output_formats: Vec<String>,
     subcommands: Vec<String>,
     fact_predicates: Vec<String>,
@@ -59,6 +60,7 @@ fn build_facts() -> Result<Facts> {
     let rule_kinds = rule_kinds(&root)?;
     let families = families(&root)?;
     let bundled_rulesets = bundled_rulesets(&root)?;
+    let bundled_ruleset_sizes = bundled_ruleset_sizes(&root)?;
     let output_formats = output_formats(&root)?;
     let mut subcommands: Vec<String> = crate::docs_export::CLI_REFERENCE_SUBCMDS
         .iter()
@@ -84,6 +86,7 @@ fn build_facts() -> Result<Facts> {
         rule_kinds,
         families,
         bundled_rulesets,
+        bundled_ruleset_sizes,
         output_formats,
         subcommands,
         fact_predicates,
@@ -190,6 +193,42 @@ fn bundled_rulesets(root: &Path) -> Result<Vec<String>> {
     let mut set = BTreeSet::new();
     walk(&dir, &dir, &mut set)?;
     Ok(set.into_iter().collect())
+}
+
+/// Number of directly-declared rules in each bundled ruleset (its top-level
+/// `rules:` array length; 0 for a pure-`extends:` composition), keyed by the
+/// same extension-stripped id as `bundled_rulesets`. Sources per-ruleset count
+/// claims on alint.org (e.g. "oss-baseline (15 rules)") so they can't drift.
+fn bundled_ruleset_sizes(root: &Path) -> Result<BTreeMap<String, usize>> {
+    fn walk(base: &Path, dir: &Path, out: &mut BTreeMap<String, usize>) -> Result<()> {
+        for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
+            let path = entry?.path();
+            if path.is_dir() {
+                walk(base, &path, out)?;
+            } else if path.extension().and_then(|e| e.to_str()) == Some("yml") {
+                let rel = path
+                    .strip_prefix(base)
+                    .unwrap_or(&path)
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let src = fs::read_to_string(&path)
+                    .with_context(|| format!("read {}", path.display()))?;
+                let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&src)
+                    .with_context(|| format!("parse {} as YAML", path.display()))?;
+                let count = doc
+                    .get("rules")
+                    .and_then(serde_yaml_ng::Value::as_sequence)
+                    .map_or(0, Vec::len);
+                out.insert(rel, count);
+            }
+        }
+        Ok(())
+    }
+    let dir = root.join("crates/alint-dsl/rulesets/v1");
+    let mut map = BTreeMap::new();
+    walk(&dir, &dir, &mut map)?;
+    Ok(map)
 }
 
 /// Lowercased `enum Format` variant names from `alint-output`, sorted.
@@ -324,6 +363,26 @@ mod tests {
     #[test]
     fn gen_facts_check_passes_on_committed_tree() {
         run(true).expect("gen-facts --check should pass on the committed tree");
+    }
+
+    /// Every bundled ruleset has exactly one `bundled_ruleset_sizes` entry (so
+    /// the size map and the name list can't drift apart), and oss-baseline's
+    /// count matches the "(15 rules)" claim alint.org renders from it
+    /// (P2.1 / documentation-drift.md).
+    #[test]
+    fn ruleset_sizes_cover_every_ruleset_and_anchor_oss_baseline() {
+        let f = build_facts().expect("build facts");
+        let names: BTreeSet<&String> = f.bundled_rulesets.iter().collect();
+        let sized: BTreeSet<&String> = f.bundled_ruleset_sizes.keys().collect();
+        assert_eq!(
+            names, sized,
+            "every ruleset must have exactly one size entry"
+        );
+        assert_eq!(
+            f.bundled_ruleset_sizes.get("oss-baseline"),
+            Some(&15),
+            "oss-baseline size feeds the '(15 rules)' claim on alint.org"
+        );
     }
 
     /// The five list-backed counts equal their list lengths, and every
