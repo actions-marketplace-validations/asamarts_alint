@@ -1,5 +1,41 @@
 use super::*;
 
+/// Release-gating of rule-body prose: `<!-- alint:since=X -->` blocks are
+/// dropped when X exceeds the released version, and the marker comments never
+/// reach the page. Revert-sensitive backstop for ADR-0007 / P1.
+#[test]
+fn strip_unreleased_prose_gates_since_blocks() {
+    let body = "\
+Intro line, always shown.
+
+<!-- alint:since=0.14 -->
+**Optional `root_only`** requires the match to be at the repo root.
+<!-- /alint:since -->
+
+Trailer line, always shown.
+";
+    // Released 0.13.0: the since=0.14 block is dropped; markers gone.
+    let gated = strip_unreleased_prose(body, Some((0, 13, 0)));
+    assert!(
+        !gated.contains("root_only"),
+        "unreleased prose leaked:\n{gated}"
+    );
+    assert!(
+        !gated.contains("alint:since"),
+        "marker comment leaked:\n{gated}"
+    );
+    assert!(gated.contains("Intro line") && gated.contains("Trailer line"));
+    // Released 0.14.0: the block content is kept; markers still stripped.
+    let shipped = strip_unreleased_prose(body, Some((0, 14, 0)));
+    assert!(shipped.contains("root_only") && !shipped.contains("alint:since"));
+    // Local/dev (None): content kept, markers stripped.
+    let local = strip_unreleased_prose(body, None);
+    assert!(local.contains("root_only") && !local.contains("alint:since"));
+    // A body with no markers is returned byte-for-byte.
+    let plain = "no markers here\n";
+    assert_eq!(strip_unreleased_prose(plain, Some((0, 13, 0))), plain);
+}
+
 /// `lead_example_with_kind` brings the matching-kind rule to the
 /// front of a multi-variant example, and is a no-op otherwise.
 #[test]
@@ -52,7 +88,7 @@ fn structured_query_pages_lead_with_their_own_kind() {
     ];
     let workspace = crate::bench_release::workspace_root().expect("workspace_root");
     let tmp = tempfile::tempdir().expect("tempdir");
-    generate_rules_pages(&workspace, tmp.path()).expect("generate rules pages");
+    generate_rules_pages(&workspace, tmp.path(), None).expect("generate rules pages");
 
     let rules_dir = tmp.path().join("rules");
     let mut pages: Vec<std::path::PathBuf> = Vec::new();

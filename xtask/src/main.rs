@@ -241,6 +241,14 @@ enum Commands {
         /// release build was the bulk of that bridge's cost.
         #[arg(long)]
         rules_only: bool,
+        /// The released version the per-rule reference pages must not document
+        /// ahead of (e.g. `0.13.0`). The docs-bundle rule-page bridge passes the
+        /// `releases/latest` tag here, so an option or prose block introduced
+        /// after the release (schema `x-since` / `<!-- alint:since=X -->`) is
+        /// stripped from the published page. Omitted for a local/dev export,
+        /// where nothing is release-gated. See ADR-0007.
+        #[arg(long)]
+        released_version: Option<String>,
     },
     /// Render the public roadmap from canonical `docs/design/ROADMAP.md`,
     /// stripping `<!-- alint:internal-start -->` /
@@ -345,7 +353,8 @@ fn main() -> Result<()> {
             out,
             check,
             rules_only,
-        } => docs_export::docs_export(out, check, rules_only),
+            released_version,
+        } => docs_export::docs_export(out, check, rules_only, released_version.as_deref()),
         Commands::GenPublicRoadmap {
             input,
             output,

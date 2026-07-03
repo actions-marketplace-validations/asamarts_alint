@@ -85,9 +85,21 @@ fn copy_c4_model(workspace: &Path, target_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn docs_export(out: Option<PathBuf>, check: bool, rules_only: bool) -> Result<()> {
+pub(crate) fn docs_export(
+    out: Option<PathBuf>,
+    check: bool,
+    rules_only: bool,
+    released_version: Option<&str>,
+) -> Result<()> {
     let workspace = workspace_root()?;
     let target_dir = out.unwrap_or_else(|| workspace.join("target/docs-bundle"));
+
+    // The released version the per-rule pages must not document ahead of.
+    // Passed explicitly by the docs-bundle rule-page bridge (which runs from
+    // a main worktree, so it can't read the release tag itself); None for a
+    // local/dev export, where nothing is release-gated. See ADR-0007 /
+    // docs/design/v0.14/documentation-drift.md P1.
+    let released = released_version.map(crate::rule_options_table::parse_version);
 
     // In check mode we still produce the bundle (so all the
     // generators run) — just under a tempdir we discard. Catches
@@ -116,7 +128,7 @@ pub(crate) fn docs_export(out: Option<PathBuf>, check: bool, rules_only: bool) -
         // of the export — most importantly step 5 (`generate_cli_reference`),
         // which builds the alint release binary. That redundant build is the
         // bulk of the bridge's cost, and the bridge never reads its output.
-        generate_rules_pages(&workspace, &target_dir)?;
+        generate_rules_pages(&workspace, &target_dir, released)?;
         eprintln!(
             "[xtask] docs-export --rules-only wrote {}/rules",
             target_dir.display()
@@ -153,7 +165,7 @@ pub(crate) fn docs_export(out: Option<PathBuf>, check: bool, rules_only: bool) -
     // overviews and a master alphabetical index. Returns a
     // kind → family-slug map used below to render kind names
     // as links from the bundled-ruleset pages.
-    let kind_to_family = generate_rules_pages(&workspace, &target_dir)?;
+    let kind_to_family = generate_rules_pages(&workspace, &target_dir, released)?;
 
     // 3. Per-bundled-ruleset reference page. `kind_to_family`
     //    drives the cross-links from `**kind**: <name>` →
@@ -342,6 +354,7 @@ fn strip_first_h1(body: &str) -> &str {
 fn generate_rules_pages(
     workspace: &Path,
     target_dir: &Path,
+    released: Option<crate::rule_options_table::Version>,
 ) -> Result<std::collections::HashMap<String, String>> {
     use std::collections::{HashMap, HashSet};
 
@@ -417,6 +430,7 @@ fn generate_rules_pages(
             &mut kind_to_family,
             &mut all_kinds,
             &mut missing_examples,
+            released,
         )?;
 
         emit_family_index(
@@ -497,6 +511,7 @@ fn process_family_h3s(
     kind_to_family: &mut std::collections::HashMap<String, String>,
     all_kinds: &mut Vec<KindEntry>,
     missing_examples: &mut Vec<String>,
+    released: Option<crate::rule_options_table::Version>,
 ) -> Result<Vec<RuleEntry>> {
     let mut family_rules: Vec<RuleEntry> = Vec::new();
     let mut kind_order: u32 = 0;
@@ -526,6 +541,11 @@ fn process_family_h3s(
             missing_examples.push(format!("{} → {}", h2.title, h3.title));
         }
         let summary = first_sentence(&h3.body);
+        // Release-gate the prose the same way the Options table is gated:
+        // drop `<!-- alint:since=X -->` blocks describing capability newer than
+        // the released version. Computed once per H3 (a multi-kind heading's
+        // siblings share it). See ADR-0007 / documentation-drift.md P1.
+        let page_body = strip_unreleased_prose(&h3.body, released);
         for kind in &group_kinds {
             kind_order += 1;
             let siblings: Vec<&str> = group_kinds
@@ -535,13 +555,13 @@ fn process_family_h3s(
                 .collect();
             let options_md = kind_branches
                 .get(kind)
-                .map(|branch| options_section(branch, schema));
+                .map(|branch| options_section(branch, schema, released));
             emit_rule_page(
                 family_dir,
                 kind,
                 family_slug,
                 &h2.title,
-                &h3.body,
+                &page_body,
                 &siblings,
                 options_md.as_deref(),
                 kind_order,
@@ -837,6 +857,56 @@ fn lead_example_with_kind(body: &str, kind: &str) -> String {
         reordered.join("\n\n"),
         &body[close..]
     )
+}
+
+/// Strip release-gated prose blocks from a rule's markdown body. A block
+/// delimited by `<!-- alint:since=X -->` ... `<!-- /alint:since -->` is
+/// dropped when `released` is `Some(v)` and `X > v` (the prose describes an
+/// unreleased capability); otherwise the block content is kept. The marker
+/// comments themselves are ALWAYS removed, so they never reach a published
+/// page. Code fences are tracked so a marker inside a fenced example stays
+/// literal. The prose analogue of the Options-table `x-since` gate
+/// (ADR-0007; docs/design/v0.14/documentation-drift.md P1).
+fn strip_unreleased_prose(
+    body: &str,
+    released: Option<crate::rule_options_table::Version>,
+) -> String {
+    // Fast path: almost every rule body carries no marker, so leave it
+    // byte-for-byte untouched (no line-ending normalisation).
+    if !body.contains("alint:since") {
+        return body.to_string();
+    }
+    let mut out = String::with_capacity(body.len());
+    let mut in_code_fence = false;
+    let mut dropping = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            if !dropping {
+                out.push_str(line);
+                out.push('\n');
+            }
+            continue;
+        }
+        if !in_code_fence {
+            if let Some(rest) = trimmed.strip_prefix("<!-- alint:since=") {
+                let ver = rest.trim().trim_end_matches("-->").trim();
+                dropping =
+                    released.is_some_and(|rel| crate::rule_options_table::parse_version(ver) > rel);
+                continue; // never emit the marker line itself
+            }
+            if trimmed == "<!-- /alint:since -->" {
+                dropping = false;
+                continue;
+            }
+        }
+        if !dropping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 // Page-rendering inputs are all distinct scalars/slices; a struct

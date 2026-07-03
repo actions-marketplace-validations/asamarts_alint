@@ -19,6 +19,23 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+/// A `(major, minor, patch)` version tuple for release-gating the docs.
+/// Missing components default to 0, so an `x-since: "0.14"` keyword parses
+/// to `(0, 14, 0)` and compares correctly against a released `0.13.0`.
+pub(crate) type Version = (u64, u64, u64);
+
+/// Parse a dotted version string (`"0.14"`, `"v0.13.0"`) into a
+/// `(major, minor, patch)` tuple, treating a missing or unparsable
+/// component as 0. Lenient by design: the input is either our own
+/// `x-since` schema keyword or the release tag the docs-bundle passes in.
+pub(crate) fn parse_version(s: &str) -> Version {
+    let mut it = s.trim().trim_start_matches('v').split('.');
+    let next = |it: &mut std::str::Split<'_, char>| {
+        it.next().and_then(|p| p.trim().parse().ok()).unwrap_or(0)
+    };
+    (next(&mut it), next(&mut it), next(&mut it))
+}
+
 /// Parse the committed config schema at `schema_path`
 /// (`schemas/v1/config.json`).
 pub(crate) fn load_config_schema(schema_path: &Path) -> Result<serde_json::Value> {
@@ -60,7 +77,11 @@ pub(crate) fn build_kind_branch_index(
 /// Render the `## Options` section for one rule branch. Omits the
 /// universal `kind`/`paths` fields from the table (`paths` is noted
 /// in the trailing common-fields line when the kind accepts it).
-pub(crate) fn options_section(branch: &serde_json::Value, schema: &serde_json::Value) -> String {
+pub(crate) fn options_section(
+    branch: &serde_json::Value,
+    schema: &serde_json::Value,
+    released: Option<Version>,
+) -> String {
     use std::collections::HashSet;
 
     let props = branch.get("properties").and_then(|p| p.as_object());
@@ -78,6 +99,18 @@ pub(crate) fn options_section(branch: &serde_json::Value, schema: &serde_json::V
                 .collect()
         })
         .unwrap_or_default();
+    // Release-gate: drop any option whose schema `x-since` exceeds the
+    // released version, so the published reference never documents an
+    // option the released binary lacks (ADR-0007; documentation-drift.md
+    // P1). No-op when `released` is None (local preview / dev export).
+    if let Some(rel) = released {
+        rows.retain(
+            |(_, ov)| match ov.get("x-since").and_then(serde_json::Value::as_str) {
+                Some(since) => parse_version(since) <= rel,
+                None => true,
+            },
+        );
+    }
     rows.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut out = String::new();
@@ -466,7 +499,7 @@ mod tests {
             },
             "required": ["name"]
         });
-        let out = options_section(&branch, &schema);
+        let out = options_section(&branch, &schema, None);
 
         assert!(out.starts_with("## Options"));
         // `kind` and `paths` are dropped from the table.
@@ -481,11 +514,49 @@ mod tests {
     }
 
     #[test]
+    fn parse_version_pads_missing_components() {
+        assert_eq!(parse_version("0.14"), (0, 14, 0));
+        assert_eq!(parse_version("v0.13.0"), (0, 13, 0));
+        assert_eq!(parse_version("1.2.3"), (1, 2, 3));
+        // The gate ordering the release filter relies on.
+        assert!(parse_version("0.14") > parse_version("0.13.0"));
+        assert!(parse_version("0.14") <= parse_version("0.14.0"));
+        assert!(parse_version("0.14") <= parse_version("0.14.1"));
+    }
+
+    #[test]
+    fn options_section_release_gates_x_since() {
+        let schema = json!({});
+        let branch = json!({
+            "properties": {
+                "kind": { "const": "demo" },
+                "root_only": { "type": "boolean", "default": false, "description": "Root only.", "x-since": "0.14" },
+                "stable_opt": { "type": "string", "description": "Always here." }
+            }
+        });
+        // Released 0.13.0: the x-since:0.14 option is stripped; the plain one stays.
+        let gated = options_section(&branch, &schema, Some((0, 13, 0)));
+        assert!(
+            !gated.contains("`root_only`"),
+            "unreleased option leaked into the table:\n{gated}"
+        );
+        assert!(gated.contains("`stable_opt`"));
+        // Released 0.14.0: the option is now shipped, so it appears.
+        let shipped = options_section(&branch, &schema, Some((0, 14, 0)));
+        assert!(
+            shipped.contains("`root_only`"),
+            "released option missing from the table:\n{shipped}"
+        );
+        // No released version (local/dev preview): nothing is gated.
+        assert!(options_section(&branch, &schema, None).contains("`root_only`"));
+    }
+
+    #[test]
     fn options_section_whole_repo_branch_has_no_options_note() {
         let schema = json!({});
         // No properties beyond `kind` -> a whole-repo rule.
         let branch = json!({ "properties": { "kind": { "const": "demo" } } });
-        let out = options_section(&branch, &schema);
+        let out = options_section(&branch, &schema, None);
         assert!(out.contains("_This rule takes no kind-specific options._"));
         assert!(
             out.contains("this rule analyses the whole repository, so it takes no `paths`")
@@ -529,7 +600,7 @@ mod tests {
         assert!(index.len() > 50, "expected the full rule-kind set");
 
         for (kind, branch) in &index {
-            let section = options_section(branch, &schema);
+            let section = options_section(branch, &schema, None);
             assert!(section.starts_with("## Options"), "{kind}: missing heading");
             assert!(
                 !section.contains("| value |"),

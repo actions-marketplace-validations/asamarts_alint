@@ -149,7 +149,15 @@ jobs:
           # the export — most importantly the CLI-reference step's `cargo build
           # --release -p alint`, which this second (cold) build would otherwise
           # redo from scratch on top of the tag build above.
-          ( cd "$main_tree" && cargo run -q -p xtask -- docs-export --rules-only --out "$main_tree/_bundle" )
+          #
+          # --released-version: this bridge runs MAIN's docs-export against MAIN's
+          # schema/rules.md, so an option (schema `x-since`) or prose block
+          # (`<!-- alint:since=X -->`) introduced after the release would render
+          # on the published page. Pass the release tag so docs-export strips
+          # anything newer than it, keeping the per-rule pages within released
+          # behaviour (ADR-0007; documentation-drift.md P1). The main worktree
+          # can't read the tag itself, so it must be supplied explicitly.
+          ( cd "$main_tree" && cargo run -q -p xtask -- docs-export --rules-only --released-version "${BUNDLE_SOURCE#v}" --out "$main_tree/_bundle" )
           refreshed=0
           while IFS= read -r page; do
             src="${main_tree}/_bundle/${page#target/docs-bundle/}"

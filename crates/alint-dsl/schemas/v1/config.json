@@ -1021,7 +1021,8 @@
         "root_only": {
           "default": false,
           "description": "If true, only a directory directly at the repository root is forbidden.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-since": "0.14"
         }
       },
       "required": [
@@ -1074,7 +1075,8 @@
         "root_only": {
           "default": false,
           "description": "If true, only a directory directly at the repository root satisfies the rule.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-since": "0.14"
         }
       },
       "required": [
@@ -1202,7 +1204,8 @@
         "root_only": {
           "default": false,
           "description": "If true, only a file directly at the repository root is forbidden.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-since": "0.14"
         }
       },
       "required": [
