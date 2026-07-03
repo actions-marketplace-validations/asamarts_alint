@@ -104,7 +104,12 @@ jobs:
           echo "Overlaid reference + design docs from origin/main ($(git rev-parse --short origin/main))."
 
       - name: Generate docs-bundle/
-        run: cargo run -q -p xtask -- docs-export
+        # --released-version: docs/site/reference is overlaid from main above, so
+        # strip any `<!-- alint:since=X -->` block newer than the release from the
+        # hand-written reference pages (P-REF), the same gate the rule pages use.
+        # A no-op for the unmarked majority; keeps the reference overlay within
+        # released behaviour mechanically instead of by author discipline.
+        run: cargo run -q -p xtask -- docs-export --released-version "${BUNDLE_SOURCE#v}"
         # Output lives at target/docs-bundle/.
 
       - name: Ensure roadmap.json is in the bundle (main-tracked)

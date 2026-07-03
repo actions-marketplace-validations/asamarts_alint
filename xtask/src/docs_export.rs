@@ -136,8 +136,10 @@ pub(crate) fn docs_export(
         return Ok(());
     }
 
-    // 1. Hand-written long-form prose, copied verbatim.
-    copy_site_tree(&workspace, &target_dir)?;
+    // 1. Hand-written long-form prose. Copied verbatim, except release-gated
+    //    `<!-- alint:since=X -->` blocks are stripped from .md when a released
+    //    version is set (matters for the main-overlaid docs/site/reference; P-REF).
+    copy_site_tree(&workspace, &target_dir, released)?;
 
     // 2. Verbatim copies of the existing top-level docs.
     copy_one(
@@ -254,7 +256,11 @@ pub(crate) fn docs_export(
 /// Recursively copy `docs/site/**.md` into the bundle root. Mirror
 /// the directory layout exactly — `docs/site/getting-started/foo.md`
 /// → `docs-bundle/getting-started/foo.md`.
-fn copy_site_tree(workspace: &Path, target_dir: &Path) -> Result<()> {
+fn copy_site_tree(
+    workspace: &Path,
+    target_dir: &Path,
+    released: Option<crate::rule_options_table::Version>,
+) -> Result<()> {
     let site_root = workspace.join(docs_paths::SITE_DIR);
     if !site_root.is_dir() {
         bail!(
@@ -272,8 +278,26 @@ fn copy_site_tree(workspace: &Path, target_dir: &Path) -> Result<()> {
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(&entry, &dest)
-            .with_context(|| format!("copying {} → {}", entry.display(), dest.display()))?;
+        let is_markdown = entry
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == "md" || e == "mdx");
+        if released.is_some() && is_markdown {
+            // Release-gate hand-written docs the same way the rule pages are:
+            // strip `<!-- alint:since=X -->` blocks newer than the released
+            // version. This matters for docs/site/reference/**, which the
+            // docs-bundle overlays from main (the one leak vector among the
+            // otherwise tag-pinned docs/site tree). A no-op for the unmarked
+            // majority (the stripper fast-paths files with no marker). See
+            // ADR-0007 / docs/design/v0.14/documentation-drift.md P-REF.
+            let body =
+                fs::read_to_string(&entry).with_context(|| format!("read {}", entry.display()))?;
+            fs::write(&dest, strip_unreleased_prose(&body, released))
+                .with_context(|| format!("writing {}", dest.display()))?;
+        } else {
+            fs::copy(&entry, &dest)
+                .with_context(|| format!("copying {} → {}", entry.display(), dest.display()))?;
+        }
     }
     Ok(())
 }

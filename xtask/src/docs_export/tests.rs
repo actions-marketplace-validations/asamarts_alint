@@ -36,6 +36,37 @@ Trailer line, always shown.
     assert_eq!(strip_unreleased_prose(plain, Some((0, 13, 0))), plain);
 }
 
+/// P-REF: `copy_site_tree` release-gates the hand-written docs the same way the
+/// rule pages are gated, so a `<!-- alint:since=X -->` block in a main-overlaid
+/// reference page can't ship ahead of the release. Revert-sensitive.
+#[test]
+fn copy_site_tree_release_gates_reference_prose() {
+    let ws = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(ws.path().join("docs/site/reference")).unwrap();
+    fs::write(
+        ws.path().join("docs/site/reference/formats.md"),
+        "Released line.\n\n<!-- alint:since=0.14 -->\nUnreleased baseline note.\n<!-- /alint:since -->\n\nTrailer.\n",
+    )
+    .unwrap();
+
+    // Released 0.13.0: the since=0.14 block is stripped from the copied page.
+    let out = tempfile::tempdir().unwrap();
+    copy_site_tree(ws.path(), out.path(), Some((0, 13, 0))).unwrap();
+    let gated = fs::read_to_string(out.path().join("reference/formats.md")).unwrap();
+    assert!(
+        !gated.contains("Unreleased baseline note"),
+        "leaked:\n{gated}"
+    );
+    assert!(!gated.contains("alint:since"));
+    assert!(gated.contains("Released line.") && gated.contains("Trailer."));
+
+    // Released 0.14.0: the block content is kept (markers still stripped).
+    let out2 = tempfile::tempdir().unwrap();
+    copy_site_tree(ws.path(), out2.path(), Some((0, 14, 0))).unwrap();
+    let shipped = fs::read_to_string(out2.path().join("reference/formats.md")).unwrap();
+    assert!(shipped.contains("Unreleased baseline note") && !shipped.contains("alint:since"));
+}
+
 /// `lead_example_with_kind` brings the matching-kind rule to the
 /// front of a multi-variant example, and is a no-op otherwise.
 #[test]
