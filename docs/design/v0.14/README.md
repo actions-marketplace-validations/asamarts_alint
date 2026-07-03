@@ -1,7 +1,8 @@
 # v0.14 — Hardening pass
 
-Status: **In progress** — the hardening remediation is complete; the cut awaits
-its release mechanics. The v0.14 cut has three strands:
+Status: **In progress** — the hardening remediation is complete; a 2026-07-03
+two-repo drift audit then opened a fourth strand (documentation + site drift:
+remediation + prevention), tracked below. The v0.14 cut has four strands:
 
 1. **Baseline / grandfathering mode** — already landed on CHANGELOG
    `[Unreleased]` (slices 1–4, audit follow-ups #88–#94). Design:
@@ -23,6 +24,14 @@ its release mechanics. The v0.14 cut has three strands:
    baseline walk-exclusion was `check`-only and over-excluding; a vacuous
    M5 regression test). Each fix ships with a revert-sensitive test; all
    tracked in CHANGELOG `[Unreleased]`.
+4. **Documentation + site drift (remediation + prevention)** - a 2026-07-03
+   two-repo audit (then an adversarial review of its own plan) found unreleased
+   v0.14 content leaking onto the live site via THREE main-overlaid vectors
+   (the per-rule pages' `root_only`, the LikeC4 model's `baseline` element, and
+   `docs/site/reference/**`), stale marketing counts, and a missing prevention
+   layer. The plan and the prevention design (a release-aware `x-since` schema
+   keyword + arch-model tag-pinning + sourced-or-allowlisted counts, ADR-0007)
+   live in [`documentation-drift.md`](./documentation-drift.md).
 
 ## Why a hardening pass headlines v0.14
 
@@ -45,6 +54,7 @@ leads the cut.
 |---|---|
 | [`post_v0.13_audit.md`](./post_v0.13_audit.md) | The full audit findings + the phased remediation plan + per-finding status. The living checklist for the cut. |
 | [`ci-fork-pr-isolation.md`](./ci-fork-pr-isolation.md) | Proposal (H6 follow-up): route untrusted fork-PR CI to ephemeral GitHub-hosted runners, keeping it off the self-hosted box. Spec to review before a workflow change lands. |
+| [`documentation-drift.md`](./documentation-drift.md) | The 2026-07-03 doc + site-drift audit (adversarially reviewed): consolidated findings across three leak vectors, the resolved decisions (ADR-0007), immediate remediation, and the prevention layer (`x-since` schema keyword + arch-model tag-pin + sourced-or-allowlisted counts + regression tests). §9 records the review's corrections to the first draft. |
 
 ## Release shape
 
