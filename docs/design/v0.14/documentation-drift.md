@@ -407,8 +407,23 @@ Each fix ships with a revert-sensitive regression test (repo convention).
   while leaving released `file_exists` untouched. Verified end-to-end (export at 0.13.0 vs
   0.14.0 vs local), revert-sensitive unit tests, gen-schema/docs-export gates, dogfood,
   clippy, fmt all green. A3 zero-width/no_symlinks residual noted in P1.3.
-- `[ ]` **Next (not yet started):** the alint.org immediate fixes (§4 items 4-7: deploy the
-  audit branch, ls-lint `83`, benchmarks conflation, STATE.md), then the prevention P2/P4/P-REF
-  and the deferred §6 v0.14 work. P1.1 landed via the base-schema hand-edit route (the fast
-  path); migrating the existence kinds to schemars (the type-derived route, also fills their
-  empty Options descriptions) remains an optional follow-up.
+- `[x]` **alint.org immediate fixes (§4)** LANDED on branch `audit/post-v0.13-drift` (local):
+  **B1** ls-lint `83`->`{alint.ruleKinds}`, **B2** benchmarks meta deconflated, **E4** STATE.md
+  reconciled (atop the prior session's W1-W7).
+- `[x]` **P2.1** LANDED (engine) — `facts.json` gains `bundled_ruleset_sizes`
+  (oss-baseline == 15, test-anchored); the per-ruleset contract source. gen-facts --check green.
+- `[x]` **P2.3/P2.4** LANDED (alint.org) — `scripts/check-counts.mjs`: a hardcoded
+  rule/ruleset/family/format count must be a `{alint.*}` interpolation or an explicit
+  allowlist entry (10 scoped counts enumerated with reasons). `--self-test` + a negative
+  test prove it catches the B1 drift; wired into `check-pins.yml` (PR + push + cron).
+- `[x]` **P2.2** captured — the sweep confirmed catalogue counts are already interpolated;
+  the residual scoped counts are allowlisted (bench/competitor permanent; oss-baseline +
+  case-study are sourced follow-ups: interpolate oss-baseline once P2.1's field syncs to
+  alint.org, and the case-study index cards from their `rules:` frontmatter).
+- `[ ]` **Remaining:** P3 (optional bench-count contract), P4 (W6: API-endpoint gate +
+  deploy-time gating), P-REF (reference-overlay hardening), P5 (RELEASING.md checklist),
+  the §6 release-gated v0.14 work (baseline site docs, Kani-claim narrowing), and the D-b
+  CHANGELOG framing nit. P1.1 used the base-schema hand-edit route; migrating the existence
+  kinds to schemars (type-derived `x-since` + fills their empty descriptions) is optional.
+- **Nothing is pushed/deployed** — both branches are local; the leaks stay live until the
+  engine branch merges to `main` (triggers `docs-bundle.yml` -> the site).
