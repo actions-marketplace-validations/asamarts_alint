@@ -420,10 +420,20 @@ Each fix ships with a revert-sensitive regression test (repo convention).
   the residual scoped counts are allowlisted (bench/competitor permanent; oss-baseline +
   case-study are sourced follow-ups: interpolate oss-baseline once P2.1's field syncs to
   alint.org, and the case-study index cards from their `rules:` frontmatter).
-- `[ ]` **Remaining:** P3 (optional bench-count contract), P4 (W6: API-endpoint gate +
-  deploy-time gating), P-REF (reference-overlay hardening), P5 (RELEASING.md checklist),
-  the §6 release-gated v0.14 work (baseline site docs, Kani-claim narrowing), and the D-b
-  CHANGELOG framing nit. P1.1 used the base-schema hand-edit route; migrating the existence
-  kinds to schemars (type-derived `x-since` + fills their empty descriptions) is optional.
+- `[x]` **P4.1/P4.3** LANDED (alint.org) — count gate extended to case-study counts; run as a
+  pre-flight in `deploy.yml` so a count-drift aborts the deploy. **P4.2 DEFERRED** (external
+  `source_url` resolvability needs network-flaky GitHub probing; internal `docs_url` is already
+  covered by `check-internal-links.mjs`).
+- `[x]` **P-REF** LANDED (engine) — `copy_site_tree` strips `<!-- alint:since=X -->` blocks from
+  the main-overlaid `docs/site/reference/**` when `--released-version` is set; docs-bundle passes
+  it. Revert-sensitive test. Closes the third leak vector mechanically + unblocks E1's pre-write.
+- `[x]` **P5 + D-b** LANDED (engine) — RELEASING.md gains a per-release doc-drift checklist
+  (unwrap x-since options/prose, narrow walked-back claims, write feature site docs, reconcile
+  pins + STATE.md, confirm gates). D-b: the `root_only` CHANGELOG entry stays correctly under
+  Fixed; the checklist gives it release-time visibility.
+- `[ ]` **Remaining:** P3 (optional bench-count contract), P4.2 (deferred, above), the §6
+  release-gated v0.14 work (baseline site docs, Kani-claim narrowing), the A3 mid-sentence
+  residual, and — optional — migrating the existence kinds to schemars (type-derived `x-since`
+  + fills their empty descriptions; P1.1 used the base-schema hand-edit route).
 - **Nothing is pushed/deployed** — both branches are local; the leaks stay live until the
   engine branch merges to `main` (triggers `docs-bundle.yml` -> the site).
