@@ -40,9 +40,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file suppresses the total, not the last writer's count); regeneration is
   byte-identical across runs and its guard counts new *occurrences* (a higher
   count on an existing finding is fresh debt too, not just new fingerprints).
-  The baseline file is excluded from the walk, so a broad-glob content rule
-  (`**/*.json`, `line_max_width`, …) can't lint alint's own JSON-Lines artifact
-  as a new violation — the adopt-flow stays clean.
+  The baseline file is excluded from the walk by `check`, `baseline`, and
+  `fix` alike, so a broad-glob content rule (`**/*.json`, `line_max_width`, …)
+  can't lint alint's own JSON-Lines artifact as a new violation — the adopt-flow
+  stays clean, regeneration doesn't see the artifact as fresh debt, and `fix`
+  never rewrites it. The exclusion is root-anchored, so a same-named baseline in
+  a subdirectory is still linted (its real violations aren't silently dropped).
   See `docs/design/baseline.md` / ADR-0006.
 - `--only <RULE_ID>` on `check` and `fix` (repeatable): restrict the run to the
   named rule id(s) from the effective config. An id that matches no loaded rule
@@ -94,6 +97,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   output-format matrix that renders a violation path carrying each format's
   metacharacters, a control byte, and a non-UTF-8 byte through all eight
   formats. (E2E sweep)
+- **Markdown output no longer splits a heading on a newline-in-path.** A file
+  whose name contains a `\n`/`\r` (legal on Unix) broke out of the `## \`path\``
+  inline-code heading, orphaning the rest onto a following line. `md_inline_code`
+  now collapses those control chars to a space (inline code is single-line), and
+  the weird-path matrix asserts every Markdown heading stays complete. (review
+  follow-up)
 - **Exit code `3` (internal error) is now actually produced.** The README
   documented `3` for an internal alint error vs `2` for a config/usage error,
   but every error funnelled to `2`, so a script could never tell "fix your
@@ -353,11 +362,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `+`) aborted the run; the addition is now checked and a malformed timestamp
   is dropped. (M7)
 - **`git_no_denied_paths` denylist patterns are anchored to any depth.** A
-  bare denied pattern (no `/`) like `*.pem` or `id_rsa` was root-anchored by
-  globset, so `secrets/server.pem` evaded the denylist — a dangerous default
-  for a secrets control. Bare patterns are now auto-anchored to `**/<pattern>`
-  (matching any depth, root included); explicit-path patterns
-  (`secrets/*.key`, `**/*.pem`) are taken as written. (M5)
+  bare denied *literal* (no `/`, no wildcard) like `id_rsa` was root-anchored by
+  globset, so a tracked `secrets/id_rsa` evaded the denylist — a dangerous
+  default for a secrets control. (A bare *wildcard* like `*.pem` already crosses
+  `/` in globset, so it was never the gap — an earlier note over-generalised.)
+  Bare patterns are now auto-anchored to `**/<pattern>` (matching any depth,
+  root included — a no-op for wildcards, the real fix for literals); explicit-path
+  patterns (`secrets/*.key`, `**/*.pem`) are taken as written. (M5)
 - **Completed the Unicode control-character sets for the obfuscation rules.**
   `no_bidi_controls` now also flags the implicit directional marks U+061C
   (ALM), U+200E (LRM), and U+200F (RLM) — completing the Trojan-Source
