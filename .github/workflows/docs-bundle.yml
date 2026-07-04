@@ -104,12 +104,16 @@ jobs:
           echo "Overlaid reference + design docs from origin/main ($(git rev-parse --short origin/main))."
 
       - name: Generate docs-bundle/
-        # --released-version: docs/site/reference is overlaid from main above, so
-        # strip any `<!-- alint:since=X -->` block newer than the release from the
-        # hand-written reference pages (P-REF), the same gate the rule pages use.
-        # A no-op for the unmarked majority; keeps the reference overlay within
-        # released behaviour mechanically instead of by author discipline.
-        run: cargo run -q -p xtask -- docs-export --released-version "${BUNDLE_SOURCE#v}"
+        # This runs the RELEASE TAG's docs-export, so it must NOT pass a flag the
+        # tag's xtask lacks. P-REF's `--released-version` (stripping unreleased
+        # `<!-- alint:since=X -->` blocks from the main-overlaid
+        # docs/site/reference) only exists from v0.14 on — and the tag's
+        # copy_site_tree has no stripper anyway — so reference-overlay
+        # release-gating activates once v0.14 is the release tag. Until then the
+        # reference overlay stays within released behaviour by convention. (The
+        # rule-page bridge below DOES gate, because it runs MAIN's docs-export
+        # from a worktree, where the flag exists.)
+        run: cargo run -q -p xtask -- docs-export
         # Output lives at target/docs-bundle/.
 
       - name: Ensure roadmap.json is in the bundle (main-tracked)
