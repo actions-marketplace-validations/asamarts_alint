@@ -10,12 +10,29 @@ use serde::Deserialize;
 
 use crate::fixers::FileCreateFixer;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// If true, only files directly at the repository root satisfy the rule.
     #[serde(default)]
     root_only: bool,
+    /// Restrict matches to files tracked in git's index: entries present in the
+    /// walked tree but not in `git ls-files` are skipped. No effect outside a
+    /// git repo. Default `false`.
+    #[serde(default)]
+    git_tracked_only: bool,
+    /// Per-rule override for the workspace `respect_gitignore` setting. When
+    /// `false`, this rule's literal-path checks also stat the filesystem
+    /// directly, so it sees files that are tracked AND `.gitignore`-masked
+    /// (the bazel-style `.bazelversion` pattern — pitfall #18 in
+    /// `docs/development/CONFIG-AUTHORING.md`). Honoured only by `file_exists`
+    /// literal paths; glob patterns fall through to the workspace setting.
+    /// Default: inherit the workspace `respect_gitignore`.
+    #[serde(default)]
+    respect_gitignore: Option<bool>,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct FileExistsRule {
@@ -262,8 +279,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         patterns,
         literal_paths,
         root_only: opts.root_only,
-        git_tracked_only: spec.git_tracked_only,
-        respect_gitignore: spec.respect_gitignore,
+        git_tracked_only: opts.git_tracked_only,
+        respect_gitignore: opts.respect_gitignore,
         fixer,
     }))
 }

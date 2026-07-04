@@ -57,6 +57,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   iff `fix_available`. Lets an agent run the fix programmatically instead of
   parsing the command out of the English `agent_instruction`.
 
+### Changed
+
+- **`git_tracked_only` and `respect_gitignore` are now kind-specific options,
+  rejected off the kinds that honor them (ADR-0008).** Both moved off the common
+  `RuleSpec` into per-kind options: `git_tracked_only` into the four existence
+  kinds (`file_exists` / `file_absent` / `dir_exists` / `dir_absent`), and the
+  per-rule `respect_gitignore` override into `file_exists` alone (the only kind
+  that honors it - the pitfall-#18 escape hatch). A rule that sets either field on
+  a kind that does not honor it now fails to load with a clean error instead of
+  silently ignoring it (the fail-loud the fields' doc-comments always promised).
+  This is a stricter load: configs that set `git_tracked_only` on a non-existence
+  kind, or `respect_gitignore` on any kind but `file_exists`, used to load and
+  no-op and now error. The workspace-level `respect_gitignore:` walker setting is
+  unaffected. The four existence kinds are now schemars-derived, which also fills
+  their previously-empty option descriptions.
+
 ### Fixed
 
 - **Auto-fixers no longer corrupt binaries or risk truncation on failure.**
