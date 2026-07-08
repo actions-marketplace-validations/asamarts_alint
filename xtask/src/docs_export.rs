@@ -412,6 +412,9 @@ fn generate_rules_pages(
     let mut kind_to_family: HashMap<String, String> = HashMap::new();
     let mut all_kinds: Vec<KindEntry> = Vec::new();
     let mut family_summaries: Vec<FamilySummary> = Vec::new();
+    // (title, display order, slug) per family, for the second-pass family Overview
+    // render (categories-based membership needs all_kinds complete first).
+    let mut families_meta: Vec<(String, u32, String)> = Vec::new();
     // Per-rule H3 sections in `docs/rules.md` must contain a
     // ```yaml usage example. Accumulated across all families and
     // surfaced as a single hard failure so a docs PR sees every
@@ -444,7 +447,10 @@ fn generate_rules_pages(
         let family_dir = rules_dir.join(&family_slug);
         fs::create_dir_all(&family_dir)?;
 
-        let family_rules = process_family_h3s(
+        // Populate all_kinds (with per-kind categories) + per-rule pages. The
+        // family Overview pages are rendered in a second pass below, once every
+        // kind's categories are known (categories-based membership).
+        process_family_h3s(
             &h2,
             &family_dir,
             &family_slug,
@@ -456,19 +462,7 @@ fn generate_rules_pages(
             &mut missing_examples,
             released,
         )?;
-
-        emit_family_index(
-            &family_dir,
-            &h2.title,
-            family_order,
-            &family_slug,
-            &family_rules,
-        )?;
-        family_summaries.push(FamilySummary {
-            title: h2.title.clone(),
-            slug: family_slug.clone(),
-            rule_count: family_rules.len(),
-        });
+        families_meta.push((h2.title.clone(), family_order, family_slug.clone()));
     }
 
     // Hard-fail on any registered kind that rules.md doesn't document. A new
@@ -510,6 +504,27 @@ fn generate_rules_pages(
             missing_examples.len(),
             missing_examples.join("\n  - "),
         );
+    }
+
+    // Family Overview pages: categories-based membership. Each family lists every
+    // kind whose `**Categories:**` line includes it (by slug), not just the kinds
+    // physically under its H2. At single-membership this equals the directory
+    // membership; at Phase-3 multi-membership it cross-lists automatically.
+    for (title, order, slug) in &families_meta {
+        let rules: Vec<RuleEntry> = all_kinds
+            .iter()
+            .filter(|k| k.categories.iter().any(|c| c == slug))
+            .map(|k| RuleEntry {
+                kind: k.kind.clone(),
+                summary: k.summary.clone(),
+            })
+            .collect();
+        emit_family_index(&rules_dir.join(slug), title, *order, slug, &rules)?;
+        family_summaries.push(FamilySummary {
+            title: title.clone(),
+            slug: slug.clone(),
+            rule_count: rules.len(),
+        });
     }
 
     emit_rules_master_index(&rules_dir, &all_kinds, &family_summaries, aliases.len())?;
@@ -620,6 +635,7 @@ fn process_family_h3s(
                 family_title: h2.title.clone(),
                 family_slug: family_slug.to_string(),
                 summary: summary.clone(),
+                categories: category_slugs.iter().copied().map(String::from).collect(),
             });
         }
     }
@@ -638,6 +654,8 @@ struct KindEntry {
     family_title: String,
     family_slug: String,
     summary: String,
+    /// URL slugs of every category the kind belongs to (primary first).
+    categories: Vec<String>,
 }
 
 struct FamilySummary {
