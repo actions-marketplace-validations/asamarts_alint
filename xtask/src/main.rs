@@ -299,7 +299,7 @@ enum Commands {
     },
     /// Regenerate the in-crate kind-to-category bridge from docs/rules.md `**Categories:**` lines.
     GenCategories {
-        /// Verify the committed `categories.gen.rs` instead of rewriting it.
+        /// Verify the committed `categories_gen.rs` instead of rewriting it.
         #[arg(long)]
         check: bool,
     },

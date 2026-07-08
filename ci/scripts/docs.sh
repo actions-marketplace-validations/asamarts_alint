@@ -34,7 +34,7 @@ echo "==> Running xtask gen-facts --check"
 cargo run -q -p xtask -- gen-facts --check
 
 # `xtask gen-categories --check` regenerates the in-crate kind-to-category bridge
-# (crates/alint-rules/src/categories.gen.rs) from the `**Categories:**` lines in
+# (crates/alint-rules/src/categories_gen.rs) from the `**Categories:**` lines in
 # docs/rules.md, validated against the alint-core Category vocabulary and the live
 # registry (every canonical kind has a line; aliases resolve). Run
 # `cargo run -p xtask -- gen-categories` to refresh after editing a categories line.

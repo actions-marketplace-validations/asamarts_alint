@@ -8,7 +8,7 @@ use alint_core::RuleRegistry;
 /// The generated kind-to-category bridge (`xtask gen-categories`, from the
 /// `**Categories:**` lines in docs/rules.md). Read by the CLI category
 /// discovery commands.
-#[path = "categories.gen.rs"]
+#[path = "categories_gen.rs"]
 pub mod categories;
 
 /// Generates a migrated rule kind's `options_schema()` fn: the schemars-derived

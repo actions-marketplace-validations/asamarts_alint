@@ -5,7 +5,7 @@
 //! Mirrors `gen-schema`'s committed in-crate artifact + `--check` gate: the CLI
 //! (`alint rules`, `alint list --category`) reads categories at runtime, but
 //! rules.md is a docs-tree file the binary never ships, so the associations are
-//! generated into `crates/alint-rules/src/categories.gen.rs` and committed.
+//! generated into `crates/alint-rules/src/categories_gen.rs` and committed.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -15,7 +15,7 @@ use alint_core::Category;
 use anyhow::{Context, Result, bail};
 
 const RULES_MD: &str = "docs/rules.md";
-const GEN_PATH: &str = "crates/alint-rules/src/categories.gen.rs";
+const GEN_PATH: &str = "crates/alint-rules/src/categories_gen.rs";
 
 const META_FAMILIES: &[&str] = &[
     "Contents",
