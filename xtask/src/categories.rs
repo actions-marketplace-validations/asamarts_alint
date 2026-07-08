@@ -181,6 +181,13 @@ fn parse_categories(content: &str, primary: Category) -> Result<Vec<Category>> {
             bail!("category {:?} listed twice", c.title());
         }
     }
+    if cats.len() > 3 {
+        bail!(
+            "a rule kind may belong to at most 3 categories; {:?} lists {}",
+            cats.iter().map(|c| c.title()).collect::<Vec<_>>(),
+            cats.len()
+        );
+    }
     Ok(cats)
 }
 
@@ -273,5 +280,30 @@ mod tests {
         assert!(parse_categories("Bananas", Category::Content).is_err());
         // duplicate
         assert!(parse_categories("Content, Content", Category::Content).is_err());
+        // three is allowed; four exceeds the cap
+        assert!(
+            parse_categories(
+                "Content, Encoding, Security / Unicode sanity",
+                Category::Content
+            )
+            .is_ok()
+        );
+        assert!(
+            parse_categories(
+                "Content, Encoding, Security / Unicode sanity, Naming",
+                Category::Content
+            )
+            .is_err(),
+            "more than 3 categories must be rejected"
+        );
+    }
+
+    /// Mirrors every sibling generator (gen-model / gen-facts / gen-schema): the
+    /// committed `categories_gen.rs` must match `rules.md` + the live registry,
+    /// so `cargo test` exercises `validate_against_registry` and the drift check,
+    /// not just CI's docs job.
+    #[test]
+    fn gen_categories_check_passes_on_committed_tree() {
+        run(true).expect("gen-categories --check must pass on the committed tree");
     }
 }

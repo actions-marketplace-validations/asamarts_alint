@@ -17,12 +17,7 @@ use anyhow::{Context, Result, bail};
 use crate::docs_export::{RuleEntry, escape_yaml_string};
 
 /// Render a family overview page: frontmatter, a lede, then the rule table.
-pub(crate) fn render(
-    family_title: &str,
-    family_order: u32,
-    family_slug: &str,
-    rules: &[RuleEntry],
-) -> String {
+pub(crate) fn render(family_title: &str, family_order: u32, rules: &[RuleEntry]) -> String {
     let mut page = String::new();
     let _ = writeln!(&mut page, "---");
     let _ = writeln!(&mut page, "title: '{}'", escape_yaml_string(family_title));
@@ -44,10 +39,14 @@ pub(crate) fn render(
     let _ = writeln!(&mut page, "| Rule | Description |");
     let _ = writeln!(&mut page, "| --- | --- |");
     for r in rules {
+        // Link to the kind's PRIMARY family page (its canonical URL), NOT the
+        // family being rendered, so a cross-listed (secondary) kind still points
+        // at its one real page. See RuleEntry::family_slug.
         let _ = writeln!(
             &mut page,
             "| [`{kind}`](/docs/rules/{family_slug}/{kind}/) | {summary} |",
             kind = r.kind,
+            family_slug = r.family_slug,
             summary = escape_table_cell(&ascii_dashes(&r.summary)),
         );
     }
@@ -119,16 +118,26 @@ mod tests {
             RuleEntry {
                 kind: "file_exists".into(),
                 summary: "Every glob match in `paths` must exist.".into(),
+                family_slug: "existence".into(),
             },
             RuleEntry {
+                // Cross-listed from another family: its link MUST point to its
+                // own primary family, not the family being rendered (F1).
                 kind: "no_merge_conflict_markers".into(),
                 summary: "Flag `||||||| ` markers — left over from a merge.".into(),
+                family_slug: "security-unicode-sanity".into(),
             },
         ];
-        let md = render("Existence", 1, "existence", &rules);
+        let md = render("Existence", 1, &rules);
         assert!(md.contains("| Rule | Description |"));
         assert!(md.contains("| --- | --- |"));
         assert!(md.contains("| [`file_exists`](/docs/rules/existence/file_exists/) |"));
+        assert!(
+            md.contains(
+                "| [`no_merge_conflict_markers`](/docs/rules/security-unicode-sanity/no_merge_conflict_markers/) |"
+            ),
+            "a cross-listed kind must link to its own primary family, not the rendered family"
+        );
         assert!(!md.contains("<likec4-view"), "diagram must be gone");
         assert!(!md.contains('—') && !md.contains('–'), "no em/en dashes");
         assert!(!md.contains("- [`"), "must be a table, not a list");

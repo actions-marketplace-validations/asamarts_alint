@@ -517,9 +517,10 @@ fn generate_rules_pages(
             .map(|k| RuleEntry {
                 kind: k.kind.clone(),
                 summary: k.summary.clone(),
+                family_slug: k.family_slug.clone(),
             })
             .collect();
-        emit_family_index(&rules_dir.join(slug), title, *order, slug, &rules)?;
+        emit_family_index(&rules_dir.join(slug), title, *order, &rules)?;
         family_summaries.push(FamilySummary {
             title: title.clone(),
             slug: slug.clone(),
@@ -551,8 +552,7 @@ fn process_family_h3s(
     all_kinds: &mut Vec<KindEntry>,
     missing_examples: &mut Vec<String>,
     released: Option<crate::rule_options_table::Version>,
-) -> Result<Vec<RuleEntry>> {
-    let mut family_rules: Vec<RuleEntry> = Vec::new();
+) -> Result<()> {
     let mut kind_order: u32 = 0;
     for h3 in split_h3_sections(&h2.body) {
         let mut group_kinds = extract_kinds(&h3.title);
@@ -626,10 +626,6 @@ fn process_family_h3s(
                 &category_slugs,
             )?;
             kind_to_family.insert(kind.clone(), family_slug.to_string());
-            family_rules.push(RuleEntry {
-                kind: kind.clone(),
-                summary: summary.clone(),
-            });
             all_kinds.push(KindEntry {
                 kind: kind.clone(),
                 family_title: h2.title.clone(),
@@ -639,13 +635,18 @@ fn process_family_h3s(
             });
         }
     }
-    Ok(family_rules)
+    Ok(())
 }
 
 #[derive(Clone)]
 pub(crate) struct RuleEntry {
     pub(crate) kind: String,
     pub(crate) summary: String,
+    /// The kind's PRIMARY (canonical) family slug, which owns its page URL. A
+    /// family Overview links each kind to `/docs/rules/<this>/<kind>/`, so a
+    /// secondary family's page still links to the one canonical page rather than
+    /// a non-existent `/docs/rules/<secondary>/<kind>/` (would 404 at Phase 3).
+    pub(crate) family_slug: String,
 }
 
 #[derive(Clone)]
@@ -1053,12 +1054,11 @@ fn emit_family_index(
     family_dir: &Path,
     family_title: &str,
     family_order: u32,
-    family_slug: &str,
     rules: &[RuleEntry],
 ) -> Result<()> {
     fs::write(
         family_dir.join("index.md"),
-        crate::family_index::render(family_title, family_order, family_slug, rules),
+        crate::family_index::render(family_title, family_order, rules),
     )?;
     Ok(())
 }

@@ -320,3 +320,29 @@ fn pascal_to_kebab_examples() {
     assert_eq!(pascal_to_kebab("ValidateConfig"), "validate-config");
     assert_eq!(pascal_to_kebab("Lsp"), "lsp");
 }
+
+/// Design invariant (docs/design/rule-categories.md): the `**Categories:**` line
+/// is stripped from every H3 body BEFORE it is summarized or rendered, so no
+/// generated summary or page body ever carries the literal marker. Tested
+/// against the real docs/rules.md so a regression in the stripper is caught by
+/// `cargo test`, not just at bundle-build time.
+#[test]
+fn no_residual_categories_marker_after_strip() {
+    let root = crate::workspace_root().expect("workspace root");
+    let src = std::fs::read_to_string(root.join("docs/rules.md")).expect("read docs/rules.md");
+    for h2 in split_h2_sections(&src) {
+        for h3 in split_h3_sections(&h2.body) {
+            let (_cats, clean) = crate::categories_line::split_categories_line(&h3.body);
+            assert!(
+                !clean.contains("**Categories:**"),
+                "residual **Categories:** in a stripped H3 body under {:?}",
+                h2.title
+            );
+            assert!(
+                !first_sentence(&clean).contains("**Categories:**"),
+                "the summary (first_sentence) still contains the marker under {:?}",
+                h2.title
+            );
+        }
+    }
+}

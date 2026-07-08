@@ -6,8 +6,8 @@
 use alint_core::RuleRegistry;
 
 /// The generated kind-to-category bridge (`xtask gen-categories`, from the
-/// `**Categories:**` lines in docs/rules.md). Read by the CLI category
-/// discovery commands.
+/// `**Categories:**` lines in docs/rules.md). Consumed by `gen-facts` today;
+/// will back the Phase-2 CLI category discovery (`alint rules`, `list --category`).
 #[path = "categories_gen.rs"]
 pub mod categories;
 
