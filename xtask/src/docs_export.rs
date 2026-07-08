@@ -569,7 +569,20 @@ fn process_family_h3s(
         // description or double-renders on the page. Categories surface via
         // frontmatter + the cross-link block. Behavior-neutral until the lines
         // land in rules.md. See `categories_line` + docs/design/rule-categories.md.
-        let (_categories, clean_body) = crate::categories_line::split_categories_line(&h3.body);
+        let (categories_content, clean_body) =
+            crate::categories_line::split_categories_line(&h3.body);
+        // Parse the association line into URL slugs for the page frontmatter
+        // (the per-kind "Categories" cross-link block reads these). All kinds in
+        // a multi-kind H3 share the line.
+        let category_slugs: Vec<&str> = categories_content
+            .as_deref()
+            .map(|c| {
+                c.split(',')
+                    .filter_map(|t| alint_core::Category::from_title(t.trim()))
+                    .map(alint_core::Category::slug)
+                    .collect()
+            })
+            .unwrap_or_default();
         let summary = first_sentence(&clean_body);
         // Release-gate the prose the same way the Options table is gated:
         // drop `<!-- alint:since=X -->` blocks describing capability newer than
@@ -595,6 +608,7 @@ fn process_family_h3s(
                 &siblings,
                 options_md.as_deref(),
                 kind_order,
+                &category_slugs,
             )?;
             kind_to_family.insert(kind.clone(), family_slug.to_string());
             family_rules.push(RuleEntry {
@@ -951,6 +965,7 @@ fn emit_rule_page(
     siblings: &[&str],
     options_md: Option<&str>,
     sidebar_order: u32,
+    category_slugs: &[&str],
 ) -> Result<()> {
     let mut page = String::new();
     let _ = writeln!(&mut page, "---");
@@ -962,6 +977,14 @@ fn emit_rule_page(
     );
     let _ = writeln!(&mut page, "sidebar:");
     let _ = writeln!(&mut page, "  order: {sidebar_order}");
+    if !category_slugs.is_empty() {
+        let list = category_slugs
+            .iter()
+            .map(|s| format!("'{s}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(&mut page, "categories: [{list}]");
+    }
     let _ = writeln!(&mut page, "---");
     let _ = writeln!(&mut page);
     let body = lead_example_with_kind(body.trim_start_matches('\n'), kind);

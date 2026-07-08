@@ -25,7 +25,7 @@ use serde::Serialize;
 
 /// Bumped when the `facts.json` shape changes, so a downstream
 /// consumer (alint.org) can pin the schema it understands.
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 struct Facts {
@@ -34,6 +34,8 @@ struct Facts {
     counts: Counts,
     rule_kinds: Vec<String>,
     families: Vec<String>,
+    categories: Vec<CategoryEntry>,
+    rule_categories: BTreeMap<String, Vec<String>>,
     bundled_rulesets: Vec<String>,
     bundled_ruleset_sizes: BTreeMap<String, usize>,
     output_formats: Vec<String>,
@@ -49,6 +51,17 @@ struct Counts {
     auto_fix_ops: usize,
     output_formats: usize,
     subcommands: usize,
+}
+
+/// A category in the taxonomy vocabulary: URL slug, display title, and
+/// zero-based display order. Emitted so a facts.json consumer can map a
+/// `rule_categories` slug back to its title/order (and validate family order)
+/// without re-slugifying. Sourced from the `alint_core::Category` enum.
+#[derive(Serialize)]
+struct CategoryEntry {
+    slug: String,
+    title: String,
+    order: usize,
 }
 
 fn facts_path() -> Result<PathBuf> {
@@ -69,6 +82,26 @@ fn build_facts() -> Result<Facts> {
     subcommands.sort();
     let fact_predicates = fact_predicates();
     let auto_fix_ops = auto_fix_ops_count(&root)?;
+    let categories: Vec<CategoryEntry> = alint_core::Category::ALL
+        .iter()
+        .map(|c| CategoryEntry {
+            slug: c.slug().to_string(),
+            title: c.title().to_string(),
+            order: c.order(),
+        })
+        .collect();
+    // Sourced from the generated in-crate bridge (validated against rules.md +
+    // the registry by gen-categories), so facts.json and the CLI agree. Slugs,
+    // primary first.
+    let rule_categories: BTreeMap<String, Vec<String>> = alint_rules::categories::KIND_CATEGORIES
+        .iter()
+        .map(|(kind, cats)| {
+            (
+                (*kind).to_string(),
+                cats.iter().map(|c| c.slug().to_string()).collect(),
+            )
+        })
+        .collect();
 
     let counts = Counts {
         rule_kinds: rule_kinds.len(),
@@ -85,6 +118,8 @@ fn build_facts() -> Result<Facts> {
         counts,
         rule_kinds,
         families,
+        categories,
+        rule_categories,
         bundled_rulesets,
         bundled_ruleset_sizes,
         output_formats,
