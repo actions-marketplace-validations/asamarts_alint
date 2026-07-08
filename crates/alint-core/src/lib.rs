@@ -22,6 +22,7 @@ pub mod template;
 mod walker;
 pub mod when;
 
+pub use category::Category;
 pub use config::{
     AllowOutOfRoot, CompiledNestedSpec, Config, ContentSourceSpec, ExtendsEntry,
     FileAppendFinalNewlineFixSpec, FileAppendFixSpec, FileCollapseBlankLinesFixSpec,
@@ -33,7 +34,6 @@ pub use config::{
 pub use engine::{Engine, RuleEntry};
 pub use error::{Error, Result};
 pub use facts::{FactKind, FactSpec, FactValue, FactValues, evaluate_facts};
-pub use category::Category;
 pub use level::Level;
 pub use registry::{RuleBuilder, RuleRegistry};
 pub use report::{FixItem, FixReport, FixRuleResult, FixStatus, Report};

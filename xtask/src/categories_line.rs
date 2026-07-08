@@ -24,11 +24,7 @@ const MARKER: &str = "**Categories:**";
 /// `"Encoding, Security / Unicode sanity"`) or `None` if there is no line. When
 /// there is no line the body is returned byte-identical (behavior-neutral).
 pub(crate) fn split_categories_line(body: &str) -> (Option<String>, String) {
-    let Some((idx, line)) = body
-        .lines()
-        .enumerate()
-        .find(|(_, l)| !l.trim().is_empty())
-    else {
+    let Some((idx, line)) = body.lines().enumerate().find(|(_, l)| !l.trim().is_empty()) else {
         return (None, body.to_string());
     };
 

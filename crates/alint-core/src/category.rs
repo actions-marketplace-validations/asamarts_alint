@@ -147,7 +147,11 @@ mod tests {
     fn ord_matches_display_order() {
         let mut sorted = Category::ALL;
         sorted.sort();
-        assert_eq!(sorted, Category::ALL, "derived Ord must equal display order");
+        assert_eq!(
+            sorted,
+            Category::ALL,
+            "derived Ord must equal display order"
+        );
         assert!(Category::Existence < Category::PluginTier1);
     }
 

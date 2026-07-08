@@ -33,6 +33,15 @@ cargo run -q -p xtask -- gen-schema --check
 echo "==> Running xtask gen-facts --check"
 cargo run -q -p xtask -- gen-facts --check
 
+# `xtask gen-categories --check` regenerates the in-crate kind-to-category bridge
+# (crates/alint-rules/src/categories.gen.rs) from the `**Categories:**` lines in
+# docs/rules.md, validated against the alint-core Category vocabulary and the live
+# registry (every canonical kind has a line; aliases resolve). Run
+# `cargo run -p xtask -- gen-categories` to refresh after editing a categories line.
+# See docs/design/rule-categories.md.
+echo "==> Running xtask gen-categories --check"
+cargo run -q -p xtask -- gen-categories --check
+
 # `xtask gen-roadmap --check` regenerates roadmap.json (the public-roadmap
 # contract the alint.org /roadmap/ timeline renders) from the marked phase
 # headings in docs/design/ROADMAP.md, and fails if the committed roadmap.json

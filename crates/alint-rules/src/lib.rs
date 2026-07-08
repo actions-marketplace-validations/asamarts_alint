@@ -5,6 +5,12 @@
 
 use alint_core::RuleRegistry;
 
+/// The generated kind-to-category bridge (`xtask gen-categories`, from the
+/// `**Categories:**` lines in docs/rules.md). Read by the CLI category
+/// discovery commands.
+#[path = "categories.gen.rs"]
+pub mod categories;
+
 /// Generates a migrated rule kind's `options_schema()` fn: the schemars-derived
 /// JSON Schema for its `Options` struct. `xtask gen-schema` composes the result
 /// with the `kind`/`paths` structure preserved from the committed base branch.

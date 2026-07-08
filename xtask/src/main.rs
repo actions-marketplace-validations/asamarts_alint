@@ -42,6 +42,7 @@ use clap::{Parser, Subcommand};
 mod arch;
 mod bench;
 mod bench_release;
+mod categories;
 mod categories_line;
 mod docs_checks;
 mod docs_export;
@@ -296,6 +297,12 @@ enum Commands {
         #[arg(long)]
         check: bool,
     },
+    /// Regenerate the in-crate kind-to-category bridge from docs/rules.md `**Categories:**` lines.
+    GenCategories {
+        /// Verify the committed `categories.gen.rs` instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
     /// Regenerate the code-derived `LikeC4` model fragments (rule taxonomy, ...).
     GenModel {
         /// Verify the committed `*.gen.c4` fragments instead of rewriting them.
@@ -378,6 +385,7 @@ fn main() -> Result<()> {
         Commands::GenFacts { check } => facts::run(check),
         Commands::GenRoadmap { check } => gen_roadmap::run(check),
         Commands::GenArch { check } => arch::run(check),
+        Commands::GenCategories { check } => categories::run(check),
         Commands::GenModel { check } => gen_model::run(check),
         Commands::GenMermaid { check } => gen_mermaid::run(check),
     }
