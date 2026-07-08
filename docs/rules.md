@@ -38,6 +38,8 @@ is the authoritative source for option types.
 
 ### `file_exists`
 
+**Categories:** Existence
+
 Every glob match in `paths` must correspond to a real file. Use an array to accept any of several names.
 
 ```yaml
@@ -53,6 +55,8 @@ Fix: `file_create` — write a declared `content`. With an array of `paths`, the
 **Optional `git_tracked_only: true`** further requires that the matching file be in git's index — useful for rules like "every release must commit a CHANGELOG entry" where local-only files shouldn't satisfy the requirement. Outside a git repo, the rule fails (no file qualifies). See [The walker and `.gitignore`](/docs/concepts/walker-and-gitignore/) for the full semantics.
 
 ### `file_absent`
+
+**Categories:** Existence
 
 No file matching `paths` may exist in the walked tree. The inverse of `file_exists`.
 
@@ -82,6 +86,8 @@ Fix: `file_remove` — delete every violating file.
 
 ### `dir_exists`
 
+**Categories:** Existence
+
 Directory counterpart of `file_exists`. Every match must correspond to a real directory in the walked tree.
 
 ```yaml
@@ -99,6 +105,8 @@ directory directly at the repository root, not nested.
 **Optional `git_tracked_only: true`** further requires that the directory contain at least one tracked file. A tree with a `docs/` checked out from a stale clone where every file was later removed via `git rm` would fail under this stricter check. See [The walker and `.gitignore`](/docs/concepts/walker-and-gitignore/) for the full semantics.
 
 ### `dir_absent`
+
+**Categories:** Existence
 
 Directory counterpart of `file_absent`. The match-and-fire semantics are the same as `file_absent` — including the `.gitignore` interaction. A `dir_absent` rule with `paths: "**/target"` only fires when `target/` exists in the walked tree; if it's gitignored, the walker filters it out and the rule stays silent.
 
@@ -130,6 +138,8 @@ See [The walker and `.gitignore`](/docs/concepts/walker-and-gitignore/) for the 
 
 ### `file_content_matches` (alias: `content_matches`)
 
+**Categories:** Content
+
 File contents must contain at least one match for a regex.
 
 ```yaml
@@ -144,6 +154,8 @@ Fix: `file_append` — append declared content.
 
 ### `file_content_forbidden` (alias: `content_forbidden`)
 
+**Categories:** Content
+
 File contents must NOT match a regex.
 
 ```yaml
@@ -155,6 +167,8 @@ File contents must NOT match a regex.
 ```
 
 ### `file_header` (alias: `header`)
+
+**Categories:** Content
 
 The first N lines must match a regex (line-oriented). For a byte-level prefix check, prefer `file_starts_with`.
 
@@ -170,6 +184,8 @@ Fix: `file_prepend` — inject declared content at the top (preserves UTF-8 BOM)
 
 ### `file_starts_with` / `file_ends_with`
 
+**Categories:** Content
+
 Byte-level prefix / suffix check. Works on any bytes (binary safe, unlike `file_header`).
 
 ```yaml
@@ -184,6 +200,8 @@ Check-only: a fix would risk silently duplicating a near-matching prefix. Pair w
 
 ### `file_hash`
 
+**Categories:** Content
+
 Content SHA-256 must equal the expected digest. Rules-as-tripwire for generated / vendored files that should never drift.
 
 ```yaml
@@ -195,6 +213,8 @@ Content SHA-256 must equal the expected digest. Rules-as-tripwire for generated 
 ```
 
 ### `file_max_size` (alias: `max_size`)
+
+**Categories:** Content
 
 File must be at most `max_bytes` in size. Catches accidental large-blob commits.
 
@@ -208,6 +228,8 @@ File must be at most `max_bytes` in size. Catches accidental large-blob commits.
 
 ### `file_min_size` (alias: `min_size`)
 
+**Categories:** Content
+
 File must be at least `min_bytes` in size. Catches placeholder / stub files that pass existence checks but add no information (a 0-byte `LICENSE`, a `README.md` with only a title).
 
 ```yaml
@@ -219,6 +241,8 @@ File must be at least `min_bytes` in size. Catches placeholder / stub files that
 ```
 
 ### `file_min_lines` (alias: `min_lines`)
+
+**Categories:** Content
 
 File must have at least `min_lines` lines (`\n`-terminated, with an unterminated trailing segment counting as one more — `wc -l` semantics). Use for "README has more than a title and a TODO".
 
@@ -232,6 +256,8 @@ File must have at least `min_lines` lines (`\n`-terminated, with an unterminated
 
 ### `file_max_lines` (alias: `max_lines`)
 
+**Categories:** Content
+
 File must have at most `max_lines` lines, using the same accounting as `file_min_lines`. Catches the everything-module anti-pattern — a `lib.rs` / `index.ts` / `helpers.py` that grew unbounded.
 
 ```yaml
@@ -243,6 +269,8 @@ File must have at most `max_lines` lines, using the same accounting as `file_min
 ```
 
 ### `file_footer` (alias: `footer`)
+
+**Categories:** Content
 
 Last `lines` lines of each file in scope must match a regex. Mirror of `file_header` anchored at the end of the file. Use for license footers, signed-off-by trailers, generated-file sentinels.
 
@@ -259,6 +287,8 @@ Fix: `file_append` — append a declared `content`. With no fix declared, violat
 
 ### `file_shebang` (alias: `shebang`)
 
+**Categories:** Content
+
 First line of each file in scope must match the `shebang` regex. Pairs with `executable_has_shebang` (which checks shebang *presence* on `+x` files) — `file_shebang` checks shebang *shape*.
 
 ```yaml
@@ -273,6 +303,8 @@ Default `shebang:` is `^#!`, which only enforces presence; almost every useful c
 
 ### `file_is_text` (alias: `is_text`)
 
+**Categories:** Content
+
 Content is detected as text (magic bytes + UTF-8 validity check) — fails on binary files matched by `paths`.
 
 ```yaml
@@ -283,6 +315,8 @@ Content is detected as text (magic bytes + UTF-8 validity check) — fails on bi
 ```
 
 ### `file_is_ascii`
+
+**Categories:** Content
 
 Every byte in the file must be < 0x80 (pure ASCII), except codepoints listed in `allow:`. Strict variant of `is_text` for configs that must round-trip through strictly-ASCII tools. `allow:` exempts specific non-ASCII codepoints — each entry a single character (`"ö"`), a `U+XXXX` codepoint, or a `U+XXXX-U+YYYY` inclusive range (curl keeps its source ASCII but allows `ö` in "Björn"; the recurring need across llvm / vscode / elixir). With `allow:` the file is decoded as UTF-8 and checked per character; without it, the strict byte-level fast path is used.
 
@@ -301,6 +335,8 @@ Every byte in the file must be < 0x80 (pure ASCII), except codepoints listed in 
 JSONPath queries over structured documents per [RFC 9535](https://datatracker.ietf.org/doc/html/rfc9535). JSON / YAML / TOML / XML targets coerce into the same `serde_json::Value` tree, so a single rule works across all four formats — Kubernetes manifests, GitHub Actions workflows, `package.json`, `Cargo.toml`, `pyproject.toml`, Maven `pom.xml`, .NET `.csproj` / `.props` / `.targets`. JSON/YAML/TOML coerce through serde; XML maps via the [XML-mapping convention](#xml-mapping) documented below. JSON parsing is **JSONC-tolerant**: a `.json` file that carries `//` or `/* … */` comments or trailing commas (`tsconfig.json`, `.vscode/*.json`, and other JS/TS-ecosystem files) still parses — strict JSON is tried first (and is byte-identical), the tolerant retry only kicks in on failure, and a genuinely-malformed document still reports the strict parser's error. The same tolerance applies to the `json:` extract used by `cross_file` / `registry_paths_resolve`.
 
 ### `json_path_equals`, `yaml_path_equals`, `toml_path_equals`, `xml_path_equals`
+
+**Categories:** Structured query
 
 Query a structured document with a JSONPath expression and assert every match deep-equals the supplied value.
 
@@ -344,6 +380,8 @@ Query a structured document with a JSONPath expression and assert every match de
 
 ### `json_path_matches`, `yaml_path_matches`, `toml_path_matches`, `xml_path_matches`
 
+**Categories:** Structured query
+
 Same shape as the `*_equals` variants, but the asserted value is a **regex** matched against string values. Non-string matches produce a clear "value is not a string" violation.
 
 ```yaml
@@ -378,6 +416,8 @@ Same shape as the `*_equals` variants, but the asserted value is a **regex** mat
 
 ### `json_schema_passes`
 
+**Categories:** Structured query
+
 Validate every JSON / YAML / TOML file in `paths` against a JSON Schema document. Targets coerce through serde into the same `serde_json::Value` tree the schema sees, so a JSON-format schema can validate a YAML config (Kubernetes manifests, GitHub Actions workflows, Helm `values.schema.json`) or a TOML manifest (`Cargo.toml`, `pyproject.toml`) without separate schemas per format. The schema is loaded + compiled lazily on first evaluation and cached on the rule.
 
 Each schema-validation error becomes one violation, with the failing instance path and the schema's error description in the message. A target that fails to parse produces a single parse-error violation, not a flood of schema errors against junk. Format is detected from the target's extension (`.json` / `.yaml` / `.yml` / `.toml`); pass `format:` to override.
@@ -405,6 +445,8 @@ Check-only — fixing schema violations is a "the user knows what value belongs 
 
 ### `filename_case`
 
+**Categories:** Naming
+
 Basename (stem only or full) matches a case convention: `snake`, `kebab`, `pascal`, `camel`, `screaming-snake`, `flat`, `lower`, `upper`.
 
 ```yaml
@@ -418,6 +460,8 @@ Basename (stem only or full) matches a case convention: `snake`, `kebab`, `pasca
 Fix: `file_rename` — converts the stem to the configured case, preserving extension.
 
 ### `filename_regex`
+
+**Categories:** Naming
 
 Basename matches a regex. Use `stem: true` to match the stem only.
 
@@ -436,6 +480,8 @@ Basename matches a regex. Use `stem: true` to match the stem only.
 
 ### `no_trailing_whitespace`
 
+**Categories:** Text hygiene
+
 No line may end with space or tab.
 
 ```yaml
@@ -449,6 +495,8 @@ No line may end with space or tab.
 
 ### `final_newline`
 
+**Categories:** Text hygiene
+
 File must end with a single `\n`. Fixable via `file_append_final_newline`.
 
 ```yaml
@@ -461,6 +509,8 @@ File must end with a single `\n`. Fixable via `file_append_final_newline`.
 ```
 
 ### `line_endings`
+
+**Categories:** Text hygiene
 
 Every line ending matches `target`: `lf` or `crlf`. Mixed endings in a single file fail.
 
@@ -476,6 +526,8 @@ Every line ending matches `target`: `lf` or `crlf`. Mixed endings in a single fi
 
 ### `line_max_width`
 
+**Categories:** Text hygiene
+
 Cap line length in characters (not bytes — code points). Optional `tab_width` for tab expansion.
 
 ```yaml
@@ -487,6 +539,8 @@ Cap line length in characters (not bytes — code points). Optional `tab_width` 
 ```
 
 ### `indent_style`
+
+**Categories:** Text hygiene
 
 Every non-blank line indents with the configured `style` (`tabs` or `spaces`). When `style: spaces`, optional `width` enforces a multiple.
 
@@ -502,6 +556,8 @@ Every non-blank line indents with the configured `style` (`tabs` or `spaces`). W
 Check-only: tab-width-aware reindentation is language-specific. Pair with your editor's "reindent on save" for remediation.
 
 ### `max_consecutive_blank_lines`
+
+**Categories:** Text hygiene
 
 Cap runs of blank lines to `max`. A blank line is empty or whitespace-only.
 
@@ -521,6 +577,8 @@ Cap runs of blank lines to `max`. A blank line is empty or whitespace-only.
 
 ### `no_merge_conflict_markers`
 
+**Categories:** Security / Unicode sanity
+
 Flag `<<<<<<< `, `=======`, `>>>>>>> `, `||||||| ` markers at the start of a line — almost always left over from an unresolved merge. The anchor markers carry a trailing ref (`<<<<<<< HEAD`), so they never collide with prose; a bare `=======` is reported only when the file also contains one of those anchors, because on its own a seven-character `=======` is indistinguishable from a reST/Markdown setext heading underline (so docs trees no longer need to be excluded).
 
 ```yaml
@@ -531,6 +589,8 @@ Flag `<<<<<<< `, `=======`, `>>>>>>> `, `||||||| ` markers at the start of a lin
 ```
 
 ### `no_bidi_controls`
+
+**Categories:** Security / Unicode sanity
 
 Flag Trojan-Source bidi override characters (U+202A–202E, U+2066–2069). Defense against [CVE-2021-42574](https://trojansource.codes/).
 
@@ -544,6 +604,8 @@ Flag Trojan-Source bidi override characters (U+202A–202E, U+2066–2069). Defe
 ```
 
 ### `no_zero_width_chars`
+
+**Categories:** Security / Unicode sanity
 
 Flag body-internal zero-width characters (U+200B, U+200C, U+200D, and non-leading U+FEFF). A leading U+FEFF is `no_bom`'s concern.
 
@@ -566,6 +628,8 @@ As of v0.14 the detection set also covers U+2060 (word joiner) and U+180E (Mongo
 
 ### `no_bom`
 
+**Categories:** Encoding
+
 Flag a leading UTF-8 / UTF-16 LE/BE / UTF-32 LE/BE byte-order mark. The fixer strips whichever BOM is detected.
 
 ```yaml
@@ -583,6 +647,8 @@ Flag a leading UTF-8 / UTF-16 LE/BE / UTF-32 LE/BE byte-order mark. The fixer st
 
 ### `max_directory_depth`
 
+**Categories:** Structure
+
 Tree depth from repo root may not exceed `max_depth`. A shallow depth stops deeply-nested imports and keeps CI path globs sane.
 
 ```yaml
@@ -595,6 +661,8 @@ Tree depth from repo root may not exceed `max_depth`. A shallow depth stops deep
 
 ### `max_files_per_directory`
 
+**Categories:** Structure
+
 Per-directory fanout may not exceed `max_files`. Useful for vendor directories that accidentally grow to thousands of entries.
 
 ```yaml
@@ -606,6 +674,8 @@ Per-directory fanout may not exceed `max_files`. Useful for vendor directories t
 ```
 
 ### `no_empty_files`
+
+**Categories:** Structure
 
 Flag zero-byte files. Fixable via `file_remove`.
 
@@ -626,6 +696,8 @@ Checks that reject tree shapes which work on one OS but break checkouts elsewher
 
 ### `no_case_conflicts`
 
+**Categories:** Portable metadata
+
 Flag paths that differ only by case (e.g. `README.md` + `readme.md`). They can't coexist on macOS HFS+/APFS or Windows NTFS defaults, so a Linux-only dev committing both breaks checkouts for teammates.
 
 ```yaml
@@ -636,6 +708,8 @@ Flag paths that differ only by case (e.g. `README.md` + `readme.md`). They can't
 ```
 
 ### `no_illegal_windows_names`
+
+**Categories:** Portable metadata
 
 Reject path components Windows can't represent:
 
@@ -658,6 +732,8 @@ All rules in this family are no-ops on Windows — the +x bit and symlinks don't
 
 ### `no_symlinks`
 
+**Categories:** Unix metadata
+
 Flag tracked paths that are symbolic links. Symlinks are a portability footgun: Windows NTFS needs admin rights to create them, git-for-Windows can silently flatten them, CI runners vary.
 
 <!-- alint:since=0.14 -->
@@ -675,6 +751,8 @@ Caveat: a symlink whose target escapes the repository root (`link -> /etc`) is p
 
 ### `executable_bit`
 
+**Categories:** Unix metadata
+
 Assert every file in scope either has the `+x` bit set (`require: true`) or does not (`require: false`).
 
 ```yaml
@@ -689,6 +767,8 @@ No fix op — chmod auto-apply is deferred.
 
 ### `executable_has_shebang`
 
+**Categories:** Unix metadata
+
 Every file with `+x` set must begin with `#!`. Catches plain text files accidentally marked executable.
 
 ```yaml
@@ -699,6 +779,8 @@ Every file with `+x` set must begin with `#!`. Catches plain text files accident
 ```
 
 ### `shebang_has_executable`
+
+**Categories:** Unix metadata
 
 Every file starting with `#!` must have `+x` set. Catches scripts that got their `+x` bit stripped by `git add --chmod=-x`, a tar round-trip, or a `cp` across filesystems.
 
@@ -715,6 +797,8 @@ Every file starting with `#!` must have `+x` set. Catches scripts that got their
 
 ### `no_submodules`
 
+**Categories:** Git hygiene
+
 Flag the presence of `.gitmodules` at the repo root — always, regardless of `paths`. For general "file X must not exist" checks, use `file_absent`.
 
 ```yaml
@@ -728,6 +812,8 @@ Flag the presence of `.gitmodules` at the repo root — always, regardless of `p
 Note the fix only deletes `.gitmodules`; `git submodule deinit` and cleaning `.git/modules/` are still on the user.
 
 ### `commented_out_code`
+
+**Categories:** Git hygiene
 
 Heuristic detector for blocks of commented-out source code (as opposed to prose comments, license headers, doc comments, or ASCII banners). For each consecutive run of comment lines (`min_lines+`), counts the fraction of non-whitespace characters that are structural punctuation strongly biased toward code (`( ) { } [ ] ; = < > & | ^`). Scores ≥ `threshold` mark the block as code-shaped.
 
@@ -754,6 +840,8 @@ Doc-comment blocks (`///`, `//!`, `/** */`) are skipped automatically. Files who
 Heuristic, with a non-zero false-positive surface — defaults are `warning`-level only, never `error`. Tune `threshold` per codebase: lower widens the catch (more FPs), higher narrows it. Check-only — auto-removing commented-out code is destructive.
 
 ### `markdown_paths_resolve`
+
+**Categories:** Git hygiene
 
 Validate that backticked workspace paths in markdown files resolve to real files or directories in the repo. Targets the AGENTS.md / CLAUDE.md / `.cursorrules` staleness problem: agent-context files reference paths in inline backticks (`` `src/api/users.ts` ``), and those paths drift as the codebase evolves. The `agent-context-no-stale-paths` rule shipped in v0.6 surfaces *candidates* via a regex; this rule does the precise existence check.
 
@@ -782,6 +870,8 @@ Check-only — auto-fixing a stale path means guessing the new location, which i
 
 ### `git_no_denied_paths`
 
+**Categories:** Git hygiene
+
 Fire when any tracked file matches a configured glob denylist. The absence-axis companion of `git_tracked_only`: instead of asking "does this tracked path exist?", it asks "is anything tracked that matches my denylist?" One rule covers what would otherwise need one `file_absent` per pattern. Reports every matching denylist entry per offending path so a single file hitting two patterns surfaces both.
 
 ```yaml
@@ -802,6 +892,8 @@ An optional `since: <git-ref>` scopes the check to denied paths that changed in 
 Outside a git repo (or when `git` isn't on `PATH`) the rule silently no-ops — the rule's intent only makes sense inside a tracked working tree. Check-only — `git rm --cached` is too destructive to automate.
 
 ### `git_commit_message`
+
+**Categories:** Git hygiene
 
 Validate commit-message shape via regex, max-subject-length, or required-body. At least one of the three must be set; combine all three for full Conventional-Commits-style enforcement. Subject length counts characters, not bytes (a 50-char emoji subject is 50, not 200).
 
@@ -876,6 +968,8 @@ jobs:
 
 ### `git_commit_signed_off`
 
+**Categories:** Git hygiene
+
 Assert every commit in scope carries a DCO (Developer Certificate of Origin) `Signed-off-by:` trailer — required by every CNCF / Linux Foundation / kernel-style project. A commit lacking the trailer fires one violation, with the short SHA + subject snippet so you know which to amend (`git commit --amend -s` or `git rebase --signoff`).
 
 ```yaml
@@ -895,6 +989,8 @@ The default `pattern:` is the canonical DCO shape `(?m)^Signed-off-by: .+ <.+@.+
 
 ### `git_commit_no_fixup`
 
+**Categories:** Git hygiene
+
 Fail on residual `fixup!` / `squash!` / `amend!` commits left in scope — the ones `git commit --fixup` / `--squash` produce, meant to be collapsed by `git rebase --autosquash` before merging. Forgetting to rebase is the universal case; this rule catches the leftover so it doesn't land on the main branch.
 
 ```yaml
@@ -909,6 +1005,8 @@ No configuration knobs — the matched subject prefixes are exactly what `--auto
 
 ### `git_commit_subject_matches`
 
+**Categories:** Git hygiene
+
 Each commit's subject line (the first line of its message) must match the `matches:` regex — the subject-grammar member of the commit family. Enforces a prefix + shape convention like go / Gerrit's `pkg/path: lowercase summary`, node's `subsystem: description`, or conventional-commit types. The regex is anchored to the **subject alone** (so `^…$` describes the first line exactly), unlike `git_commit_message`'s `pattern:` which matches the whole subject + body; for a subject-length cap use `git_commit_message`'s `subject_max_length:`. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes (HEAD-only when `since:` is unset, `<since>..HEAD` when set; silent outside a git repo; a bad `since:` ref hard-fails with a shallow-clone hint).
 
 ```yaml
@@ -920,6 +1018,8 @@ Each commit's subject line (the first line of its message) must match the `match
 ```
 
 ### `git_commit_author_allowlist`
+
+**Categories:** Git hygiene
 
 Assert every commit author in scope matches an allowed email and/or name pattern. At least one of `email_pattern:` / `name_pattern:` is required; specifying both means BOTH must match (AND). A commit whose author fails any specified pattern fires one violation. Demand: enterprise repos enforcing contributor identity against a corporate domain; OSS projects catching commits from sock-puppet or compromised accounts.
 
@@ -936,6 +1036,8 @@ Assert every commit author in scope matches an allowed email and/or name pattern
 
 ### `git_commit_gpg_signed`
 
+**Categories:** Git hygiene
+
 Assert every commit in scope has a verifying signature (`git verify-commit` exits 0). A commit that is unsigned — or signed with a key that doesn't verify against the local keyring — fires one violation. Demand: kernel maintainers, security-sensitive OSS, anyone using GitHub's "Require signed commits" branch protection.
 
 ```yaml
@@ -949,6 +1051,8 @@ Assert every commit in scope has a verifying signature (`git verify-commit` exit
 The rule reflects git's own verdict and deliberately does **not** distinguish "unsigned" from "signed with an untrusted key" — trust is git's GPG config / `.git/allowed_signers`, not this rule's job. No configuration knobs. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes.
 
 ### `git_blame_age`
+
+**Categories:** Git hygiene
 
 Fire on lines matching a regex whose `git blame` author-time is older than `max_age_days`. Same regex match shape as `file_content_forbidden`, but with a per-line age gate: a TODO added yesterday passes silently; a TODO that has sat in tree for 18 months fires. Closes the gap between `level: warning` on every TODO (too noisy) and `level: off` (accepts unbounded debt accumulation).
 
@@ -981,6 +1085,8 @@ Outside a git repo, on untracked files, or when blame fails for any other reason
 
 ### `changeset_requires_path`
 
+**Categories:** Git hygiene
+
 The `<since>...HEAD` diff must **add** (git status `A`) at least one path matching `add_glob:` — the "did you add a changelog entry?" gate. Three corpus signals: prettier's `changelog_unreleased/`, cpython's `Misc/NEWS.d/next/`, pnpm's `.changeset/*.md`. `since:` (the base ref) is required — the rule asserts about the *set of files a contribution adds*, so it's diff-scoped. An optional `when_changed:` gates the requirement on some other glob having changed (don't demand a changelog for a docs-only PR); with no gate, any non-empty changeset triggers it. Builds on the same `<since>...HEAD` three-dot (merge-base) diff as `alint check --changed`. Silent no-op outside a git repo or when nothing relevant changed; a `since:` that fails to resolve hard-fails with a shallow-clone hint.
 
 ```yaml
@@ -995,6 +1101,8 @@ The `<since>...HEAD` diff must **add** (git status `A`) at least one path matchi
 ---
 
 ### `pair_changed_together`
+
+**Categories:** Git hygiene
 
 If the `<since>...HEAD` diff changes any path matching `if_changed:`, at least one path matching `then_changed:` must change in the same range — the **co-change** gate. Corpus signals: rust's `rustdoc-json-types` `FORMAT_VERSION` must bump when the format struct changes; "`version.txt` and the lockfile change together" release guards. Both globs and `since:` (the base ref) are required. **Directional** — the trigger is `if_changed`, the obligation is `then_changed`; a `then_changed`-only change never fires it, so add a second rule with the globs swapped for a bidirectional pact. The `changeset_requires_path` sibling, built on the same merge-base diff as `alint check --changed`. Silent no-op outside a git repo or when `if_changed` didn't change; a `since:` that fails to resolve hard-fails with a shallow-clone hint.
 
@@ -1013,6 +1121,8 @@ If the `<since>...HEAD` diff changes any path matching `if_changed:`, at least o
 
 ### `pair`
 
+**Categories:** Cross-file
+
 For every file matching `primary`, a file matching the `partner` template must exist.
 
 ```yaml
@@ -1024,6 +1134,8 @@ For every file matching `primary`, a file matching the `partner` template must e
 ```
 
 ### `pair_hash`
+
+**Categories:** Cross-file
 
 The `algorithm` digest (`sha256` default / `sha512`) of every file matching `source` must appear in the single `target` file — either as an embedded hex substring (`format: contains`, default) or a `<hex>  <path>` manifest line (`format: sums-line`, where the path token must be the source's path; a leading `*` binary marker and a `./` prefix are tolerated). The sums-line parser accepts **either order** — coreutils / go-`.sum` `<hex> <path>` *and* the Go FIPS snapshot's path-first `<path> <hex>` — by identifying the digest token by its shape (the algorithm fixes its hex length). One violation per source whose digest is absent or mismatched; a missing `target` is one violation anchored on `target`. Raw bytes are hashed (a CRLF/newline change *is* a digest change — it is an integrity pin). Detection-only: alint never regenerates the manifest (same posture as `file_hash`). The sibling of `file_hash` (one file vs a *literal* hash in the config) and `generated_file_fresh` (a *generator's* stdout); `pair_hash` is the cross-file "B carries A's current digest" relation. golang/go FIPS `fips140.sum` is the canonical, highest-stakes use.
 
@@ -1039,6 +1151,8 @@ The `algorithm` digest (`sha256` default / `sha512`) of every file matching `sou
 
 ### `registry_paths_resolve`
 
+**Categories:** Cross-file
+
 A manifest file enumerates path entries; each must resolve to an on-disk artefact. `extract` pulls the entry list via a structured query (`toml` / `json` / `yaml` RFC 9535 JSONPath), a line list (`lines`, optional `comment` prefix), or a regex capture (`regex`, group 1). `expect` (`any` / `file` / `dir`) and `must_contain` constrain the resolved kind; `exclude_query` subtracts entries; `entries_are_globs` expands each entry as a glob. Non-literal entries (interpolation / antiquotation) are skipped, not failed. Optional `orphans` adds the reverse-completeness check: on-disk artefacts under the `space` glob that no entry references (the "new crate not wired into the workspace" detector). Cross-file: reads one manifest, resolves against the file index.
 
 ```yaml
@@ -1053,6 +1167,8 @@ A manifest file enumerates path entries; each must resolve to an on-disk artefac
 ```
 
 ### `cross_file` (alias: `cross_file_value_equals`)
+
+**Categories:** Cross-file
 
 A `source` must hold a `relation` to one or more `targets` (or, for `resolves`, the filesystem). The `source` is a single `{ file, extract }` — **or**, for the set relations only (`subset` / `superset` / `set_equals`), `{ files: <glob>, extract }`, whose matches are read and whose extracted values are **unioned into one set** (the "every `*hl-X*` across `runtime/doc/*.txt` must equal the `default link X` set in `highlight.c`" shape — symbol-set / cross-language parity). For the value relations, `targets` is either a `{ files: <glob>, extract }` map (one query applied per glob match) or a sequence of `{ file, extract }` (heterogeneous pins); `extract` is the same one-of as `registry_paths_resolve` (`toml`/`json`/`yaml` JSONPath, `lines`, `regex` group 1) plus `whole_file: {}` (the entire file content as one value — for byte-level content equality without `identical`'s no-`extract`/no-`normalize` constraint). `relation` (default `equals`) selects the assertion, checked independently per target; the *shape* (which of `source.file`/`source.files`, `source.extract`, `targets` is present) follows the relation and is validated at load:
 
@@ -1101,6 +1217,8 @@ A `source` must hold a `relation` to one or more `targets` (or, for `resolves`, 
 ```
 
 ### `file_graph`
+
+**Categories:** Cross-file
 
 Assemble the repo's *file → file* reference graph and assert a global structural property the 1-level cross-file kinds can't express. `nodes` (a glob) selects the graph's files. The `edges` block takes one of two extractors: `from_content` (extract one reference per match — `extract` is the same one-of as `registry_paths_resolve`: `toml` / `json` / `yaml` JSONPath, `lines`, `regex` capture group 1 — then `resolve` it to a path, `relative_to_file` default or `relative_to_repo_root`) for the reference-graph modes, or `derive_target` (`{ from: <regex on the node path>, to: <template, e.g. $1.pb.go> }`) for the `fresh` codegen-freshness mode **or** the `no_dangling` derived-sibling-existence mode. Bare module names, absolute paths, URLs, and computed/interpolated references are **dropped, not mis-resolved** (resolving module *names* is the package-graph non-goal — nodes stay path-based). `require` is a closed set — three bare-string modes and three configured map modes: `acyclic` (no dependency cycle among the nodes, each reported once as a rotation-canonical path list); `no_dangling` (every path-shaped edge must resolve to a path that exists on disk — the doc-cross-link / generic `markdown_paths_resolve` integrity check; with `edges.derive_target` it instead asserts each node's *derived* sibling exists, e.g. every `licenses/X-LICENSE.txt` needs an `X-NOTICE.txt`); `no_orphans` (no node is unreferenced by another node, except those matching a `roots:` glob — the registry / staging orphan detector); `{ forbidden_edges: [{ from, to }] }` (one violation per edge whose source matches `from` and resolved target matches `to` — the whole-repo layering firewall, where `import_gate` is the cheap per-file version); `{ no_orphans: { roots: [...] } }` (the `no_orphans` form with declared entry points); and `{ fresh: { hash, marker } }` (needs `edges.derive_target`: the generated file must embed the source's current `hash` digest, captured by `marker` group 1 — content-hash, never mtime; the alint-native form of generate-then-`git diff`, with no generator run). Pure-parse and extraction-based: it never shells out. Cross-file (whole-index).
 
@@ -1167,6 +1285,8 @@ Assemble the repo's *file → file* reference graph and assert a global structur
 
 ### `ordered_block`
 
+**Categories:** Cross-file
+
 The lines between a `start` / `end` marker pair must stay sorted (and, with `unique: true`, free of duplicates) under `comparator` (`lexical` / `lexical-ci` / `numeric`). **Both markers are optional**: omit `end` to sort from `start` to EOF, omit both to sort the whole file (the markerless "this file is one sorted list" form — dictionaries, allow-lists, a fully-sorted `CODEOWNERS`). The generic form of per-project keep-sorted scripts (protobuf `failure_lists`, sorted `.gitignore` / `CODEOWNERS` / dependency lists). Per-file: with markers, a file with no `start` marker is silently fine; markers match the trimmed line; blank lines inside a block are ignored; one violation per out-of-order block; a fully-delimited block that never sees its `end` is reported `unclosed` (a block with an absent `end` runs to EOF by design). An optional `select:` regex restricts the sortable entries to lines matching it — other lines inside the block (comments, group headers) pass through untouched (the sectioned / keep-sorted-subset shape).
 
 ```yaml
@@ -1183,6 +1303,8 @@ The lines between a `start` / `end` marker pair must stay sorted (and, with `uni
 
 ### `for_each_match`
 
+**Categories:** Cross-file
+
 For each line matching `select` (a regex), the line must satisfy the nested `require:` predicates. The in-file line quantifier — the dual of `ordered_block`'s `select:` (where `ordered_block` *orders* selected lines, this asserts a *conjunction of predicates* over each). `require:` takes at least one of: `matches` (the line must match **all** listed regexes), `forbid` (the line must match **none**), and `equal` (the listed named `select` captures must all be **equal** — checked on **every** `select` match on the line, so a line carrying two PR links validates both). One violation per offending line; lines `select` does not match are ignored. It closes two shapes no `file_content_*` kind can: a per-line changelog grammar ("**every** `* ` entry must *also* end with a linked PR ref" — `file_content_matches` asserts existence, not a per-line conjunction) and intra-line capture equality ("the display number must equal the `/pull/` URL number" — the Rust `regex` engine is RE2: no backreferences). Per-file (the `PerFileRule` fast path).
 
 ```yaml
@@ -1198,6 +1320,8 @@ For each line matching `select` (a regex), the line must satisfy the nested `req
 ```
 
 ### `generated_file_fresh`
+
+**Categories:** Cross-file
 
 A committed artefact must equal what a declared `command` generator produces, in one of two modes (exactly one of `file` / `outputs`). **alint never leaves regenerated files behind** — it *verifies* freshness, it does not run codegen as a build step. Either mode runs a user-declared, maintainer-trusted process, so the kind is trust-gated to your own top-level config (same tier as the `command` rule). Single-shot, opt-in. Spawn-failure / non-zero exit / timeout are each a clear, distinct violation. `normalize` (`none` / `trim` / `final-newline`) absorbs trailing-newline churn.
 
@@ -1224,6 +1348,8 @@ A committed artefact must equal what a declared `command` generator produces, in
 
 ### `import_gate`
 
+**Categories:** Cross-file
+
 Forbid imports whose **extracted target** matches a `forbid` regex, within the `paths` scope — an architectural import firewall (staging-layer isolation, core/providers separation, private-API gates). Matches the import target, not the raw line (so a comment or string mentioning the path doesn't fire — the low-false-positive specialisation of `file_content_forbidden`). `language` (`go`/`python`/`rust`/`js`/`scala`/`java`/`dart`/`nix`) supplies a built-in import-line pattern; `import_pattern` overrides it (capture group 1 = target; required for `generic`). The `js` preset (whose pattern is unanchored, to catch dynamic `import("m")` / `require("m")`) additionally blanks `//` and `/* … */` comments before matching, so a JSDoc `@typedef {import("../x")}` type annotation isn't mistaken for a real import. `allow` globs exempt sanctioned files. One violation per offending import.
 
 ```yaml
@@ -1237,6 +1363,8 @@ Forbid imports whose **extracted target** matches a `forbid` regex, within the `
 ```
 
 ### `command_idempotent`
+
+**Categories:** Cross-file
 
 Run a user-declared formatter/checker in its **`--check`
 (idempotence) mode** once: exit `0` ⇒ the tree is
@@ -1266,6 +1394,8 @@ top-level config.
 ```
 
 ### `for_each_dir` / `for_each_file`
+
+**Categories:** Cross-file
 
 For every matching directory / file, evaluate a nested `require:` block with the entry as context. Template tokens (`{dir}`, `{stem}`, `{ext}`, `{basename}`, `{path}`, `{parent_name}`) expand against each match. `select:` is a single glob or a list with `!`-prefixed excludes (e.g. `["src/*", "!src/internal"]`).
 
@@ -1307,6 +1437,8 @@ The `iter` namespace exposes:
 
 ### `dir_contains`
 
+**Categories:** Cross-file
+
 Every directory matching `select:` must contain files matching every glob in `require:`. Sugar for a common `for_each_dir` shape.
 
 ```yaml
@@ -1318,6 +1450,8 @@ Every directory matching `select:` must contain files matching every glob in `re
 ```
 
 ### `dir_only_contains`
+
+**Categories:** Cross-file
 
 Every direct-child file of a directory matching `select:` must match at least one glob in `allow:`. Catches stray test data in `src/`.
 
@@ -1331,6 +1465,8 @@ Every direct-child file of a directory matching `select:` must match at least on
 
 ### `unique_by`
 
+**Categories:** Cross-file
+
 No two files matching `select` may share the value of `key` (a path template; tokens `{path}`/`{dir}`/`{basename}`/`{stem}`/`{ext}`/`{parent_name}`). Catches basename collisions across subdirectories. With `case_insensitive: true` the key is folded to lowercase before grouping, so `README.md` and `readme.md` collide — the case-insensitive-filesystem hazard (Windows / macOS).
 
 ```yaml
@@ -1342,6 +1478,8 @@ No two files matching `select` may share the value of `key` (a path template; to
 ```
 
 ### `every_matching_has`
+
+**Categories:** Cross-file
 
 For every file or directory matching `select:`, every nested rule under `require:` must be satisfied. Lightweight sibling of `pair` that iterates both file and directory entries. `select:` is a single glob or a list with `!`-prefixed excludes (e.g. `["packages/*", "!packages/internal"]`).
 
@@ -1360,6 +1498,8 @@ For every file or directory matching `select:`, every nested rule under `require
 ## Plugin (tier 1)
 
 ### `command`
+
+**Categories:** Plugin (tier 1)
 
 Shell out to an external CLI per matched file. Exit `0` is a pass; non-zero is one violation whose message is the (truncated) stdout+stderr. Working directory is the repo root; stdin is closed.
 
