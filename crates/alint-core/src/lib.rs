@@ -4,6 +4,7 @@
 //! rule model, execution order, and crate layout rationale.
 
 pub mod baseline;
+mod category;
 mod config;
 pub mod did_you_mean;
 mod engine;
@@ -32,6 +33,7 @@ pub use config::{
 pub use engine::{Engine, RuleEntry};
 pub use error::{Error, Result};
 pub use facts::{FactKind, FactSpec, FactValue, FactValues, evaluate_facts};
+pub use category::Category;
 pub use level::Level;
 pub use registry::{RuleBuilder, RuleRegistry};
 pub use report::{FixItem, FixReport, FixRuleResult, FixStatus, Report};

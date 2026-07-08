@@ -71,15 +71,50 @@ pub fn run(check: bool) -> Result<()> {
         check_model_crate_set(&root)?;
         check_config_model_root_keys(&root)?;
         check_taxonomy_complete(&families, &md, &root)?;
+        check_category_vocabulary(&families)?;
         check_view_ids_exist(&root)?;
         println!(
-            "{RULE_FAMILIES_C4} is up to date; model gates pass (crate set, config keys, taxonomy completeness, embedded view-ids)"
+            "{RULE_FAMILIES_C4} is up to date; model gates pass (crate set, config keys, taxonomy completeness, category vocabulary, embedded view-ids)"
         );
         return Ok(());
     }
 
     fs::write(&path, &rendered).with_context(|| format!("write {}", path.display()))?;
     println!("wrote {RULE_FAMILIES_C4}");
+    Ok(())
+}
+
+/// Gate the `alint_core::Category` vocabulary against `docs/rules.md`: the enum's
+/// declaration order MUST equal the `## ` family-heading sequence, and each
+/// variant's `slug()` MUST equal `slugify(title())` (the URL form docs-export
+/// generates). This keeps the typed vocabulary, the prose taxonomy, and the
+/// site's family slugs from drifting apart. See docs/design/rule-categories.md.
+fn check_category_vocabulary(families: &[Family]) -> Result<()> {
+    use alint_core::Category;
+
+    let md_titles: Vec<&str> = families.iter().map(|f| f.title.as_str()).collect();
+    let enum_titles: Vec<&str> = Category::ALL.iter().map(|c| c.title()).collect();
+    if md_titles != enum_titles {
+        bail!(
+            "`alint_core::Category` is out of sync with the docs/rules.md `## ` family \
+             order.\n  rules.md: {md_titles:?}\n  enum:     {enum_titles:?}\n\
+             Update `Category` in crates/alint-core/src/category.rs (or the rules.md \
+             heading order) so the two match."
+        );
+    }
+
+    for c in Category::ALL {
+        let expected = crate::docs_export::slugify(c.title());
+        if expected != c.slug() {
+            bail!(
+                "Category::{c:?}.slug() = {:?} but slugify({:?}) = {:?}; they must match \
+                 so the enum slug equals the generated family directory / URL.",
+                c.slug(),
+                c.title(),
+                expected
+            );
+        }
+    }
     Ok(())
 }
 
