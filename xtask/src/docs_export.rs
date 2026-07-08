@@ -564,12 +564,18 @@ fn process_family_h3s(
         if !h3.body.contains("```yaml") {
             missing_examples.push(format!("{} → {}", h2.title, h3.title));
         }
-        let summary = first_sentence(&h3.body);
+        // Strip the `**Categories:**` association line (if any) from the body
+        // BEFORE summarizing or rendering, so it never becomes the summary / SEO
+        // description or double-renders on the page. Categories surface via
+        // frontmatter + the cross-link block. Behavior-neutral until the lines
+        // land in rules.md. See `categories_line` + docs/design/rule-categories.md.
+        let (_categories, clean_body) = crate::categories_line::split_categories_line(&h3.body);
+        let summary = first_sentence(&clean_body);
         // Release-gate the prose the same way the Options table is gated:
         // drop `<!-- alint:since=X -->` blocks describing capability newer than
         // the released version. Computed once per H3 (a multi-kind heading's
         // siblings share it). See ADR-0007 / documentation-drift.md P1.
-        let page_body = strip_unreleased_prose(&h3.body, released);
+        let page_body = strip_unreleased_prose(&clean_body, released);
         for kind in &group_kinds {
             kind_order += 1;
             let siblings: Vec<&str> = group_kinds
