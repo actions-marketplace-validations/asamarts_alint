@@ -94,8 +94,27 @@ impl Category {
     }
 
     /// Zero-based display position (index into [`Category::ALL`]).
+    ///
+    /// Exhaustive `match` on purpose: adding a variant is a compile error here
+    /// (as in `title`/`slug`), and the `order() == ALL index` test guards these
+    /// indices against a reorder of `ALL`. No panic path, unlike
+    /// `ALL.position(..).unwrap()`.
     pub fn order(self) -> usize {
-        Self::ALL.iter().position(|&c| c == self).unwrap()
+        match self {
+            Category::Existence => 0,
+            Category::Content => 1,
+            Category::StructuredQuery => 2,
+            Category::Naming => 3,
+            Category::TextHygiene => 4,
+            Category::SecurityUnicodeSanity => 5,
+            Category::Encoding => 6,
+            Category::Structure => 7,
+            Category::PortableMetadata => 8,
+            Category::UnixMetadata => 9,
+            Category::GitHygiene => 10,
+            Category::CrossFile => 11,
+            Category::PluginTier1 => 12,
+        }
     }
 
     /// Parse a category from its display title (the form used on a
