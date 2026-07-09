@@ -184,7 +184,8 @@
   ],
   "rule_categories": {
     "changeset_requires_path": [
-      "git-hygiene"
+      "git-hygiene",
+      "cross-file"
     ],
     "command": [
       "plugin-tier-1"
@@ -193,7 +194,8 @@
       "cross-file"
     ],
     "commented_out_code": [
-      "git-hygiene"
+      "git-hygiene",
+      "content"
     ],
     "cross_file": [
       "cross-file"
@@ -202,13 +204,15 @@
       "existence"
     ],
     "dir_contains": [
-      "cross-file"
+      "cross-file",
+      "structure"
     ],
     "dir_exists": [
       "existence"
     ],
     "dir_only_contains": [
-      "cross-file"
+      "cross-file",
+      "structure"
     ],
     "every_matching_has": [
       "cross-file"
@@ -217,13 +221,15 @@
       "unix-metadata"
     ],
     "executable_has_shebang": [
-      "unix-metadata"
+      "unix-metadata",
+      "content"
     ],
     "file_absent": [
       "existence"
     ],
     "file_content_forbidden": [
-      "content"
+      "content",
+      "security-unicode-sanity"
     ],
     "file_content_matches": [
       "content"
@@ -241,31 +247,40 @@
       "cross-file"
     ],
     "file_hash": [
-      "content"
+      "content",
+      "security-unicode-sanity"
     ],
     "file_header": [
       "content"
     ],
     "file_is_ascii": [
-      "content"
+      "content",
+      "encoding",
+      "security-unicode-sanity"
     ],
     "file_is_text": [
-      "content"
+      "content",
+      "encoding"
     ],
     "file_max_lines": [
-      "content"
+      "content",
+      "structure"
     ],
     "file_max_size": [
-      "content"
+      "content",
+      "structure"
     ],
     "file_min_lines": [
-      "content"
+      "content",
+      "structure"
     ],
     "file_min_size": [
-      "content"
+      "content",
+      "structure"
     ],
     "file_shebang": [
-      "content"
+      "content",
+      "unix-metadata"
     ],
     "file_starts_with": [
       "content"
@@ -289,16 +304,19 @@
       "cross-file"
     ],
     "generated_file_fresh": [
-      "cross-file"
+      "cross-file",
+      "security-unicode-sanity"
     ],
     "git_blame_age": [
       "git-hygiene"
     ],
     "git_commit_author_allowlist": [
-      "git-hygiene"
+      "git-hygiene",
+      "security-unicode-sanity"
     ],
     "git_commit_gpg_signed": [
-      "git-hygiene"
+      "git-hygiene",
+      "security-unicode-sanity"
     ],
     "git_commit_message": [
       "git-hygiene"
@@ -313,10 +331,12 @@
       "git-hygiene"
     ],
     "git_no_denied_paths": [
-      "git-hygiene"
+      "git-hygiene",
+      "security-unicode-sanity"
     ],
     "import_gate": [
-      "cross-file"
+      "cross-file",
+      "security-unicode-sanity"
     ],
     "indent_style": [
       "text-hygiene"
@@ -331,13 +351,15 @@
       "structured-query"
     ],
     "line_endings": [
-      "text-hygiene"
+      "text-hygiene",
+      "portable-metadata"
     ],
     "line_max_width": [
       "text-hygiene"
     ],
     "markdown_paths_resolve": [
-      "git-hygiene"
+      "git-hygiene",
+      "cross-file"
     ],
     "max_consecutive_blank_lines": [
       "text-hygiene"
@@ -349,52 +371,64 @@
       "structure"
     ],
     "no_bidi_controls": [
-      "security-unicode-sanity"
-    ],
-    "no_bom": [
+      "security-unicode-sanity",
       "encoding"
     ],
+    "no_bom": [
+      "encoding",
+      "text-hygiene"
+    ],
     "no_case_conflicts": [
-      "portable-metadata"
+      "portable-metadata",
+      "naming"
     ],
     "no_empty_files": [
       "structure"
     ],
     "no_illegal_windows_names": [
-      "portable-metadata"
+      "portable-metadata",
+      "naming"
     ],
     "no_merge_conflict_markers": [
-      "security-unicode-sanity"
+      "security-unicode-sanity",
+      "text-hygiene"
     ],
     "no_submodules": [
       "git-hygiene"
     ],
     "no_symlinks": [
-      "unix-metadata"
+      "unix-metadata",
+      "portable-metadata",
+      "security-unicode-sanity"
     ],
     "no_trailing_whitespace": [
       "text-hygiene"
     ],
     "no_zero_width_chars": [
-      "security-unicode-sanity"
+      "security-unicode-sanity",
+      "encoding"
     ],
     "ordered_block": [
-      "cross-file"
+      "cross-file",
+      "text-hygiene"
     ],
     "pair": [
       "cross-file"
     ],
     "pair_changed_together": [
-      "git-hygiene"
+      "git-hygiene",
+      "cross-file"
     ],
     "pair_hash": [
-      "cross-file"
+      "cross-file",
+      "security-unicode-sanity"
     ],
     "registry_paths_resolve": [
       "cross-file"
     ],
     "shebang_has_executable": [
-      "unix-metadata"
+      "unix-metadata",
+      "content"
     ],
     "toml_path_equals": [
       "structured-query"

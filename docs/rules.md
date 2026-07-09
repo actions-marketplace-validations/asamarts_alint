@@ -154,7 +154,7 @@ Fix: `file_append` — append declared content.
 
 ### `file_content_forbidden` (alias: `content_forbidden`)
 
-**Categories:** Content
+**Categories:** Content, Security / Unicode sanity
 
 File contents must NOT match a regex.
 
@@ -200,7 +200,7 @@ Check-only: a fix would risk silently duplicating a near-matching prefix. Pair w
 
 ### `file_hash`
 
-**Categories:** Content
+**Categories:** Content, Security / Unicode sanity
 
 Content SHA-256 must equal the expected digest. Rules-as-tripwire for generated / vendored files that should never drift.
 
@@ -214,7 +214,7 @@ Content SHA-256 must equal the expected digest. Rules-as-tripwire for generated 
 
 ### `file_max_size` (alias: `max_size`)
 
-**Categories:** Content
+**Categories:** Content, Structure
 
 File must be at most `max_bytes` in size. Catches accidental large-blob commits.
 
@@ -228,7 +228,7 @@ File must be at most `max_bytes` in size. Catches accidental large-blob commits.
 
 ### `file_min_size` (alias: `min_size`)
 
-**Categories:** Content
+**Categories:** Content, Structure
 
 File must be at least `min_bytes` in size. Catches placeholder / stub files that pass existence checks but add no information (a 0-byte `LICENSE`, a `README.md` with only a title).
 
@@ -242,7 +242,7 @@ File must be at least `min_bytes` in size. Catches placeholder / stub files that
 
 ### `file_min_lines` (alias: `min_lines`)
 
-**Categories:** Content
+**Categories:** Content, Structure
 
 File must have at least `min_lines` lines (`\n`-terminated, with an unterminated trailing segment counting as one more — `wc -l` semantics). Use for "README has more than a title and a TODO".
 
@@ -256,7 +256,7 @@ File must have at least `min_lines` lines (`\n`-terminated, with an unterminated
 
 ### `file_max_lines` (alias: `max_lines`)
 
-**Categories:** Content
+**Categories:** Content, Structure
 
 File must have at most `max_lines` lines, using the same accounting as `file_min_lines`. Catches the everything-module anti-pattern — a `lib.rs` / `index.ts` / `helpers.py` that grew unbounded.
 
@@ -287,7 +287,7 @@ Fix: `file_append` — append a declared `content`. With no fix declared, violat
 
 ### `file_shebang` (alias: `shebang`)
 
-**Categories:** Content
+**Categories:** Content, Unix metadata
 
 First line of each file in scope must match the `shebang` regex. Pairs with `executable_has_shebang` (which checks shebang *presence* on `+x` files) — `file_shebang` checks shebang *shape*.
 
@@ -303,7 +303,7 @@ Default `shebang:` is `^#!`, which only enforces presence; almost every useful c
 
 ### `file_is_text` (alias: `is_text`)
 
-**Categories:** Content
+**Categories:** Content, Encoding
 
 Content is detected as text (magic bytes + UTF-8 validity check) — fails on binary files matched by `paths`.
 
@@ -316,7 +316,7 @@ Content is detected as text (magic bytes + UTF-8 validity check) — fails on bi
 
 ### `file_is_ascii`
 
-**Categories:** Content
+**Categories:** Content, Encoding, Security / Unicode sanity
 
 Every byte in the file must be < 0x80 (pure ASCII), except codepoints listed in `allow:`. Strict variant of `is_text` for configs that must round-trip through strictly-ASCII tools. `allow:` exempts specific non-ASCII codepoints — each entry a single character (`"ö"`), a `U+XXXX` codepoint, or a `U+XXXX-U+YYYY` inclusive range (curl keeps its source ASCII but allows `ö` in "Björn"; the recurring need across llvm / vscode / elixir). With `allow:` the file is decoded as UTF-8 and checked per character; without it, the strict byte-level fast path is used.
 
@@ -510,7 +510,7 @@ File must end with a single `\n`. Fixable via `file_append_final_newline`.
 
 ### `line_endings`
 
-**Categories:** Text hygiene
+**Categories:** Text hygiene, Portable metadata
 
 Every line ending matches `target`: `lf` or `crlf`. Mixed endings in a single file fail.
 
@@ -577,7 +577,7 @@ Cap runs of blank lines to `max`. A blank line is empty or whitespace-only.
 
 ### `no_merge_conflict_markers`
 
-**Categories:** Security / Unicode sanity
+**Categories:** Security / Unicode sanity, Text hygiene
 
 Flag `<<<<<<< `, `=======`, `>>>>>>> `, `||||||| ` markers at the start of a line — almost always left over from an unresolved merge. The anchor markers carry a trailing ref (`<<<<<<< HEAD`), so they never collide with prose; a bare `=======` is reported only when the file also contains one of those anchors, because on its own a seven-character `=======` is indistinguishable from a reST/Markdown setext heading underline (so docs trees no longer need to be excluded).
 
@@ -590,7 +590,7 @@ Flag `<<<<<<< `, `=======`, `>>>>>>> `, `||||||| ` markers at the start of a lin
 
 ### `no_bidi_controls`
 
-**Categories:** Security / Unicode sanity
+**Categories:** Security / Unicode sanity, Encoding
 
 Flag Trojan-Source bidi override characters (U+202A–202E, U+2066–2069). Defense against [CVE-2021-42574](https://trojansource.codes/).
 
@@ -605,7 +605,7 @@ Flag Trojan-Source bidi override characters (U+202A–202E, U+2066–2069). Defe
 
 ### `no_zero_width_chars`
 
-**Categories:** Security / Unicode sanity
+**Categories:** Security / Unicode sanity, Encoding
 
 Flag body-internal zero-width characters (U+200B, U+200C, U+200D, and non-leading U+FEFF). A leading U+FEFF is `no_bom`'s concern.
 
@@ -628,7 +628,7 @@ As of v0.14 the detection set also covers U+2060 (word joiner) and U+180E (Mongo
 
 ### `no_bom`
 
-**Categories:** Encoding
+**Categories:** Encoding, Text hygiene
 
 Flag a leading UTF-8 / UTF-16 LE/BE / UTF-32 LE/BE byte-order mark. The fixer strips whichever BOM is detected.
 
@@ -696,7 +696,7 @@ Checks that reject tree shapes which work on one OS but break checkouts elsewher
 
 ### `no_case_conflicts`
 
-**Categories:** Portable metadata
+**Categories:** Portable metadata, Naming
 
 Flag paths that differ only by case (e.g. `README.md` + `readme.md`). They can't coexist on macOS HFS+/APFS or Windows NTFS defaults, so a Linux-only dev committing both breaks checkouts for teammates.
 
@@ -709,7 +709,7 @@ Flag paths that differ only by case (e.g. `README.md` + `readme.md`). They can't
 
 ### `no_illegal_windows_names`
 
-**Categories:** Portable metadata
+**Categories:** Portable metadata, Naming
 
 Reject path components Windows can't represent:
 
@@ -732,7 +732,7 @@ All rules in this family are no-ops on Windows — the +x bit and symlinks don't
 
 ### `no_symlinks`
 
-**Categories:** Unix metadata
+**Categories:** Unix metadata, Portable metadata, Security / Unicode sanity
 
 Flag tracked paths that are symbolic links. Symlinks are a portability footgun: Windows NTFS needs admin rights to create them, git-for-Windows can silently flatten them, CI runners vary.
 
@@ -767,7 +767,7 @@ No fix op — chmod auto-apply is deferred.
 
 ### `executable_has_shebang`
 
-**Categories:** Unix metadata
+**Categories:** Unix metadata, Content
 
 Every file with `+x` set must begin with `#!`. Catches plain text files accidentally marked executable.
 
@@ -780,7 +780,7 @@ Every file with `+x` set must begin with `#!`. Catches plain text files accident
 
 ### `shebang_has_executable`
 
-**Categories:** Unix metadata
+**Categories:** Unix metadata, Content
 
 Every file starting with `#!` must have `+x` set. Catches scripts that got their `+x` bit stripped by `git add --chmod=-x`, a tar round-trip, or a `cp` across filesystems.
 
@@ -813,7 +813,7 @@ Note the fix only deletes `.gitmodules`; `git submodule deinit` and cleaning `.g
 
 ### `commented_out_code`
 
-**Categories:** Git hygiene
+**Categories:** Git hygiene, Content
 
 Heuristic detector for blocks of commented-out source code (as opposed to prose comments, license headers, doc comments, or ASCII banners). For each consecutive run of comment lines (`min_lines+`), counts the fraction of non-whitespace characters that are structural punctuation strongly biased toward code (`( ) { } [ ] ; = < > & | ^`). Scores ≥ `threshold` mark the block as code-shaped.
 
@@ -841,7 +841,7 @@ Heuristic, with a non-zero false-positive surface — defaults are `warning`-lev
 
 ### `markdown_paths_resolve`
 
-**Categories:** Git hygiene
+**Categories:** Git hygiene, Cross-file
 
 Validate that backticked workspace paths in markdown files resolve to real files or directories in the repo. Targets the AGENTS.md / CLAUDE.md / `.cursorrules` staleness problem: agent-context files reference paths in inline backticks (`` `src/api/users.ts` ``), and those paths drift as the codebase evolves. The `agent-context-no-stale-paths` rule shipped in v0.6 surfaces *candidates* via a regex; this rule does the precise existence check.
 
@@ -870,7 +870,7 @@ Check-only — auto-fixing a stale path means guessing the new location, which i
 
 ### `git_no_denied_paths`
 
-**Categories:** Git hygiene
+**Categories:** Git hygiene, Security / Unicode sanity
 
 Fire when any tracked file matches a configured glob denylist. The absence-axis companion of `git_tracked_only`: instead of asking "does this tracked path exist?", it asks "is anything tracked that matches my denylist?" One rule covers what would otherwise need one `file_absent` per pattern. Reports every matching denylist entry per offending path so a single file hitting two patterns surfaces both.
 
@@ -1019,7 +1019,7 @@ Each commit's subject line (the first line of its message) must match the `match
 
 ### `git_commit_author_allowlist`
 
-**Categories:** Git hygiene
+**Categories:** Git hygiene, Security / Unicode sanity
 
 Assert every commit author in scope matches an allowed email and/or name pattern. At least one of `email_pattern:` / `name_pattern:` is required; specifying both means BOTH must match (AND). A commit whose author fails any specified pattern fires one violation. Demand: enterprise repos enforcing contributor identity against a corporate domain; OSS projects catching commits from sock-puppet or compromised accounts.
 
@@ -1036,7 +1036,7 @@ Assert every commit author in scope matches an allowed email and/or name pattern
 
 ### `git_commit_gpg_signed`
 
-**Categories:** Git hygiene
+**Categories:** Git hygiene, Security / Unicode sanity
 
 Assert every commit in scope has a verifying signature (`git verify-commit` exits 0). A commit that is unsigned — or signed with a key that doesn't verify against the local keyring — fires one violation. Demand: kernel maintainers, security-sensitive OSS, anyone using GitHub's "Require signed commits" branch protection.
 
@@ -1085,7 +1085,7 @@ Outside a git repo, on untracked files, or when blame fails for any other reason
 
 ### `changeset_requires_path`
 
-**Categories:** Git hygiene
+**Categories:** Git hygiene, Cross-file
 
 The `<since>...HEAD` diff must **add** (git status `A`) at least one path matching `add_glob:` — the "did you add a changelog entry?" gate. Three corpus signals: prettier's `changelog_unreleased/`, cpython's `Misc/NEWS.d/next/`, pnpm's `.changeset/*.md`. `since:` (the base ref) is required — the rule asserts about the *set of files a contribution adds*, so it's diff-scoped. An optional `when_changed:` gates the requirement on some other glob having changed (don't demand a changelog for a docs-only PR); with no gate, any non-empty changeset triggers it. Builds on the same `<since>...HEAD` three-dot (merge-base) diff as `alint check --changed`. Silent no-op outside a git repo or when nothing relevant changed; a `since:` that fails to resolve hard-fails with a shallow-clone hint.
 
@@ -1102,7 +1102,7 @@ The `<since>...HEAD` diff must **add** (git status `A`) at least one path matchi
 
 ### `pair_changed_together`
 
-**Categories:** Git hygiene
+**Categories:** Git hygiene, Cross-file
 
 If the `<since>...HEAD` diff changes any path matching `if_changed:`, at least one path matching `then_changed:` must change in the same range — the **co-change** gate. Corpus signals: rust's `rustdoc-json-types` `FORMAT_VERSION` must bump when the format struct changes; "`version.txt` and the lockfile change together" release guards. Both globs and `since:` (the base ref) are required. **Directional** — the trigger is `if_changed`, the obligation is `then_changed`; a `then_changed`-only change never fires it, so add a second rule with the globs swapped for a bidirectional pact. The `changeset_requires_path` sibling, built on the same merge-base diff as `alint check --changed`. Silent no-op outside a git repo or when `if_changed` didn't change; a `since:` that fails to resolve hard-fails with a shallow-clone hint.
 
@@ -1135,7 +1135,7 @@ For every file matching `primary`, a file matching the `partner` template must e
 
 ### `pair_hash`
 
-**Categories:** Cross-file
+**Categories:** Cross-file, Security / Unicode sanity
 
 The `algorithm` digest (`sha256` default / `sha512`) of every file matching `source` must appear in the single `target` file — either as an embedded hex substring (`format: contains`, default) or a `<hex>  <path>` manifest line (`format: sums-line`, where the path token must be the source's path; a leading `*` binary marker and a `./` prefix are tolerated). The sums-line parser accepts **either order** — coreutils / go-`.sum` `<hex> <path>` *and* the Go FIPS snapshot's path-first `<path> <hex>` — by identifying the digest token by its shape (the algorithm fixes its hex length). One violation per source whose digest is absent or mismatched; a missing `target` is one violation anchored on `target`. Raw bytes are hashed (a CRLF/newline change *is* a digest change — it is an integrity pin). Detection-only: alint never regenerates the manifest (same posture as `file_hash`). The sibling of `file_hash` (one file vs a *literal* hash in the config) and `generated_file_fresh` (a *generator's* stdout); `pair_hash` is the cross-file "B carries A's current digest" relation. golang/go FIPS `fips140.sum` is the canonical, highest-stakes use.
 
@@ -1285,7 +1285,7 @@ Assemble the repo's *file → file* reference graph and assert a global structur
 
 ### `ordered_block`
 
-**Categories:** Cross-file
+**Categories:** Cross-file, Text hygiene
 
 The lines between a `start` / `end` marker pair must stay sorted (and, with `unique: true`, free of duplicates) under `comparator` (`lexical` / `lexical-ci` / `numeric`). **Both markers are optional**: omit `end` to sort from `start` to EOF, omit both to sort the whole file (the markerless "this file is one sorted list" form — dictionaries, allow-lists, a fully-sorted `CODEOWNERS`). The generic form of per-project keep-sorted scripts (protobuf `failure_lists`, sorted `.gitignore` / `CODEOWNERS` / dependency lists). Per-file: with markers, a file with no `start` marker is silently fine; markers match the trimmed line; blank lines inside a block are ignored; one violation per out-of-order block; a fully-delimited block that never sees its `end` is reported `unclosed` (a block with an absent `end` runs to EOF by design). An optional `select:` regex restricts the sortable entries to lines matching it — other lines inside the block (comments, group headers) pass through untouched (the sectioned / keep-sorted-subset shape).
 
@@ -1321,7 +1321,7 @@ For each line matching `select` (a regex), the line must satisfy the nested `req
 
 ### `generated_file_fresh`
 
-**Categories:** Cross-file
+**Categories:** Cross-file, Security / Unicode sanity
 
 A committed artefact must equal what a declared `command` generator produces, in one of two modes (exactly one of `file` / `outputs`). **alint never leaves regenerated files behind** — it *verifies* freshness, it does not run codegen as a build step. Either mode runs a user-declared, maintainer-trusted process, so the kind is trust-gated to your own top-level config (same tier as the `command` rule). Single-shot, opt-in. Spawn-failure / non-zero exit / timeout are each a clear, distinct violation. `normalize` (`none` / `trim` / `final-newline`) absorbs trailing-newline churn.
 
@@ -1348,7 +1348,7 @@ A committed artefact must equal what a declared `command` generator produces, in
 
 ### `import_gate`
 
-**Categories:** Cross-file
+**Categories:** Cross-file, Security / Unicode sanity
 
 Forbid imports whose **extracted target** matches a `forbid` regex, within the `paths` scope — an architectural import firewall (staging-layer isolation, core/providers separation, private-API gates). Matches the import target, not the raw line (so a comment or string mentioning the path doesn't fire — the low-false-positive specialisation of `file_content_forbidden`). `language` (`go`/`python`/`rust`/`js`/`scala`/`java`/`dart`/`nix`) supplies a built-in import-line pattern; `import_pattern` overrides it (capture group 1 = target; required for `generic`). The `js` preset (whose pattern is unanchored, to catch dynamic `import("m")` / `require("m")`) additionally blanks `//` and `/* … */` comments before matching, so a JSDoc `@typedef {import("../x")}` type annotation isn't mistaken for a real import. `allow` globs exempt sanctioned files. One violation per offending import.
 
@@ -1437,7 +1437,7 @@ The `iter` namespace exposes:
 
 ### `dir_contains`
 
-**Categories:** Cross-file
+**Categories:** Cross-file, Structure
 
 Every directory matching `select:` must contain files matching every glob in `require:`. Sugar for a common `for_each_dir` shape.
 
@@ -1451,7 +1451,7 @@ Every directory matching `select:` must contain files matching every glob in `re
 
 ### `dir_only_contains`
 
-**Categories:** Cross-file
+**Categories:** Cross-file, Structure
 
 Every direct-child file of a directory matching `select:` must match at least one glob in `allow:`. Catches stray test data in `src/`.
 
