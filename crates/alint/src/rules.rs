@@ -216,11 +216,13 @@ mod tests {
 
     #[test]
     fn categories_for_kind_resolves_canonical_and_alias() {
-        // canonical kind
-        assert_eq!(
-            categories_for_kind("no_bidi_controls"),
-            vec!["security-unicode-sanity"]
-        );
+        // A canonical kind resolves to its categories, its family (primary) FIRST.
+        // Exact membership is gated by `gen-categories --check` against the bridge, so
+        // this test pins only resolution + the primary-first invariant — a many-to-many
+        // flip (a kind gaining a secondary) must not churn it.
+        let cats = categories_for_kind("no_bidi_controls");
+        assert!(!cats.is_empty());
+        assert_eq!(cats.first(), Some(&"security-unicode-sanity"));
         // an alias resolves to its canonical kind's categories
         assert_eq!(
             categories_for_kind("content_matches"),
