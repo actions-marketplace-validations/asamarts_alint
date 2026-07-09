@@ -1,6 +1,6 @@
 Browse the catalog of rule kinds alint ships (config-independent). Use `alint list` for the rules configured in THIS repo; `alint rules` never reads a config and works anywhere
 
-Usage: alint rules [OPTIONS] <COMMAND>
+Usage: alint[EXE] rules [OPTIONS] <COMMAND>
 
 Commands:
   list        List rule kinds in the catalog, optionally filtered. Reads no config
