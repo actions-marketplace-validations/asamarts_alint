@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand};
 mod export_agents_md;
 mod init;
 mod progress;
+mod rules;
 mod suggest;
 
 /// Long-form `alint --version` output: workspace version, git short
@@ -368,6 +369,30 @@ enum Command {
     /// meant to be run interactively. Publishes diagnostics for the
     /// workspace's `.alint.yml` rules on document open and save.
     Lsp,
+    /// Browse the catalog of rule kinds alint ships (config-independent).
+    /// Use `alint list` for the rules configured in THIS repo; `alint rules`
+    /// never reads a config and works anywhere.
+    Rules {
+        #[command(subcommand)]
+        command: RulesCommand,
+    },
+}
+
+/// Subcommands of `alint rules` (catalog discovery). See ADR-0009.
+#[derive(Subcommand, Debug)]
+enum RulesCommand {
+    /// List rule kinds in the catalog, optionally filtered. Reads no config.
+    List {
+        /// Only kinds in this category (slug, e.g. `security-unicode-sanity`;
+        /// run `alint rules categories` for the list).
+        #[arg(long)]
+        category: Option<String>,
+        /// Case-insensitive substring filter on the kind name (and its aliases).
+        #[arg(long)]
+        search: Option<String>,
+    },
+    /// List the rule categories: slug, title, and how many kinds each holds.
+    Categories,
 }
 
 fn main() -> ExitCode {
@@ -572,6 +597,7 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
         ),
         Command::ValidateConfig { path, format } => cmd_validate_config(path, &format, &cli),
         Command::Lsp => cmd_lsp(),
+        Command::Rules { command } => rules::run(&command, &cli),
     }
 }
 

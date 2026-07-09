@@ -1,21 +1,11 @@
-Language-agnostic linter for repository structure, existence, naming, and content rules
+Browse the catalog of rule kinds alint ships (config-independent). Use `alint list` for the rules configured in THIS repo; `alint rules` never reads a config and works anywhere
 
-Usage: alint[EXE] [OPTIONS] [COMMAND]
+Usage: alint rules [OPTIONS] <COMMAND>
 
 Commands:
-  check             Run linters against the current (or given) directory. Default command
-  list              List all rules loaded from the effective config
-  explain           Show a rule's definition
-  fix               Apply automatic fixes for violations whose rules declare one
-  baseline          Snapshot the current violations into a baseline file, so a later `alint check --baseline <file>` fails only on NEW violations. The one-step way to adopt alint as a blocking gate on a legacy repo: `alint baseline` (commit it), then gate on the delta. The baseline is whole-tree; `--changed` is not accepted
-  facts             Evaluate every `facts:` entry in the effective config and print the resolved value. Debugging aid for `when:` clauses
-  init              Scaffold a starter `.alint.yml` based on the repo's detected ecosystem (and optionally workspace shape). Refuses to overwrite an existing config — delete the existing one first if you really mean it
-  export-agents-md  Generate (or maintain a section of) `AGENTS.md` from the active rule set, so the agent's pre-prompt directives stay in sync with the lint config. Outputs to stdout by default; use `--output PATH` to write a file or `--inline --output PATH` to splice between `<!-- alint:start -->` / `<!-- alint:end -->` markers
-  suggest           Scan the repo for known antipatterns and propose rules that would catch them. Prints proposals to stdout for review — never edits the user's config. Pairs naturally with `alint init` for a smarter cold-start adoption flow
-  validate-config   Parse-validate an `.alint.yml` (resolves `extends:`, builds every rule, parses every `when:`) and report any errors — without walking the tree. For editor LSP, pre-commit hooks, and fail-fast CI steps that just want to know "is the config loadable?". Exit 0 on success; exit 1 on validation failure
-  lsp               Start the alint language server, speaking LSP over stdio. Editor integrations (VS Code, Zed, Neovim, and others) spawn this and drive it via the Language Server Protocol; it is not meant to be run interactively. Publishes diagnostics for the workspace's `.alint.yml` rules on document open and save
-  rules             Browse the catalog of rule kinds alint ships (config-independent). Use `alint list` for the rules configured in THIS repo; `alint rules` never reads a config and works anywhere
-  help              Print this message or the help of the given subcommand(s)
+  list        List rule kinds in the catalog, optionally filtered. Reads no config
+  categories  List the rule categories: slug, title, and how many kinds each holds
+  help        Print this message or the help of the given subcommand(s)
 
 Options:
   -c, --config <CONFIG>  Path to a config file
@@ -35,4 +25,3 @@ Options:
       --show-baselined   With `--baseline`, list the suppressed (baselined) findings on stderr in full, rather than just a one-line count. Parallels `--show-notes`
       --only <RULE_ID>   Restrict the run to the named rule id(s) from the effective config (repeatable). Other rules are skipped entirely. An id that matches no loaded rule is an error, so typos fail loudly rather than silently linting nothing. Applies to `check` and `fix` (the `agent` format emits `fix --only <rule-id>`); rejected on any other subcommand. Global so the bare `alint --only <id>` lints the current directory like `alint check --only <id>` — to lint a different path, use the explicit form `alint check --only <id> <path>`
   -h, --help             Print help
-  -V, --version          Print version

@@ -42,6 +42,7 @@ pub(crate) const CLI_REFERENCE_SUBCMDS: &[&str] = &[
     "export-agents-md",
     "validate-config",
     "lsp",
+    "rules",
 ];
 
 /// Workspace-relative paths the export reads from. Centralised so a

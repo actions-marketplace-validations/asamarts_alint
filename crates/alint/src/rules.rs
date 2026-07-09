@@ -1,0 +1,195 @@
+//! `alint rules` - catalog discovery, config-independent.
+//!
+//! Unlike `alint list` / `alint explain` (which read THIS repo's effective
+//! config), `alint rules` browses the rule kinds alint ships, from the generated
+//! in-crate category bridge (`alint_rules::categories`). It never loads a config
+//! and works anywhere, including outside a repo. See ADR-0009.
+
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::process::ExitCode;
+
+use alint_core::Category;
+use alint_output::Format;
+use alint_rules::categories::{ALIAS_TO_CANONICAL, KIND_CATEGORIES};
+use anyhow::{Result, bail};
+
+use crate::{Cli, RulesCommand};
+
+/// A catalog row: a canonical kind, its category slugs (primary first), and its
+/// alias spellings.
+struct Row {
+    kind: &'static str,
+    categories: Vec<&'static str>,
+    aliases: Vec<&'static str>,
+}
+
+pub(crate) fn run(command: &RulesCommand, cli: &Cli) -> Result<ExitCode> {
+    let format: Format = cli.format.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+    if !matches!(format, Format::Human | Format::Json) {
+        bail!(
+            "`alint rules` supports only `--format human` or `--format json` (got {:?})",
+            cli.format
+        );
+    }
+    match command {
+        RulesCommand::List { category, search } => {
+            list(category.as_deref(), search.as_deref(), format)
+        }
+        RulesCommand::Categories => categories(format),
+    }
+}
+
+/// canonical kind -> its alias spellings, sorted.
+fn aliases_by_canonical() -> BTreeMap<&'static str, Vec<&'static str>> {
+    let mut map: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
+    for (alias, canon) in ALIAS_TO_CANONICAL {
+        map.entry(canon).or_default().push(alias);
+    }
+    for aliases in map.values_mut() {
+        aliases.sort_unstable();
+    }
+    map
+}
+
+fn list(category: Option<&str>, search: Option<&str>, format: Format) -> Result<ExitCode> {
+    // Validate the category slug up front: a clear error beats a silent empty list.
+    if let Some(slug) = category
+        && Category::from_slug(slug).is_none()
+    {
+        let known: Vec<&str> = Category::ALL.iter().map(|c| c.slug()).collect();
+        bail!(
+            "unknown category {slug:?}. Known categories: {}",
+            known.join(", ")
+        );
+    }
+    let needle = search.map(str::to_lowercase);
+    let alias_map = aliases_by_canonical();
+
+    let mut rows: Vec<Row> = Vec::new();
+    for (kind, cats) in KIND_CATEGORIES {
+        let slugs: Vec<&'static str> = cats.iter().map(|c| c.slug()).collect();
+        if let Some(slug) = category
+            && !slugs.contains(&slug)
+        {
+            continue;
+        }
+        let aliases = alias_map.get(kind).cloned().unwrap_or_default();
+        if let Some(term) = &needle {
+            let hit = kind.to_lowercase().contains(term)
+                || aliases.iter().any(|a| a.to_lowercase().contains(term));
+            if !hit {
+                continue;
+            }
+        }
+        rows.push(Row {
+            kind,
+            categories: slugs,
+            aliases,
+        });
+    }
+
+    let mut out = std::io::stdout().lock();
+    if format == Format::Json {
+        let rules: Vec<_> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "kind": r.kind,
+                    "categories": r.categories,
+                    "aliases": r.aliases,
+                })
+            })
+            .collect();
+        let doc = serde_json::json!({
+            "schema_version": 1,
+            "kind": "rule-catalog",
+            "rules": rules,
+        });
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+    } else {
+        let n = rows.len();
+        writeln!(
+            out,
+            "Rule catalog ({n} kind{})\n",
+            if n == 1 { "" } else { "s" }
+        )?;
+        let width = rows.iter().map(|r| r.kind.len()).max().unwrap_or(0);
+        for r in &rows {
+            let titles: Vec<&str> = r
+                .categories
+                .iter()
+                .filter_map(|s| Category::from_slug(s))
+                .map(Category::title)
+                .collect();
+            let alias_note = if r.aliases.is_empty() {
+                String::new()
+            } else {
+                format!("  (alias: {})", r.aliases.join(", "))
+            };
+            writeln!(
+                out,
+                "  {kind:<width$}  {cats}{alias_note}",
+                kind = r.kind,
+                cats = titles.join(", "),
+            )?;
+        }
+    }
+    out.flush().ok();
+    Ok(ExitCode::SUCCESS)
+}
+
+fn categories(format: Format) -> Result<ExitCode> {
+    // Kinds per category (a kind counts once per category it belongs to).
+    let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for (_kind, cats) in KIND_CATEGORIES {
+        for c in *cats {
+            *counts.entry(c.slug()).or_default() += 1;
+        }
+    }
+
+    let mut out = std::io::stdout().lock();
+    if format == Format::Json {
+        let cats: Vec<_> = Category::ALL
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "slug": c.slug(),
+                    "title": c.title(),
+                    "order": c.order(),
+                    "kinds": counts.get(c.slug()).copied().unwrap_or(0),
+                })
+            })
+            .collect();
+        let doc = serde_json::json!({
+            "schema_version": 1,
+            "kind": "rule-categories",
+            "categories": cats,
+        });
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+    } else {
+        writeln!(out, "Rule categories ({})\n", Category::ALL.len())?;
+        let sw = Category::ALL
+            .iter()
+            .map(|c| c.slug().len())
+            .max()
+            .unwrap_or(0);
+        let tw = Category::ALL
+            .iter()
+            .map(|c| c.title().len())
+            .max()
+            .unwrap_or(0);
+        for c in Category::ALL {
+            let n = counts.get(c.slug()).copied().unwrap_or(0);
+            writeln!(
+                out,
+                "  {slug:<sw$}  {title:<tw$}  {n} kind{plural}",
+                slug = c.slug(),
+                title = c.title(),
+                plural = if n == 1 { "" } else { "s" },
+            )?;
+        }
+    }
+    out.flush().ok();
+    Ok(ExitCode::SUCCESS)
+}
