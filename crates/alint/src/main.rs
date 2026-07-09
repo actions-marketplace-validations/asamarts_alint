@@ -190,8 +190,14 @@ enum Command {
         #[arg(long, value_name = "REF")]
         base: Option<String>,
     },
-    /// List all rules loaded from the effective config.
-    List,
+    /// List the rules loaded from THIS repo's effective config. To browse the
+    /// full catalog of rule kinds alint ships, use `alint rules list`.
+    List {
+        /// Only rules whose kind is in this category (slug; see
+        /// `alint rules categories`).
+        #[arg(long)]
+        category: Option<String>,
+    },
     /// Show a rule's definition.
     Explain {
         /// Rule id to describe.
@@ -542,7 +548,7 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
             changed,
             base,
         } => cmd_check(&path, &ChangedMode::new(changed, base), &cli.only, &cli),
-        Command::List => cmd_list(&cli),
+        Command::List { category } => cmd_list(category.as_deref(), &cli),
         Command::Explain { rule_id } => cmd_explain(&rule_id, &cli),
         Command::Fix {
             path,
@@ -1307,11 +1313,28 @@ fn cmd_fix(
     Ok(exit)
 }
 
-fn cmd_list(cli: &Cli) -> Result<ExitCode> {
-    use alint_core::Level;
+fn cmd_list(category: Option<&str>, cli: &Cli) -> Result<ExitCode> {
+    use alint_core::{Category, Level};
     use alint_output::style;
 
-    let loaded = load_rules(Path::new("."), cli)?;
+    let mut loaded = load_rules(Path::new("."), cli)?;
+
+    // Config-scoped category filter: keep only the loaded rules whose kind is in
+    // the given category, resolved through the same in-crate bridge `alint rules`
+    // uses. `alint list --category X` answers "which of MY rules are X"; the
+    // catalog view (all kinds alint ships) is `alint rules list --category X`.
+    if let Some(slug) = category {
+        if Category::from_slug(slug).is_none() {
+            let known: Vec<&str> = Category::ALL.iter().map(|c| c.slug()).collect();
+            bail!(
+                "unknown category {slug:?}. Known categories: {}",
+                known.join(", ")
+            );
+        }
+        loaded
+            .entries
+            .retain(|e| rules::categories_for_kind(&e.kind).contains(&slug));
+    }
 
     // `list` honours --format for machine consumers: `json` emits a
     // stable rule-inventory envelope (the effective rule set, post
@@ -1867,7 +1890,7 @@ fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
         // not opted in stays confined (the setter is a no-op for every
         // kind that doesn't honor the flag).
         rule.set_allow_out_of_root(config.allow_out_of_root.allows(&spec.id, &spec.kind));
-        let mut entry = alint_core::RuleEntry::new(rule);
+        let mut entry = alint_core::RuleEntry::new(rule).with_kind(spec.kind.clone());
         if let Some(when_src) = &spec.when {
             let expr = alint_core::when::parse(when_src)
                 .with_context(|| format!("rule {:?}: parsing `when`", spec.id))?;

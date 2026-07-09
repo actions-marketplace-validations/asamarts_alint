@@ -45,6 +45,7 @@
 === list ===
   --ascii
   --baseline <FILE>
+  --category <CATEGORY>
   --color <WHEN>
   --compact
   --fail-on-warning

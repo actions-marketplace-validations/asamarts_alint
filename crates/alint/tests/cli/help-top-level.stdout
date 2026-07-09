@@ -4,7 +4,7 @@ Usage: alint[EXE] [OPTIONS] [COMMAND]
 
 Commands:
   check             Run linters against the current (or given) directory. Default command
-  list              List all rules loaded from the effective config
+  list              List the rules loaded from THIS repo's effective config. To browse the full catalog of rule kinds alint ships, use `alint rules list`
   explain           Show a rule's definition
   fix               Apply automatic fixes for violations whose rules declare one
   baseline          Snapshot the current violations into a baseline file, so a later `alint check --baseline <file>` fails only on NEW violations. The one-step way to adopt alint as a blocking gate on a legacy repo: `alint baseline` (commit it), then gate on the delta. The baseline is whole-tree; `--changed` is not accepted

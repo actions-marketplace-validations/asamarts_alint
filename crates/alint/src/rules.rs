@@ -40,6 +40,22 @@ pub(crate) fn run(command: &RulesCommand, cli: &Cli) -> Result<ExitCode> {
     }
 }
 
+/// The category slugs of a rule KIND (resolving an alias to its canonical kind
+/// first), primary first. Empty for an unknown kind. Shared with
+/// `alint list --category` so the two commands map kinds identically.
+pub(crate) fn categories_for_kind(kind: &str) -> Vec<&'static str> {
+    let canonical = ALIAS_TO_CANONICAL
+        .iter()
+        .find(|(alias, _)| *alias == kind)
+        .map_or(kind, |(_, canon)| canon);
+    KIND_CATEGORIES
+        .iter()
+        .find(|(k, _)| *k == canonical)
+        .map_or_else(Vec::new, |(_, cats)| {
+            cats.iter().map(|c| c.slug()).collect()
+        })
+}
+
 /// canonical kind -> its alias spellings, sorted.
 fn aliases_by_canonical() -> BTreeMap<&'static str, Vec<&'static str>> {
     let mut map: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
@@ -192,4 +208,26 @@ fn categories(format: Format) -> Result<ExitCode> {
     }
     out.flush().ok();
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn categories_for_kind_resolves_canonical_and_alias() {
+        // canonical kind
+        assert_eq!(
+            categories_for_kind("no_bidi_controls"),
+            vec!["security-unicode-sanity"]
+        );
+        // an alias resolves to its canonical kind's categories
+        assert_eq!(
+            categories_for_kind("content_matches"),
+            categories_for_kind("file_content_matches")
+        );
+        assert!(!categories_for_kind("content_matches").is_empty());
+        // an unknown kind yields no categories (rather than panicking)
+        assert!(categories_for_kind("does_not_exist").is_empty());
+    }
 }

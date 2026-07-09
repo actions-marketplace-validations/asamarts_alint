@@ -73,16 +73,32 @@ type LivePerFileEntries<'a> = (Vec<(usize, &'a RuleEntry)>, Vec<(usize, RuleResu
 pub struct RuleEntry {
     pub rule: Box<dyn Rule>,
     pub when: Option<WhenExpr>,
+    /// The rule's kind (e.g. `file_exists`), retained from its `RuleSpec` so
+    /// config-scoped tooling (`alint list --category`) can map an active rule to
+    /// its categories. Empty for entries built without a spec (`Engine::new`,
+    /// nested rules).
+    pub kind: String,
 }
 
 impl RuleEntry {
     pub fn new(rule: Box<dyn Rule>) -> Self {
-        Self { rule, when: None }
+        Self {
+            rule,
+            when: None,
+            kind: String::new(),
+        }
     }
 
     #[must_use]
     pub fn with_when(mut self, expr: WhenExpr) -> Self {
         self.when = Some(expr);
+        self
+    }
+
+    /// Record the rule's kind (see [`RuleEntry::kind`]).
+    #[must_use]
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = kind.into();
         self
     }
 }
