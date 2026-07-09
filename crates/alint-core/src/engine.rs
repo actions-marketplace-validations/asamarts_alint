@@ -76,7 +76,9 @@ pub struct RuleEntry {
     /// The rule's kind (e.g. `file_exists`), retained from its `RuleSpec` so
     /// config-scoped tooling (`alint list --category`) can map an active rule to
     /// its categories. Empty for entries built without a spec (`Engine::new`,
-    /// nested rules).
+    /// nested rules). INVARIANT: category filtering treats an empty kind as "no
+    /// categories" (the rule is silently dropped), so any config-loading path
+    /// that wants `--category` to work MUST set this via [`RuleEntry::with_kind`].
     pub kind: String,
 }
 

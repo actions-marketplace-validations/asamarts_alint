@@ -1317,20 +1317,26 @@ fn cmd_list(category: Option<&str>, cli: &Cli) -> Result<ExitCode> {
     use alint_core::{Category, Level};
     use alint_output::style;
 
+    // Validate the category slug BEFORE building the config, so a typo fails fast
+    // with a clear error instead of surfacing an unrelated config-build failure.
+    if let Some(slug) = category
+        && Category::from_slug(slug).is_none()
+    {
+        let known: Vec<&str> = Category::ALL.iter().map(|c| c.slug()).collect();
+        bail!(
+            "unknown category {slug:?}. Known categories: {}",
+            known.join(", ")
+        );
+    }
+
     let mut loaded = load_rules(Path::new("."), cli)?;
+    let loaded_any = !loaded.entries.is_empty();
 
     // Config-scoped category filter: keep only the loaded rules whose kind is in
     // the given category, resolved through the same in-crate bridge `alint rules`
     // uses. `alint list --category X` answers "which of MY rules are X"; the
     // catalog view (all kinds alint ships) is `alint rules list --category X`.
     if let Some(slug) = category {
-        if Category::from_slug(slug).is_none() {
-            let known: Vec<&str> = Category::ALL.iter().map(|c| c.slug()).collect();
-            bail!(
-                "unknown category {slug:?}. Known categories: {}",
-                known.join(", ")
-            );
-        }
         loaded
             .entries
             .retain(|e| rules::categories_for_kind(&e.kind).contains(&slug));
@@ -1352,7 +1358,13 @@ fn cmd_list(category: Option<&str>, cli: &Cli) -> Result<ExitCode> {
 
     let (mut out, opts) = render_env(cli)?;
     if loaded.entries.is_empty() {
-        writeln!(out, "(no rules loaded from config)")?;
+        // Distinguish "config defines no rules" from "the category matched none".
+        match category {
+            Some(slug) if loaded_any => {
+                writeln!(out, "(no loaded rules are in category '{slug}')")?;
+            }
+            _ => writeln!(out, "(no rules loaded from config)")?,
+        }
         out.flush().ok();
         return Ok(ExitCode::SUCCESS);
     }
@@ -1402,6 +1414,8 @@ fn list_json(loaded: &LoadedConfig) -> Result<ExitCode> {
         .map(|entry| {
             serde_json::json!({
                 "id": entry.rule.id(),
+                "kind": entry.kind,
+                "categories": rules::categories_for_kind(&entry.kind),
                 "level": entry.rule.level().as_str(),
                 "policy_url": entry.rule.policy_url(),
                 "conditional": entry.when.is_some(),

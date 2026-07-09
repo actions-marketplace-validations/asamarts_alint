@@ -69,6 +69,8 @@ const JSON_STDOUT_SUBCOMMANDS: &[&[&str]] = &[
     &["facts"],
     &["suggest"],
     &["validate-config"],
+    &["rules", "list"],
+    &["rules", "categories"],
     // explain is appended with a concrete id below.
 ];
 
@@ -271,4 +273,134 @@ fn fix_accepts_its_renderable_formats() {
             );
         }
     }
+}
+
+// ─── Phase 2: `alint rules` catalog + `list --category` ────────────────
+//
+// The catalog (`rules`) is config-independent; `list --category` is
+// config-scoped. Both map kinds through the generated in-crate bridge.
+
+/// ADR-0009 invariant: `alint rules` NEVER reads a config (succeeds with none),
+/// while `alint list` REQUIRES one. Backs the "config-independent" claim.
+#[test]
+fn rules_are_config_independent_but_list_is_not() {
+    let dir = tempfile::tempdir().expect("tempdir"); // deliberately no .alint.yml
+    for args in [&["rules", "list"][..], &["rules", "categories"][..]] {
+        let out = run(dir.path(), args);
+        assert!(
+            out.status.success(),
+            "`alint {args:?}` must succeed without a config; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !out.stdout.is_empty(),
+            "`alint {args:?}` produced no output"
+        );
+    }
+    let out = run(dir.path(), &["list"]);
+    assert!(!out.status.success(), "`alint list` must require a config");
+    let out = run(dir.path(), &["list", "--category", "naming"]);
+    assert!(
+        !out.status.success(),
+        "`alint list --category` must not relax the config requirement"
+    );
+}
+
+/// `rules list`/`categories` output: canonical-only rows, aliases annotated,
+/// `--category` filters, unknown slug errors, vocabulary listed.
+#[test]
+fn rules_catalog_output() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let out = run(dir.path(), &["rules", "list"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        s.contains("no_bidi_controls"),
+        "catalog missing a kind: {s}"
+    );
+    assert!(
+        s.contains("file_content_matches") && s.contains("(alias: content_matches)"),
+        "aliases must be annotated on their canonical row"
+    );
+    assert!(
+        !s.lines()
+            .any(|l| l.trim_start().starts_with("content_matches ")),
+        "an alias must not be its own catalog row"
+    );
+
+    let out = run(dir.path(), &["rules", "list", "--category", "naming"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        s.contains("filename_case") && s.contains("filename_regex"),
+        "naming filter dropped a naming kind: {s}"
+    );
+    assert!(
+        !s.contains("no_bidi_controls"),
+        "naming filter leaked a non-naming kind"
+    );
+
+    let out = run(dir.path(), &["rules", "list", "--category", "nope"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unknown category"));
+
+    let out = run(dir.path(), &["rules", "categories"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.contains("security-unicode-sanity") && s.contains("Security / Unicode sanity"));
+}
+
+/// `alint list --category` filters THIS config's rules; an alias-kind rule maps
+/// through the bridge; a category matching no loaded rule reports it distinctly.
+#[test]
+fn list_category_filters_config_rules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        r#"version: 1
+rules:
+  - id: name_rule
+    kind: filename_case
+    paths: "**/*"
+    case: snake
+    level: warning
+  - id: content_rule
+    kind: content_matches
+    paths: "**/*.md"
+    pattern: "x"
+    level: warning
+"#,
+    )
+    .unwrap();
+
+    let out = run(dir.path(), &["list", "--category", "naming"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        s.contains("name_rule") && !s.contains("content_rule"),
+        "naming: {s}"
+    );
+
+    // content_rule's kind is the alias `content_matches` -> resolves to Content.
+    let out = run(dir.path(), &["list", "--category", "content"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        s.contains("content_rule") && !s.contains("name_rule"),
+        "content (alias-kind): {s}"
+    );
+
+    let out = run(dir.path(), &["list", "--category", "git-hygiene"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        s.contains("no loaded rules are in category"),
+        "empty-category message: {s}"
+    );
+
+    // The filtered JSON exposes kind + categories (parity with `rules list`).
+    let out = run(
+        dir.path(),
+        &["list", "--category", "naming", "--format", "json"],
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("json");
+    let rules = v["rules"].as_array().expect("rules array");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["kind"], "filename_case");
+    assert_eq!(rules[0]["categories"][0], "naming");
 }
