@@ -938,6 +938,25 @@ fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> 
             cli.show_baselined,
             &mut out,
         ),
+        (Format::Gitlab, _) => {
+            // Unify GitLab Code Quality's `fingerprint` with the baseline/SARIF
+            // identity (was a self-contained occurrence hash): compute the
+            // canonical per-violation `violation_fingerprint` (file-content-aware,
+            // cached reads) and pass it in, so a finding has ONE fingerprint
+            // across GitLab, SARIF, and baseline mode.
+            let mut reader = FileReader::new(path);
+            let fps: Vec<Vec<String>> = report
+                .results
+                .iter()
+                .map(|r| {
+                    r.violations
+                        .iter()
+                        .map(|v| reader.fingerprint(&r.rule_id, v))
+                        .collect()
+                })
+                .collect();
+            alint_output::write_gitlab(&report, Some(&fps), &mut out)
+        }
         _ => format.write_with_options(&report, &mut out, opts),
     }
     .context("writing output")?;
@@ -986,7 +1005,15 @@ impl<'a> FileReader<'a> {
             Some(p) => self
                 .cache
                 .entry(p.to_path_buf())
-                .or_insert_with(|| std::fs::read(self.root.join(p)).ok())
+                .or_insert_with(|| {
+                    // Cap the fingerprint read (M3): a pathological >256 MiB
+                    // file must not OOM the fingerprint path. Over-cap → None →
+                    // the fingerprint degrades to its non-content identity
+                    // rather than reading unbounded bytes.
+                    let full = self.root.join(p);
+                    let size = std::fs::metadata(&full).map_or(0, |m| m.len());
+                    alint_core::read_capped_or_skip(&full, size)
+                })
                 .as_deref(),
             None => None,
         };

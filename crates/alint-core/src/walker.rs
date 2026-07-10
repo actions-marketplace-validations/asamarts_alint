@@ -23,7 +23,7 @@ pub const MAX_ANALYZE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Read a walked file's bytes, first fast-rejecting (loudly) any file whose
 /// walk-time [`FileEntry::size`] exceeds [`MAX_ANALYZE_BYTES`] (no extra `stat`),
-/// then bounding the actual read to the cap ([`read_bounded`], TOCTOU-safe). The
+/// then bounding the actual read to the cap (`read_bounded`, TOCTOU-safe). The
 /// per-file loops read the whole file into memory, so an uncapped read of a
 /// committed multi-GB blob would OOM the process; a bounded skip keeps the run
 /// alive and observable (M3). A genuine read error (permission, I/O) is logged

@@ -676,3 +676,57 @@ fn nested_same_named_baseline_is_not_over_excluded() {
         "the nested file's TOPSECRET must be reported, not over-excluded"
     );
 }
+
+/// GitLab Code Quality's `fingerprint` must be the SAME canonical
+/// `baseline::violation_fingerprint` that the baseline file and SARIF's
+/// `partialFingerprints` carry — one finding, one identity across every
+/// surface. Before the unification the GitLab path used a self-contained
+/// occurrence hash, so the same finding had two different fingerprints
+/// depending on which format you exported. This anchors the guarantee end to
+/// end: snapshot the tree's findings into a baseline (whose entries carry the
+/// canonical fingerprints), then export the identical tree as GitLab and prove
+/// the fingerprint sets are equal.
+#[test]
+fn gitlab_fingerprint_equals_canonical_baseline_fingerprint() {
+    let d = fixture();
+    let root = d.path();
+
+    // 1. Snapshot → `.alint-baseline.json` (JSONL: header line, then one entry
+    //    per canonical fingerprint).
+    assert_eq!(code(&run(root, &["baseline"])), 0, "snapshot the findings");
+    let baseline_raw = std::fs::read_to_string(root.join(".alint-baseline.json")).unwrap();
+    let canonical: std::collections::BTreeSet<String> = baseline_raw
+        .lines()
+        .skip(1) // header
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let entry: serde_json::Value = serde_json::from_str(l).expect("entry is JSON");
+            entry["fingerprint"]
+                .as_str()
+                .expect("entry carries a fingerprint")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(canonical.len(), 2, "two distinct findings: {canonical:?}");
+
+    // 2. Export the SAME tree as GitLab Code Quality (no baseline → all findings).
+    let gl = run(root, &["check", "--format", "gitlab"]);
+    let issues: Vec<serde_json::Value> =
+        serde_json::from_slice(&gl.stdout).expect("gitlab output is a JSON array");
+    let gitlab_fps: std::collections::BTreeSet<String> = issues
+        .iter()
+        .map(|i| {
+            i["fingerprint"]
+                .as_str()
+                .expect("issue carries a fingerprint")
+                .to_string()
+        })
+        .collect();
+
+    // 3. The fingerprint sets must be identical — one identity per finding.
+    assert_eq!(
+        gitlab_fps, canonical,
+        "GitLab fingerprints must equal the canonical baseline fingerprints\n\
+         gitlab={gitlab_fps:?}\ncanonical={canonical:?}",
+    );
+}

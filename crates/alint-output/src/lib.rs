@@ -113,7 +113,7 @@ impl Format {
             Self::Github => write_github(report, w),
             Self::Markdown => write_markdown(report, w),
             Self::Junit => write_junit(report, w),
-            Self::Gitlab => write_gitlab(report, w),
+            Self::Gitlab => write_gitlab(report, None, w),
             Self::Agent => write_agent(report, w),
         }
     }

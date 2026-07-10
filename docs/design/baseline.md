@@ -3,12 +3,12 @@
 Status: Implemented. Shipped across the slice series (engine, fingerprint, CLI),
 the per-rule `baseline_key` audit (v3), the `baseline:` config key, and the
 per-format SARIF suppression marking + JSON `baselined_suppressed` (§3.8 — the
-final piece). One sub-item is still outstanding: the `gitlab.rs` fingerprint is
-not yet unified onto `violation_fingerprint` (§5, §7). (Draft | Implemented |
-Superseded by <doc>.)
+final piece). The last sub-item — unifying the `gitlab.rs` fingerprint onto
+`violation_fingerprint` — is now **RESOLVED** (v0.14 deferral close-out,
+2026-07-05; §5, §7). (Draft | Implemented | Superseded by <doc>.)
 Decisions: [ADR-0006](../adr/0006-baseline-suppression.md) — **Accepted (2026-06-21)** (new persistent suppression mechanism; affects pass/fail semantics).
 Demand evidence: External adoption evaluation, §4.1 — *"the single feature that makes ESLint/RuboCop/etc. adoptable on legacy code, and its absence is the #1 thing that stops a team from flipping alint on as a merge gate."* Reproduced firsthand against alint 0.13.0.
-Status detail: Implemented and merged to `main` (#88–#94, 2026-06-24); landed after the v0.13.0 cut, so it ships in the next release. All of §7 is RESOLVED except Q7 (`gitlab.rs` fingerprint unification), a tracked deferred follow-up (§5, §7).
+Status detail: Implemented and merged to `main` (#88–#94, 2026-06-24); landed after the v0.13.0 cut, so it ships in the next release. All of §7 is RESOLVED — Q7 (`gitlab.rs` fingerprint unification) closed in the v0.14 deferral close-out (2026-07-05; §5, §7).
 
 > **v3 changelog (implementation-time audit).** Running the (then-draft)
 > fingerprint against the *whole firing scenario corpus* (all 89 registered
@@ -436,19 +436,21 @@ By failure mode:
   CLI (`crates/alint/src/main.rs`) gains `cmd_baseline`, threads `--baseline` /
   `baseline:` key / `--strict-baseline` / `--show-baselined` into `cmd_check`,
   at the same post-load layer as the existing `apply_only_filter`.
-- **Unify the fingerprint (review H1).** `gitlab.rs` already ships
-  `fingerprint(rule_id|path|message)` (SHA-256, bare `|` separator) for GitLab
-  Code Quality cross-run dedup. v2 introduces **one** `violation_fingerprint` in
-  `alint-core` (length-prefixed, discriminator-based); the SARIF
-  `partialFingerprints` use it. **The `gitlab.rs` migration onto it is NOT yet
-  done** — `gitlab.rs` still emits the legacy message-keyed fingerprint, which is
-  line-unstable (code motion churns it) and differs from the SARIF/baseline
-  fingerprint for the same finding. Completing it needs the engine to attach
-  precomputed fingerprints to the report — the formatter has no file bytes to
-  compute the line-content discriminator (§3.1 case 2) — which is the same
-  plumbing that would let SARIF emit `partialFingerprints` without `--baseline`.
-  Deferred to a focused follow-up. The message-keyed GitLab scheme is *less*
-  stable (rewords churn it) and has the `|` collision; unifying will fix both.
+- **Unify the fingerprint (review H1). — RESOLVED (v0.14 deferral close-out,
+  2026-07-05).** `gitlab.rs` used to ship its own
+  `fingerprint(rule_id|path|message|occurrence)` (SHA-256, bare `|` separator)
+  for GitLab Code Quality cross-run dedup, which was line-unstable (code motion
+  churned it) and differed from the SARIF/baseline fingerprint for the same
+  finding. The `alint` GitLab path now computes the canonical
+  `violation_fingerprint` (via the same `FileReader` the baseline path uses, so
+  it has the file bytes for the line-content discriminator, §3.1 case 2) and
+  passes a `[result][violation]` fingerprint grid into `write_gitlab`, so a
+  finding carries **one** identity across GitLab, SARIF (`partialFingerprints`),
+  and the baseline file. `gitlab.rs` keeps the old scheme only as a
+  `self_fingerprint` *fallback* for callers without file access (the generic
+  `Format` dispatch, benches, unit tests); GitLab's per-report-uniqueness
+  requirement holds on both paths. Cross-surface parity is guarded end to end by
+  `alint::tests::baseline_cli::gitlab_fingerprint_equals_canonical_baseline_fingerprint`.
 - **`Violation.baseline_key`** (§2.4): with the v3 path-shape default, the
   rule-side work is setting a key on only the ~15 kinds whose identity isn't
   `(rule_id, path)` — structured-query, cross-file/no-path, first-offender, and
@@ -540,14 +542,15 @@ only files that already produced such a violation, cached per file).
 6. **Hash truncation — RESOLVED (2026-06-21): no truncation,** full 64-hex
    SHA-256. A fingerprint collision is a silent mis-suppression; the readability
    that motivated truncation is provided by the advisory `message` field (§2.1).
-7. **Fingerprint unification with `gitlab.rs` (and SARIF)** — PARTIALLY DONE.
-   The single `violation_fingerprint` lives in alint-core and the SARIF
-   `partialFingerprints` use it; **the `gitlab.rs` migration is still
-   outstanding** — it ships the legacy message-keyed hash, which is line-unstable
-   and distinct from the SARIF/baseline fingerprint for the same finding (§5).
-   Open detail still applies: changing gitlab's fingerprint is a benign change
-   for consumers relying on the old `|message` hash (stability *improves*);
-   confirm before the migration lands.
+7. **Fingerprint unification with `gitlab.rs` (and SARIF)** — RESOLVED (v0.14
+   deferral close-out, 2026-07-05). The single `violation_fingerprint` lives in
+   alint-core; SARIF `partialFingerprints`, the baseline file, and now the
+   `alint` GitLab export all carry it, so a finding has one identity everywhere.
+   `gitlab.rs` retains the legacy message-keyed hash only as a `self_fingerprint`
+   fallback for callers without file access (generic dispatch / benches / tests).
+   The migration was the benign change anticipated here (gitlab fingerprint
+   *stability improves*); parity is guarded by
+   `gitlab_fingerprint_equals_canonical_baseline_fingerprint` (§5).
 8. **No-regression "ratchet" + level-aware re-surfacing** — out of scope v1, but
    the two most-requested likely follow-ups (prevent a threshold getting *worse*;
    re-surface a grandfathered finding when its rule is escalated to `error`).

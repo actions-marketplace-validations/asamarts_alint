@@ -70,7 +70,7 @@ CHANGELOG `[Unreleased]`, not here.
 | 3 | HIGH — correctness | H3, H4 | `[x]` |
 | 4 | MEDIUM — security cluster | M1–M8 | `[x]` (M1/M2/M3/M5/M7/M8 done; M4 done — dir symlinks + escaping side-list; M6 done — commit-lint bypass + non-UTF-8 tracked/changed paths preserved; both landed in the Phase-A deferral close-out) |
 | 5 | MEDIUM — output / CLI / baseline | M9–M14 | `[x]` (M9–M14 all done) |
-| 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[~]` (D1–D10,D12 + L1,L3–L14 + Dog1/Dog2 done; L2 partial; D11 deferred) |
+| 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[~]` (D1–D10,D12 + L1,L3–L14 + Dog1/Dog2 done; L2 done — Unicode fold landed, ASCII-scope residual accepted WON'T-FIX; D11 deferred) |
 | 7 | alint.org drift | W1–W7 | `[x]` (W1–W5,W7 done on the site branch; W6 partial) |
 
 Phases land security-first. Each is one atomic commit (or a small group)
@@ -583,14 +583,17 @@ LOW correctness cleanup (L):
   fixer breaks legit emoji ZWJ sequences (scope away from such files);
   grapheme-aware refinement noted as a future, not done (out of contained
   scope). Tests added for all five new codepoints.
-- `[~]` **L2** `no_case_conflicts` now folds with Unicode `to_lowercase`
+- `[x]` **L2** `no_case_conflicts` now folds with Unicode `to_lowercase`
   (not ASCII-only), so `É`/`é` and `Ω`/`ω` collisions are caught — the strict,
-  portable default for a case-conflict detector (test added). **Deferred
-  (rest):** `case.rs`/`filename_case.rs` are *documented* as ASCII-scoped by
-  design (camel/pascal/snake are defined on ASCII letters), so Unicode-izing
-  them is a semantics change, not a bug fix; the `file_ops.rs` same-inode
-  rename special-case is filesystem-semantics needing cross-platform care.
-  Both want a deliberate pass.
+  portable default for a case-conflict detector (test added). **Residual —
+  WON'T-FIX (accepted 2026-07-05):** the ASCII scope of `case.rs` /
+  `filename_case.rs` is deliberate, not a defect — the camel/pascal/snake
+  conventions those rules enforce are *defined* on ASCII letters, so folding
+  Unicode into them would silently change what passes (a semantics change, not
+  a correctness fix) and is already documented as ASCII-scoped in the rule
+  docs. The `file_ops.rs` same-inode rename special-case is filesystem
+  semantics, not case handling. Reopen only if a concrete non-ASCII naming
+  convention is requested; no code change carried into v0.14.
 - `[x]` **L3** the `when:` lexer now decodes the full UTF-8 scalar instead of
   casting one byte to `char` (Latin-1 mojibake), so a non-ASCII literal like
   `== "café"` matches. Escapes still work; tests cover accents, Cyrillic, emoji.

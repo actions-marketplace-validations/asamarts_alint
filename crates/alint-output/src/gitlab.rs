@@ -9,8 +9,9 @@
 //! objects, one per violation.
 //!
 //! Each issue carries: `description`, `check_name`,
-//! `fingerprint` (SHA-256 hex of `rule_id|path|message|occurrence` for
-//! cross-run de-duplication; see [`fingerprint`]), `severity` (one of
+//! `fingerprint` (the canonical `baseline::violation_fingerprint` when `alint`
+//! supplies it — so GitLab, SARIF, and baseline mode agree on identity — else
+//! the self-contained fallback [`self_fingerprint`]), `severity` (one of
 //! `info` / `minor` / `major` / `critical` / `blocker`), and
 //! `location.path` + `location.lines.begin`.
 //!
@@ -33,20 +34,36 @@ use alint_core::{Level, Report, RuleResult, Violation};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-pub fn write_gitlab(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
+/// `fingerprints`, when supplied, is the per-result / per-violation canonical
+/// `baseline::violation_fingerprint` (indexed `[result][violation]`, aligned with
+/// `report.results[i].violations[j]`), so GitLab Code Quality shares ONE identity
+/// with baseline mode + SARIF (`partialFingerprints`) — a finding has the same
+/// fingerprint everywhere. Passed by `alint`'s GitLab path (which has file access
+/// to compute the content discriminator). `None` falls back to the self-contained
+/// occurrence-based hash for callers without that plumbing (the generic dispatch,
+/// benches, unit tests) — GitLab's per-report-uniqueness requirement is met either
+/// way (the canonical fingerprints are collision-free by the coverage audit).
+pub fn write_gitlab(
+    report: &Report,
+    fingerprints: Option<&[Vec<String>]>,
+    w: &mut dyn Write,
+) -> std::io::Result<()> {
     let mut issues: Vec<Issue> = Vec::new();
-    // Per-report occurrence counter keyed by the base `rule|path|message`
-    // tuple, so genuinely-distinct findings that share all three get distinct
-    // fingerprints (the Code Climate spec requires per-report uniqueness, else
-    // GitLab silently drops the duplicates). Deterministic: report iteration
-    // order is stable. (M10)
+    // Fallback per-report occurrence counter keyed by the base `rule|path|message`
+    // tuple, so genuinely-distinct findings that share all three still get distinct
+    // fingerprints (Code Climate requires per-report uniqueness). Only consulted
+    // when `fingerprints` is None. Deterministic: report iteration order is stable.
     let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    for result in &report.results {
+    for (ri, result) in report.results.iter().enumerate() {
         if result.level == Level::Off {
             continue;
         }
-        for violation in &result.violations {
-            issues.push(build_issue(result, violation, &mut seen));
+        for (vi, violation) in result.violations.iter().enumerate() {
+            let precomputed = fingerprints
+                .and_then(|f| f.get(ri))
+                .and_then(|r| r.get(vi))
+                .cloned();
+            issues.push(build_issue(result, violation, precomputed, &mut seen));
         }
     }
     let json = serde_json::to_string_pretty(&issues)?;
@@ -78,6 +95,7 @@ struct Lines {
 fn build_issue(
     result: &RuleResult,
     violation: &Violation,
+    precomputed_fingerprint: Option<String>,
     seen: &mut std::collections::HashMap<String, u32>,
 ) -> Issue {
     let path = violation
@@ -85,19 +103,24 @@ fn build_issue(
         .as_ref()
         .map_or_else(|| ".".to_string(), |p| p.display().to_string());
 
-    // Nth identical (rule, path, message) in this report — 0 for the first.
-    let key = format!("{}|{path}|{}", result.rule_id, violation.message);
-    let occurrence = {
-        let counter = seen.entry(key).or_insert(0);
-        let n = *counter;
-        *counter += 1;
-        n
-    };
+    let fingerprint = precomputed_fingerprint.unwrap_or_else(|| {
+        // Fallback: the self-contained occurrence-based hash. `occurrence` is the
+        // Nth identical (rule, path, message) in this report — 0 for the first —
+        // so distinct findings sharing all three don't collide.
+        let key = format!("{}|{path}|{}", result.rule_id, violation.message);
+        let occurrence = {
+            let counter = seen.entry(key).or_insert(0);
+            let n = *counter;
+            *counter += 1;
+            n
+        };
+        self_fingerprint(&result.rule_id, &path, &violation.message, occurrence)
+    });
 
     Issue {
         description: violation.message.to_string(),
         check_name: result.rule_id.to_string(),
-        fingerprint: fingerprint(&result.rule_id, &path, &violation.message, occurrence),
+        fingerprint,
         severity: severity(result.level),
         location: Location {
             path,
@@ -136,10 +159,13 @@ fn severity(level: Level) -> &'static str {
 /// file). The single-occurrence common case keeps a line-independent
 /// fingerprint, so drift tolerance is preserved.
 ///
-/// Note: this is *not* yet the `violation_fingerprint` used by baseline mode
-/// (ADR-0006); unifying the two needs report-fingerprint plumbing and is
-/// deferred — see `docs/design/baseline.md` §5/§7.
-fn fingerprint(rule_id: &str, path: &str, message: &str, occurrence: u32) -> String {
+/// Note: this is the FALLBACK identity, used only when `write_gitlab` is called
+/// without pre-computed `fingerprints` (the generic dispatch / benches / unit
+/// tests). `alint`'s GitLab path passes the canonical
+/// `baseline::violation_fingerprint` (ADR-0006), so GitLab, SARIF, and baseline
+/// mode share ONE identity per finding — the unification that `docs/design/
+/// baseline.md` §5/§7 tracked as a follow-up.
+fn self_fingerprint(rule_id: &str, path: &str, message: &str, occurrence: u32) -> String {
     let mut hasher = Sha256::new();
     hasher.update(rule_id.as_bytes());
     hasher.update(b"|");
@@ -166,7 +192,7 @@ mod tests {
 
     fn render(report: &Report) -> String {
         let mut buf = Vec::new();
-        write_gitlab(report, &mut buf).unwrap();
+        write_gitlab(report, None, &mut buf).unwrap();
         String::from_utf8(buf).unwrap()
     }
 

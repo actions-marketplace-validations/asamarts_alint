@@ -2,7 +2,7 @@
   {
     "description": "expected a file matching [LICENSE]",
     "check_name": "must-have-license",
-    "fingerprint": "c58a316821b90856e9c6ee478d35c9115d04994d181b47014401a7aad543b415",
+    "fingerprint": "6d67edc4771cc4088a3ef8e03c7ad4367b7350e5069d752880a0c2f34897e865",
     "severity": "major",
     "location": {
       "path": ".",
