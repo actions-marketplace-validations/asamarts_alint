@@ -56,6 +56,23 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (e.g. `["fix", "--only", "<id>"]`) to auto-fix a single violation, present
   iff `fix_available`. Lets an agent run the fix programmatically instead of
   parsing the command out of the English `agent_instruction`.
+- **Many-to-many rule categories.** Every rule kind now belongs to one or more
+  categories (primary first), so cross-cutting kinds surface where users look for
+  them — `no_bidi_controls` is both Encoding and Security, `filename_case` both
+  Naming and Structure — instead of hiding under a single family. Two new
+  config-independent catalog commands: `alint rules list` (browse every kind,
+  optionally `--category <slug>` or `--search <text>`) and `alint rules
+  categories` (the vocabulary: slug, title, and how many kinds each holds); and
+  `alint list --category <slug>` filters *this repo's* effective config by
+  category. The membership is one source of truth — a generated in-crate bridge
+  (`gen-categories`), validated against `docs/rules.md` + the registry and
+  drift-gated — published as `facts.json` `categories` (slug / title / order) and
+  `rule_categories` (kind → category slugs), which alint.org renders and
+  cross-checks so the site can't disagree with the tool. `docs/rules.md` gains a
+  `Categories:` line per kind, and the site's family pages list membership by
+  category. The category vocabulary stays the current 13 families; only the
+  membership becomes many-to-many. Design: `docs/design/rule-categories.md`; CLI
+  shape in ADR-0009.
 
 ### Changed
 
@@ -463,7 +480,8 @@ The config JSON Schema is now derived from the Rust option types, powering a
 per-rule `## Options` table on every reference page; `facts.json` and
 `roadmap.json` publish the surface-area counts and the public roadmap as
 machine-readable artifacts; the path-confinement boundary from v0.12.0 gains a
-Kani-model-checked proof and proptest properties; and the architecture is
+Kani-model-checked proof of its lexical containment policy plus proptest
+properties; and the architecture is
 documented as a single interactive LikeC4 model on alint.org, exported to Mermaid
 for the GitHub repository.
 
@@ -511,9 +529,12 @@ for the GitHub repository.
 
 ### Security
 
-- **A Kani-model-checked proof and proptest properties now verify the
-  path-confinement boundary** introduced in v0.12.0 (the untrusted-`extends:`
-  threat model), turning that guarantee into a machine-checked invariant.
+- **A Kani-model-checked proof of the lexical containment policy, plus proptest
+  properties, now verify the path-confinement boundary** introduced in v0.12.0
+  (the untrusted-`extends:` threat model). Kani proves the component-sequence
+  normalization (the `..`/absolute-root arithmetic can't underflow or escape);
+  the symlink-aware runtime confinement is exercised by proptest + tests. Turns
+  that guarantee into a machine-checked invariant.
 
 ## [0.12.0] - 2026-06-07
 

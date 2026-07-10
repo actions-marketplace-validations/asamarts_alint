@@ -17,7 +17,7 @@ option types (powering the per-rule options docs), `facts.json` and
 machine-readable contracts, the crate-dependency graph and the architecture are
 a single LikeC4 model rendered interactively on alint.org (and exported to
 Mermaid for GitHub), and the v0.12.0 path-confinement boundary gains a
-Kani-verified proof. All are generated and regenerate-and-diff gated, and
+Kani-verified proof of its lexical containment policy. All are generated and regenerate-and-diff gated, and
 alint.org renders its headline counts from `facts.json`. See the
 [Engineering foundations](#v013-engineering-foundations-spec-driven-development)
 section below.
@@ -1327,7 +1327,7 @@ Design pass: [`asf_bundle_overfire.md`](https://github.com/asamarts/alint/blob/m
   so the kind now covers it directly.
 
 ## v0.13: Engineering foundations: spec-driven development
-<!-- roadmap-public: blurb="A drift-elimination program on main: schema, facts, and architecture generated and gated, plus a Kani-verified path-confinement proof." -->
+<!-- roadmap-public: blurb="A drift-elimination program on main: schema, facts, and architecture generated and gated, plus a Kani-verified proof of the lexical path-confinement policy." -->
 
 A drift-elimination program run on `main` after v0.12. Conceived as a foundations
 track interleaved with the release cadence, it grew substantial enough to be cut
@@ -1351,7 +1351,9 @@ shipped, each artifact regenerate-and-diff gated:
   a hand-modeled Structurizr C4 model is kept honest against the workspace members,
   both gated by `gen-arch --check`.
 - **Pragmatic formal methods.** proptest properties as an always-on behaviour spec,
-  plus a verified Kani bounded proof of the path-confinement security policy.
+  plus a verified Kani bounded proof of the lexical path-confinement policy (the
+  component-sequence normalization; the symlink-aware runtime confinement is
+  enforced separately and covered by proptest + tests, not Kani).
 - **Contract-consuming site.** alint.org reads `facts.json` through a typed loader,
   cross-checks at sync time that the bundled contract agrees with the site's own
   manifest, and renders its headline counts and roadmap claims from it — so the
