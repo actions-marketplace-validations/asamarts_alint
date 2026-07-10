@@ -374,8 +374,9 @@ facts.json contracts, computed the same way: `alint_dsl::load(<config>).rules.le
   **DONE (release-independent, landed early):** the proof `confine_steps_is_sound`
   verifies only the lexical component-sequence policy, so ROADMAP.md (3 spots incl.
   the roadmap-public blurb) + CHANGELOG.md (2 spots) now say "lexical path-confinement
-  policy" and note the symlink-aware runtime confinement is proptest/test-covered, not
-  Kani. roadmap.json regenerated; both alint.org copies refresh on the next docs-bundle
+  policy" and note the symlink-aware runtime confinement is a separate runtime
+  canonicalize-recheck covered by integration tests, not Kani OR proptest (both of which
+  are lexical-only per formal-methods.md). roadmap.json regenerated; both alint.org copies refresh on the next docs-bundle
   sync (overlaid from main). Also landed alongside: the missing many-to-many
   **rule-categories** CHANGELOG `[Unreleased]` entry + a README `list --category` note.
 - `[-]` **Pin bump** (four install-pins + prose claims) at the cut.

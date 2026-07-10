@@ -58,8 +58,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parsing the command out of the English `agent_instruction`.
 - **Many-to-many rule categories.** Every rule kind now belongs to one or more
   categories (primary first), so cross-cutting kinds surface where users look for
-  them — `no_bidi_controls` is both Encoding and Security, `filename_case` both
-  Naming and Structure — instead of hiding under a single family. Two new
+  them — `no_bidi_controls` is both Encoding and Security, `git_commit_gpg_signed`
+  both Git hygiene and Security — instead of hiding under a single family. Two new
   config-independent catalog commands: `alint rules list` (browse every kind,
   optionally `--category <slug>` or `--search <text>`) and `alint rules
   categories` (the vocabulary: slug, title, and how many kinds each holds); and
@@ -529,12 +529,13 @@ for the GitHub repository.
 
 ### Security
 
-- **A Kani-model-checked proof of the lexical containment policy, plus proptest
-  properties, now verify the path-confinement boundary** introduced in v0.12.0
-  (the untrusted-`extends:` threat model). Kani proves the component-sequence
-  normalization (the `..`/absolute-root arithmetic can't underflow or escape);
-  the symlink-aware runtime confinement is exercised by proptest + tests. Turns
-  that guarantee into a machine-checked invariant.
+- **A Kani-model-checked proof and proptest properties now verify the lexical
+  path-confinement policy** introduced in v0.12.0 (the untrusted-`extends:`
+  threat model): the `..`/absolute-root normalization can't underflow or escape.
+  Both cover the *lexical* layer only; the filesystem layer — an in-repo symlink
+  that resolves outside the root — is a separate runtime canonicalize-and-recheck
+  (`resolved_within_root`), covered by integration tests, not the proof. Turns
+  the lexical guarantee into a machine-checked invariant.
 
 ## [0.12.0] - 2026-06-07
 
