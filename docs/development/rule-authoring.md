@@ -35,7 +35,15 @@ test time.
 4. Document the kind in `docs/rules.md`, under its family (an `##` heading) as an
    `###` section that contains at least one fenced ` ```yaml ` usage example.
    The reference page at `alint.org/docs/rules/<family>/<kind>/` is sliced from
-   this section, and the docs build fails if the example is missing.
+   this section, and the docs build fails if the example is missing. Directly
+   under the `###` heading add a `**Categories:**` line listing the kind's
+   categories, PRIMARY FIRST — the primary is the family it sits under. Most kinds
+   are single-category (just the family); give a cross-cutting kind its
+   secondaries too, e.g. `**Categories:** Content, Security / Unicode sanity`.
+   `gen-categories` (step 7) parses this line; its gate enforces primary-first, a
+   three-category cap, and the closed `Category` vocabulary. See
+   `docs/design/rule-categories.md` and the curated table in
+   `docs/design/rule-categories-assignments.md`.
 5. Add e2e scenarios:
    - `crates/alint-e2e/scenarios/check/<family>/<kind>_pass.yml`
    - `crates/alint-e2e/scenarios/check/<family>/<kind>_fires.yml`
@@ -46,9 +54,10 @@ test time.
    - `<family>/<kind>_no_op_outside_git.yml` (no `given.git` block)
 7. Regenerate the derived contracts and run the audits:
    ```text
-   cargo run -p xtask -- gen-facts     # headline counts + catalogues
-   cargo run -p xtask -- gen-schema    # config JSON Schema (kinds with options)
-   cargo run -p xtask -- gen-model     # LikeC4 model fragments
+   cargo run -p xtask -- gen-categories # kind->category bridge (from **Categories:**)
+   cargo run -p xtask -- gen-facts      # headline counts + catalogues + categories
+   cargo run -p xtask -- gen-schema     # config JSON Schema (kinds with options)
+   cargo run -p xtask -- gen-model      # LikeC4 model fragments
    cargo test -p alint-e2e -- --no-fail-fast
    ```
    Every `coverage_audit_*` test should pass. The `gen-* --check` gates in CI and
@@ -85,6 +94,13 @@ the six headline counts, and the catalogue lists that the README, the docs, and
 alint.org render from. CI and the docs script run `gen-facts --check` and fail on
 drift. The same applies when you add a family, bundled ruleset, fix operation,
 output format, or subcommand.
+
+`cargo run -p xtask -- gen-categories` regenerates the in-crate kind-to-category
+bridge (`crates/alint-rules/src/categories_gen.rs`) from the `**Categories:**`
+lines in `docs/rules.md`. The CLI (`alint rules`, `alint list --category`) reads
+it, and `facts.json` carries the same associations, so run `gen-categories` before
+`gen-facts`. `gen-categories --check` gates it; run it after step 4 whenever you
+add a kind or edit a `**Categories:**` line.
 
 `cargo run -p xtask -- gen-model` refreshes the LikeC4 model fragment that
 carries the rule-kind taxonomy (`docs/design/architecture/model/rule-families.gen.c4`),
