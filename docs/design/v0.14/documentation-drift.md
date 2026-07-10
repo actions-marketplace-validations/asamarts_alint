@@ -326,8 +326,14 @@ Each fix ships with a revert-sensitive regression test (repo convention).
 
 - `[ ]` **P4.1** Add the count anchors the gate lacks: families, case-study count, examples
   count (all already contract-interpolated).
-- `[ ]` **P4.2** Gate the `/api/{rules,rulesets,versions}.json` endpoints for source/URI
+- `[x]` **P4.2** Gate the `/api/{rules,rulesets,versions}.json` endpoints for source/URI
   resolvability (the W3/W4 404 class), so a new aliased/nested kind cannot silently 404.
+  **DONE via a deterministic (no-network) stem gate** (decision: no GitHub probing).
+  The engine emits `facts.json.rule_source_files` (kind -> source-file stem, parsed from
+  `register_builtin`, each stem's `.rs` existence-verified by `gen-facts`); the site's
+  `scripts/check-rule-source-files.mjs` asserts `sourceUrlOf`'s `SOURCE_FILE_OF[k] ?? k`
+  resolution equals that map for every kind and that no hand-map entry is stale. Wired
+  into `check-links.yml`; negative-tested; graceful-skips on a pre-contract bundle.
 - `[ ]` **P4.3** Run the count/link/pin gates at deploy time in `deploy.yml`, not only
   PR + cron.
 
@@ -455,7 +461,9 @@ Each fix ships with a revert-sensitive regression test (repo convention).
   short-name aliases + `cross_file_value_equals`, whose `docs_url` 404 **live**
   (`/docs/rules/content/content_matches/` → 404; aliases have no page of their own).
   Fixed `docsUrlOf` to resolve aliases to the canonical kind's page; a fresh build has
-  100 API links all resolving. External `source_url` probing stays the deferred P4.2 tail.
+  100 API links all resolving. `source_url` resolvability is now closed **deterministically**
+  (no external probing) by the `rule_source_files` engine map + `check-rule-source-files.mjs`
+  site gate (P4.2 above), superseding the deferred network-probe idea.
 - `[-]` **2b — case-study index-card count interpolation: DEFERRED with rationale.**
   Infeasible as specified. The card counts (golang/go "31 rules") are curated *narrative*
   subsets that diverge ~2x from the study `rules:` frontmatter (64 = the effective total
@@ -471,10 +479,12 @@ Each fix ships with a revert-sensitive regression test (repo convention).
 - `[x]` **3 — housekeeping DONE.** `.github-account=asamarts` marker added to alint.org (the
   alint repo already had a tracked one); the work-stream branches (git-tracked-kind-option,
   v0.14-doc-followups, v0.14-doc-drift) deleted in both repos.
-- `[ ]` **True remainder:** P3 (optional bench-count contract — now also subsumes the
-  case-study count reconciler above), P4.2's EXTERNAL `source_url` probe, and the §6
-  release-cut tail (Kani-claim narrowing, nav wiring + un-sentinel the pre-written v0.14
-  prose, pin bump).
+- `[~]` **True remainder:** ~~P4.2's EXTERNAL `source_url` probe~~ CLOSED deterministically
+  (engine `rule_source_files` map + `check-rule-source-files.mjs` gate — no network). What
+  remains: **P3** (optional bench-count contract — also subsumes the case-study count
+  reconciler above; still `[-]` optional), and the **§6 release-cut tail** (Kani-claim
+  narrowing, nav wiring + un-sentinel the pre-written v0.14 prose, pin bump) — the latter is
+  the release-time Phase F.
 - **Deployment:** the engine drift-prevention (P1/P-C4/P-REF/P2.1/P5) and the alint.org
   immediate fixes (§4) merged in the prior session; this session merged #118 (ADR-0008),
   #119 (1b/1c/1d), and alint.org #15 (2a + alias fix). The alias-`docs_url` fix is live on

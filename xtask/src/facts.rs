@@ -21,6 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use regex::Regex;
 use serde::Serialize;
 
 /// Bumped when the `facts.json` shape changes, so a downstream
@@ -37,6 +38,7 @@ struct Facts {
     categories: Vec<CategoryEntry>,
     rule_categories: BTreeMap<String, Vec<String>>,
     rule_aliases: BTreeMap<String, String>,
+    rule_source_files: BTreeMap<String, String>,
     bundled_rulesets: Vec<String>,
     bundled_ruleset_sizes: BTreeMap<String, usize>,
     output_formats: Vec<String>,
@@ -111,6 +113,7 @@ fn build_facts() -> Result<Facts> {
         .iter()
         .map(|(alias, canon)| ((*alias).to_string(), (*canon).to_string()))
         .collect();
+    let rule_source_files = rule_source_files(&root)?;
 
     let counts = Counts {
         rule_kinds: rule_kinds.len(),
@@ -130,6 +133,7 @@ fn build_facts() -> Result<Facts> {
         categories,
         rule_categories,
         rule_aliases,
+        rule_source_files,
         bundled_rulesets,
         bundled_ruleset_sizes,
         output_formats,
@@ -189,6 +193,60 @@ fn rule_kinds(root: &Path) -> Result<Vec<String>> {
         }
     }
     Ok(set.into_iter().collect())
+}
+
+/// Map every registered rule kind (canonical **and** alias) to the stem of the
+/// Rust source file it lives in — the module before `::` in each
+/// `registry.register("<kind>", <module>::<builder>)` line of `register_builtin`.
+///
+/// This is the authoritative, drift-proof input for alint.org's `sourceUrlOf`:
+/// a kind whose source is NOT `<kind>.rs` (the 8 structured-query kinds share
+/// `structured_path`, `cross_file_value_equals` aliases `cross_file`, the legacy
+/// short-name aliases reuse their `file_*` file) resolves deterministically with
+/// no network probe. The site gate asserts its resolution equals this map, so a
+/// new shared-source or aliased kind can never silently 404 (audit P4.2 /
+/// documentation-drift.md W3/W4).
+///
+/// Parsed from `register_builtin` — the single kind→builder table — rather than
+/// a hand-kept list, and each stem is verified to exist on disk so a rename that
+/// desyncs the table from the tree fails `gen-facts` here, not on the live site.
+fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
+    let path = root.join("crates/alint-rules/src/lib.rs");
+    let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    // Bound the scan to the register_builtin body so an unrelated `register(` in
+    // another fn can't leak in. The fn ends at the first `}` in column 0.
+    let start = text
+        .find("pub fn register_builtin")
+        .context("register_builtin not found in alint-rules/src/lib.rs")?;
+    let body = &text[start..];
+    let end = body
+        .find("\n}")
+        .context("register_builtin closing brace not found")?;
+    let body = &body[..end];
+
+    // `registry.register("<kind>", <module>::<builder>)` OR the
+    // `.register_optionless(…)` variant — kind is the string literal, the source
+    // stem is the module path segment before `::`. `\s` spans the newline in the
+    // multi-line register calls.
+    let re = Regex::new(r#"\.register(?:_optionless)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*([a-z0-9_]+)::"#)
+        .expect("static regex compiles");
+    let src_dir = root.join("crates/alint-rules/src");
+    let mut map = BTreeMap::new();
+    for cap in re.captures_iter(body) {
+        let kind = cap[1].to_string();
+        let stem = cap[2].to_string();
+        anyhow::ensure!(
+            src_dir.join(format!("{stem}.rs")).exists(),
+            "register_builtin maps kind `{kind}` to `{stem}::…` but \
+             crates/alint-rules/src/{stem}.rs does not exist (rename drift)"
+        );
+        map.insert(kind, stem);
+    }
+    anyhow::ensure!(
+        !map.is_empty(),
+        "parsed zero register() entries from register_builtin"
+    );
+    Ok(map)
 }
 
 /// Non-meta `## ` family headings in `docs/rules.md`, sorted.
@@ -428,6 +486,57 @@ mod tests {
             Some(&15),
             "oss-baseline size feeds the '(15 rules)' claim on alint.org"
         );
+    }
+
+    /// `rule_source_files` covers EVERY registered kind and alias (so
+    /// alint.org's `sourceUrlOf` can resolve any of them without a hand-map),
+    /// each mapped stem's `.rs` exists, and the known shared-source / alias
+    /// remaps land on the right file. This is the P4.2 deterministic stem gate's
+    /// engine half.
+    #[test]
+    fn rule_source_files_cover_every_kind_and_alias_and_resolve() {
+        let f = build_facts().expect("build facts");
+        let root = crate::workspace_root().expect("workspace root");
+        let src = root.join("crates/alint-rules/src");
+
+        // Every canonical kind and every alias has an entry.
+        for kind in &f.rule_kinds {
+            assert!(
+                f.rule_source_files.contains_key(kind),
+                "rule_kind `{kind}` has no rule_source_files entry"
+            );
+        }
+        for alias in f.rule_aliases.keys() {
+            assert!(
+                f.rule_source_files.contains_key(alias),
+                "alias `{alias}` has no rule_source_files entry"
+            );
+        }
+
+        // Every mapped stem points at a real source file.
+        for (kind, stem) in &f.rule_source_files {
+            assert!(
+                src.join(format!("{stem}.rs")).exists(),
+                "kind `{kind}` -> `{stem}.rs`, which does not exist"
+            );
+        }
+
+        // The non-`<kind>.rs` remaps the site depends on.
+        for (kind, expected) in [
+            ("json_path_equals", "structured_path"),
+            ("xml_path_matches", "structured_path"),
+            ("cross_file_value_equals", "cross_file"),
+            ("content_matches", "file_content_matches"),
+            ("header", "file_header"),
+            ("max_size", "file_max_size"),
+            ("no_symlinks", "no_symlinks"),
+        ] {
+            assert_eq!(
+                f.rule_source_files.get(kind).map(String::as_str),
+                Some(expected),
+                "`{kind}` must resolve to `{expected}.rs`"
+            );
+        }
     }
 
     /// The five list-backed counts equal their list lengths, and every
