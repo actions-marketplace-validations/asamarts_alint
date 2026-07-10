@@ -114,7 +114,7 @@ fn format_json_is_never_a_silent_human_fallthrough() {
                 "`alint {} --format json` exited 0 but stdout was not JSON \
                  (silent --format no-op regression). stdout begins:\n{}",
                 case.join(" "),
-                &stdout.chars().take(200).collect::<String>(),
+                stdout.chars().take(200).collect::<String>(),
             );
         }
     }
