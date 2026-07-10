@@ -50,9 +50,10 @@ CRITICAL (C1–C2) and HIGH (H1–H5) findings plus the full M1–M14 cluster. T
 consults), **M3-F2** (a byte-bounded, TOCTOU-safe read), **M3-F7** (the two
 `generated_file_fresh` reads capped; also caught + capped a third uncapped read
 in `facts.rs`), and **M6** (git tracked/changed path sets preserve non-UTF-8
-paths). The remaining open items are the tracked deferrals — **D11, L2** (closed
-by decision — ASCII-scope is intentional), **W6, H6**, and the doc-drift
-`P3`/`P4.2` tail — being closed in the later deferral-close-out phases. The findings below read as the audit originally
+paths). **L2** (Unicode fold landed; ASCII-scope residual accepted WON'T-FIX)
+and **D11** (CHANGELOG per-version backfill + separator normalize) are likewise
+closed in the deferral close-out; the remaining open items are **W6, H6** and
+the doc-drift `P3`/`P4.2` tail — being closed in the later phases. The findings below read as the audit originally
 recorded them (present-tense "is a bypass" = as-found, not as-shipped); the
 per-finding `[x]`/`[~]`/`[-]` markers and the phase plan are the live status.
 Follow-on work surfaced *after* this audit (the post-v0.13 e2e sweep and the
@@ -70,7 +71,7 @@ CHANGELOG `[Unreleased]`, not here.
 | 3 | HIGH — correctness | H3, H4 | `[x]` |
 | 4 | MEDIUM — security cluster | M1–M8 | `[x]` (M1/M2/M3/M5/M7/M8 done; M4 done — dir symlinks + escaping side-list; M6 done — commit-lint bypass + non-UTF-8 tracked/changed paths preserved; both landed in the Phase-A deferral close-out) |
 | 5 | MEDIUM — output / CLI / baseline | M9–M14 | `[x]` (M9–M14 all done) |
-| 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[~]` (D1–D10,D12 + L1,L3–L14 + Dog1/Dog2 done; L2 done — Unicode fold landed, ASCII-scope residual accepted WON'T-FIX; D11 deferred) |
+| 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[x]` (all done; L2 Unicode fold landed + ASCII-scope residual accepted WON'T-FIX; D11 CHANGELOG backfill + separator normalize done) |
 | 7 | alint.org drift | W1–W7 | `[x]` (W1–W5,W7 done on the site branch; W6 partial) |
 
 Phases land security-first. Each is one atomic commit (or a small group)
@@ -566,10 +567,18 @@ Doc drift (D):
   architecture-as-code.md describe the pre-LikeC4 Mermaid crate-graph and
   "pending merge/deploy" / "runner rebuild" state that already shipped
   (#69-71, #90). Refresh + add superseded pointers.
-- `[-]` **D11** CHANGELOG: missing v0.4.3–v0.4.8 entries; em-dash vs
-  hyphen header separator drift. **Deferred:** a historical CHANGELOG
-  backfill, low value, and kept off-limits during the doc pass so the
-  `[Unreleased]` audit entries weren't disturbed. Tracked.
+- `[x]` **D11** CHANGELOG: missing v0.4.3–v0.4.8 entries; em-dash vs
+  hyphen header separator drift. **Done (v0.14 deferral close-out):** those six
+  releases' notes were never lost — they had been concatenated under a single
+  `## [0.4.9]` header (each sub-block self-identifies via "every v0.4.N config
+  runs unchanged"); split them into proper per-version headers dated from their
+  tags. Normalized all 54 version-header separators to the hyphen
+  `bump-version.sh` emits (the em-dashes were the drift; `render-history.py`
+  accepts both, so parser-safe). Also filled the one orphaned footer ref
+  (`0.5.7`) the header↔ref cross-check surfaced. A `## [x]` header ↔ `[x]:`
+  footer-ref parity check now passes for all 64 versions. (The untagged
+  `0.5.0`–`0.5.7` compare-links are a distinct, pre-existing situation — those
+  versions were never git-tagged — left as-is, out of D11 scope.)
 - `[x]` **D12** `CONTRIBUTING.md:72` `docs.sh` gate list under-counts;
   `:189` "release.yml-equivalent CI" misnomer (PR gate is ci.yml).
 

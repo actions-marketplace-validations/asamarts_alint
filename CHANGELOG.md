@@ -1147,7 +1147,7 @@ informational-notes channel surfaced via `--show-notes`.
   floor for external consumers pulling a single workspace crate by
   name.
 
-## [0.10.2] — 2026-05-21 (asciinema-demo underline-extension fix)
+## [0.10.2] - 2026-05-21 (asciinema-demo underline-extension fix)
 
 Targeted follow-up to v0.10.1. The alint.org landing-page demo
 rendered `docs:` link underlines extending past the URL text to
@@ -1187,7 +1187,7 @@ configs continue to work; safe upgrade for every consumer.
   /tmp/demo-outputs/01.txt` would otherwise see `is_tty=false`
   and skip OSC 8 entirely. Empty / `0` values do NOT force.
 
-## [0.10.1] — 2026-05-20 (read_capped reach extension + post-release CI/docs hygiene)
+## [0.10.1] - 2026-05-20 (read_capped reach extension + post-release CI/docs hygiene)
 
 Small post-release follow-up to v0.10.0. Headline change: the
 `crate::io::read_capped` 256 MiB whole-file cap (introduced in
@@ -1221,7 +1221,7 @@ for every consumer.
   silent skip (which masked an OOM-DoS surface on hostile /
   accidental multi-GB candidate files). `version: 1` unchanged.
 
-## [0.10.0] — 2026-05-20 (case-study coverage push: 8 rule kinds + 2 bundled rulesets + pre-release hardening sweep)
+## [0.10.0] - 2026-05-20 (case-study coverage push: 8 rule kinds + 2 bundled rulesets + pre-release hardening sweep)
 
 The "case-study coverage push" minor. Eight new rule kinds and
 two bundled rulesets aggregated from the 30-OSS-repo demand-
@@ -1499,7 +1499,7 @@ configs continue to work.
   gap existed only within `[Unreleased]`, so no released
   version is affected.
 
-## [0.9.23] — 2026-05-17 (GitHub Action pinning + release-pipeline hardening)
+## [0.9.23] - 2026-05-17 (GitHub Action pinning + release-pipeline hardening)
 
 Distribution + release-reliability release. The headline is the
 GitHub Action change: a pinned action ref now pins the installed
@@ -1590,7 +1590,7 @@ under **Changed** below.
   from that exact ref. Pairs with the binary-pin change under
   **Changed**.
 
-## [0.9.22] — 2026-05-14 (doc-drift cleanup + prevention automation)
+## [0.9.22] - 2026-05-14 (doc-drift cleanup + prevention automation)
 
 Doc + prevention-automation cleanup release. A 2026-05-14 audit of
 the alint and alint.org repos surfaced 10 categories of drift
@@ -1680,7 +1680,7 @@ Marketplace on this release.
   comment) refreshed for v0.9.21 + 70 rule kinds + 13 families
   consistency.
 
-## [0.9.21] — 2026-05-14 (commit-range mode for git_commit_message)
+## [0.9.21] - 2026-05-14 (commit-range mode for git_commit_message)
 
 Headline feature: the `git_commit_message` rule's new `since:`
 option ([#26](https://github.com/asamarts/alint/issues/26)), which
@@ -1786,7 +1786,7 @@ that replaces a hand-edited table.
 - v0.9.18 / v0.9.19 / v0.9.20 macro-bench + criterion results
   published under `docs/benchmarks/`.
 
-## [0.9.20] — 2026-05-10 (cross-command output polish)
+## [0.9.20] - 2026-05-10 (cross-command output polish)
 
 Extends v0.9.19's width-aware-output / `--no-docs` / message-wrap
 treatment from `alint check` to every other human-renderer command
@@ -1849,7 +1849,7 @@ the bundled-rule messages.
   4-command sequence (check → cat .alint.yml → fix → check),
   same reading beats. Cleaner visual.
 
-## [0.9.19] — 2026-05-09 (output polish)
+## [0.9.19] - 2026-05-09 (output polish)
 
 Quality-of-life patch focused on the human formatter's behaviour
 in narrow terminals, screen recordings, and CI logs — surfaced
@@ -1912,7 +1912,7 @@ goes in the policy URL or the rule's docs page.
   global flags.
 - 1 `cli_flag_inventory` snapshot regenerated.
 
-## [0.9.18] — 2026-05-08 (pre-launch fixes)
+## [0.9.18] - 2026-05-08 (pre-launch fixes)
 
 Findings from the v0.9.17 deep-analysis pass (30 case studies — see
 [`docs/development/case-study-deep-analysis-log.md`](docs/development/case-study-deep-analysis-log.md))
@@ -2042,7 +2042,7 @@ numbers:
   deep-analysis log evidence table is the v0.9.18 ship-state
   authority.
 
-## [0.9.17] — 2026-05-06
+## [0.9.17] - 2026-05-06
 
 Corrective release that re-publishes v0.9.16's content + the
 build.rs/main.rs lint fixes that prevented v0.9.16's Release
@@ -2124,7 +2124,7 @@ who pulled the v0.9.16 tag will see no published artifacts at any
 of the usual channels (crates.io / Homebrew / Docker / npm); v0.9.17
 is the first publishable tag in the 0.9.16 content lineage.
 
-## [0.9.16] — 2026-05-06 (tag-only — never published, see v0.9.17)
+## [0.9.16] - 2026-05-06 (tag-only — never published, see v0.9.17)
 
 Config DX hardening release. Closes the launch-prep validation pass
 with seven-phase coverage of the 17 schema + runtime pitfalls
@@ -2419,7 +2419,7 @@ for publish coordinated with this release's docs roll:
 The drafts are not part of the v0.9.15 binary release; they ship
 when the alint.org site repo is updated next.
 
-## [0.9.14] — 2026-05-05
+## [0.9.14] - 2026-05-05
 
 CI automation release. The `bench-record.yml` workflow that
 captures publish-grade bench data on every release tag is now
@@ -2512,7 +2512,7 @@ this release was cut).
   pinned at the same SHAs as v0.9.12; separate "rotate +
   verify" cycle (note from v0.9.13).
 
-## [0.9.13] — 2026-05-04
+## [0.9.13] - 2026-05-04
 
 Dependency-refresh release. Closes the 10 open Dependabot PRs
 plus opportunistic bumps the version specs already accepted.
@@ -2607,7 +2607,7 @@ once the bench-record workflow lands the canonical capture.
 - `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS=-D warnings`
   clean.
 
-## [0.9.12] — 2026-05-03
+## [0.9.12] - 2026-05-03
 
 Backlog cleanup release closing the explicitly-held v0.9 items
 that didn't fit cleanly into earlier cuts. Three structural
@@ -2695,7 +2695,7 @@ audits + one engine refactor + the bench-record CI fix.
   leisure or kept as historical artefacts of the broken
   state.
 
-## [0.9.11] — 2026-05-03
+## [0.9.11] - 2026-05-03
 
 Structural fix for the `git_tracked_only:` silent-no-op
 recurrence-risk shape. v0.9.10 closed the analogous
@@ -2797,7 +2797,7 @@ because the slow-path iteration cost is dominant.
 - **`when:` ownership** remains explicitly out of scope —
   different semantics, no shared silent-no-op shape.
 
-## [0.9.10] — 2026-05-03
+## [0.9.10] - 2026-05-03
 
 Structural fix for the `scope_filter:` silent-no-op bug class.
 v0.9.6 / v0.9.7 / v0.9.9 each shipped a different group of rules
@@ -2870,7 +2870,7 @@ predicates. The bug class can no longer recur.
   `git_tracked_only:` silently dropped) but the field is
   rarer in practice and currently 100 % wired up. Tracked.
 
-## [0.9.9] — 2026-05-03
+## [0.9.9] - 2026-05-03
 
 Patch release for two `scope_filter:` silent-no-op gaps surfaced
 by the post-v0.9.8 audit. v0.9.7 wired the filter through the
@@ -2961,7 +2961,7 @@ the `for_each_dir` literal-path bypass introduced in v0.9.8.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   clean.
 
-## [0.9.8] — 2026-05-02
+## [0.9.8] - 2026-05-02
 
 Cross-file dispatch fast paths, round 2. v0.9.5 closed the
 `for_each_dir × file_exists` cliff via the lazy `path_set` index;
@@ -3038,7 +3038,7 @@ backfill (1M S7 was stuck at ~614 s across all three releases).
 - All 376 alint-rules tests + 226 e2e scenarios + 183 alint-core
   tests + 11 new walker tests pass.
 
-## [0.9.7] — 2026-05-02
+## [0.9.7] - 2026-05-02
 
 Patch release for the v0.9.6 `scope_filter:` runtime no-op (v0.9.6
 shipped the field, the type, and the engine gate but never wired the
@@ -3110,7 +3110,7 @@ dormant dependency.
 - **`.alint.yml`** dogfood fact `is_rust` → `has_rust` to match the v0.9.6
   bundled-fact rename.
 
-## [0.9.6] — 2026-05-02
+## [0.9.6] - 2026-05-02
 
 Closes the v0.9 cut with the `scope_filter:` primitive — closest-
 ancestor manifest scoping for per-file rules, designed to make the
@@ -3178,7 +3178,7 @@ See [`docs/benchmarks/investigations/2026-05-scope-filter-baseline-drift/`](docs
 for the dispositive A/B and the lesson on machine-state drift in
 cross-version bench comparisons.
 
-## [0.9.5] — 2026-05-01
+## [0.9.5] - 2026-05-01
 
 Reopens v0.9 with cross-file dispatch fast paths, the
 test/coverage floor that prevents the same class of regression
@@ -3381,7 +3381,7 @@ HTML reports.
   `bench-scale`'s internal monorepo shape, so trees are
   byte-identical to the published bench corpus.
 
-## [0.9.4] — 2026-04-30
+## [0.9.4] - 2026-04-30
 
 Mechanical follow-up to v0.9.3: migrates 16 of the
 remaining ~22 per-file content rules to opt into the
@@ -3438,7 +3438,7 @@ paths), `structured_path` (which backs `json_path_*`,
   v0.9.4 numbers at
   `docs/benchmarks/micro/results/linux-x86_64/v0.9.4/criterion/`.
 
-## [0.9.3] — 2026-04-30
+## [0.9.3] - 2026-04-30
 
 Third phase of the v0.9 engine-optimization cut: the
 per-file dispatch flip plus the per-rule scanning
@@ -3546,7 +3546,7 @@ implementation that proves the shape works.
   v0.9.3 numbers at
   `docs/benchmarks/archive/v0.9-development-phases/v0.9.3-dispatch-flip/criterion/`.
 
-## [0.9.2] — 2026-04-30
+## [0.9.2] - 2026-04-30
 
 Second phase of the v0.9 engine-optimization cut: the
 type-level memory pass. No new user-visible rule kinds,
@@ -3628,7 +3628,7 @@ touching the same rule bodies twice. See
   same-day per-phase delta comparisons. v0.9.2 numbers
   at `docs/benchmarks/archive/v0.9-development-phases/v0.9.2-memory-pass/criterion/`.
 
-## [0.9.1] — 2026-04-30
+## [0.9.1] - 2026-04-30
 
 First phase of the v0.9 engine-optimization cut. Parallel
 walker. No user-visible rule kinds, formatters, or
@@ -3709,7 +3709,7 @@ subcommands change; every v0.8 config runs unchanged.
   one file). Designed in `docs/design/v0.9/dispatch_flip.md`;
   ships as v0.9.3.
 
-## [0.8.2] — 2026-04-29
+## [0.8.2] - 2026-04-29
 
 Second hotfix on v0.8.0; supersedes v0.8.1. Same code as
 v0.8.0 / v0.8.1; manifest + script changes only.
@@ -3741,7 +3741,7 @@ alint) all failed.
   v0.8.0 and v0.8.1 remain partially published on
   crates.io; consumers should pin to v0.8.2 or `latest`.
 
-## [0.8.1] — 2026-04-29 (partially published — superseded by v0.8.2)
+## [0.8.1] - 2026-04-29 (partially published — superseded by v0.8.2)
 
 Reverted `publish = false` on alint-dsl/rules/output to fix
 v0.8.0's crates.io publish failure. Pipeline progressed
@@ -3760,7 +3760,7 @@ see v0.8.2 above for the resolution. Use v0.8.2 instead.
   comment block on each manifest documents the constraint
   so a future audit doesn't repeat the trap.
 
-## [0.8.0] — 2026-04-29
+## [0.8.0] - 2026-04-29
 
 > **Note**: this tag shipped to GitHub Releases, npm, Homebrew,
 > and Docker, plus `alint-core` on crates.io — but the `alint`
@@ -3900,7 +3900,7 @@ internal. Schema-compatible: every v0.7 config runs unchanged.
   (binary). The other three are internal implementation
   detail.
 
-## [0.7.0] — 2026-04-28
+## [0.7.0] - 2026-04-28
 
 Closes the v0.7 cut. Three new rule kinds and two new
 subcommands targeting agent-driven development workflows
@@ -4140,7 +4140,7 @@ duplicate config to maintain.
     level: warning
   ```
 
-## [0.6.0] — 2026-04-27
+## [0.6.0] - 2026-04-27
 
 Two bundled rulesets and a new output format aimed at the
 agent-driven-development era. Schema-compatible: every v0.5.12
@@ -4270,7 +4270,7 @@ kinds, no engine changes, no architectural shift.
   refreshed to mention `agent` in the `--color` flag's
   documented list of plain-bytes formats.
 
-## [0.5.12] — 2026-04-27
+## [0.5.12] - 2026-04-27
 
 Maintenance release. Verifies the npm auto-publish CI wiring
 end-to-end after v0.5.11's `publish-npm` job failed (the
@@ -4294,7 +4294,7 @@ npm install --save-dev @asamarts/alint
 npx alint check
 ```
 
-## [0.5.11] — 2026-04-27
+## [0.5.11] - 2026-04-27
 
 npm install channel. Closes the v0.5 milestone — every
 deferred item from the v0.5 roadmap is now shipped.
@@ -4342,7 +4342,7 @@ deferred item from the v0.5 roadmap is now shipped.
   postinstall can fetch the binary tarballs); reads
   `NPM_TOKEN` secret from repo settings.
 
-## [0.5.10] — 2026-04-27
+## [0.5.10] - 2026-04-27
 
 DSL ergonomics: three composition primitives that close
 common monorepo / ops pain points. Schema-compatible: every
@@ -4430,7 +4430,7 @@ v0.5.9 config runs unchanged.
   collection + merge, 6 lib tests for template
   expansion).
 
-## [0.5.9] — 2026-04-27
+## [0.5.9] - 2026-04-27
 
 `json_schema_passes` (last unshipped structured-query
 primitive), two new git-aware rule kinds, and four
@@ -4507,7 +4507,7 @@ Schema-compatible: every v0.5.8 config runs unchanged.
   four new rules); two existing override scenarios
   updated to account for the new bundled rules.
 
-## [0.5.8] — 2026-04-26
+## [0.5.8] - 2026-04-26
 
 Three new output formats. Brings the count to seven and
 closes the v0.5 output-format roadmap item. Schema-compatible:
@@ -4566,7 +4566,7 @@ every v0.5.7 config runs unchanged.
   GitLab) fingerprint stability across line-drift +
   sensitivity to message changes.
 
-## [0.5.7] — 2026-04-26
+## [0.5.7] - 2026-04-26
 
 Competitive bench publication. The v0.5.6 harness becomes a
 multi-tool driver: alint, ls-lint, Repolinter, and `find` +
@@ -4675,7 +4675,7 @@ Schema-compatible; every v0.5.6 config runs unchanged.
   committed reports. Capture now keeps just the first
   line of each tool's `--version` output.
 
-## [0.5.6] — 2026-04-26
+## [0.5.6] - 2026-04-26
 
 Scale-ceiling bench publication + a latent walker bug fix
 that the bench surfaced. New `xtask bench-scale` subcommand
@@ -4772,7 +4772,7 @@ runs unchanged.
   `.git/`-exclusion is a behaviour fix, not a config
   change.
 
-## [0.5.5] — 2026-04-26
+## [0.5.5] - 2026-04-26
 
 Two license-compliance bundled rulesets — the v0.5 cycle's
 expansion beyond the workspace-tier monorepo audience to
@@ -4852,7 +4852,7 @@ Schema-compatible; every v0.5.4 config runs unchanged.
 - JSON / SARIF / GitHub outputs byte-equivalent for
   configs that don't extend the new rulesets.
 
-## [0.5.4] — 2026-04-26
+## [0.5.4] - 2026-04-26
 
 `alint init` — the missing one-line adoption story.
 Detects the repo's ecosystem (Rust / Node / Python / Go /
@@ -4943,7 +4943,7 @@ config runs unchanged.
   workspace dep elsewhere; the binary needs it for the
   init unit tests).
 
-## [0.5.3] — 2026-04-26
+## [0.5.3] - 2026-04-26
 
 Three workspace-aware bundled rulesets layered on top of
 `monorepo@v1`. Each is gated by a workspace-flavor fact and
@@ -5015,7 +5015,7 @@ Schema-compatible; every v0.5.2 config runs unchanged.
 - JSON / SARIF / GitHub outputs byte-equivalent for
   configs that don't extend the new rulesets.
 
-## [0.5.2] — 2026-04-26
+## [0.5.2] - 2026-04-26
 
 Per-iteration `when:` filter on iterating rules — closes the
 second monorepo-scale gap from the v0.5 roadmap. Combined
@@ -5103,7 +5103,7 @@ Schema-compatible; every v0.5.1 config runs unchanged.
   helper) gained a `when_iter` parameter — only matters if
   you've forked the crate.
 
-## [0.5.1] — 2026-04-26
+## [0.5.1] - 2026-04-26
 
 Plugin tier 1: `command` rule kind. Wraps any CLI on `PATH`
 into alint's report. Continues the v0.5 monorepo-scale theme
@@ -5186,7 +5186,7 @@ runs unchanged.
   unchanged; the new `reject_command_rules_in` is a new
   public function in `alint-dsl`.
 
-## [0.5.0] — 2026-04-26
+## [0.5.0] - 2026-04-26
 
 First v0.5 cut. Headline: incremental `alint check --changed`
 mode for pre-commit and PR-check paths. Schema-compatible;
@@ -5269,7 +5269,7 @@ outputs byte-equivalent for full-tree runs.
   (`Step::CheckChanged`); embedders that exhaustively
   matched on `Step` need to add an arm for it.
 
-## [0.4.10] — 2026-04-25
+## [0.4.10] - 2026-04-25
 
 Three new content-family rule kinds rounding out the family.
 Schema-compatible; every v0.4.9 config runs unchanged. JSON /
@@ -5296,7 +5296,7 @@ SARIF / GitHub outputs byte-equivalent.
 - 6 new e2e scenarios covering pass/fail paths for the three
   new kinds.
 
-## [0.4.9] — 2026-04-25
+## [0.4.9] - 2026-04-25
 
 Java bundled ruleset. Schema-compatible; every v0.4.8 config
 runs unchanged. JSON / SARIF / GitHub outputs byte-equivalent.
@@ -5332,7 +5332,7 @@ runs unchanged. JSON / SARIF / GitHub outputs byte-equivalent.
   `silent_on_locally_built_target` e2e scenario proves the
   wiring end-to-end.
 
-
+## [0.4.8] - 2026-04-25
 
 First git-aware primitive lands. Schema-compatible; every v0.4.7
 config runs unchanged. JSON / SARIF / GitHub outputs gain no new
@@ -5379,7 +5379,7 @@ keys.
   add, commit }` block so e2e scenarios can stand up a real git
   repo in their tempdir before alint runs.
 
-
+## [0.4.7] - 2026-04-24
 
 Distribution breadth. Schema-compatible; every v0.4.6 config
 runs unchanged. JSON/SARIF/GitHub outputs byte-equivalent. No
@@ -5445,7 +5445,7 @@ Rust code changes — this release ships new install paths only.
   license / test-block shape). Wired into `ci/scripts/test.sh`
   so it runs on every CI pass.
 
-
+## [0.4.6] - 2026-04-23
 
 Ecosystem coverage + debugging ergonomics. Schema-compatible;
 every v0.4.5 config runs unchanged. JSON output unchanged for
@@ -5506,7 +5506,7 @@ existing commands; SARIF and GitHub outputs byte-equivalent.
   Used by the `facts` subcommand's renderers; available to
   external embedders.
 
-
+## [0.4.5] - 2026-04-23
 
 Supply-chain hardening ruleset + composition ergonomics.
 Schema-compatible; every v0.4.4 config runs unchanged. JSON
@@ -5579,7 +5579,7 @@ byte-equivalent.
   `{url, only?, except?}`. YAML ergonomics unchanged for the
   string form; existing configs continue to parse as before.
 
-
+## [0.4.4] - 2026-04-23
 
 Rule-catalogue expansion + README rewrite. Schema-compatible;
 every v0.4.3 config runs unchanged. JSON output gains no new
@@ -5646,7 +5646,7 @@ than being silently skipped.
   and the security-family bans. Bumped the family count from
   ten to eleven and the rule-kind count from ~42 to ~50.
 
-
+## [0.4.3] - 2026-04-23
 
 Composition ergonomics + monorepo support + four new bundled
 rulesets. Schema-compatible; every v0.4.2 config runs unchanged.
@@ -5759,7 +5759,7 @@ Workspace: 422 → 437 tests (+15). Includes 6 new unit tests
 on nested-discovery, 3 e2e on field-level override, 2 e2e on
 nested discovery, 4 e2e on Phase A bundled rulesets.
 
-## [0.4.2] — 2026-04-22
+## [0.4.2] - 2026-04-22
 
 Pretty-output overhaul of the `human` formatter. Schema-compatible;
 every v0.4.1 config still runs, every JSON/SARIF/GitHub output is
@@ -5831,7 +5831,7 @@ CLI flags (`--color`, `--ascii`, `--compact`) are new.
 - `supports-hyperlinks` (OSC 8 detection).
 - `terminal_size` (column-width detection).
 
-## [0.4.1] — 2026-04-21
+## [0.4.1] - 2026-04-21
 
 Packaging fix. v0.4.0 is functionally identical but failed to
 publish beyond `alint-core` on crates.io — the bundled-rulesets
@@ -5856,7 +5856,7 @@ publish beyond `alint-core` on crates.io — the bundled-rulesets
   It's functionally identical to `alint-core@0.4.1` and nothing
   transitively depends on it — safe to ignore or yank later.
 
-## [0.4.0] — 2026-04-21
+## [0.4.0] - 2026-04-21
 
 Headline: **bundled rulesets**. The single biggest adoption
 lever identified during pre-launch review — reduces onboarding
@@ -5928,7 +5928,7 @@ adopt alint with 4 lines of YAML.
   `alint-dsl` gains a new public `bundled` module; the existing
   `load` / `load_with` entry points are unchanged.
 
-## [0.3.2] — 2026-04-21
+## [0.3.2] - 2026-04-21
 
 Patch release fixing a broken `action.yml` that affects every
 `asamarts/alint@v0.2.1` / `v0.3.0` / `v0.3.1` consumer. No code
@@ -5968,7 +5968,7 @@ should bump to `@v0.3.2`. There are no API / CLI / config
 changes — configs that worked under `@v0.3.1` continue to work
 verbatim.
 
-## [0.3.1] — 2026-04-21
+## [0.3.1] - 2026-04-21
 
 Documentation-only patch release following v0.3.0. No code
 changes; no schema changes; v0.3.0 configs run unchanged.
@@ -5997,7 +5997,7 @@ changes; no schema changes; v0.3.0 configs run unchanged.
   exercise the v0.3 catalogue against alint's own tree. All
   rules pass.
 
-## [0.3.0] — 2026-04-21
+## [0.3.0] - 2026-04-21
 
 Rule-catalogue expansion. Adds ~25 new rule kinds across seven
 phase commits plus one new fix op, covering categories other
@@ -6121,7 +6121,7 @@ have a `dir_*` sibling.
   required methods; out-of-tree implementations compile
   unmodified. `Engine::with_fix_size_limit` is additive.
 
-## [0.2.1] — 2026-04-20
+## [0.2.1] - 2026-04-20
 
 Patch release. Finishes the v0.2 roadmap item that didn't make it
 into v0.2.0: `extends:` composition.
@@ -6173,7 +6173,7 @@ into v0.2.0: `extends:` composition.
 - `ureq` (rustls TLS), `sha2`, `directories`. Release-binary size
   impact: ~+1.5–2 MiB, mostly from rustls' embedded root certs.
 
-## [0.2.0] — 2026-04-19
+## [0.2.0] - 2026-04-19
 
 Second release. The theme is composition and remediation: cross-file rules,
 conditional gating, auto-fix, and two new output formats. Every v0.1 config
@@ -6266,7 +6266,7 @@ continues to validate and run under v0.2 without changes.
   gained a `fixer()` method with a `None` default, so out-of-tree rule
   implementations compile without modification.
 
-## [0.1.0] — 2026-04-19
+## [0.1.0] - 2026-04-19
 
 Initial release. MVP.
 
@@ -6328,6 +6328,7 @@ Initial release. MVP.
 [0.5.10]: https://github.com/asamarts/alint/compare/v0.5.9...v0.5.10
 [0.5.9]: https://github.com/asamarts/alint/compare/v0.5.8...v0.5.9
 [0.5.8]: https://github.com/asamarts/alint/compare/v0.4.10...v0.5.8
+[0.5.7]: https://github.com/asamarts/alint/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/asamarts/alint/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/asamarts/alint/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/asamarts/alint/compare/v0.5.3...v0.5.4
