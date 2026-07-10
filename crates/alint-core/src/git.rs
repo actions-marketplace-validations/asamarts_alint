@@ -38,6 +38,24 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// All these cases produce an empty `Option`, never panic — the
 /// caller is responsible for treating `None` as "no tracked-set
 /// available" in whatever way makes sense for the calling rule.
+/// Build a `PathBuf` from a NUL-delimited `git -z` path chunk WITHOUT a UTF-8
+/// round-trip, so a non-UTF-8 tracked/changed path is PRESERVED (M6) rather than
+/// collapsing the whole set to `None` — which made `git_tracked_only`
+/// over-permissive (a non-UTF-8 tracked file wasn't recognized as tracked). On
+/// Unix the raw bytes ARE the path; elsewhere git emits UTF-8, so a lossy decode
+/// keeps a best-effort path instead of dropping the entire set.
+fn path_from_git_chunk(chunk: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        PathBuf::from(std::ffi::OsStr::from_bytes(chunk))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(chunk).into_owned())
+    }
+}
+
 pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
     // `-z` separates entries with NUL so paths with newlines or
     // exotic bytes round-trip correctly. `--full-name` would force
@@ -57,8 +75,7 @@ pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
         if chunk.is_empty() {
             continue;
         }
-        let s = std::str::from_utf8(chunk).ok()?;
-        out.insert(PathBuf::from(s));
+        out.insert(path_from_git_chunk(chunk));
     }
     Some(out)
 }
@@ -131,8 +148,7 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
         if chunk.is_empty() {
             continue;
         }
-        let s = std::str::from_utf8(chunk).ok()?;
-        out.insert(PathBuf::from(s));
+        out.insert(path_from_git_chunk(chunk));
     }
     Some(out)
 }
@@ -713,6 +729,18 @@ mod tests {
         // hard-error (CLI's `--changed`) and silent fallback.
         assert!(collect_changed_paths(tmp.path(), None).is_none());
         assert!(collect_changed_paths(tmp.path(), Some("main")).is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn path_from_git_chunk_preserves_non_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        // M6: a non-UTF-8 tracked/changed path must survive as its exact bytes,
+        // not collapse the whole set to None (which made `git_tracked_only`
+        // over-permissive by not recognizing the file as tracked).
+        let raw: &[u8] = b"dir/\xff\xfe_file";
+        let p = path_from_git_chunk(raw);
+        assert_eq!(p.as_os_str().as_bytes(), raw);
     }
 
     #[test]

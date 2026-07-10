@@ -255,7 +255,12 @@ fn evaluate_one(spec: &FactSpec, root: &Path, index: &FileIndex) -> Result<FactV
                 if !scope.matches(&entry.path, index) {
                     return false;
                 }
-                let Some(bytes) = crate::walker::read_or_skip(&root.join(&entry.path)) else {
+                // Cap the read (M3): a fact content-predicate must not read a
+                // multi-GB in-scope file unbounded. Gates on the walk-time size
+                // and bounds the actual read (TOCTOU-safe via read_capped_or_skip).
+                let Some(bytes) =
+                    crate::walker::read_capped_or_skip(&root.join(&entry.path), entry.size)
+                else {
                     return false;
                 };
                 let Ok(text) = std::str::from_utf8(&bytes) else {

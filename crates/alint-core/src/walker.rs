@@ -8,25 +8,10 @@ use ignore::{
 
 use crate::error::{Error, Result};
 
-/// Read a walked file's bytes, returning `None` to skip it on any read error
-/// — but only *silently* when the file is genuinely gone (`NotFound`, the
-/// benign deleted-between-walk-and-read race). Any other error (permission
-/// denied, I/O failure) is logged at `warn` so it is observable with `-v` /
-/// `RUST_LOG`, instead of being indistinguishable from "file absent" (L7).
-///
-/// The run stays resilient (one unreadable file never aborts the whole lint),
-/// which is the long-standing per-file-read contract; this only makes the
-/// real-error case *loud* rather than silent.
-pub(crate) fn read_or_skip(path: &Path) -> Option<Vec<u8>> {
-    match std::fs::read(path) {
-        Ok(bytes) => Some(bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
-            None
-        }
-    }
-}
+/// Shared, thread-safe sink for the walk's escaping-symlink side-list (M4):
+/// `filter_entry` (parallel) pushes each pruned escaping symlink's relative
+/// path; `walk` drains it into the [`FileIndex`].
+type EscapingSink = Arc<Mutex<Vec<Arc<Path>>>>;
 
 /// Hard cap on a single whole-file read by the per-file engine/rule loops
 /// and the direct-read structured-query kinds. Generous — every realistic
@@ -36,11 +21,14 @@ pub(crate) fn read_or_skip(path: &Path) -> Option<Vec<u8>> {
 /// family re-exports this constant (M3).
 pub const MAX_ANALYZE_BYTES: u64 = 256 * 1024 * 1024;
 
-/// Like `read_or_skip`, but first skip (loudly) any file whose size — taken
-/// from the walk-time [`FileEntry::size`], so no extra `stat` — exceeds
-/// [`MAX_ANALYZE_BYTES`]. The per-file loops read the whole file into memory,
-/// so an uncapped read of a committed multi-GB blob would OOM the process; a
-/// bounded skip keeps the run alive and observable (M3).
+/// Read a walked file's bytes, first fast-rejecting (loudly) any file whose
+/// walk-time [`FileEntry::size`] exceeds [`MAX_ANALYZE_BYTES`] (no extra `stat`),
+/// then bounding the actual read to the cap ([`read_bounded`], TOCTOU-safe). The
+/// per-file loops read the whole file into memory, so an uncapped read of a
+/// committed multi-GB blob would OOM the process; a bounded skip keeps the run
+/// alive and observable (M3). A genuine read error (permission, I/O) is logged
+/// at `warn` so it's observable with `-v` / `RUST_LOG` rather than silent (L7);
+/// a `NotFound` is a silent skip (the benign deleted-between-walk-and-read race).
 pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
     if size > MAX_ANALYZE_BYTES {
         tracing::warn!(
@@ -51,7 +39,43 @@ pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
         );
         return None;
     }
-    read_or_skip(path)
+    // M3-F2 (TOCTOU): the walk-time `size` above is a fast reject only — it can
+    // be stale, so a file that GREW past the cap between the walk and here would
+    // otherwise slip through to an unbounded read. Bound the actual read by
+    // BYTES (not the trusted size) so concurrent growth can't force an OOM.
+    read_bounded(path, MAX_ANALYZE_BYTES)
+}
+
+/// Read a whole file bounded to `cap` bytes — TOCTOU-safe: the read itself
+/// stops at `cap + 1` bytes, so the file's size *at read time* (not a possibly
+/// stale earlier stat / walk-time size) decides. A file that measures `> cap`
+/// is skipped (loud `warn`); a missing file is `None`.
+pub(crate) fn read_bounded(path: &Path, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
+            return None;
+        }
+    };
+    let mut buf = Vec::new();
+    match file.take(cap.saturating_add(1)).read_to_end(&mut buf) {
+        Ok(_) if u64::try_from(buf.len()).is_ok_and(|n| n > cap) => {
+            tracing::warn!(
+                path = %path.display(),
+                cap,
+                "skipping file larger than the analysis cap (grew past its walk-time size)"
+            );
+            None
+        }
+        Ok(_) => Some(buf),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
+            None
+        }
+    }
 }
 
 /// Debug-only tracing for `FileIndex` lazy index builds. Emits a
@@ -120,6 +144,11 @@ pub struct FileEntry {
 #[derive(Debug, Default)]
 pub struct FileIndex {
     pub entries: Vec<FileEntry>,
+    /// Symlinks whose target ESCAPES the repo root. Pruned from `entries` by the
+    /// walk (so no content rule can `root.join()` through them to read out-of-
+    /// tree bytes) but recorded here so `no_symlinks` can still flag them (M4).
+    /// Relative paths, sorted + deduped. Empty for a fixture-built index.
+    escaping_symlinks: Vec<Arc<Path>>,
     path_set: OnceLock<HashSet<Arc<Path>>>,
     parent_to_children: OnceLock<HashMap<Arc<Path>, Vec<usize>>>,
     /// Per-`since`-ref diff sets backing `scope_filter.changed_since:`.
@@ -142,13 +171,32 @@ impl FileIndex {
     /// out so test/bench fixtures don't have to know about the
     /// internal lazy `path_set` field.
     pub fn from_entries(entries: Vec<FileEntry>) -> Self {
+        Self::from_entries_with_escaping(entries, Vec::new())
+    }
+
+    /// Like [`from_entries`](Self::from_entries) but also records the walk's
+    /// escaping-symlink side-list (M4). Used by [`walk`]; fixtures use the plain
+    /// constructor (empty side-list).
+    pub(crate) fn from_entries_with_escaping(
+        entries: Vec<FileEntry>,
+        escaping_symlinks: Vec<Arc<Path>>,
+    ) -> Self {
         Self {
             entries,
+            escaping_symlinks,
             path_set: OnceLock::new(),
             parent_to_children: OnceLock::new(),
             changed_paths: OnceLock::new(),
             facts: OnceLock::new(),
         }
+    }
+
+    /// Symlinks whose target escapes the repo root — pruned from `entries` (so no
+    /// content rule reads through them) but surfaced here for `no_symlinks` (M4).
+    /// Relative paths.
+    #[must_use]
+    pub fn escaping_symlinks(&self) -> &[Arc<Path>] {
+        &self.escaping_symlinks
     }
 
     /// The cached evaluated `facts:` values, if [`set_facts`](Self::set_facts)
@@ -395,7 +443,7 @@ impl Default for WalkOptions {
 }
 
 pub fn walk(root: &Path, opts: &WalkOptions) -> Result<FileIndex> {
-    let builder = build_walk_builder(root, opts)?;
+    let (builder, escaping) = build_walk_builder(root, opts)?;
 
     // Per-thread accumulators land in `out_entries`; the first
     // error wins and stops the walk via `WalkState::Quit` (the
@@ -430,14 +478,27 @@ pub fn walk(root: &Path, opts: &WalkOptions) -> Result<FileIndex> {
         .flatten()
         .collect();
     entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    Ok(FileIndex::from_entries(entries))
+
+    // M4: the escaping/broken symlinks the filter pruned. Sort + dedup for a
+    // deterministic side-list (the walk is parallel, order is non-deterministic).
+    let mut escaping_symlinks: Vec<Arc<Path>> = escaping
+        .lock()
+        .expect("walker escaping-symlink lock")
+        .drain(..)
+        .collect();
+    escaping_symlinks.sort_unstable();
+    escaping_symlinks.dedup();
+    Ok(FileIndex::from_entries_with_escaping(
+        entries,
+        escaping_symlinks,
+    ))
 }
 
 /// Build the `ignore::WalkBuilder` we run today. Pure factor-out
 /// of the original `walk()` body's setup half so both the
 /// sequential test path and the parallel runtime path stay in
 /// sync.
-fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<WalkBuilder> {
+fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<(WalkBuilder, EscapingSink)> {
     let mut builder = WalkBuilder::new(root);
     builder
         .standard_filters(opts.respect_gitignore)
@@ -484,18 +545,34 @@ fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<WalkBuilder> {
     // syscall; the common non-symlink path is a bare `true`, so the
     // walk's cost is unchanged for trees without symlinks.
     let canonical_root = root.canonicalize().ok();
+    // M4 side-list: escaping/broken symlinks are pruned from `entries` (below,
+    // via the `false` return) so no content rule reads through them, but their
+    // relative paths are recorded here so `no_symlinks` can still flag them.
+    let escaping: Arc<Mutex<Vec<Arc<Path>>>> = Arc::new(Mutex::new(Vec::new()));
+    let escaping_filter = Arc::clone(&escaping);
+    let root_for_rel = root.to_path_buf();
     builder.filter_entry(move |entry| {
         if !entry.path_is_symlink() {
             return true;
         }
-        match (&canonical_root, entry.path().canonicalize()) {
+        let keep = match (&canonical_root, entry.path().canonicalize()) {
             (Some(root), Ok(target)) => target.starts_with(root),
             // Broken / unresolvable symlink (or an un-canonicalisable
             // root) — can't be safely read anyway; prune it.
             _ => false,
+        };
+        if !keep {
+            if let Ok(rel) = entry.path().strip_prefix(&root_for_rel) {
+                if !rel.as_os_str().is_empty() {
+                    if let Ok(mut v) = escaping_filter.lock() {
+                        v.push(Arc::from(rel));
+                    }
+                }
+            }
         }
+        keep
     });
-    Ok(builder)
+    Ok((builder, escaping))
 }
 
 /// Convert one `ignore::DirEntry` (or its error) into a
@@ -688,6 +765,26 @@ mod tests {
             "in-tree symlink should still be followed/indexed: {p:?}"
         );
         assert!(p.iter().any(|x| x == "real.txt"), "{p:?}");
+
+        // M4: the escaping symlinks are pruned from `entries` (above) but recorded
+        // on the side-list so `no_symlinks` can still flag them.
+        let esc: Vec<String> = idx
+            .escaping_symlinks()
+            .iter()
+            .map(|x| x.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            esc.iter().any(|x| x == "link-file"),
+            "escaping symlink-to-file must be on the side-list: {esc:?}"
+        );
+        assert!(
+            esc.iter().any(|x| x == "link-dir"),
+            "escaping symlink-to-dir must be on the side-list: {esc:?}"
+        );
+        assert!(
+            !esc.iter().any(|x| x == "link-in"),
+            "in-tree symlink must NOT be on the side-list: {esc:?}"
+        );
     }
 
     #[test]
@@ -1178,5 +1275,31 @@ mod tests {
     fn read_capped_or_skip_missing_file_is_none() {
         let tmp = tempfile::tempdir().unwrap();
         assert!(read_capped_or_skip(&tmp.path().join("nope"), 0).is_none());
+    }
+
+    #[test]
+    fn read_bounded_bounds_the_actual_read_toctou() {
+        // M3-F2: the read is bounded by the file's real bytes AT READ TIME, not
+        // a (possibly stale) walk-time size — a file whose ACTUAL size exceeds
+        // the cap is skipped, so concurrent growth past the cap can't force an
+        // unbounded read. read_capped_or_skip delegates to this; the internal
+        // cap is 256 MiB (a fixture that large is infeasible), so the bound is
+        // exercised here with a small cap.
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("grew.txt");
+        std::fs::write(&p, vec![b'x'; 10]).unwrap();
+        assert!(
+            read_bounded(&p, 4).is_none(),
+            "actual size over the cap must skip (not trust a passed size)"
+        );
+        assert_eq!(
+            read_bounded(&p, 100).unwrap().len(),
+            10,
+            "under the cap reads the whole file"
+        );
+        assert!(
+            read_bounded(&tmp.path().join("nope"), 100).is_none(),
+            "missing file is None"
+        );
     }
 }

@@ -43,11 +43,16 @@ point. The keystone fix re-runs the gate on the **finalized,
 template-expanded** rule set, tagged by provenance, which closes all
 three classes at once.
 
-**Remediation status (updated 2026-07-03).** Everything above **landed**: all
+**Remediation status (updated 2026-07-10).** Everything above **landed**: all
 CRITICAL (C1–C2) and HIGH (H1–H5) findings plus the full M1–M14 cluster. The
-only open items are the tracked deferrals — M4 escaping-symlink *detection*, M6
-tracked/changed-path collapse, M3-F2 (TOCTOU) + M3-F7, D11, L2, W6, and H6 —
-each with rationale inline. The findings below read as the audit originally
+**v0.14 deferral close-out (Phase A)** then landed the security tail —
+**M4** escaping-symlink *detection* (a `FileIndex` side-list `no_symlinks`
+consults), **M3-F2** (a byte-bounded, TOCTOU-safe read), **M3-F7** (the two
+`generated_file_fresh` reads capped; also caught + capped a third uncapped read
+in `facts.rs`), and **M6** (git tracked/changed path sets preserve non-UTF-8
+paths). The remaining open items are the tracked deferrals — **D11, L2** (closed
+by decision — ASCII-scope is intentional), **W6, H6**, and the doc-drift
+`P3`/`P4.2` tail — being closed in the later deferral-close-out phases. The findings below read as the audit originally
 recorded them (present-tense "is a bypass" = as-found, not as-shipped); the
 per-finding `[x]`/`[~]`/`[-]` markers and the phase plan are the live status.
 Follow-on work surfaced *after* this audit (the post-v0.13 e2e sweep and the
@@ -63,7 +68,7 @@ CHANGELOG `[Unreleased]`, not here.
 | 1 | CRITICAL — spawn-gate RCE | C1, C2 | `[x]` |
 | 2 | HIGH — security | H1, H2, H5 | `[x]` |
 | 3 | HIGH — correctness | H3, H4 | `[x]` |
-| 4 | MEDIUM — security cluster | M1–M8 | `[~]` (M1/M2/M3/M5/M7/M8 done; M4 partial — dir symlinks done, escaping deferred; M6 partial — commit-lint bypass closed, tracked/changed-path collapse deferred) |
+| 4 | MEDIUM — security cluster | M1–M8 | `[x]` (M1/M2/M3/M5/M7/M8 done; M4 done — dir symlinks + escaping side-list; M6 done — commit-lint bypass + non-UTF-8 tracked/changed paths preserved; both landed in the Phase-A deferral close-out) |
 | 5 | MEDIUM — output / CLI / baseline | M9–M14 | `[x]` (M9–M14 all done) |
 | 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[~]` (D1–D10,D12 + L1,L3–L14 + Dog1/Dog2 done; L2 partial; D11 deferred) |
 | 7 | alint.org drift | W1–W7 | `[x]` (W1–W5,W7 done on the site branch; W6 partial) |
@@ -830,19 +835,19 @@ rest are recorded here.
   residual (a secret inside a >256 MiB file evades a content scan) — accepted,
   observable via `-v` on the core paths.
 
-**Deferred with corrected framing:**
-- **M4 escaping symlinks** — the review showed a *simpler* safe path than the
-  "read-path redesign" I first described: record escaping symlinks in a
-  **side-list** on `FileIndex` (kept out of `entries`, so no content rule can
-  `root.join()` through them), populated by the `filter_entry` prune;
-  `no_symlinks` consults it. No read-path change. Still deferred (a walker +
-  `FileIndex` + determinism-sort change), but tractable — a good next item.
-- **M3-F2 (TOCTOU)** — the size gate uses the walk-time index size, then does an
-  unbounded read; a file that grows past the cap between walk and read defeats
-  it. Narrow (needs concurrent growth mid-run); a static checkout is safe.
-- **M3-F7** — `generated_file_fresh.rs:300,436` have two uncapped whole-file
-  reads (its other reads use `read_capped`); a spawning kind, gated, out of
-  M3's stated scope but worth capping for consistency.
+**LANDED in the Phase-A deferral close-out (2026-07-10; were: deferred with corrected framing):**
+- **M4 escaping symlinks — LANDED.** The escaping/broken symlinks the walk
+  prunes are now recorded in a **side-list** on `FileIndex` (kept out of
+  `entries`, so no content rule can `root.join()` through them), populated by the
+  `filter_entry` prune and sorted+deduped for determinism; `no_symlinks` consults
+  it. No read-path change. Walker + `no_symlinks` revert-sensitive tests.
+- **M3-F2 (TOCTOU) — LANDED.** `read_capped_or_skip` now fast-rejects on the
+  walk-time size AND bounds the ACTUAL read to `cap+1` bytes (`read_bounded`), so
+  a file that grows past the cap between walk and read is skipped instead of read
+  unbounded. TOCTOU-safe; the obsolete unbounded `read_or_skip` was removed.
+- **M3-F7 — LANDED.** The two `generated_file_fresh.rs` reads are now `read_capped`
+  (over-cap reported distinctly from removed). A THIRD uncapped read — a `facts.rs`
+  content-predicate — was also found and capped via `read_capped_or_skip`.
 
 **Adversarially verified NOT bugs:** symlink cap-bypass (index records the
 *target* size — probed), `--fix` on a dir symlink (`remove_file` unlinks the
