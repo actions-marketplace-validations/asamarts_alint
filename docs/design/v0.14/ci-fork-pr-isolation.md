@@ -1,10 +1,15 @@
 # CI fork-PR isolation — keep untrusted PR code off the self-hosted runner
 
-Status: **Proposed (2026-06-28).** Follows the post-v0.13 audit finding
+Status: **Implemented (#106).** Follows the post-v0.13 audit finding
 **H6** (`post_v0.13_audit.md`). The immediate mitigation — the GitHub
-*"Require approval for all outside collaborators"* setting — is already in
-place; this is the durable, defence-in-depth fix. No workflow change has
-landed yet; this doc is the spec to review before one does.
+*"Require approval for all outside collaborators"* setting — was already in
+place; this durable, defence-in-depth fix landed in **#106**: the §4 router in
+`ci.yml`, dynamic `runs-on` on every portable job, the box-only jobs
+(`bench-smoke`/`perf-gate`/`coverage`) gated on `untrusted != 'true'`, the §5
+ephemeral-path gaps closed (`docs` job `setup-node`, `audit.sh` self-installs
+`cargo-audit`). The design below is the as-built spec; the recommendations in
+§8 were taken as written (dynamic routing, skip coverage on fork PRs, tool
+installs folded into the scripts).
 
 Scope: `.github/workflows/ci.yml`, `.github/workflows/coverage.yml`.
 Related: ADR-0004 (trust boundary), `deterministic-perf-gating.md`,

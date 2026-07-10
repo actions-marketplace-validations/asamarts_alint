@@ -53,7 +53,7 @@ leads the cut.
 | Doc | Scope |
 |---|---|
 | [`post_v0.13_audit.md`](./post_v0.13_audit.md) | The full audit findings + the phased remediation plan + per-finding status. The living checklist for the cut. |
-| [`ci-fork-pr-isolation.md`](./ci-fork-pr-isolation.md) | Proposal (H6 follow-up): route untrusted fork-PR CI to ephemeral GitHub-hosted runners, keeping it off the self-hosted box. Spec to review before a workflow change lands. |
+| [`ci-fork-pr-isolation.md`](./ci-fork-pr-isolation.md) | **Implemented (#106)** (H6 follow-up): routes untrusted fork-PR CI to ephemeral GitHub-hosted runners, keeping it off the self-hosted box. The doc is now the as-built spec. |
 | [`documentation-drift.md`](./documentation-drift.md) | The 2026-07-03 doc + site-drift audit (adversarially reviewed): consolidated findings across three leak vectors, the resolved decisions (ADR-0007), immediate remediation, and the prevention layer (`x-since` schema keyword + arch-model tag-pin + sourced-or-allowlisted counts + regression tests). §9 records the review's corrections to the first draft. |
 
 ## Release shape

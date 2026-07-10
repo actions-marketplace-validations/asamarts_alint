@@ -52,8 +52,9 @@ consults), **M3-F2** (a byte-bounded, TOCTOU-safe read), **M3-F7** (the two
 in `facts.rs`), and **M6** (git tracked/changed path sets preserve non-UTF-8
 paths). **L2** (Unicode fold landed; ASCII-scope residual accepted WON'T-FIX)
 and **D11** (CHANGELOG per-version backfill + separator normalize) are likewise
-closed in the deferral close-out; the remaining open items are **W6, H6** and
-the doc-drift `P3`/`P4.2` tail — being closed in the later phases. The findings below read as the audit originally
+closed in the deferral close-out, as is **H6** (fork-PR CI isolation landed in
+#106); the remaining open items are **W6** and the doc-drift `P3`/`P4.2` tail —
+being closed in the later phases. The findings below read as the audit originally
 recorded them (present-tense "is a bypass" = as-found, not as-shipped); the
 per-finding `[x]`/`[~]`/`[-]` markers and the phase plan are the live status.
 Follow-on work surfaced *after* this audit (the post-v0.13 e2e sweep and the
@@ -275,7 +276,7 @@ use case appears.
 **Test:** `-c a -c b` exits with a clear "multiple --config" error; a
 single `-c` is unaffected.
 
-### H6 — untrusted fork-PR code runs on the persistent self-hosted runner `[-]`
+### H6 — untrusted fork-PR code runs on the persistent self-hosted runner `[x]`
 
 **Severity:** High. **Action required — a GitHub setting + workflow change,
 not a code fix I can land.** **Where:** `.github/workflows/ci.yml` +
@@ -291,11 +292,19 @@ request workflows from outside collaborators* to **Require approval for all
 outside collaborators** (the public-repo default — first-time contributors
 only — is insufficient). (2) Ideally move the PR lanes to ephemeral /
 GitHub-hosted runners, reserving the self-hosted box for `push`/tag/bench.
-**Status:** the approval setting was applied by the maintainer (2026-06-28),
-closing the immediate hole. The durable defence-in-depth fix — routing
-fork-PR CI to ephemeral runners — is specced in
-[`ci-fork-pr-isolation.md`](./ci-fork-pr-isolation.md) (proposed; no
-workflow change has landed yet).
+**Status: DONE.** The approval setting was applied by the maintainer
+(2026-06-28), closing the immediate hole; the durable defence-in-depth fix —
+routing fork-PR CI to ephemeral `ubuntu-latest` from the immutable
+`head.repo.fork` context — landed in **#106** (`ci.yml` router +
+dynamic `runs-on`, `coverage.yml` fork skip, `bench-smoke`/`perf-gate` gated on
+`untrusted != 'true'`, `docs` job `setup-node` on the hosted path, `audit.sh`
+self-installs `cargo-audit`). Spec + rollout in
+[`ci-fork-pr-isolation.md`](./ci-fork-pr-isolation.md). Both layers now hold:
+approval (belt) + never-runs-on-the-box routing (suspenders). **Cross-repo
+check:** `asamarts/alint.org` needs no equivalent change — every workflow runs
+on `ubuntu-latest` (no self-hosted box), there is no `pull_request_target`, and
+the only PR-triggered secret use is the auto `GITHUB_TOKEN` (read-only, no
+custom secrets on fork runs). Verified 2026-07-10.
 
 ---
 
