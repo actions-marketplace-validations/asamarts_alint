@@ -452,6 +452,19 @@
       "structured-query"
     ]
   },
+  "rule_aliases": {
+    "content_forbidden": "file_content_forbidden",
+    "content_matches": "file_content_matches",
+    "cross_file_value_equals": "cross_file",
+    "footer": "file_footer",
+    "header": "file_header",
+    "is_text": "file_is_text",
+    "max_lines": "file_max_lines",
+    "max_size": "file_max_size",
+    "min_lines": "file_min_lines",
+    "min_size": "file_min_size",
+    "shebang": "file_shebang"
+  },
   "bundled_rulesets": [
     "agent-context",
     "agent-hygiene",

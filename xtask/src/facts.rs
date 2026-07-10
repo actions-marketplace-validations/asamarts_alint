@@ -36,6 +36,7 @@ struct Facts {
     families: Vec<String>,
     categories: Vec<CategoryEntry>,
     rule_categories: BTreeMap<String, Vec<String>>,
+    rule_aliases: BTreeMap<String, String>,
     bundled_rulesets: Vec<String>,
     bundled_ruleset_sizes: BTreeMap<String, usize>,
     output_formats: Vec<String>,
@@ -102,6 +103,14 @@ fn build_facts() -> Result<Facts> {
             )
         })
         .collect();
+    // Alias -> canonical kind, from the same generated bridge. Lets a facts.json
+    // consumer (e.g. alint.org's cross-repo alias-parity gate) resolve the
+    // page-less legacy aliases to their canonical kind without a hand-kept map,
+    // so the site's alias resolution can be gated against this authoritative set.
+    let rule_aliases: BTreeMap<String, String> = alint_rules::categories::ALIAS_TO_CANONICAL
+        .iter()
+        .map(|(alias, canon)| ((*alias).to_string(), (*canon).to_string()))
+        .collect();
 
     let counts = Counts {
         rule_kinds: rule_kinds.len(),
@@ -120,6 +129,7 @@ fn build_facts() -> Result<Facts> {
         families,
         categories,
         rule_categories,
+        rule_aliases,
         bundled_rulesets,
         bundled_ruleset_sizes,
         output_formats,
