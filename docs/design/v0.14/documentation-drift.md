@@ -312,15 +312,29 @@ Each fix ships with a revert-sensitive regression test (repo convention).
   with a bare "83-rule catalogue" must fail; "79-rule pass" with an allowlist entry must
   pass.
 
-### P3. Bench-count contract (OPTIONAL future rigor; Decision 2) `[-]`
+### P3. Rule-count contracts — case studies + bench scenarios `[x]`
 
-- `[-]` Only if the scenario counts are wanted as live contract data rather than allowlist
-  entries: at a v0.14 bench cycle, have the harness RESOLVE each scenario's `extends:` +
-  dedup + count, bump `benchmarks-trajectory.json`'s `schema_version` to add a per-scenario
-  rule-count, expand the trajectory beyond its current 4 headline cells to cover S1/S2/S4/S5,
-  update `render-history.py` (:442-462) + `benchmarks.astro` to interpolate. Deferred because
-  it is new-data engine work spanning the harness, the producer, and the page - the
-  allowlist (P2.3) covers these honestly in the meantime.
+**DONE (v0.14 deferral close-out).** Both count classes are now live, drift-proof
+facts.json contracts, computed the same way: `alint_dsl::load(<config>).rules.len()`
+(extends-resolved, `id`-deduped — exactly what `alint list -c <config>` reports).
+
+- `[x]` **Bench-scenario counts.** `facts.json.bench_scenario_rule_counts` (`S1`..`S14`)
+  from `xtask/src/bench/scenarios/*.yml`. `benchmarks.astro` interpolates each scenario's
+  "N rules" label via a `scen()` helper (fallback to the old literal on a pre-contract
+  bundle), so a count self-updates as the bundled rulesets a scenario `extends:` grow. This
+  fixed a live stale number (S3 showed `~34`; the resolved count is `32`) and retired the
+  `34/26/5 rules` "P3 contract pending" allowlist entries in `check-counts.mjs`. Chose the
+  facts.json count-contract channel (like `bundled_ruleset_sizes` / `example_rule_counts`)
+  over the `benchmarks-trajectory.json` schema bump the original sketch suggested — the
+  trajectory stays timing-only; counts live with the other count contracts.
+- `[x]` **Case-study counts (the "systemic divergence" finding below).**
+  `facts.json.example_rule_counts` (per `examples/<repo>/.alint.yml`). Resolves the
+  ambiguity empirically: the frontmatter `rules:` is NOT the extends-resolved count (28/30
+  studies drift, up to 2.4x — it's a point-in-time measurement against the real repo incl.
+  `for_each_*` expansion). Per **Decision (dual number)**, the per-study page now shows
+  BOTH — "N at study time · M in today's ruleset" — so the historical number (and the 7
+  studies that cite it in prose) stays honest while the live half self-updates. Gated by
+  `check-example-counts.mjs` (every published study maps to an engine count).
 
 ### P4. Complete the site drift-gate blind spots (W6) `[ ]`
 
@@ -470,21 +484,20 @@ Each fix ships with a revert-sensitive regression test (repo convention).
   incl. `extends:`) AND the authored `- id:` count (29); interpolating from `rules:` would
   display the wrong number. Corrected the misleading `check-counts` allowlist reason; the
   literal stays allowlisted.
-- `[ ]` **NEW finding — systemic case-study count divergence.** The `rules:` frontmatter
-  (rendered in each study's meta cell) runs ~2x the authored `- id:` count (golang-go 64/29,
-  kubernetes 49/25, turbo 88/34, tokio 74/31). It appears to mean "effective total incl.
-  `extends:`" but is unverified per-study. Making it a trustworthy contract needs an
-  extends-resolution + dedup pass (the P3 class); until then the meta cells + card narratives
-  are hand-curated. Tracked, not urgent.
+- `[x]` **NEW finding — systemic case-study count divergence. RESOLVED (P3, dual number).**
+  Measured the divergence engine-side: the `rules:` frontmatter is NOT the extends-resolved
+  count (28/30 studies drift; protobuf 108 vs 45 resolved, uv 73 vs 89) — it's a point-in-time
+  measurement against the real repo. Rather than "reconcile" it to one metric (which would
+  falsify the study and rewrite the 7 prose citations), the engine emits the current resolved
+  count (`example_rule_counts`) and the per-study page shows both numbers. See P3 above.
 - `[x]` **3 — housekeeping DONE.** `.github-account=asamarts` marker added to alint.org (the
   alint repo already had a tracked one); the work-stream branches (git-tracked-kind-option,
   v0.14-doc-followups, v0.14-doc-drift) deleted in both repos.
-- `[~]` **True remainder:** ~~P4.2's EXTERNAL `source_url` probe~~ CLOSED deterministically
-  (engine `rule_source_files` map + `check-rule-source-files.mjs` gate — no network). What
-  remains: **P3** (optional bench-count contract — also subsumes the case-study count
-  reconciler above; still `[-]` optional), and the **§6 release-cut tail** (Kani-claim
-  narrowing, nav wiring + un-sentinel the pre-written v0.14 prose, pin bump) — the latter is
-  the release-time Phase F.
+- `[x]` **True remainder — CLOSED.** ~~P4.2's EXTERNAL `source_url` probe~~ (deterministic
+  `rule_source_files` gate) and ~~P3~~ (bench-scenario + case-study rule-count contracts,
+  dual number) are both done. The only thing left is the **§6 release-cut tail** (Kani-claim
+  narrowing, nav wiring + un-sentinel the pre-written v0.14 prose, pin bump) — the
+  release-time Phase F, not a deferral.
 - **Deployment:** the engine drift-prevention (P1/P-C4/P-REF/P2.1/P5) and the alint.org
   immediate fixes (§4) merged in the prior session; this session merged #118 (ADR-0008),
   #119 (1b/1c/1d), and alint.org #15 (2a + alias fix). The alias-`docs_url` fix is live on

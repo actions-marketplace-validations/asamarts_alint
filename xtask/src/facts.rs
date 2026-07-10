@@ -39,6 +39,8 @@ struct Facts {
     rule_categories: BTreeMap<String, Vec<String>>,
     rule_aliases: BTreeMap<String, String>,
     rule_source_files: BTreeMap<String, String>,
+    example_rule_counts: BTreeMap<String, usize>,
+    bench_scenario_rule_counts: BTreeMap<String, usize>,
     bundled_rulesets: Vec<String>,
     bundled_ruleset_sizes: BTreeMap<String, usize>,
     output_formats: Vec<String>,
@@ -114,6 +116,8 @@ fn build_facts() -> Result<Facts> {
         .map(|(alias, canon)| ((*alias).to_string(), (*canon).to_string()))
         .collect();
     let rule_source_files = rule_source_files(&root)?;
+    let example_rule_counts = example_rule_counts(&root)?;
+    let bench_scenario_rule_counts = bench_scenario_rule_counts(&root)?;
 
     let counts = Counts {
         rule_kinds: rule_kinds.len(),
@@ -134,6 +138,8 @@ fn build_facts() -> Result<Facts> {
         rule_categories,
         rule_aliases,
         rule_source_files,
+        example_rule_counts,
+        bench_scenario_rule_counts,
         bundled_rulesets,
         bundled_ruleset_sizes,
         output_formats,
@@ -246,6 +252,75 @@ fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
         !map.is_empty(),
         "parsed zero register() entries from register_builtin"
     );
+    Ok(map)
+}
+
+/// The effective rule count of each `examples/<study>/.alint.yml` case-study
+/// config **after** `extends:` resolution + `id` dedup — i.e. exactly what
+/// `alint list -c <config>` reports (`alint_dsl::load(...).rules.len()`).
+///
+/// This is the drift-proof HALF of each case study's meta-cell count on
+/// alint.org: the study's `rules:` frontmatter is a point-in-time measurement
+/// against the real repo (incl. `for_each_*` expansion the engine can't
+/// recompute without the checkout), while this is the current-ruleset effective
+/// total. Both are shown ("N at study time · M in today's ruleset") so the
+/// live number self-updates as the bundled rulesets grow, without falsifying
+/// what the study found (P3 / documentation-drift.md systemic-count finding).
+///
+/// Keyed by the example directory name, which equals each case study's `repo:`
+/// frontmatter / filename, so the site maps them 1:1.
+fn example_rule_counts(root: &Path) -> Result<BTreeMap<String, usize>> {
+    let dir = root.join("examples");
+    let mut map = BTreeMap::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let config = entry.path().join(".alint.yml");
+        if !config.exists() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let loaded = alint_dsl::load(&config)
+            .with_context(|| format!("load examples/{name}/.alint.yml for its rule count"))?;
+        map.insert(name, loaded.rules.len());
+    }
+    anyhow::ensure!(
+        !map.is_empty(),
+        "no examples/*/.alint.yml case-study configs found"
+    );
+    Ok(map)
+}
+
+/// The effective (extends-resolved, `id`-deduped) rule count of each synthetic
+/// bench scenario `xtask/src/bench/scenarios/s<N>_*.yml`, keyed by its display
+/// id `S<N>` (matching alint.org's benchmarks page). Same load-and-count as
+/// [`example_rule_counts`] (`alint_dsl::load(...).rules.len()`).
+///
+/// Lets the benchmarks page interpolate each scenario's "N rules" label from
+/// the current ruleset instead of a hand-typed `~34` that silently drifts as
+/// the bundled rulesets a scenario `extends:` grow (P3 bench-count contract /
+/// documentation-drift.md). Only the stable synthetic S1-S14 configs are
+/// counted; a real-repo pass's rule count (e.g. the nixpkgs run) is a
+/// point-in-time measurement, tracked like the case-study historical numbers.
+fn bench_scenario_rule_counts(root: &Path) -> Result<BTreeMap<String, usize>> {
+    let dir = root.join("xtask/src/bench/scenarios");
+    let re = Regex::new(r"^s(\d+)_.*\.ya?ml$").expect("static regex compiles");
+    let mut map = BTreeMap::new();
+    for entry in fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        let Some(cap) = re.captures(&name) else {
+            continue;
+        };
+        let id = format!("S{}", &cap[1]);
+        let loaded = alint_dsl::load(&entry.path())
+            .with_context(|| format!("load bench scenario {name} for its rule count"))?;
+        map.insert(id, loaded.rules.len());
+    }
+    anyhow::ensure!(!map.is_empty(), "no bench scenario configs found");
     Ok(map)
 }
 
@@ -536,6 +611,83 @@ mod tests {
                 Some(expected),
                 "`{kind}` must resolve to `{expected}.rs`"
             );
+        }
+    }
+
+    /// `example_rule_counts` has one entry per `examples/<study>/.alint.yml`,
+    /// each a positive resolved-rule count equal to what `alint list` would
+    /// report (P3 case-study reconciler). Guards that a new example config or a
+    /// deleted one keeps facts.json in sync with the site's dual-count cells.
+    #[test]
+    fn example_rule_counts_cover_every_example_config() {
+        let f = build_facts().expect("build facts");
+        let root = crate::workspace_root().expect("workspace root");
+        let examples = root.join("examples");
+
+        let mut on_disk = BTreeSet::new();
+        for entry in fs::read_dir(&examples).expect("read examples/") {
+            let entry = entry.expect("dir entry");
+            if entry.file_type().expect("file type").is_dir()
+                && entry.path().join(".alint.yml").exists()
+            {
+                on_disk.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        let counted: BTreeSet<String> = f.example_rule_counts.keys().cloned().collect();
+        assert_eq!(
+            counted, on_disk,
+            "every examples/<study>/.alint.yml must have exactly one example_rule_counts entry"
+        );
+        assert!(!on_disk.is_empty(), "expected case-study example configs");
+
+        for (study, count) in &f.example_rule_counts {
+            assert!(
+                *count > 0,
+                "example_rule_counts[{study}] is 0 — the config resolved to no rules"
+            );
+            // The count must equal a fresh load's resolved rule count.
+            let loaded = alint_dsl::load(&examples.join(study).join(".alint.yml"))
+                .unwrap_or_else(|e| panic!("reload {study}: {e}"));
+            assert_eq!(
+                *count,
+                loaded.rules.len(),
+                "example_rule_counts[{study}] must equal the resolved rule count"
+            );
+        }
+    }
+
+    /// `bench_scenario_rule_counts` has one `S<N>` entry per bench scenario
+    /// config, each a positive resolved-rule count matching a fresh load
+    /// (P3 bench-count contract). Keeps facts.json in sync with the benchmarks
+    /// page's per-scenario "N rules" labels.
+    #[test]
+    fn bench_scenario_rule_counts_cover_every_scenario() {
+        let f = build_facts().expect("build facts");
+        let root = crate::workspace_root().expect("workspace root");
+        let dir = root.join("xtask/src/bench/scenarios");
+
+        let re = Regex::new(r"^s(\d+)_.*\.ya?ml$").expect("regex");
+        let mut on_disk = BTreeSet::new();
+        for entry in fs::read_dir(&dir).expect("read scenarios/") {
+            let entry = entry.expect("dir entry");
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some(cap) = re.captures(&name) {
+                on_disk.insert(format!("S{}", &cap[1]));
+            }
+        }
+        let counted: BTreeSet<String> = f.bench_scenario_rule_counts.keys().cloned().collect();
+        assert_eq!(
+            counted, on_disk,
+            "every s<N>_*.yml scenario must have exactly one S<N> rule-count entry"
+        );
+        assert_eq!(
+            on_disk.len(),
+            14,
+            "expected the 14 synthetic bench scenarios"
+        );
+
+        for (id, count) in &f.bench_scenario_rule_counts {
+            assert!(*count > 0, "bench_scenario_rule_counts[{id}] is 0");
         }
     }
 
