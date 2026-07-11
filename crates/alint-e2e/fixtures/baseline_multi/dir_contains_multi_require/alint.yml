@@ -1,0 +1,10 @@
+version: 1
+# One directory missing two required files → two path-only findings on the same
+# dir. They must carry distinct fingerprints (dir + glob), else a newly-missing
+# required file would be masked by an already-baselined one.
+rules:
+  - id: pkg-required-files
+    kind: dir_contains
+    select: "packages/*"
+    require: ["README.md", "LICENSE"]
+    level: error

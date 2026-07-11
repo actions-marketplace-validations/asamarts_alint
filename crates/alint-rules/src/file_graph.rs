@@ -527,8 +527,13 @@ impl FileGraphRule {
     }
 
     fn node_violation(node: &Path, reason: &str) -> Violation {
+        // Keyed on the node so it can't collide with an `orphan_violation` (or a
+        // `fresh_violation`) on the same path — both are path-only and line-less,
+        // so without distinct keys a baseline could mask a genuinely-new node
+        // finding (baseline.md §6 collision-invariant).
         Violation::new(format!("file_graph node {} {reason}", crate::slash(node)))
             .with_path(node.to_path_buf())
+            .with_baseline_key(format!("file_graph-node\u{0}{}", crate::slash(node)))
     }
 
     fn forbidden_violation(&self, src: &Path, target: &Path, pat: &ForbiddenPattern) -> Violation {
@@ -603,7 +608,9 @@ impl FileGraphRule {
                 crate::slash(node),
             )
         });
-        Violation::new(msg).with_path(node.to_path_buf())
+        Violation::new(msg)
+            .with_path(node.to_path_buf())
+            .with_baseline_key(format!("file_graph-orphan\u{0}{}", crate::slash(node)))
     }
 
     /// A stale / missing `derive_target` output. Anchored on the
@@ -614,7 +621,9 @@ impl FileGraphRule {
             .message
             .clone()
             .unwrap_or_else(|| format!("{} {reason}", crate::slash(target)));
-        Violation::new(msg).with_path(target.to_path_buf())
+        Violation::new(msg)
+            .with_path(target.to_path_buf())
+            .with_baseline_key(format!("file_graph-fresh\u{0}{}", crate::slash(target)))
     }
 }
 
@@ -949,6 +958,33 @@ mod tests {
                 to_glob: to.into(),
             }]),
         }
+    }
+
+    #[test]
+    fn node_error_and_orphan_on_same_node_dont_collide() {
+        // A node that is BOTH errored (unreadable / too-large / out-of-repo
+        // target) AND an orphan lands two path-only, line-less findings on the
+        // SAME path. Without distinct baseline_keys they share a fingerprint and
+        // a baseline silently masks a genuinely-new one (baseline.md §6). Both
+        // keys — and therefore both fingerprints — must differ.
+        let rule = acyclic(
+            "**/*.proto",
+            r#"import\s+"([^"]+)""#,
+            Resolve::RelativeToRepoRoot,
+        );
+        let node = Path::new("proto/a.proto");
+        let node_err = FileGraphRule::node_violation(node, "could not be read: boom");
+        let orphan = rule.orphan_violation(node);
+        assert_ne!(
+            node_err.baseline_key, orphan.baseline_key,
+            "node-error and orphan on the same node must carry distinct baseline_keys"
+        );
+        let fp = |v: &Violation| alint_core::baseline::fingerprint("file_graph", v, None);
+        assert_ne!(
+            fp(&node_err),
+            fp(&orphan),
+            "distinct keys must yield distinct fingerprints (no baseline masking)"
+        );
     }
 
     fn acyclic(nodes: &str, regex: &str, resolve: Resolve) -> FileGraphRule {

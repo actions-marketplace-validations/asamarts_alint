@@ -99,7 +99,19 @@ impl Rule for DirContainsRule {
                 if !found {
                     let glob = &self.require_globs[i];
                     let msg = self.format_message(&dir.path, glob);
-                    violations.push(Violation::new(msg).with_path(dir.path.clone()));
+                    // One violation per missing `require` glob, all on the same
+                    // dir path with no line — so a `baseline_key` on (dir, glob)
+                    // is required or they collide to one fingerprint and a
+                    // baseline masks a genuinely-new missing-file finding
+                    // (baseline.md §6 collision-invariant).
+                    violations.push(
+                        Violation::new(msg)
+                            .with_path(dir.path.clone())
+                            .with_baseline_key(format!(
+                                "dir_contains\0{}\0{glob}",
+                                dir.path.display()
+                            )),
+                    );
                 }
             }
         }
