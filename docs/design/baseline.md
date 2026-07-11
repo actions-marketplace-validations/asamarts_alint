@@ -446,11 +446,19 @@ By failure mode:
   it has the file bytes for the line-content discriminator, §3.1 case 2) and
   passes a `[result][violation]` fingerprint grid into `write_gitlab`, so a
   finding carries **one** identity across GitLab, SARIF (`partialFingerprints`),
-  and the baseline file. `gitlab.rs` keeps the old scheme only as a
-  `self_fingerprint` *fallback* for callers without file access (the generic
-  `Format` dispatch, benches, unit tests); GitLab's per-report-uniqueness
-  requirement holds on both paths. Cross-surface parity is guarded end to end by
-  `alint::tests::baseline_cli::gitlab_fingerprint_equals_canonical_baseline_fingerprint`.
+  and the baseline file. **Caveat (per-report uniqueness):** the canonical
+  fingerprint deliberately *collides* on identical content (that is the baseline
+  count-collapse), but GitLab Code Quality silently drops findings that share a
+  fingerprint. So `write_gitlab` runs a per-report occurrence pass over the grid:
+  the FIRST finding with a given canonical identity emits it raw (SARIF/baseline
+  parity preserved), and any in-report collision gets a deterministic suffix, so
+  every emitted GitLab issue is unique. `gitlab.rs` keeps the old scheme only as
+  a `self_fingerprint` *fallback base* for callers without file access (the
+  generic `Format` dispatch, benches, unit tests), which the same occurrence pass
+  makes unique. Cross-surface parity for the un-collided case is guarded by
+  `alint::tests::baseline_cli::gitlab_fingerprint_equals_canonical_baseline_fingerprint`;
+  the collision-disambiguation by
+  `gitlab::tests::precomputed_canonical_collision_is_disambiguated_but_first_keeps_identity`.
 - **`Violation.baseline_key`** (§2.4): with the v3 path-shape default, the
   rule-side work is setting a key on only the ~15 kinds whose identity isn't
   `(rule_id, path)` — structured-query, cross-file/no-path, first-offender, and

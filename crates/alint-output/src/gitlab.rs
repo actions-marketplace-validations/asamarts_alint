@@ -36,23 +36,31 @@ use sha2::{Digest, Sha256};
 
 /// `fingerprints`, when supplied, is the per-result / per-violation canonical
 /// `baseline::violation_fingerprint` (indexed `[result][violation]`, aligned with
-/// `report.results[i].violations[j]`), so GitLab Code Quality shares ONE identity
-/// with baseline mode + SARIF (`partialFingerprints`) — a finding has the same
-/// fingerprint everywhere. Passed by `alint`'s GitLab path (which has file access
-/// to compute the content discriminator). `None` falls back to the self-contained
-/// occurrence-based hash for callers without that plumbing (the generic dispatch,
-/// benches, unit tests) — GitLab's per-report-uniqueness requirement is met either
-/// way (the canonical fingerprints are collision-free by the coverage audit).
+/// `report.results[i].violations[j]`), so an un-collided finding shares ONE
+/// identity with baseline mode + SARIF (`partialFingerprints`). Passed by
+/// `alint`'s GitLab path (which has file access to compute the content
+/// discriminator). `None` falls back to the self-contained hash (generic
+/// dispatch, benches, unit tests).
+///
+/// The canonical fingerprint is deliberately collision-prone — it collapses
+/// identical-content findings so baseline mode can count them — but GitLab Code
+/// Quality drops findings that share a fingerprint. So `build_issue` runs a
+/// per-report occurrence pass over BOTH fingerprint sources: the first finding
+/// with a given base identity emits it raw (cross-format identity preserved),
+/// and any in-report collision gets a deterministic suffix, so every emitted
+/// issue is unique and none is silently dropped.
 pub fn write_gitlab(
     report: &Report,
     fingerprints: Option<&[Vec<String>]>,
     w: &mut dyn Write,
 ) -> std::io::Result<()> {
     let mut issues: Vec<Issue> = Vec::new();
-    // Fallback per-report occurrence counter keyed by the base `rule|path|message`
-    // tuple, so genuinely-distinct findings that share all three still get distinct
-    // fingerprints (Code Climate requires per-report uniqueness). Only consulted
-    // when `fingerprints` is None. Deterministic: report iteration order is stable.
+    // Per-report occurrence counter keyed by each finding's BASE fingerprint
+    // (canonical when supplied, else the self-contained hash). Consulted for
+    // EVERY issue so an in-report collision — which the canonical fingerprint
+    // deliberately produces on identical content — is disambiguated and GitLab
+    // keeps both findings (Code Climate requires per-report uniqueness).
+    // Deterministic: report iteration order is stable.
     let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for (ri, result) in report.results.iter().enumerate() {
         if result.level == Level::Off {
@@ -103,19 +111,29 @@ fn build_issue(
         .as_ref()
         .map_or_else(|| ".".to_string(), |p| p.display().to_string());
 
-    let fingerprint = precomputed_fingerprint.unwrap_or_else(|| {
-        // Fallback: the self-contained occurrence-based hash. `occurrence` is the
-        // Nth identical (rule, path, message) in this report — 0 for the first —
-        // so distinct findings sharing all three don't collide.
-        let key = format!("{}|{path}|{}", result.rule_id, violation.message);
-        let occurrence = {
-            let counter = seen.entry(key).or_insert(0);
-            let n = *counter;
-            *counter += 1;
-            n
-        };
-        self_fingerprint(&result.rule_id, &path, &violation.message, occurrence)
-    });
+    // Base identity: the canonical `violation_fingerprint` when `alint` supplies
+    // it (so a unique finding matches SARIF + baseline), else the self-contained
+    // hash. The canonical fingerprint is DELIBERATELY collision-prone — it
+    // discriminates on line *content*, not line number, so a rule firing on two
+    // identical lines of one file hashes both the same (baseline count-collapse).
+    // GitLab Code Quality requires per-report-UNIQUE fingerprints — a collision
+    // makes GitLab silently drop the duplicate finding — so disambiguate the Nth
+    // (N>0) occurrence of any base identity within this report. Occurrence 0 (the
+    // common case) keeps the raw base, so cross-format identity is preserved;
+    // only genuine in-report collisions get a deterministic suffix.
+    let base = precomputed_fingerprint
+        .unwrap_or_else(|| self_fingerprint(&result.rule_id, &path, &violation.message));
+    let occurrence = {
+        let counter = seen.entry(base.clone()).or_insert(0);
+        let n = *counter;
+        *counter += 1;
+        n
+    };
+    let fingerprint = if occurrence == 0 {
+        base
+    } else {
+        occurrence_suffixed(&base, occurrence)
+    };
 
     Issue {
         description: violation.message.to_string(),
@@ -147,33 +165,40 @@ fn severity(level: Level) -> &'static str {
     }
 }
 
-/// Stable per-issue fingerprint for cross-run de-duplication.
-/// SHA-256 hex of `rule_id|path|message|occurrence`. The line number is
-/// intentionally omitted so a violation that drifts up or down by a few
-/// lines stays the same issue from GitLab's perspective. `occurrence` is the
-/// 0-based index of this finding among others in the *same report* sharing
-/// the same `rule_id|path|message`, so two genuinely-distinct findings don't
-/// collapse to one fingerprint — the Code Climate spec requires per-report
-/// uniqueness, and a collision makes GitLab silently drop the duplicate
-/// (e.g. a generic-message per-line rule firing on several lines of one
-/// file). The single-occurrence common case keeps a line-independent
-/// fingerprint, so drift tolerance is preserved.
+/// The self-contained FALLBACK base identity, used only when `write_gitlab` is
+/// called without pre-computed `fingerprints` (the generic dispatch / benches /
+/// unit tests). SHA-256 hex of `rule_id|path|message`; the line number is
+/// intentionally omitted so a violation that drifts up or down by a few lines
+/// stays the same issue from GitLab's perspective. Per-report uniqueness (the
+/// Code Climate requirement) is enforced by the caller's occurrence pass, not
+/// here.
 ///
-/// Note: this is the FALLBACK identity, used only when `write_gitlab` is called
-/// without pre-computed `fingerprints` (the generic dispatch / benches / unit
-/// tests). `alint`'s GitLab path passes the canonical
-/// `baseline::violation_fingerprint` (ADR-0006), so GitLab, SARIF, and baseline
-/// mode share ONE identity per finding — the unification that `docs/design/
-/// baseline.md` §5/§7 tracked as a follow-up.
-fn self_fingerprint(rule_id: &str, path: &str, message: &str, occurrence: u32) -> String {
+/// `alint`'s GitLab path instead passes the canonical
+/// `baseline::violation_fingerprint` (ADR-0006), so an un-collided finding
+/// shares ONE identity across GitLab, SARIF, and baseline mode.
+fn self_fingerprint(rule_id: &str, path: &str, message: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(rule_id.as_bytes());
     hasher.update(b"|");
     hasher.update(path.as_bytes());
     hasher.update(b"|");
     hasher.update(message.as_bytes());
-    hasher.update(b"|");
+    hex_digest(hasher)
+}
+
+/// Deterministically derive a distinct fingerprint for the Nth (`occurrence` >
+/// 0) in-report collision of `base`, so GitLab keeps every finding. Only reached
+/// on a genuine collision — the first occurrence emits the raw `base`, preserving
+/// cross-format identity for the common (unique) case.
+fn occurrence_suffixed(base: &str, occurrence: u32) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(base.as_bytes());
+    hasher.update(b":");
     hasher.update(occurrence.to_le_bytes());
+    hex_digest(hasher)
+}
+
+fn hex_digest(hasher: Sha256) -> String {
     let digest = hasher.finalize();
     let mut hex = String::with_capacity(64);
     for byte in digest {
@@ -402,6 +427,43 @@ mod tests {
         assert_ne!(
             arr[0]["fingerprint"], arr[1]["fingerprint"],
             "distinct findings must have distinct fingerprints"
+        );
+    }
+
+    #[test]
+    fn precomputed_canonical_collision_is_disambiguated_but_first_keeps_identity() {
+        // The canonical `violation_fingerprint` DELIBERATELY collides on
+        // identical content (baseline count-collapse). GitLab drops findings
+        // that share a fingerprint, so when `alint` supplies two identical
+        // canonical fingerprints for two distinct findings, the emitted GitLab
+        // issues must be UNIQUE — while the FIRST keeps the raw canonical so it
+        // still correlates with SARIF/baseline. (Regression: the unified path
+        // used to emit the canonical verbatim, dropping the 2nd in GitLab.)
+        let mk_v = |line: usize| Violation {
+            path: Some(Path::new("notes.txt").into()),
+            message: "same message".into(),
+            line: Some(line),
+            column: None,
+            is_note: false,
+            baseline_key: None,
+        };
+        let report = Report {
+            results: vec![rule("r", Level::Error, vec![mk_v(1), mk_v(2)])],
+        };
+        // Simulate the engine handing GitLab two IDENTICAL canonical fingerprints.
+        let canon = "a".repeat(64);
+        let fps = vec![vec![canon.clone(), canon.clone()]];
+        let mut buf = Vec::new();
+        write_gitlab(&report, Some(&fps), &mut buf).unwrap();
+        let arr: Vec<Value> = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(arr.len(), 2, "both findings emitted");
+        assert_ne!(
+            arr[0]["fingerprint"], arr[1]["fingerprint"],
+            "colliding canonical fingerprints must be disambiguated per-report"
+        );
+        assert_eq!(
+            arr[0]["fingerprint"], canon,
+            "the FIRST occurrence keeps the raw canonical (SARIF/baseline parity)"
         );
     }
 
