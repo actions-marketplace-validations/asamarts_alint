@@ -59,7 +59,10 @@ recorded them (present-tense "is a bypass" = as-found, not as-shipped); the
 per-finding `[x]`/`[~]`/`[-]` markers and the phase plan are the live status.
 Follow-on work surfaced *after* this audit (the post-v0.13 e2e sweep and the
 adversarial review of the remediation, PRs #111–#116) is tracked in the
-CHANGELOG `[Unreleased]`, not here.
+CHANGELOG `[Unreleased]`, not here. A later **full-cycle adversarial re-review**
+of everything since v0.13.0 (2026-07-11) found ten more issues — including a
+CRITICAL fixer-confinement escape and a HIGH GitLab regression this audit's own
+remediation had left open — recorded in **Phase 8** below.
 
 ---
 
@@ -74,6 +77,7 @@ CHANGELOG `[Unreleased]`, not here.
 | 5 | MEDIUM — output / CLI / baseline | M9–M14 | `[x]` (M9–M14 all done) |
 | 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[x]` (all done; L2 Unicode fold landed + ASCII-scope residual accepted WON'T-FIX; D11 CHANGELOG backfill + separator normalize done) |
 | 7 | alint.org drift | W1–W7 | `[x]` (W1–W5,W7 done on the site branch; W6 partial) |
+| 8 | Full-cycle adversarial re-review (2026-07-11) | R1–R10 | `[x]` (all done + CI-green; R1 CRITICAL fixer confinement, R2/R3 HIGH, R4 MEDIUM, R5–R10 LOW) |
 
 Phases land security-first. Each is one atomic commit (or a small group)
 with a forward `Next: Phase N` pointer, per the phased-rollout
@@ -746,6 +750,110 @@ noted the docs-bundle `subcommands=10` vs facts.json `11` — that's correct
 - `[x]` **W7** Case studies are point-in-time (alint v0.9.17, "future
   tense" for now-shipped kinds). Add a visible "as of vX" banner or a
   revalidation note so they don't read as current-catalogue claims.
+
+---
+
+## Phase 8 — Full-cycle adversarial re-review (2026-07-11)
+
+A comprehensive review + end-to-end test of **everything on `main` since the
+`v0.13.0` tag** (94 commits: baseline mode, categories, this audit's own
+remediation, `root_only`, ADR-0008, the facts.json contracts, the GitLab
+fingerprint unification, CI/docs). Four parallel adversarial passes (baseline,
+security cluster, categories, output/facts/CLI) over the `v0.13.0..HEAD` diff,
+plus the full test battery (1994 tests, all six `gen-* --check` contracts, clippy
+1.97, rustdoc, dogfood, version-pins) and real-binary E2E smoke of every new
+surface. Ten findings — each **empirically reproduced first**, then fixed with a
+regression test that reds without the fix. All landed + CI-green (`0eee08d5`,
+`c00ee476`, `1e9922b5`, `5ce7e6bf`).
+
+### R1 — fixer write/read paths bypass path confinement `[x]`
+**Severity: CRITICAL.** **Where:** `alint-rules/fixers/creators.rs`
+(`FileCreateFixer::apply` `root.join(&self.path)`; `resolve_source_bytes`
+`ctx_root.join(rel)`) — `grep confine fixers/` returned nothing. **Problem:** the
+audit hardened every rule *read* against an untrusted `extends:`'d ruleset (H1,
+M2, M3) but left the *fixer* paths unguarded. A `file_exists`+`file_create`
+(not spawn-gated) with `path: "../../x"` had `alint fix` write an
+attacker-controlled file OUTSIDE the repo root (persistence/RCE via autostart /
+cron.d drop paths); `content_from: "../secret"` read an out-of-tree secret INTO
+an in-repo file (exfiltration). Both reproduced in a sandbox. **Fix:** route the
+two config-derived fixer paths (write target + shared `content_from`) through the
+same `pathsafe::confine_read` gate the read rules use, honoring the owning rule's
+`allow_out_of_root`. Plumbing: `FixContext` gains `allow_out_of_root`, carried
+per-entry from `RuleEntry` (set in the CLI + LSP load paths); an `extends:`'d
+rule can't set that flag, so its fixer is always confined; the LSP `fix_edit`
+path denies escape outright. **Test:** `path_confinement_cli.rs` — real-binary
+tests that the out-of-root `file_create` is refused, `allow_out_of_root: true`
+permits it (escape hatch), and `content_from` can't exfiltrate. Extends H1/M2's
+read confinement to the write side.
+
+### R2 — GitLab fingerprint unification reintroduced the M10 collision-drop `[x]`
+**Severity: HIGH.** **Where:** `output/gitlab.rs` + `alint/main.rs` GitLab
+dispatch (Phase B unification, `d0532d1e`). **Problem:** the unification replaced
+gitlab.rs's per-report `occurrence` discriminator (added by **M10**) with the raw
+canonical `violation_fingerprint`, which *deliberately* collides on identical
+content (baseline count-collapse). GitLab Code Quality drops findings that share
+a fingerprint, so a rule firing on two identical lines of one file lost all but
+one — exactly the M10 regression, undone by M10's own follow-up. The parity test
+couldn't catch it (different-file fixture + a `BTreeSet` compare that dedupes
+both sides). **Fix:** `build_issue` runs a per-report occurrence pass over BOTH
+fingerprint sources — the first finding with a given base identity emits it raw
+(SARIF/baseline parity preserved), any in-report collision gets a deterministic
+`sha256(base:occurrence)` suffix. Also corrected the false "collision-free by the
+coverage audit" doc claim. **Test:**
+`precomputed_canonical_collision_is_disambiguated_but_first_keeps_identity`.
+Supersedes M10's note that the unification was the tracked follow-up — it shipped
+in Phase B, and this closes the uniqueness gap it opened.
+
+### R3 — `dir_contains` multi-`require` findings collapse to one fingerprint `[x]`
+**Severity: HIGH.** **Where:** `alint-rules/dir_contains.rs` (one violation per
+missing `require` glob, all on the same dir path, no line, no `baseline_key`).
+**Problem:** all collapse to `sha(rule_id ‖ path ‖ "")`, so under a committed
+baseline a genuinely-new missing-file finding is silently grandfathered — the
+one thing baseline mode promises never to do (`baseline.md` §6). Reproduced end
+to end (baseline missing-README, fix README + break LICENSE → `check --baseline`
+exits 0, masking it). The §6 collision-invariant audit missed it: no fixture
+emitted the multi-finding-per-dir shape. **Fix:** `baseline_key =
+dir_contains\0<dir>\0<glob>`. **Test:** `baseline_multi/dir_contains_multi_require`
+fixture (proven to red the collision-invariant audit when the key is stripped).
+
+### R4 — `file_graph no_orphans` node-error + orphan collide on one node `[x]`
+**Severity: MEDIUM.** **Where:** `alint-rules/file_graph.rs` (`node_violation`,
+`orphan_violation`, `fresh_violation` — all path-only, line-less, key-less).
+**Problem:** a node that is both errored (unreadable / too-large / out-of-repo
+target) and an orphan lands two distinct findings on the same path → same
+fingerprint → same masking class as R3, narrower trigger. **Fix:** distinct-prefix
+keys (`file_graph-node/-orphan/-fresh\0<path>`). **Test:** unit test asserting a
+node-error and an orphan on one node get distinct fingerprints.
+
+### R5–R10 — LOW / hardening `[x]`
+Landed together in `5ce7e6bf`, each with a test:
+- **R5** `io.rs read_capped_with` stat-then-**unbounded**-read TOCTOU (the M3-F2
+  class the walker's `read_bounded` already closes): now bounds the actual read
+  with `take(max+1)`.
+- **R6** `init` / `lsp` silently ignored `--format` (the **M13** fail-loud
+  contract gap): both now reject a non-human `--format` (exit 2); CLI test.
+- **R7** `bundled_ruleset_sizes` doc made explicit it's the ruleset's OWN
+  directly-declared count, NOT the extends-resolved effective total that
+  `example_rule_counts` / `bench_scenario_rule_counts` carry.
+- **R8** `rule_aliases` (billed authoritative) is now gated against the engine's
+  actual alias→builder wiring — the facts test asserts `rule_source_files[alias]
+  == rule_source_files[canonical]` for every alias.
+- **R9** three divergent H3-title parsers agree only on `(alias: `<name>`)`; a
+  `gen-categories` test now pins that exact format.
+- **R10** `rule-categories.md` hardcoded ungated taxonomy counts softened to
+  point at the drift-gated `categories_gen.rs` / facts.json as authoritative.
+
+**Verified clean this round (no defect):** spawn-gate + its recursion into
+`require:`/`templates:`, escaping-symlink pruning, non-UTF-8 git paths + output,
+read caps, `root_only`, the whole categories SSOT chain, the facts.json
+generators, ADR-0008 kind-options, `--only`/exit-codes, release-gating
+(x-since/P-REF), and baseline counting/config-trust/mark-not-remove/scope.
+
+**Lesson:** two of the four confirmed defects (R1 fixer confinement, R2 GitLab
+collision) were *left open by this audit's own remediation* — R1 hardened reads
+but not writes; R2's Phase-B unification undid M10's fix. The value of an
+independent, adversarial pass over the remediation itself, with a repro before
+every claim.
 
 ---
 
