@@ -235,10 +235,11 @@ fn diff_name_only(
         if chunk.is_empty() {
             continue;
         }
-        let Ok(s) = std::str::from_utf8(chunk) else {
-            return Ok(None);
-        };
-        out.insert(PathBuf::from(s));
+        // Preserve a non-UTF-8 changed path instead of collapsing the whole set
+        // to `None` (which the caller maps to an empty changed-set, silently
+        // no-opping every `changed_since`-scoped rule — a fail-open lint bypass).
+        // Same decode the top-level `--changed` collector uses (M6).
+        out.insert(path_from_git_chunk(chunk));
     }
     Ok(Some(out))
 }
@@ -266,7 +267,11 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let raw = String::from_utf8(output.stdout).ok()?;
+    // Lossily decode a non-UTF-8 HEAD message instead of returning `None` (which
+    // silently no-ops `git_commit_message` — letting a non-UTF-8 commit message
+    // bypass conventional-subject / forbidden-pattern / length checks; the same
+    // fail-open the range-mode `parse_commit_log` was already hardened against, M6).
+    let raw = String::from_utf8_lossy(&output.stdout);
     // `git log --format=%B` appends a trailing newline that's not
     // part of the message body — trim once at the end so length
     // checks against the subject and body don't trip on it.
@@ -962,6 +967,36 @@ filename a.rs
             );
         }
         tmp
+    }
+
+    #[test]
+    fn head_commit_message_lossily_decodes_non_utf8() {
+        // A non-UTF-8 HEAD commit message must NOT make `head_commit_message`
+        // return `None` — that would silently no-op the `git_commit_message`
+        // rule, letting a non-UTF-8 message bypass subject/pattern/length checks
+        // (M6 fail-open, the sibling of the range-mode path already hardened).
+        let tmp = make_repo_with_commits(&[]);
+        let dir = tmp.path();
+        let msg = dir.join("MSG");
+        // Raw non-UTF-8 bytes (0xFF/0xFE are never valid UTF-8) in the subject.
+        std::fs::write(&msg, b"fix: \xff\xfe non-utf8 subject\n").unwrap();
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["commit", "--allow-empty", "-F"])
+            .arg(&msg)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "commit failed");
+        let got = head_commit_message(dir);
+        assert!(
+            got.is_some(),
+            "a non-UTF-8 HEAD message must decode lossily, not collapse to None"
+        );
+        assert!(
+            got.unwrap().contains("non-utf8 subject"),
+            "the (lossily-decoded) message body should survive"
+        );
     }
 
     #[test]
