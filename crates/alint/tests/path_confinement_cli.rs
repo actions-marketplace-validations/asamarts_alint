@@ -212,7 +212,10 @@ fn fixer_file_create_out_of_root_target_is_refused() {
     );
     // The human formatter wraps the skip reason across lines, so normalize
     // whitespace before matching the phrase.
-    let normalized = out_text(&out).split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = out_text(&out)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(
         normalized.contains("escapes the repo root"),
         "the refusal should say why; got:\n{}",
