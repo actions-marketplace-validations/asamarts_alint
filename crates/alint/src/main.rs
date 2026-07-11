@@ -568,7 +568,10 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
             accept_new,
         } => cmd_baseline(&path, output.as_deref(), accept_new, &cli),
         Command::Facts { path } => cmd_facts(&path, &cli),
-        Command::Init { path, monorepo } => cmd_init(&path, monorepo),
+        Command::Init { path, monorepo } => {
+            reject_non_human_format(&cli, "init")?;
+            cmd_init(&path, monorepo)
+        }
         Command::ExportAgentsMd {
             output,
             inline,
@@ -602,9 +605,26 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
             &cli,
         ),
         Command::ValidateConfig { path, format } => cmd_validate_config(path, &format, &cli),
-        Command::Lsp => cmd_lsp(),
+        Command::Lsp => {
+            reject_non_human_format(&cli, "lsp")?;
+            cmd_lsp()
+        }
         Command::Rules { command } => rules::run(&command, &cli),
     }
+}
+
+/// Fail loudly when a subcommand that produces no formatted report is given a
+/// non-default `--format` (M13 contract: never silently ignore the flag). Used
+/// by `init` and `lsp`, which — unlike `check`/`list`/`baseline`/… — take no
+/// `&cli` of their own.
+fn reject_non_human_format(cli: &Cli, cmd: &str) -> anyhow::Result<()> {
+    if cli.format != "human" {
+        anyhow::bail!(
+            "`{cmd}` does not support `--format {}` — it produces no formatted report; drop `--format`",
+            cli.format
+        );
+    }
+    Ok(())
 }
 
 /// Start the LSP server over stdio. Blocks (running its own async

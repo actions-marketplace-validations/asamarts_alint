@@ -404,3 +404,40 @@ rules:
     assert_eq!(rules[0]["kind"], "filename_case");
     assert_eq!(rules[0]["categories"][0], "naming");
 }
+
+// ─── M13 — `init` / `lsp` fail loud on an unsupported `--format` ─────
+//
+// The "never silently ignore `--format`" contract (M13) is applied to every
+// report-producing subcommand; `init` and `lsp` produce no formatted report and
+// used to silently no-op the global flag. They must reject a non-default
+// `--format` (exit 2) like their siblings, not run as if it were absent.
+#[test]
+fn init_and_lsp_reject_a_non_human_format() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let out = run(dir.path(), &["init", ".", "--format", "sarif"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "`init --format sarif` must fail loud, not silently ignore the flag"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("does not support"),
+        "the rejection should name the unsupported flag; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // `lsp` would otherwise block on stdio; the format check happens before it
+    // starts serving, so it returns immediately.
+    let out = Command::new(alint_bin())
+        .args(["lsp", "--format", "json"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn alint");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "`lsp --format json` must fail loud before serving"
+    );
+}

@@ -373,10 +373,18 @@ fn bundled_rulesets(root: &Path) -> Result<Vec<String>> {
     Ok(set.into_iter().collect())
 }
 
-/// Number of directly-declared rules in each bundled ruleset (its top-level
+/// Number of **directly-declared** rules in each bundled ruleset (its top-level
 /// `rules:` array length; 0 for a pure-`extends:` composition), keyed by the
 /// same extension-stripped id as `bundled_rulesets`. Sources per-ruleset count
 /// claims on alint.org (e.g. "oss-baseline (15 rules)") so they can't drift.
+///
+/// NOTE: this is the ruleset's OWN rule count, NOT the effective total a user
+/// gets after `extends:` resolution — a *composed* ruleset (e.g. `node` that
+/// extends `oss-baseline`) reports only its own rules here, so do not render it
+/// as "N rules a user gets". That extends-resolved total is what
+/// `example_rule_counts` / `bench_scenario_rule_counts` carry (via
+/// `alint_dsl::load(...).rules.len()`); these two count contracts deliberately
+/// measure different things.
 fn bundled_ruleset_sizes(root: &Path) -> Result<BTreeMap<String, usize>> {
     fn walk(base: &Path, dir: &Path, out: &mut BTreeMap<String, usize>) -> Result<()> {
         for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
@@ -585,6 +593,25 @@ mod tests {
             assert!(
                 f.rule_source_files.contains_key(alias),
                 "alias `{alias}` has no rule_source_files entry"
+            );
+        }
+
+        // `rule_aliases` (from the docs-driven categories bridge) must agree with
+        // the engine's ACTUAL alias->builder wiring: an alias and its canonical
+        // are registered with the same builder module, so `rule_source_files`
+        // (parsed straight from `register_builtin`) maps both to the same stem.
+        // This gates the alias map — which alint.org trusts as authoritative —
+        // against reality, so a bridge/registry divergence fails `gen-facts`
+        // rather than silently mis-resolving a page/source link.
+        for (alias, canonical) in &f.rule_aliases {
+            assert_eq!(
+                f.rule_source_files.get(alias),
+                f.rule_source_files.get(canonical),
+                "alias `{alias}` -> `{canonical}` in rule_aliases, but the registry builds them \
+                 from different source files ({:?} vs {:?}) — the alias map disagrees with \
+                 register_builtin",
+                f.rule_source_files.get(alias),
+                f.rule_source_files.get(canonical),
             );
         }
 

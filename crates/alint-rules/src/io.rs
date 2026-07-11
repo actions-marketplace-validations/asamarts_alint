@@ -155,11 +155,27 @@ pub fn over_cap(n: u64) -> String {
 /// `max` to exercise the over-cap violation path without
 /// materialising a >256 MiB fixture.
 pub(crate) fn read_capped_with(path: &Path, max: u64) -> Result<Vec<u8>, ReadCapError> {
+    use std::io::Read as _;
+    // Fast reject via a cheap stat, so the oversized bytes are never read for
+    // the common case.
     match std::fs::metadata(path) {
-        Ok(m) if m.len() > max => Err(ReadCapError::TooLarge(m.len())),
-        Ok(_) => std::fs::read(path).map_err(ReadCapError::Io),
-        Err(e) => Err(ReadCapError::Io(e)),
+        Ok(m) if m.len() > max => return Err(ReadCapError::TooLarge(m.len())),
+        Ok(_) => {}
+        Err(e) => return Err(ReadCapError::Io(e)),
     }
+    // But ALSO bound the actual read: a file that grows past `max` between the
+    // stat above and the read must not be slurped in full (TOCTOU / OOM — the
+    // M3-F2 class the walker's `read_bounded` already closes). `take(max + 1)`
+    // lets us distinguish "exactly at cap" from "over".
+    let file = std::fs::File::open(path).map_err(ReadCapError::Io)?;
+    let mut buf = Vec::new();
+    file.take(max.saturating_add(1))
+        .read_to_end(&mut buf)
+        .map_err(ReadCapError::Io)?;
+    if u64::try_from(buf.len()).is_ok_and(|n| n > max) {
+        return Err(ReadCapError::TooLarge(buf.len() as u64));
+    }
+    Ok(buf)
 }
 
 /// Whole-file read bounded by [`MAX_ANALYZE_BYTES`]. Used by the

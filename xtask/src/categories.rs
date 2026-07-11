@@ -258,6 +258,32 @@ fn render(kind_cats: &[KindCats], alias_to_canonical: &[(String, String)]) -> St
 mod tests {
     use super::*;
 
+    /// Three separate H3-title parsers split the alias annotation
+    /// (`categories.rs` `split_once("(alias:")`, `gen_model.rs` `split("(alias")`,
+    /// `docs_export.rs` paren-depth counting). They agree only on the exact
+    /// `(alias: `<name>`)` form; a divergent spelling (`(aliases:`, a missing
+    /// colon, a second alias) would make them disagree — e.g. turning an alias
+    /// name into a phantom canonical kind in one parser but not another. Pin the
+    /// format so that can't happen silently.
+    #[test]
+    fn every_h3_alias_annotation_uses_the_canonical_format() {
+        let root = crate::workspace_root().unwrap();
+        let md = std::fs::read_to_string(root.join("docs/rules.md")).unwrap();
+        let has_alias = regex::Regex::new(r"^### .*\(alias").unwrap();
+        let canonical = regex::Regex::new(r"^### `[a-z0-9_]+` \(alias: `[a-z0-9_]+`\)$").unwrap();
+        for line in md.lines() {
+            let line = line.trim_end();
+            if has_alias.is_match(line) {
+                assert!(
+                    canonical.is_match(line),
+                    "H3 alias annotation must be exactly \
+                     `### `<canonical>` (alias: `<alias>`)`, else the three title \
+                     parsers diverge; got: {line:?}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn parse_h3_title_splits_canonical_and_alias() {
         let (c, a) = parse_h3_title("`file_content_matches` (alias: `content_matches`)");

@@ -155,10 +155,12 @@ Rules:
 - Single-membership kinds carry a one-entry line (their current family). Introducing
   the line with only current families is behavior-neutral (Phase 1).
 - The norm is at most two categories per kind; a `gen-categories` gate caps membership
-  at three. Exactly two kinds use that cap: `file_is_ascii` (Content + Encoding +
-  Security) and `no_symlinks` (Unix metadata + Portable metadata + Security). The full
-  curated set lives in `docs/design/rule-categories-assignments.md` (78 kinds, 32
-  multi-category, 46 single).
+  at three (e.g. `file_is_ascii` = Content + Encoding + Security). The authoritative,
+  drift-gated membership is the generated in-crate bridge (`categories_gen.rs`, checked
+  by `gen-categories --check`) and `facts.json.rule_categories` — NOT the illustrative
+  counts in this design doc, which are a point-in-time snapshot and are not gated, so
+  treat the bridge as the source of truth. The full curated set is documented in
+  `docs/design/rule-categories-assignments.md`.
 
 Today six xtask files parse `rules.md` independently, so this design adds a small
 shared parse helper for the `**Categories:**` line (and, opportunistically, the H2/H3
