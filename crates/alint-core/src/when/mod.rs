@@ -566,6 +566,20 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn sibling_chains_do_not_accumulate_parse_depth() {
+        // Regression: the flat-chain depth bumps in `parse_or`/`parse_and` used
+        // to leak into sibling sub-expressions (never restored), so a list of N
+        // one-`and` items falsely tripped "nests too deeply" at ~64 items even
+        // though nothing is deeply nested. 200 shallow sibling chains must parse.
+        let items = vec!["facts.x == 1 and facts.x == 2"; 200].join(", ");
+        let src = format!("facts.x in [{items}]");
+        assert!(
+            parse(&src).is_ok(),
+            "sibling AND-chains must not accumulate depth across list items"
+        );
+    }
+
     // ─── env namespace ───────────────────────────────────────────
 
     fn check_env(src: &str, vars_env: &[(&str, &str)]) -> bool {

@@ -96,29 +96,36 @@ impl Parser {
 
     fn parse_or(&mut self) -> Result<WhenExpr, WhenError> {
         let mut left = self.parse_and()?;
+        // The chain bumps bound this flat `a or a or …` chain's LENGTH during
+        // parsing (each `bump_depth` checks `MAX_DEPTH`, so a >64-term chain
+        // still trips — this loop is iterative, so it doesn't re-enter
+        // `parse_expr` where the nesting guard lives; H5 flat-chain gap). But the
+        // accumulated depth must be RESTORED after the chain, or it leaks into
+        // sibling sub-expressions (a list of N one-`and` items would falsely trip
+        // "nests too deeply" at ~64 items though nothing is deeply nested).
+        let saved = self.depth;
         while matches!(self.peek(), Some(Tok::KwOr)) {
             self.advance();
-            // Each `or` deepens the left-nested AST by one. Bound the chain
-            // here (this loop is iterative, so it doesn't re-enter `parse_expr`
-            // where the depth guard lives): a long flat `a or a or …` chain
-            // would otherwise build a tree that abandons the stack on its
-            // recursive Drop / eval later (H5 flat-chain gap).
             self.bump_depth()?;
             let right = self.parse_and()?;
             left = WhenExpr::Or(Box::new(left), Box::new(right));
         }
+        self.depth = saved;
         Ok(left)
     }
 
     fn parse_and(&mut self) -> Result<WhenExpr, WhenError> {
         let mut left = self.parse_not()?;
+        // See `parse_or`: bound the flat `a and a and …` chain length, then
+        // restore so the bumps don't leak into sibling sub-expressions.
+        let saved = self.depth;
         while matches!(self.peek(), Some(Tok::KwAnd)) {
             self.advance();
-            // See `parse_or`: bound the flat `a and a and …` chain (H5).
             self.bump_depth()?;
             let right = self.parse_not()?;
             left = WhenExpr::And(Box::new(left), Box::new(right));
         }
+        self.depth = saved;
         Ok(left)
     }
 

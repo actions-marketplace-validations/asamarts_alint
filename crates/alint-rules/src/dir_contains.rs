@@ -107,9 +107,13 @@ impl Rule for DirContainsRule {
                     violations.push(
                         Violation::new(msg)
                             .with_path(dir.path.clone())
+                            // `slash()` (not `display()`) so the key matches the
+                            // fingerprint's forward-slash path normalization and a
+                            // baseline stays stable across Windows/Unix, like the
+                            // twin file_graph keys.
                             .with_baseline_key(format!(
                                 "dir_contains\0{}\0{glob}",
-                                dir.path.display()
+                                crate::slash(&dir.path)
                             )),
                     );
                 }

@@ -604,6 +604,13 @@ mod tests {
         // against reality, so a bridge/registry divergence fails `gen-facts`
         // rather than silently mis-resolving a page/source link.
         for (alias, canonical) in &f.rule_aliases {
+            // Guard against a vacuous None == None pass: the canonical must have
+            // a source-file entry (it's always registered), so the equality below
+            // is a real comparison, not both-absent.
+            assert!(
+                f.rule_source_files.contains_key(canonical),
+                "canonical `{canonical}` (target of alias `{alias}`) has no rule_source_files entry"
+            );
             assert_eq!(
                 f.rule_source_files.get(alias),
                 f.rule_source_files.get(canonical),
