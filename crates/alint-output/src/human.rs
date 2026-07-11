@@ -138,18 +138,21 @@ fn write_violation(
 
     let rule_style = style::RULE_ID;
     // First line: indent + sigil + level + rule_id + optional `fixable` tag.
+    // The rule id comes from the linted repo's own `.alint.yml`, so a hostile
+    // repo can hide terminal escapes in it (YAML `\x1b` decodes to a real ESC
+    // byte past the parser's raw-control-char check) — sanitize it like the
+    // message + path (M8).
+    let safe_rule_id = sanitize_terminal(&result.rule_id);
     if result.is_fixable {
         let fix = style::FIXABLE;
         writeln!(
             w,
-            "  {level_style}{sigil}  {level_name}{level_style:#}  {rule_style}{}{rule_style:#}   {fix}fixable{fix:#}",
-            result.rule_id,
+            "  {level_style}{sigil}  {level_name}{level_style:#}  {rule_style}{safe_rule_id}{rule_style:#}   {fix}fixable{fix:#}",
         )?;
     } else {
         writeln!(
             w,
-            "  {level_style}{sigil}  {level_name}{level_style:#}  {rule_style}{}{rule_style:#}",
-            result.rule_id,
+            "  {level_style}{sigil}  {level_name}{level_style:#}  {rule_style}{safe_rule_id}{rule_style:#}",
         )?;
     }
 
@@ -208,8 +211,13 @@ fn write_violation(
         } else {
             style::DOCS
         };
+        // The policy_url is also config-controlled; an embedded ESC/BEL would
+        // otherwise close the OSC-8 hyperlink sequence early and let the tail be
+        // interpreted as terminal control. Sanitize before emitting (target +
+        // visible text).
+        let safe_url = sanitize_terminal(url);
         write!(w, "{MSG_INDENT}{dim}docs:{dim:#} {docs}")?;
-        write_hyperlink(w, url, url, opts.hyperlinks)?;
+        write_hyperlink(w, &safe_url, &safe_url, opts.hyperlinks)?;
         writeln!(w, "{docs:#}")?;
     }
     Ok(())
@@ -367,10 +375,10 @@ fn write_human_compact(
             } else {
                 String::new()
             };
+            let safe_rule_id = sanitize_terminal(&result.rule_id);
             writeln!(
                 w,
-                "{path}:{line}:{col}: {level_style}{level_name}{level_style:#}: {rule_style}{}{rule_style:#}: {message}{fix_tag}",
-                result.rule_id,
+                "{path}:{line}:{col}: {level_style}{level_name}{level_style:#}: {rule_style}{safe_rule_id}{rule_style:#}: {message}{fix_tag}",
             )?;
         }
     }
@@ -443,10 +451,10 @@ pub fn write_fix_human(
             Level::Off => (style::DIM, "off"),
         };
         let rule_style = style::RULE_ID;
+        let safe_rule_id = sanitize_terminal(&rule.rule_id);
         writeln!(
             w,
-            "{level_style}{level_name}{level_style:#} {rule_style}[{}]{rule_style:#}:",
-            rule.rule_id
+            "{level_style}{level_name}{level_style:#} {rule_style}[{safe_rule_id}]{rule_style:#}:",
         )?;
         for item in &rule.items {
             let path_prefix = item
@@ -650,13 +658,15 @@ mod tests {
         use std::path::PathBuf;
         let v = Violation::new(format!("{RAW_CLEAR}forged: all rules passed."))
             .with_path(PathBuf::from(format!("src/{RAW_CLEAR}evil.rs")));
+        // The rule_id and policy_url are ALSO config-controlled (a hostile repo's
+        // own `.alint.yml`), so they must be sanitized too.
         Report {
             results: vec![RuleResult::new(
-                "demo".into(),
+                format!("{RAW_CLEAR}evil-rule").into(),
                 Level::Error,
-                None,
+                Some(format!("https://example.test/{RAW_CLEAR}x").into()),
                 vec![v],
-                false,
+                true,
             )],
         }
     }

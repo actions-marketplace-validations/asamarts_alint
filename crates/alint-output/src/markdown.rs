@@ -305,7 +305,28 @@ fn md_inline_code(s: &str) -> String {
 /// inside `(...)`. We percent-encode parens conservatively;
 /// browsers handle the rest.
 fn md_url(s: &str) -> String {
-    s.replace('(', "%28").replace(')', "%29")
+    // Percent-encode every char that can break out of a CommonMark inline-link
+    // destination `[text](DEST)`: parens, whitespace/newlines (a destination
+    // can't hold raw whitespace, so the tail would render as live markdown),
+    // angle brackets, and square brackets. The policy_url is config-controlled,
+    // so an unescaped one is an injection vector into a PR-comment surface.
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '(' => out.push_str("%28"),
+            ')' => out.push_str("%29"),
+            '[' => out.push_str("%5B"),
+            ']' => out.push_str("%5D"),
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            ' ' => out.push_str("%20"),
+            '\t' => out.push_str("%09"),
+            '\n' => out.push_str("%0A"),
+            '\r' => out.push_str("%0D"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -335,6 +356,21 @@ mod tests {
             notes: Vec::new(),
             is_fixable: false,
         }
+    }
+
+    #[test]
+    fn md_url_percent_encodes_link_breaking_chars() {
+        // A config-controlled `policy_url` must not break out of the CommonMark
+        // link destination `[text](DEST)` and inject live markdown into a PR
+        // comment. Every whitespace/bracket/angle char is percent-encoded.
+        let out = md_url("https://x/a b\nc)d]e<f[g>h");
+        for bad in [' ', '\n', '(', ')', '[', ']', '<', '>'] {
+            assert!(
+                !out.contains(bad),
+                "md_url left a raw {bad:?} that can break the link: {out}"
+            );
+        }
+        assert!(out.starts_with("https://x/a%20b%0Ac%29d%5De%3Cf%5Bg%3Eh"));
     }
 
     #[test]
