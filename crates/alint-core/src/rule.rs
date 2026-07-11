@@ -508,6 +508,12 @@ pub struct FixContext<'a> {
     /// `None` means no cap. Honored by the `read_for_fix` helper
     /// (and any custom fixer that opts in).
     pub fix_size_limit: Option<u64>,
+    /// The owning rule's resolved `allow_out_of_root:` permission (top-level
+    /// policy only — an `extends:`'d rule is always `false`). Fixers that
+    /// resolve a config-declared path (`file_create.path`, `content_from`)
+    /// MUST confine it to the repo root unless this is `true`, so an untrusted
+    /// ruleset can't make `alint fix` write or read outside the tree.
+    pub allow_out_of_root: bool,
 }
 
 /// The result of applying (or simulating) one fix against one violation.
@@ -783,6 +789,7 @@ mod tests {
             root: dir.path(),
             dry_run: false,
             fix_size_limit: None,
+            allow_out_of_root: false,
         };
         let outcome = check_fix_size(&f, Path::new("a.txt"), &ctx).unwrap();
         assert!(outcome.is_none());
@@ -797,6 +804,7 @@ mod tests {
             root: dir.path(),
             dry_run: false,
             fix_size_limit: Some(64),
+            allow_out_of_root: false,
         };
         let outcome = check_fix_size(&f, Path::new("big.txt"), &ctx).unwrap();
         match outcome {
@@ -817,6 +825,7 @@ mod tests {
             root: dir.path(),
             dry_run: false,
             fix_size_limit: Some(1 << 20),
+            allow_out_of_root: false,
         };
         match read_for_fix(&f, Path::new("a.txt"), &ctx).unwrap() {
             ReadForFix::Bytes(b) => assert_eq!(b, b"hello"),
@@ -833,6 +842,7 @@ mod tests {
             root: dir.path(),
             dry_run: false,
             fix_size_limit: Some(64),
+            allow_out_of_root: false,
         };
         match read_for_fix(&f, Path::new("big.txt"), &ctx).unwrap() {
             ReadForFix::Skipped(FixOutcome::Skipped(_)) => {}

@@ -1930,8 +1930,11 @@ fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
         // the user's own config only — never from `extends:`). A rule
         // not opted in stays confined (the setter is a no-op for every
         // kind that doesn't honor the flag).
-        rule.set_allow_out_of_root(config.allow_out_of_root.allows(&spec.id, &spec.kind));
-        let mut entry = alint_core::RuleEntry::new(rule).with_kind(spec.kind.clone());
+        let allow_out_of_root = config.allow_out_of_root.allows(&spec.id, &spec.kind);
+        rule.set_allow_out_of_root(allow_out_of_root);
+        let mut entry = alint_core::RuleEntry::new(rule)
+            .with_kind(spec.kind.clone())
+            .with_allow_out_of_root(allow_out_of_root);
         if let Some(when_src) = &spec.when {
             let expr = alint_core::when::parse(when_src)
                 .with_context(|| format!("rule {:?}: parsing `when`", spec.id))?;

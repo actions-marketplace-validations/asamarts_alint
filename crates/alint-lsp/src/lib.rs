@@ -586,8 +586,9 @@ fn build_session(root: &Path) -> Result<Option<Session>, String> {
         // Apply the top-level `allow_out_of_root:` policy (top-level
         // config only; never via `extends:`). No-op for kinds that
         // don't honor the flag.
-        rule.set_allow_out_of_root(config.allow_out_of_root.allows(&spec.id, &spec.kind));
-        let mut entry = RuleEntry::new(rule);
+        let allow_out_of_root = config.allow_out_of_root.allows(&spec.id, &spec.kind);
+        rule.set_allow_out_of_root(allow_out_of_root);
+        let mut entry = RuleEntry::new(rule).with_allow_out_of_root(allow_out_of_root);
         if let Some(when_src) = &spec.when {
             let expr = alint_core::when::parse(when_src)
                 .map_err(|e| format!("rule {:?}: parsing `when`: {e}", spec.id))?;

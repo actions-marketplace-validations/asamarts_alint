@@ -49,14 +49,21 @@ impl Fixer for FileCreateFixer {
     }
 
     fn apply(&self, _violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome> {
-        let abs = ctx.root.join(&self.path);
+        // Confine the config-declared write target to the repo root (honoring
+        // the owning rule's `allow_out_of_root`), so a `file_create.path` like
+        // `../../x` from an untrusted `extends:`'d ruleset can't write outside
+        // the tree on `alint fix`. Refuse (skip loudly) when it escapes.
+        let abs = match confine_fix_path(&self.path, ctx.root, ctx.allow_out_of_root) {
+            Ok(p) => p,
+            Err(reason) => return Ok(FixOutcome::Skipped(reason)),
+        };
         if abs.exists() {
             return Ok(FixOutcome::Skipped(format!(
                 "{} already exists",
                 self.path.display()
             )));
         }
-        let content = match resolve_source_bytes(&self.source, ctx.root) {
+        let content = match resolve_source_bytes(&self.source, ctx.root, ctx.allow_out_of_root) {
             Ok(bytes) => bytes,
             Err(skip_msg) => return Ok(FixOutcome::Skipped(skip_msg)),
         };
@@ -85,13 +92,35 @@ impl Fixer for FileCreateFixer {
     }
 
     fn fix_edit(&self, _violation: &Violation, _bytes: &[u8], root: &Path) -> Option<FixEdit> {
-        // The target is set at build time, not taken from the violation.
-        // Content is resolved (reading a declared template is allowed).
-        let content = resolve_source_bytes(&self.source, root).ok()?;
+        // The target is set at build time, not taken from the violation. The
+        // editor (LSP) fix path doesn't thread `allow_out_of_root`, so confine
+        // strictly (deny escape): an editor code-action must never create a
+        // file — or read a template — outside the repo root.
+        confine_fix_path(&self.path, root, false).ok()?;
+        let content = resolve_source_bytes(&self.source, root, false).ok()?;
         Some(FixEdit::CreateFile {
             path: self.path.clone(),
             content,
         })
+    }
+}
+
+/// Confine a config-declared fixer path (a `file_create.path` write target or a
+/// `content_from` read source) to the repo root, honoring the owning rule's
+/// `allow_out_of_root`. Returns the joinable absolute path, or `Err(reason)`
+/// when it escapes and isn't permitted — the write/read is then refused. This is
+/// the fixer-side counterpart of the read rules' `confine_read` gate; without it
+/// an untrusted `extends:`'d ruleset's fixer could write or exfiltrate
+/// out-of-tree on `alint fix`.
+fn confine_fix_path(rel: &Path, root: &Path, allow: bool) -> std::result::Result<PathBuf, String> {
+    match crate::pathsafe::confine_read(rel, root, allow) {
+        crate::pathsafe::Confined::In(p) | crate::pathsafe::Confined::AllowedEscape(p) => {
+            Ok(root.join(p))
+        }
+        crate::pathsafe::Confined::Denied => Err(format!(
+            "{} escapes the repo root (set a top-level `allow_out_of_root` to permit)",
+            rel.display()
+        )),
     }
 }
 
@@ -104,11 +133,15 @@ impl Fixer for FileCreateFixer {
 fn resolve_source_bytes(
     source: &ContentSourceSpec,
     ctx_root: &std::path::Path,
+    allow_out_of_root: bool,
 ) -> std::result::Result<Vec<u8>, String> {
     match source {
         ContentSourceSpec::Inline(s) => Ok(s.as_bytes().to_vec()),
         ContentSourceSpec::File(rel) => {
-            let abs = ctx_root.join(rel);
+            // Confine the `content_from` read the same way rule reads are
+            // confined, so an untrusted ruleset can't exfiltrate an out-of-tree
+            // secret (`content_from: ../../secret`) into an in-repo file.
+            let abs = confine_fix_path(rel, ctx_root, allow_out_of_root)?;
             std::fs::read(&abs)
                 .map_err(|e| format!("content_from `{}` could not be read: {e}", rel.display()))
         }
@@ -156,7 +189,7 @@ impl Fixer for FilePrependFixer {
             ));
         };
         let abs = ctx.root.join(path);
-        let prepend = match resolve_source_bytes(&self.source, ctx.root) {
+        let prepend = match resolve_source_bytes(&self.source, ctx.root, ctx.allow_out_of_root) {
             Ok(b) => b,
             Err(skip_msg) => return Ok(FixOutcome::Skipped(skip_msg)),
         };
@@ -208,7 +241,7 @@ impl Fixer for FilePrependFixer {
 
     fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
         let path = violation.path.as_deref()?;
-        let prepend = resolve_source_bytes(&self.source, root).ok()?;
+        let prepend = resolve_source_bytes(&self.source, root, false).ok()?;
         // Idempotency guard (L4): already-present content is not re-prepended.
         let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
         if body.starts_with(prepend.as_slice()) {
@@ -268,7 +301,7 @@ impl Fixer for FileAppendFixer {
             ));
         };
         let abs = ctx.root.join(path);
-        let payload = match resolve_source_bytes(&self.source, ctx.root) {
+        let payload = match resolve_source_bytes(&self.source, ctx.root, ctx.allow_out_of_root) {
             Ok(b) => b,
             Err(skip_msg) => return Ok(FixOutcome::Skipped(skip_msg)),
         };
@@ -311,7 +344,7 @@ impl Fixer for FileAppendFixer {
 
     fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
         let path = violation.path.as_deref()?;
-        let payload = resolve_source_bytes(&self.source, root).ok()?;
+        let payload = resolve_source_bytes(&self.source, root, false).ok()?;
         // Idempotency guard (L4): already-present content is not re-appended.
         if bytes.ends_with(payload.as_slice()) {
             return None;
@@ -335,6 +368,7 @@ mod tests {
             root: tmp.path(),
             dry_run,
             fix_size_limit: None,
+            allow_out_of_root: false,
         }
     }
 

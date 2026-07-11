@@ -405,6 +405,7 @@ mod tests {
             root: tmp.path(),
             dry_run,
             fix_size_limit: None,
+            allow_out_of_root: false,
         }
     }
 
@@ -440,6 +441,7 @@ mod tests {
             root: tmp.path(),
             dry_run: false,
             fix_size_limit: Some(100),
+            allow_out_of_root: false,
         };
         let outcome = FileTrimTrailingWhitespaceFixer
             .apply(

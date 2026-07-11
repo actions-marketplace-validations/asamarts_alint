@@ -80,6 +80,11 @@ pub struct RuleEntry {
     /// categories" (the rule is silently dropped), so any config-loading path
     /// that wants `--category` to work MUST set this via [`RuleEntry::with_kind`].
     pub kind: String,
+    /// The rule's resolved top-level `allow_out_of_root:` permission, threaded
+    /// into the fixer's [`FixContext`] so a config-declared fix path can escape
+    /// the root only when the user's own config opted this rule in. Defaults to
+    /// `false` (confined) — the safe default for `Engine::new` / nested rules.
+    pub allow_out_of_root: bool,
 }
 
 impl RuleEntry {
@@ -88,7 +93,16 @@ impl RuleEntry {
             rule,
             when: None,
             kind: String::new(),
+            allow_out_of_root: false,
         }
+    }
+
+    /// Record the rule's resolved `allow_out_of_root:` permission (see
+    /// [`RuleEntry::allow_out_of_root`]).
+    #[must_use]
+    pub fn with_allow_out_of_root(mut self, allow: bool) -> Self {
+        self.allow_out_of_root = allow;
+        self
     }
 
     #[must_use]
@@ -810,10 +824,13 @@ impl Engine {
             iter: None,
             env: None,
         };
-        let fix_ctx = FixContext {
+        let mut fix_ctx = FixContext {
             root,
             dry_run,
             fix_size_limit: self.fix_size_limit,
+            // Set per-entry inside the loop below, so each fixer confines its
+            // config-declared paths against the OWNING rule's permission.
+            allow_out_of_root: false,
         };
 
         // Same `scope_filter.changed_since:` resolution as `run`, so a
@@ -857,6 +874,7 @@ impl Engine {
                 continue;
             }
             let fixer = entry.rule.fixer();
+            fix_ctx.allow_out_of_root = entry.allow_out_of_root;
             let items: Vec<FixItem> = violations
                 .into_iter()
                 .map(|v| {

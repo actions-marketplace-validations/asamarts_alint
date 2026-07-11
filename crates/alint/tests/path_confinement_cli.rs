@@ -174,3 +174,102 @@ fn m2_local_extends_through_in_tree_symlink_is_rejected() {
         out_text(&out)
     );
 }
+
+// ─── FIXER confinement — a config-declared fix path can't escape the root ─────
+//
+// The post-v0.13 audit confined every rule *read* against an untrusted
+// `extends:`'d ruleset, but the *fixer* write/read paths were left unguarded:
+// `alint fix` on a `file_create` whose `path:` (or `content_from:`) is `../…`
+// wrote/read outside the repo root. These lock that down: the escape is refused
+// unless the user's own top-level config opts in with `allow_out_of_root`.
+
+/// A `file_create` whose target escapes the root must NOT be written on
+/// `alint fix` (no top-level `allow_out_of_root`) — the fix is skipped and the
+/// out-of-root file never appears.
+#[test]
+fn fixer_file_create_out_of_root_target_is_refused() {
+    let base = tempfile::Builder::new()
+        .prefix("alint-fixesc-")
+        .tempdir()
+        .unwrap();
+    let repo = base.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join(".alint.yml"),
+        "version: 1\nrules:\n  - id: seed\n    kind: file_exists\n    level: error\n    \
+         paths: [\"../PWNED.txt\"]\n    fix:\n      file_create:\n        \
+         path: \"../PWNED.txt\"\n        content: \"pwned\\n\"\n",
+    )
+    .unwrap();
+
+    let out = run(&repo, &["fix", "."]);
+    let pwned = base.path().join("PWNED.txt");
+    assert!(
+        !pwned.exists(),
+        "fixer wrote OUTSIDE the repo root — confinement escape: {}\n{}",
+        pwned.display(),
+        out_text(&out)
+    );
+    // The human formatter wraps the skip reason across lines, so normalize
+    // whitespace before matching the phrase.
+    let normalized = out_text(&out).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        normalized.contains("escapes the repo root"),
+        "the refusal should say why; got:\n{}",
+        out_text(&out)
+    );
+}
+
+/// The escape hatch works: with a top-level `allow_out_of_root: true`, the same
+/// `file_create` IS permitted to write out of the root (the intended opt-in).
+#[test]
+fn fixer_file_create_out_of_root_allowed_with_top_level_opt_in() {
+    let base = tempfile::Builder::new()
+        .prefix("alint-fixok-")
+        .tempdir()
+        .unwrap();
+    let repo = base.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(
+        repo.join(".alint.yml"),
+        "version: 1\nallow_out_of_root: true\nrules:\n  - id: seed\n    kind: file_exists\n    \
+         level: error\n    paths: [\"../ALLOWED.txt\"]\n    fix:\n      file_create:\n        \
+         path: \"../ALLOWED.txt\"\n        content: \"ok\\n\"\n",
+    )
+    .unwrap();
+
+    run(&repo, &["fix", "."]);
+    let allowed = base.path().join("ALLOWED.txt");
+    assert!(
+        allowed.exists(),
+        "top-level allow_out_of_root must permit the out-of-root create (escape hatch)"
+    );
+}
+
+/// `content_from` pointing out of the root must NOT read an out-of-tree secret
+/// into an in-repo file (exfiltration) without the opt-in.
+#[test]
+fn fixer_content_from_out_of_root_is_refused() {
+    let base = tempfile::Builder::new()
+        .prefix("alint-exfil-")
+        .tempdir()
+        .unwrap();
+    let repo = base.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(base.path().join("secret.txt"), "TOPSECRET\n").unwrap();
+    std::fs::write(
+        repo.join(".alint.yml"),
+        "version: 1\nrules:\n  - id: exfil\n    kind: file_exists\n    level: error\n    \
+         paths: [\"stolen.txt\"]\n    fix:\n      file_create:\n        \
+         path: \"stolen.txt\"\n        content_from: \"../secret.txt\"\n",
+    )
+    .unwrap();
+
+    run(&repo, &["fix", "."]);
+    let stolen = repo.join("stolen.txt");
+    let leaked = std::fs::read_to_string(&stolen).unwrap_or_default();
+    assert!(
+        !leaked.contains("TOPSECRET"),
+        "content_from exfiltrated an out-of-root secret into the repo: {leaked:?}"
+    );
+}
