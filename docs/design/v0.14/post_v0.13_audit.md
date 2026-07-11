@@ -78,6 +78,7 @@ remediation had left open — recorded in **Phase 8** below.
 | 6 | Docs + LOW cleanup + dogfooding (alint) | D1–D12, L1–L14 | `[x]` (all done; L2 Unicode fold landed + ASCII-scope residual accepted WON'T-FIX; D11 CHANGELOG backfill + separator normalize done) |
 | 7 | alint.org drift | W1–W7 | `[x]` (W1–W5,W7 done on the site branch; W6 partial) |
 | 8 | Full-cycle adversarial re-review (2026-07-11) | R1–R10 | `[x]` (all done + CI-green; R1 CRITICAL fixer confinement, R2/R3 HIGH, R4 MEDIUM, R5–R10 LOW) |
+| 9 | Second full-cycle re-review (2026-07-11) | R11–R16 | `[x]` (R11 Med-High terminal injection, R12 Med non-UTF-8 fail-open, R13–R16 LOW; two more are incompleteness of prior fixes M8/M6) |
 
 Phases land security-first. Each is one atomic commit (or a small group)
 with a forward `Next: Phase N` pointer, per the phased-rollout
@@ -854,6 +855,53 @@ collision) were *left open by this audit's own remediation* — R1 hardened read
 but not writes; R2's Phase-B unification undid M10's fix. The value of an
 independent, adversarial pass over the remediation itself, with a repro before
 every claim.
+
+---
+
+## Phase 9 — Second full-cycle re-review (2026-07-11)
+
+A second independent adversarial pass, focused on **the Phase-8 remediation
+itself** (newest, least-reviewed code) plus subsystems round 1 under-covered
+(the `extends:`/nested loader, the `when:` engine, LSP, git modes) and the
+non-GitLab output formats. Battery re-run green (1997 tests). Six findings, each
+reproduced then fixed with a test (`cce4bdc6`, `3e0aca2c`, `c21a5f92`).
+
+- `[x]` **R11 — human formatter injects terminal escapes via `rule_id` +
+  `policy_url` (Medium-High).** The M8 sanitizer covered `message`+`path` but not
+  these two equally config-controlled fields. Raw control bytes are blocked by
+  the YAML parser, but a YAML `\x1b` escape decodes to a real ESC byte past it,
+  so a hostile repo made `alint check --color always` emit a clear-screen /
+  OSC-8 breakout. **Fix:** route both (and the fix-report / compact rule ids)
+  through `sanitize_terminal`. Reproduced empirically. (Sibling of R1/R2: another
+  incompleteness of a prior audit fix, M8.)
+- `[x]` **R12 — M6 non-UTF-8 fix reached only 2 of 4 sibling git paths
+  (Medium, fail-open).** `diff_name_only` (per-rule `changed_since`) and
+  `head_commit_message` (single-HEAD `git_commit_message`) still collapsed to
+  empty/`None` on a non-UTF-8 path/message -> the rule silently no-ops, a lint
+  bypass a contributor triggers with a non-UTF-8 filename or commit message.
+  **Fix:** `path_from_git_chunk` / `from_utf8_lossy`, matching the hardened
+  siblings.
+- `[x]` **R13 — `dir_contains` baseline_key used `display()` not `slash()`
+  (Low).** A cross-OS baseline-churn regression introduced in R3's own fix (the
+  twin file_graph key used `slash()`). Now slash-normalized.
+- `[x]` **R14 — `when:` parser depth-counter leak (Low).** The flat-chain bumps
+  in `parse_or`/`parse_and` were never restored, so a list of N one-`and` items
+  falsely tripped "nests too deeply." **Fix:** restore depth after the chain
+  (length bound preserved).
+- `[x]` **R15 — markdown `policy_url` under-escaped (Low).** `md_url` percent-
+  encodes all CommonMark-link-breaking chars now (not just parens).
+- `[x]` **R16 — facts `rule_aliases` assert could pass vacuously** if both entries
+  were absent; now asserts the canonical exists (test-only hardening).
+
+**Verified solid this pass (no defect):** all 10 Phase-8 fixes (9/10 fully
+correct+complete; only R13's slash), the `extends:`/loader/cache/SRI/fetcher
+(SSRF, depth, cycles, pin re-verification), the `when:` evaluator, the LSP fix
+confinement (R1's fix confirmed complete there + the nested-fixer non-issue),
+`export-agents-md`/`init`, git arg-injection, and **every machine-readable output
+format** (SARIF positional baseline mapping, JUnit/JSON/GitHub/agent escaping,
+non-UTF-8, determinism). Reinforces the Phase-8 lesson: R11 and R12 are again
+incompleteness of prior audit fixes (M8, M6) — an independent adversarial pass
+over the remediation keeps finding the gaps the fix authors' own tests missed.
 
 ---
 
