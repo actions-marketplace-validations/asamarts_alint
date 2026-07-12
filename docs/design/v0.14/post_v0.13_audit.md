@@ -953,6 +953,98 @@ crash/hang/DoS classes.
 
 ---
 
+## Phase 11 — Whole-repo re-review: pre-v0.13 core + DSL loader + rule fixers (2026-07-11)
+
+The prior three passes scoped to the `v0.13.0..HEAD` delta. This pass **widened
+to the entire repo and all functionality** — the DSL config loader, the security
+rules' decode path, the byte-fixers, and the direct-read I/O helpers, most of
+which predate v0.13 — with the same empirical-execution discipline (crafted
+FIFOs, a 60k-deep flow-YAML bomb, a `0xFF`-poisoned file). Five confirmed
+findings fixed with regression tests; one prior "asymmetry" reclassified as
+benign; the end-to-end sweep (all 12 subcommands, all 8 formats, adversarial
+inputs) otherwise found the code robust.
+
+- `[x]` **W1 — an `extends:`'d ruleset lifts read-confinement before the
+  rejection fires (Medium-High, trust bypass / hang / info-leak).** The
+  loader derived the `extends:` path-confinement from
+  `allow_out_of_root: All` **at every level**, but `reject_allow_out_of_root_in`
+  only rejects a sub-config's flag *after* that sub-config has already resolved
+  its own `extends:`. So an extended ruleset could set the flag and read an
+  out-of-root target — a FIFO (hang), a huge file (slurp), or probe host paths
+  as an existence oracle — before the reject could fire. **Fix:** thread an
+  `is_top` bit through `load_recursive`; only the user's top-level config may
+  open the gate (`crates/alint-dsl/src/loader.rs`). Regression:
+  `extended_config_allow_out_of_root_does_not_lift_confinement_before_reject`
+  (out-of-root target is invalid YAML; the error proves the read was blocked
+  *before* parse). Same "guard fires one level too late" shape as R19.
+- `[x]` **W2 — YAML flow-nesting DoS in config/`extends:` and `yaml_path_*`
+  (High, algorithmic-complexity DoS).** `serde_yaml_ng`/libyaml has no nesting
+  limit and is super-linear on deeply-nested flow collections (`[[[…]]]`): a
+  ~40 KB `[`×20000 document already takes seconds; deeper hangs. Reachable both
+  from a crafted config/ruleset and from a `yaml_path_*` rule over repo content
+  (JSON/TOML/XML all already carried limits — YAML was the one gap). **Fix:** a
+  shared cheap pre-parse scanner `alint_core::yaml_depth::flow_depth_within_limit`
+  (`MAX_YAML_FLOW_DEPTH = 1024`), wired into both the config loader
+  (`parse_config_interpolated`) and the structured-query YAML arm
+  (`structured_path.rs`). It counts only genuine flow opens — a `[` inside a
+  plain or quoted scalar (`key: a[b`) is not a nesting level — so it never
+  false-rejects ordinary YAML. Empirically reproduced (timeout).
+- `[x]` **W3 — `no_bidi_controls` / `no_zero_width_chars` fail open on a
+  non-UTF-8 byte (Medium, security-defense evasion).** Both rules did
+  `str::from_utf8(bytes) else return Ok(empty)`, so appending a single stray
+  `0xFF` anywhere in a file suppressed detection of *every* bidi override / ZW
+  char — a one-byte bypass of a CVE-2021-42574 (Trojan-Source) defense. **Fix:**
+  `String::from_utf8_lossy` in both `evaluate_file`s; `U+FFFD` replaces only the
+  invalid bytes, controls in the valid runs still fire. Regressions:
+  `invalid_utf8_byte_does_not_suppress_a_later_{bidi_control,zero_width_char}`.
+  (The recurring fail-open-on-decode pattern, now closed on the two security
+  rules that most needed fail-*safe*.)
+- `[x]` **W4 — `filename_case` Lower/Upper fixer is non-convergent on non-ASCII
+  names (Low-Medium, `--fix` never settles).** The `check` predicate is
+  Unicode-aware (`char::is_lowercase`) but `convert` case-folded ASCII-only, so
+  `RÉSUMÉ.md` "fixed" to `rÉsumÉ.md` (the É untouched), failed the check again,
+  and re-fired every run. **Fix:** `convert` uses Unicode `to_lowercase`/
+  `to_uppercase` for the `Lower`/`Upper` conventions (`case.rs`). Regression:
+  `lower_upper_convert_converges_on_non_ascii_names` (asserts the output is a
+  fixed point of `check` and idempotent).
+- `[x]` **W5 — the direct-read I/O helpers bypass the walker's special-file
+  guard (Medium, hang DoS — companion to R18).** R18 taught the *walker* to skip
+  FIFOs, but `read_prefix_n` / `read_suffix_n` / `read_capped_with` — reached by
+  shebang/prefix/suffix/structured rules on a config- or content-derived path —
+  still `File::open`'d directly, so a planted in-tree named pipe (or a symlink to
+  one) would block the run `O_RDONLY`. **Fix:** an `open_regular` helper that
+  stats `is_file()` before opening, mirroring `result_to_entry` (`io.rs`).
+  Regressions: `direct_read_helpers_reject_a_non_regular_file` and a
+  timeout-guarded `direct_read_of_a_fifo_is_rejected_not_hung`.
+- `[-]` **Reclassified (not a bug): BOM-fixer `apply`/`fix_edit` "asymmetry."**
+  `apply` carries a `looks_binary` guard the editor-side `fix_edit` lacked — but
+  the guard is **inert** for a real BOM: `content_inspector` classifies *any*
+  BOM-prefixed content as a text-with-BOM type, never binary, so `looks_binary`
+  is always false whenever `detect_bom` is `Some`. The two paths could not
+  actually diverge. Added the guard to `fix_edit` anyway for **symmetry +
+  defense-in-depth** (should `content_inspector` ever change), with a test
+  (`bom_fix_edit_binary_guard_mirrors_apply`) that pins the inert-guard
+  invariant so a behavior change surfaces loudly.
+- `[-]` **Accepted lows (not fixed):** a second-writer `merge`/`export-agents`
+  can clobber a concurrently-edited output (single-user CLI; no locking by
+  design); `validate-config` shadows a genuine parse error behind a generic
+  message in one branch (cosmetic); `init` into a non-existent parent dir errors
+  a step later than ideal (clean error, just not the friendliest). Recorded;
+  none is a safety or correctness defect.
+
+**Verified genuinely solid this pass:** all 12 subcommands survive adversarial
+input without panic; all 8 output formats emit valid output; deeply-nested
+JSON/TOML are bounded by their existing recursion limits; symlink loops,
+2000-deep trees, and 5000-rule configs are handled; binary / non-UTF-8 files
+pass through the text/encoding rules with the fix path preserving bytes exactly;
+10 MB single lines, 2 M matches, and 500k-key recursive JSONPath complete; cyclic
+`extends:` is detected. The whole-repo widening confirmed the delta passes had
+already hardened the new surface — the residual risk lived in **older** code
+(the DSL loader's confinement timing, the pre-v0.13 YAML parse path, the
+security rules' decode) that the delta-scoped passes never looked at.
+
+---
+
 ## Themes / root causes
 
 1. **Spawn gate enumerates at one pre-expansion choke point.** *Four*
