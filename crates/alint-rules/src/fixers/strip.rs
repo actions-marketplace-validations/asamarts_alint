@@ -129,6 +129,12 @@ impl Fixer for FileStripBomFixer {
 
     fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
         let path = violation.path.as_deref()?;
+        // Mirror `apply`'s binary guard so the editor (LSP) fix path and the disk
+        // path behave identically: don't strip a "BOM" prefix from a file that's
+        // actually binary (a leading `EF BB BF` may be data, not an encoding mark).
+        if looks_binary(bytes) {
+            return None;
+        }
         let bom = crate::no_bom::detect_bom(bytes)?;
         Some(FixEdit::SetContent {
             path: path.to_path_buf(),
@@ -334,5 +340,31 @@ mod tests {
                 .fix_edit(&v(), b"no bom", std::path::Path::new("/r"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn bom_fix_edit_binary_guard_mirrors_apply() {
+        // The editor-side `fix_edit` now carries the same `looks_binary` guard
+        // as `apply`, so the two fix paths can't diverge on a binary file. In
+        // practice the guard is INERT for a real BOM: `content_inspector`
+        // classifies any BOM-prefixed content as a text-with-BOM type (never
+        // binary), so `looks_binary` is false whenever `detect_bom` is Some —
+        // this test pins that invariant. Should content_inspector ever start
+        // classifying a BOM+binary payload as binary, this assert flips and
+        // signals that both fix paths must be re-examined together.
+        let mut bytes = vec![0xEF, 0xBB, 0xBF]; // UTF-8 BOM
+        bytes.extend_from_slice(&[0x00, 0x01, 0x02, 0x00, 0xFF, 0x00, 0x03]);
+        assert!(
+            !looks_binary(&bytes),
+            "a BOM-prefixed payload is classified as text-with-BOM, so the guard is inert"
+        );
+        // With the guard inert, fix_edit strips the BOM exactly as apply would.
+        let edit = FileStripBomFixer
+            .fix_edit(&v(), &bytes, std::path::Path::new("/r"))
+            .expect("a detectable BOM yields an edit");
+        let FixEdit::SetContent { content, .. } = edit else {
+            panic!("expected SetContent");
+        };
+        assert_eq!(content, &bytes[3..], "strips only the 3 BOM bytes");
     }
 }

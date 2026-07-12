@@ -6,6 +6,31 @@ use std::path::Path;
 /// How much of a file to sample when classifying text vs. binary.
 pub const TEXT_INSPECT_LEN: usize = 8 * 1024;
 
+/// The `InvalidInput` error a direct-read helper returns for a non-regular
+/// file, so the message is uniform across the three read helpers.
+fn not_regular_file(path: &Path) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("{} is not a regular file", path.display()),
+    )
+}
+
+/// Open `path` for reading, first refusing a non-regular file (FIFO / socket /
+/// device). Opening a FIFO `O_RDONLY` blocks until a writer appears, so a
+/// direct read of a planted in-tree named pipe (reachable via a config-declared
+/// path or a symlink the walker followed) would hang the whole run. The walker
+/// skips these at index time (`result_to_entry`); the direct-read helpers that
+/// bypass the walker must apply the same guard. The `metadata` stat follows
+/// symlinks, so a symlink-to-FIFO is rejected too. (A vanishingly small TOCTOU
+/// window remains between the stat and the open — the real threat is a
+/// committed / planted special file, which the stat catches.)
+fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
+    if !std::fs::metadata(path)?.is_file() {
+        return Err(not_regular_file(path));
+    }
+    std::fs::File::open(path)
+}
+
 /// Read up to `TEXT_INSPECT_LEN` bytes from the start of a file. Returned
 /// `Ok(None)` means the file was empty; `Err` is propagated I/O error.
 pub fn read_prefix(path: &Path) -> std::io::Result<Vec<u8>> {
@@ -18,7 +43,7 @@ pub fn read_prefix(path: &Path) -> std::io::Result<Vec<u8>> {
 /// Reads less than `n` if the file is shorter; returns the actual byte
 /// count in the returned `Vec`'s length.
 pub fn read_prefix_n(path: &Path, n: usize) -> std::io::Result<Vec<u8>> {
-    let mut file = std::fs::File::open(path)?;
+    let mut file = open_regular(path)?;
     let mut buf = vec![0u8; n];
     let read = file.read(&mut buf)?;
     buf.truncate(read);
@@ -31,7 +56,7 @@ pub fn read_prefix_n(path: &Path, n: usize) -> std::io::Result<Vec<u8>> {
 /// length; fewer than `n` bytes if the file is shorter. Files smaller
 /// than `n` are read whole.
 pub fn read_suffix_n(path: &Path, n: usize) -> std::io::Result<Vec<u8>> {
-    let mut file = std::fs::File::open(path)?;
+    let mut file = open_regular(path)?;
     let len = file.seek(SeekFrom::End(0))?;
     // 32-bit platforms: `usize::MAX < u64::MAX`, so a > 4 GiB
     // file would truncate. `try_from` falls back to reading the
@@ -159,6 +184,14 @@ pub(crate) fn read_capped_with(path: &Path, max: u64) -> Result<Vec<u8>, ReadCap
     // Fast reject via a cheap stat, so the oversized bytes are never read for
     // the common case.
     match std::fs::metadata(path) {
+        // Refuse a non-regular file (FIFO/socket/device). Opening a FIFO
+        // `O_RDONLY` blocks until a writer appears, so a direct read of a
+        // planted in-tree named pipe (reachable via a config-declared path or
+        // a symlink the walker followed) would hang the run. The walker skips
+        // these at index time; the direct-read helpers must too.
+        Ok(m) if !m.is_file() => {
+            return Err(ReadCapError::Io(not_regular_file(path)));
+        }
         Ok(m) if m.len() > max => return Err(ReadCapError::TooLarge(m.len())),
         Ok(_) => {}
         Err(e) => return Err(ReadCapError::Io(e)),
@@ -277,5 +310,31 @@ mod tests {
         );
         assert_eq!(std::fs::read(&target).unwrap(), b"new", "target updated");
         assert_eq!(std::fs::read(&link).unwrap(), b"new", "reads through link");
+    }
+
+    #[test]
+    fn direct_read_helpers_reject_a_non_regular_file() {
+        // Regression (W5): the direct-read helpers bypass the walker (which skips
+        // special files at index time). The `is_file()` guard in `open_regular` /
+        // `read_capped_with` must reject a non-regular file as `InvalidInput`
+        // *before* `File::open` — that pre-open rejection is exactly what keeps a
+        // planted in-tree FIFO from being opened `O_RDONLY` and blocking the whole
+        // run forever. A directory is the portable, hang-free proxy for a
+        // non-regular file: it has `metadata().is_file() == false` just like a
+        // FIFO, so it drives the identical guard branch. (`File::open` on a
+        // directory even *succeeds* on Linux — proving the value of rejecting via
+        // the stat rather than relying on open to fail.) This crate forbids
+        // `unsafe_code` and takes no libc dependency, so it cannot `mkfifo(3)` a
+        // real pipe here; the directory case covers the guard faithfully.
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        let e = read_prefix_n(d, 16).expect_err("a directory is not a regular file");
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        let e = read_suffix_n(d, 16).expect_err("a directory is not a regular file");
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        match read_capped_with(d, 1024) {
+            Err(ReadCapError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput),
+            _ => panic!("read_capped_with must reject a directory as an Io error"),
+        }
     }
 }

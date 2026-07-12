@@ -60,14 +60,16 @@ impl CaseConvention {
     }
 
     /// Convert `input` to this convention. Used by `file_rename` to
-    /// derive a filename's corrected form. For `Lower`/`Upper` the
-    /// transform is a simple ASCII case flip on letters; other
-    /// conventions tokenize on separators and case transitions then
-    /// re-assemble.
+    /// derive a filename's corrected form. `Lower`/`Upper` case-fold with
+    /// Unicode `to_lowercase`/`to_uppercase` — NOT ASCII-only — so the fixer
+    /// matches the Unicode-aware `is_lowercase`/`is_uppercase` check and can
+    /// actually converge on a non-ASCII name like `RÉSUMÉ.md` (an ASCII-only
+    /// flip left `É` and re-fired every run). The other conventions tokenize on
+    /// separators and case transitions then re-assemble.
     pub fn convert(self, input: &str) -> String {
         match self {
-            Self::Lower => input.to_ascii_lowercase(),
-            Self::Upper => input.to_ascii_uppercase(),
+            Self::Lower => input.to_lowercase(),
+            Self::Upper => input.to_uppercase(),
             Self::Pascal => assemble_cap(&tokenize(input)),
             Self::Camel => assemble_camel(&tokenize(input)),
             Self::Snake => tokenize(input)
@@ -326,6 +328,29 @@ mod tests {
         assert_eq!(CaseConvention::Snake.convert("foo_bar"), "foo_bar");
         assert_eq!(CaseConvention::Pascal.convert("FooBar"), "FooBar");
         assert_eq!(CaseConvention::Kebab.convert("foo-bar"), "foo-bar");
+    }
+
+    #[test]
+    fn lower_upper_convert_converges_on_non_ascii_names() {
+        // Regression: `Lower`/`Upper` `convert` case-folded ASCII-only, but the
+        // `check` predicate is Unicode-aware. So a name like `RÉSUMÉ.md` failed
+        // the check (É is uppercase), got "fixed" to `rÉsumÉ.md` (É untouched),
+        // and re-fired forever — `--fix` never converged. The fix must be a fixed
+        // point: convert once, and the output must satisfy check.
+        for (conv, input) in [
+            (CaseConvention::Lower, "RÉSUMÉ.md"),
+            (CaseConvention::Upper, "café.txt"),
+            (CaseConvention::Lower, "ÜBER-STRASSE"),
+            (CaseConvention::Upper, "naïve"),
+        ] {
+            let out = conv.convert(input);
+            assert!(
+                conv.check(&out),
+                "{conv:?}.convert({input:?}) = {out:?} does not satisfy check() — non-convergent"
+            );
+            // And idempotent: a second pass changes nothing.
+            assert_eq!(conv.convert(&out), out, "second convert must be a no-op");
+        }
     }
 
     #[test]
