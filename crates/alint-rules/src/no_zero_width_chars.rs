@@ -77,10 +77,11 @@ impl PerFileRule for NoZeroWidthCharsRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return Ok(Vec::new());
-        };
-        let Some((line_no, col, codepoint)) = first_zero_width(text) else {
+        // Lossily decode rather than abandon the file on the first invalid byte:
+        // this is a security-posture rule, so a stray non-UTF-8 byte must NOT
+        // suppress detection of a zero-width char elsewhere (fail-open evasion).
+        let text = String::from_utf8_lossy(bytes);
+        let Some((line_no, col, codepoint)) = first_zero_width(&text) else {
             return Ok(Vec::new());
         };
         let msg = self.message.clone().unwrap_or_else(|| {
@@ -178,5 +179,43 @@ mod tests {
     #[test]
     fn clean_ascii_passes() {
         assert!(first_zero_width("nothing hidden here\n").is_none());
+    }
+
+    fn rule() -> NoZeroWidthCharsRule {
+        NoZeroWidthCharsRule {
+            id: "no-zw".to_string(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::match_all(),
+            fixer: None,
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_byte_does_not_suppress_a_later_zero_width_char() {
+        // Fail-open evasion regression (mirrors no_bidi_controls): a stray
+        // `0xFF` must not abandon the scan — a hidden ZWSP after it is still
+        // flagged. evaluate_file decodes lossily rather than strictly.
+        let idx = alint_core::FileIndex::from_entries(Vec::new());
+        let ctx = Context {
+            root: Path::new("/r"),
+            index: &idx,
+            registry: None,
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+        };
+        let mut bytes = vec![0xFFu8];
+        bytes.extend_from_slice("a\u{200B}b".as_bytes());
+        let vs = rule()
+            .evaluate_file(&ctx, Path::new("a.rs"), &bytes)
+            .unwrap();
+        assert_eq!(
+            vs.len(),
+            1,
+            "the ZWSP after a bad byte must still be flagged"
+        );
     }
 }

@@ -81,10 +81,13 @@ impl PerFileRule for NoBidiControlsRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return Ok(Vec::new());
-        };
-        let Some((line_no, col, codepoint)) = first_bidi(text) else {
+        // Lossily decode rather than abandon the whole file on the first invalid
+        // byte: this is a Trojan-Source (CVE-2021-42574) defense, so a single
+        // stray `0xFF` must NOT suppress detection of a bidi override elsewhere
+        // in the file (a trivial fail-open evasion otherwise). `U+FFFD` replaces
+        // only the invalid bytes; bidi controls in the valid runs are preserved.
+        let text = String::from_utf8_lossy(bytes);
+        let Some((line_no, col, codepoint)) = first_bidi(&text) else {
             return Ok(Vec::new());
         };
         let msg = self.message.clone().unwrap_or_else(|| {
@@ -190,5 +193,45 @@ mod tests {
     fn non_bidi_unicode_passes() {
         // ☃ snowman is not a bidi control.
         assert!(first_bidi("☃ chilly ☃\n").is_none());
+    }
+
+    fn rule() -> NoBidiControlsRule {
+        NoBidiControlsRule {
+            id: "no-bidi".to_string(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::match_all(),
+            fixer: None,
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_byte_does_not_suppress_a_later_bidi_control() {
+        // Fail-open evasion regression: an earlier code path abandoned the whole
+        // file on the first invalid UTF-8 byte (`str::from_utf8` else-return
+        // empty), so appending a stray `0xFF` anywhere hid every bidi override —
+        // a trivial bypass of a CVE-2021-42574 defense. evaluate_file must decode
+        // lossily and still flag the RLO after the bad byte.
+        let idx = alint_core::FileIndex::from_entries(Vec::new());
+        let ctx = Context {
+            root: Path::new("/r"),
+            index: &idx,
+            registry: None,
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+        };
+        let mut bytes = vec![0xFFu8]; // invalid UTF-8 lead byte
+        bytes.extend_from_slice("code\u{202E}evil".as_bytes());
+        let vs = rule()
+            .evaluate_file(&ctx, Path::new("a.rs"), &bytes)
+            .unwrap();
+        assert_eq!(
+            vs.len(),
+            1,
+            "the RLO after a bad byte must still be flagged"
+        );
     }
 }
