@@ -1273,6 +1273,36 @@ mod tests {
     }
 
     #[test]
+    fn yaml_flow_depth_bomb_is_rejected_pre_parse_not_hung() {
+        // W2 wiring regression: a `yaml_path_*` rule over a deeply-nested FLOW
+        // document (`[[[…`) must be rejected as a contained parse-error, not fed
+        // to libyaml (which is super-linear on flow nesting and would hang the
+        // run). This exercises the `flow_depth_within_limit` guard *at its
+        // structured-query call site* — the yaml_depth unit tests only cover the
+        // scanner in isolation, so without this a deleted guard here would pass
+        // CI while reopening the DoS.
+        let depth = 5000;
+        let yaml = format!("x: {}1{}", "[".repeat(depth), "]".repeat(depth));
+        let spec = spec_yaml(
+            "id: t\nkind: yaml_path_equals\npaths: \"bomb.yml\"\n\
+             path: \"$.x\"\nequals: \"1\"\nlevel: error\n",
+        );
+        let rule = yaml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[("bomb.yml", yaml.as_bytes())]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "must be one contained parse-error, no hang: {v:?}"
+        );
+        assert!(
+            v[0].message.contains("depth"),
+            "the flow-depth guard message should mention depth: {}",
+            v[0].message
+        );
+    }
+
+    #[test]
     fn xml_depth_scan_does_not_count_comments_cdata_or_self_closing() {
         // The pre-scan must not over-count: comment/CDATA contents and
         // self-closing tags don't add nesting, so valid shallow docs pass.

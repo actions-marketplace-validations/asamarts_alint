@@ -303,6 +303,29 @@ fn extended_config_allow_out_of_root_does_not_lift_confinement_before_reject() {
 }
 
 #[test]
+fn deeply_nested_flow_config_is_rejected_before_libyaml_parses_it() {
+    // W2 wiring regression: a config whose YAML nests flow collections far too
+    // deep must be rejected by the pre-parse `flow_depth_within_limit` guard
+    // BEFORE it reaches serde_yaml_ng/libyaml (which is super-linear on flow
+    // nesting and would hang the run). The `yaml_depth` unit tests only cover
+    // the scanner in isolation; this pins that the config loader actually calls
+    // it, so a deleted guard here would fail rather than silently reopen the DoS.
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = tmp.path().join(".alint.yml");
+    let bomb = format!(
+        "version: 1\nrules: []\nx: {}1{}\n",
+        "[".repeat(5000),
+        "]".repeat(5000)
+    );
+    std::fs::write(&cfg, bomb).unwrap();
+    let err = load(&cfg).unwrap_err().to_string();
+    assert!(
+        err.contains("flow nesting") && err.contains("depth"),
+        "a flow-depth bomb config must be rejected pre-parse; got: {err}"
+    );
+}
+
+#[test]
 fn local_extends_out_of_root_allowed_with_top_level_flag() {
     // M2: the same blanket `allow_out_of_root: true` that lifts per-rule
     // read confinement also lifts the local-extends boundary — for users
