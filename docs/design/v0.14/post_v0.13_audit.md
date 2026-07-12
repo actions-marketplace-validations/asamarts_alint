@@ -79,6 +79,7 @@ remediation had left open — recorded in **Phase 8** below.
 | 7 | alint.org drift | W1–W7 | `[x]` (W1–W5,W7 done on the site branch; W6 partial) |
 | 8 | Full-cycle adversarial re-review (2026-07-11) | R1–R10 | `[x]` (all done + CI-green; R1 CRITICAL fixer confinement, R2/R3 HIGH, R4 MEDIUM, R5–R10 LOW) |
 | 9 | Second full-cycle re-review (2026-07-11) | R11–R16 | `[x]` (R11 Med-High terminal injection, R12 Med non-UTF-8 fail-open, R13–R16 LOW; two more are incompleteness of prior fixes M8/M6) |
+| 10 | Third re-review: crafted-input DoS (2026-07-11) | R17–R21 | `[x]` (R17 High XML-abort, R18 Med FIFO-hang, R19 High R14-regression revert, R20 Med M6 5th-sibling, R21 Low-Med md_url; found by EMPIRICAL execution) |
 
 Phases land security-first. Each is one atomic commit (or a small group)
 with a forward `Next: Phase N` pointer, per the phased-rollout
@@ -902,6 +903,53 @@ format** (SARIF positional baseline mapping, JUnit/JSON/GitHub/agent escaping,
 non-UTF-8, determinism). Reinforces the Phase-8 lesson: R11 and R12 are again
 incompleteness of prior audit fixes (M8, M6) — an independent adversarial pass
 over the remediation keeps finding the gaps the fix authors' own tests missed.
+
+---
+
+## Phase 10 — Third re-review: crafted-input DoS + remediation re-check (2026-07-11)
+
+A third pass, this time hitting surfaces neither prior round reviewed deeply —
+**per-rule evaluation + resource-exhaustion** and the **walker/engine/fixer**
+internals — plus another re-review of the round-2 remediation. Crucially, this
+round leaned on **empirical execution of crafted inputs**, not just reading. Six
+findings (`c845f7d3`, `727d9f3c`, `14d653d0`); the code-reading agent for the
+per-rule surface had judged the XML path *safe* — executing it found an abort.
+
+- `[x]` **R17 — XML structured-query aborts on a deeply-nested document
+  (High, crash DoS).** The `MAX_XML_DEPTH` guard is post-parse, but
+  `roxmltree::Document::parse` overflows the stack itself (~tens of thousands of
+  levels) before it runs; the existing test only used depth 306. **Fix:** a
+  pre-parse `xml_depth_within_limit` scan. Empirically reproduced (SIGABRT).
+- `[x]` **R18 — `alint check` hangs forever on a FIFO in the repo (Medium,
+  hang DoS).** The walker indexed a named pipe as a size-0 file; opening it
+  `O_RDONLY` blocks until a writer appears. **Fix:** index only regular files +
+  dirs, skip special files. Empirically reproduced (infinite hang).
+- `[x]` **R19 — the R14 when-parser depth-restore reopened the AST-overflow
+  guard (High invariant break).** Restoring the chain bumps let a nested
+  parens+chains construction build a ~MAX_DEPTH² tree that parses but can
+  overflow on Drop/eval. R14 was only a cosmetic over-strictness fix; **reverted**
+  — `depth` must accumulate along the spine. (Another regression from the
+  remediation itself — R14 was landed two passes ago.)
+- `[x]` **R20 — M6 missed a 5th non-UTF-8 sibling (`blame_lines`, Medium
+  fail-open).** One non-UTF-8 byte in a blamed file no-opped `git_blame_age`.
+  **Fix:** `from_utf8_lossy`. (The recurring "fixed N of M paths" pattern, again.)
+- `[x]` **R21 — `md_url` encoded only 4 of ~35 control chars (Low-Med).** A
+  control byte in a config `policy_url` broke the markdown link → injection; also
+  over-encoded `[]<>` (broke IPv6 URLs). **Fix:** encode all ASCII controls +
+  space + parens; leave `[]<>`.
+- `[-]` **Accepted low (not fixed):** `write_atomic` divorces a hardlinked file
+  on `--fix` (rare; git can't store hardlinks; data-divergence not loss), and
+  `registry_paths_resolve` is O(entries × N) per glob (bounded, needs control of
+  both config and manifest). Recorded, tradeoff-laden to "fix," left as-is.
+
+**Verified genuinely solid this pass:** the per-rule/ReDoS surface (regex is
+RE2/linear; JSON/YAML/TOML parsers all carry recursion limits; graph cycle
+detection is iterative; reads uniformly capped) and the walker/engine determinism
+(parallel eval order-stable, escaping-symlink side-list race-free, atomic writes
+preserve mode, byte-fixers binary-safe + idempotent). The lesson sharpens: two
+prior passes *read* the XML guard and trusted it; only **running** a crafted
+document surfaced the abort — empirical exploitation beats inspection for
+crash/hang/DoS classes.
 
 ---
 
