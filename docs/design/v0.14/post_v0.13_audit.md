@@ -989,6 +989,19 @@ inputs) otherwise found the code robust.
   (`structured_path.rs`). It counts only genuine flow opens — a `[` inside a
   plain or quoted scalar (`key: a[b`) is not a nesting level — so it never
   false-rejects ordinary YAML. Empirically reproduced (timeout).
+  **Follow-up (test-coverage gap, self-caught):** the first cut shipped only the
+  scanner's *unit* tests (`yaml_depth::{shallow…,deep…}`) — the guard's two
+  **wiring points** (the config loader and the `yaml_path_*` rule) had no test,
+  so deleting either `if !flow_depth_within_limit(…)` call would have kept the
+  scanner tests green while silently reopening the DoS — the exact
+  guard-not-actually-called class this audit keeps surfacing (cf. W1, R19).
+  Closed with two end-to-end call-site regressions:
+  `deeply_nested_flow_config_is_rejected_before_libyaml_parses_it` (loader) and
+  `yaml_flow_depth_bomb_is_rejected_pre_parse_not_hung` (`yaml_path_equals`).
+  Each asserts the guard's specific "depth" message, which nothing else emits,
+  so removing the guard fails the test. Lesson: a shared guard needs a test at
+  every call site, not just on the primitive — a unit test of the scanner does
+  not prove anyone calls it.
 - `[x]` **W3 — `no_bidi_controls` / `no_zero_width_chars` fail open on a
   non-UTF-8 byte (Medium, security-defense evasion).** Both rules did
   `str::from_utf8(bytes) else return Ok(empty)`, so appending a single stray
@@ -1014,8 +1027,14 @@ inputs) otherwise found the code robust.
   still `File::open`'d directly, so a planted in-tree named pipe (or a symlink to
   one) would block the run `O_RDONLY`. **Fix:** an `open_regular` helper that
   stats `is_file()` before opening, mirroring `result_to_entry` (`io.rs`).
-  Regressions: `direct_read_helpers_reject_a_non_regular_file` and a
-  timeout-guarded `direct_read_of_a_fifo_is_rejected_not_hung`.
+  Regression: `direct_read_helpers_reject_a_non_regular_file` — it drives the
+  helpers with a *directory* (a portable non-regular file with
+  `is_file() == false`, exactly the branch a FIFO takes), asserting the pre-open
+  `InvalidInput` rejection. (A real `mkfifo(3)` regression was prototyped but
+  dropped: `alint-rules` `forbid`s `unsafe_code` and takes no libc dependency,
+  and a subprocess `mkfifo` correctly trips the `coverage_audit_spawn_gate` scan
+  — which flags any rule-source module that constructs a `Command`. The
+  directory case exercises the guard faithfully without either.)
 - `[-]` **Reclassified (not a bug): BOM-fixer `apply`/`fix_edit` "asymmetry."**
   `apply` carries a `looks_binary` guard the editor-side `fix_edit` lacked — but
   the guard is **inert** for a real BOM: `content_inspector` classifies *any*
