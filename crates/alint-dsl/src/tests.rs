@@ -272,6 +272,37 @@ fn local_extends_outside_lint_root_is_rejected() {
 }
 
 #[test]
+fn extended_config_allow_out_of_root_does_not_lift_confinement_before_reject() {
+    // Trust bypass: an inherited (untrusted) ruleset that sets
+    // `allow_out_of_root: true` used to lift local-extends confinement for ITS
+    // OWN `extends:` chain, so an out-of-root target was READ before the
+    // parent's `reject_allow_out_of_root_in` fired one level too late. The flag
+    // must only lift confinement for the user's TOP-LEVEL config. The out-of-root
+    // target here is INVALID YAML: if it were read, the error would mention
+    // parsing; the fix rejects it as "outside the lint root" BEFORE any read.
+    let base = tempfile::tempdir().unwrap();
+    std::fs::write(base.path().join("outside.yml"), "{{{ not valid yaml :::").unwrap();
+    let repo = base.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    std::fs::write(
+        repo.join("evil.yml"),
+        "version: 1\nallow_out_of_root: true\nextends: [\"../outside.yml\"]\nrules: []\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.join(".alint.yml"),
+        "version: 1\nextends: [./evil.yml]\nrules: []\n",
+    )
+    .unwrap();
+    let err = load(&repo.join(".alint.yml")).unwrap_err().to_string();
+    assert!(
+        err.contains("outside the lint root"),
+        "an extends'd allow_out_of_root must not lift confinement (target read blocked \
+         BEFORE any read); got: {err}"
+    );
+}
+
+#[test]
 fn local_extends_out_of_root_allowed_with_top_level_flag() {
     // M2: the same blanket `allow_out_of_root: true` that lifts per-rule
     // read confinement also lifts the local-extends boundary — for users

@@ -108,7 +108,19 @@ impl Format {
             Self::Json => serde_json::from_str(text).or_else(|strict_err| {
                 serde_json::from_str(&strip_jsonc(text)).map_err(|_| strict_err.to_string())
             }),
-            Self::Yaml => serde_yaml_ng::from_str(text).map_err(|e| e.to_string()),
+            Self::Yaml => {
+                // Bound flow-nesting before libyaml parses it super-linearly (a
+                // crafted `[[[…` file otherwise hangs the run) — the YAML analogue
+                // of the `xml_depth_within_limit` guard below. JSON (serde_json,
+                // 128-deep) and TOML (toml, 80-deep) carry their own limits.
+                if !alint_core::yaml_depth::flow_depth_within_limit(text) {
+                    return Err(format!(
+                        "YAML flow nesting exceeds the maximum supported depth ({})",
+                        alint_core::yaml_depth::MAX_YAML_FLOW_DEPTH
+                    ));
+                }
+                serde_yaml_ng::from_str(text).map_err(|e| e.to_string())
+            }
             Self::Toml => toml::from_str(text).map_err(|e| e.to_string()),
             Self::Xml => xml_to_value(text),
         }

@@ -21,6 +21,7 @@ mod scope_filter;
 pub mod template;
 mod walker;
 pub mod when;
+pub mod yaml_depth;
 
 pub use category::Category;
 pub use config::{

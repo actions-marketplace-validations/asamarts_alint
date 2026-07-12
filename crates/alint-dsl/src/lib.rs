@@ -89,7 +89,10 @@ pub fn load_with(path: &Path, opts: &LoadOptions) -> Result<Config> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let mut raw = loader::load_recursive(path, &mut visiting, opts, Some(&confine_root))?;
+    // `is_top: true` — the user's own top-level config may open the
+    // `allow_out_of_root` escape hatch; an `extends:`'d ruleset may not (that
+    // recursion passes `false`), so an untrusted ruleset can't lift confinement.
+    let mut raw = loader::load_recursive(path, &mut visiting, opts, Some(&confine_root), true)?;
 
     // `.alint.d/*.yml` drop-ins — auto-discovered next to the
     // top-level config and merged in alphabetical order. The
@@ -111,8 +114,15 @@ pub fn load_with(path: &Path, opts: &LoadOptions) -> Result<Config> {
         .unwrap_or_else(|| Path::new("."))
         .join(".alint.d");
     for drop_in_path in collect_drop_ins(&drop_in_dir)? {
-        let drop_in =
-            loader::load_recursive(&drop_in_path, &mut visiting, opts, Some(&confine_root))?;
+        // Drop-ins are trust-equivalent to the top-level config (local,
+        // user-controlled), so `is_top: true` — they may open the escape hatch.
+        let drop_in = loader::load_recursive(
+            &drop_in_path,
+            &mut visiting,
+            opts,
+            Some(&confine_root),
+            true,
+        )?;
         raw = merge(raw, drop_in);
     }
 

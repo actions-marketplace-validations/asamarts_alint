@@ -34,6 +34,15 @@ const MAX_EXTENDS_DEPTH: usize = 64;
 /// failure is reported with the `source` path; a typed/YAML error
 /// propagates bare so the existing diagnostics are unchanged.
 pub(crate) fn parse_config_interpolated(contents: &str, source: &Path) -> Result<RawConfig> {
+    // Reject a deeply-nested-flow config before `serde_yaml_ng` (libyaml) chews
+    // on it super-linearly — a DoS reachable through an `extends:`'d ruleset.
+    if !alint_core::yaml_depth::flow_depth_within_limit(contents) {
+        return Err(Error::Other(format!(
+            "{}: YAML flow nesting exceeds the maximum supported depth ({})",
+            source.display(),
+            alint_core::yaml_depth::MAX_YAML_FLOW_DEPTH
+        )));
+    }
     if contents.contains("{{") {
         let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)?;
         crate::interp::interpolate_value(&mut value, &|n| std::env::var(n).ok())
@@ -55,6 +64,7 @@ pub(crate) fn load_recursive(
     visiting: &mut std::collections::HashSet<PathBuf>,
     opts: &LoadOptions,
     confine: Option<&Path>,
+    is_top: bool,
 ) -> Result<RawConfig> {
     let canonical = path.canonicalize().map_err(|source| Error::Io {
         path: path.to_path_buf(),
@@ -103,10 +113,17 @@ pub(crate) fn load_recursive(
     // host. The top-level `allow_out_of_root: true` lifts it for the whole
     // chain — the same blanket escape that lifts per-rule read confinement.
     // A `Selective` allowlist names rule kinds/ids and has no meaning for an
-    // extends *path*, so only the `All` form opens this gate. (Sub-configs
-    // can't set the flag: `reject_allow_out_of_root_in` fires below.)
-    let confine = match &config.allow_out_of_root {
-        AllowOutOfRoot::All => None,
+    // extends *path*, so only the `All` form opens this gate. Only the USER'S
+    // TOP-LEVEL config may open it: a sub-config's flag is rejected by
+    // `reject_allow_out_of_root_in` at the parent's loop below, but that fires
+    // AFTER this sub-config has already resolved ITS OWN `extends:` — so gating
+    // on `is_top` here is what actually prevents an extended ruleset from
+    // lifting confinement and reading an out-of-root `extends:` target (a FIFO
+    // hangs, a big file is slurped, host paths become an existence oracle)
+    // before the rejection can fire. Without `is_top` the reject is one level
+    // too late.
+    let confine = match (&config.allow_out_of_root, is_top) {
+        (AllowOutOfRoot::All, true) => None,
         _ => confine,
     };
 
@@ -128,7 +145,7 @@ pub(crate) fn load_recursive(
         } else {
             let target = resolve_relative(&source_dir, url);
             confine_extends_target(&target, url, confine)?;
-            load_recursive(&target, visiting, opts, confine)?
+            load_recursive(&target, visiting, opts, confine, false)?
         };
         // Extended configs cannot introduce `custom:` facts or
         // `kind: command` rules — both spawn arbitrary processes
