@@ -597,6 +597,15 @@ fn result_to_entry(
         path: abs.to_path_buf(),
         source: std::io::Error::other(e.to_string()),
     })?;
+    // Index only regular files and directories. A special file (FIFO/named
+    // pipe, socket, char/block device) is not lintable content, and — worse —
+    // opening a FIFO `O_RDONLY` BLOCKS until a writer appears, so a per-file
+    // content rule reading one would hang the whole run forever. `follow_links`
+    // is on, so a symlink to a special file resolves here to its (non-regular)
+    // target and is dropped too. Skip it rather than index it as a size-0 file.
+    if !metadata.is_dir() && !metadata.is_file() {
+        return Ok(None);
+    }
     Ok(Some(FileEntry {
         path: Arc::from(rel),
         is_dir: metadata.is_dir(),
@@ -1268,6 +1277,38 @@ mod tests {
             read_capped_or_skip(&p, 4).unwrap(),
             b"tiny",
             "under-cap size must read"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_skips_a_fifo_special_file() {
+        // A FIFO (named pipe) must NOT be indexed as a file: opening one
+        // `O_RDONLY` blocks until a writer appears, so a per-file content rule
+        // reading it would hang the whole run forever. Regular files alongside
+        // it are still indexed.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("normal.txt"), b"hi").unwrap();
+        let fifo = root.join("pipe.txt");
+        let ok = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok || !fifo.exists() {
+            eprintln!("mkfifo unavailable; skipping FIFO walk test");
+            return;
+        }
+
+        let idx = walk(root, &WalkOptions::default()).unwrap();
+        let names: Vec<_> = idx.entries.iter().map(|e| e.path.to_path_buf()).collect();
+        assert!(
+            names.iter().any(|p| p.as_os_str() == "normal.txt"),
+            "regular file must still be indexed: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|p| p.as_os_str() == "pipe.txt"),
+            "FIFO must be skipped, not indexed: {names:?}"
         );
     }
 

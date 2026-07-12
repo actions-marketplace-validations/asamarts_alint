@@ -553,11 +553,79 @@ fn kind_name(v: &Value) -> &'static str {
 /// limits; this is the XML arm's equivalent.
 const MAX_XML_DEPTH: usize = 256;
 
+/// Conservatively bound the raw XML's element-nesting depth BEFORE
+/// `roxmltree::Document::parse` sees it. `Document::parse` descends recursively
+/// per element and overflows the stack — **aborting the whole process** — on
+/// deeply-nested input (tens of thousands of levels); the `element_to_value`
+/// [`MAX_XML_DEPTH`] guard is post-parse, so it only catches depths the parser
+/// already survived. A cheap linear pre-scan rejects an over-deep document here
+/// (as one ordinary per-file parse-error violation) so a crafted or accidental
+/// `<a><a>…` file can never abort the run. Comment / CDATA / PI / declaration
+/// regions are skipped so their contents don't count toward depth.
+fn xml_depth_within_limit(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut pos = 0usize;
+    let mut depth = 0usize;
+    while pos < bytes.len() {
+        if bytes[pos] != b'<' {
+            pos += 1;
+            continue;
+        }
+        let rest = &text[pos..];
+        if rest.starts_with("</") {
+            depth = depth.saturating_sub(1);
+            pos += 2;
+        } else if rest.starts_with("<!--") {
+            pos += rest.find("-->").map_or(rest.len(), |p| p + 3);
+        } else if rest.starts_with("<![CDATA[") {
+            pos += rest.find("]]>").map_or(rest.len(), |p| p + 3);
+        } else if rest.starts_with("<!") || rest.starts_with("<?") {
+            // DOCTYPE / PI / other declaration: skip to its terminating `>`.
+            pos += rest.find('>').map_or(rest.len(), |p| p + 1);
+        } else {
+            // `<tag …>` or `<tag/>`: find the closing `>` respecting quoted
+            // attribute values (a `>` inside `"…"`/`'…'` isn't the tag end).
+            let tag = rest.as_bytes();
+            let mut end = 1usize;
+            let mut quote: Option<u8> = None;
+            while end < tag.len() {
+                let ch = tag[end];
+                if let Some(q) = quote {
+                    if ch == q {
+                        quote = None;
+                    }
+                } else if ch == b'"' || ch == b'\'' {
+                    quote = Some(ch);
+                } else if ch == b'>' {
+                    break;
+                }
+                end += 1;
+            }
+            // Self-closing `<tag/>` opens and closes, so it adds no depth.
+            let self_closing = end >= 2 && tag[end - 1] == b'/';
+            if !self_closing {
+                depth += 1;
+                if depth > MAX_XML_DEPTH {
+                    return false;
+                }
+            }
+            pos += end + 1;
+        }
+    }
+    true
+}
+
 /// Parse XML into the same `serde_json::Value` tree the rest of
 /// the family queries. The document maps to
 /// `{ <root-element-name>: <root value> }` so the root element is
 /// the first `JSONPath` segment (`$.Project…`, `$.project…`).
 fn xml_to_value(text: &str) -> std::result::Result<Value, String> {
+    // Reject over-deep XML before `Document::parse` can overflow the stack.
+    if !xml_depth_within_limit(text) {
+        return Err(format!(
+            "XML nesting exceeds the maximum supported depth ({MAX_XML_DEPTH})"
+        ));
+    }
     let doc = roxmltree::Document::parse(text).map_err(|e| e.to_string())?;
     let root = doc.root_element();
     let mut obj = serde_json::Map::new();
@@ -1166,6 +1234,46 @@ mod tests {
             "expected a depth parse-error message, got: {}",
             v[0].message
         );
+    }
+
+    #[test]
+    fn xml_depth_beyond_parse_recursion_limit_is_rejected_pre_parse_not_aborted() {
+        // The MAX_XML_DEPTH guard above is POST-parse; a document deep enough to
+        // overflow `roxmltree::Document::parse` itself (tens of thousands of
+        // levels) aborts the whole process before that guard runs. The pre-parse
+        // `xml_depth_within_limit` scan must reject it as an ordinary parse error.
+        // (Without the pre-scan this test would SIGABRT the whole test binary.)
+        let depth = 100_000;
+        let xml = format!("{}deep{}", "<a>".repeat(depth), "</a>".repeat(depth));
+        let spec = spec_yaml(
+            "id: t\nkind: xml_path_equals\npaths: \"deep.xml\"\n\
+             path: \"$.a\"\nequals: \"x\"\nlevel: error\n",
+        );
+        let rule = xml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[("deep.xml", xml.as_bytes())]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "must be one contained parse-error, no abort: {v:?}"
+        );
+        assert!(v[0].message.contains("depth"), "{}", v[0].message);
+    }
+
+    #[test]
+    fn xml_depth_scan_does_not_count_comments_cdata_or_self_closing() {
+        // The pre-scan must not over-count: comment/CDATA contents and
+        // self-closing tags don't add nesting, so valid shallow docs pass.
+        assert!(xml_depth_within_limit(
+            "<r><!-- <a><a><a> --><c/><![CDATA[ <b><b> ]]><d attr=\"x>y\"/></r>"
+        ));
+        // A genuinely deep run is rejected.
+        let deep = format!("{}{}", "<a>".repeat(300), "</a>".repeat(300));
+        assert!(!xml_depth_within_limit(&deep));
+        // Real manifest depth is fine.
+        assert!(xml_depth_within_limit(
+            "<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>"
+        ));
     }
 
     #[test]
