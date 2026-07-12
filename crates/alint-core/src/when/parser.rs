@@ -96,36 +96,33 @@ impl Parser {
 
     fn parse_or(&mut self) -> Result<WhenExpr, WhenError> {
         let mut left = self.parse_and()?;
-        // The chain bumps bound this flat `a or a or …` chain's LENGTH during
-        // parsing (each `bump_depth` checks `MAX_DEPTH`, so a >64-term chain
-        // still trips — this loop is iterative, so it doesn't re-enter
-        // `parse_expr` where the nesting guard lives; H5 flat-chain gap). But the
-        // accumulated depth must be RESTORED after the chain, or it leaks into
-        // sibling sub-expressions (a list of N one-`and` items would falsely trip
-        // "nests too deeply" at ~64 items though nothing is deeply nested).
-        let saved = self.depth;
         while matches!(self.peek(), Some(Tok::KwOr)) {
             self.advance();
+            // Each `or` node deepens the built AST's left spine by one. Bump per
+            // operator and DO NOT restore: `depth` must bound the CUMULATIVE
+            // structural depth of the AST (a `(…) or a or a …` construction nests
+            // parens AND chains at each level), so a later recursive Drop / eval
+            // of a tall tree can't overflow the stack. `parse_expr` only unwinds
+            // its own single nesting bump, so chain depth correctly accumulates
+            // along the spine (H5 flat-chain gap). Restoring it here would let a
+            // ~MAX_DEPTH² tree parse and abort on Drop — DO NOT.
             self.bump_depth()?;
             let right = self.parse_and()?;
             left = WhenExpr::Or(Box::new(left), Box::new(right));
         }
-        self.depth = saved;
         Ok(left)
     }
 
     fn parse_and(&mut self) -> Result<WhenExpr, WhenError> {
         let mut left = self.parse_not()?;
-        // See `parse_or`: bound the flat `a and a and …` chain length, then
-        // restore so the bumps don't leak into sibling sub-expressions.
-        let saved = self.depth;
         while matches!(self.peek(), Some(Tok::KwAnd)) {
             self.advance();
+            // See `parse_or`: bump per `and` node and never restore, so `depth`
+            // bounds the AST's cumulative structural depth (Drop/eval-safe).
             self.bump_depth()?;
             let right = self.parse_not()?;
             left = WhenExpr::And(Box::new(left), Box::new(right));
         }
-        self.depth = saved;
         Ok(left)
     }
 

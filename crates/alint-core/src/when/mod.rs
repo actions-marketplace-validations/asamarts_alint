@@ -567,16 +567,22 @@ mod tests {
     }
 
     #[test]
-    fn sibling_chains_do_not_accumulate_parse_depth() {
-        // Regression: the flat-chain depth bumps in `parse_or`/`parse_and` used
-        // to leak into sibling sub-expressions (never restored), so a list of N
-        // one-`and` items falsely tripped "nests too deeply" at ~64 items even
-        // though nothing is deeply nested. 200 shallow sibling chains must parse.
-        let items = vec!["facts.x == 1 and facts.x == 2"; 200].join(", ");
-        let src = format!("facts.x in [{items}]");
+    fn nested_parens_with_per_level_chains_are_bounded_at_parse() {
+        // The chain-depth bumps must bound the AST's CUMULATIVE structural depth,
+        // not just one flat chain: nesting parens AND a chain at every level
+        // (`(…) and a and a …`) builds a tall left-nested tree whose later
+        // recursive Drop / eval would overflow the stack. `depth` accumulates
+        // along the spine, so this fails loudly at PARSE rather than aborting.
+        // (An earlier "restore after each chain" attempt let this parse and
+        // reopened the overflow — the chain bumps must NOT be restored.)
+        let mut expr = String::from("facts.x == 1");
+        for lvl in (1..=62).rev() {
+            expr = format!("({expr}){}", " and facts.x == 1".repeat(63 - lvl));
+        }
+        let err = parse(&expr).unwrap_err();
         assert!(
-            parse(&src).is_ok(),
-            "sibling AND-chains must not accumulate depth across list items"
+            matches!(err, WhenError::Parse { .. }),
+            "a deep nested-chain AST must be rejected at parse: {err:?}"
         );
     }
 
