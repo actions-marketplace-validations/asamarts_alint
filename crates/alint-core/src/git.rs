@@ -548,8 +548,15 @@ pub fn blame_lines(root: &Path, rel_path: &Path) -> Option<Vec<BlameLine>> {
     if !output.status.success() {
         return None;
     }
-    let text = std::str::from_utf8(&output.stdout).ok()?;
-    Some(parse_porcelain(text))
+    // Lossily decode: `--line-porcelain` embeds source-line content AND author
+    // names, so one non-UTF-8 byte anywhere in the file must NOT collapse the
+    // whole blame to `None` — that silently no-ops `git_blame_age` for the file
+    // (every stale line evades the age check), the M6 fail-open the sibling git
+    // paths were already hardened against. The porcelain framing (SHA/header
+    // keywords, tab-prefixed content lines) is ASCII, so lossy decoding leaves
+    // the structure parseable.
+    let text = String::from_utf8_lossy(&output.stdout);
+    Some(parse_porcelain(&text))
 }
 
 /// Parse the `--line-porcelain` output of `git blame`. Pure
