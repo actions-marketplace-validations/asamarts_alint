@@ -90,7 +90,8 @@ struct Cli {
 
     /// Compact one-line-per-violation human output, suitable for
     /// piping into editors / grep / `wc -l`. Format:
-    /// `path:line:col: level: rule-id: message`.
+    /// `path:line:col: level: rule-id: message` (the `:line:col` is
+    /// omitted for findings with no specific location).
     #[arg(long, global = true)]
     compact: bool,
 

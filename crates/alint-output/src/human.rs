@@ -318,13 +318,19 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
 ///
 /// ```text
 /// <path>:<line>:<col>: <level>: <rule-id>: <message>[  [fixable]]
+/// <path>: <level>: <rule-id>: <message>                  (no location)
+/// <repo>: <level>: <rule-id>: <message>                  (repo-level)
 /// ```
 ///
-/// Path-less violations use the literal `<repo>` so every line
-/// parses uniformly. Missing line / col are rendered as `0`.
-/// Levels are color-tagged to aid visual scanning even in
-/// compact form; the `AutoStream` still strips SGR escapes when
-/// the sink isn't a TTY, so pipe-safe output is automatic.
+/// The `:line:col` suffix is emitted only when the violation actually
+/// carries a location, so an editor / grep can still jump to it. A
+/// whole-file or repo-level finding has nothing to point at, so the old
+/// `:0:0` was noise that also misleadingly implied line 0 / col 0.
+/// Path-less violations use the literal `<repo>`. The location prefix is
+/// color-tagged (magenta) so each finding's start is visually obvious
+/// even without the grouped format's per-file separators; levels are
+/// color-tagged too. The `AutoStream` strips SGR escapes when the sink
+/// isn't a TTY, so pipe-safe `path:line:col` output is automatic.
 fn write_human_compact(
     report: &Report,
     w: &mut dyn Write,
@@ -347,8 +353,14 @@ fn write_human_compact(
                 |p| sanitize_terminal(&p.display().to_string()).into_owned(),
             );
             let message = sanitize_terminal(&v.message);
-            let line = v.line.unwrap_or(0);
-            let col = v.column.unwrap_or(0);
+            // Append `:line:col` only for findings that actually have a
+            // location. A repo-level or whole-file finding points at nothing,
+            // so `:0:0` was misleading noise. Located findings keep the full
+            // `path:line:col` an editor / grep jumps on.
+            let loc = match (v.line, v.column) {
+                (Some(line), Some(col)) => format!("{path}:{line}:{col}"),
+                _ => path,
+            };
             let (level_style, level_name) = match result.level {
                 Level::Error => {
                     errors += 1;
@@ -376,9 +388,10 @@ fn write_human_compact(
                 String::new()
             };
             let safe_rule_id = sanitize_terminal(&result.rule_id);
+            let loc_style = style::LOCATION;
             writeln!(
                 w,
-                "{path}:{line}:{col}: {level_style}{level_name}{level_style:#}: {rule_style}{safe_rule_id}{rule_style:#}: {message}{fix_tag}",
+                "{loc_style}{loc}{loc_style:#}: {level_style}{level_name}{level_style:#}: {rule_style}{safe_rule_id}{rule_style:#}: {message}{fix_tag}",
             )?;
         }
     }
@@ -654,6 +667,26 @@ mod tests {
     // neutralized form `\x1b[2J` (literal text) proves the sanitizer ran.
     const RAW_CLEAR: &str = "\x1b[2J\x1b[H";
 
+    /// Drop `ESC [ ... m` SGR sequences so a test can assert on the plain-text
+    /// shape of colored output.
+    fn strip_sgr(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                for e in chars.by_ref() {
+                    if e == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
     fn evil_report() -> Report {
         use std::path::PathBuf;
         let v = Violation::new(format!("{RAW_CLEAR}forged: all rules passed."))
@@ -698,6 +731,56 @@ mod tests {
         };
         write_human(&evil_report(), &mut buf, opts).unwrap();
         assert_neutralized(&String::from_utf8(buf).unwrap());
+    }
+
+    #[test]
+    fn compact_omits_line_col_when_the_finding_has_no_location() {
+        use std::path::PathBuf;
+        // Three shapes: located (path + line/col), whole-file (path, no
+        // line/col), and repo-level (no path at all).
+        let located = Violation::new("located msg")
+            .with_path(PathBuf::from("src/lib.rs"))
+            .with_location(12, 5);
+        let whole_file = Violation::new("whole-file msg").with_path(PathBuf::from("PLAN.md"));
+        let repo_level = Violation::new("repo msg");
+        let report = Report {
+            results: vec![
+                RuleResult::new("r-loc".into(), Level::Warning, None, vec![located], false),
+                RuleResult::new(
+                    "r-file".into(),
+                    Level::Warning,
+                    None,
+                    vec![whole_file],
+                    false,
+                ),
+                RuleResult::new("r-repo".into(), Level::Error, None, vec![repo_level], false),
+            ],
+        };
+        let mut buf = Vec::new();
+        let opts = HumanOptions {
+            compact: true,
+            ..HumanOptions::default()
+        };
+        write_human(&report, &mut buf, opts).unwrap();
+        // Strip SGR so the assertions read against the plain text shape.
+        let raw = String::from_utf8(buf).unwrap();
+        let out = strip_sgr(&raw);
+        assert!(
+            out.contains("src/lib.rs:12:5: warning: r-loc: located msg"),
+            "located finding keeps path:line:col for editor/grep jump:\n{out}"
+        );
+        assert!(
+            out.contains("PLAN.md: warning: r-file: whole-file msg"),
+            "whole-file finding drops the :0:0 noise:\n{out}"
+        );
+        assert!(
+            out.contains("<repo>: error: r-repo: repo msg"),
+            "repo-level finding is <repo> with no :0:0:\n{out}"
+        );
+        assert!(
+            !out.contains(":0:0"),
+            "no finding should render the misleading :0:0:\n{out}"
+        );
     }
 
     #[test]

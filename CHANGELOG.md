@@ -76,6 +76,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`--compact` output is more readable: the `:line:col` suffix is dropped for
+  findings that have no specific location, and the path prefix is colored.**
+  A repo-level or whole-file finding used to render `<repo>:0:0:` / `PLAN.md:0:0:`,
+  where the `:0:0` was noise that also misleadingly implied line 0 / column 0.
+  Located findings still emit the full `path:line:col:` an editor / grep jumps on;
+  only findings with no location drop it (`PLAN.md: warning: …`). The location
+  prefix is now magenta so each finding's start is visually distinct even without
+  the grouped format's per-file separators. Color is TTY-only (SGR is stripped
+  when piped), so `path:line:col` piping is unchanged.
 - **`git_tracked_only` and `respect_gitignore` are now kind-specific options,
   rejected off the kinds that honor them (ADR-0008).** Both moved off the common
   `RuleSpec` into per-kind options: `git_tracked_only` into the four existence

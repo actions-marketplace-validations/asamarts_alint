@@ -48,6 +48,13 @@ pub const SUCCESS: Style = Style::new()
 /// File path headers.
 pub const PATH: Style = Style::new().bold();
 
+/// Location prefix (`path:line:col`, or just `path`) in the compact
+/// one-line format. Magenta so it reads as a field distinct from the
+/// level colors (red / yellow / cyan) and visually delimits the start of
+/// each finding — the compact format has no per-file section headers to
+/// separate findings the way the grouped format does.
+pub const LOCATION: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Magenta)));
+
 /// Rule identifiers — dimmed so they're secondary to the
 /// message.
 pub const RULE_ID: Style = Style::new().dimmed();
