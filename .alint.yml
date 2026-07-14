@@ -29,6 +29,15 @@ ignore:
   # trailing whitespace) so the test can assert a diagnostic and an
   # apply-fix. Dogfooding alint over it would re-fire those rules.
   - "editors/vscode/src/test/fixtures/**"
+  # The README demo fixture (demo/fixture/**) is the repo that the VHS
+  # tape records `alint check` / `alint fix` against, so it ships
+  # deliberate drift: a scratch PLAN.md at root, trailing whitespace, a
+  # missing final newline, a BOM, an unpinned action. Dogfooding alint
+  # over it would re-fire exactly the rules the demo exists to show.
+  # (The grossest bits, a tracked `target/` and a `.DS_Store`, are NOT
+  # committed; the tape synthesizes them into a scratch copy at record
+  # time, so git stays clean.)
+  - "demo/fixture/**"
   # v0.12 case-study corpus: agent-drafted .alint.yml configs for the
   # 100-repo study, kept as research artifacts. They are OTHER repos'
   # configs (not alint's own source), so dogfooding alint over them is

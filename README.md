@@ -6,6 +6,13 @@
 
 **Fast, language-agnostic linter for repository structure, files, and content.** Declare the shape your repo should have (required files, filename conventions, content patterns, values inside `package.json` / `Cargo.toml` / GitHub workflows, cross-file relationships) in a single `.alint.yml`. alint enforces it.
 
+<!-- Absolute URL on purpose: this README is also the crates.io and npm landing
+     page, and neither resolves relative image paths. The GIF is generated from
+     demo/alint.tape, never hand-recorded, so it cannot drift from real output. -->
+<img src="https://raw.githubusercontent.com/asamarts/alint/main/demo/alint.gif" alt="alint finding structural violations in a repo, fixing the mechanical ones, and leaving the structural ones for a human" width="100%">
+
+*A tracked `target/`, an unpinned GitHub Action, a scratch planning doc at the repo root, and whitespace drift. alint finds all of it, fixes what is mechanical, and leaves what needs a decision. No per-language linter sees any of it.*
+
 - ⚡ **Fast at scale.** ~1.1 s on a 100K-file workspace bundle, ~12 s at 1M files. [Public benchmarks per release.](docs/benchmarks/HISTORY.md)
 - 🤖 **Agent-aware.** First-class `agent` output format with per-violation `agent_instruction` strings; bundled `agent-hygiene` and `agent-context` rulesets for AI-touched repos.
 - 🧰 **Powerful + extensible.** 89 rule kinds across 13 families, 22 bundled ecosystem rulesets, 12 auto-fix ops, 8 output formats, structured-query rules with full RFC 9535 JSONPath, cross-file relational rules, conditional `when:` gates over per-run facts, and `extends:` composition with SRI-pinned URLs.

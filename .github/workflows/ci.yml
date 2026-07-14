@@ -209,6 +209,11 @@ jobs:
         with:
           key: ci-dogfood
       - run: ci/scripts/dogfood.sh
+      # The README's demo GIF is generated from demo/alint.tape, so a rule or
+      # fixer change can silently turn it into a lie on our main discovery
+      # surface. dogfood.sh has already built target/release/alint, so replay
+      # the tape's command sequence and pin what it actually does.
+      - run: ci/scripts/demo-drift.sh
 
   # ── Bench smoke ───────────────────────────────────────────────────
   bench-smoke:
