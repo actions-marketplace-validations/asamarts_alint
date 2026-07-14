@@ -8,14 +8,16 @@
 
 <!-- Absolute URL on purpose: this README is also the crates.io and npm landing
      page, and neither resolves relative image paths. The GIF is generated from
-     demo/alint.tape, never hand-recorded, so it cannot drift from real output.
+     demo/alint.tape (via demo/render.sh), never hand-recorded, so it cannot
+     drift from real output.
 
-     NO width= attribute, deliberately. The GIF is rendered 880px wide to sit
-     just inside GitHub's ~896px README column, so the browser maps it 1:1 with
-     no rescaling and the terminal glyphs stay sharp. A width="100%" would
-     stretch it to the column and blur every letter; an oversized source
-     (we tried 1100px) gets fractionally downscaled, which is just as mushy. -->
-<img src="https://raw.githubusercontent.com/asamarts/alint/main/demo/alint.gif" alt="alint finding structural violations in a repo, fixing the mechanical ones, and leaving the structural ones for a human">
+     width="880" is REQUIRED and is half the GIF's native 1760px. Most people
+     read GitHub on a HiDPI display, where a 1x asset gets upscaled 2x by the
+     browser and small antialiased terminal glyphs turn to mush. At 2x native,
+     HiDPI maps this 1:1 to device pixels (sharp) and 1x displays downscale it
+     exactly 2:1 (clean). Drop the attribute and the 1760px source blows out the
+     column; set it to 100% and the letters go blurry again. -->
+<img src="https://raw.githubusercontent.com/asamarts/alint/main/demo/alint.gif" width="880" alt="alint finding structural violations in a repo, fixing the mechanical ones, and leaving the structural ones for a human">
 
 *A tracked `target/`, an unpinned GitHub Action, a scratch planning doc at the repo root, and whitespace drift. alint finds all of it, fixes what is mechanical, and leaves what needs a decision. No per-language linter sees any of it.*
 

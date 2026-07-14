@@ -1,3 +1,4 @@
+Output demo/alint.gif
 # alint README demo, as code.
 #
 # Regenerate:  vhs demo/alint.tape          (writes demo/alint.gif)
@@ -14,33 +15,33 @@
 # not carry, a tracked `target/` and a `.DS_Store`, are synthesized here at record
 # time rather than committed.
 
-Output demo/alint.gif
 
 Require alint
 Require git
 
 Set Shell bash
 
-# GEOMETRY IS LOAD-BEARING. Do not "improve" these numbers casually.
+# GEOMETRY IS LOAD-BEARING. Do not "improve" these numbers, and do not run this
+# tape with a bare `vhs`. Use demo/render.sh.
 #
-# Width 880 is chosen to sit just inside GitHub's ~896px README column, so the
-# browser renders the GIF 1:1 with no rescaling and the glyphs stay sharp. Any
-# rescaling blurs terminal text badly: a 1100px source gets downscaled ~0.81x
-# (mushy), and a width="100%" on an 880px source upscales it (equally mushy).
-# The README embed therefore carries NO width attribute.
+# 1760x1520 is 2x the 880x760 the README displays. Most people read GitHub on a
+# HiDPI screen, where a 1x asset is upscaled 2x by the browser and small
+# antialiased terminal glyphs turn to mush. That WAS the bug. At 2x, HiDPI maps
+# the GIF 1:1 to device pixels (sharp) and 1x displays downscale it exactly 2:1
+# (clean). The README <img> carries width="880" to match; do not remove it.
 #
-# FontSize 15 gives ~92 columns at this width, which is what `--width 88` output
-# plus the prompt needs. Do not shrink the font to fit more columns; we don't
-# need them, and smaller glyphs are the thing that looked blurry.
+# FontSize 30 gives ~92 columns at this width, which is what `--width 88` output
+# plus the prompt needs. Do not shrink it to fit more columns; we do not need
+# them, and small glyphs are the whole problem.
 #
-# Keep the canvas small for a second reason: VHS screenshots a headless browser
-# in real time, and a larger canvas makes it silently DROP frames while still
-# tagging the GIF 25fps, so the demo plays too fast. At 2200x1680 it captured
-# 282 frames instead of ~830 and ran 2.6x speed. This geometry captures cleanly.
-Set FontSize 15
-Set Width 880
-Set Height 760
-Set Padding 20
+# THE CATCH: VHS screenshots a headless browser in real time and cannot keep up
+# with this canvas, so it silently DROPS frames while still tagging the GIF
+# 25fps. The raw output plays 2.4x too fast with no warning. demo/render.sh
+# re-times it back to the true 33.32s. Render with that script, never bare vhs.
+Set FontSize 30
+Set Width 1760
+Set Height 1520
+Set Padding 40
 Set TypingSpeed 45ms
 Set Theme "Catppuccin Mocha"
 
