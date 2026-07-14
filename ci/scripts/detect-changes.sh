@@ -71,6 +71,17 @@ if echo "$CHANGED" | grep -qE '^(crates/|xtask/|schemas/|\.alint\.yml$|\.gitattr
   RUST=true
 fi
 
+# `demo/**` is the README demo: a fixture repo plus the VHS tape that records
+# `alint check`/`fix` against it. `ci/scripts/demo-drift.sh` replays that exact
+# sequence and asserts what alint really does, and it runs inside the Dogfood
+# job, which is gated on RUST. So a change to the fixture or the tape must set
+# RUST=true, or the one gate that keeps the published GIF honest would skip
+# precisely when the demo itself was edited. (A rule change already sets RUST
+# via `crates/`, which covers the main drift source.)
+if echo "$CHANGED" | grep -qE '^demo/'; then
+  RUST=true
+fi
+
 # Bench-only changes keep the bench smoke alive but still need rust to build.
 if echo "$CHANGED" | grep -qE '^(crates/alint-bench/|xtask/)'; then
   BENCH=true
