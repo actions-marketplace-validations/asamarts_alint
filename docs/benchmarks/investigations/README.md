@@ -56,6 +56,33 @@ super-linearly in file count. Functions whose share grows
 monotonically are super-linear suspects, even when the wall-time
 absolute number doesn't yet flag them as a regression.
 
+### [`2026-07-1m-writeback-contention/`](2026-07-1m-writeback-contention/)
+
+`S2/1m/full` blows the 10 % CV gate (37–51 %) on a 16 GB bench host,
+while the *same cell, same box, same tag, same flags* measured in
+isolation is clean (0.4 %). Not an alint regression: a measurement
+artifact. A single `bench-scale` invocation writes ~16 GB (two 1M
+trees — S9 forces a second — plus git objects) and then starts
+hyperfine immediately, while the kernel is still draining gigabytes
+of dirty pages; `S2` is the first scenario that reads the whole tree's
+*content*, so it eats the contention. The 1M `runs = 3`
+auto-reduction turns one stalled run into a gate failure.
+
+Ten hypotheses were tested and falsified before the right one, and the
+README records all of them — because a future engineer seeing high 1M
+CV will reach for most of them first. Notably **it is not RAM**
+(`MemAvailable` never below 14.8 GB of 15.8 GB) and **not thermal**
+(NVMe peaked 44 °C against a ~70 °C throttle point).
+
+The diagnostic that cracked it: compare each 1M cell's **isolated** vs
+**in-matrix** mean. The CV gate only catches *variance*, so a
+uniformly-slow cell would pass while being wrong; that comparison
+proves the inflation is real and confined to one cell.
+
+Also: the harness bug is **latent on the 62 GB 3900X**, not absent —
+that box just holds the whole tree in page cache, so its reads never
+touch the disk.
+
 ## Tooling
 
 - `ALINT_LOG=alint_core=info target/release/alint check <root>` —
