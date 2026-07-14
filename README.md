@@ -36,12 +36,12 @@ alint fix --dry-run
 alint fix
 ```
 
-Most bundled rulesets are gated by ecosystem facts (`has_rust`, `has_node`, `has_python`, …), so listing one for an ecosystem you don't have is a silent no-op; the compliance and Apache-governance sets (`reuse`, `apache-2`, `apache/governance`) and `agent-hygiene` carry no fact gate and always fire, so extending them is itself the opt-in. See [docs/rules.md](docs/rules.md) for the full rule catalogue and [alint.org](https://alint.org) for narrative docs.
+Most bundled rulesets are gated by ecosystem facts (`has_rust`, `has_node`, `has_python`, and so on), so listing one for an ecosystem you don't have is a silent no-op; the compliance and Apache-governance sets (`reuse`, `apache-2`, `apache/governance`) and `agent-hygiene` carry no fact gate and always fire, so extending them is itself the opt-in. See [docs/rules.md](docs/rules.md) for the full rule catalogue and [alint.org](https://alint.org) for narrative docs.
 
 ## Core capabilities
 
 - **89 rule kinds** across 13 families: existence, content, naming, structured query (RFC 9535 JSONPath over JSON/YAML/TOML/XML), text hygiene, security/unicode, encoding, structure, portable metadata, Unix metadata, git hygiene, cross-file relations, plugin (`command` shellout). Full reference: [`docs/rules.md`](docs/rules.md).
-- **22 bundled rulesets**: `oss-baseline` (a strict superset of [Repolinter](https://github.com/todogroup/repolinter)'s default ruleset for users migrating from that tool, archived 2026-02), language sets (`rust`, `node`, `python`, `go`, `java`, `dotnet`, `php`), `ci/github-actions`, the base `monorepo` set plus workspace overlays (`cargo-workspace`, `pnpm-workspace`, `yarn-workspace`), hygiene (`no-tracked-artifacts`, `lockfiles`), tooling (`editorconfig`), docs (`adr`), compliance (`reuse`, `apache-2`), `apache/governance` (Apache TLP governance discipline), agent (`hygiene`, `context`). Built into the binary, no network round-trip; the language and workspace sets are fact-gated (a silent no-op for an absent ecosystem), while the compliance (`reuse`, `apache-2`), Apache-governance, and `agent-hygiene` sets carry no fact gate and always fire.
+- **22 bundled rulesets**, compiled into the binary with no network round-trip: `oss-baseline` (a strict superset of [Repolinter](https://github.com/todogroup/repolinter)'s default ruleset, for anyone migrating off it now that it is archived), seven language sets, `ci/github-actions`, a `monorepo` base plus Cargo / pnpm / Yarn workspace overlays, hygiene, tooling, ADR docs, compliance (`reuse`, `apache-2`), Apache TLP governance, and two agent-aware sets. Per-ruleset detail: [Bundled rulesets](#bundled-rulesets) below.
 - **Auto-fix**: 12 ops covering content edits (whitespace, newlines, line endings, BOM/bidi/zero-width strip, blank-line collapse) and path ops (create/remove/rename/prepend/append). Preview with `alint fix --dry-run`. Configurable `fix_size_limit` (default 1 MiB) skips oversize files rather than rewriting them.
 - **Conditional rules**: a bounded `when:` expression language (boolean logic, comparisons, `matches`, `in`) gates rules on *facts* evaluated once per run (predicate kinds: `all_files_exist`, `any_file_exists`, `count_files`, `file_content_matches`, `git_branch`, `custom`).
 - **Composition**: `extends:` pulls in other configs by local path, HTTPS URL (SRI-pinned), or `alint://bundled/<name>@<rev>`. Children override field-by-field. Monorepos can opt into `nested_configs: true` for auto-discovered subtree-scoped `.alint.yml` files.
@@ -53,17 +53,17 @@ Most bundled rulesets are gated by ecosystem facts (`has_rust`, `has_node`, `has
 
 ## Where alint shines
 
-alint isn't trying to be everything to everyone. The validation pass across 30 OSS repos surfaced five distinct shapes of project where alint earns its keep:
+The 30 [example configs](examples/README.md) that ship with alint were not cherry-picked. We wrote a working config for each of those repos to find out where alint actually pulls its weight, and five recurring shapes of project came out of it.
 
-1. **Repos with verify-script sprawl.** *"Replaces the structural subset of N hand-rolled validation scripts."* Best fit: kubernetes (50 verify scripts → 17 declarative rules), apache/airflow (109 pre-commit hooks → ~40% map cleanly), python/cpython (12 validation surfaces consolidated into 1 alint config), microsoft/vscode (`build/hygiene.ts` → ~75% covered declaratively).
-2. **Repos that rely on convention without explicit checks.** *"Catches the conventions your pipeline assumes but doesn't verify."* Best fit: tokio (zero hand-rolled scripts; alint catches 15 conventions tokio's pipeline silently assumes), uv (67-crate workspace conventions enforced nowhere in CI today), pnpm (replaces the in-tree `meta-updater` plugin), facebook/react, nodejs/node.
-3. **Repos with mature tooling that lacks a structural layer.** *"Adds a structural floor on top of mature tooling."* Best fit: microsoft/typescript (eslint + dprint + knip already tight), astral-sh/ruff (900+ Python lint rules but zero rules for ruff's own internal-crate `publish = false` discipline), prettier, helm, dotnet/runtime (~2,300 XML manifests with structural invariants no existing tool covers).
-4. **Repos that built their own lint-orchestration tool.** *"Replaces the structural subset of your custom orchestration layer."* Best fit: pytorch (≈86% of pytorch's 57 [`lintrunner.toml`](https://github.com/suo/lintrunner) adapters are structural; alint sits beneath, lintrunner keeps the AST-aware tail), bazel (alint replaces the structural subset of bazel's hand-rolled CI scripts).
-5. **Tightly-curated minimal-tooling projects.** *"Encodes conventions enforced only by code-review discipline."* Best fit: golang/go (zero `.github/workflows/`, zero `Makefile`, zero `.golangci.yml`; the 31-rule alint config encodes the project's structural contract for the first time anywhere).
+1. **Repos with verify-script sprawl.** Kubernetes hand-rolled 50 verify scripts; 17 declarative rules cover the structural ones. apache/airflow runs 109 pre-commit hooks, and roughly 40% map cleanly onto alint. python/cpython has 12 separate validation surfaces that collapse into a single config. About 75% of microsoft/vscode's `build/hygiene.ts` is expressible declaratively.
+2. **Repos that rely on convention without checking it.** tokio has no hand-rolled validation scripts at all, and alint catches 15 conventions its pipeline silently assumes. uv's 67-crate workspace conventions are enforced nowhere in CI today. pnpm maintains an in-tree `meta-updater` plugin to do this work. Same shape: facebook/react, nodejs/node.
+3. **Repos with mature tooling but no structural layer.** microsoft/typescript already runs eslint, dprint and knip. astral-sh/ruff ships 900+ Python lint rules, yet none cover ruff's own internal-crate `publish = false` discipline. dotnet/runtime carries roughly 2,300 XML manifests whose structural invariants no existing tool checks. Same shape: prettier, helm.
+4. **Repos that built their own lint-orchestration layer.** Around 86% of pytorch's 57 [`lintrunner`](https://github.com/suo/lintrunner) adapters are structural. alint sits underneath, and lintrunner keeps the AST-aware tail. bazel is the same shape, with hand-rolled CI scripts standing in for lintrunner.
+5. **Tightly curated, minimal-tooling projects.** golang/go has no `.github/workflows/`, no `Makefile`, no `.golangci.yml`. Its conventions live in code-review discipline. The 31-rule alint config writes that structural contract down for the first time.
 
-**Polyglot wins as a sixth shape:** when a single tree spans languages or platforms (apache/arrow's 6 languages, vercel/next.js's TS+Rust, NixOS/nixpkgs at 39k files, flutter's Dart-framework-with-6-native-embedders, protobuf's 11 language bindings), no per-language linter sees the cross-cutting conventions; alint is the layer that does.
+Polyglot repos are a sixth shape. When one tree spans languages or platforms (apache/arrow's 6 languages, vercel/next.js in TS and Rust, NixOS/nixpkgs at 39k files, flutter's Dart framework with 6 native embedders, protobuf's 11 language bindings), no per-language linter sees the conventions that cut across them. alint is the layer that does.
 
-If your repo doesn't match one of these shapes, alint is probably still useful (the rule catalogue is broad), but you may want to start by reading the closest case study above to see what a working config looks like in your shape.
+If your repo matches none of these, alint is likely still useful, since the rule catalogue is broad. Start from whichever example is closest to your shape to see what a working config looks like.
 
 ## Non-goals
 
@@ -145,12 +145,12 @@ docker run --rm -u $(id -u):$(id -g) -v "$PWD:/repo" ghcr.io/asamarts/alint:late
 
 Also published: `:<major>.<minor>` (e.g. `:0.13`) and the raw git tag (`:v0.13.0`).
 
-## Quick start
+## Usage
 
-The fastest on-ramp is `alint init`. It scans your repo for the obvious markers (Cargo.toml, package.json, pnpm-workspace.yaml, …) and writes a `.alint.yml` with the right `extends:` lines:
+The fastest on-ramp is `alint init`. It scans your repo for the obvious markers (Cargo.toml, package.json, pnpm-workspace.yaml, and so on) and writes a `.alint.yml` with the right `extends:` lines:
 
 ```bash
-alint init             # ecosystem-aware (rust@v1, node@v1, …)
+alint init             # ecosystem-aware (rust@v1, node@v1, and so on)
 alint init --monorepo  # plus workspace overlays for Cargo / pnpm / Yarn
 ```
 
@@ -249,7 +249,7 @@ Twenty-two rulesets ship in the binary, with zero network round-trip, pinned to 
 
 **Namespaced utilities**
 
-- **`hygiene/no-tracked-artifacts@v1`**: build outputs (`node_modules`, `target`, `dist`, `__pycache__`, …), OS junk (`.DS_Store`, `Thumbs.db`), editor backups (`*~`, `*.swp`), secret-shaped files (`.env` and locals), and files over 10 MiB. Several rules auto-fixable via `file_remove`.
+- **`hygiene/no-tracked-artifacts@v1`**: build outputs (`node_modules`, `target`, `dist`, `__pycache__`, and more), OS junk (`.DS_Store`, `Thumbs.db`), editor backups (`*~`, `*.swp`), secret-shaped files (`.env` and locals), and files over 10 MiB. Several rules auto-fixable via `file_remove`.
 - **`hygiene/lockfiles@v1`**: enforce lockfiles (`yarn.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `Cargo.lock`, `poetry.lock`, `uv.lock`) live only at the workspace root.
 - **`tooling/editorconfig@v1`**: root `.editorconfig` + `.gitattributes` with line-ending normalization.
 - **`docs/adr@v1`**: MADR-style Architecture Decision Records under `docs/adr/`: `NNNN-kebab-title.md` filename + required `## Status` / `## Context` / `## Decision` sections.
@@ -321,14 +321,14 @@ The hook runs `alint check` against the repo's `.alint.yml`. For auto-fix, add `
 - [**ROADMAP.md**](docs/design/ROADMAP.md): scope per version from v0.1 through v1.0.
 - [**CHANGELOG.md**](CHANGELOG.md): per-version changes, breaking and otherwise.
 - [**docs/benchmarks/METHODOLOGY.md**](docs/benchmarks/METHODOLOGY.md): how benchmarks are measured and published.
-- Per-version, per-platform benchmark results under [`docs/benchmarks/<version>/`](docs/benchmarks/).
+- Per-version, per-platform benchmark results under [`docs/benchmarks/macro/results/`](docs/benchmarks/macro/results/) (end-to-end wall-time) and [`docs/benchmarks/micro/results/`](docs/benchmarks/micro/results/) (criterion micro-benches).
 
 ## Development
 
 ```bash
 git clone https://github.com/asamarts/alint
 cd alint
-cargo test --workspace        # 450+ tests; includes end-to-end scenarios
+cargo test --workspace        # 2,000+ tests; includes end-to-end scenarios
 cargo run -- check            # dogfood: alint lints itself
 cargo bench -p alint-bench    # criterion micro-benches
 ```
