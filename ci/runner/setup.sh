@@ -11,7 +11,10 @@ if [[ ! -f "$ENV_FILE" ]]; then
     echo "Copy ci/env.example to ci/.env and fill in the values."
     exit 1
 fi
-set -a; source "$ENV_FILE"; set +a
+set -a
+# shellcheck disable=SC1090  # .env is deployment-local, resolved at runtime
+source "$ENV_FILE"
+set +a
 
 : "${GITHUB_REPO_URL:?GITHUB_REPO_URL is required in .env}"
 : "${GITHUB_TOKEN:?GITHUB_TOKEN is required in .env}"
@@ -61,5 +64,44 @@ if [[ "${_actual_pids}" != "${PIDS_LIMIT}" ]]; then
     exit 1
 fi
 echo "==> Verified PidsLimit=${PIDS_LIMIT}"
+
+# ── Reboot persistence ───────────────────────────────────────────────────────
+# The container's `--restart unless-stopped` policy plus podman-restart.service
+# start it on a NORMAL reboot — but only if the container OBJECT survives. A hard
+# reboot that clears the container leaves the runner permanently offline
+# (observed: CI went dark for hours until a manual re-setup). A user systemd unit
+# closes that gap: it guarantees a boot start AND recreates the container (by
+# re-running this script) if it is gone. `oneshot`, not a supervising
+# `podman start -a` service, because the container already self-restarts via
+# podman; a supervising unit would just loop on an already-running container.
+# Skipped when invoked as recovery (ALINT_RUNNER_RECOVERY=1) so the unit's own
+# ExecStartPre doesn't re-enter systemctl.
+if [[ -z "${ALINT_RUNNER_RECOVERY:-}" ]]; then
+    echo "==> Installing systemd user unit (reboot persistence)"
+    REPO_ROOT="$(cd "${CI_DIR}/.." && pwd)"
+    UNIT_DIR="${HOME}/.config/systemd/user"
+    mkdir -p "${UNIT_DIR}"
+    cat > "${UNIT_DIR}/container-${CONTAINER_NAME}.service" <<UNIT
+[Unit]
+Description=${CONTAINER_NAME} self-hosted GitHub Actions runner (podman)
+Documentation=${GITHUB_REPO_URL}/tree/main/ci/runner
+After=network-online.target podman-restart.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/bin/sh -c 'podman container exists ${CONTAINER_NAME} || (cd ${REPO_ROOT} && ALINT_RUNNER_RECOVERY=1 bash ci/runner/setup.sh)'
+ExecStart=/usr/bin/podman start ${CONTAINER_NAME}
+
+[Install]
+WantedBy=default.target
+UNIT
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user enable "container-${CONTAINER_NAME}.service" 2>/dev/null || true
+    # Linger so the unit starts at boot without an active login session.
+    loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || true
+    echo "==> Enabled container-${CONTAINER_NAME}.service (runner now survives reboot)"
+fi
 
 echo "==> Runner started. Check status with: podman logs -f ${CONTAINER_NAME}"
