@@ -45,11 +45,12 @@ on kbench.
    expectations (both were 3900X). alint.org's `/benchmarks/` trajectory then
    reflects kbench. **PENDING.**
 
-6. **rustc pin.** The backfill used rustc 1.97.0 (pinned via `RUSTUP_TOOLCHAIN`
-   because the repo's `rust-toolchain.toml` says the drifting `stable`).
-   `bench-record.yml` uses `dtolnay/rust-toolchain@stable`; each release records
-   its rustc in the fingerprint, so drift is visible, but consider pinning
-   bench-record to keep the kbench series on one rustc. **TO DECIDE.**
+6. **rustc pinned to 1.97.0.** rustc is part of the bench fingerprint, so the
+   whole kbench series must stay on one toolchain. `bench-record.yml` now pins
+   `dtolnay/rust-toolchain@1.97.0` (was `@stable`), matching the backfill.
+   CI stays on `@stable` (it tests current stable); only bench is pinned. Bump
+   deliberately + re-baseline when the fleet moves, never via `stable` drift.
+   **DONE.**
 
 ## Ordering constraint
 

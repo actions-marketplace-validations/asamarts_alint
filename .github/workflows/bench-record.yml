@@ -78,7 +78,12 @@ jobs:
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      # PINNED, unlike CI's @stable: rustc is part of the bench fingerprint, so
+      # the whole kbench corpus series must stay on one toolchain or numbers stop
+      # being cross-version comparable. 1.97.0 matches the v0.10-v0.13 backfill
+      # that re-based the series onto kbench. Bump deliberately (and re-baseline)
+      # when the fleet moves, never implicitly via `stable` drift.
+      - uses: dtolnay/rust-toolchain@1.97.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: bench-record
