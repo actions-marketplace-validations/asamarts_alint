@@ -30,9 +30,11 @@ Set Shell bash
 # the GIF 1:1 to device pixels (sharp) and 1x displays downscale it exactly 2:1
 # (clean). The README <img> carries width="880" to match; do not remove it.
 #
-# FontSize 30 gives ~92 columns at this width, which is what `--width 88` output
-# plus the prompt needs. Do not shrink it to fit more columns; we do not need
-# them, and small glyphs are the whole problem.
+# FontSize 30 gives a ~91-column terminal at this width. The demo runs plain
+# `alint check` (no --width): alint reads the terminal size itself and lays the
+# output out to fit, which is what a real user sees and what we want to show. Do
+# not shrink the font to cram in more columns; we do not need them, and small
+# glyphs are the whole problem.
 #
 # THE CATCH: VHS screenshots a headless browser in real time and cannot keep up
 # with this canvas, so it silently DROPS frames while still tagging the GIF
@@ -64,7 +66,7 @@ Type "# A Rust repo with the usual structural drift. Nothing here checks for it.
 Enter
 Sleep 1.5s
 
-Type "alint check --width 88 --no-docs"
+Type "alint check --no-docs"
 Enter
 Sleep 6s
 
@@ -77,12 +79,12 @@ Type "# Some of that is mechanical. alint fixes it in place."
 Enter
 Sleep 1.5s
 
-Type "alint fix --width 88"
+Type "alint fix"
 Enter
 Sleep 5s
 
 # --- 3. what is left is a human decision ------------------------------------
-Type "alint check --width 88 --no-docs --compact"
+Type "alint check --no-docs --compact"
 Enter
 Sleep 4s
 

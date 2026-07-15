@@ -44,19 +44,19 @@ fail() { echo "DEMO DRIFT: $1"; echo; echo "The README GIF now misrepresents ali
          echo "Re-record it (vhs demo/alint.tape) and update ci/scripts/demo-drift.sh."; exit 1; }
 
 # --- 1. check: the state the GIF opens on -------------------------------------
-before="$("$ALINT" check --width 88 --no-docs --color never 2>&1 || true)"
+before="$("$ALINT" check --no-docs --color never 2>&1 || true)"
 errors=$(printf '%s' "$before"  | grep -oE '[0-9]+ errors?'        | head -1 | grep -oE '[0-9]+' || echo 0)
 fixable=$(printf '%s' "$before" | grep -oE '[0-9]+ auto-fixable'   | head -1 | grep -oE '[0-9]+' || echo 0)
 [ "$errors" = "$EXPECT_ERRORS" ]   || fail "check reports $errors errors, GIF shows $EXPECT_ERRORS"
 [ "$fixable" = "$EXPECT_FIXABLE" ] || fail "check reports $fixable auto-fixable, GIF shows $EXPECT_FIXABLE"
 
 # --- 2. fix: the payoff frame --------------------------------------------------
-fixed="$("$ALINT" fix --width 88 --color never 2>&1 || true)"
+fixed="$("$ALINT" fix --color never 2>&1 || true)"
 applied=$(printf '%s' "$fixed" | grep -oE '[0-9]+ applied' | head -1 | grep -oE '[0-9]+' || echo 0)
 [ "$applied" = "$EXPECT_APPLIED" ] || fail "fix applied $applied, GIF shows $EXPECT_APPLIED"
 
 # --- 3. check again: what a human still has to decide --------------------------
-after="$("$ALINT" check --width 88 --no-docs --color never 2>&1 || true)"
+after="$("$ALINT" check --no-docs --color never 2>&1 || true)"
 errors_after=$(printf '%s' "$after" | grep -oE '[0-9]+ errors?' | head -1 | grep -oE '[0-9]+' || echo 0)
 [ "$errors_after" = "$EXPECT_ERRORS_AFTER" ] \
   || fail "post-fix check reports $errors_after errors, GIF shows $EXPECT_ERRORS_AFTER"
