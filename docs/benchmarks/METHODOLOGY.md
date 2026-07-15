@@ -174,6 +174,17 @@ competitive runs" section.
 - **`cargo build --release` is not bit-reproducible across
   rustc versions** even with the same source. That's why
   the fingerprint records the rustc version.
+- **Small-RAM hosts (<= ~16 GB) must run with
+  `ALINT_BENCH_DROP_CACHES=1`.** The full 1M matrix leaves the page
+  cache saturated (two 1M trees + git objects, ~16 GB), and the first
+  content-heavy 1M scenario then stalls in page-cache reclaim mid-
+  measurement (`allocstall`) — a variance artifact invisible to disk-util
+  and `MemAvailable` that spikes one cell's CV to 40-50 %. The flag drops
+  the page cache once per size phase after tree-gen; warmup re-reads the
+  tree so measured runs stay warm. A large-RAM host (e.g. the 62 GB
+  3900X baseline) never reclaims and must leave the flag OFF — it needs
+  passwordless sudo for `drop_caches` and would only add overhead.
+  Investigation: [`investigations/2026-07-1m-writeback-contention/`](investigations/2026-07-1m-writeback-contention/).
 
 ## Why not CodSpeed / iai-callgrind / Bencher
 

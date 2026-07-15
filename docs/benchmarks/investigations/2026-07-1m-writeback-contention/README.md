@@ -1,6 +1,37 @@
 # 2026-07 — S2/1m/full blows the CV gate on a 16 GB bench host
 
-Status: **Open — mechanism identified, fixes under test.**
+Status: **Resolved — page-cache reclaim confirmed; `ALINT_BENCH_DROP_CACHES` fix validated.**
+
+## Resolution (2026-07-15)
+
+The mechanism was NOT RAM-by-`MemAvailable`, NOT thermal, NOT writeback (all
+falsified with instrumentation — see below); it was **page-cache reclaim
+pressure**. On a 16 GB host the full matrix leaves the cache saturated (two 1M
+trees plus git objects, ~16 GB); the first content-heavy 1M scenario (`S2`)
+then allocates + reads 3.9 GB and stalls in reclaim (`allocstall`), invisible to
+both disk-util and `MemAvailable`. A 62 GB host holds it all and never reclaims,
+which is why the 3900X never shows the artifact.
+
+**Fix (`xtask/src/bench/run.rs`, opt-in `ALINT_BENCH_DROP_CACHES`):** `sync` +
+drop the page cache once per size phase, after tree materialization and before
+the benchmark loop. hyperfine's warmup re-reads the tree, so measured runs stay
+warm; the drop only evicts the stale cross-phase pollution that forced reclaim.
+
+**Validation (same full publish-grade matrix that broke S2/1m/full 3/3 times at
+37 % / 43 % / 51 % CV):** with the flag, S2/1m/full = **3656 ms, CV 0.5 %** (the
+isolated-clean baseline is 3667 ms / 0.4 %), every 1M cell clean, and
+**`bench-gate: PASS`**. Comparability (T5): no non-S2 cell moved materially
+(median |move| 1.3 % in the earlier A/B). An A/B on the `100k,1m` SUBSET was
+inconclusive because that subset reproduces the artifact only intermittently
+(the extra 1k/10k phases are what make the full matrix break reliably) — so the
+FULL matrix is the correct reproduction shape.
+
+The flag is off by default (a large-RAM host neither needs nor should pay for
+it) and becomes part of the small-RAM bench-host contract in `METHODOLOGY.md`.
+
+---
+
+Original write-up (superseded by the resolution above):
 Symptom is a *measurement artifact*, not an alint regression: the
 same cell measured in isolation on the same box, same tag, same
 flags is clean (CV 0.1–0.5 %).
