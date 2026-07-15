@@ -1,8 +1,29 @@
 # Documentation and site-drift: remediation + prevention (v0.14)
 
-Status: **Plan / Draft** (2026-07-03; revised after an adversarial self-review that
-verified every load-bearing claim against the pipeline code). Flip items to `[x]` as they
-land. Decisions: [ADR-0007](../../adr/0007-release-aware-documentation.md).
+Status: **Substantially landed — the `[ ]` boxes below are STALE.** (Plan drafted
+2026-07-03; revised after an adversarial self-review that verified every load-bearing
+claim against the pipeline code.) Decisions: [ADR-0007](../../adr/0007-release-aware-documentation.md).
+
+> **Reconciliation (2026-07-15).** A re-verification against the current two-repo
+> state found the checklist far more done than its checkboxes show — many items
+> were fixed without flipping the box. Confirmed:
+> - **§5 prevention: LANDED.** `ci/scripts/strip-since.mjs` (+ `strip-since.test.mjs`)
+>   exists and is *wired into the deploy pipeline* (`docs-bundle.yml:123-129` checks
+>   it out from main and release-gates the overlaid reference docs; its test runs in
+>   `docs.sh`). ADR-0007 is **Accepted**. The recurrence-prevention layer is live.
+> - **§A live leaks: not leaking.** The live `file_absent` rule page shows only
+>   `git_tracked_only`, no `root_only` (A1 resolved by strip-since).
+> - **§B marketing counts: fixed.** Every named `.astro` (`ls-lint`, `benchmarks`,
+>   `monorepo-linter`, `repository-structure-linter`, `compare`) is clean of the
+>   stale 83/70 counts; the only remaining `70`/`83` hits are in *historical
+>   changelog entries*, which correctly record past counts and must not change.
+>
+> **Genuinely residual (minor, non-blocking):** D-b (the `root_only` changelog
+> entry sits under Fixed; the plan preferred Added — defensible either way) and
+> E4 (`alint.org/marketing/STATE.md` still says "Last reviewed v0.9.22" in one
+> line; an internal tracking doc). Neither blocks a v0.14 release. A full
+> box-by-box flip is deferred; this note is the source of truth over the stale
+> `[ ]` marks below.
 Relationship: extends [`post_v0.13_audit.md`](./post_v0.13_audit.md) Phase 6 (doc drift)
 and Phase 7 (site drift W1-W7). This doc adds the drift a fresh two-repo audit
 (2026-07-03) found that those phases did not cover, plus the recurrence-prevention layer.
