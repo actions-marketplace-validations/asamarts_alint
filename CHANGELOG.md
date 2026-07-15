@@ -227,6 +227,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so `É.txt`/`é.txt` (and other non-ASCII case pairs) slipped past — yet a
   case-insensitive filesystem folds them. It now uses Unicode `to_lowercase`,
   the strict portable default. (L2)
+- **`filename_case` `--fix` converges on non-ASCII names.** The `lower`/`upper`
+  conventions case-folded ASCII-only while the check was Unicode-aware, so a name
+  like `RÉSUMÉ.md` "fixed" to a form the check still rejected and re-fired every
+  run. `convert` now folds with Unicode `to_lowercase` / `to_uppercase`, so the
+  fixed name is a fixed point of the check. (W4)
 - **`command` argv is guarded against option-injection via filenames.** A repo
   file named like a flag (e.g. `--write`) rendered from `{path}` could turn a
   trusted `command: ["prettier", "--check", "{path}"]` into a destructive
@@ -448,6 +453,34 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   escape. alint's own styling is unaffected, machine formats (JSON/SARIF/…)
   are unchanged, and clean output is byte-identical (no TTY-conditional
   divergence). (M8)
+- **An inherited ruleset can no longer lift path-confinement before its own
+  `extends:` resolves.** The loader derived `extends:`-target confinement from
+  `allow_out_of_root: true` at every recursion level, but the rejection of that
+  flag in a non-top-level config fired only *after* the sub-config had already
+  resolved its own `extends:`. So an inherited (untrusted) ruleset could set the
+  flag and read an out-of-root target — hang on a FIFO, slurp a large file, or
+  probe host paths as an existence oracle — before the reject could fire. Only
+  the user's own top-level config (and trust-equivalent `.alint.d/` drop-ins) may
+  now open that gate. (W1)
+- **Deeply-nested YAML flow collections can no longer hang the run.**
+  `serde_yaml_ng`/libyaml has no nesting limit and is super-linear on `[[[…` /
+  `{{{…`, so a crafted config, an `extends:`'d ruleset, or a `yaml_path_*` rule
+  over crafted repo content could stall for seconds-to-forever. A cheap pre-parse
+  flow-depth scan (shared in `alint-core`, cap 1024) now rejects such input
+  before libyaml sees it, matching the existing JSON/TOML/XML depth guards; it
+  counts only genuine flow opens, so a `[` inside a plain or quoted scalar never
+  false-rejects ordinary YAML. (W2)
+- **The Trojan-Source and zero-width rules no longer fail open on a non-UTF-8
+  byte.** `no_bidi_controls` and `no_zero_width_chars` abandoned the whole file
+  on the first invalid UTF-8 byte, so appending one stray `0xFF` suppressed
+  detection of every bidi override / zero-width char in it — a one-byte bypass of
+  a CVE-2021-42574 defense. Both now decode lossily and keep scanning the valid
+  runs. (W3)
+- **A direct read of an in-tree FIFO can no longer hang the run.** The walker
+  skips named pipes at index time, but the direct-read helpers reached by
+  shebang / prefix / suffix / structured rules on a config- or content-derived
+  path opened them anyway, blocking `O_RDONLY` until a writer appeared. They now
+  stat `is_file()` before opening, matching the walker. (W5)
 
 ### Internal
 
