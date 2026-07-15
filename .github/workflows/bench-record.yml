@@ -1,8 +1,13 @@
 name: bench-record
 
 # Tag-triggered "publish-grade" bench run for the canonical baseline
-# machine (self-hosted, AMD Ryzen 9 3900X — matches the fingerprint
-# every published row in docs/benchmarks/HISTORY.md was captured on).
+# machine: self-hosted `kbench` (Intel i7-6700HQ laptop, 16 GB), which
+# replaced the 3900X dev box as the bench host on 2026-07-15 (quiet +
+# dedicated + fixed fingerprint). Its 16 GB RAM needs the drop_caches
+# fix (ALINT_BENCH_DROP_CACHES, set below); the trees live on /bench
+# (ext4 NVMe) because kbench's /tmp is a 7.8 GB tmpfs that overflows at
+# 1M. See project docs: the kbench canonical-host note + the
+# 2026-07-1m-writeback-contention investigation.
 #
 # Two layers per run:
 # - macro: `xtask bench-scale --include-1m --warmup 3 --runs 10` over
@@ -61,11 +66,12 @@ concurrency:
 jobs:
   bench:
     name: bench (linux-x86_64)
-    # The canonical baseline runner — must match the fingerprint of
-    # every previously published row. ubuntu-latest on github-hosted
-    # would run a different CPU, kernel, and FS, voiding cross-version
+    # The canonical baseline runner is kbench (label `bench`), NOT the
+    # `alint` CI runner (the 3900X dev box) — bench moved to a dedicated,
+    # quiet, fixed-fingerprint host. ubuntu-latest on github-hosted would
+    # run a different CPU, kernel, and FS, voiding cross-version
     # comparability.
-    runs-on: [self-hosted, linux, alint]
+    runs-on: [self-hosted, linux, bench]
     timeout-minutes: 360   # 6h cap; ~3.5h expected at publish-grade flags
     steps:
       - uses: actions/checkout@v7
@@ -186,6 +192,12 @@ jobs:
       - name: macro bench-scale
         env:
           OUT_LABEL: ${{ steps.label.outputs.label }}
+          # kbench (16 GB) needs the page-cache-reclaim fix or S2/1m/full
+          # spikes to 40-50% CV and fails bench-gate; and its trees must
+          # live on the /bench ext4 NVMe, not the 7.8 GB /tmp tmpfs which
+          # overflows at 1M. Both are no-ops/harmless on any large-RAM host.
+          ALINT_BENCH_DROP_CACHES: "1"
+          TMPDIR: /bench
         run: |
           set -euo pipefail
           out_dir="docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}"
