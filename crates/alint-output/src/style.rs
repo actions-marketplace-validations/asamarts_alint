@@ -49,11 +49,13 @@ pub const SUCCESS: Style = Style::new()
 pub const PATH: Style = Style::new().bold();
 
 /// Location prefix (`path:line:col`, or just `path`) in the compact
-/// one-line format. Magenta so it reads as a field distinct from the
-/// level colors (red / yellow / cyan) and visually delimits the start of
-/// each finding — the compact format has no per-file section headers to
-/// separate findings the way the grouped format does.
-pub const LOCATION: Style = Style::new().fg_color(Some(Color::Ansi(AnsiColor::Magenta)));
+/// one-line format. Bright magenta + bold so it reads as a field distinct
+/// from the level colors (red / yellow / cyan) and clearly delimits the
+/// start of each finding — the compact format has no per-file section
+/// headers to separate findings the way the grouped format does.
+pub const LOCATION: Style = Style::new()
+    .fg_color(Some(Color::Ansi(AnsiColor::BrightMagenta)))
+    .bold();
 
 /// Rule identifiers — dimmed so they're secondary to the
 /// message.

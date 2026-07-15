@@ -327,8 +327,8 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
 /// whole-file or repo-level finding has nothing to point at, so the old
 /// `:0:0` was noise that also misleadingly implied line 0 / col 0.
 /// Path-less violations use the literal `<repo>`. The location prefix is
-/// color-tagged (magenta) so each finding's start is visually obvious
-/// even without the grouped format's per-file separators; levels are
+/// color-tagged (bright magenta + bold) so each finding's start is visually
+/// obvious even without the grouped format's per-file separators; levels are
 /// color-tagged too. The `AutoStream` strips SGR escapes when the sink
 /// isn't a TTY, so pipe-safe `path:line:col` output is automatic.
 fn write_human_compact(

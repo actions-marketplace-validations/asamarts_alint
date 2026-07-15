@@ -23,11 +23,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# The demo's real wall-clock length. Measured from a canvas small enough that VHS
-# captured EVERY frame (880x760 -> 833 frames at a true 25fps = 33.32s). If you
-# change the tape's Sleep/Type timings, re-measure this: render once at 880x760,
-# read the duration, put it here.
-TRUE_DURATION=33.32
+# Target GIF duration. NOT the real wall-clock length (that is ~33.3s, measured
+# from an 880x760 render where VHS captured every frame). We deliberately play it
+# a touch faster: the first published demo ran at 29.16s because VHS was
+# frame-dropping at 1100px, and that snappier pace read better, so we reproduce it
+# on purpose here instead of leaving it to a capture artifact. setpts scales the
+# complete 2x-captured frames to this duration -- uniform speedup of typing and
+# pauses alike, which is exactly what the frame-drop happened to do. Nudge this if
+# the pace feels off; it is a pure playback-speed knob, no re-render needed.
+TRUE_DURATION=29.16
 
 command -v vhs >/dev/null    || { echo "need vhs (charmbracelet/vhs)"; exit 1; }
 command -v ffmpeg >/dev/null || { echo "need ffmpeg"; exit 1; }
