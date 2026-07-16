@@ -250,9 +250,21 @@ MANUAL = {
     ("v0.5.6", "S3", "1m", "changed"): (528103.0, 2537.0),
 }
 
+# Host fingerprint per published arch series, for the HISTORY header line.
+# `linux-x86_64` is the canonical kbench series (2026-07 onward); the retired
+# 3900X dev-box series lives at `linux-x86_64-ryzen-3900x` (alint.org/benchmarks-1).
+FINGERPRINT = {
+    "linux-x86_64": "Intel Core i7-6700HQ 4-core / 15 GB / ext4 / rustc 1.97.0",
+    "linux-x86_64-ryzen-3900x": "AMD Ryzen 9 3900X 12-core / 62 GB / ext4 / rustc 1.95",
+}
+
 
 def load_arch(base: str, arch: str) -> Dict[Cell, Stat]:
-    data = dict(MANUAL)
+    # The v0.5.6 MANUAL cells are 3900X numbers (that release predates the
+    # results.json format). They belong only to the retired 3900X series
+    # (`linux-x86_64-ryzen-3900x`); the canonical kbench `linux-x86_64`
+    # series starts at v0.10 and must not inherit a foreign-host baseline row.
+    data = dict(MANUAL) if arch == "linux-x86_64-ryzen-3900x" else {}
     arch_dir = os.path.join(base, arch)
     if not os.path.isdir(arch_dir):
         print(f"warning: {arch_dir} missing; nothing to load", file=sys.stderr)
@@ -290,6 +302,7 @@ def fmt(data: Dict[Cell, Stat], v: str, s: str, sz: str, m: str) -> str:
 def render(
     data: Dict[Cell, Stat],
     changelog_headlines: Dict[str, Tuple[str, str]] | None = None,
+    arch: str = "linux-x86_64",
 ) -> str:
     """Produce the full HISTORY.md text. Caller redirects to file.
 
@@ -306,7 +319,7 @@ def render(
         "# alint perf history",
         "",
         "Per-scenario tables, version-trajectory shape. Headline cells fingerprinted",
-        "to `linux-x86_64` (AMD Ryzen 9 3900X 12-core / 62 GB / ext4 / rustc 1.95) —",
+        f"to `{arch}` ({FINGERPRINT.get(arch, 'see METHODOLOGY.md')}) —",
         "see [`METHODOLOGY.md`](METHODOLOGY.md) for the hardware contract and why",
         "cross-machine comparisons need like-for-like.",
         "",
@@ -519,7 +532,7 @@ def main() -> int:
     changelog_headlines = parse_changelog(args.changelog)
     if not data:
         return 1
-    sys.stdout.write(render(data, changelog_headlines))
+    sys.stdout.write(render(data, changelog_headlines, args.arch))
     if args.json_out:
         os.makedirs(os.path.dirname(os.path.abspath(args.json_out)) or ".", exist_ok=True)
         with open(args.json_out, "w", encoding="utf-8") as f:

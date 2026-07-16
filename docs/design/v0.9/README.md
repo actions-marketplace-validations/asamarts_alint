@@ -66,7 +66,7 @@ Every v0.9.x tag runs:
 
 ```sh
 xtask bench-compare \
-  --before docs/benchmarks/micro/results/linux-x86_64/v0.7.0/criterion \
+  --before docs/benchmarks/micro/results/linux-x86_64-ryzen-3900x/v0.7.0/criterion \
   --after target/criterion \
   --threshold 10
 ```
@@ -79,7 +79,7 @@ The four v0.7.0-baselined micro-benches are `glob_compile`,
 (`single_file_rules`, `cross_file_rules`, `output_formats`,
 `fix_throughput`, `dsl_extends`, `structured_query`,
 `blame_cache`, `walker`) didn't exist at v0.7.0 — per
-`docs/benchmarks/micro/results/linux-x86_64/v0.7.0/README.md`, "their own
+`docs/benchmarks/micro/results/linux-x86_64-ryzen-3900x/v0.7.0/README.md`, "their own
 first-run numbers serve as their baseline." For these, v0.9.x
 compares against the previous v0.9.x phase rather than against
 v0.7.0.

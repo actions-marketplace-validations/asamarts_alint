@@ -4,16 +4,19 @@ How fast is alint, how do we measure it, and where do the numbers live.
 
 ## TL;DR — current published numbers
 
-`linux-x86_64` (AMD Ryzen 9 3900X 12-core / 62 GB / ext4 / rustc 1.95).
-Latest published release: **v0.13.0** (2026-06-17). Headline full-run
-wall-times at 1M files (sourced from [`HISTORY.md`](HISTORY.md)):
+`linux-x86_64` (Intel Core i7-6700HQ 4-core / 15 GB / ext4 / rustc 1.97.0, host
+`kbench`). Canonical since 2026-07-15; the retired 3900X dev-box series is
+retained at [`macro/results/linux-x86_64-ryzen-3900x/`](macro/results/linux-x86_64-ryzen-3900x/)
+(published at alint.org/benchmarks-1). Latest published release: **v0.13.0**
+(2026-06-17). Headline full-run wall-times at 1M files (sourced from
+[`HISTORY.md`](HISTORY.md)):
 
 | Workload (1M, full) | v0.13.0 |
 |---|---:|
-| S3 workspace bundle | 11.82 s ± 0.06 |
-| S6 per-file content fan-out | 11.57 s ± 0.27 |
-| S7 cross-file relational | 15.41 s ± 0.13 |
-| S9 nested polyglot | 7.48 s ± 0.11 |
+| S3 workspace bundle | 17.46 s ± 0.16 |
+| S6 per-file content fan-out | 16.65 s ± 0.03 |
+| S7 cross-file relational | 16.09 s ± 0.10 |
+| S9 nested polyglot | 11.39 s ± 0.05 |
 
 The full per-scenario, per-size trajectory (every release × 1k/10k/100k/1M ×
 full/changed) lives in [`HISTORY.md`](HISTORY.md); per-version raw snapshots
@@ -77,8 +80,8 @@ smoke check that the macro harness still runs end-to-end (**non-gating**) — an
 (`DET_PERF_ADVISORY=1`, so it annotates rather than fails). Wall-clock regression
 is gated per-release by `xtask bench-gate` (cross-version `min_ms`; the publish
 criterion in [`../../RELEASING.md`](../../RELEASING.md)), trustworthy only on a
-verified-quiet box; `xtask bench-compare` against the v0.7.0 micro floor under
-[`micro/results/linux-x86_64/v0.7.0/criterion/`](micro/results/linux-x86_64/v0.7.0/)
+verified-quiet box; `xtask bench-compare` against an earlier micro floor (e.g.
+[`micro/results/linux-x86_64/v0.10.0/criterion/`](micro/results/linux-x86_64/v0.10.0/))
 is a local helper, not wired into any workflow. See [`METHODOLOGY.md`](METHODOLOGY.md)
 and [`../design/deterministic-perf-gating.md`](../design/deterministic-perf-gating.md).
 

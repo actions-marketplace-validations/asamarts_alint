@@ -13,7 +13,7 @@ v0.9.6. Deviations from the draft are flagged inline below.
 The LSP server (see [`lsp_server.md`](./lsp_server.md)) needs to
 re-evaluate rules against a single file on every keystroke (debounced).
 A full `Engine::run` on a 100k-file workspace takes ~186ms (per
-`docs/benchmarks/macro/results/linux-x86_64/v0.9.5/`); on every keystroke
+`docs/benchmarks/macro/results/linux-x86_64-ryzen-3900x/v0.9.5/`); on every keystroke
 that's a UX disaster. We need a `run_for_file` contract that costs
 proportional to *one* file's evaluation, not the whole tree's.
 

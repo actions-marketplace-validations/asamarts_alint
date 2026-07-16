@@ -83,9 +83,10 @@ exits non-zero when any paired benchmark's mean has grown past the
 threshold:
 
 ```sh
-# Compare against the v0.7.0 micro floor (local helper — no workflow runs this)
+# Compare against an earlier micro floor (local helper — no workflow runs this).
+# Use a same-host baseline: the canonical linux-x86_64 series is kbench (v0.10.0+).
 xtask bench-compare \
-    --before docs/benchmarks/micro/results/linux-x86_64/v0.7.0/criterion \
+    --before docs/benchmarks/micro/results/linux-x86_64/v0.10.0/criterion \
     --after  target/criterion \
     --threshold 10
 ```
