@@ -214,7 +214,20 @@ jobs:
           # follow-up, so it is ABSENT at the tag. Without this, /benchmarks/ on
           # alint.org is always a release behind. Overlay main's bench results +
           # renderer and regenerate just the trajectory JSON in the bundle.
+          #
+          # `git checkout <ref> -- <dir>` ADDS and OVERWRITES but never DELETES,
+          # so a results dir that main MOVED still survives from the tag's tree
+          # and gets rendered as part of the canonical series. The 2026-07 kbench
+          # re-baseline relocated the pre-v0.10 3900X results to
+          # `linux-x86_64-ryzen-3900x/`; without dropping the tag's copy first,
+          # those 20 stale dirs stayed at `linux-x86_64/` and spliced a foreign
+          # host into the trajectory (kbench v0.10+ rows sitting on top of 3900X
+          # v0.5.7-v0.9.23 rows, under one fingerprint). Delete first so main's
+          # layout REPLACES the tag's rather than merging with it. Safe here: the
+          # bundle payload is already assembled under target/docs-bundle/, and
+          # nothing after this step reads the working tree's docs/benchmarks.
           git fetch --quiet origin main
+          rm -rf docs/benchmarks
           git checkout origin/main -- docs/benchmarks xtask/scripts/render-history.py
           python3 xtask/scripts/render-history.py \
             --json-out "$(pwd)/target/docs-bundle/benchmarks-trajectory.json"
