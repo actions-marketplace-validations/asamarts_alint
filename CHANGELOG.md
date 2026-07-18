@@ -6,6 +6,24 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-18
+
+The adoption release. **Baseline mode** (`alint baseline` + `alint check
+--baseline`) grandfathers a repo's existing violations behind a
+content-fingerprinted snapshot, so `alint check` reports and gates only on *new*
+findings — alint becomes a blocking merge gate on an established codebase without
+a flag-day cleanup, and for SARIF the suppressed findings are *marked, not
+deleted*, so GitHub Code Scanning dismisses them instead of flapping
+fixed-then-reopened. Rule kinds go **many-to-many over categories**, so a
+cross-cutting kind like `no_bidi_controls` surfaces under both Encoding and
+Security instead of hiding under one family, browsable with the new `alint rules
+list` / `alint rules categories` catalog commands. Alongside: `--only <id>` to
+run a single rule (the exact command the `agent` output format now emits per
+fixable finding), a more readable `--compact` output, and a whole-repo security
+and correctness cycle that closes an `extends:` trust-bypass, a YAML flow-scalar
+DoS, a bidi/zero-width fail-open, a symlink path-confinement escape, and a FIFO
+read hang.
+
 ### Added
 
 - **Baseline mode** (`alint baseline` + `alint check --baseline <file>`): snapshot
@@ -6352,7 +6370,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/asamarts/alint/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/asamarts/alint/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/asamarts/alint/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/asamarts/alint/compare/v0.11.0...v0.11.1

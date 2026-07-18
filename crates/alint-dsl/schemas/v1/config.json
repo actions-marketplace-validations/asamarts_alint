@@ -1024,8 +1024,7 @@
         "root_only": {
           "default": false,
           "description": "If true, only a directory directly at the repository root is forbidden; a nested match with the same name is allowed.",
-          "type": "boolean",
-          "x-since": "0.14"
+          "type": "boolean"
         }
       },
       "required": [
@@ -1081,8 +1080,7 @@
         "root_only": {
           "default": false,
           "description": "If true, only a directory directly at the repository root satisfies the rule; a nested match does not.",
-          "type": "boolean",
-          "x-since": "0.14"
+          "type": "boolean"
         }
       },
       "required": [
@@ -1213,8 +1211,7 @@
         "root_only": {
           "default": false,
           "description": "If true, only a file matching `paths` directly at the repository root is forbidden; a nested match with the same name is allowed.",
-          "type": "boolean",
-          "x-since": "0.14"
+          "type": "boolean"
         }
       },
       "required": [

@@ -12,7 +12,6 @@ use crate::fixers::FileRemoveFixer;
 struct Options {
     /// If true, only a file matching `paths` directly at the repository root is
     /// forbidden; a nested match with the same name is allowed.
-    #[schemars(extend("x-since" = "0.14"))]
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to files tracked in git's index: entries present in the

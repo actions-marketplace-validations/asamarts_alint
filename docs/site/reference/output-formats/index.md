@@ -25,7 +25,6 @@ A single `Report` fans out to each format:
 
 Each format is shown by example in the [quickstart](/docs/getting-started/quickstart/). The [`agent` format](/docs/reference/output-formats/agent/) has its own reference because its shape is purpose-built for AI coding agents.
 
-<!-- alint:since=0.14 -->
 ## Baseline suppression
 
 When a run is filtered through a [baseline](/docs/concepts/baseline/), suppression *marks* findings rather than deleting them, and only two formats surface those marks:
@@ -34,4 +33,3 @@ When a run is filtered through a [baseline](/docs/concepts/baseline/), suppressi
 - **`json`** omits suppressed findings from `results` and records a `summary.baselined_suppressed` count in the envelope.
 
 The other six formats receive the already-filtered live report and are baseline-oblivious. The global `--show-baselined` flag lists the suppressed findings in full, in any format; the exit code is gated on the live (new) findings only, in every format.
-<!-- /alint:since -->

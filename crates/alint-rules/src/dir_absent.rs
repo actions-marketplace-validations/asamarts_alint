@@ -8,7 +8,6 @@ use serde::Deserialize;
 struct Options {
     /// If true, only a directory directly at the repository root is forbidden; a
     /// nested match with the same name is allowed.
-    #[schemars(extend("x-since" = "0.14"))]
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to directories that contain at least one git-tracked
