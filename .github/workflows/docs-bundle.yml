@@ -18,6 +18,16 @@ on:
     # Lets the alint.org repo (or a maintainer) re-trigger a
     # rebuild without a code change — useful when only a brand-
     # new alint.org consumer is being onboarded.
+  release:
+    # The corrective trigger. The `tags: v*` push above fires at tag-push
+    # time, BEFORE release.yml has created the GitHub Release, so it builds
+    # from the PREVIOUS published release (this workflow always checks out the
+    # latest *published* release tag, not the ref that triggered it). When
+    # release.yml then publishes the new Release, this fires a second run that
+    # builds the new version and pings the deploy hook, so alint.org's STALE
+    # DOCS BUNDLE guard clears on its own instead of needing a manual
+    # re-dispatch. Cost: one extra ~9-min bundle build per release.
+    types: [published]
 
 permissions:
   contents: write   # required to push to the docs-bundle branch
