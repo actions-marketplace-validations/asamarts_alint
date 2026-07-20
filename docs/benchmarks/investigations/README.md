@@ -83,6 +83,31 @@ Also: the harness bug is **latent on the 62 GB 3900X**, not absent —
 that box just holds the whole tree in page cache, so its reads never
 touch the disk.
 
+### [`2026-07-v0.14-s2-harness-artifact/`](2026-07-v0.14-s2-harness-artifact/)
+
+v0.14.0's `bench-record` failed the wall-clock gate: **S2 `10k full` +17.6 %
+`min_ms`** vs v0.13.0, with the other content scenarios up ~+6.5 % and the
+filename-only S1 flat. The content-scanning correlation looked like a real
+per-file cost, and a code scan even surfaced a plausible culprit — a v0.14
+read-path change (`c845f7d3`, crash/FIFO hardening) that *appeared* to drop a
+buffer preallocation.
+
+**The deterministic gate overturned both.** `det_check` under Valgrind (Ir +
+EstimatedCycles, load- and harness-immune) is flat ±0.4 % for every scenario
+including S2 (−0.2 % at 10k). Same instructions + same cycles + +17.6 % wall-clock
+⟹ the delta is not in the binary. Root cause: a **harness difference** — v0.14.0
+is the first release benched through the self-hosted GitHub Actions runner, while
+v0.10–v0.13 were backfilled by hand over SSH; the runner agent's steady concurrent
+load inflates the longer content scenarios and spares the short walker-only S1.
+
+Reusable traps: a plausible code diff is not proof (`read_to_end` on a `File` /
+`Take<File>` preallocates via a std specialization, so `Vec::new()` there is not
+the regression it looks like); when a wall-clock "regression" and a code lead both
+disagree with a flat deterministic gate, the deterministic gate wins. A real CI
+bug fell out on the way: `det-perf-gate.sh` pins `gungraun-runner` older than the
+`gungraun` library, so the deterministic gate mis-reports a tooling failure as an
+Ir regression on any post-bump PR.
+
 ## Tooling
 
 - `ALINT_LOG=alint_core=info target/release/alint check <root>` —
