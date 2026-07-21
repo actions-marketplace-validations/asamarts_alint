@@ -242,10 +242,20 @@ jobs:
           sync   # flush the release build's dirty pages before measuring
           out_dir="docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}"
           mkdir -p "$out_dir"
+          # Scenarios present in THIS ref, not a hardcoded list: S10 landed in
+          # v0.9.9, S11-S13 in v0.10, S14 in v0.12, so re-benching an old tag (when
+          # re-baselining v0.10-v0.13 onto the runner) must request only the
+          # scenarios its own xtask knows, or bench-scale errors on an unknown
+          # scenario — the same per-tag adaptation the manual backfill made. Derived
+          # from the scenario definition files; a current release still yields the
+          # full S1..S14.
+          scenarios=$(ls xtask/src/bench/scenarios/s*.yml 2>/dev/null \
+            | sed -E 's#.*/s([0-9]+)_.*#\1#' | sort -n | sed 's/^/S/' | paste -sd,)
+          echo "scenarios for this ref ($(git rev-parse --short HEAD)): $scenarios"
           ./target/release/xtask bench-scale \
             --include-1m \
             --sizes 1k,10k,100k,1m \
-            --scenarios S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,S12,S13,S14 \
+            --scenarios "$scenarios" \
             --modes full,changed \
             --tools alint \
             --warmup 3 --runs 10 \
@@ -269,11 +279,15 @@ jobs:
           # det_check needs a release binary + baseline. Those are the load-immune
           # deterministic gate (ci/scripts/det-perf-gate.sh, per-PR; det-100k at
           # release) and are NOT part of the criterion micro corpus.
-          cargo bench -p alint-bench --features fs-benches \
-            --bench glob_compile --bench glob_match --bench regex_content \
-            --bench rule_engine --bench walker --bench single_file_rules \
-            --bench cross_file_rules --bench output_formats --bench fix_throughput \
-            --bench dsl_extends --bench structured_query --bench blame_cache
+          # Criterion micro-benches present in THIS ref, EXCLUDING the gungraun
+          # det_* Valgrind gate benches (slow, need a baseline; not part of the
+          # criterion micro corpus). Derived rather than hardcoded so re-benching an
+          # old tag (blame_cache / structured_query / etc. were added over time)
+          # doesn't fail on a --bench its alint-bench crate doesn't define.
+          mbenches=$(ls crates/alint-bench/benches/*.rs 2>/dev/null | xargs -n1 basename \
+            | sed 's/\.rs$//' | grep -vE '^det_' | sed 's/^/--bench /' | paste -sd' ')
+          echo "micro benches for this ref: $mbenches"
+          cargo bench -p alint-bench --features fs-benches $mbenches
 
       - name: publish micro snapshot
         env:
