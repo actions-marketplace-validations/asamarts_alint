@@ -183,6 +183,29 @@ jobs:
             echo "label=v${workspace_ver}-rc-${short_sha}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: graft drop-caches harness onto pre-fix refs
+        run: |
+          set -euo pipefail
+          # The ALINT_BENCH_DROP_CACHES quiescing (mandatory on kbench's 16 GB, or
+          # S2/1m/full blows the CV gate — see
+          # docs/benchmarks/investigations/2026-07-1m-writeback-contention/) was
+          # added to the bench driver AFTER v0.13. Re-benching a pre-fix ref
+          # (v0.10-v0.13, when re-baselining the series onto the runner) with its
+          # OWN driver would reintroduce that artifact. If the checked-out ref's
+          # run.rs lacks the quiescing, graft ONLY the bench driver from origin/main
+          # so the ref's own alint binary is measured with the drop-caches harness.
+          # The driver changes how the bench quiesces the cache between phases, not
+          # what alint DOES — the same graft the manual v0.10-v0.13 backfill used.
+          # Only the results dirs are committed to the PR, never this working-tree
+          # graft (the PR step cp's the results, not the source tree).
+          if grep -q maybe_quiesce_page_cache xtask/src/bench/run.rs; then
+            echo "Ref already carries the drop-caches harness; no graft needed."
+          else
+            git fetch --quiet origin main
+            git checkout origin/main -- xtask/src/bench/run.rs
+            echo "Grafted drop-caches harness (run.rs) from origin/main ($(git rev-parse --short origin/main)) onto $(git rev-parse --short HEAD)."
+          fi
+
       - name: build release binaries
         run: cargo build --release -p alint -p xtask
 
