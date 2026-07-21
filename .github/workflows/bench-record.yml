@@ -205,6 +205,18 @@ jobs:
           TMPDIR: /bench
         run: |
           set -euo pipefail
+          # Reduce the runner's footprint on the measurement: give this step (and
+          # the xtask/alint children it forks) top CPU + I/O priority so the runner
+          # agent's concurrent bookkeeping can't inflate wall-clock. The v0.14.0
+          # corpus (the first run through the GHA runner) came out ~6.5% slow vs the
+          # hand-measured v0.10-v0.13 baselines from harness overhead alone — the
+          # deterministic Ir was flat (see
+          # docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/).
+          # renice the step shell; forked children inherit. Best-effort so a
+          # large-RAM host without passwordless sudo is unaffected.
+          sudo -n renice -n -10 -p $$ >/dev/null 2>&1 || true
+          sudo -n ionice -c2 -n0 -p $$ >/dev/null 2>&1 || true
+          sync   # flush the release build's dirty pages before measuring
           out_dir="docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}"
           mkdir -p "$out_dir"
           ./target/release/xtask bench-scale \
@@ -222,6 +234,12 @@ jobs:
       - name: micro cargo bench
         run: |
           set -euo pipefail
+          # Same footprint reduction as the macro step (criterion measures ns/op,
+          # so it is wall-clock sensitive too): renice + ionice this step so the
+          # runner agent's concurrent work can't skew the samples.
+          sudo -n renice -n -10 -p $$ >/dev/null 2>&1 || true
+          sudo -n ionice -c2 -n0 -p $$ >/dev/null 2>&1 || true
+          sync
           # Criterion micro-benches ONLY (explicit list). A bare
           # `cargo bench -p alint-bench` would also fire the gungraun
           # det_engine/det_check benches, which run under Valgrind (slow) and
