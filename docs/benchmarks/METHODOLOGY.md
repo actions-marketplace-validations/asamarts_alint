@@ -233,6 +233,22 @@ trustworthy only on a verified-quiet box — `bench-record.yml`'s
 is otherwise characterization. Anything > 20 % drift gets an
 investigation under [`investigations/`](investigations/).
 
+**The deterministic `perf-gate` is load-immune but I/O-blind — this is the concrete
+case for keeping BOTH layers.** It counts *guest instructions*, so a regression that
+lives in syscall / kernel wall-clock (extra `read()`s per file, an added `stat`, a
+spawn) barely moves `Ir` / `EstimatedCycles` while costing real time. v0.14.0 shipped
+exactly such a read-path regression — the OOM cap dropped `File`'s `read_to_end`
+preallocation, so content reads grew-and-reread — that the deterministic gate passed
+flat (±0.4 %) and **only the wall-clock `bench-gate` caught** (S2 +12-15 %). So a
+flat-`Ir`-but-slow scenario is *not* automatically contamination: it can be a real
+I/O regression the deterministic layer structurally cannot see. Disambiguate with a
+syscall count (deterministic, like `Ir`, but sensitive to the I/O path) or a
+quiet-box wall-clock control before concluding either way. Worked example + microbench:
+[`investigations/2026-07-v0.14-s2-harness-artifact/`](investigations/2026-07-v0.14-s2-harness-artifact/);
+the gate's own statement of the limit is in
+[`../design/deterministic-perf-gating.md`](../design/deterministic-perf-gating.md)
+("Known blind spot").
+
 Per-phase gating during a release cut (e.g. v0.9.x's four
 phases) compared each phase against the prior phase's
 snapshot under

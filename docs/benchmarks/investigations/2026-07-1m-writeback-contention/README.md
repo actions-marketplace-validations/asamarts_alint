@@ -223,3 +223,12 @@ than the contended dev box:
   samples, across the T0 reproduction. Kills #10 and localises the
   writeback window.
 - `isolated-vs-matrix.md` — the raw jq output behind the table above.
+
+## Related
+
+- [`../2026-07-v0.14-s2-harness-artifact/`](../2026-07-v0.14-s2-harness-artifact/) — the
+  same `S2`-reads-the-whole-tree's-content property that makes this cell eat writeback
+  contention also makes it the first to show a *code* read-path regression: v0.14.0
+  dropped a whole-file-read buffer preallocation and S2 took the biggest hit. That one is
+  a real regression (fixed in v0.14.1), not a measurement artifact — the contrast is the
+  useful bit when triaging a slow S2: is it the box (this doc) or the binary (that one)?

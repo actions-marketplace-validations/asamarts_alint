@@ -239,6 +239,17 @@ Helix / Eclipse are docs-only (config snippets): nothing to publish.
 > until the deterministic gate (or a quiescent re-run) confirms it. At release
 > time also run the 100k deterministic tier:
 > `cargo bench -p alint-bench --bench det_check --features det-100k`.
+>
+> **Caveat — the deterministic gate is I/O-blind.** It confirms *compute/cache*
+> regressions; a read / `stat` / spawn-path regression barely moves `Ir` (a syscall is
+> ~constant guest instructions regardless of kernel time), so the gate will NOT confirm
+> it even though it is real — v0.14.0's S2 read regression passed a flat `Ir` gate and
+> only the wall-clock bench caught it
+> ([`docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/`](docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/)).
+> So a wall-clock regression the deterministic gate does not confirm is *not*
+> automatically contamination. If the flagged cells are content-read-heavy (S2 / S6 /
+> S12) and the diff touched the read / open / spawn path, disambiguate with a syscall
+> count or a same-box quiescent A/B — not the deterministic gate alone.
 
 `bench-record.yml` opens a PR titled `docs(bench): <tag> bench-scale results`
 when its run completes. Review checklist:

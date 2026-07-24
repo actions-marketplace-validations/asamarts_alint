@@ -2,6 +2,18 @@
 
 **Status:** CLOSED (2026-06-08) — both questions answered; see Phase 1c.
 
+> **Later caveat (2026-07-24).** The methodology this investigation validated — *a flat
+> deterministic `Ir` gate discriminates a real regression from co-tenant contamination* —
+> is sound but **I/O-blind**: it rules out a compute/cache regression, NOT a syscall/I/O
+> one, because a `read()`/`stat()` is ~constant guest instructions regardless of kernel
+> time. v0.14.0's S2 regression was a *real* read-path cost that nonetheless passed a flat
+> `Ir` gate (worked example:
+> [`../2026-07-v0.14-s2-harness-artifact/`](../2026-07-v0.14-s2-harness-artifact/)). This
+> investigation's "contamination, not code" verdict still holds — v0.12's changes did not
+> touch the content-read path — but a future flat-`Ir`-but-slow case (especially on the
+> content-read-heavy S2/S12, the cells flagged here) must rule out an I/O regression, via
+> a syscall count or quiet-box wall-clock control, before concluding contamination.
+
 ## Two open questions — NEITHER assumed
 
 1. **PRIMARY — why did the canonical bench-record run (PR #46, workflow run

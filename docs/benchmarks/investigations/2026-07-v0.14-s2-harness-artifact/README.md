@@ -315,6 +315,18 @@ across the bump.
   the `Take<File>` specialization loss and validates the fix, independent of alint and
   of the bench host. This is the mechanistic proof.
 
+## Related investigations
+
+- [`../2026-07-1m-writeback-contention/`](../2026-07-1m-writeback-contention/) — a
+  *measurement* artifact (page-cache writeback contention) on the same `S2/1M` cell. Not
+  the same root cause, but the same reason S2 surfaces both: it is the first scenario to
+  read the whole tree's *content*, so it is alint's I/O canary — the cell where any
+  read-path cost, real or artifactual, shows up first.
+- [`../2026-06-v0.12-perf-validation/`](../2026-06-v0.12-perf-validation/) — the precedent
+  that established the flat-`Ir`-⟹-contamination reasoning this finding qualifies (v0.12
+  hit the same S2/S12 cells, but that time it really *was* contamination). Its verdict
+  stands; this one adds the I/O-blindness caveat to the shared methodology.
+
 ## Reuse
 
 - Compute the *full* per-scenario delta before trusting a single flagged cell:
