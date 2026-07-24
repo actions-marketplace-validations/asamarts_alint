@@ -1,11 +1,107 @@
-# 2026-07 — v0.14.0 S2 "+17.6%" bench-gate failure was a harness artifact, not code
+# 2026-07 — v0.14.0 S2 "+17.6%" bench-gate failure: a REAL read-path regression (first misdiagnosed as a harness artifact)
 
-Status: **Resolved — the deterministic Valgrind gate (`det_check`) shows Ir AND
-EstimatedCycles flat (±0.4%) between v0.13.0 and v0.14.0 for every scenario,
-including S2. The wall-clock inflation is a measurement-harness difference (the
-v0.14.0 corpus is the first run through the self-hosted GitHub Actions runner;
-the v0.10–v0.13 baselines were measured over a plain SSH session). No code fix.
-Remediation is to re-measure the trajectory on one consistent harness.**
+Status: **Resolved (root cause corrected 2026-07-22).** The S2 wall-clock lift is a
+genuine, if modest, v0.14 regression on read-heavy scenarios — NOT the pure harness
+artifact first concluded. v0.14's OOM-cap fix (`c845f7d3`) routed every content read
+through `File::open(p).take(cap+1).read_to_end(Vec::new())`; a `Take<File>` has no
+`read_to_end` fstat-preallocation specialization (a bare `File` does), so it
+grows-and-rereads, issuing extra `read()` syscalls per file. That is real wall-clock
+on read-heavy repos but nearly invisible to the deterministic Valgrind gate (a
+`read()` is a few guest instructions but a real kernel round-trip) — which is why
+`det_check` Ir looked flat and the first pass called it environmental. **Fixed** by
+preallocating the read buffer from the walk-time `FileEntry::size` alint already has
+(`alint-core` `walker::read_bounded` + `alint-rules` `io::read_capped_with`),
+restoring single-read behaviour while keeping the `take(cap+1)` TOCTOU bound. A
+harness component was real but secondary — re-baselining runner-vs-runner only
+dropped S2 from +17.6% to +15.1%; the ~13% residual is the code.
+
+## Correction (2026-07-22) — how the "harness artifact" call was overturned
+
+The original conclusion below ("flat `det_check` Ir ⟹ no code regression") was
+**incomplete**, and the re-baseline it recommended is what disproved it: with
+v0.13.0 (#136) and v0.14.0 (#134) BOTH measured on the self-hosted runner, same
+rustc 1.97.0, the S2 gate still failed — `min_ms` +15.1% @100k, +12.9% @10k, +12.5%
+@1m. Same harness, same host ⟹ the residual is not environmental.
+
+A back-to-back microbench (same box, so contamination cannot explain it) isolates
+the mechanism and the fix — reading 8000 small files ×5:
+
+| read path | min | vs v0.13 |
+|---|--:|--:|
+| v0.13 `std::fs::read(p)` (`File`-specialized) | 189.6 ms | — |
+| v0.14 `File::open` + `take(cap+1).read_to_end(Vec::new())` | 276.9 ms | **+46.0%** |
+| fix: preallocate `Vec::with_capacity(walk_size)` | 172.9 ms | **−8.8%** (beats v0.13) |
+
+The fix beats v0.13 because it skips even the `fstat` `std::fs::read` does
+internally — alint already has the size from the walk. The +46% here is the pure
+read cost; in S2 (which also does rule matching) it dilutes to the ~+13% the corpus
+shows, and in read-light scenarios (S1 filename-only, S7 cross-file) to ~0.
+
+### Why the deterministic gate missed it (methodology lesson)
+
+`det_check` under Valgrind is load-immune AND harness-immune — but it is **not
+I/O-immune**. It counts guest instructions; a `read()` syscall is a handful of guest
+instructions regardless of how long the kernel spends servicing it, so a regression
+that lives in *syscall / kernel wall-clock* (extra `read()` round-trips) does not
+move Ir or EstimatedCycles. **A flat deterministic gate rules out a compute/cache
+regression, NOT an I/O or syscall one.** For read-heavy (or spawn-heavy) scenarios,
+confirm with a wall-clock control — a quiet-box back-to-back, or a syscall count —
+before concluding "no regression." This caveat belongs in
+[`../../../design/deterministic-perf-gating.md`](../../../design/deterministic-perf-gating.md).
+
+### Re-baseline confirmation (all-runner trajectory)
+
+The re-baseline this write-up originally recommended — re-running v0.10–v0.13 through
+the *same* runner harness as v0.14 — is what proved the regression real. With every
+tag measured identically (drop-caches, `renice`/`ionice`, rustc 1.97.0), v0.10→v0.13
+is flat and low-CV, and v0.14 lifts across **every content-reading scenario in
+proportion to how read-dominated it is** — the signature of a per-read cost, not a
+harness offset (which would not survive harness control):
+
+| scenario | v0.14 vs v0.13 (`min_ms`, ≥10k) | reads content? |
+|---|--:|:--|
+| **S2** existence + content | **+12.5 … +15.1 %** | yes — most read-dominated |
+| **S12** v0.10 per-file | **+11 … +14 %** | yes |
+| S3 / S6 / S9 | +5.6 … +7.4 % | yes |
+| S7 cross-file relational | ~0 % | diff-dominated (few reads) |
+| S1 filename hygiene | ~0 % | no (control) |
+
+The gate flags exactly one cell (S2 100k, +15.1 %) only because most cells sit just
+under the +15 % ceiling — a systematic regression the wall-clock gate *barely* catches.
+This is also why the original per-scenario table's "broad ~+6.5 % band" was misread as
+environmental: the band is real, and it is the read cost hitting every content
+scenario at once. All-runner corpus: `../../macro/results/linux-x86_64/` (v0.10–v0.14),
+trajectory in [`../../HISTORY.md`](../../HISTORY.md).
+
+### The fix
+
+`read_capped_or_skip` already receives the walk-time `FileEntry::size`, so the fix
+threads it into `read_bounded` as a `Vec::with_capacity` hint — the read then fills in
+one syscall instead of `Take<File>`'s grow-and-reread. The same one-line change lands
+in `alint-rules` `io::read_capped_with`, which already computes the size for its
+fast-reject. The `take(cap+1)` stays the sole correctness bound, so the hint is
+strictly advisory: a stale or hostile size cannot force an over-read (locked in by the
+`read_bounded_bounds_the_actual_read_toctou` test, which now passes a deliberately
+lying hint). The microbench above nets −8.8 % vs v0.13 — the fix skips even the `fstat`
+`std::fs::read` does internally, since alint has the size for free. Shipped in v0.14.1;
+the v0.14.1 runner bench is the on-host recovery confirmation (see
+[`../../HISTORY.md`](../../HISTORY.md)).
+
+Reproduce the mechanism + fix microbench:
+[`read-preallocation-microbench/`](read-preallocation-microbench/).
+
+The original analysis is preserved below as the investigative record: it is correct
+that `det_check` Ir is flat and that a harness offset exists — only the inference
+"therefore no code regression" was wrong.
+
+---
+
+> **Everything below is the INITIAL ANALYSIS, preserved as the investigative
+> record.** Its conclusion — "harness artifact, no code fix" — was **overturned**
+> (see the Correction above). The data it presents is sound (`det_check` Ir *is*
+> flat; a harness offset *is* present); only the inference "flat Ir ⟹ no code
+> regression" was wrong, because the deterministic gate is I/O-blind. Read it for
+> how the misdiagnosis happened, not for the conclusion.
 
 ## TL;DR
 
@@ -30,10 +126,13 @@ work (log streaming, job bookkeeping) adds a steady background load that inflate
 wall-clock most on the longer, CPU-heavier scenarios and barely touches the short
 ones — which is exactly the "content-correlated" pattern that looked like code.
 
-**Consequences:** no v0.14.1 perf fix is warranted (the binary is
-instruction-for-instruction identical on the hot path). PR #131's numbers are not
-comparable to the v0.10–v0.13 baselines and should not be published as a
-regression; re-baseline the trajectory on one harness. A separate real bug was
+**Consequences:** ~~no v0.14.1 perf fix is warranted (the binary is
+instruction-for-instruction identical on the hot path)~~ **[SUPERSEDED — see the
+Correction above: a v0.14.1 fix IS warranted; "instruction-for-instruction
+identical" is true yet does not imply "wall-clock identical" for an I/O regression].**
+PR #131's numbers carry BOTH a harness offset and a real read-path regression;
+re-baseline the trajectory on one harness so the real regression (and its v0.14.1
+fix) can be read cleanly against a like-for-like baseline. A separate real bug was
 found on the way: `ci/scripts/det-perf-gate.sh` pins `gungraun-runner` at a
 version older than the workspace's `gungraun` library, which breaks the CI
 deterministic gate on any post-bump PR (see "Secondary finding").
@@ -91,8 +190,8 @@ shape of a steady background cost, not a hot-path change.
 | 1 | Transient contamination on kbench during the run | Partly — but kbench was idle at diagnosis time (load 0.00), CV was low (0.6%), and the lift was reproducible in the committed numbers, so not a one-off blip. |
 | 2 | The kbench ACPI GPE storm (a known contamination source, ~1630 int/s burning a core) was firing during the bench | **Ruled out.** `gpe61` reads `enabled masked` and is frozen (0/s) — the kernel auto-masked it after an early-boot storm; it was not firing at bench time. |
 | 3 | A real per-content-scan code regression from the W-series security cycle | **Killed by the deterministic gate (row 5).** Looked strong: the lift tracks content scanning, and a code scan found a read-path change (below). |
-| 4 | The subagent's "smoking gun": v0.14's `c845f7d3` (crash/FIFO hardening) switched every content read from `std::fs::read(&abs)` to `read_capped_or_skip` → `read_bounded`, which reads into a zero-capacity `Vec::new()` via `Take::read_to_end` — *looks* like it drops `std::fs::read`'s size preallocation | **Wrong.** Plausible on paper, but `Read::read_to_end` on a `File`/`Take<File>` is *specialized* in std to reserve capacity from the file's remaining length, so `Vec::new()` costs no extra reallocations. Proven by row 5: if it added reallocs/memcpys the instruction count would rise; it did not. |
-| 5 | **Harness / environment difference, not code** | **Confirmed.** `det_check` under Valgrind (load- and harness-immune) shows Ir and EstimatedCycles flat ±0.4% across all scenarios incl. S2 (see Evidence). Same instructions + same estimated cycles + +17.6% wall-clock ⟹ the wall-clock delta is not in the binary. |
+| 4 | The subagent's "smoking gun": v0.14's `c845f7d3` (crash/FIFO hardening) switched every content read from `std::fs::read(&abs)` to `read_capped_or_skip` → `read_bounded`, which reads into a zero-capacity `Vec::new()` via `Take::read_to_end` — *looks* like it drops `std::fs::read`'s size preallocation | **ACTUALLY RIGHT — the "Wrong" verdict here WAS the misdiagnosis.** The refutation confused two std behaviours: `read_to_end` is specialized to fstat-and-preallocate for a bare `File`, but a `Take<File>` gets NO such specialization and falls back to grow-and-reread. The cost is extra `read()` **syscalls**, not reallocs/memcpys — so it barely moves Ir (row 5) yet is real wall-clock. See the Correction (microbench: +46%). |
+| 5 | **Harness / environment difference, not code** | **Partial — overturned as the SOLE cause.** `det_check` Ir/EstimatedCycles ARE flat ±0.4% (so no compute/cache regression, and a harness offset is genuinely present), but Ir is **I/O-blind**: it cannot see the extra `read()` syscalls. The runner-vs-runner re-baseline (still +12–15% S2) + the microbench proved a real ~13% wall-clock regression underneath the harness offset. See the Correction. |
 
 The load- and harness-immunity of the deterministic gate is the whole point: it
 measures instructions executed, not time, so a busier runner or a different
@@ -127,7 +226,14 @@ Everything inside measurement noise. In particular **S2 at 10k — the failing c
 flat 10k result implies flat 100k/1M as well. There is no per-file, per-byte, or
 cache/memory regression in v0.14.0.
 
-## Root cause of the artifact
+## Initial root-cause hypothesis: the harness (SUPERSEDED)
+
+**Superseded — see the Correction.** The re-baseline disproved this: with v0.10–v0.13
+re-measured through the *same* runner harness as v0.14, the "content-correlated"
+inflation persisted (S2 +12–15 %, all content scenarios ∝ read intensity), so the
+runner-load story below explains at most the small S2 harness slice (+17.6 → +15.1 %),
+not the regression. It is kept because the reasoning ("broad content band ⟹ steady
+background load") is a plausible-but-wrong inference worth recognizing.
 
 The v0.10–v0.13 macro corpus was **backfilled by hand over SSH** on kbench (the
 `$SCRATCH/laptop-*.sh` scripts), with nothing else running on the box. v0.14.0 is
@@ -196,7 +302,12 @@ across the bump.
 
 - [`det-check-ir.md`](det-check-ir.md) — the raw `det_check` absolute Ir +
   EstimatedCycles for v0.13.0 and v0.14.0 (S1/S2/S6/S7/S12 × 1k/10k), the numbers
-  the Evidence table is computed from.
+  the Evidence table is computed from. Flat — which correctly narrowed the search to
+  I/O, and (misread) is what sent the first pass to "harness artifact".
+- [`read-preallocation-microbench/`](read-preallocation-microbench/) — the
+  self-contained `rustc` reproduction (`readrepro.rs` + method + numbers) that isolates
+  the `Take<File>` specialization loss and validates the fix, independent of alint and
+  of the bench host. This is the mechanistic proof.
 
 ## Reuse
 
@@ -207,7 +318,14 @@ across the bump.
   doesn't prove it was quiet earlier. Check `cat /sys/firmware/acpi/interrupts/gpe61`
   for the `masked` flag and whether the kernel cmdline (not just `/etc/default/grub`)
   carries `acpi_mask_gpe=0x61`; the mask only applies after a reboot.
-- A plausible code diff is not proof. `read_to_end` on a `File`/`Take<File>`
-  preallocates via a std specialization, so `Vec::new()` there is not the
-  regression it looks like. When wall-clock and a code lead disagree with a flat
-  deterministic gate, the deterministic gate wins.
+- `read_to_end` is specialized to fstat-and-preallocate for a bare `File` but NOT
+  for a `Take<File>` — wrapping a read in `.take(cap+1)` for an OOM/TOCTOU bound
+  silently drops that specialization, so `Vec::new()` there DOES regress
+  (grow-and-reread → extra `read()` syscalls per file). Preallocate the buffer from
+  a size you already have (here the walk-time `FileEntry::size`) to keep the single
+  read while retaining the `take` bound.
+- A flat deterministic (Valgrind-Ir) gate rules out a compute/cache regression but
+  NOT an I/O or syscall one — it is I/O-blind. When wall-clock and a flat Ir gate
+  disagree on a read- or spawn-heavy scenario, do NOT assume the gate wins: confirm
+  with a quiet-box wall-clock control or a syscall count. This investigation is the
+  worked example — the gate was flat while a real regression existed.

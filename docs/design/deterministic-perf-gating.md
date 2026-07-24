@@ -60,6 +60,30 @@ very-high deltas — RECALIBRATED 2026-06-08 to diagnostic-only + an `EstimatedC
 | **D1 / LL cache misses** (cachegrind) | DIAGNOSTIC-ONLY |
 | **Syscalls** (strace, supplementary) | optional check — new per-file syscall (H1 `lstat`) |
 
+## Known blind spot: I/O and syscall wall-clock (added 2026-07)
+
+The `Ir` / `EstimatedCycles` gate is load- and harness-immune but **not
+I/O-immune**. Callgrind counts *guest* instructions and models the *cache*, but a
+`read()` / `open()` / `stat()` syscall is a fixed handful of guest instructions no
+matter how long the kernel spends servicing it — so a regression that lives in
+**syscall / kernel wall-clock**, not in compute or cache, does not move either
+gated metric. A flat gate therefore rules out a compute/cache regression, **not an
+I/O one.**
+
+Worked example: v0.14.0's OOM-cap fix wrapped every content read in
+`.take(cap+1).read_to_end()`, which drops `File`'s `read_to_end` preallocation
+specialization (a `Take<File>` grows-and-rereads → extra `read()` syscalls per
+file). `det_check` `Ir` stayed flat ±0.4 % while S2 wall-clock rose ~13 %; the gate
+passed a real read-path regression. Full write-up:
+[`../benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/`](../benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/).
+
+Mitigation: the **Syscalls** row above (already collected, supplementary) is the
+signal that catches this. For a PR that changes the read / open / spawn path,
+compare the per-scenario syscall counts (deterministic, like `Ir`) or run a
+quiet-box wall-clock control — do not treat a flat `Ir` gate as sufficient.
+Elevating a per-scenario syscall-count check to gating for I/O-touching changes is
+a tracked follow-up.
+
 ## Automation — load-immune per-PR CI gate
 
 `ci.yml` job `perf-gate` (gated on `changes.outputs.rust`, PRs only), on the

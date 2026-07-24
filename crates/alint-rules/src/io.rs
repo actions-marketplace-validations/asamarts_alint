@@ -182,8 +182,10 @@ pub fn over_cap(n: u64) -> String {
 pub(crate) fn read_capped_with(path: &Path, max: u64) -> Result<Vec<u8>, ReadCapError> {
     use std::io::Read as _;
     // Fast reject via a cheap stat, so the oversized bytes are never read for
-    // the common case.
-    match std::fs::metadata(path) {
+    // the common case. The stat length is also kept as the read buffer's
+    // preallocation hint below — it is already computed here, so reusing it is
+    // free.
+    let stat_len = match std::fs::metadata(path) {
         // Refuse a non-regular file (FIFO/socket/device). Opening a FIFO
         // `O_RDONLY` blocks until a writer appears, so a direct read of a
         // planted in-tree named pipe (reachable via a config-declared path or
@@ -193,15 +195,23 @@ pub(crate) fn read_capped_with(path: &Path, max: u64) -> Result<Vec<u8>, ReadCap
             return Err(ReadCapError::Io(not_regular_file(path)));
         }
         Ok(m) if m.len() > max => return Err(ReadCapError::TooLarge(m.len())),
-        Ok(_) => {}
+        Ok(m) => m.len(),
         Err(e) => return Err(ReadCapError::Io(e)),
-    }
+    };
     // But ALSO bound the actual read: a file that grows past `max` between the
     // stat above and the read must not be slurped in full (TOCTOU / OOM — the
     // M3-F2 class the walker's `read_bounded` already closes). `take(max + 1)`
     // lets us distinguish "exactly at cap" from "over".
+    //
+    // Preallocate to the stat length: a `Take<File>` has no `read_to_end`
+    // fstat-preallocation specialization (bare `File` does), so an empty `Vec`
+    // would grow-and-reread — extra `read()` syscalls per file that cost wall
+    // clock while staying ~invisible to the Valgrind-Ir gate. The `take(max+1)`
+    // is still the sole size bound, so the hint can't force an over-read. See
+    // docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/.
     let file = std::fs::File::open(path).map_err(ReadCapError::Io)?;
-    let mut buf = Vec::new();
+    let prealloc = usize::try_from(stat_len.min(max.saturating_add(1))).unwrap_or(0);
+    let mut buf = Vec::with_capacity(prealloc);
     file.take(max.saturating_add(1))
         .read_to_end(&mut buf)
         .map_err(ReadCapError::Io)?;

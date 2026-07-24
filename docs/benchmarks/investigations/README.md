@@ -87,26 +87,30 @@ touch the disk.
 
 v0.14.0's `bench-record` failed the wall-clock gate: **S2 `10k full` +17.6 %
 `min_ms`** vs v0.13.0, with the other content scenarios up ~+6.5 % and the
-filename-only S1 flat. The content-scanning correlation looked like a real
-per-file cost, and a code scan even surfaced a plausible culprit — a v0.14
-read-path change (`c845f7d3`, crash/FIFO hardening) that *appeared* to drop a
-buffer preallocation.
+filename-only S1 flat. A code scan surfaced the culprit — v0.14's OOM-cap fix
+(`c845f7d3`) routed every content read through `File::open + take(cap+1)
+.read_to_end(Vec::new())`.
 
-**The deterministic gate overturned both.** `det_check` under Valgrind (Ir +
-EstimatedCycles, load- and harness-immune) is flat ±0.4 % for every scenario
-including S2 (−0.2 % at 10k). Same instructions + same cycles + +17.6 % wall-clock
-⟹ the delta is not in the binary. Root cause: a **harness difference** — v0.14.0
-is the first release benched through the self-hosted GitHub Actions runner, while
-v0.10–v0.13 were backfilled by hand over SSH; the runner agent's steady concurrent
-load inflates the longer content scenarios and spares the short walker-only S1.
+**First misdiagnosed as a harness artifact, then corrected to a REAL regression.**
+`det_check` under Valgrind (Ir + EstimatedCycles) is flat ±0.4 % including S2, which
+the first pass read as "not in the binary." But Ir is **I/O-blind**: a `Take<File>`
+loses `File`'s `read_to_end` fstat-preallocation, so it grows-and-rereads → extra
+`read()` **syscalls** per file — real wall-clock, ~zero guest instructions.
+Re-baselining v0.13 and v0.14 on the *same* runner still showed S2 +12–15 %, and a
+back-to-back microbench measured +46 % (fixed: −8.8 %). Fixed by preallocating the
+read buffer from the walk-time `FileEntry::size` (`walker::read_bounded` +
+`io::read_capped_with`), keeping the `take(cap+1)` TOCTOU bound. A harness offset
+was real but secondary — it explained only +17.6 → +15.1 %.
 
-Reusable traps: a plausible code diff is not proof (`read_to_end` on a `File` /
-`Take<File>` preallocates via a std specialization, so `Vec::new()` there is not
-the regression it looks like); when a wall-clock "regression" and a code lead both
-disagree with a flat deterministic gate, the deterministic gate wins. A real CI
-bug fell out on the way: `det-perf-gate.sh` pins `gungraun-runner` older than the
-`gungraun` library, so the deterministic gate mis-reports a tooling failure as an
-Ir regression on any post-bump PR.
+Reusable traps: `read_to_end` is specialized to preallocate for a bare `File` but
+NOT a `Take<File>` — a `.take()` OOM/TOCTOU wrapper silently drops the specialization
+and regresses read-heavy paths; preallocate from a size you already have. And a flat
+deterministic (Valgrind-Ir) gate rules out a compute/cache regression but is
+**I/O-blind** — confirm read- or spawn-heavy scenarios with a quiet-box wall-clock
+control before concluding "no regression." A real CI bug fell out on the way:
+`det-perf-gate.sh` pins `gungraun-runner` older than the `gungraun` library, so the
+deterministic gate mis-reports a tooling failure as an Ir regression on any
+post-bump PR.
 
 ## Tooling
 

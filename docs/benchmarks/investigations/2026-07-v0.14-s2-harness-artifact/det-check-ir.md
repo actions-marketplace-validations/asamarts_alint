@@ -1,5 +1,12 @@
 # det_check absolute counts — v0.13.0 vs v0.14.0
 
+> **These counts are flat (±0.4%) between v0.13 and v0.14 — and that is real — but it
+> does NOT mean "no regression."** The v0.14 S2 regression is a real read-path cost
+> (extra `read()` syscalls) that is invisible to `Ir`/`EstimatedCycles`: the gate is
+> load- and harness-immune but **I/O-blind**. See [`README.md`](README.md) Correction.
+> This file is the evidence that the regression is not in *compute/cache*, which
+> correctly narrowed the search to I/O — not evidence that there is no regression.
+
 Raw Valgrind (callgrind, via gungraun) instruction and estimated-cycle counts for
 the `det_check` binary bench, which runs the real release `alint check` CLI over
 `gen-monorepo` synthetic trees. Deterministic: byte-identical trees (seed

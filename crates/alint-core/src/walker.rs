@@ -43,14 +43,31 @@ pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
     // be stale, so a file that GREW past the cap between the walk and here would
     // otherwise slip through to an unbounded read. Bound the actual read by
     // BYTES (not the trusted size) so concurrent growth can't force an OOM.
-    read_bounded(path, MAX_ANALYZE_BYTES)
+    // `size` is ALSO forwarded as the read buffer's preallocation hint — alint
+    // already stat-ed it during the walk, so it costs nothing and lets the read
+    // finish in one syscall (see `read_bounded`).
+    read_bounded(path, MAX_ANALYZE_BYTES, size)
 }
 
 /// Read a whole file bounded to `cap` bytes — TOCTOU-safe: the read itself
 /// stops at `cap + 1` bytes, so the file's size *at read time* (not a possibly
 /// stale earlier stat / walk-time size) decides. A file that measures `> cap`
 /// is skipped (loud `warn`); a missing file is `None`.
-pub(crate) fn read_bounded(path: &Path, cap: u64) -> Option<Vec<u8>> {
+///
+/// `size_hint` (the walk-time [`FileEntry::size`], already stat-ed by the walk
+/// so free here) preallocates the buffer. It is strictly ADVISORY — capacity
+/// only, clamped to `cap + 1`, and it NEVER affects what is accepted: the
+/// `take(cap + 1)` below is the sole correctness bound, so a stale or hostile
+/// hint cannot force an over-read. The preallocation matters because a
+/// `Take<File>` (unlike a bare `File`) has no `read_to_end` fstat-preallocation
+/// specialization: given an empty `Vec` it grows-and-rereads, issuing several
+/// `read()` syscalls per file. That overhead is ~invisible to the deterministic
+/// Valgrind-Ir gate (a `read()` is a handful of guest instructions but a real
+/// kernel round-trip) yet measurably regressed read-heavy scenarios (S2) on the
+/// wall clock. Sizing the buffer up front restores the single-read behaviour
+/// `std::fs::read` had before the OOM cap. See
+/// docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/.
+pub(crate) fn read_bounded(path: &Path, cap: u64, size_hint: u64) -> Option<Vec<u8>> {
     use std::io::Read as _;
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
@@ -60,7 +77,8 @@ pub(crate) fn read_bounded(path: &Path, cap: u64) -> Option<Vec<u8>> {
             return None;
         }
     };
-    let mut buf = Vec::new();
+    let prealloc = usize::try_from(size_hint.min(cap.saturating_add(1))).unwrap_or(0);
+    let mut buf = Vec::with_capacity(prealloc);
     match file.take(cap.saturating_add(1)).read_to_end(&mut buf) {
         Ok(_) if u64::try_from(buf.len()).is_ok_and(|n| n > cap) => {
             tracing::warn!(
@@ -1325,21 +1343,25 @@ mod tests {
         // the cap is skipped, so concurrent growth past the cap can't force an
         // unbounded read. read_capped_or_skip delegates to this; the internal
         // cap is 256 MiB (a fixture that large is infeasible), so the bound is
-        // exercised here with a small cap.
+        // exercised here with a small cap. The `size_hint` arg is strictly a
+        // preallocation hint: a wrong hint must never change what is accepted.
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("grew.txt");
         std::fs::write(&p, vec![b'x'; 10]).unwrap();
         assert!(
-            read_bounded(&p, 4).is_none(),
-            "actual size over the cap must skip (not trust a passed size)"
+            // Hint LIES that the 10-byte file fits the cap (4). The take(cap+1)
+            // bound, not the hint, decides — the over-cap file is still skipped.
+            read_bounded(&p, 4, 4).is_none(),
+            "actual size over the cap must skip (never trust the size hint)"
         );
         assert_eq!(
-            read_bounded(&p, 100).unwrap().len(),
+            // Hint understates (0 = no preallocation); the whole file still reads.
+            read_bounded(&p, 100, 0).unwrap().len(),
             10,
-            "under the cap reads the whole file"
+            "under the cap reads the whole file regardless of the hint"
         );
         assert!(
-            read_bounded(&tmp.path().join("nope"), 100).is_none(),
+            read_bounded(&tmp.path().join("nope"), 100, 50).is_none(),
             "missing file is None"
         );
     }
