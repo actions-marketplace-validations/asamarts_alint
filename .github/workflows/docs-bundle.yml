@@ -19,14 +19,17 @@ on:
     # rebuild without a code change — useful when only a brand-
     # new alint.org consumer is being onboarded.
   release:
-    # The corrective trigger. The `tags: v*` push above fires at tag-push
-    # time, BEFORE release.yml has created the GitHub Release, so it builds
-    # from the PREVIOUS published release (this workflow always checks out the
-    # latest *published* release tag, not the ref that triggered it). When
-    # release.yml then publishes the new Release, this fires a second run that
-    # builds the new version and pings the deploy hook, so alint.org's STALE
-    # DOCS BUNDLE guard clears on its own instead of needing a manual
-    # re-dispatch. Cost: one extra ~9-min bundle build per release.
+    # FALLBACK trigger, for a HUMAN-published Release only. The `tags: v*` push
+    # above fires at tag-push time, BEFORE release.yml has created the GitHub
+    # Release, so it builds from the PREVIOUS published release (this workflow
+    # always checks out the latest *published* release tag, not the triggering
+    # ref). The corrective rebuild against the NEW release is dispatched explicitly
+    # by release.yml (`gh workflow run docs-bundle.yml` right after `gh release
+    # create`) -- NOT by this trigger: a Release created via the default
+    # GITHUB_TOKEN does not fire `release: published` (GitHub's anti-recursion
+    # rule), which is why relying on this trigger alone left the bundle stale until
+    # a manual dispatch for v0.14.1. This trigger still catches the rare case of a
+    # maintainer publishing a Release by hand (UI / PAT, not GITHUB_TOKEN).
     types: [published]
 
 permissions:

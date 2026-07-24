@@ -148,6 +148,9 @@ jobs:
     name: create GitHub Release
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release
+      actions: write    # dispatch docs-bundle.yml (workflow_dispatch) below
     steps:
       - uses: actions/checkout@v7
 
@@ -186,6 +189,22 @@ jobs:
             --generate-notes \
             install.sh SHA256SUMS \
             alint-*.tar.gz alint-*.tar.gz.sha256
+
+      - name: trigger docs-bundle rebuild from the freshly-published Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The Release created above via GITHUB_TOKEN does NOT fire further
+          # workflow runs (GitHub's anti-recursion rule), so docs-bundle.yml's
+          # `release: published` trigger never sees it. The tag-push build of
+          # docs-bundle already ran, but BEFORE this Release existed, so it bundled
+          # the PREVIOUS version and alint.org's STALE DOCS BUNDLE guard would block
+          # until a manual dispatch (as happened for v0.14.1). workflow_dispatch is
+          # the documented exception to the anti-recursion rule, so dispatch the
+          # corrective build explicitly: docs-bundle always checks out the latest
+          # *published* Release (now this one), rebuilds the bundle at the new
+          # version, and pings the deploy hook -- so the guard clears on its own.
+          gh workflow run docs-bundle.yml --ref main
 
   docker:
     name: push Docker image to ghcr.io
