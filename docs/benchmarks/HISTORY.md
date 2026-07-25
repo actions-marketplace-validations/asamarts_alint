@@ -439,6 +439,36 @@ Two v0.10 single-shot kinds (`generated_file_fresh`, `command_idempotent`) decla
 | v0.10.1 | 30 ms ± 1 | 74 ms ± 1 | 403 ms ± 3 | 4.21 s ± 0.01 |
 | v0.10.0 | 30 ms ± 1 | 56 ms ± 1 | 401 ms ± 2 | 4.23 s ± 0.01 |
 
+## S14 — v0.12 featureset
+
+A single deliberately-mixed scenario exercising every file-shape rule kind / mode the v0.12 cycle added, so one row catches a regression anywhere in the v0.12 surface. Where S11-S13 are per-dispatch-class, this is per-feature-set — the v0.12 analogue of running the whole new vocabulary over the macro tree once. **New in v0.12.0.**
+
+### S14 — full
+
+| Version | 1k | 10k | 100k | 1M |
+|---|---:|---:|---:|---:|
+| **v0.14.1** | 459 ms ± 19 | 4.65 s ± 0.14 | 46.70 s ± 0.25 | 474.7 s ± 0.5 |
+| v0.14.0 | 448 ms ± 2 | 4.67 s ± 0.02 | 47.08 s ± 0.19 | 477.2 s ± 1.4 |
+| v0.13.0 | 456 ms ± 2 | 4.74 s ± 0.02 | 48.00 s ± 0.26 | 488.8 s ± 0.8 |
+| v0.12.0 | 455 ms ± 2 | 4.72 s ± 0.02 | 47.87 s ± 0.25 | 487.3 s ± 2.1 |
+| v0.11.0 | n/a | n/a | n/a | n/a |
+| v0.10.2 | n/a | n/a | n/a | n/a |
+| v0.10.1 | n/a | n/a | n/a | n/a |
+| v0.10.0 | n/a | n/a | n/a | n/a |
+
+### S14 — changed
+
+| Version | 1k | 10k | 100k | 1M |
+|---|---:|---:|---:|---:|
+| **v0.14.1** | 462 ms ± 18 | 4.66 s ± 0.14 | 46.78 s ± 0.21 | 474.5 s ± 1.4 |
+| v0.14.0 | 458 ms ± 2 | 4.67 s ± 0.03 | 47.08 s ± 0.18 | 477.1 s ± 0.5 |
+| v0.13.0 | 465 ms ± 2 | 4.75 s ± 0.02 | 48.07 s ± 0.14 | 487.8 s ± 1.4 |
+| v0.12.0 | 464 ms ± 2 | 4.75 s ± 0.01 | 47.81 s ± 0.20 | 488.3 s ± 0.4 |
+| v0.11.0 | n/a | n/a | n/a | n/a |
+| v0.10.2 | n/a | n/a | n/a | n/a |
+| v0.10.1 | n/a | n/a | n/a | n/a |
+| v0.10.0 | n/a | n/a | n/a | n/a |
+
 ## How to add a row
 
 When a release tag lands, the `bench-record.yml` workflow (introduced in

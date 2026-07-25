@@ -33,9 +33,11 @@ syscall instruction counts drift with glibc/kernel versions.
 So we split:
 
 - **criterion micro-benches** isolate the pure-CPU kernels
-  where instruction-ish patterns are stable. 12 bench files
-  under `crates/alint-bench/benches/`; the catalogue with
-  per-bench rationale lives in [`micro/README.md`](micro/README.md).
+  where instruction-ish patterns are stable. 12 criterion bench
+  files under `crates/alint-bench/benches/` (the two `det_*`
+  gungraun benches there back the deterministic gate below, not
+  this layer); the catalogue with per-bench rationale lives in
+  [`micro/README.md`](micro/README.md).
 - **hyperfine macro-benches** measure the actual CLI as
   users will invoke it, across controlled synthetic trees,
   and publish per-platform numbers. 14 scenarios (S1-S14)
@@ -90,7 +92,8 @@ Cross-version reproducibility tells the real story:
 So `xtask bench-gate` (the publish criterion; `RELEASING.md`
 step 1) gates within-run CV only on 100k/1m (1k/10k are advisory
 measurement-floor noise) and gates cross-version regression on
-`min_ms` for `>= 10k` (`1k` is unreliable at every statistic).
+`min_ms` for `>= 10k` at a **+15 % ceiling vs the prior release**
+(`1k` is unreliable at every statistic).
 The published `HISTORY.md` tables and the alint.org trajectory
 deliberately stay `mean +/- stddev`: every historical row and the
 hardcoded v0.5.6 baseline are mean-based, and restating the
@@ -181,9 +184,11 @@ competitive runs" section.
   measurement (`allocstall`) — a variance artifact invisible to disk-util
   and `MemAvailable` that spikes one cell's CV to 40-50 %. The flag drops
   the page cache once per size phase after tree-gen; warmup re-reads the
-  tree so measured runs stay warm. A large-RAM host (e.g. the 62 GB
-  3900X baseline) never reclaims and must leave the flag OFF — it needs
-  passwordless sudo for `drop_caches` and would only add overhead.
+  tree so measured runs stay warm. A large-RAM host (e.g. the now-retired
+  62 GB 3900X reference desktop, whose series lives at
+  [`/benchmarks-1/`](https://alint.org/benchmarks-1/)) never reclaims and
+  must leave the flag OFF — it needs passwordless sudo for `drop_caches`
+  and would only add overhead.
   Investigation: [`investigations/2026-07-1m-writeback-contention/`](investigations/2026-07-1m-writeback-contention/).
 
 ## Why not CodSpeed / iai-callgrind / Bencher
@@ -230,8 +235,10 @@ not wired into any workflow. Wall-clock regression is gated
 (cross-version `min_ms`; the publish criterion in `RELEASING.md`),
 trustworthy only on a verified-quiet box — `bench-record.yml`'s
 `xtask bench-scale` matrix (S1-S14 × {1k,10k,100k,1m} × {full,changed})
-is otherwise characterization. Anything > 20 % drift gets an
-investigation under [`investigations/`](investigations/).
+is otherwise characterization. A gate failure — or any > 20 % drift even
+when the gate passes — gets an investigation under
+[`investigations/`](investigations/) (v0.14.0's S2 read regression failed
+the gate at +15 % and got one, below).
 
 **The deterministic `perf-gate` is load-immune but I/O-blind — this is the concrete
 case for keeping BOTH layers.** It counts *guest instructions*, so a regression that

@@ -230,6 +230,10 @@ SCENARIOS = [
         "S13", "v0.10 single-shot dispatch class",
         "Two v0.10 single-shot kinds (`generated_file_fresh`, `command_idempotent`) declared with `command: [\"true\"]` so the row measures `crate::spawn::run_capturing` (fork / exec / concurrent pipe-drain / wait / stdout-parse), not the user's tool. Single-shot rules add a fixed cost per run; tree walk dominates the row. Signal of interest is cross-version stability of the spawn path — regressions in `crate::spawn` or the engine's single-shot dispatch surface here in isolation. **New in v0.10.0.**",
     ),
+    (
+        "S14", "v0.12 featureset",
+        "A single deliberately-mixed scenario exercising every file-shape rule kind / mode the v0.12 cycle added, so one row catches a regression anywhere in the v0.12 surface. Where S11-S13 are per-dispatch-class, this is per-feature-set — the v0.12 analogue of running the whole new vocabulary over the macro tree once. **New in v0.12.0.**",
+    ),
 ]
 
 # Per-scenario "this is the first version where the scenario exists".
@@ -242,6 +246,7 @@ FIRST_VERSION: Dict[str, str] = {
     "S11": "v0.10.0",
     "S12": "v0.10.0",
     "S13": "v0.10.0",
+    "S14": "v0.12.0",
 }
 
 # Manual cells from the published v0.5.6 markdown (no JSON exists).
