@@ -319,6 +319,23 @@ def render(
     automatically — no edit to this script required.
     """
     versions_present = sorted({k[0] for k in data}, key=semver_key, reverse=True)
+
+    # Recurrence guard (added after S14 was silently dropped): every scenario
+    # measured in the corpus MUST have a SCENARIOS entry, else its section is
+    # skipped and HISTORY.md under-reports the matrix while nothing complains.
+    # Fail loudly so bench-record.yml's re-render surfaces a new scenario that
+    # needs a hand-written intro here.
+    known = {sid for sid, _title, _intro in SCENARIOS}
+    measured = {k[1] for k in data}
+    missing = sorted(measured - known, key=lambda s: int(s[1:]) if s[1:].isdigit() else 0)
+    if missing:
+        sys.stderr.write(
+            f"render-history: {len(missing)} benched scenario(s) missing from the "
+            f"SCENARIOS list, so they would be dropped from HISTORY.md: "
+            f"{', '.join(missing)}. Add each to SCENARIOS (+ FIRST_VERSION).\n"
+        )
+        sys.exit(1)
+
     out: list[str] = []
     out += [
         "# alint perf history",
