@@ -514,7 +514,7 @@ case study). **Counts not re-run for v0.9.20.**
 
 | Finding | Path | Severity | Rule | Triage |
 |---|---|---|---|---|
-| `=======` markdown-section underline misread as merge-conflict marker | `csharp/README.md` | error | `oss-no-merge-conflict-markers` | **False positive (pre-existing bundled-rule issue).** The `=======` regex is too eager — it matches the ASCII underline used for markdown h2 sections (one of two valid Setext-style heading delimiters). Verified at v0.9.17; the v0.9.18 cross-cutting revalidation (B4) did NOT pull this rule into its A1-A6 refinement scope, so the FP **is still present in v0.9.20**. Filed under the bundled-ruleset refinement queue (the rule should additionally require ANY of `<<<<<<< `, `>>>>>>> `, or 7+ `=` followed by a label; pure 7-`=` lines are too common in markdown). |
+| `=======` markdown-section underline misread as merge-conflict marker | `csharp/README.md` | error | `oss-no-merge-conflict-markers` | **False positive (pre-existing bundled-rule issue, fixed in v0.12 / `0d66ee95`).** The `=======` regex was too eager — it matched the ASCII underline used for markdown h2 sections (one of two valid Setext-style heading delimiters). Verified at v0.9.17; the v0.9.18 cross-cutting revalidation (B4) did NOT pull this rule into its A1-A6 refinement scope, so the FP persisted through v0.9.20. **Fixed in alint v0.12 (commit `0d66ee95`):** the rule now treats `=======` as a conflict separator only when the file also carries an unambiguous anchor line (`<<<<<<< `, `>>>>>>> `, or `||||||| ` — each 7 chars + space + ref), so pure 7-`=` Setext underlines no longer fire. |
 | ~50 GHA SHA-pin warnings | `.github/workflows/{scorecard,test_runner,…}.yml` | warning | `gha-pin-actions-to-sha` (bundled) | **Real but expected upstream issue.** protobuf has 22 workflows; many third-party actions still use floating tags. The bundled rule surfaces them at PR time; OpenSSF Scorecard surfaces the same nightly. Aligns with protobuf's existing Scorecard hygiene posture. |
 | ~21 info-level final-newline + trailing-whitespace | various | info | `oss-final-newline`, `oss-no-trailing-whitespace` | Real but unweighted — protobuf doesn't gate on these cosmetic items. **All auto-fixable** via `alint fix`. |
 | 6 "tool not on PATH" warnings | `MODULE.bazel`, `python/BUILD.bazel`, `ruby/google-protobuf.gemspec`, `go/BUILD.bazel`, `src/google/protobuf/BUILD.bazel` | warning | `protobuf-{buildifier,bazel-build-target,cpp-clang-format,python-flake8,ruby-rubocop,go-fmt}-check` | Expected — the tools are not installed in this test env. In production CI these would resolve cleanly. |
@@ -587,10 +587,12 @@ recheck reproduces the README finding exactly.
 - **`generated_file_fresh` rule kind** — v0.10 ship-target (6
   sources). protobuf's `staleness_check.yml` workflow is a candidate
   use case; deferred to the per-tool integration design phase.
-- **Bundled-ruleset refinement** — `oss-no-merge-conflict-markers`
-  pre-existing false positive on `=======` markdown-section underlines
-  (csharp/README.md). Recommended fix: tighten the regex to require
-  one of `<<<<<<< `, `>>>>>>> `, or 7+ `=` followed by a label.
+- **Bundled-ruleset refinement (shipped in v0.12 / `0d66ee95`)** —
+  `oss-no-merge-conflict-markers` had a pre-existing false positive on
+  `=======` markdown-section underlines (csharp/README.md). The v0.12
+  fix tightened the rule to require an unambiguous anchor line (one of
+  `<<<<<<< `, `>>>>>>> `, or `||||||| `) before treating `=======` as a
+  conflict separator, so pure 7-`=` Setext underlines no longer fire.
 
 ---
 
@@ -652,10 +654,12 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   ship-target, 6 sources). None of these shipped in v0.9.18-v0.9.20.
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
 - **Pre-existing bundled-rule false positive at csharp/README.md
-  STILL ACTIVE in v0.9.20** — `oss-no-merge-conflict-markers` over-fires
-  on `=======` markdown-section underlines. The v0.9.18 cross-cutting
-  revalidation (B4) did not pull this rule into the A1-A6 refinement
-  scope. Still in the bundled-ruleset refinement queue.
+  FIXED in v0.12 (`0d66ee95`)** — `oss-no-merge-conflict-markers` had
+  over-fired on `=======` markdown-section underlines. It persisted
+  through v0.9.20 (the v0.9.18 cross-cutting revalidation B4 did not
+  pull this rule into the A1-A6 refinement scope); v0.12's `0d66ee95`
+  fix now requires an unambiguous anchor line (`<<<<<<< ` / `>>>>>>> ` /
+  `||||||| `) before flagging, resolving the FP.
 
 ## v0.11 re-analysis update (2026-05-25)
 
