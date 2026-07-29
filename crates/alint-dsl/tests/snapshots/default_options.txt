@@ -327,6 +327,7 @@ FileAbsentRule {
     ],
     root_only: false,
     git_tracked_only: false,
+    content_prefixes: [],
     fixer: Some(
         FileRemoveFixer,
     ),

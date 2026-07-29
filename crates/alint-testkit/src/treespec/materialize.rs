@@ -74,6 +74,34 @@ empty: {}
     }
 
     #[test]
+    fn writes_binary_magic_bytes_via_unicode_escapes() {
+        // Scenario fixtures express raw binary signatures (macOS-junk magic
+        // numbers) with YAML \u00NN escapes. Every code point below
+        // U+0080 encodes to one byte, so the AppleDouble magic (00 05 16 07)
+        // and the .DS_Store "Bud1" prefix round-trip to disk verbatim. Guards
+        // the mechanism the hygiene-no-macos-junk content scenarios rely on.
+        let tmp = TempDir::new().unwrap();
+        let spec = TreeSpec::from_yaml(
+            r#"
+"._ad": "\u0000\u0005\u0016\u0007payload"
+".DS_Store": "\u0000\u0000\u0000\u0001Bud1"
+"#,
+        )
+        .unwrap();
+        materialize(&spec, tmp.path()).unwrap();
+        assert_eq!(
+            &std::fs::read(tmp.path().join("._ad")).unwrap()[..4],
+            &[0x00u8, 0x05, 0x16, 0x07],
+            "AppleDouble magic must round-trip to raw bytes",
+        );
+        assert_eq!(
+            std::fs::read(tmp.path().join(".DS_Store")).unwrap(),
+            b"\x00\x00\x00\x01Bud1",
+            "Bud1 magic must round-trip to raw bytes",
+        );
+    }
+
+    #[test]
     fn overwrites_existing_files() {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "OLD").unwrap();

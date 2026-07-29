@@ -10,8 +10,10 @@ tags: [check, extends, bundled, hygiene]
 given:
   tree:
     README.md: "# demo\n"
-    # OS junk: alint walks even dot-files; these should fire.
-    ".DS_Store": ""
+    # OS junk: alint walks even dot-files; these should fire. The rule now
+    # verifies the content signature, so this fixture carries the real
+    # .DS_Store "Bud1" magic (00 00 00 01 42 75 64 31) not an empty placeholder.
+    ".DS_Store": "\u0000\u0000\u0000\u0001Bud1"
     # Secret-shaped file — the ruleset's error-level rule.
     ".env": "SECRET=x\n"
     # Explicitly allowed: the *.example convention for docs.

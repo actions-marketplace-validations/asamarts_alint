@@ -1197,6 +1197,14 @@
     },
     "rule_file_absent": {
       "properties": {
+        "content_prefix_hex": {
+          "default": [],
+          "description": "When non-empty, a file matching `paths` is reported only if its raw content begins with one of these byte signatures, each given as an even-length hex string (e.g. `\"00051607\"`). This separates genuine binary junk from unrelated files that merely share the name pattern: macOS `AppleDouble` sidecars start with `00 05 16 07` and `.DS_Store` with `00 00 00 01 \"Bud1\"`, whereas Hadoop writes `._<name>.crc` checksum files that begin with `crc\\0` and are not macOS junk. A file that cannot be read, or is shorter than every signature, does not match. Empty (the default) keeps the historical name-only behaviour.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "git_tracked_only": {
           "default": false,
           "description": "Restrict matches to files tracked in git's index: entries present in the walked tree but not in `git ls-files` are skipped. No effect outside a git repo. Default `false`.",

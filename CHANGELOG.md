@@ -4,6 +4,27 @@ All notable changes to alint are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `file_absent` (and the rules built on it) gained an optional
+  `content_prefix_hex` option: a list of hex byte-signatures that a matching
+  file's content must begin with to be flagged. It distinguishes real binary
+  junk from unrelated files that merely share a name pattern. Unset (the
+  default) keeps the historical name-only behaviour.
+
+### Fixed
+
+- `hygiene-no-macos-junk` no longer reports Hadoop `._<name>.crc` checksum
+  files as macOS junk. The rule matched `**/._*` by name, so a committed
+  `._SUCCESS.crc` (whose content begins `crc\0`) looked like a macOS
+  AppleDouble sidecar (`00 05 16 07`). The bundled rule now verifies the
+  AppleDouble or `.DS_Store` ("Bud1") signature via `content_prefix_hex`
+  before flagging, and `alint fix` removes only files that carry a real
+  signature. Name-only matching is unchanged when `content_prefix_hex` is
+  unset.
+
 ## [0.14.1] - 2026-07-24
 
 A performance patch. v0.14.0's OOM/TOCTOU read cap inadvertently regressed
@@ -27,8 +48,6 @@ timings. No configuration or behaviour changes.
   analysis cap and its TOCTOU-safe read bound are unchanged. Full investigation,
   reproduction, and the corrected write-up:
   `docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/`.
-
-## [Unreleased]
 
 ## [0.14.0] - 2026-07-18
 
