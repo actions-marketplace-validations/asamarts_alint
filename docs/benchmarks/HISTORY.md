@@ -111,7 +111,7 @@ Eight existence + content rules (`file_exists`, `file_absent`, `file_content_for
 
 ## S3 — Workspace bundle
 
-`extends: oss-baseline + rust + monorepo + cargo-workspace` (~34 rules). Heavy mix — content rules over `**/*.rs`, cross-file `for_each_dir` over `crates/*`, `toml_path_matches` per crate. Realistic monorepo workload; the v0.9.5 cliff (`investigations/2026-05-cross-file-rules/`) lived here.
+`extends: oss-baseline + rust + monorepo + cargo-workspace` (32 effective rules). Heavy mix — content rules over `**/*.rs`, cross-file `for_each_dir` over `crates/*`, `toml_path_matches` per crate. Realistic monorepo workload; the v0.9.5 cliff (`investigations/2026-05-cross-file-rules/`) lived here.
 
 ### S3 — full
 

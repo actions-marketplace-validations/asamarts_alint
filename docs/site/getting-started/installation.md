@@ -5,17 +5,9 @@ sidebar:
   order: 1
 ---
 
-alint ships as a single static Rust binary — no runtime, no JVM, nothing else to install. Pick whichever path matches your environment.
+alint ships as a single native executable with no language runtime, no JVM, and nothing else to install. Pick whichever path matches your environment.
 
 <likec4-view view-id="distributionFlow"></likec4-view>
-
-## install.sh (Linux + macOS + Windows tarballs)
-
-```bash
-curl -sSL https://raw.githubusercontent.com/asamarts/alint/main/install.sh | bash
-```
-
-Detects platform (Linux / macOS, x86_64 / aarch64), downloads the matching tarball from GitHub Releases, verifies the SHA-256, and installs to `$INSTALL_DIR` (default `~/.local/bin`). Windows users download the Windows tarball from the [Releases page](https://github.com/asamarts/alint/releases) directly.
 
 ## Homebrew (macOS + Linuxbrew)
 
@@ -24,7 +16,17 @@ brew tap asamarts/alint
 brew install alint
 ```
 
-The [asamarts/homebrew-alint](https://github.com/asamarts/homebrew-alint) tap is auto-updated on every release. The formula resolves the matching pre-built tarball for your platform, verifies its SHA-256, and installs to the Homebrew cellar.
+The recommended path on macOS and Linux. The [asamarts/homebrew-alint](https://github.com/asamarts/homebrew-alint) tap is auto-updated on every release; the formula resolves the matching pre-built tarball for your platform, verifies its SHA-256, and installs to the Homebrew cellar.
+
+## install.sh (Linux + macOS + Windows tarballs)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/asamarts/alint/main/install.sh | bash
+```
+
+Detects platform (Linux / macOS, x86_64 / aarch64), downloads the matching tarball from GitHub Releases, verifies its SHA-256, and installs to `$INSTALL_DIR` (default `~/.local/bin`). Windows users download the Windows tarball from the [Releases page](https://github.com/asamarts/alint/releases) directly.
+
+Supply-chain note: the installer verifies the SHA-256 of the release tarball it downloads, but the script itself is fetched from the `main` branch. To pin the installer too, point `curl` at a release tag instead of `main` (for example `https://raw.githubusercontent.com/asamarts/alint/v0.14.1/install.sh`), or download it from the [Releases page](https://github.com/asamarts/alint/releases) and review it before running.
 
 ## Docker
 
