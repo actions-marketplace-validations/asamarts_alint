@@ -31,7 +31,7 @@ use serde::Deserialize;
 
 use crate::extract::{Extract, ExtractSpec, extract_values, is_non_literal};
 
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum Expect {
     #[default]
@@ -40,7 +40,7 @@ enum Expect {
     Dir,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum Severity {
     #[default]
@@ -49,33 +49,53 @@ enum Severity {
     Off,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Enable the reverse-completeness check: on-disk artefacts under the `space`
+/// glob that no entry references (the "new crate not wired into the workspace"
+/// detector).
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct OrphansSpec {
     /// Glob of on-disk artefacts that should each be referenced.
     space: String,
+    /// Severity when an on-disk artefact is unreferenced: `warn` (default),
+    /// `error`, or `off`.
     #[serde(default)]
     unreferenced: Severity,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// The manifest/registry file (path, or a glob to run once per matching
+    /// manifest) that enumerates the path entries.
     source: String,
     extract: ExtractSpec,
+    /// Resolve entries relative to: `registry_dir` (default), `lint_root`, or
+    /// an explicit path.
     #[serde(default)]
     base: Option<String>,
+    /// Expand each extracted entry as a glob rather than treating it as a
+    /// single literal path; a glob that matches nothing is a violation.
     #[serde(default)]
     entries_are_globs: bool,
+    /// Constrain the kind each entry must resolve to on disk: `any` (default),
+    /// `file`, or `dir`.
     #[serde(default)]
     expect: Expect,
+    /// When an entry resolves to a directory, that directory must contain this
+    /// named child (e.g. `Cargo.toml`), else the entry is a violation.
     #[serde(default)]
     must_contain: Option<String>,
+    /// A structured query selecting entries to subtract from the extracted list
+    /// before resolution is checked.
     #[serde(default)]
     exclude_query: Option<String>,
+    /// Enable the reverse-completeness check (see `OrphansSpec`).
     #[serde(default)]
     orphans: Option<OrphansSpec>,
 }
+
+crate::options_schema_for!(Options);
 
 /// Resolution base for entries.
 #[derive(Debug, Clone)]

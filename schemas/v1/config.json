@@ -26,6 +26,14 @@
         }
       ]
     },
+    "Expect": {
+      "enum": [
+        "any",
+        "file",
+        "dir"
+      ],
+      "type": "string"
+    },
     "FilesFrom": {
       "oneOf": [
         {
@@ -163,6 +171,24 @@
         }
       ]
     },
+    "OrphansSpec": {
+      "additionalProperties": false,
+      "description": "Enable the reverse-completeness check: on-disk artefacts under the `space` glob that no entry references (the \"new crate not wired into the workspace\" detector).",
+      "properties": {
+        "space": {
+          "description": "Glob of on-disk artefacts that should each be referenced.",
+          "type": "string"
+        },
+        "unreferenced": {
+          "$ref": "#/$defs/Severity",
+          "description": "Severity when an on-disk artefact is unreferenced: `warn` (default), `error`, or `off`."
+        }
+      },
+      "required": [
+        "space"
+      ],
+      "type": "object"
+    },
     "OutputsSpec": {
       "anyOf": [
         {
@@ -230,6 +256,14 @@
           "type": "array"
         }
       ]
+    },
+    "Severity": {
+      "enum": [
+        "warn",
+        "error",
+        "off"
+      ],
+      "type": "string"
     },
     "SourceSpec": {
       "additionalProperties": false,
@@ -3284,81 +3318,55 @@
       "description": "A manifest enumerates path entries; each must resolve to an on-disk artefact. `extract` selects how the entry list is pulled (structured-query toml/json/yaml, a line list, or regex capture group 1). Optional `orphans` adds the reverse check: on-disk artefacts under `space` that no entry references. Non-literal entries (interpolation / antiquotation) are skipped, not failed.",
       "properties": {
         "base": {
-          "description": "Resolve entries relative to: registry_dir (default), lint_root, or an explicit path.",
-          "type": "string"
+          "default": null,
+          "description": "Resolve entries relative to: `registry_dir` (default), `lint_root`, or an explicit path.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "entries_are_globs": {
+          "default": false,
           "description": "Expand each extracted entry as a glob rather than treating it as a single literal path; a glob that matches nothing is a violation.",
           "type": "boolean"
         },
         "exclude_query": {
+          "default": null,
           "description": "A structured query selecting entries to subtract from the extracted list before resolution is checked.",
-          "type": "string"
-        },
-        "expect": {
-          "description": "Constrain the kind each entry must resolve to on disk: `any` (default), `file`, or `dir`.",
-          "enum": [
-            "any",
-            "file",
-            "dir"
+          "type": [
+            "string",
+            "null"
           ]
         },
+        "expect": {
+          "$ref": "#/$defs/Expect",
+          "description": "Constrain the kind each entry must resolve to on disk: `any` (default), `file`, or `dir`."
+        },
         "extract": {
-          "additionalProperties": false,
-          "description": "Exactly one of: toml/json/yaml (RFC 9535 JSONPath string), lines (object; optional `comment` prefix, default `#`), regex (string; capture group 1 is the path).",
-          "maxProperties": 1,
-          "minProperties": 1,
-          "properties": {
-            "json": {
-              "type": "string"
-            },
-            "lines": {
-              "additionalProperties": false,
-              "properties": {
-                "comment": {
-                  "type": "string"
-                }
-              },
-              "type": "object"
-            },
-            "regex": {
-              "type": "string"
-            },
-            "toml": {
-              "type": "string"
-            },
-            "yaml": {
-              "type": "string"
-            }
-          },
-          "type": "object"
+          "$ref": "#/$defs/extract_spec",
+          "description": "Exactly one of: toml/json/yaml (RFC 9535 JSONPath string), lines (object; optional `comment` prefix, default `#`), regex (string; capture group 1 is the path)."
         },
         "kind": {
           "const": "registry_paths_resolve"
         },
         "must_contain": {
+          "default": null,
           "description": "When an entry resolves to a directory, that directory must contain this named child (e.g. `Cargo.toml`), else the entry is a violation.",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "orphans": {
-          "additionalProperties": false,
-          "description": "Enable the reverse-completeness check: on-disk artefacts under the `space` glob that no entry references (the \"new crate not wired into the workspace\" detector).",
-          "properties": {
-            "space": {
-              "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OrphansSpec"
             },
-            "unreferenced": {
-              "enum": [
-                "warn",
-                "error",
-                "off"
-              ]
+            {
+              "type": "null"
             }
-          },
-          "required": [
-            "space"
           ],
-          "type": "object"
+          "description": "Enable the reverse-completeness check (see `OrphansSpec`)."
         },
         "source": {
           "description": "The manifest/registry file (path, or a glob to run once per matching manifest) that enumerates the path entries.",
