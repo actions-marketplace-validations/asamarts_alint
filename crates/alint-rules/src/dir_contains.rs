@@ -22,18 +22,23 @@ use globset::{Glob, GlobMatcher};
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Glob selecting the directories to check.
     select: String,
+    /// Basename glob(s): every dir matching `select` must have at least one
+    /// child matching each.
     require: RequireList,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 enum RequireList {
+    /// A single basename glob.
     One(String),
-    Many(Vec<String>),
+    /// A non-empty list of basename globs.
+    Many(#[schemars(length(min = 1))] Vec<String>),
 }
 
 impl RequireList {
@@ -44,6 +49,8 @@ impl RequireList {
         }
     }
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct DirContainsRule {

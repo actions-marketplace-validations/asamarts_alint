@@ -48,7 +48,7 @@ use serde::Deserialize;
 /// emits before collapsing the tail into one summary line.
 const MAX_STALE_REPORTED: usize = 50;
 
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 enum Normalize {
     /// Exact byte equality.
@@ -81,11 +81,13 @@ impl Normalize {
 }
 
 /// `outputs:` accepts a single glob or a list (a `Scope`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 enum OutputsSpec {
+    /// A single output glob.
     One(String),
-    Many(Vec<String>),
+    /// A non-empty list of output globs.
+    Many(#[schemars(length(min = 1))] Vec<String>),
 }
 
 impl OutputsSpec {
@@ -97,25 +99,37 @@ impl OutputsSpec {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    /// stdout mode: the single committed file compared to stdout.
+    /// STDOUT mode: the committed generated file to verify against the
+    /// generator's stdout.
     #[serde(default)]
     file: Option<String>,
-    /// mutating mode: the glob(s) the generator rewrites in place.
+    /// MUTATING mode: the glob (or list of globs) the in-place generator
+    /// rewrites; its presence selects the mutating mode. alint snapshots these,
+    /// runs the generator, diffs, and restores them.
     #[serde(default)]
     outputs: Option<OutputsSpec>,
+    /// Generator argv (no shell). STDOUT mode: emit the file's contents to
+    /// stdout. MUTATING mode: write the `outputs` in place.
+    #[schemars(length(min = 1))]
     command: Vec<String>,
+    /// Generator cwd, relative to the lint root (default: lint root).
     #[serde(default)]
     workdir: Option<String>,
+    /// Normalization applied before comparison to absorb trailing-newline
+    /// churn: `none`, `trim`, or `final-newline`.
     #[serde(default)]
     normalize: Normalize,
-    /// Child timeout in seconds. Default
-    /// [`crate::spawn::DEFAULT_SPAWN_TIMEOUT_SECS`].
+    /// Generator timeout in seconds (default 120). On timeout the child is
+    /// killed and one violation is emitted.
     #[serde(default)]
+    #[schemars(range(min = 1))]
     timeout: Option<u64>,
 }
+
+crate::options_schema_for!(Options);
 
 /// Which freshness check to run, fixed at load.
 #[derive(Debug)]

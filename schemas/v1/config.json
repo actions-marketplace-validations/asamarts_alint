@@ -97,6 +97,58 @@
       ],
       "type": "string"
     },
+    "Normalize": {
+      "oneOf": [
+        {
+          "const": "none",
+          "description": "Exact byte equality.",
+          "type": "string"
+        },
+        {
+          "const": "trim",
+          "description": "Trim leading/trailing whitespace of the whole output.",
+          "type": "string"
+        },
+        {
+          "const": "final-newline",
+          "description": "Normalise only a single trailing newline (the most common generator/editor diff).",
+          "type": "string"
+        }
+      ]
+    },
+    "OutputsSpec": {
+      "anyOf": [
+        {
+          "description": "A single output glob.",
+          "type": "string"
+        },
+        {
+          "description": "A non-empty list of output globs.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "`outputs:` accepts a single glob or a list (a `Scope`)."
+    },
+    "RequireList": {
+      "anyOf": [
+        {
+          "description": "A single basename glob.",
+          "type": "string"
+        },
+        {
+          "description": "A non-empty list of basename globs.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ]
+    },
     "StyleName": {
       "enum": [
         "tabs",
@@ -1039,19 +1091,8 @@
           "const": "dir_contains"
         },
         "require": {
-          "description": "Basename glob(s) — every dir matching `select` must have at least one child matching each.",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            }
-          ]
+          "$ref": "#/$defs/RequireList",
+          "description": "Basename glob(s): every dir matching `select` must have at least one child matching each."
         },
         "select": {
           "description": "Glob selecting the directories to check.",
@@ -1959,43 +2000,48 @@
           "type": "array"
         },
         "file": {
+          "default": null,
           "description": "STDOUT mode: the committed generated file to verify against the generator's stdout.",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "kind": {
           "const": "generated_file_fresh"
         },
         "normalize": {
-          "description": "Normalization applied before comparison to absorb trailing-newline churn: `none`, `trim`, or `final-newline`.",
-          "enum": [
-            "none",
-            "trim",
-            "final-newline"
-          ]
+          "$ref": "#/$defs/Normalize",
+          "description": "Normalization applied before comparison to absorb trailing-newline churn: `none`, `trim`, or `final-newline`."
         },
         "outputs": {
-          "description": "MUTATING mode: the glob (or list of globs) the in-place generator rewrites; its presence selects the mutating mode. alint snapshots these, runs the generator, diffs, and restores them.",
-          "oneOf": [
+          "anyOf": [
             {
-              "type": "string"
+              "$ref": "#/$defs/OutputsSpec"
             },
             {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
+              "type": "null"
             }
-          ]
+          ],
+          "description": "MUTATING mode: the glob (or list of globs) the in-place generator rewrites; its presence selects the mutating mode. alint snapshots these, runs the generator, diffs, and restores them."
         },
         "timeout": {
+          "default": null,
           "description": "Generator timeout in seconds (default 120). On timeout the child is killed and one violation is emitted.",
+          "format": "uint64",
           "minimum": 1,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "workdir": {
+          "default": null,
           "description": "Generator cwd, relative to the lint root (default: lint root).",
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

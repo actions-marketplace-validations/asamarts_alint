@@ -156,6 +156,11 @@ pub fn migrated_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
         ("rule_file_absent", file_absent::options_schema()),
         ("rule_dir_exists", dir_exists::options_schema()),
         ("rule_dir_absent", dir_absent::options_schema()),
+        ("rule_dir_contains", dir_contains::options_schema()),
+        (
+            "rule_generated_file_fresh",
+            generated_file_fresh::options_schema(),
+        ),
         ("rule_file_header", file_header::options_schema()),
         ("rule_file_footer", file_footer::options_schema()),
         ("rule_file_max_size", file_max_size::options_schema()),
