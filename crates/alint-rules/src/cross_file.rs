@@ -82,6 +82,10 @@ struct TargetEntrySpec {
 #[serde(untagged)]
 enum TargetsSpec {
     /// Form a: one query applied per glob match.
+    // The hand-written schema rejected unknown keys in this form; schemars does
+    // not emit `additionalProperties: false` for an untagged struct variant, so
+    // restore it schema-side (the loader stays lenient, as it was before).
+    #[schemars(extend("additionalProperties" = false))]
     Glob {
         files: String,
         #[serde(default)]

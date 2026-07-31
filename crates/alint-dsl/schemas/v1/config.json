@@ -362,6 +362,7 @@
     "TargetsSpec": {
       "anyOf": [
         {
+          "additionalProperties": false,
           "description": "Form a: one query applied per glob match.",
           "properties": {
             "extract": {
