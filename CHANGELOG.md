@@ -13,6 +13,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file's content must begin with to be flagged. It distinguishes real binary
   junk from unrelated files that merely share a name pattern. Unset (the
   default) keeps the historical name-only behaviour.
+- `alint check --format sarif` now emits `partialFingerprints` (the canonical
+  `violation_fingerprint`) on every run, not only when a baseline is active, so
+  GitHub Code Scanning can correlate alerts across runs without `--baseline`.
+  The fingerprint matches the GitLab Code Quality export and the baseline file,
+  so a finding has one identity across every surface.
 
 ### Fixed
 

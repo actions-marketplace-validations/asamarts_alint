@@ -730,3 +730,63 @@ fn gitlab_fingerprint_equals_canonical_baseline_fingerprint() {
          gitlab={gitlab_fps:?}\ncanonical={canonical:?}",
     );
 }
+
+/// SARIF's `partialFingerprints` must carry the SAME canonical
+/// `baseline::violation_fingerprint` even without `--baseline`. Before this the
+/// SARIF path emitted fingerprints only when a baseline was in effect, so a
+/// plain `check --format sarif` gave GitHub Code Scanning nothing to correlate
+/// alerts across runs. This anchors the guarantee: snapshot the tree into a
+/// baseline (canonical fingerprints), export the identical tree as SARIF with NO
+/// baseline, and prove the `partialFingerprints` set equals the canonical set
+/// and that no result is tagged `baselineState` (there is no baseline).
+#[test]
+fn sarif_fingerprint_equals_canonical_baseline_fingerprint() {
+    let d = fixture();
+    let root = d.path();
+
+    // 1. Snapshot → canonical fingerprints (one per distinct finding).
+    assert_eq!(code(&run(root, &["baseline"])), 0, "snapshot the findings");
+    let baseline_raw = std::fs::read_to_string(root.join(".alint-baseline.json")).unwrap();
+    let canonical: std::collections::BTreeSet<String> = baseline_raw
+        .lines()
+        .skip(1) // header
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let entry: serde_json::Value = serde_json::from_str(l).expect("entry is JSON");
+            entry["fingerprint"]
+                .as_str()
+                .expect("entry carries a fingerprint")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(canonical.len(), 2, "two distinct findings: {canonical:?}");
+
+    // 2. Export the SAME tree as SARIF with NO baseline → every finding carries
+    //    its canonical `partialFingerprints`.
+    let sr = run(root, &["check", "--format", "sarif"]);
+    let sarif: serde_json::Value =
+        serde_json::from_slice(&sr.stdout).expect("sarif output is JSON");
+    let results = sarif["runs"][0]["results"]
+        .as_array()
+        .expect("sarif carries a results array");
+    let sarif_fps: std::collections::BTreeSet<String> = results
+        .iter()
+        .map(|r| {
+            r["partialFingerprints"]["alint/v1"]
+                .as_str()
+                .expect("result carries a partialFingerprint")
+                .to_string()
+        })
+        .collect();
+
+    // 3. Identical sets, and no `baselineState` without a baseline.
+    assert_eq!(
+        sarif_fps, canonical,
+        "SARIF partialFingerprints must equal the canonical baseline fingerprints\n\
+         sarif={sarif_fps:?}\ncanonical={canonical:?}",
+    );
+    assert!(
+        results.iter().all(|r| r.get("baselineState").is_none()),
+        "no result may carry baselineState without --baseline",
+    );
+}

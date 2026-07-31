@@ -953,6 +953,13 @@ fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> 
         (Format::Sarif, Some(marks)) => {
             alint_output::write_sarif_with_baseline(&report, Some(marks), &mut out)
         }
+        (Format::Sarif, None) => {
+            // No baseline, but still emit the canonical `partialFingerprints` so
+            // GitHub Code Scanning can correlate alerts across runs (these were
+            // baseline-only before). Same fingerprints the GitLab path uses.
+            let fps = report_fingerprints(&report, path);
+            alint_output::write_sarif_with_fingerprints(&report, Some(&fps), &mut out)
+        }
         (Format::Json, Some(marks)) => alint_output::write_json_with_baseline(
             &report,
             Some(marks),
@@ -961,21 +968,11 @@ fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> 
         ),
         (Format::Gitlab, _) => {
             // Unify GitLab Code Quality's `fingerprint` with the baseline/SARIF
-            // identity (was a self-contained occurrence hash): compute the
-            // canonical per-violation `violation_fingerprint` (file-content-aware,
-            // cached reads) and pass it in, so a finding has ONE fingerprint
-            // across GitLab, SARIF, and baseline mode.
-            let mut reader = FileReader::new(path);
-            let fps: Vec<Vec<String>> = report
-                .results
-                .iter()
-                .map(|r| {
-                    r.violations
-                        .iter()
-                        .map(|v| reader.fingerprint(&r.rule_id, v))
-                        .collect()
-                })
-                .collect();
+            // identity (was a self-contained occurrence hash): the canonical
+            // per-violation `violation_fingerprint` (file-content-aware, cached
+            // reads), so a finding has ONE fingerprint across GitLab, SARIF, and
+            // baseline mode.
+            let fps = report_fingerprints(&report, path);
             alint_output::write_gitlab(&report, Some(&fps), &mut out)
         }
         _ => format.write_with_options(&report, &mut out, opts),
@@ -1040,6 +1037,26 @@ impl<'a> FileReader<'a> {
         };
         alint_core::baseline::fingerprint(rule_id, v, bytes)
     }
+}
+
+/// The canonical per-violation `violation_fingerprint` for every violation in
+/// `report`, indexed `[result][violation]` to align with
+/// `report.results[i].violations[j]`. Reads each offending file once (cached,
+/// size-capped) for the content discriminator. Shared by the GitLab and the
+/// no-baseline SARIF output paths so a finding carries ONE identity across
+/// GitLab, SARIF, and baseline mode.
+fn report_fingerprints(report: &alint_core::Report, root: &Path) -> Vec<Vec<String>> {
+    let mut reader = FileReader::new(root);
+    report
+        .results
+        .iter()
+        .map(|r| {
+            r.violations
+                .iter()
+                .map(|v| reader.fingerprint(&r.rule_id, v))
+                .collect()
+        })
+        .collect()
 }
 
 /// Build the per-result baseline marks the SARIF/JSON formatters consume:

@@ -472,12 +472,18 @@ chosen over including the *line* deliberately: the existing
 discriminator preserves it (single-occurrence findings keep a
 line-independent fingerprint) while still disambiguating true duplicates.
 New test `distinct_findings_same_message_get_distinct_fingerprints`; the
-two existing stability tests still pass. **Done (docs):** ADR-0006 §74
-claimed the gitlab fingerprint was migrated onto `violation_fingerprint`
-— it wasn't. Corrected to say SARIF integration shipped but the gitlab
-unification is **deferred** (report-fingerprint plumbing, `baseline.md`
-§5/§7), matching what `baseline.md` already states. The full unification
-remains the tracked follow-up.
+two existing stability tests still pass. **Done (docs), then superseded:**
+ADR-0006 §74 claimed the gitlab fingerprint was already migrated onto
+`violation_fingerprint` — it was not, at audit time, so this was corrected
+to "deferred." The full unification **then landed in the v0.14 deferral
+close-out (2026-07-05)**: the `alint` GitLab path computes the canonical
+`violation_fingerprint` and passes a `[result][violation]` grid into
+`write_gitlab` (the occurrence pass above became a fallback-and-collision
+guard over that grid), and SARIF `partialFingerprints` was later made
+always-on (a plain `check --format sarif` needs no `--baseline`).
+Authoritative status: `baseline.md` §5/§7; cross-surface parity guarded by
+`gitlab_fingerprint_equals_canonical_baseline_fingerprint` and
+`sarif_fingerprint_equals_canonical_baseline_fingerprint`.
 
 ### M11 — exit codes: documented `3` never produced; `2` overloaded `[x]`
 **Decision (maintainer):** *implement exit 3.* **Where:** README:212

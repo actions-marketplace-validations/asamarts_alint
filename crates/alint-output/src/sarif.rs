@@ -36,13 +36,39 @@ pub fn write_sarif_with_baseline(
     baseline: Option<&BaselineMarks>,
     w: &mut dyn Write,
 ) -> std::io::Result<()> {
-    let sarif = build_sarif(report, baseline);
-    serde_json::to_writer_pretty(&mut *w, &sarif)?;
+    emit_sarif(&build_sarif(report, baseline, None), w)
+}
+
+/// SARIF with pre-computed canonical fingerprints but no baseline in effect.
+///
+/// `fingerprints` is indexed `[result][violation]`, aligned with
+/// `report.results[i].violations[j]` (the same shape the GitLab path builds), so
+/// every finding carries the canonical `baseline::violation_fingerprint` under
+/// `partialFingerprints` — the same identity baseline mode and GitLab Code
+/// Quality use. GitHub Code Scanning can then correlate alerts across runs even
+/// without `--baseline`. No `baselineState` is emitted (no baseline is in
+/// effect). `None` (generic dispatch / callers with no file access) emits no
+/// fingerprints, matching [`write_sarif`].
+pub fn write_sarif_with_fingerprints(
+    report: &Report,
+    fingerprints: Option<&[Vec<String>]>,
+    w: &mut dyn Write,
+) -> std::io::Result<()> {
+    emit_sarif(&build_sarif(report, None, fingerprints), w)
+}
+
+/// Serialize a built [`Sarif`] as pretty JSON with a trailing newline.
+fn emit_sarif(sarif: &Sarif, w: &mut dyn Write) -> std::io::Result<()> {
+    serde_json::to_writer_pretty(&mut *w, sarif)?;
     writeln!(w)?;
     Ok(())
 }
 
-fn build_sarif(report: &Report, baseline: Option<&BaselineMarks>) -> Sarif {
+fn build_sarif(
+    report: &Report,
+    baseline: Option<&BaselineMarks>,
+    fingerprints: Option<&[Vec<String>]>,
+) -> Sarif {
     let mut rules = Vec::with_capacity(report.results.len());
     let mut results = Vec::new();
 
@@ -60,8 +86,22 @@ fn build_sarif(report: &Report, baseline: Option<&BaselineMarks>) -> Sarif {
         // Live (new) findings — drive the exit code; tagged `new` under a baseline.
         for (vi, v) in rr.violations.iter().enumerate() {
             let mut res = base_result(rr.rule_id.as_ref(), rr.level, v);
-            if let Some(fp) = marks.and_then(|m| m.live_fingerprints.get(vi)) {
-                res.baseline_state = Some("new");
+            // `partialFingerprints` carries the canonical `violation_fingerprint`
+            // so GitHub Code Scanning correlates alerts across runs. The value is
+            // the baseline marks' fingerprint when a baseline is in effect, else
+            // the pre-computed source the CLI supplies for the no-baseline path;
+            // both are the same canonical identity. `baselineState: new` is
+            // baseline-specific, so it stays gated on an active baseline while the
+            // fingerprint is emitted either way.
+            let fp = marks.and_then(|m| m.live_fingerprints.get(vi)).or_else(|| {
+                fingerprints
+                    .and_then(|f| f.get(idx))
+                    .and_then(|r| r.get(vi))
+            });
+            if let Some(fp) = fp {
+                if baseline.is_some() {
+                    res.baseline_state = Some("new");
+                }
                 res.partial_fingerprints = Some(fingerprint_map(fp));
             }
             results.push(res);
@@ -508,6 +548,51 @@ mod tests {
         assert!(r.get("baselineState").is_none());
         assert!(r.get("suppressions").is_none());
         assert!(r.get("partialFingerprints").is_none());
+    }
+
+    #[test]
+    fn fingerprints_without_baseline_attach_partialfingerprints_only() {
+        // The CLI's no-baseline SARIF path passes canonical fingerprints (indexed
+        // [result][violation]) so Code Scanning can correlate alerts without a
+        // baseline. Each result must carry its OWN `partialFingerprints` and NO
+        // `baselineState` (no baseline is in effect). Distinct fingerprints pin
+        // each to its own result — a desync would stamp fp-a1 onto rule-b.
+        let report = Report {
+            results: vec![
+                RuleResult {
+                    rule_id: "rule-a".into(),
+                    level: Level::Error,
+                    policy_url: None,
+                    violations: vec![Violation::new("a1").with_path(Path::new("a.txt"))],
+                    notes: Vec::new(),
+                    is_fixable: false,
+                },
+                RuleResult {
+                    rule_id: "rule-b".into(),
+                    level: Level::Error,
+                    policy_url: None,
+                    violations: vec![Violation::new("b1").with_path(Path::new("b.txt"))],
+                    notes: Vec::new(),
+                    is_fixable: false,
+                },
+            ],
+        };
+        let fps = vec![vec!["fp-a1".to_string()], vec!["fp-b1".to_string()]];
+        let mut buf = Vec::new();
+        write_sarif_with_fingerprints(&report, Some(&fps), &mut buf).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        let results = v["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        let by_msg = |m: &str| {
+            results
+                .iter()
+                .find(|r| r["message"]["text"] == m)
+                .unwrap_or_else(|| panic!("no result for {m}"))
+        };
+        assert_eq!(by_msg("a1")["partialFingerprints"]["alint/v1"], "fp-a1");
+        assert_eq!(by_msg("b1")["partialFingerprints"]["alint/v1"], "fp-b1");
+        // No baseline in effect → no `baselineState` on any result.
+        assert!(results.iter().all(|r| r.get("baselineState").is_none()));
     }
 
     #[test]

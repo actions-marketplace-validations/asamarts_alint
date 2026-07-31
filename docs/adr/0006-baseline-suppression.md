@@ -71,13 +71,18 @@ generated fingerprint file, separate from `.alint.yml`:
   per-fingerprint counts, and is reword-proof. (v1 keyed only no-path rules; v2
   over-corrected to "key every non-line-content rule"; the v3 audit showed the
   `(rule_id, path)` default is both safe and far smaller.)
-- This is *intended* as **one** fingerprint definition for the whole tool:
-  SARIF gains it as `partialFingerprints` (shipped). Migrating the existing
-  `gitlab.rs` cross-run-dedup fingerprint onto it is **deferred** — it needs
-  report-fingerprint plumbing (see `docs/design/baseline.md` §5/§7). Until
-  then `gitlab.rs` keeps its own `rule_id|path|message|occurrence` fingerprint
-  (the `occurrence` discriminator added in the post-v0.13 audit guarantees the
-  per-report uniqueness the Code Climate spec requires).
+- This is **one** fingerprint definition for the whole tool, and every surface
+  now carries it. SARIF emits it as `partialFingerprints`: under an active
+  baseline since the v0.14 deferral close-out, and on every run afterward
+  (`check --format sarif` needs no `--baseline` for GitHub Code Scanning to
+  correlate alerts across runs). The `gitlab.rs` migration, deferred when this
+  ADR was first written, also landed in the close-out: the `alint` GitLab path
+  computes the canonical `violation_fingerprint` and passes a
+  `[result][violation]` grid into `write_gitlab`, keeping the old
+  `rule_id|path|message` hash only as a `self_fingerprint` fallback for callers
+  without file access. GitLab's per-report-uniqueness requirement is met by a
+  per-report occurrence pass over the grid (the first occurrence raw, a
+  deterministic suffix on collision). See `docs/design/baseline.md` §5/§7.
 - A stale entry (the fixed/edited case) warns and re-tightens but does not fail
   the build by default; `--strict-baseline` opts into failing on stale.
 - Suppression **marks rather than removes**: a deterministic, order-preserving

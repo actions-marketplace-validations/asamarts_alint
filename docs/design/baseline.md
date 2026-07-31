@@ -551,14 +551,18 @@ only files that already produced such a violation, cached per file).
    SHA-256. A fingerprint collision is a silent mis-suppression; the readability
    that motivated truncation is provided by the advisory `message` field (§2.1).
 7. **Fingerprint unification with `gitlab.rs` (and SARIF)** — RESOLVED (v0.14
-   deferral close-out, 2026-07-05). The single `violation_fingerprint` lives in
-   alint-core; SARIF `partialFingerprints`, the baseline file, and now the
-   `alint` GitLab export all carry it, so a finding has one identity everywhere.
-   `gitlab.rs` retains the legacy message-keyed hash only as a `self_fingerprint`
-   fallback for callers without file access (generic dispatch / benches / tests).
-   The migration was the benign change anticipated here (gitlab fingerprint
-   *stability improves*); parity is guarded by
-   `gitlab_fingerprint_equals_canonical_baseline_fingerprint` (§5).
+   deferral close-out, 2026-07-05; SARIF made always-on afterward). The single
+   `violation_fingerprint` lives in alint-core; the baseline file, the `alint`
+   GitLab export, and SARIF `partialFingerprints` all carry it, so a finding has
+   one identity everywhere. SARIF originally emitted `partialFingerprints` only
+   under an active baseline; it now emits them on every run (a plain `check
+   --format sarif` needs no `--baseline` for GitHub Code Scanning to correlate
+   alerts across runs), from the same `[result][violation]` grid the GitLab path
+   uses. `gitlab.rs` retains the legacy message-keyed hash only as a
+   `self_fingerprint` fallback for callers without file access (generic dispatch
+   / benches / tests). Parity is guarded by
+   `gitlab_fingerprint_equals_canonical_baseline_fingerprint` and
+   `sarif_fingerprint_equals_canonical_baseline_fingerprint` (§5).
 8. **No-regression "ratchet" + level-aware re-surfacing** — out of scope v1, but
    the two most-requested likely follow-ups (prevent a threshold getting *worse*;
    re-surface a grandfathered finding when its rule is escalated to `error`).

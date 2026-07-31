@@ -25,7 +25,10 @@
           "message": {
             "text": "expected a file matching [README.md] at the repo root"
           },
-          "locations": []
+          "locations": [],
+          "partialFingerprints": {
+            "alint/v1": "[..]"
+          }
         }
       ]
     }
