@@ -32,9 +32,12 @@ cp -r "$REPO_ROOT/demo/fixture/." "$work/"
 
 # The tape synthesizes these two at record time rather than committing them
 # (a tracked target/ and a .DS_Store in git would be gross, and would trip
-# alint's own dogfood). Mirror that setup exactly.
+# alint's own dogfood). Mirror that setup exactly. The .DS_Store must carry the
+# real "Bud1" magic (00 00 00 01 42 75 64 31): hygiene-no-macos-junk is
+# content-verified, so a bare-newline stub is correctly NOT flagged and the demo
+# would silently lose its .DS_Store finding (the 3 -> 2 drift this gate caught).
 mkdir -p "$work/target/debug" && printf 'binary\n' > "$work/target/debug/acme"
-printf '\n' > "$work/.DS_Store"
+printf '\000\000\000\001Bud1' > "$work/.DS_Store"
 git -C "$work" init -q .
 git -C "$work" add -A
 

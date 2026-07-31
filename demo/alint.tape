@@ -53,8 +53,10 @@ Type "export PS1='$ ' && clear"
 Enter
 Type "cd $(mktemp -d) && cp -r ${ALINT_DEMO_FIXTURE:-$OLDPWD/demo/fixture}/. ."
 Enter
-# Synthesize the two artifacts we deliberately do not commit.
-Type "mkdir -p target/debug && printf 'binary\n' > target/debug/acme && printf '\n' > .DS_Store"
+# Synthesize the two artifacts we deliberately do not commit. The .DS_Store
+# carries the real "Bud1" magic (00 00 00 01 42 75 64 31): the macos-junk rule
+# is content-verified, so a bare-newline stub would no longer be flagged.
+Type "mkdir -p target/debug && printf 'binary\n' > target/debug/acme && printf '\000\000\000\001Bud1' > .DS_Store"
 Enter
 Type "git init -q . && git add -A && clear"
 Enter
