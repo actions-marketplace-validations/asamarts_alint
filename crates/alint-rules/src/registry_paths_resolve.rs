@@ -69,6 +69,12 @@ struct Options {
     /// The manifest/registry file (path, or a glob to run once per matching
     /// manifest) that enumerates the path entries.
     source: String,
+    // A registry entry is a PATH; `whole_file` (the entire manifest as one
+    // value) is nonsensical here, and the hand-written schema excluded it.
+    // schemars cannot drop a field from the shared extract_spec, so exclude it
+    // schema-side with a `not: { required: [whole_file] }` guard. The loader is
+    // unchanged (it was already lenient here, as it is for the other kinds).
+    #[schemars(extend("not" = {"required": ["whole_file"]}))]
     extract: ExtractSpec,
     /// Resolve entries relative to: `registry_dir` (default), `lint_root`, or
     /// an explicit path.

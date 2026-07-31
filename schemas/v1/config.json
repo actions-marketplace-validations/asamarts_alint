@@ -3345,7 +3345,12 @@
         },
         "extract": {
           "$ref": "#/$defs/extract_spec",
-          "description": "Exactly one of: toml/json/yaml (RFC 9535 JSONPath string), lines (object; optional `comment` prefix, default `#`), regex (string; capture group 1 is the path)."
+          "description": "Exactly one of: toml/json/yaml (RFC 9535 JSONPath string), lines (object; optional `comment` prefix, default `#`), regex (string; capture group 1 is the path).",
+          "not": {
+            "required": [
+              "whole_file"
+            ]
+          }
         },
         "kind": {
           "const": "registry_paths_resolve"
