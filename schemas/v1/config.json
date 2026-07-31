@@ -257,6 +257,23 @@
         }
       ]
     },
+    "SelectSpec": {
+      "anyOf": [
+        {
+          "description": "A single glob.",
+          "type": "string"
+        },
+        {
+          "description": "A non-empty list of globs (`!`-prefixed entries are excludes).",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      ],
+      "description": "`select:` accepts a single glob (`\"src/*\"`) or a list with `!`-prefixed excludes (`[\"packages/*\", \"!packages/internal\"]`). A YAML string vs sequence are structurally distinct, so an untagged enum decodes them unambiguously. Shared by the select-family (`for_each_dir`, `for_each_file`, `every_matching_has`)."
+    },
     "Severity": {
       "enum": [
         "warn",
@@ -1349,23 +1366,16 @@
           "type": "array"
         },
         "select": {
-          "description": "Glob(s) selecting the files/dirs to iterate — a single glob, or a list with `!`-prefixed excludes (e.g. [\"packages/*\", \"!packages/internal\"]).",
-          "oneOf": [
-            {
-              "type": "string"
-            },
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            }
-          ]
+          "$ref": "#/$defs/SelectSpec",
+          "description": "Glob(s) selecting the files/dirs to iterate: a single glob, or a list with `!`-prefixed excludes (e.g. `[\"packages/*\", \"!packages/internal\"]`)."
         },
         "when_iter": {
-          "description": "Per-iteration `when:` filter — see rule_for_each_dir.when_iter.",
-          "type": "string"
+          "default": null,
+          "description": "Per-iteration `when:` filter (same semantics as `for_each_dir`'s `when_iter`).",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

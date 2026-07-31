@@ -163,6 +163,10 @@ pub fn migrated_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
         ),
         ("rule_dir_contains", dir_contains::options_schema()),
         (
+            "rule_every_matching_has",
+            every_matching_has::options_schema(),
+        ),
+        (
             "rule_generated_file_fresh",
             generated_file_fresh::options_schema(),
         ),

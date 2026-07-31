@@ -43,11 +43,13 @@ use serde::Deserialize;
 /// untagged enum decodes them unambiguously. Shared by the
 /// select-family (`for_each_dir`, `for_each_file`,
 /// `every_matching_has`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub(crate) enum SelectSpec {
+    /// A single glob.
     One(String),
-    Many(Vec<String>),
+    /// A non-empty list of globs (`!`-prefixed entries are excludes).
+    Many(#[schemars(length(min = 1))] Vec<String>),
 }
 
 /// Resolve a `select:` spec to a validated `Scope`: non-empty, with

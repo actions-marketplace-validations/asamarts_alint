@@ -26,14 +26,38 @@ use crate::for_each_dir::{
     resolve_select, validate_nested_require,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Glob(s) selecting the files/dirs to iterate: a single glob, or a list
+    /// with `!`-prefixed excludes (e.g. `["packages/*", "!packages/internal"]`).
     select: SelectSpec,
+    /// Per-iteration `when:` filter (same semantics as `for_each_dir`'s
+    /// `when_iter`).
     #[serde(default)]
     when_iter: Option<String>,
+    // `require` is a list of nested rules; a nested rule is the recursive shared
+    // `nested_rule` schema (used by for_each_dir/for_each_file too, kept
+    // hand-written), so point `require` straight at it rather than derive the
+    // deep NestedRuleSpec cluster (PathsSpec/ScopeFilterSpec carry custom
+    // string-or-list deserializers + a flattened options map schemars can't see).
+    #[schemars(schema_with = "require_schema")]
     require: Vec<NestedRuleSpec>,
 }
+
+/// Schema for `require:` — a non-empty array of the shared `nested_rule` def
+/// (kept hand-written; see the field comment). Reproduces the previous
+/// hand-written branch exactly.
+fn require_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "One or more nested rules that every file or directory matching `select` must satisfy.",
+        "type": "array",
+        "minItems": 1,
+        "items": { "$ref": "#/$defs/nested_rule" }
+    })
+}
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct EveryMatchingHasRule {
