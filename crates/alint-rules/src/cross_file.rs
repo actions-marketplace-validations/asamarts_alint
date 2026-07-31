@@ -42,27 +42,33 @@ use serde::Deserialize;
 
 use crate::extract::{Extract, ExtractSpec, extract_values, is_non_literal};
 
-#[derive(Debug, Deserialize)]
+/// The file whose extracted value(s) form the reference side of the relation:
+/// a single `{ file, extract }`, or (set relations only) `{ files: <glob>,
+/// extract }` whose matches are unioned into one set.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("oneOf" = [{"required": ["file"]}, {"required": ["files"]}]))]
 struct SourceSpec {
-    /// A single source file. Exactly one of `file` / `files`.
+    /// A single source file.
     #[serde(default)]
     file: Option<String>,
-    /// A glob whose matches are read and whose extracted values are
-    /// **unioned** into one set — for the set relations only
-    /// (`subset` / `superset` / `set_equals`). The "every `*hl-X*`
-    /// across `runtime/doc/*.txt`" shape.
+    /// A glob whose matches are read and whose extracted values are UNIONED
+    /// into one set, for the set relations only (`subset` / `superset` /
+    /// `set_equals`).
     #[serde(default)]
     files: Option<String>,
-    /// Absent for `identical` (whole-file); required otherwise.
+    /// The extraction to apply. Absent for `identical` (whole-file); required
+    /// otherwise.
     #[serde(default)]
     extract: Option<ExtractSpec>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct TargetEntrySpec {
+    /// A single target file.
     file: String,
+    /// The extraction to apply to this target (absent for `identical`).
     #[serde(default)]
     extract: Option<ExtractSpec>,
 }
@@ -72,14 +78,16 @@ struct TargetEntrySpec {
 /// `{ file, extract }` (form b — heterogeneous pins). A YAML map
 /// vs a sequence are structurally distinct, so an untagged enum
 /// decodes them unambiguously. `extract` is absent for `identical`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 enum TargetsSpec {
+    /// Form a: one query applied per glob match.
     Glob {
         files: String,
         #[serde(default)]
         extract: Option<ExtractSpec>,
     },
+    /// Form b: a sequence of heterogeneous `{ file, extract }` pins.
     List(Vec<TargetEntrySpec>),
 }
 
@@ -87,7 +95,7 @@ enum TargetsSpec {
 /// 1:1 scalar case (the released `cross_file_value_equals`); the set
 /// relations compare extracted sets; `identical` compares whole
 /// files; `resolves` checks path existence on the filesystem.
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum Relation {
     /// Source extracts exactly one value `v`; every target value
@@ -116,8 +124,9 @@ impl Relation {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
+#[schemars(rename = "NormalizeTransform")]
 enum Normalize {
     #[default]
     None,
@@ -186,7 +195,7 @@ fn semver_minor(v: &str) -> String {
 /// list (`[trim, semver-minor]`), applied left-to-right. A scalar
 /// vs a sequence are structurally distinct, so an untagged enum
 /// decodes them unambiguously.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 enum NormalizeSpec {
     One(Normalize),
@@ -218,24 +227,41 @@ fn apply_normalize(transforms: &[Normalize], v: &str) -> String {
         .fold(v.to_string(), |acc, t| t.apply(&acc))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// The file whose extracted value(s) form the reference side of the
+    /// relation: a single `{ file, extract }`, or (set relations only)
+    /// `{ files: <glob>, extract }` whose matches are unioned into one set.
     source: SourceSpec,
+    /// The file(s) compared against the source, one relation check per target.
     /// Absent for `resolves` (the target is the filesystem).
     #[serde(default)]
     targets: Option<TargetsSpec>,
+    /// The assertion checked between the source and each target: `equals`
+    /// (default), `subset`, `superset`, `set_equals`, `identical` (whole file
+    /// byte-for-byte), or `resolves` (each path the source extracts exists on
+    /// disk).
     #[serde(default)]
     relation: Relation,
+    /// A normalize transform, or an ordered list of transforms applied
+    /// left-to-right (`[trim, semver-minor]`). `semver-major` / `semver-minor`
+    /// keep only the leading MAJOR / MAJOR.MINOR band.
     #[serde(default)]
     normalize: NormalizeSpec,
+    /// When true, an absent target file or a missing extracted target value is
+    /// tolerated instead of reported as drift.
     #[serde(default)]
     allow_missing_target: bool,
-    /// `identical` only: drop the first N lines of both files
-    /// before comparison (skip a license / generated header).
+    /// For the `identical` relation only: drop this many leading lines from
+    /// both files before comparison, to ignore a differing license or
+    /// generated header.
     #[serde(default)]
+    #[schemars(range(min = 0))]
     skip_header_lines: Option<usize>,
 }
+
+crate::options_schema_for!(Options);
 
 /// Resolved target shape. `extract` is `None` for `identical`
 /// (whole-file), `Some` for the value relations.

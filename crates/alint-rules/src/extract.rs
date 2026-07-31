@@ -28,10 +28,13 @@ pub(crate) enum Extract {
     WholeFile,
 }
 
-/// The deserialised `extract:` block — exactly one field set,
-/// validated in [`ExtractSpec::resolve`].
-#[derive(Debug, Clone, Default, Deserialize)]
+/// Exactly one of: toml/json/yaml (RFC 9535 `JSONPath` string), lines (object;
+/// optional `comment` prefix, default `#`), regex (string; capture group 1 is
+/// the value), `whole_file` (object `{}`; the entire file content as one value,
+/// for byte-level `cross_file` comparison; the non-literal skip does not apply).
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "extract_spec", extend("minProperties" = 1, "maxProperties" = 1))]
 pub(crate) struct ExtractSpec {
     #[serde(default)]
     toml: Option<String>,
@@ -104,11 +107,11 @@ impl From<Extract> for ExtractSpec {
 /// `whole_file:` carries no options today (an empty `{}` map, like a
 /// marker); kept as a struct so options can be added without a
 /// breaking change.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WholeFileOpts {}
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LinesOpts {
     /// Lines starting with this (after trim) are skipped.

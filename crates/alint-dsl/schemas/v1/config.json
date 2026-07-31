@@ -97,6 +97,17 @@
       ],
       "type": "string"
     },
+    "LinesOpts": {
+      "additionalProperties": false,
+      "properties": {
+        "comment": {
+          "default": "#",
+          "description": "Lines starting with this (after trim) are skipped.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Normalize": {
       "oneOf": [
         {
@@ -112,6 +123,42 @@
         {
           "const": "final-newline",
           "description": "Normalise only a single trailing newline (the most common generator/editor diff).",
+          "type": "string"
+        }
+      ]
+    },
+    "NormalizeSpec": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NormalizeTransform"
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/NormalizeTransform"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "`normalize:` accepts a single transform (`trim`) or an ordered list (`[trim, semver-minor]`), applied left-to-right. A scalar vs a sequence are structurally distinct, so an untagged enum decodes them unambiguously."
+    },
+    "NormalizeTransform": {
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "trim",
+            "lower"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "semver-major",
+          "description": "Compare only the leading `MAJOR` token (the dotnet/runtime SDK-band shape: same feature band, not exact patch).",
+          "type": "string"
+        },
+        {
+          "const": "semver-minor",
+          "description": "Compare only the leading `MAJOR.MINOR` band — drops patch and pre-release and takes the leading digits of each token, so `4.36-dev`, `4.36.0`, `pnpm@11.3.0` (→ `11.3`) and `>=22.13` all reconcile to one band (the protobuf / pnpm version-format case the v0.12 study surfaced).",
           "type": "string"
         }
       ]
@@ -133,6 +180,41 @@
       ],
       "description": "`outputs:` accepts a single glob or a list (a `Scope`)."
     },
+    "Relation": {
+      "description": "The relation the source must hold to each target. `equals` is the 1:1 scalar case (the released `cross_file_value_equals`); the set relations compare extracted sets; `identical` compares whole files; `resolves` checks path existence on the filesystem.",
+      "oneOf": [
+        {
+          "const": "equals",
+          "description": "Source extracts exactly one value `v`; every target value must equal `v` (after normalize).",
+          "type": "string"
+        },
+        {
+          "const": "subset",
+          "description": "`S ⊆ T` — every source value appears in the target (singleton `S` = membership).",
+          "type": "string"
+        },
+        {
+          "const": "superset",
+          "description": "`S ⊇ T` — every target value appears in the source.",
+          "type": "string"
+        },
+        {
+          "const": "set_equals",
+          "description": "`S == T` — the sets match exactly.",
+          "type": "string"
+        },
+        {
+          "const": "identical",
+          "description": "Whole-file byte identity (optional `skip_header_lines`).",
+          "type": "string"
+        },
+        {
+          "const": "resolves",
+          "description": "Each extracted source path must exist on disk (file or dir).",
+          "type": "string"
+        }
+      ]
+    },
     "RequireList": {
       "anyOf": [
         {
@@ -149,12 +231,82 @@
         }
       ]
     },
+    "SourceSpec": {
+      "additionalProperties": false,
+      "description": "The file whose extracted value(s) form the reference side of the relation: a single `{ file, extract }`, or (set relations only) `{ files: <glob>, extract }` whose matches are unioned into one set.",
+      "oneOf": [
+        {
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "required": [
+            "files"
+          ]
+        }
+      ],
+      "properties": {
+        "extract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/extract_spec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extraction to apply. Absent for `identical` (whole-file); required otherwise."
+        },
+        "file": {
+          "default": null,
+          "description": "A single source file.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "files": {
+          "default": null,
+          "description": "A glob whose matches are read and whose extracted values are UNIONED into one set, for the set relations only (`subset` / `superset` / `set_equals`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "StyleName": {
       "enum": [
         "tabs",
         "spaces"
       ],
       "type": "string"
+    },
+    "TargetEntrySpec": {
+      "additionalProperties": false,
+      "properties": {
+        "extract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/extract_spec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extraction to apply to this target (absent for `identical`)."
+        },
+        "file": {
+          "description": "A single target file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
     },
     "TargetFormat": {
       "description": "The `format:` override values for `json_schema_passes`. Distinct from `structured_path::Format` (which has `xml`, not `yml`): this validator targets json/yaml/toml documents and accepts `yml` as a `yaml` alias.",
@@ -172,6 +324,45 @@
         "crlf"
       ],
       "type": "string"
+    },
+    "TargetsSpec": {
+      "anyOf": [
+        {
+          "description": "Form a: one query applied per glob match.",
+          "properties": {
+            "extract": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/extract_spec"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "files": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "files"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Form b: a sequence of heterogeneous `{ file, extract }` pins.",
+          "items": {
+            "$ref": "#/$defs/TargetEntrySpec"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "`targets:` is either a `{ files: <glob>, extract: … }` map (form a — one query applied per glob match) or a sequence of `{ file, extract }` (form b — heterogeneous pins). A YAML map vs a sequence are structurally distinct, so an untagged enum decodes them unambiguously. `extract` is absent for `identical`."
+    },
+    "WholeFileOpts": {
+      "additionalProperties": false,
+      "description": "`whole_file:` carries no options today (an empty `{}` map, like a marker); kept as a struct so options can be added without a breaking change.",
+      "type": "object"
     },
     "case_convention": {
       "description": "Case convention. Aliases like PascalCase / pascal / pascal-case / UpperCamelCase all resolve to the same canonical form.",
@@ -251,34 +442,57 @@
     },
     "extract_spec": {
       "additionalProperties": false,
-      "description": "Exactly one of: toml/json/yaml (RFC 9535 JSONPath string), lines (object; optional `comment` prefix, default `#`), regex (string; capture group 1 is the value), whole_file (object `{}`; the entire file content as one value — for byte-level cross_file comparison; the non-literal skip does not apply).",
+      "description": "Exactly one of: toml/json/yaml (RFC 9535 `JSONPath` string), lines (object; optional `comment` prefix, default `#`), regex (string; capture group 1 is the value), `whole_file` (object `{}`; the entire file content as one value, for byte-level `cross_file` comparison; the non-literal skip does not apply).",
       "maxProperties": 1,
       "minProperties": 1,
       "properties": {
         "json": {
-          "type": "string"
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "lines": {
-          "additionalProperties": false,
-          "properties": {
-            "comment": {
-              "type": "string"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinesOpts"
+            },
+            {
+              "type": "null"
             }
-          },
-          "type": "object"
+          ]
         },
         "regex": {
-          "type": "string"
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "toml": {
-          "type": "string"
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "whole_file": {
-          "additionalProperties": false,
-          "type": "object"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WholeFileOpts"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "yaml": {
-          "type": "string"
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"
@@ -935,6 +1149,7 @@
       "description": "A `source` file must hold a `relation` to one or more `targets` (or the filesystem). Value relations extract values: `equals` (default — every target value equals the single source value; the released `cross_file_value_equals`), `subset` / `superset` / `set_equals` (the source's extracted set vs each target's set). `identical` compares whole files byte-for-byte (no `extract`; optional `skip_header_lines`). `resolves` checks that each path the source extracts exists on disk (`source.extract`, no `targets` — the forward half of `registry_paths_resolve`). `targets` is a `{ files: <glob>, extract }` map or a `[{ file, extract }]` list. `normalize` relaxes value comparison. Non-literal values are skipped, not failed. `cross_file_value_equals` is a byte-compatible alias (relation defaults to equals). The per-relation shape (which of `source.extract` / `targets` is present) is validated at load.",
       "properties": {
         "allow_missing_target": {
+          "default": false,
           "description": "When true, an absent target file or a missing extracted target value is tolerated instead of reported as drift.",
           "type": "boolean"
         },
@@ -945,114 +1160,37 @@
           ]
         },
         "normalize": {
-          "description": "A normalize transform, or an ordered list of transforms applied left-to-right (`[trim, semver-minor]`). `semver-major` / `semver-minor` keep only the leading MAJOR / MAJOR.MINOR band (each token's leading digits, leading non-digits stripped) — the protobuf / pnpm version-format reconcile.",
-          "oneOf": [
-            {
-              "enum": [
-                "none",
-                "trim",
-                "lower",
-                "semver-major",
-                "semver-minor"
-              ]
-            },
-            {
-              "items": {
-                "enum": [
-                  "none",
-                  "trim",
-                  "lower",
-                  "semver-major",
-                  "semver-minor"
-                ]
-              },
-              "type": "array"
-            }
-          ]
+          "$ref": "#/$defs/NormalizeSpec",
+          "description": "A normalize transform, or an ordered list of transforms applied left-to-right (`[trim, semver-minor]`). `semver-major` / `semver-minor` keep only the leading MAJOR / MAJOR.MINOR band."
         },
         "relation": {
-          "description": "The assertion checked between the source and each target: `equals` (default), `subset`, `superset`, `set_equals`, `identical` (whole file byte-for-byte), or `resolves` (each path the source extracts exists on disk).",
-          "enum": [
-            "equals",
-            "subset",
-            "superset",
-            "set_equals",
-            "identical",
-            "resolves"
-          ]
+          "$ref": "#/$defs/Relation",
+          "description": "The assertion checked between the source and each target: `equals` (default), `subset`, `superset`, `set_equals`, `identical` (whole file byte-for-byte), or `resolves` (each path the source extracts exists on disk)."
         },
         "skip_header_lines": {
+          "default": null,
           "description": "For the `identical` relation only: drop this many leading lines from both files before comparison, to ignore a differing license or generated header.",
+          "format": "uint",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "source": {
-          "additionalProperties": false,
-          "description": "The file whose extracted value(s) form the reference side of the relation — a single `{ file, extract }`, or (set relations only) `{ files: <glob>, extract }` whose matches are unioned into one set.",
-          "oneOf": [
-            {
-              "required": [
-                "file"
-              ]
-            },
-            {
-              "required": [
-                "files"
-              ]
-            }
-          ],
-          "properties": {
-            "extract": {
-              "$ref": "#/$defs/extract_spec"
-            },
-            "file": {
-              "description": "A single source file.",
-              "type": "string"
-            },
-            "files": {
-              "description": "A glob whose matches are read and whose extracted values are UNIONED into one set — for the set relations only (subset / superset / set_equals). The 'every match across a glob == a set' shape.",
-              "type": "string"
-            }
-          },
-          "type": "object"
+          "$ref": "#/$defs/SourceSpec",
+          "description": "The file whose extracted value(s) form the reference side of the relation: a single `{ file, extract }`, or (set relations only) `{ files: <glob>, extract }` whose matches are unioned into one set."
         },
         "targets": {
-          "description": "The file(s) compared against the source, one relation check per target — a `{ files: <glob>, extract }` map or a list of `{ file, extract }` pins; omitted for the `resolves` relation (whose target is the filesystem).",
-          "oneOf": [
+          "anyOf": [
             {
-              "additionalProperties": false,
-              "properties": {
-                "extract": {
-                  "$ref": "#/$defs/extract_spec"
-                },
-                "files": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "files"
-              ],
-              "type": "object"
+              "$ref": "#/$defs/TargetsSpec"
             },
             {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "extract": {
-                    "$ref": "#/$defs/extract_spec"
-                  },
-                  "file": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "file"
-                ],
-                "type": "object"
-              },
-              "type": "array"
+              "type": "null"
             }
-          ]
+          ],
+          "description": "The file(s) compared against the source, one relation check per target. Absent for `resolves` (the target is the filesystem)."
         }
       },
       "required": [
