@@ -790,3 +790,81 @@ fn sarif_fingerprint_equals_canonical_baseline_fingerprint() {
         "no result may carry baselineState without --baseline",
     );
 }
+
+/// The no-baseline SARIF path must READ the offending file's bytes to compute a
+/// CASE-2 (line-content) fingerprint, exactly as the baseline snapshot does. The
+/// parity test above only exercises case-1 (structural key) and case-3
+/// (path-only) findings, where `file_bytes` is irrelevant — so a regression that
+/// passed no bytes (or the wrong root) into the SARIF fingerprint grid would keep
+/// those green while silently diverging any line-content finding from the
+/// baseline/GitLab identity. This pins the case-2 path end to end with a real
+/// merge-conflict finding.
+#[test]
+fn sarif_content_discriminator_fingerprint_matches_baseline() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path();
+    std::fs::write(
+        root.join(".alint.yml"),
+        "version: 1\n\
+         rules:\n\
+         \x20 - id: no-conflicts\n\
+         \x20   kind: no_merge_conflict_markers\n\
+         \x20   paths: [\"**/*.md\"]\n\
+         \x20   level: error\n",
+    )
+    .unwrap();
+    // Conflict-marker lines fire with the offending line's bytes as the
+    // fingerprint discriminator (case 2), so the fingerprint depends on the read.
+    std::fs::write(
+        root.join("doc.md"),
+        "intro\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\ntail\n",
+    )
+    .unwrap();
+
+    // 1. Snapshot -> canonical case-2 fingerprints.
+    assert_eq!(code(&run(root, &["baseline"])), 0, "snapshot");
+    let baseline_raw = std::fs::read_to_string(root.join(".alint-baseline.json")).unwrap();
+    let canonical: std::collections::BTreeSet<String> = baseline_raw
+        .lines()
+        .skip(1)
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).expect("entry is JSON")["fingerprint"]
+                .as_str()
+                .expect("entry carries a fingerprint")
+                .to_string()
+        })
+        .collect();
+    assert!(!canonical.is_empty(), "conflict markers produce findings");
+
+    // 2. SARIF with NO baseline.
+    let sr = run(root, &["check", "--format", "sarif"]);
+    let sarif: serde_json::Value = serde_json::from_slice(&sr.stdout).expect("sarif is JSON");
+    let results = sarif["runs"][0]["results"]
+        .as_array()
+        .expect("results array");
+    // Confirm these are genuinely line-anchored — the case-2 path, not case-3.
+    assert!(
+        results
+            .iter()
+            .any(|r| r["locations"][0]["physicalLocation"]["region"]["startLine"].is_number()),
+        "expected a line-anchored (case-2) finding"
+    );
+    let sarif_fps: std::collections::BTreeSet<String> = results
+        .iter()
+        .map(|r| {
+            r["partialFingerprints"]["alint/v1"]
+                .as_str()
+                .expect("case-2 finding carries a partialFingerprint")
+                .to_string()
+        })
+        .collect();
+
+    // 3. A None-bytes regression would make these the path-only (case-3) hash
+    //    instead, breaking this equality.
+    assert_eq!(
+        sarif_fps, canonical,
+        "SARIF case-2 partialFingerprints must equal the baseline fingerprints\n\
+         sarif={sarif_fps:?}\ncanonical={canonical:?}",
+    );
+}

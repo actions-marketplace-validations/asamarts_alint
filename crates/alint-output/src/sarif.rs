@@ -575,14 +575,32 @@ mod tests {
                     notes: Vec::new(),
                     is_fixable: false,
                 },
+                RuleResult {
+                    rule_id: "rule-c".into(),
+                    level: Level::Error,
+                    policy_url: None,
+                    // Two violations in ONE result exercises the vi (violation)
+                    // axis of the [result][violation] grid; the two results above
+                    // only vary the result index.
+                    violations: vec![
+                        Violation::new("c1").with_path(Path::new("c.txt")),
+                        Violation::new("c2").with_path(Path::new("c.txt")),
+                    ],
+                    notes: Vec::new(),
+                    is_fixable: false,
+                },
             ],
         };
-        let fps = vec![vec!["fp-a1".to_string()], vec!["fp-b1".to_string()]];
+        let fps = vec![
+            vec!["fp-a1".to_string()],
+            vec!["fp-b1".to_string()],
+            vec!["fp-c1".to_string(), "fp-c2".to_string()],
+        ];
         let mut buf = Vec::new();
         write_sarif_with_fingerprints(&report, Some(&fps), &mut buf).unwrap();
         let v: Value = serde_json::from_slice(&buf).unwrap();
         let results = v["runs"][0]["results"].as_array().unwrap();
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 4);
         let by_msg = |m: &str| {
             results
                 .iter()
@@ -591,6 +609,10 @@ mod tests {
         };
         assert_eq!(by_msg("a1")["partialFingerprints"]["alint/v1"], "fp-a1");
         assert_eq!(by_msg("b1")["partialFingerprints"]["alint/v1"], "fp-b1");
+        // vi>0: the second violation of rule-c gets its OWN fingerprint, proving
+        // the grid is indexed [result][violation], not just per-result.
+        assert_eq!(by_msg("c1")["partialFingerprints"]["alint/v1"], "fp-c1");
+        assert_eq!(by_msg("c2")["partialFingerprints"]["alint/v1"], "fp-c2");
         // No baseline in effect → no `baselineState` on any result.
         assert!(results.iter().all(|r| r.get("baselineState").is_none()));
     }

@@ -72,8 +72,8 @@ generated fingerprint file, separate from `.alint.yml`:
   over-corrected to "key every non-line-content rule"; the v3 audit showed the
   `(rule_id, path)` default is both safe and far smaller.)
 - This is **one** fingerprint definition for the whole tool, and every surface
-  now carries it. SARIF emits it as `partialFingerprints`: under an active
-  baseline since the v0.14 deferral close-out, and on every run afterward
+  now carries it. SARIF emits it as `partialFingerprints`: originally only under
+  an active baseline (since baseline mode shipped, #88-#94), and now on every run
   (`check --format sarif` needs no `--baseline` for GitHub Code Scanning to
   correlate alerts across runs). The `gitlab.rs` migration, deferred when this
   ADR was first written, also landed in the close-out: the `alint` GitLab path
