@@ -44,7 +44,10 @@ use serde::Deserialize;
 /// select-family (`for_each_dir`, `for_each_file`,
 /// `every_matching_has`).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a glob string, or a list of globs (with `!`-prefixed excludes)"
+)]
 pub(crate) enum SelectSpec {
     /// A single glob.
     One(String),

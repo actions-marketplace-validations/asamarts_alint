@@ -192,7 +192,10 @@ impl<'de> Deserialize<'de> for AllowOutOfRoot {
 /// unknown rule id is a config error so typos surface at load
 /// time.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a URL or path string, or a `{ url, only?, except? }` map"
+)]
 pub enum ExtendsEntry {
     Url(String),
     Filtered {
@@ -239,7 +242,10 @@ impl ExtendsEntry {
 /// For the include/exclude form, each field accepts either a single string
 /// or a list of strings.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a glob string, a list of globs, or an `{ include, exclude }` map"
+)]
 pub enum PathsSpec {
     Single(String),
     Many(Vec<String>),
@@ -256,7 +262,7 @@ where
     D: serde::Deserializer<'de>,
 {
     #[derive(Deserialize)]
-    #[serde(untagged)]
+    #[serde(untagged, expecting = "a string, or a list of strings")]
     enum OneOrMany {
         One(String),
         Many(Vec<String>),
@@ -323,7 +329,10 @@ pub struct RuleSpec {
 /// The `fix:` block on a rule. Exactly one op key must be present —
 /// alint errors at load time when the op and rule kind are incompatible.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a map with exactly one fix op (e.g. `file_create`, `file_remove`, `file_prepend`)"
+)]
 pub enum FixSpec {
     FileCreate {
         file_create: FileCreateFixSpec,
@@ -777,6 +786,33 @@ mod tests {
         assert!(
             !err.to_string().contains("Raw"),
             "message leaks the internal enum name: {err}"
+        );
+    }
+
+    #[test]
+    fn untagged_config_enums_name_accepted_forms_not_internal_type() {
+        // A value matching no variant reports the accepted forms (via
+        // `#[serde(expecting)]`), never the internal untagged-enum type name.
+        let p = serde_yaml_ng::from_str::<PathsSpec>("42")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            p.contains("a glob string") && !p.contains("PathsSpec"),
+            "PathsSpec: {p}"
+        );
+        let e = serde_yaml_ng::from_str::<ExtendsEntry>("42")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("a URL or path") && !e.contains("ExtendsEntry"),
+            "ExtendsEntry: {e}"
+        );
+        let f = serde_yaml_ng::from_str::<FixSpec>("42")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            f.contains("exactly one fix op") && !f.contains("FixSpec"),
+            "FixSpec: {f}"
         );
     }
 

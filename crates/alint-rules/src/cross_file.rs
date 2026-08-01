@@ -79,7 +79,10 @@ struct TargetEntrySpec {
 /// vs a sequence are structurally distinct, so an untagged enum
 /// decodes them unambiguously. `extract` is absent for `identical`.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a `{ files, extract }` map, or a list of `{ file, extract }` entries"
+)]
 enum TargetsSpec {
     /// Form a: one query applied per glob match.
     // The hand-written schema rejected unknown keys in this form; schemars does
@@ -200,7 +203,10 @@ fn semver_minor(v: &str) -> String {
 /// vs a sequence are structurally distinct, so an untagged enum
 /// decodes them unambiguously.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(untagged, expecting = "a normalize transform, or a list of transforms")]
+#[serde(
+    untagged,
+    expecting = "a normalize transform (`none`, `trim`, `lower`, `semver-major`, or `semver-minor`), or a list of them"
+)]
 enum NormalizeSpec {
     One(Normalize),
     Many(Vec<Normalize>),
@@ -1100,17 +1106,22 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
-    fn normalize_spec_error_names_accepted_forms_not_internal_enum() {
-        // A value that is neither a transform nor a list is rejected with a
-        // message naming the accepted forms, not the internal untagged enum.
-        let err = serde_yaml_ng::from_str::<NormalizeSpec>("42").unwrap_err();
+    fn untagged_enums_name_accepted_forms_not_internal_enum() {
+        // A value matching no variant reports the accepted forms (via
+        // `#[serde(expecting)]`), not the internal untagged-enum name.
+        let n = serde_yaml_ng::from_str::<NormalizeSpec>("42")
+            .unwrap_err()
+            .to_string();
         assert!(
-            err.to_string().contains("a normalize transform"),
-            "expected a friendly message, got: {err}"
+            n.contains("a normalize transform") && !n.contains("NormalizeSpec"),
+            "NormalizeSpec: {n}"
         );
+        let t = serde_yaml_ng::from_str::<TargetsSpec>("42")
+            .unwrap_err()
+            .to_string();
         assert!(
-            !err.to_string().contains("NormalizeSpec"),
-            "message leaks the internal enum name: {err}"
+            t.contains("{ files, extract }") && !t.contains("TargetsSpec"),
+            "TargetsSpec: {t}"
         );
     }
 
@@ -1729,6 +1740,28 @@ mod tests {
         );
         let err = build(&spec).unwrap_err();
         assert!(err.to_string().contains("normalize"), "{err}");
+    }
+
+    #[test]
+    fn build_surfaces_friendly_untagged_error_through_options_wrapper() {
+        // The `expecting` message must reach the user through build()'s
+        // `invalid options: {e}` wrapping, not just the isolated enum. Guards a
+        // refactor that drops the inner error from the wrapper (audit M3).
+        use crate::test_support::spec_yaml;
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: cross_file\n\
+             relation: equals\n\
+             source: { file: a.txt, extract: { toml: \"$.v\" } }\n\
+             normalize: 42\n\
+             level: error\n",
+        );
+        let err = build(&spec).unwrap_err().to_string();
+        assert!(
+            err.contains("a normalize transform"),
+            "friendly text lost through the options wrapper: {err}"
+        );
+        assert!(!err.contains("NormalizeSpec"), "leaks internal enum: {err}");
     }
 
     fn identical_rule(targets: Targets, skip_header_lines: usize) -> CrossFileRule {

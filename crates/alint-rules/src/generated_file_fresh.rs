@@ -82,7 +82,7 @@ impl Normalize {
 
 /// `outputs:` accepts a single glob or a list (a `Scope`).
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
+#[serde(untagged, expecting = "a glob string, or a list of globs")]
 enum OutputsSpec {
     /// A single output glob.
     One(String),

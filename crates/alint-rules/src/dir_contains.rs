@@ -33,7 +33,7 @@ struct Options {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
+#[serde(untagged, expecting = "a basename glob, or a list of basename globs")]
 enum RequireList {
     /// A single basename glob.
     One(String),

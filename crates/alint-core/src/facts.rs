@@ -54,7 +54,7 @@ impl FactValue {
 /// A string or a list of strings — accepted by fact kinds whose input is
 /// glob-shaped.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, expecting = "a string, or a list of strings")]
 pub enum OneOrMany {
     One(String),
     Many(Vec<String>),
@@ -80,7 +80,10 @@ pub struct FactSpec {
 /// The closed set of built-in fact kinds. Serde dispatches via `untagged`
 /// — the first variant whose required field is present in the YAML wins.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a fact with exactly one kind key (e.g. `any_file_exists`, `all_files_exist`, `count_files`)"
+)]
 pub enum FactKind {
     AnyFileExists {
         any_file_exists: OneOrMany,

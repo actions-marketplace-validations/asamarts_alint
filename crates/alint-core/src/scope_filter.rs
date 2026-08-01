@@ -98,7 +98,7 @@ where
     D: Deserializer<'de>,
 {
     #[derive(Deserialize)]
-    #[serde(untagged)]
+    #[serde(untagged, expecting = "a string, or a list of strings")]
     enum OneOrMany {
         One(String),
         Many(Vec<String>),
