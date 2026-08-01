@@ -121,7 +121,10 @@ struct ForbiddenEdgeSpec {
 /// pattern — not the externally-tagged-enum-from-map trap
 /// `crate::extract` documents).
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a mode name (`acyclic`, `no_dangling`, or `no_orphans`), or a map of require options"
+)]
 enum RequireSpec {
     Named(NamedRequire),
     Map(RequireMap),
@@ -916,6 +919,21 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 mod tests {
     use super::*;
     use alint_core::{FileEntry, FileIndex};
+
+    #[test]
+    fn require_spec_error_names_accepted_forms_not_internal_enum() {
+        // A value that is neither a mode name nor a map is rejected with a
+        // message naming the accepted forms, not the internal untagged enum.
+        let err = serde_yaml_ng::from_str::<RequireSpec>("42").unwrap_err();
+        assert!(
+            err.to_string().contains("a mode name"),
+            "expected a friendly message, got: {err}"
+        );
+        assert!(
+            !err.to_string().contains("RequireSpec"),
+            "message leaks the internal enum name: {err}"
+        );
+    }
 
     fn index(files: &[&str]) -> FileIndex {
         FileIndex::from_entries(

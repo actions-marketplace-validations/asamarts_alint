@@ -200,7 +200,7 @@ fn semver_minor(v: &str) -> String {
 /// vs a sequence are structurally distinct, so an untagged enum
 /// decodes them unambiguously.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
-#[serde(untagged)]
+#[serde(untagged, expecting = "a normalize transform, or a list of transforms")]
 enum NormalizeSpec {
     One(Normalize),
     Many(Vec<Normalize>),
@@ -1098,6 +1098,21 @@ mod tests {
     use super::*;
     use alint_core::{FileEntry, FileIndex};
     use proptest::prelude::*;
+
+    #[test]
+    fn normalize_spec_error_names_accepted_forms_not_internal_enum() {
+        // A value that is neither a transform nor a list is rejected with a
+        // message naming the accepted forms, not the internal untagged enum.
+        let err = serde_yaml_ng::from_str::<NormalizeSpec>("42").unwrap_err();
+        assert!(
+            err.to_string().contains("a normalize transform"),
+            "expected a friendly message, got: {err}"
+        );
+        assert!(
+            !err.to_string().contains("NormalizeSpec"),
+            "message leaks the internal enum name: {err}"
+        );
+    }
 
     proptest! {
         /// Every `normalize` transform is idempotent: normalising an

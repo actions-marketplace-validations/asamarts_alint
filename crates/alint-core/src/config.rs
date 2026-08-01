@@ -153,7 +153,10 @@ impl<'de> Deserialize<'de> for AllowOutOfRoot {
             rules: Vec<String>,
         }
         #[derive(Deserialize)]
-        #[serde(untagged)]
+        #[serde(
+            untagged,
+            expecting = "a boolean, or a map with optional `kinds` and `rules` lists"
+        )]
         enum Raw {
             Flag(bool),
             Selective(SelectiveSpec),
@@ -764,8 +767,17 @@ mod tests {
             }
             other => panic!("expected Selective, got {other:?}"),
         }
-        // an unknown key in the map form is rejected.
-        assert!(serde_yaml_ng::from_str::<AllowOutOfRoot>("bogus: 1").is_err());
+        // an unknown key in the map form is rejected with a message that names
+        // the accepted forms, not the internal untagged-enum type.
+        let err = serde_yaml_ng::from_str::<AllowOutOfRoot>("bogus: 1").unwrap_err();
+        assert!(
+            err.to_string().contains("a boolean, or a map"),
+            "expected a friendly message, got: {err}"
+        );
+        assert!(
+            !err.to_string().contains("Raw"),
+            "message leaks the internal enum name: {err}"
+        );
     }
 
     #[test]
