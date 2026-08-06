@@ -22,6 +22,24 @@ if [[ "${1:-}" == "--purge" ]]; then
     podman volume rm alint-runner-cargo-cache 2>/dev/null || true
     podman volume rm alint-runner-cargo-target 2>/dev/null || true
     echo "==> Volumes purged"
+
+    # Deregistration lives here, not in the container's signal handler: a SIGTERM
+    # arrives on any ordinary restart, and removing the registration there leaves
+    # the runner looping on credentials the server has deleted. Only --purge
+    # means "this runner is going away". Through the API rather than
+    # `config.sh remove`, whose registration token has expired by teardown time.
+    if command -v gh >/dev/null 2>&1 && [[ -n "${GITHUB_REPO_URL:-}" ]]; then
+        _slug="${GITHUB_REPO_URL#https://github.com/}"
+        _id="$(gh api "repos/${_slug}/actions/runners" \
+                 --jq ".runners[] | select(.name==\"${CONTAINER_NAME}\") | .id" 2>/dev/null || true)"
+        if [[ -n "${_id}" ]]; then
+            gh api -X DELETE "repos/${_slug}/actions/runners/${_id}" >/dev/null 2>&1 \
+                && echo "==> Deregistered runner '${CONTAINER_NAME}'" \
+                || echo "==> Could not deregister; remove it in Settings -> Actions -> Runners"
+        fi
+    else
+        echo "==> Remove the runner in Settings -> Actions -> Runners if it lingers"
+    fi
 fi
 
 echo "==> Teardown complete"
