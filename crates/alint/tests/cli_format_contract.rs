@@ -120,6 +120,127 @@ fn format_json_is_never_a_silent_human_fallthrough() {
     }
 }
 
+// ─── Explain completeness — output surfaces the rule's configured detail ─
+//
+// `explain` used to print only id/level/policy_url, silently dropping the
+// rule's kind, paths, and author `message` — all present in the loaded config,
+// and a byte-exact snapshot froze that thin output as "correct". This gate is a
+// POSITIVE completeness invariant: for a rule that sets kind/paths/message,
+// explain's human AND json output must actually contain those values, so the
+// `RuleSpec` -> `RuleEntry` projection can't quietly go lossy again. The
+// generalisation to every rule kind is tracked in ADR-0012.
+#[test]
+fn explain_surfaces_configured_rule_detail() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        "version: 1\n\
+         rules:\n\
+        \x20 - id: needs-readme\n\
+        \x20   kind: file_exists\n\
+        \x20   paths: README.md\n\
+        \x20   level: error\n\
+        \x20   message: \"README.md must exist at the repository root.\"\n",
+    )
+    .unwrap();
+
+    // JSON: the machine contract must carry the rule's kind, message, paths,
+    // and categories — not merely parse as *some* JSON (the old G1a-only gate).
+    let out = run(dir.path(), &["explain", "needs-readme", "--format", "json"]);
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("explain --format json must be JSON");
+    assert_eq!(
+        v["rule_kind"], "file_exists",
+        "explain json dropped the rule's kind: {v}"
+    );
+    assert_eq!(
+        v["message"], "README.md must exist at the repository root.",
+        "explain json dropped the author message: {v}"
+    );
+    assert_eq!(
+        v["paths"]["include"][0], "README.md",
+        "explain json dropped the rule's paths: {v}"
+    );
+    assert!(
+        v["categories"].as_array().is_some_and(|c| !c.is_empty()),
+        "explain json dropped the kind's categories: {v}"
+    );
+
+    // Human: the same detail must be visible, not just id/level.
+    let out = run(dir.path(), &["explain", "needs-readme"]);
+    let s = String::from_utf8_lossy(&out.stdout);
+    for needle in [
+        "kind:",
+        "file_exists",
+        "paths:",
+        "README.md",
+        "message:",
+        "README.md must exist at the repository root.",
+    ] {
+        assert!(
+            s.contains(needle),
+            "explain human output is missing {needle:?}:\n{s}"
+        );
+    }
+}
+
+// ─── Explain edge cases — negation paths + blank message ───────────
+//
+// Guards two adversarial-review findings: an inline `!` negation in a paths
+// list must report as an exclude (not a bogus include), and a blank message
+// must render as absent (no dangling `message:` label, json null).
+#[test]
+fn explain_handles_negation_paths_and_blank_message() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        r#"version: 1
+rules:
+  - id: neg
+    kind: file_content_forbidden
+    paths: ["src/**", "!src/gen/**"]
+    pattern: "TODO"
+    level: warning
+  - id: blank
+    kind: file_exists
+    paths: X
+    level: error
+    message: ""
+"#,
+    )
+    .unwrap();
+
+    // An inline `!` negation is an exclude, mirroring the scope matcher.
+    let v: serde_json::Value =
+        serde_json::from_slice(&run(dir.path(), &["explain", "neg", "--format", "json"]).stdout)
+            .expect("json");
+    assert_eq!(v["paths"]["include"][0], "src/**");
+    assert_eq!(
+        v["paths"]["exclude"][0], "src/gen/**",
+        "inline `!` negation must report as an exclude, not an include: {v}"
+    );
+    let human = String::from_utf8_lossy(&run(dir.path(), &["explain", "neg"]).stdout).into_owned();
+    assert!(
+        human.contains("(excluding src/gen/**)"),
+        "human paths must show the negation as an exclusion:\n{human}"
+    );
+
+    // A blank message renders as absent: json null, no human label.
+    let v: serde_json::Value =
+        serde_json::from_slice(&run(dir.path(), &["explain", "blank", "--format", "json"]).stdout)
+            .expect("json");
+    assert!(
+        v["message"].is_null(),
+        "blank message must be json null: {v}"
+    );
+    let human =
+        String::from_utf8_lossy(&run(dir.path(), &["explain", "blank"]).stdout).into_owned();
+    assert!(
+        !human.contains("message:"),
+        "blank message must not print a dangling label:\n{human}"
+    );
+}
+
 // ─── G1b — the agent format only emits commands the CLI accepts ─────
 
 /// Pull `` `alint …` `` commands out of an `agent_instruction` string:
