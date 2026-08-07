@@ -241,6 +241,108 @@ rules:
     );
 }
 
+// ─── Explain covers every registered kind (all_kinds.yaml) ─────────
+//
+// ADR-0012's generalisation of the per-rule completeness gate: drive the
+// `all_kinds.yaml` fixture (a rule for ~every registered kind) through
+// `explain --format json` and assert each renders valid JSON with its id and
+// kind round-tripping and categories present. A newly registered kind that
+// rendered blank, mis-reported its kind, or crashed `explain` fails here.
+#[test]
+fn explain_covers_every_registered_kind() {
+    let fixture = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../alint-dsl/tests/fixtures/all_kinds.yaml"
+    ))
+    .expect("read all_kinds.yaml");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".alint.yml"), &fixture).unwrap();
+
+    let list: serde_json::Value =
+        serde_json::from_slice(&run(dir.path(), &["list", "--format", "json"]).stdout)
+            .expect("list --format json must be JSON");
+    let rules = list["rules"].as_array().expect("rules array");
+    assert!(
+        rules.len() > 60,
+        "all_kinds fixture should exercise many kinds (got {})",
+        rules.len()
+    );
+
+    for r in rules {
+        let id = r["id"].as_str().expect("rule id");
+        let kind = r["kind"].as_str().expect("rule kind");
+        let out = run(dir.path(), &["explain", id, "--format", "json"]);
+        let ev: serde_json::Value = serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|_| panic!("explain {id} --format json must be valid JSON"));
+        assert_eq!(ev["id"], id, "explain mis-reported the id for {id}: {ev}");
+        assert_eq!(
+            ev["rule_kind"], kind,
+            "explain mis-reported the kind for {id}: {ev}"
+        );
+        assert!(
+            ev["categories"].as_array().is_some(),
+            "explain dropped categories for {id}: {ev}"
+        );
+    }
+}
+
+// ─── list human surfaces kind + fixable/conditional markers ────────
+//
+// #163 added `kind`, `[fix]` (fixable), and `[when]` (conditional) markers to
+// `alint list`'s human output (parity with `list --format json`). The
+// `list.stdout` snapshot fixture has no fixable/conditional rule, so it
+// exercises only `kind`; this asserts the markers directly.
+#[test]
+fn list_human_surfaces_kind_and_markers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        r#"version: 1
+rules:
+  - id: rule-a
+    kind: file_exists
+    paths: .editorconfig
+    level: error
+    fix: { file_create: { content: "x\n" } }
+  - id: rule-b
+    kind: file_exists
+    paths: rust-toolchain.toml
+    level: info
+    when: "facts.has_rust"
+  - id: rule-c
+    kind: file_absent
+    paths: "**/*.bak"
+    level: warning
+"#,
+    )
+    .unwrap();
+
+    let s = String::from_utf8_lossy(&run(dir.path(), &["list"]).stdout).into_owned();
+    // Every rule shows its kind (parity with `list --format json`).
+    assert!(
+        s.contains("file_exists") && s.contains("file_absent"),
+        "list human dropped the kind:\n{s}"
+    );
+    let line = |id: &str| s.lines().find(|l| l.contains(id)).unwrap_or("").to_string();
+    // A fixable rule shows `[fix]`; a non-fixable one does not.
+    assert!(
+        line("rule-a").contains("[fix]"),
+        "fixable rule missing [fix]: {:?}",
+        line("rule-a")
+    );
+    assert!(
+        !line("rule-c").contains("[fix]"),
+        "non-fixable rule has a stray [fix]: {:?}",
+        line("rule-c")
+    );
+    // A conditional rule shows `[when]`.
+    assert!(
+        line("rule-b").contains("[when]"),
+        "conditional rule missing [when]: {:?}",
+        line("rule-b")
+    );
+}
+
 // ─── G1b — the agent format only emits commands the CLI accepts ─────
 
 /// Pull `` `alint …` `` commands out of an `agent_instruction` string:
