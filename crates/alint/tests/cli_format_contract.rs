@@ -619,6 +619,132 @@ fn help_wraps_to_narrow_terminal_width() {
     }
 }
 
+// ─── Explain surfaces a summary + docs link for every kind (ADR-0011) ─
+//
+// The generated per-kind summary bridge must yield a non-empty `summary:` line
+// and a `docs:` deep link for EVERY registered kind. Drives `all_kinds.yaml`
+// (the same all-kinds driver ADR-0012 established) so a newly registered kind
+// missing a `docs/rules.md` summary can't ship silently.
+#[test]
+fn explain_surfaces_summary_and_docs_for_every_kind() {
+    let fixture = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../alint-dsl/tests/fixtures/all_kinds.yaml"
+    ))
+    .expect("read all_kinds.yaml");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".alint.yml"), &fixture).unwrap();
+
+    let list: serde_json::Value =
+        serde_json::from_slice(&run(dir.path(), &["list", "--format", "json"]).stdout)
+            .expect("list --format json must be JSON");
+    for r in list["rules"].as_array().expect("rules array") {
+        let id = r["id"].as_str().expect("rule id");
+
+        // JSON: `summary` non-empty + `docs` a deep link whose family segment is
+        // the kind's primary category. This gate asserts the JSON surface, not
+        // only human, matching its Tier-1 sibling `explain_surfaces_configured_
+        // rule_detail` - dropping the json half is what let the explain-json
+        // summary/docs omission ship in the first place.
+        let v: serde_json::Value =
+            serde_json::from_slice(&run(dir.path(), &["explain", id, "--format", "json"]).stdout)
+                .unwrap_or_else(|_| panic!("explain {id} --format json must be JSON"));
+        assert!(
+            v["summary"].as_str().is_some_and(|s| s.trim().len() >= 5),
+            "explain {id} json has no summary: {v}"
+        );
+        let family = v["categories"][0].as_str().unwrap_or_default();
+        let docs = v["docs"].as_str().unwrap_or_default();
+        assert!(
+            docs.starts_with("https://alint.org/docs/rules/") && docs.contains(family),
+            "explain {id} json docs link is wrong (family {family:?}): {docs:?}"
+        );
+
+        // Human: the same summary and the same docs link must be visible.
+        let human = String::from_utf8_lossy(&run(dir.path(), &["explain", id]).stdout).into_owned();
+        assert!(
+            human.lines().any(|l| {
+                l.trim_start()
+                    .strip_prefix("summary:")
+                    .is_some_and(|rest| rest.trim().len() >= 5)
+            }),
+            "explain {id} human has no summary:\n{human}"
+        );
+        assert!(
+            human.contains(docs),
+            "explain {id} human is missing its docs link:\n{human}"
+        );
+    }
+}
+
+// ─── rules show + list --search over summaries (ADR-0011 phase 2) ──
+//
+// `rules show <kind>` surfaces a kind's summary + docs link (alias-resolving),
+// and `list --search` now matches summary TEXT, not just the kind name/alias.
+#[test]
+fn rules_show_and_search_over_summaries() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // `rules show <alias>` resolves to the canonical kind + its docs link.
+    let out =
+        String::from_utf8_lossy(&run(dir.path(), &["rules", "show", "content_matches"]).stdout)
+            .into_owned();
+    assert!(
+        out.contains("file_content_matches")
+            && out.contains("https://alint.org/docs/rules/content/file_content_matches/"),
+        "rules show must resolve the alias and print the canonical docs link:\n{out}"
+    );
+
+    // JSON: a summary + docs link.
+    let v: serde_json::Value = serde_json::from_slice(
+        &run(
+            dir.path(),
+            &["rules", "show", "file_hash", "--format", "json"],
+        )
+        .stdout,
+    )
+    .expect("rules show --format json must be JSON");
+    assert!(
+        v["summary"].as_str().is_some_and(|s| !s.is_empty()),
+        "rules show json must carry a summary: {v}"
+    );
+    assert!(
+        v["docs"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("https://")),
+        "rules show json must carry a docs link: {v}"
+    );
+
+    // `list --search` matches summary text: "digest" is in file_hash's summary,
+    // not its name.
+    let v: serde_json::Value = serde_json::from_slice(
+        &run(
+            dir.path(),
+            &["rules", "list", "--search", "digest", "--format", "json"],
+        )
+        .stdout,
+    )
+    .expect("rules list --format json must be JSON");
+    let hits: Vec<&str> = v["rules"]
+        .as_array()
+        .expect("rules")
+        .iter()
+        .filter_map(|r| r["kind"].as_str())
+        .collect();
+    assert!(
+        hits.contains(&"file_hash"),
+        "list --search over summaries must match file_hash on 'digest': {hits:?}"
+    );
+
+    // An unknown kind is a loud error, not an empty success.
+    assert!(
+        !run(dir.path(), &["rules", "show", "not_a_kind"])
+            .status
+            .success(),
+        "rules show on an unknown kind must fail"
+    );
+}
+
 // ─── G1b — the agent format only emits commands the CLI accepts ─────
 
 /// Pull `` `alint …` `` commands out of an `agent_instruction` string:

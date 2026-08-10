@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use alint_core::Category;
 use alint_output::Format;
 use alint_rules::categories::{ALIAS_TO_CANONICAL, KIND_CATEGORIES};
+use alint_rules::kind_docs::KIND_SUMMARIES;
 use anyhow::{Result, bail};
 
 use crate::{Cli, RulesCommand};
@@ -22,6 +23,7 @@ struct Row {
     kind: &'static str,
     categories: Vec<&'static str>,
     aliases: Vec<&'static str>,
+    summary: Option<&'static str>,
 }
 
 pub(crate) fn run(command: &RulesCommand, cli: &Cli) -> Result<ExitCode> {
@@ -37,6 +39,7 @@ pub(crate) fn run(command: &RulesCommand, cli: &Cli) -> Result<ExitCode> {
             list(category.as_deref(), search.as_deref(), format)
         }
         RulesCommand::Categories => categories(format),
+        RulesCommand::Show { kind } => show(kind, format, !cli.no_docs),
     }
 }
 
@@ -54,6 +57,27 @@ pub(crate) fn categories_for_kind(kind: &str) -> Vec<&'static str> {
         .map_or_else(Vec::new, |(_, cats)| {
             cats.iter().map(|c| c.slug()).collect()
         })
+}
+
+/// The one-line summary of a rule KIND (resolving an alias to its canonical kind
+/// first), or `None` for an unknown kind or an empty summary. Sourced from the
+/// generated docs bridge (ADR-0011); shared by `alint explain` and `alint rules`.
+pub(crate) fn summary_for_kind(kind: &str) -> Option<&'static str> {
+    KIND_SUMMARIES
+        .iter()
+        .find(|(k, _)| *k == canonical_kind(kind))
+        .map(|(_, s)| *s)
+        .filter(|s| !s.is_empty())
+}
+
+/// Resolve an alias spelling to its canonical kind (identity for a canonical or
+/// unknown kind). The canonical kind is the one with a `docs/rules.md` page, so
+/// deep links use it.
+pub(crate) fn canonical_kind(kind: &str) -> &str {
+    ALIAS_TO_CANONICAL
+        .iter()
+        .find(|(alias, _)| *alias == kind)
+        .map_or(kind, |(_, canon)| canon)
 }
 
 /// canonical kind -> its alias spellings, sorted.
@@ -91,9 +115,11 @@ fn list(category: Option<&str>, search: Option<&str>, format: Format) -> Result<
             continue;
         }
         let aliases = alias_map.get(kind).cloned().unwrap_or_default();
+        let summary = summary_for_kind(kind);
         if let Some(term) = &needle {
             let hit = kind.to_lowercase().contains(term)
-                || aliases.iter().any(|a| a.to_lowercase().contains(term));
+                || aliases.iter().any(|a| a.to_lowercase().contains(term))
+                || summary.is_some_and(|s| s.to_lowercase().contains(term));
             if !hit {
                 continue;
             }
@@ -102,6 +128,7 @@ fn list(category: Option<&str>, search: Option<&str>, format: Format) -> Result<
             kind,
             categories: slugs,
             aliases,
+            summary,
         });
     }
 
@@ -114,6 +141,7 @@ fn list(category: Option<&str>, search: Option<&str>, format: Format) -> Result<
                     "kind": r.kind,
                     "categories": r.categories,
                     "aliases": r.aliases,
+                    "summary": r.summary,
                 })
             })
             .collect();
@@ -149,6 +177,59 @@ fn list(category: Option<&str>, search: Option<&str>, format: Format) -> Result<
                 kind = r.kind,
                 cats = titles.join(", "),
             )?;
+            if let Some(s) = r.summary {
+                writeln!(out, "  {blank:<width$}  {s}", blank = "")?;
+            }
+        }
+    }
+    out.flush().ok();
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `alint rules show <kind>`: a single kind's summary, categories, aliases, and
+/// docs link (ADR-0011). Accepts an alias, resolving to its canonical kind.
+fn show(kind: &str, format: Format, show_docs: bool) -> Result<ExitCode> {
+    let cats = categories_for_kind(kind);
+    if cats.is_empty() {
+        bail!("unknown rule kind {kind:?}. Run `alint rules list` for the catalog.");
+    }
+    let canonical = canonical_kind(kind);
+    let summary = summary_for_kind(kind);
+    let aliases = aliases_by_canonical()
+        .get(canonical)
+        .cloned()
+        .unwrap_or_default();
+    let family = cats.first().copied().unwrap_or_default();
+    let docs = format!("https://alint.org/docs/rules/{family}/{canonical}/");
+
+    let mut out = std::io::stdout().lock();
+    if format == Format::Json {
+        let doc = serde_json::json!({
+            "schema_version": 1,
+            "kind": "rule-definition",
+            "rule_kind": canonical,
+            "categories": cats,
+            "aliases": aliases,
+            "summary": summary,
+            "docs": docs,
+        });
+        writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+    } else {
+        let titles: Vec<&str> = cats
+            .iter()
+            .filter_map(|s| Category::from_slug(s))
+            .map(Category::title)
+            .collect();
+        writeln!(out, "{canonical}")?;
+        if let Some(s) = summary {
+            writeln!(out, "  {s}")?;
+        }
+        writeln!(out, "  categories: {}", titles.join(", "))?;
+        if !aliases.is_empty() {
+            writeln!(out, "  aliases:    {}", aliases.join(", "))?;
+        }
+        if show_docs {
+            writeln!(out, "  docs:       {docs}")?;
         }
     }
     out.flush().ok();
