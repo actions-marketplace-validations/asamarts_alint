@@ -129,7 +129,7 @@ pub(crate) fn docs_export(
         // of the export — most importantly step 5 (`generate_cli_reference`),
         // which builds the alint release binary. That redundant build is the
         // bulk of the bridge's cost, and the bridge never reads its output.
-        generate_rules_pages(&workspace, &target_dir, released)?;
+        generate_rules_pages(&workspace, &target_dir, released, false)?;
         eprintln!(
             "[xtask] docs-export --rules-only wrote {}/rules",
             target_dir.display()
@@ -168,7 +168,7 @@ pub(crate) fn docs_export(
     // overviews and a master alphabetical index. Returns a
     // kind → family-slug map used below to render kind names
     // as links from the bundled-ruleset pages.
-    let kind_to_family = generate_rules_pages(&workspace, &target_dir, released)?;
+    let kind_to_family = generate_rules_pages(&workspace, &target_dir, released, true)?;
 
     // 3. Per-bundled-ruleset reference page. `kind_to_family`
     //    drives the cross-links from `**kind**: <name>` →
@@ -380,6 +380,7 @@ fn generate_rules_pages(
     workspace: &Path,
     target_dir: &Path,
     released: Option<crate::rule_options_table::Version>,
+    capture_output: bool,
 ) -> Result<std::collections::HashMap<String, String>> {
     use std::collections::{HashMap, HashSet};
 
@@ -406,6 +407,12 @@ fn generate_rules_pages(
     // spelling so aliases resolve to their canonical branch.
     let schema = load_config_schema(&workspace.join(docs_paths::SCHEMA_JSON))?;
     let kind_branches = build_kind_branch_index(&schema);
+
+    // ADR-0014: scenarios carrying a `docs:` block render their kind's worked
+    // example from the real fixture (tree + config + a live `alint check` run).
+    // Empty until a kind opts in, so every other kind keeps its hand-written
+    // rules.md example.
+    let documented = examples::render_documented(workspace, capture_output)?;
 
     let rules_dir = target_dir.join("rules");
     fs::create_dir_all(&rules_dir)?;
@@ -466,6 +473,7 @@ fn generate_rules_pages(
             &mut all_kinds,
             &mut missing_examples,
             &mut wrong_kind_examples,
+            &documented,
             released,
         )?;
         families_meta.push((h2.title.clone(), family_order, family_slug.clone()));
@@ -499,6 +507,7 @@ fn generate_rules_pages(
     // warnings, so a regressing PR fails the docs-bundle build before it can
     // publish a broken example to alint.org.
     enforce_example_gates(&missing_examples, &wrong_kind_examples)?;
+    enforce_documented_page_targets(&documented, &kind_to_family)?;
 
     // Family Overview pages: categories-based membership. Each family lists every
     // kind whose `**Categories:**` line includes it (by slug), not just the kinds
@@ -546,6 +555,7 @@ fn process_family_h3s(
     all_kinds: &mut Vec<KindEntry>,
     missing_examples: &mut Vec<String>,
     wrong_kind_examples: &mut Vec<String>,
+    documented: &std::collections::BTreeMap<String, Vec<examples::RenderedExample>>,
     released: Option<crate::rule_options_table::Version>,
 ) -> Result<()> {
     let mut kind_order: u32 = 0;
@@ -571,8 +581,27 @@ fn process_family_h3s(
         // pass. Multi-kind headings (e.g. the structured-query
         // family's three path_equals kinds) share one body, so
         // one example per heading covers the group.
-        if !h3.body.contains("```yaml") {
+        // A kind rendered from a documented `docs:` scenario (ADR-0014) needs
+        // no hand-written ```yaml block - its example is generated. Exempt an
+        // H3 only when every kind it documents is covered that way.
+        if !h3.body.contains("```yaml") && !group_kinds.iter().all(|k| documented.contains_key(k)) {
             missing_examples.push(format!("{} → {}", h2.title, h3.title));
+        }
+        // ...and a documented kind must NOT also keep a hand-written ```yaml
+        // block, or the page double-renders (the generated example plus a stale
+        // hand-written one). Enforce the atomic-swap invariant (ADR-0014).
+        if h3.body.contains("```yaml") && group_kinds.iter().any(|k| documented.contains_key(k)) {
+            let dup: Vec<&str> = group_kinds
+                .iter()
+                .filter(|k| documented.contains_key(*k))
+                .map(String::as_str)
+                .collect();
+            anyhow::bail!(
+                "docs/rules.md H3 '{}' documents {dup:?} via a `docs:` scenario but \
+                 still contains a hand-written ```yaml example - remove the \
+                 hand-written block; the example now renders from the fixture.",
+                h3.title,
+            );
         }
         // The example must demonstrate the H3's CANONICAL kind, not an alias:
         // the generated page is slugged/titled by the canonical name, so an
@@ -636,6 +665,7 @@ fn process_family_h3s(
                 options_md.as_deref(),
                 kind_order,
                 &category_slugs,
+                documented.get(kind).map(Vec::as_slice),
             )?;
             kind_to_family.insert(kind.clone(), family_slug.to_string());
             all_kinds.push(KindEntry {
@@ -1077,6 +1107,30 @@ fn enforce_example_gates(missing: &[String], wrong_kind: &[String]) -> Result<()
     Ok(())
 }
 
+/// Every documented scenario's `docs.kind` must resolve to an emitted page, or
+/// its example is silently dropped (ADR-0014).
+fn enforce_documented_page_targets(
+    documented: &std::collections::BTreeMap<String, Vec<examples::RenderedExample>>,
+    kind_to_family: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    let mut orphan: Vec<&str> = documented
+        .keys()
+        .filter(|k| !kind_to_family.contains_key(*k))
+        .map(String::as_str)
+        .collect();
+    orphan.sort_unstable();
+    if !orphan.is_empty() {
+        anyhow::bail!(
+            "{} documented scenario `docs.kind` value(s) match no rule page \
+             (a typo, or an alias without its own page):\n  - {}\n\n\
+             Set `docs.kind` to the canonical kind whose H3 the example documents.",
+            orphan.len(),
+            orphan.join("\n  - "),
+        );
+    }
+    Ok(())
+}
+
 /// Strip release-gated prose blocks from a rule's markdown body. A block
 /// delimited by `<!-- alint:since=X -->` ... `<!-- /alint:since -->` is
 /// dropped when `released` is `Some(v)` and `X > v` (the prose describes an
@@ -1140,6 +1194,7 @@ fn emit_rule_page(
     options_md: Option<&str>,
     sidebar_order: u32,
     category_slugs: &[&str],
+    documented: Option<&[examples::RenderedExample]>,
 ) -> Result<()> {
     let mut page = String::new();
     let _ = writeln!(&mut page, "---");
@@ -1174,6 +1229,18 @@ fn emit_rule_page(
         page.push_str("\n\n");
         page.push_str(opts.trim_end_matches('\n'));
         page.push('\n');
+    }
+    // ADR-0014: worked examples rendered from the kind's documented scenarios
+    // (example repo + config + a real `alint check` run). Injected after the
+    // options table, before "See also".
+    if let Some(rendered) = documented {
+        while page.ends_with('\n') {
+            page.pop();
+        }
+        page.push_str("\n\n## Example\n\n");
+        for ex in rendered {
+            page.push_str(&ex.markdown);
+        }
     }
     if !siblings.is_empty() {
         // Trim trailing newlines so the footer doesn't have a
@@ -2143,6 +2210,8 @@ fn write_manifest(target_dir: &Path) -> Result<()> {
     fs::write(target_dir.join("manifest.json"), json)?;
     Ok(())
 }
+
+mod examples;
 
 mod counts;
 
