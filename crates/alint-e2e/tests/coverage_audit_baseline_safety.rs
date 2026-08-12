@@ -38,29 +38,6 @@ use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
 use alint_testkit::{Scenario, StepOutcome, run_scenario};
 
-/// Kind-name aliases (same set the other coverage audits use): a scenario
-/// using either spelling counts for the canonical kind.
-const ALIASES: &[(&str, &str)] = &[
-    ("content_matches", "file_content_matches"),
-    ("content_forbidden", "file_content_forbidden"),
-    ("header", "file_header"),
-    ("footer", "file_footer"),
-    ("shebang", "file_shebang"),
-    ("max_size", "file_max_size"),
-    ("min_size", "file_min_size"),
-    ("min_lines", "file_min_lines"),
-    ("max_lines", "file_max_lines"),
-    ("is_text", "file_is_text"),
-];
-
-fn canonical(kind: &str) -> String {
-    ALIASES
-        .iter()
-        .find(|(a, _)| *a == kind)
-        .map_or(kind, |(_, c)| *c)
-        .to_string()
-}
-
 /// One emitted violation, reduced to what the invariants need.
 struct Finding {
     kind: String,
@@ -136,9 +113,12 @@ fn findings_of(
 ) {
     let mut cache: BTreeMap<PathBuf, Option<Vec<u8>>> = BTreeMap::new();
     for r in &report.results {
+        // Both call sites (scenarios + multi-fixtures) build `id_kind` with
+        // canonical kinds, so use the value as-is; fall back to the rule id when
+        // the kind is unknown.
         let kind = id_kind
             .get(r.rule_id.as_ref())
-            .map_or_else(|| r.rule_id.to_string(), |k| canonical(k));
+            .map_or_else(|| r.rule_id.to_string(), Clone::clone);
         for v in &r.violations {
             let bytes = v.path.as_ref().and_then(|p| {
                 cache
@@ -161,6 +141,7 @@ fn findings_of(
 
 /// Run every scenario under `dir` and collect findings + which kinds fired.
 fn collect_from_scenarios(dir: &Path, all: &mut Vec<Vec<Finding>>, fired: &mut BTreeSet<String>) {
+    let registry = builtin_registry();
     for path in yml_files(dir) {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
@@ -168,7 +149,13 @@ fn collect_from_scenarios(dir: &Path, all: &mut Vec<Vec<Finding>>, fired: &mut B
         let Ok(scenario) = serde_yaml_ng::from_str::<Scenario>(&text) else {
             continue;
         };
-        let id_kind = id_to_kind(&scenario.given.config);
+        // Canonicalise the id -> kind map (matching `collect_from_multi_fixtures`)
+        // so an alias-spelled `kind:` resolves to its canonical, keeping `fired`
+        // and the finding labels in a single namespace.
+        let id_kind: BTreeMap<String, String> = id_to_kind(&scenario.given.config)
+            .into_iter()
+            .map(|(id, kind)| (id, registry.canonical_kind(&kind).to_string()))
+            .collect();
         let Ok(run) = run_scenario(&scenario) else {
             continue;
         };
@@ -209,7 +196,7 @@ fn collect_from_multi_fixtures(
         let id_kind: BTreeMap<String, String> = config
             .rules
             .iter()
-            .map(|s| (s.id.clone(), canonical(&s.kind)))
+            .map(|s| (s.id.clone(), registry.canonical_kind(&s.kind).to_string()))
             .collect();
         let mut entries = Vec::new();
         for spec in &config.rules {
@@ -304,7 +291,7 @@ fn every_kind_emits_baseline_safe_fingerprints() {
 
     // Sanity: the corpus must actually exercise a broad set of kinds, else a
     // broken testkit would vacuously pass this gate.
-    let canonical_kinds = builtin_registry().known_kinds().count();
+    let canonical_kinds = builtin_registry().canonical_kinds().count();
     assert!(
         fired.len() >= 60,
         "baseline audit only saw {} kinds fire (of {canonical_kinds}); the scenario \
