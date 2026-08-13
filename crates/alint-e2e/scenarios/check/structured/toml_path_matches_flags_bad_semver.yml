@@ -1,9 +1,9 @@
-name: toml_path_matches stays silent when every match satisfies the regex
-tags: [check, toml_path_matches, structured, passing]
+name: toml_path_matches flags a crate version that isn't strict semver
+tags: [check, toml_path_matches, structured]
 
 docs:
-  title: Every crate version matches the semver pattern
-  case: pass
+  title: A crate version that isn't valid semver
+  case: fail
   kind: toml_path_matches
 
 given:
@@ -18,7 +18,7 @@ given:
         "Cargo.toml": |
           [package]
           name = "b"
-          version = "0.4.5"
+          version = "0.4"
   config: |
     version: 1
     rules:
@@ -27,9 +27,10 @@ given:
         paths: "crates/*/Cargo.toml"
         path: "$.package.version"
         matches: '^\d+\.\d+\.\d+$'
-        level: warning
+        level: error
 
 when: [check]
 
 expect:
-  - violations: []
+  - violations:
+      - {rule: pinned-version, level: error, path: crates/b/Cargo.toml}

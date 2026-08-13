@@ -5,6 +5,11 @@ tags: [check, git_commit_no_fixup, git, failing]
 # `fixup! `, the shape `git commit --fixup` produces. The rule
 # fires once — the user forgot to `rebase --autosquash`.
 
+docs:
+  title: A leftover `fixup!` commit never autosquashed
+  case: fail
+  kind: git_commit_no_fixup
+
 given:
   tree:
     README.md: "# demo\n"
@@ -17,7 +22,8 @@ given:
   git:
     init: true
     commits:
-      - "fixup! feat: the original change"
+      - message: "fixup! feat: the original change"
+        date: "2024-01-15T09:00:00+00:00"
 
 when: [check]
 

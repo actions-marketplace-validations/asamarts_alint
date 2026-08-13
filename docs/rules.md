@@ -186,36 +186,6 @@ JSONPath queries over structured documents per [RFC 9535](https://datatracker.ie
 
 Query a structured document with a JSONPath expression and assert every match deep-equals the supplied value.
 
-```yaml
-- id: require-mit-license
-  kind: json_path_equals
-  paths: "packages/*/package.json"
-  path: "$.license"
-  equals: "MIT"
-  level: error
-
-- id: workflow-contents-read
-  kind: yaml_path_equals
-  paths: ".github/workflows/*.yml"
-  path: "$.permissions.contents"
-  equals: "read"
-  level: error
-
-- id: rust-edition-2024
-  kind: toml_path_equals
-  paths: "crates/*/Cargo.toml"
-  path: "$.package.edition"
-  equals: "2024"
-  level: warning
-
-- id: csproj-targets-net8
-  kind: xml_path_equals
-  paths: "**/*.csproj"
-  path: "$.Project.PropertyGroup.TargetFramework"
-  equals: "net8.0"
-  level: error
-```
-
 **Semantics**:
 - Multiple matches — every match must equal the expected value.
 - Zero matches — counts as a violation (the key the rule is enforcing doesn't exist).
@@ -230,36 +200,6 @@ Query a structured document with a JSONPath expression and assert every match de
 
 Same shape as the `*_equals` variants, but the asserted value is a **regex** matched against string values. Non-string matches produce a clear "value is not a string" violation.
 
-```yaml
-- id: semver-version
-  kind: json_path_matches
-  paths: "packages/*/package.json"
-  path: "$.version"
-  matches: '^\d+\.\d+\.\d+$'
-  level: error
-
-- id: pin-actions-to-sha
-  kind: yaml_path_matches
-  paths: ".github/workflows/*.yml"
-  path: "$.jobs.*.steps[*].uses"
-  matches: '^[a-zA-Z0-9._/-]+@[a-f0-9]{40}$'
-  level: warning
-
-- id: packageref-has-version
-  kind: xml_path_matches
-  paths: "**/*.csproj"
-  path: "$.Project.ItemGroup.PackageReference[*]['@Version']"
-  matches: '^\d'
-  level: error
-
-- id: crate-version-is-semver
-  kind: toml_path_matches
-  paths: "crates/*/Cargo.toml"
-  path: "$.package.version"
-  matches: '^\d+\.\d+\.\d+$'
-  level: error
-```
-
 ### `json_schema_passes`
 
 **Categories:** Structured query
@@ -267,21 +207,6 @@ Same shape as the `*_equals` variants, but the asserted value is a **regex** mat
 Validate every JSON / YAML / TOML file in `paths` against a JSON Schema document. Targets coerce through serde into the same `serde_json::Value` tree the schema sees, so a JSON-format schema can validate a YAML config (Kubernetes manifests, GitHub Actions workflows, Helm `values.schema.json`) or a TOML manifest (`Cargo.toml`, `pyproject.toml`) without separate schemas per format. The schema is loaded + compiled lazily on first evaluation and cached on the rule.
 
 Each schema-validation error becomes one violation, with the failing instance path and the schema's error description in the message. A target that fails to parse produces a single parse-error violation, not a flood of schema errors against junk. Format is detected from the target's extension (`.json` / `.yaml` / `.yml` / `.toml`); pass `format:` to override.
-
-```yaml
-- id: package-json-shape
-  kind: json_schema_passes
-  paths: "packages/*/package.json"
-  schema_path: "schemas/package.schema.json"
-  level: error
-
-- id: workflow-shape
-  kind: json_schema_passes
-  paths: ".github/workflows/*.yml"
-  schema_path: "schemas/workflow.schema.json"
-  format: yaml
-  level: warning
-```
 
 Check-only — fixing schema violations is a "the user knows what value belongs there" problem, not alint's.
 
@@ -295,14 +220,6 @@ Check-only — fixing schema violations is a "the user knows what value belongs 
 
 Basename (stem only or full) matches a case convention: `snake`, `kebab`, `pascal`, `camel`, `screaming-snake`, `flat`, `lower`, `upper`.
 
-```yaml
-- id: rust-snake-case
-  kind: filename_case
-  paths: "crates/**/src/**/*.rs"
-  case: snake
-  level: error
-```
-
 Fix: `file_rename` — converts the stem to the configured case, preserving extension.
 
 ### `filename_regex`
@@ -310,15 +227,6 @@ Fix: `file_rename` — converts the stem to the configured case, preserving exte
 **Categories:** Naming
 
 Basename matches a regex. Use `stem: true` to match the stem only.
-
-```yaml
-- id: toml-kebab-or-cargo
-  kind: filename_regex
-  paths: "**/*.toml"
-  stem: true
-  pattern: "[a-z][a-z0-9_-]*|Cargo"
-  level: warning
-```
 
 ---
 
@@ -330,29 +238,11 @@ Basename matches a regex. Use `stem: true` to match the stem only.
 
 No line may end with space or tab.
 
-```yaml
-- id: rust-no-trailing-ws
-  kind: no_trailing_whitespace
-  paths: "crates/**/src/**/*.rs"
-  level: warning
-  fix:
-    file_trim_trailing_whitespace: {}
-```
-
 ### `final_newline`
 
 **Categories:** Text hygiene
 
 File must end with a single `\n`. Fixable via `file_append_final_newline`.
-
-```yaml
-- id: text-files-final-newline
-  kind: final_newline
-  paths: "**/*.{md,yml,yaml,toml,sh}"
-  level: warning
-  fix:
-    file_append_final_newline: {}
-```
 
 ### `line_endings`
 
@@ -360,44 +250,17 @@ File must end with a single `\n`. Fixable via `file_append_final_newline`.
 
 Every line ending matches `target`: `lf` or `crlf`. Mixed endings in a single file fail.
 
-```yaml
-- id: lf-only
-  kind: line_endings
-  paths: ["**/*.rs", "**/*.md"]
-  target: lf
-  level: warning
-  fix:
-    file_normalize_line_endings: {}
-```
-
 ### `line_max_width`
 
 **Categories:** Text hygiene
 
 Cap line length in characters (not bytes — code points). Optional `tab_width` for tab expansion.
 
-```yaml
-- id: docs-80-col
-  kind: line_max_width
-  paths: "docs/**/*.md"
-  max_width: 80
-  level: info
-```
-
 ### `indent_style`
 
 **Categories:** Text hygiene
 
 Every non-blank line indents with the configured `style` (`tabs` or `spaces`). When `style: spaces`, optional `width` enforces a multiple.
-
-```yaml
-- id: yaml-2sp
-  kind: indent_style
-  paths: "**/*.yml"
-  style: spaces
-  width: 2
-  level: warning
-```
 
 Check-only: tab-width-aware reindentation is language-specific. Pair with your editor's "reindent on save" for remediation.
 
@@ -406,16 +269,6 @@ Check-only: tab-width-aware reindentation is language-specific. Pair with your e
 **Categories:** Text hygiene
 
 Cap runs of blank lines to `max`. A blank line is empty or whitespace-only.
-
-```yaml
-- id: md-tidy
-  kind: max_consecutive_blank_lines
-  paths: "**/*.md"
-  max: 1
-  level: warning
-  fix:
-    file_collapse_blank_lines: {}
-```
 
 ---
 
@@ -427,27 +280,11 @@ Cap runs of blank lines to `max`. A blank line is empty or whitespace-only.
 
 Flag `<<<<<<< `, `=======`, `>>>>>>> `, `||||||| ` markers at the start of a line — almost always left over from an unresolved merge. The anchor markers carry a trailing ref (`<<<<<<< HEAD`), so they never collide with prose; a bare `=======` is reported only when the file also contains one of those anchors, because on its own a seven-character `=======` is indistinguishable from a reST/Markdown setext heading underline (so docs trees no longer need to be excluded).
 
-```yaml
-- id: no-conflicts
-  kind: no_merge_conflict_markers
-  paths: "**"
-  level: error
-```
-
 ### `no_bidi_controls`
 
 **Categories:** Security / Unicode sanity, Encoding
 
 Flag Trojan-Source bidi override characters (U+202A–202E, U+2066–2069). Defense against [CVE-2021-42574](https://trojansource.codes/).
-
-```yaml
-- id: no-bidi
-  kind: no_bidi_controls
-  paths: "crates/**/src/**/*.rs"
-  level: error
-  fix:
-    file_strip_bidi: {}
-```
 
 ### `no_zero_width_chars`
 
@@ -456,15 +293,6 @@ Flag Trojan-Source bidi override characters (U+202A–202E, U+2066–2069). Defe
 Flag body-internal zero-width characters (U+200B, U+200C, U+200D, and non-leading U+FEFF). A leading U+FEFF is `no_bom`'s concern.
 
 As of v0.14 the detection set also covers U+2060 (word joiner) and U+180E (Mongolian vowel separator).
-
-```yaml
-- id: no-zwsp
-  kind: no_zero_width_chars
-  paths: "crates/**/src/**/*.rs"
-  level: error
-  fix:
-    file_strip_zero_width: {}
-```
 
 ---
 
@@ -476,15 +304,6 @@ As of v0.14 the detection set also covers U+2060 (word joiner) and U+180E (Mongo
 
 Flag a leading UTF-8 / UTF-16 LE/BE / UTF-32 LE/BE byte-order mark. The fixer strips whichever BOM is detected.
 
-```yaml
-- id: no-bom
-  kind: no_bom
-  paths: ["**/*.rs", "**/*.toml", "**/*.yml"]
-  level: warning
-  fix:
-    file_strip_bom: {}
-```
-
 ---
 
 ## Structure
@@ -495,42 +314,17 @@ Flag a leading UTF-8 / UTF-16 LE/BE / UTF-32 LE/BE byte-order mark. The fixer st
 
 Tree depth from repo root may not exceed `max_depth`. A shallow depth stops deeply-nested imports and keeps CI path globs sane.
 
-```yaml
-- id: shallow-tree
-  kind: max_directory_depth
-  paths: "**"
-  max_depth: 6
-  level: warning
-```
-
 ### `max_files_per_directory`
 
 **Categories:** Structure
 
 Per-directory fanout may not exceed `max_files`. Useful for vendor directories that accidentally grow to thousands of entries.
 
-```yaml
-- id: vendor-dir-fanout-cap
-  kind: max_files_per_directory
-  paths: "vendor/**"
-  max_files: 200
-  level: warning
-```
-
 ### `no_empty_files`
 
 **Categories:** Structure
 
 Flag zero-byte files. Fixable via `file_remove`.
-
-```yaml
-- id: no-empty
-  kind: no_empty_files
-  paths: "**"
-  level: warning
-  fix:
-    file_remove: {}
-```
 
 ---
 
@@ -544,13 +338,6 @@ Checks that reject tree shapes which work on one OS but break checkouts elsewher
 
 Flag paths that differ only by case (e.g. `README.md` + `readme.md`). They can't coexist on macOS HFS+/APFS or Windows NTFS defaults, so a Linux-only dev committing both breaks checkouts for teammates.
 
-```yaml
-- id: no-case-colliding-paths
-  kind: no_case_conflicts
-  paths: "**"
-  level: error
-```
-
 ### `no_illegal_windows_names`
 
 **Categories:** Portable metadata, Naming
@@ -560,13 +347,6 @@ Reject path components Windows can't represent:
 - Reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`) — case-insensitive, regardless of extension. `con.txt` fails; `COM10` and `confused` correctly pass.
 - Trailing dots (`foo.`) or trailing spaces (`foo `) — Windows silently strips these on checkout.
 - Reserved chars: `<`, `>`, `:`, `"`, `|`, `?`, `*`.
-
-```yaml
-- id: portable-names
-  kind: no_illegal_windows_names
-  paths: "**"
-  level: warning
-```
 
 ---
 
@@ -604,13 +384,6 @@ Every file with `+x` set must begin with `#!`. Catches plain text files accident
 
 Every file starting with `#!` must have `+x` set. Catches scripts that got their `+x` bit stripped by `git add --chmod=-x`, a tar round-trip, or a `cp` across filesystems.
 
-```yaml
-- id: scripts-wired
-  kind: shebang_has_executable
-  paths: "ci/**/*.sh"
-  level: warning
-```
-
 ---
 
 ## Git hygiene
@@ -621,14 +394,6 @@ Every file starting with `#!` must have `+x` set. Catches scripts that got their
 
 Flag the presence of `.gitmodules` at the repo root — always, regardless of `paths`. For general "file X must not exist" checks, use `file_absent`.
 
-```yaml
-- id: no-submods
-  kind: no_submodules
-  level: warning
-  fix:
-    file_remove: {}
-```
-
 Note the fix only deletes `.gitmodules`; `git submodule deinit` and cleaning `.git/modules/` are still on the user.
 
 ### `commented_out_code`
@@ -636,22 +401,6 @@ Note the fix only deletes `.gitmodules`; `git submodule deinit` and cleaning `.g
 **Categories:** Git hygiene, Content
 
 Heuristic detector for blocks of commented-out source code (as opposed to prose comments, license headers, doc comments, or ASCII banners). For each consecutive run of comment lines (`min_lines+`), counts the fraction of non-whitespace characters that are structural punctuation strongly biased toward code (`( ) { } [ ] ; = < > & | ^`). Scores ≥ `threshold` mark the block as code-shaped.
-
-```yaml
-- id: no-commented-code
-  kind: commented_out_code
-  paths:
-    include: ["src/**/*.{ts,tsx,js,jsx,rs,py,go,java}"]
-    exclude:
-      - "**/*test*/**"
-      - "**/__tests__/**"
-      - "**/fixtures/**"
-  language: auto              # auto | rust | typescript | python | go | java | c | cpp | ruby | shell
-  min_lines: 3                # consecutive comment lines required (default 3)
-  threshold: 0.5              # 0.0-1.0 (default 0.5 = midpoint between obvious-prose and obvious-code)
-  skip_leading_lines: 30      # skip the first N lines (license headers — default 30)
-  level: warning
-```
 
 The scorer deliberately ignores identifier-token density (English prose has identifier-shaped words too) and excludes backticks / quotes (rustdoc / TSDoc prose uses backticks to delimit code references). Runs of 5+ identical characters (`============`, `----`, `####`) are dropped before scoring so ASCII-art separator banners don't flag as code.
 
@@ -664,21 +413,6 @@ Heuristic, with a non-zero false-positive surface — defaults are `warning`-lev
 **Categories:** Git hygiene, Cross-file
 
 Validate that backticked workspace paths in markdown files resolve to real files or directories in the repo. Targets the AGENTS.md / CLAUDE.md / `.cursorrules` staleness problem: agent-context files reference paths in inline backticks (`` `src/api/users.ts` ``), and those paths drift as the codebase evolves. The `agent-context-no-stale-paths` rule shipped in v0.6 surfaces *candidates* via a regex; this rule does the precise existence check.
-
-```yaml
-- id: agents-md-paths-resolve
-  kind: markdown_paths_resolve
-  paths:
-    - AGENTS.md
-    - CLAUDE.md
-    - .cursorrules
-    - "docs/**/*.md"
-  prefixes:
-    - src/
-    - crates/
-    - docs/
-  level: warning
-```
 
 The `prefixes` list is **required** — a backticked token must start with one of these to be considered a path candidate. No defaults: every project's layout differs, and a missing prefix is silent while a wrong default trips false positives.
 
@@ -693,19 +427,6 @@ Check-only — auto-fixing a stale path means guessing the new location, which i
 **Categories:** Git hygiene, Security / Unicode sanity
 
 Fire when any tracked file matches a configured glob denylist. The absence-axis companion of `git_tracked_only`: instead of asking "does this tracked path exist?", it asks "is anything tracked that matches my denylist?" One rule covers what would otherwise need one `file_absent` per pattern. Reports every matching denylist entry per offending path so a single file hitting two patterns surfaces both.
-
-```yaml
-- id: no-secrets-or-keys
-  kind: git_no_denied_paths
-  denied:
-    - "*.env"
-    - ".env*"
-    - "*.pem"
-    - "id_rsa"
-    - "secrets/**"
-  level: error
-  message: "Don't commit secrets or credentials."
-```
 
 An optional `since: <git-ref>` scopes the check to denied paths that changed in the `<ref>...HEAD` diff — the PR-scoped shape, which catches a secret added in the PR even if HEAD's tree still tracks an older one. It accepts the `{{env.X}}` interpolation (e.g. `since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"`); an unresolvable ref hard-fails with a shallow-clone hint.
 
@@ -773,19 +494,6 @@ jobs:
 
 Assert every commit in scope carries a DCO (Developer Certificate of Origin) `Signed-off-by:` trailer — required by every CNCF / Linux Foundation / kernel-style project. A commit lacking the trailer fires one violation, with the short SHA + subject snippet so you know which to amend (`git commit --amend -s` or `git rebase --signoff`).
 
-```yaml
-# HEAD-only: the tip commit must be signed off.
-- id: dco
-  kind: git_commit_signed_off
-  level: error
-
-# Range mode for PR CI: every commit in the PR must be signed off.
-- id: pr-dco
-  kind: git_commit_signed_off
-  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
-  level: error
-```
-
 The default `pattern:` is the canonical DCO shape `(?m)^Signed-off-by: .+ <.+@.+>$`. Override `pattern:` to enforce a stricter form (e.g. a corporate-domain email). Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes (silent outside a git repo; a bad `since:` ref hard-fails with a shallow-clone hint). See [variable interpolation](/docs/concepts/variable-interpolation/) for the `{{env.X}}` form.
 
 ### `git_commit_no_fixup`
@@ -793,14 +501,6 @@ The default `pattern:` is the canonical DCO shape `(?m)^Signed-off-by: .+ <.+@.+
 **Categories:** Git hygiene
 
 Fail on residual `fixup!` / `squash!` / `amend!` commits left in scope — the ones `git commit --fixup` / `--squash` produce, meant to be collapsed by `git rebase --autosquash` before merging. Forgetting to rebase is the universal case; this rule catches the leftover so it doesn't land on the main branch.
-
-```yaml
-# Range mode for PR CI: no un-squashed fixups may merge.
-- id: no-fixup
-  kind: git_commit_no_fixup
-  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
-  level: error
-```
 
 No configuration knobs — the matched subject prefixes are exactly what `--autosquash` understands. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes.
 
@@ -810,28 +510,11 @@ No configuration knobs — the matched subject prefixes are exactly what `--auto
 
 Each commit's subject line (the first line of its message) must match the `matches:` regex — the subject-grammar member of the commit family. Enforces a prefix + shape convention like go / Gerrit's `pkg/path: lowercase summary`, node's `subsystem: description`, or conventional-commit types. The regex is anchored to the **subject alone** (so `^…$` describes the first line exactly), unlike `git_commit_message`'s `pattern:` which matches the whole subject + body; for a subject-length cap use `git_commit_message`'s `subject_max_length:`. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes (HEAD-only when `since:` is unset, `<since>..HEAD` when set; silent outside a git repo; a bad `since:` ref hard-fails with a shallow-clone hint).
 
-```yaml
-- id: subject-grammar
-  kind: git_commit_subject_matches
-  matches: '^[a-z0-9_/.-]+: [a-z].{0,70}$'   # `component: lowercase summary`
-  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
-  level: error
-```
-
 ### `git_commit_author_allowlist`
 
 **Categories:** Git hygiene, Security / Unicode sanity
 
 Assert every commit author in scope matches an allowed email and/or name pattern. At least one of `email_pattern:` / `name_pattern:` is required; specifying both means BOTH must match (AND). A commit whose author fails any specified pattern fires one violation. Demand: enterprise repos enforcing contributor identity against a corporate domain; OSS projects catching commits from sock-puppet or compromised accounts.
-
-```yaml
-# Every commit in the PR must be authored from the corporate domain.
-- id: org-authors-only
-  kind: git_commit_author_allowlist
-  email_pattern: '^.+@example\.com$'
-  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
-  level: error
-```
 
 `email_pattern:` matches `git log %ae`; `name_pattern:` matches `git log %an`. Both are Rust regexes. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes (silent outside a git repo; a bad `since:` ref hard-fails with a shallow-clone hint).
 
@@ -840,14 +523,6 @@ Assert every commit author in scope matches an allowed email and/or name pattern
 **Categories:** Git hygiene, Security / Unicode sanity
 
 Assert every commit in scope has a verifying signature (`git verify-commit` exits 0). A commit that is unsigned — or signed with a key that doesn't verify against the local keyring — fires one violation. Demand: kernel maintainers, security-sensitive OSS, anyone using GitHub's "Require signed commits" branch protection.
-
-```yaml
-# Every commit in the PR must carry a verifying signature.
-- id: signed-commits
-  kind: git_commit_gpg_signed
-  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
-  level: error
-```
 
 The rule reflects git's own verdict and deliberately does **not** distinguish "unsigned" from "signed with an untrusted key" — trust is git's GPG config / `.git/allowed_signers`, not this rule's job. No configuration knobs. Shares the commit-validation family's `since:` / `include_merges:` semantics and failure modes.
 
@@ -892,46 +567,17 @@ If the `<since>...HEAD` diff changes any path matching `if_changed:`, at least o
 
 For every file matching `primary`, a file matching the `partner` template must exist.
 
-```yaml
-- id: every-impl-has-test
-  kind: pair
-  primary: "src/**/*.rs"
-  partner: "tests/{stem}.test.rs"
-  level: warning
-```
-
 ### `pair_hash`
 
 **Categories:** Cross-file, Security / Unicode sanity
 
 The `algorithm` digest (`sha256` default / `sha512`) of every file matching `source` must appear in the single `target` file — either as an embedded hex substring (`format: contains`, default) or a `<hex>  <path>` manifest line (`format: sums-line`, where the path token must be the source's path; a leading `*` binary marker and a `./` prefix are tolerated). The sums-line parser accepts **either order** — coreutils / go-`.sum` `<hex> <path>` *and* the Go FIPS snapshot's path-first `<path> <hex>` — by identifying the digest token by its shape (the algorithm fixes its hex length). One violation per source whose digest is absent or mismatched; a missing `target` is one violation anchored on `target`. Raw bytes are hashed (a CRLF/newline change *is* a digest change — it is an integrity pin). Detection-only: alint never regenerates the manifest (same posture as `file_hash`). The sibling of `file_hash` (one file vs a *literal* hash in the config) and `generated_file_fresh` (a *generator's* stdout); `pair_hash` is the cross-file "B carries A's current digest" relation. golang/go FIPS `fips140.sum` is the canonical, highest-stakes use.
 
-```yaml
-- id: fips-sum-pins-module
-  kind: pair_hash
-  source: "src/crypto/internal/fips140/v1.0.0/**/*.go"
-  target: "src/crypto/internal/fips140/fips140.sum"
-  algorithm: sha256
-  format: sums-line
-  level: error
-```
-
 ### `registry_paths_resolve`
 
 **Categories:** Cross-file
 
 A manifest file enumerates path entries; each must resolve to an on-disk artefact. `extract` pulls the entry list via a structured query (`toml` / `json` / `yaml` RFC 9535 JSONPath), a line list (`lines`, optional `comment` prefix), or a regex capture (`regex`, group 1). `expect` (`any` / `file` / `dir`) and `must_contain` constrain the resolved kind; `exclude_query` subtracts entries; `entries_are_globs` expands each entry as a glob. Non-literal entries (interpolation / antiquotation) are skipped, not failed. Optional `orphans` adds the reverse-completeness check: on-disk artefacts under the `space` glob that no entry references (the "new crate not wired into the workspace" detector). Cross-file: reads one manifest, resolves against the file index.
-
-```yaml
-- id: workspace-members-resolve
-  kind: registry_paths_resolve
-  source: Cargo.toml
-  extract: { toml: "$.workspace.members[*]" }
-  expect: dir
-  must_contain: Cargo.toml
-  orphans: { space: "crates/*/Cargo.toml", unreferenced: warn }
-  level: error
-```
 
 ### `cross_file` (alias: `cross_file_value_equals`)
 
@@ -950,105 +596,11 @@ A `source` must hold a `relation` to one or more `targets` (or, for `resolves`, 
 
 `normalize` relaxes the value comparison — a single transform or an ordered list applied left-to-right (`normalize: [trim, semver-minor]`): `trim`, `lower`, `semver-major` (the leading `MAJOR` band — the dotnet SDK shape), and `semver-minor` (the leading `MAJOR.MINOR` band, each token's leading digits with a non-digit prefix stripped — so `4.36-dev`, `4.36.0`, `pnpm@11.3.0` and `>=22.13` reconcile; the protobuf / pnpm version-format case). `identical` reads whole files byte-for-byte (`normalize`/`extract` do not apply), with an optional `skip_header_lines` to ignore a differing license/header; `resolves` extracts paths from the `source` (no `targets`) and checks each exists relative to the source file's directory. Non-literal extracted values (interpolation / antiquotation) are skipped, not failed — **except** a `whole_file: {}` source/target, whose single value (the entire file content) is compared verbatim even when it embeds `${…}`/`{{…}}` markers (those mark interpolated *paths*, not content); `whole_file` still honours `normalize`, so it sits between a query-extract and a no-normalize `identical`. `allow_missing_target` controls absent files/values. `equals` requires the `source` to extract **exactly one** value; to pull the latest entry from a multi-match file (e.g. the newest version in a multi-release `CHANGELOG.md`), anchor the regex so it captures only the first match — `regex: '(?s)\A.*?## (\d+\.\d+\.\d+)'` (`(?s)` makes `.` cross newlines, `\A` anchors at the start, `.*?` reaches the first heading lazily) yields a single value (a leading `## Unreleased` is skipped because the version pattern doesn't match it). The released `cross_file_value_equals` is a **byte-compatible alias** (`relation` defaults to `equals`). Cross-file.
 
-```yaml
-# equals (the default; the cross_file_value_equals shape)
-- id: workspace-versions-coherent
-  kind: cross_file
-  source:  { file: Cargo.toml, extract: { toml: "$.workspace.package.version" } }
-  targets: { files: "crates/*/Cargo.toml", extract: { toml: "$.package.version" } }
-  relation: equals
-  level: error
-
-# subset — every catalog reference must resolve to a declared catalog key
-- id: pnpm-catalog-refs-resolve
-  kind: cross_file
-  source:  { file: pnpm-workspace.yaml, extract: { yaml: "$.catalog.*" } }
-  targets: { files: "packages/**/package.json", extract: { regex: 'catalog:(\S+)' } }
-  relation: subset
-  level: error
-
-# identical — each crate README must mirror the workspace README byte-for-byte
-- id: readme-mirrors-root
-  kind: cross_file
-  source:  { file: README.md }
-  targets: { files: "crates/*/README.md" }
-  relation: identical
-  level: error
-
-# resolves — every declared workspace member path must exist on disk
-- id: workspace-members-exist
-  kind: cross_file
-  source: { file: Cargo.toml, extract: { toml: "$.workspace.members[*]" } }
-  relation: resolves
-  level: error
-```
-
 ### `file_graph`
 
 **Categories:** Cross-file
 
 Assemble the repo's *file → file* reference graph and assert a global structural property the 1-level cross-file kinds can't express. `nodes` (a glob) selects the graph's files. The `edges` block takes one of two extractors: `from_content` (extract one reference per match — `extract` is the same one-of as `registry_paths_resolve`: `toml` / `json` / `yaml` JSONPath, `lines`, `regex` capture group 1 — then `resolve` it to a path, `relative_to_file` default or `relative_to_repo_root`) for the reference-graph modes, or `derive_target` (`{ from: <regex on the node path>, to: <template, e.g. $1.pb.go> }`) for the `fresh` codegen-freshness mode **or** the `no_dangling` derived-sibling-existence mode. Bare module names, absolute paths, URLs, and computed/interpolated references are **dropped, not mis-resolved** (resolving module *names* is the package-graph non-goal — nodes stay path-based). `require` is a closed set — three bare-string modes and three configured map modes: `acyclic` (no dependency cycle among the nodes, each reported once as a rotation-canonical path list); `no_dangling` (every path-shaped edge must resolve to a path that exists on disk — the doc-cross-link / generic `markdown_paths_resolve` integrity check; with `edges.derive_target` it instead asserts each node's *derived* sibling exists, e.g. every `licenses/X-LICENSE.txt` needs an `X-NOTICE.txt`); `no_orphans` (no node is unreferenced by another node, except those matching a `roots:` glob — the registry / staging orphan detector); `{ forbidden_edges: [{ from, to }] }` (one violation per edge whose source matches `from` and resolved target matches `to` — the whole-repo layering firewall, where `import_gate` is the cheap per-file version); `{ no_orphans: { roots: [...] } }` (the `no_orphans` form with declared entry points); and `{ fresh: { hash, marker } }` (needs `edges.derive_target`: the generated file must embed the source's current `hash` digest, captured by `marker` group 1 — content-hash, never mtime; the alint-native form of generate-then-`git diff`, with no generator run). Pure-parse and extraction-based: it never shells out. Cross-file (whole-index).
-
-```yaml
-# Layering: domain code must not reach into infra (file → file).
-- id: domain-not-depend-on-infra
-  kind: file_graph
-  nodes: "src/**/*.ts"
-  edges:
-    from_content:
-      extract: { regex: 'from\s+"(\.[^"]+)"' }
-      resolve: relative_to_file
-  require:
-    forbidden_edges:
-      - { from: "src/domain/**", to: "src/infra/**" }
-  level: error
-
-# Acyclicity: the clearest capability gap — no current kind detects cycles.
-- id: no-proto-import-cycles
-  kind: file_graph
-  nodes: "proto/**/*.proto"
-  edges:
-    from_content:
-      extract: { regex: 'import\s+"([^"]+)"' }
-      resolve: relative_to_repo_root
-  require: acyclic
-
-# Integrity: every doc cross-link resolves, and no doc is unreferenced
-# except the declared entry points.
-- id: docs-links-resolve
-  kind: file_graph
-  nodes: "docs/**/*.md"
-  edges:
-    from_content:
-      extract: { regex: '\]\((\.[^)]+\.md)\)' }
-      resolve: relative_to_file
-  require: no_dangling
-
-- id: no-orphan-docs
-  kind: file_graph
-  nodes: "docs/**/*.md"
-  edges:
-    from_content:
-      extract: { regex: '\]\((\.[^)]+\.md)\)' }
-      resolve: relative_to_file
-  require:
-    no_orphans:
-      roots: ["docs/index.md", "docs/README.md"]
-
-# Freshness: each generated *.pb.go must embed the sha256 of its .proto
-# source (the alint-native, no-spawn form of `make gen && git diff`).
-- id: generated-stays-fresh
-  kind: file_graph
-  nodes: "proto/**/*.proto"
-  edges:
-    derive_target:
-      from: '(.*)\.proto'
-      to: '$1.pb.go'
-  require:
-    fresh:
-      hash: sha256
-      marker: 'sha256:([0-9a-f]{64})'
-```
 
 ### `ordered_block`
 
@@ -1056,35 +608,11 @@ Assemble the repo's *file → file* reference graph and assert a global structur
 
 The lines between a `start` / `end` marker pair must stay sorted (and, with `unique: true`, free of duplicates) under `comparator` (`lexical` / `lexical-ci` / `numeric`). **Both markers are optional**: omit `end` to sort from `start` to EOF, omit both to sort the whole file (the markerless "this file is one sorted list" form — dictionaries, allow-lists, a fully-sorted `CODEOWNERS`). The generic form of per-project keep-sorted scripts (protobuf `failure_lists`, sorted `.gitignore` / `CODEOWNERS` / dependency lists). Per-file: with markers, a file with no `start` marker is silently fine; markers match the trimmed line; blank lines inside a block are ignored; one violation per out-of-order block; a fully-delimited block that never sees its `end` is reported `unclosed` (a block with an absent `end` runs to EOF by design). An optional `select:` regex restricts the sortable entries to lines matching it — other lines inside the block (comments, group headers) pass through untouched (the sectioned / keep-sorted-subset shape).
 
-```yaml
-- id: keep-sorted
-  kind: ordered_block
-  paths: ["**/.gitignore", "CODEOWNERS"]
-  start: "# keep-sorted start"
-  end: "# keep-sorted end"
-  comparator: lexical
-  unique: false
-  select: '^\s*require '   # sort only the `require '…'` lines
-  level: warning
-```
-
 ### `for_each_match`
 
 **Categories:** Cross-file
 
 For each line matching `select` (a regex), the line must satisfy the nested `require:` predicates. The in-file line quantifier — the dual of `ordered_block`'s `select:` (where `ordered_block` *orders* selected lines, this asserts a *conjunction of predicates* over each). `require:` takes at least one of: `matches` (the line must match **all** listed regexes), `forbid` (the line must match **none**), and `equal` (the listed named `select` captures must all be **equal** — checked on **every** `select` match on the line, so a line carrying two PR links validates both). One violation per offending line; lines `select` does not match are ignored. It closes two shapes no `file_content_*` kind can: a per-line changelog grammar ("**every** `* ` entry must *also* end with a linked PR ref" — `file_content_matches` asserts existence, not a per-line conjunction) and intra-line capture equality ("the display number must equal the `/pull/` URL number" — the Rust `regex` engine is RE2: no backreferences). Per-file (the `PerFileRule` fast path).
-
-```yaml
-- id: changelog-entries-well-formed
-  kind: for_each_match
-  paths: ["CHANGELOG.md"]
-  select: '^[*-] .*\[#(?P<disp>\d+)\]\([^)]*pull/(?P<url>\d+)\)'
-  require:
-    matches: ['\)\.$']            # every entry line ends with ").":
-    forbid:  ['\[Fix #\d+\]']     # ...never uses the "[Fix #N]" form
-    equal:   [disp, url]          # ...and its display number == its URL number
-  level: warning
-```
 
 ### `generated_file_fresh`
 
@@ -1095,39 +623,11 @@ A committed artefact must equal what a declared `command` generator produces, in
 - **stdout mode** (`file:`) — the generator writes its single output to stdout; alint captures it and compares to the one committed `file`. Never writes the tree.
 - **mutating / in-place mode** (`outputs:`, a glob or list) — for the common `make gen && git diff --exit-code` pattern, where the generator rewrites files in place. alint **snapshots** the `outputs`, runs the generator, **diffs** (flagging each stale / newly-created / removed file), and **restores the snapshot** — so `alint check` leaves the working tree byte-identical (the restore is panic-safe). The generator must confine its writes to `outputs`.
 
-```yaml
-# stdout mode — diff the generator's stdout against one committed file
-- id: bindings-fresh
-  kind: generated_file_fresh
-  file: crates/ffi/include/core.h
-  command: ["cbindgen", "--config", "cbindgen.toml", "crates/core"]
-  normalize: final-newline
-  level: error
-
-# mutating mode — run the in-place generator and assert nothing changed
-- id: commands-def-fresh
-  kind: generated_file_fresh
-  outputs: "src/commands.def"          # glob or list; selects mutating mode
-  command: ["make", "commands.def"]
-  timeout: 300
-  level: error
-```
-
 ### `import_gate`
 
 **Categories:** Cross-file, Security / Unicode sanity
 
 Forbid imports whose **extracted target** matches a `forbid` regex, within the `paths` scope — an architectural import firewall (staging-layer isolation, core/providers separation, private-API gates). Matches the import target, not the raw line (so a comment or string mentioning the path doesn't fire — the low-false-positive specialisation of `file_content_forbidden`). `language` (`go`/`python`/`rust`/`js`/`scala`/`java`/`dart`/`nix`) supplies a built-in import-line pattern; `import_pattern` overrides it (capture group 1 = target; required for `generic`). The `js` preset (whose pattern is unanchored, to catch dynamic `import("m")` / `require("m")`) additionally blanks `//` and `/* … */` comments before matching, so a JSDoc `@typedef {import("../x")}` type annotation isn't mistaken for a real import. `allow` globs exempt sanctioned files. One violation per offending import.
-
-```yaml
-- id: staging-no-main-module
-  kind: import_gate
-  paths: "staging/src/k8s.io/**/*.go"
-  language: go
-  forbid: "^k8s\\.io/kubernetes/"
-  allow: ["staging/src/k8s.io/legacy/**"]
-  level: error
-```
 
 ### `command_idempotent`
 
@@ -1149,44 +649,13 @@ never swallowed into a pass. Single-shot, opt-in. Trust-gated
 like `command` (see below): declarable only in your own
 top-level config.
 
-```yaml
-- id: code-is-formatted
-  kind: command_idempotent
-  command: ["cargo", "fmt", "--all", "--", "--check"]
-  workdir: "."
-  files_from: stderr
-  files_pattern: "Diff in (.+) at"
-  level: error
-  message: "run `cargo fmt` — code is not formatter-clean"
-```
-
 ### `for_each_dir` / `for_each_file`
 
 **Categories:** Cross-file
 
 For every matching directory / file, evaluate a nested `require:` block with the entry as context. Template tokens (`{dir}`, `{stem}`, `{ext}`, `{basename}`, `{path}`, `{parent_name}`) expand against each match. `select:` is a single glob or a list with `!`-prefixed excludes (e.g. `["src/*", "!src/internal"]`).
 
-```yaml
-- id: every-pkg-has-readme
-  kind: for_each_dir
-  select: "packages/*"
-  require:
-    - kind: file_exists
-      paths: "{path}/README.md"
-```
-
 **`when_iter:` — per-iteration filter.** Optional expression in the `when:` grammar, with one extra namespace: `iter.*` references the entry currently being iterated. Iterations whose verdict is false are skipped before any nested rule is built — the canonical use case for monorepos shaped like Cargo / pnpm / Bazel workspaces:
-
-```yaml
-- id: workspace-member-has-readme
-  kind: for_each_dir
-  select: "crates/*"
-  when_iter: 'iter.has_file("Cargo.toml")'
-  require:
-    - kind: file_exists
-      paths: "{path}/README.md"
-  level: error
-```
 
 The `iter` namespace exposes:
 
@@ -1208,27 +677,11 @@ The `iter` namespace exposes:
 
 Every directory matching `select:` must contain files matching every glob in `require:`. Sugar for a common `for_each_dir` shape.
 
-```yaml
-- id: packages-have-readme-and-license
-  kind: dir_contains
-  select: "packages/*"
-  require: ["README.md", "LICENSE*"]
-  level: error
-```
-
 ### `dir_only_contains`
 
 **Categories:** Cross-file, Structure
 
 Every direct-child file of a directory matching `select:` must match at least one glob in `allow:`. Catches stray test data in `src/`.
-
-```yaml
-- id: src-only-rs
-  kind: dir_only_contains
-  select: "src/*"
-  allow: ["*.rs", "README.md"]
-  level: error
-```
 
 ### `unique_by`
 
@@ -1236,29 +689,11 @@ Every direct-child file of a directory matching `select:` must match at least on
 
 No two files matching `select` may share the value of `key` (a path template; tokens `{path}`/`{dir}`/`{basename}`/`{stem}`/`{ext}`/`{parent_name}`). Catches basename collisions across subdirectories. With `case_insensitive: true` the key is folded to lowercase before grouping, so `README.md` and `readme.md` collide — the case-insensitive-filesystem hazard (Windows / macOS).
 
-```yaml
-- id: unique-basenames
-  kind: unique_by
-  select: "src/**/*.rs"
-  key: "{stem}"
-  level: warning
-```
-
 ### `every_matching_has`
 
 **Categories:** Cross-file
 
 For every file or directory matching `select:`, every nested rule under `require:` must be satisfied. Lightweight sibling of `pair` that iterates both file and directory entries. `select:` is a single glob or a list with `!`-prefixed excludes (e.g. `["packages/*", "!packages/internal"]`).
-
-```yaml
-- id: every-pkg-has-readme
-  kind: every_matching_has
-  select: "packages/*"
-  require:
-    - kind: file_exists
-      paths: "{path}/README.md"
-  level: error
-```
 
 ---
 
@@ -1269,14 +704,6 @@ For every file or directory matching `select:`, every nested rule under `require
 **Categories:** Plugin (tier 1)
 
 Shell out to an external CLI per matched file. Exit `0` is a pass; non-zero is one violation whose message is the (truncated) stdout+stderr. Working directory is the repo root; stdin is closed.
-
-```yaml
-- id: workflows-clean
-  kind: command
-  paths: ".github/workflows/*.{yml,yaml}"
-  command: ["actionlint", "{path}"]
-  level: error
-```
 
 Argv tokens accept the same path-template substitutions as `pair` and `for_each_dir`: `{path}`, `{dir}`, `{stem}`, `{ext}`, `{basename}`, `{parent_name}`. The first token is the program (looked up via `PATH` if it's a bare name).
 
