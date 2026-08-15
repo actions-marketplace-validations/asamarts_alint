@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `scope_filter:` gains `include_manifest_paths:` / `exclude_manifest_paths:`
+  (ADR-0010): scope a per-file rule by membership in a path set a manifest
+  declares, instead of a hand-maintained `paths.exclude` that drifts from the
+  manifest that owns the truth. Each takes a `source:` manifest, the shared
+  `{json|toml|yaml|lines|regex}` `extract:`, and an optional
+  `derive_target: {from, to}` that maps a declared build output (`package.json`
+  `bin`'s `dist/cli.js`) back to source (`src/cli.ts`). Membership is
+  directory-aware (a declared `workspace.members` entry scopes a rule to files
+  under it); the set resolves once per run; a manifest value gates which files a
+  rule sees, never what it decides about a file. `alint explain` prints the
+  resolved set.
 - `alint explain <rule>` now shows a one-line `summary:` of what the rule's KIND
   checks, plus a `docs:` deep link to the full reference. Both are compiled into
   the binary from `docs/rules.md` (so they work offline); `--no-docs` suppresses
@@ -39,6 +50,26 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   block in the human output and an `options` object in `--format json`. This
   completes the explain output: id, kind, categories, level, paths, options,
   message, policy_url, when, and fix.
+
+### Fixed
+
+- `scope_filter.changed_since:` now resolves under `--changed` / `--base`. Its
+  per-rule diff set was cached only on the full index, so a `changed_since` rule
+  dispatched against the `--changed` filtered index matched nothing (a silent
+  false negative); the resolved diff is now copied onto the filtered index, the
+  same way the manifest path sets are.
+- `scope_filter` now applies on rule kinds dispatched in the rule-major partition
+  (`filename_case`, `filename_regex`, `file_max_size`, `file_min_size`,
+  `executable_bit`, `no_empty_files`, `json_schema_passes`, and others), not only
+  per-file content rules. Those kinds applied their scope per file but didn't
+  expose it for the engine to pre-resolve, and the scope caches were resolved
+  after the rule-major dispatch — so a `changed_since:` predicate silently
+  matched nothing on them (affected since v0.11). A per-file rule that applies a
+  scope now exposes it (also enabling `--changed` to skip it), and the scope
+  caches resolve before every dispatch path.
+- Diagnostic warnings now write to stderr, never stdout, so a `warn!` (such as an
+  empty `include_manifest_paths` set) no longer corrupts the machine-readable
+  `--format json` / SARIF output that consumers read from stdout.
 
 ## [0.14.2] - 2026-08-06
 

@@ -137,7 +137,14 @@ fn url_encode(s: &str) -> String {
 fn init_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
     let filter = EnvFilter::try_from_env("ALINT_LOG").unwrap_or_else(|_| EnvFilter::new("warn"));
-    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+    // Diagnostics go to stderr, never stdout: a `warn!` (e.g. an empty
+    // `include_manifest_paths` set) must not corrupt `--format json`/SARIF, which
+    // machine consumers read from stdout. `fmt()`'s default writer is stdout.
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 fn run(mut cli: Cli) -> Result<ExitCode> {
@@ -1268,6 +1275,55 @@ fn fact_value_json(v: &alint_core::FactValue) -> serde_json::Value {
     }
 }
 
+/// Render the `scope_filter:` block for `alint explain` (human format): the
+/// `has_ancestor` / `changed_since` gates, and for the manifest predicates the
+/// paths they resolve to (ADR-0010's legibility mitigation). No-op if unset.
+fn write_scope_filter_explain(
+    out: &mut impl std::io::Write,
+    entry: &alint_core::RuleEntry,
+) -> Result<()> {
+    use alint_output::style;
+    let dim = style::DIM;
+    // scope_filter narrows `paths:` further; you can't read the glob and know the
+    // scope, so surface each gate — and for the manifest predicates, the paths
+    // they actually resolve to (ADR-0010's legibility mitigation).
+    if let Some(sf) = entry.scope_filter() {
+        writeln!(out, "{dim}scope_filter:{dim:#}")?;
+        if let Some(ha) = &sf.has_ancestor {
+            writeln!(out, "  {dim}has_ancestor: {dim:#} {}", ha.join(", "))?;
+        }
+        if let Some(cs) = &sf.changed_since {
+            writeln!(out, "  {dim}changed_since:{dim:#} {cs}")?;
+        }
+        if (sf.include_manifest_paths.is_some() || sf.exclude_manifest_paths.is_some())
+            && let Ok(filter) = alint_core::ScopeFilter::from_spec(entry.rule.id(), sf.clone())
+        {
+            for res in filter.resolved_manifest_sets(Path::new(".")) {
+                let key = if res.include {
+                    "include_manifest_paths"
+                } else {
+                    "exclude_manifest_paths"
+                };
+                let paths = if res.paths.is_empty() {
+                    "(no paths resolved)".to_string()
+                } else {
+                    res.paths
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                writeln!(
+                    out,
+                    "  {dim}{key}:{dim:#} {} -> {paths}",
+                    res.source.display()
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     use alint_core::Level;
     use alint_output::style;
@@ -1331,6 +1387,7 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     if let Some(paths) = entry.paths() {
         writeln!(out, "{dim}paths:     {dim:#} {}", paths.render_scope())?;
     }
+    write_scope_filter_explain(&mut out, entry)?;
     // Kind-specific options (pattern, max_lines, ...): the first inline after
     // the `options:` label, the rest indented under the value column. A
     // spec-less entry has no options, so the flattened iterator is empty.
@@ -1404,6 +1461,32 @@ fn explain_json(entry: &alint_core::RuleEntry) -> Result<ExitCode> {
         }
         _ => serde_json::Value::Null,
     };
+    // scope_filter: the configured gates plus, for the manifest predicates, the
+    // paths they resolve to (relative to the CWD, like the human block).
+    let scope_filter = entry.scope_filter().map(|sf| {
+        let manifest_scopes: Vec<_> =
+            alint_core::ScopeFilter::from_spec(entry.rule.id(), sf.clone())
+                .map(|f| f.resolved_manifest_sets(Path::new(".")))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "predicate": if r.include {
+                            "include_manifest_paths"
+                        } else {
+                            "exclude_manifest_paths"
+                        },
+                        "source": r.source,
+                        "paths": r.paths,
+                    })
+                })
+                .collect();
+        serde_json::json!({
+            "has_ancestor": sf.has_ancestor,
+            "changed_since": sf.changed_since,
+            "manifest_scopes": manifest_scopes,
+        })
+    });
     let doc = serde_json::json!({
         "schema_version": 1,
         "kind": "rule",
@@ -1421,6 +1504,7 @@ fn explain_json(entry: &alint_core::RuleEntry) -> Result<ExitCode> {
         }),
         "level": entry.rule.level().as_str(),
         "paths": paths,
+        "scope_filter": scope_filter,
         "options": options,
         "message": entry.message().filter(|m| !m.trim().is_empty()),
         "policy_url": entry.rule.policy_url(),

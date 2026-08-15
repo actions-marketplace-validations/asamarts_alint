@@ -1,6 +1,6 @@
 # Manifest-derived rule scope — narrowing a per-file rule by a manifest's declared paths
 
-Status: Draft. (Draft | Implemented in <commit> | Superseded by <doc>.)
+Status: Draft — spec resolved 2026-08-13 (see §7), implementing for v0.15. (Draft | Implemented in <commit> | Superseded by <doc>.)
 Decisions: [ADR-0010](../../adr/0010-manifest-derived-rule-scope.md) (manifest-derived rule scope stays on the scope_filter seam)
 Demand evidence: the "repo-shape vs manifest" reply drafted in the alint.org marketing tree (`marketing/reddit/drafts/2026-08-reply-repo-shape-vs-manifest.md`); the in-tree `paths.exclude` drift in [`../v0.12/asf_bundle_overfire.md`](../v0.12/asf_bundle_overfire.md).
 
@@ -178,24 +178,44 @@ Mandatory section. What fires wrongly, and the mitigations.
   standard S-scenarios (should be negligible).
 - Every registered predicate needs both a firing and a silent e2e scenario (constitution 8).
 
-## 7. Open questions
+## 7. Resolved decisions
 
-Lead with the crux; resolve each inline with an editorial note when the work lands.
+Resolved 2026-08-13 for the v0.15 cut (ADR-0010 Accepted). The original open questions and
+the decision taken on each:
 
-1. **Source-versus-output — the crux.** Does v1 require source-declaring manifests and ship
-   `derive_target` as a fast-follow, or land both together? Recommendation: v1 =
-   source-declaring (the clean, honest sweet spot), `derive_target` mapping as an immediate
-   follow-up, so the headline `bin` case is documented as "needs the mapper" rather than
-   half-working.
-2. **Shape.** Narrow `scope_filter` predicate (favored: fits the roadmap ScopeFilter
-   generalisation, minimal surface) vs a general named `path_sets:` block (more reusable, new
-   top-level concept). Pick one before schema work.
-3. **Include and exclude.** Two predicates (`include_manifest_paths` /
-   `exclude_manifest_paths`) or one with a `mode:`? Naming should sit with `has_ancestor` and
-   the roadmap's mooted `has_sibling`.
-4. **Empty-set default**: silent no-op vs warn vs `expect_nonempty`.
-5. **Manifest-absent default**: scope-nothing (sibling-consistent) vs warn/error.
-6. **`allow_out_of_root` and confinement** interplay for an external manifest `source:`.
-7. **Relationship to the roadmap's `has_sibling`** idea (ROADMAP, ScopeFilter generalisation
-   line): coordinate so the two land as one coherent generalisation, not two overlapping
-   predicates.
+1. **Source-versus-output — the crux.** RESOLVED: land both together. `derive_target` ships
+   in v0.15 (reusing `file_graph`'s mapper), so the headline `package.json` `bin` case works
+   on arrival — mapping `dist/cli.js` back to `src/cli.ts` — rather than being documented as
+   "needs the mapper." Source-declaring manifests (`Cargo.toml` `workspace.members`,
+   `tsconfig` references, `go.work`, PSR-4 autoload) work without the mapper; build-output
+   manifests opt into it.
+2. **Shape.** RESOLVED: a narrow `scope_filter` predicate, not a top-level `path_sets:` block.
+   It fits the ScopeFilter generalisation and keeps the schema surface minimal. A set reused
+   by many rules is repeated per rule — the accepted cost of not adding a top-level concept;
+   `path_sets:` stays a possible future addition if reuse pressure grows.
+3. **Include and exclude.** RESOLVED: two predicates, `include_manifest_paths` /
+   `exclude_manifest_paths`, not one with a `mode:`. This sits with `has_ancestor` (also a
+   predicate, not a mode) and the roadmap's mooted `has_sibling`.
+4. **Empty-set default.** RESOLVED: `exclude_manifest_paths` with an empty set excludes
+   nothing, so the rule runs full-scope — safe, and the resulting over-firing is *visible*
+   (more violations, not fewer), so no warning is needed. `include_manifest_paths` with an
+   empty set would silently no-op the rule (silent under-firing — a "silent cap" the
+   constitution forbids), so it WARNS by default; `expect_nonempty: false` opts out for a rule
+   that tolerates an empty set. (An absent, unreadable, or root-escaping manifest resolves to
+   the empty set through the same paths.)
+5. **Manifest-absent default.** RESOLVED: the predicate contributes nothing, consistent with
+   `has_ancestor`. `exclude_manifest_paths` → full-scope; `include_manifest_paths` → scopes
+   nothing and warns (same footgun as the empty set).
+6. **`allow_out_of_root` and confinement.** RESOLVED: `source:` is ALWAYS repo-root-confined
+   (an escaping `source` is a build-time error). A manifest a rule scopes by lives in the repo,
+   so v1 does not honor `allow_out_of_root:` for the manifest read: the policy is a load-time
+   per-rule resolution not reachable from `ScopeFilter::from_spec`, and an out-of-root manifest
+   source is not a real use case. Revisit only if one appears. The `source:` is read
+   directly and confined by canonicalisation (as `registry_paths_resolve` / `file_graph`
+   read their sources), NOT through the walked file index — so a `.gitignore`'d or `ignore:`'d
+   manifest is still read (`.gitignore` governs lint *targets*, not a referenced config
+   source), and `alint explain` shows the same resolved set the engine uses.
+7. **Relationship to `has_sibling`.** RESOLVED: `has_sibling` is NOT bundled into v0.15 (a
+   separate scope generalisation). The manifest-path predicate is named and shaped as a
+   `scope_filter` membership predicate so `has_sibling` joins the same family later without a
+   rework.

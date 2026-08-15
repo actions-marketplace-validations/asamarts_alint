@@ -175,6 +175,14 @@ pub struct FileIndex {
     /// predicate silently matches nothing). Read lock-free in the
     /// hot loop after `set`.
     changed_paths: OnceLock<HashMap<String, HashSet<std::path::PathBuf>>>,
+    /// Per-predicate manifest-derived path sets backing
+    /// `scope_filter.include_manifest_paths:` / `exclude_manifest_paths:`. Keyed
+    /// by each predicate's canonical `(source, extract, derive_target)` cache
+    /// key, so rules sharing a config share one resolved set. Populated once by
+    /// the engine before per-file dispatch (a missing key = empty set, so the
+    /// predicate contributes nothing). Read lock-free in the hot loop after
+    /// `set`.
+    manifest_paths: OnceLock<HashMap<String, HashSet<std::path::PathBuf>>>,
     /// Evaluated `facts:` values, cached so repeated [`Engine::run_for_file`]
     /// calls (the LSP per-keystroke path) don't re-scan the tree.
     /// ASSUMPTION: a given index is evaluated by one engine's fact set
@@ -205,6 +213,7 @@ impl FileIndex {
             path_set: OnceLock::new(),
             parent_to_children: OnceLock::new(),
             changed_paths: OnceLock::new(),
+            manifest_paths: OnceLock::new(),
             facts: OnceLock::new(),
         }
     }
@@ -252,6 +261,52 @@ impl FileIndex {
     /// one index across `run` + `fix` is safe.
     pub fn set_changed_paths(&self, map: HashMap<String, HashSet<std::path::PathBuf>>) {
         let _ = self.changed_paths.set(map);
+    }
+
+    /// The whole resolved `changed_since` diff map, if populated. Like
+    /// [`Self::manifest_paths_map`], the engine resolves diffs against the FULL
+    /// index and copies the result onto the pre-filtered `--changed` index (whose
+    /// own entries omit the ref-diff set), so a per-file `scope_filter.changed_since:`
+    /// still resolves under `--changed` instead of silently matching nothing.
+    #[must_use]
+    pub(crate) fn changed_paths_map(
+        &self,
+    ) -> Option<&HashMap<String, HashSet<std::path::PathBuf>>> {
+        self.changed_paths.get()
+    }
+
+    /// Look up the cached manifest-derived path set for a predicate's cache key.
+    /// `None` means the cache wasn't populated for this key (manifest absent /
+    /// unresolved); the predicate treats it as the empty set.
+    #[must_use]
+    pub(crate) fn manifest_paths(&self, cache_key: &str) -> Option<&HashSet<std::path::PathBuf>> {
+        self.manifest_paths.get()?.get(cache_key)
+    }
+
+    /// `true` once the engine has populated the manifest-paths cache.
+    #[must_use]
+    pub fn manifest_paths_initialized(&self) -> bool {
+        self.manifest_paths.get().is_some()
+    }
+
+    /// Populate the manifest-paths cache (engine-only, once per run, before
+    /// parallel dispatch). A no-op if already set, so re-using one index across
+    /// `run` + `fix` is safe.
+    pub fn set_manifest_paths(&self, map: HashMap<String, HashSet<std::path::PathBuf>>) {
+        let _ = self.manifest_paths.set(map);
+    }
+
+    /// The whole resolved manifest-paths map, if populated. The engine resolves
+    /// manifests against the FULL index (so `find_file` reaches them) and copies
+    /// the result onto the pre-filtered `--changed` index (whose own entries omit
+    /// unchanged manifests), so per-file `matches` against the filtered index
+    /// still sees the set. The declared path set is independent of which files
+    /// the run visits, so the same map is valid for both.
+    #[must_use]
+    pub(crate) fn manifest_paths_map(
+        &self,
+    ) -> Option<&HashMap<String, HashSet<std::path::PathBuf>>> {
+        self.manifest_paths.get()
     }
 
     pub fn files(&self) -> impl Iterator<Item = &FileEntry> {
