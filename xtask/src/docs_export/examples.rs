@@ -291,7 +291,11 @@ fn render_markdown(
     let _ = writeln!(&mut md);
     let _ = writeln!(&mut md, "{lead}");
     let _ = writeln!(&mut md);
-    push_fenced(&mut md, "text", &render_tree(tree));
+    push_fenced(
+        &mut md,
+        "text",
+        &escape_docs_control_chars(&render_tree(tree)),
+    );
     // The tree shows only names; a content-based rule (file_content_matches,
     // file_header, ...) turns on what's INSIDE the files, so render each file's
     // content too - otherwise the pass/fail premise is invisible.
@@ -299,22 +303,24 @@ fn render_markdown(
     let _ = writeln!(&mut md);
     let _ = writeln!(&mut md, "With this `.alint.yml`:");
     let _ = writeln!(&mut md);
-    push_fenced(&mut md, "yaml", config);
+    push_fenced(&mut md, "yaml", &escape_docs_control_chars(config));
     // Git-rule examples turn on the repo's history (a backdated commit, a bad
     // subject) - surface it, or the worked example's premise is off-screen.
     if let Some(history) = git.and_then(render_git_history) {
         let _ = writeln!(&mut md);
         let _ = writeln!(&mut md, "committed with this history (oldest first):");
         let _ = writeln!(&mut md);
-        push_fenced(&mut md, "text", &history);
+        push_fenced(&mut md, "text", &escape_docs_control_chars(&history));
     }
     if let Some(output) = output {
         let _ = writeln!(&mut md);
         let _ = writeln!(&mut md, "`alint check` reports:");
         let _ = writeln!(&mut md);
         // `ansi` so the site's Shiki highlighter colours alint's real severity
-        // markers / rule ids from the captured SGR codes.
-        push_fenced(&mut md, "ansi", output);
+        // markers / rule ids from the captured SGR codes. Escaping preserves ESC
+        // (the SGR introducer) while tokenising a bidi/zero-width char a rule
+        // message might echo from a hostile filename or commit subject.
+        push_fenced(&mut md, "ansi", &escape_ansi_preserving_sgr(output));
     }
     let _ = writeln!(&mut md);
     md
@@ -349,7 +355,13 @@ fn push_file_contents(md: &mut String, tree: &TreeSpec) {
                 &format!("(binary content, {} bytes)", content.len()),
             );
         } else {
-            push_fenced(md, lang_for(&path), content);
+            // Escape invisible / bidi / zero-width chars to a visible `<U+XXXX>`
+            // token before fencing: the unicode-safety rules' fixtures carry them
+            // deliberately (they ARE what the rule catches), and emitting them raw
+            // into a published page ships a live Trojan-Source override / invisible
+            // byte. The escaped form still SHOWS the reader where the offending
+            // char is. (`\0` files are already noted as binary above.)
+            push_fenced(md, lang_for(&path), &escape_docs_control_chars(content));
         }
     }
 }
@@ -384,6 +396,63 @@ fn lang_for(path: &str) -> &'static str {
 /// still rendered verbatim.
 fn looks_binary(content: &str) -> bool {
     content.contains('\0')
+}
+
+/// True for a char that must never be emitted RAW into a generated docs page:
+/// it is invisible or reorders the surrounding text (a Trojan-Source vector).
+/// Tab and newline are kept (ordinary layout).
+///
+/// Delegates to alint's OWN unicode-safety rule predicates so the docs escaper
+/// covers exactly what those rules flag - a fixture demonstrating a rule can
+/// never ship the very char it warns about. (A hand-maintained parallel list had
+/// drifted, letting U+061C / U+200E / U+200F / U+2060 / U+180E through raw.) On
+/// top it adds the invisible line/paragraph separators and the terminal control
+/// classes (C0 sans tab/newline, DEL, C1).
+pub(crate) fn is_dangerous_docs_char(c: char) -> bool {
+    alint_rules::no_bidi_controls::is_bidi_control(c)
+        // `false` = "not the leading BOM": tokenise a U+FEFF anywhere in the
+        // embedded example, even the leading BOM the rule itself exempts - inside
+        // a rendered code fence it is still an invisible byte worth showing.
+        || alint_rules::no_zero_width_chars::is_flagged_zero_width(c, false)
+        || matches!(c, '\u{2028}' | '\u{2029}')
+        || (c.is_control() && c != '\t' && c != '\n')
+}
+
+/// Render `content` with every dangerous char (an [`is_dangerous_docs_char`] not
+/// spared by `keep`) replaced by a visible `<U+XXXX>` token, so a fixture that
+/// deliberately carries an invisible / bidi char (the unicode-safety rules) still
+/// SHOWS where it is without shipping the live control char into the published
+/// page. `keep` spares a char that is legitimately raw in its render context.
+fn escape_dangerous_with(content: &str, keep: impl Fn(char) -> bool) -> String {
+    let hot = |c: char| is_dangerous_docs_char(c) && !keep(c);
+    if !content.chars().any(hot) {
+        return content.to_string();
+    }
+    content
+        .chars()
+        .map(|c| {
+            if hot(c) {
+                format!("<U+{:04X}>", c as u32)
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Escape every dangerous char in ordinary text (file contents, config, file
+/// trees, git history) - nothing is spared.
+fn escape_docs_control_chars(content: &str) -> String {
+    escape_dangerous_with(content, |_| false)
+}
+
+/// Escape dangerous chars in captured `alint check` output while preserving `ESC`
+/// (U+001B): the output is fenced as an `ansi` block so the site's highlighter
+/// can read the real SGR colour codes ESC introduces. A rule whose message echoes
+/// a hostile filename / commit subject (a bidi override, a zero-width char) still
+/// renders as a visible token, not a live reordering char.
+fn escape_ansi_preserving_sgr(output: &str) -> String {
+    escape_dangerous_with(output, |c| c == '\u{1B}')
 }
 
 /// Strip OSC-8 hyperlink sequences (`ESC ] 8 ; ... ST`) while keeping SGR colour
@@ -527,6 +596,78 @@ mod tests {
         let t = tree("Cargo.toml: \"x\"\nsrc:\n  main.rs: \"y\"\n");
         // Files sort with their paths; the directory gets a trailing slash.
         assert_eq!(render_tree(&t), "Cargo.toml\nsrc/\nsrc/main.rs");
+    }
+
+    #[test]
+    fn escape_docs_control_chars_neutralizes_dangerous_chars() {
+        // A fixture carrying a bidi override / zero-width char / BOM (the very
+        // inputs the unicode-safety rules catch) must render as a visible token,
+        // never the raw char - emitting it raw ships a Trojan-Source override /
+        // invisible byte into the published page. Ordinary text (incl. tab/newline)
+        // is untouched.
+        let raw = "let c = \"\u{202e}reversed\u{200b}\u{feff}\";";
+        let esc = escape_docs_control_chars(raw);
+        assert!(
+            !esc.chars().any(is_dangerous_docs_char),
+            "no raw dangerous char survives: {esc:?}"
+        );
+        assert!(
+            esc.contains("<U+202E>") && esc.contains("<U+200B>") && esc.contains("<U+FEFF>"),
+            "shows each char's location: {esc:?}"
+        );
+        assert_eq!(
+            escape_docs_control_chars("plain ascii\n\twith tab"),
+            "plain ascii\n\twith tab",
+            "ordinary text + tab/newline are untouched"
+        );
+
+        // Every codepoint alint's own unicode-safety rules flag - including the
+        // bidi MARKS (U+061C/U+200E/U+200F) and the wider zero-width set (U+2060
+        // WORD JOINER, U+180E) an earlier hand-rolled list missed - plus the
+        // invisible line/paragraph separators and the control classes must escape.
+        for c in [
+            '\u{061C}', '\u{200E}', '\u{200F}', // bidi marks
+            '\u{202A}', '\u{2069}', // bidi embedding / isolate
+            '\u{200C}', '\u{200D}', '\u{2060}', '\u{180E}', // zero-width family
+            '\u{2028}', '\u{2029}', // line / paragraph separators
+            '\u{0007}', '\u{007F}', '\u{0080}', // C0 / DEL / C1
+        ] {
+            assert!(
+                is_dangerous_docs_char(c),
+                "U+{:04X} must be treated as dangerous",
+                c as u32
+            );
+            assert_eq!(
+                escape_docs_control_chars(&format!("x{c}y")),
+                format!("x<U+{:04X}>y", c as u32),
+                "U+{:04X} must render as a visible token",
+                c as u32
+            );
+        }
+
+        // Drift guard: the docs escaper must never cover LESS than the rules it
+        // documents, or a rule's own example page could ship the raw char - the
+        // exact drift that let the bidi marks through. Tie it to the predicates.
+        for cp in 0u32..=0x2100 {
+            if let Some(c) = char::from_u32(cp) {
+                if alint_rules::no_bidi_controls::is_bidi_control(c)
+                    || alint_rules::no_zero_width_chars::is_flagged_zero_width(c, false)
+                {
+                    assert!(
+                        is_dangerous_docs_char(c),
+                        "escaper drifted below the rules: U+{cp:04X} is rule-flagged but not escaped"
+                    );
+                }
+            }
+        }
+
+        // The ```ansi variant tokenises a bidi char a rule message might echo,
+        // but preserves ESC so the captured SGR colour codes still highlight.
+        let ansi = "\u{1b}[31m\u{202e}oops\u{1b}[0m";
+        let out = escape_ansi_preserving_sgr(ansi);
+        assert!(out.contains('\u{1b}'), "ESC (SGR) must survive: {out:?}");
+        assert!(out.contains("<U+202E>"), "bidi must be tokenised: {out:?}");
+        assert!(!out.contains('\u{202e}'), "no raw bidi survives: {out:?}");
     }
 
     #[test]
