@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-16
+
+v0.15 makes rules legible and monorepos first-class. `alint explain <rule>` now
+surfaces a rule's full configured detail — kind and categories, a one-line
+`summary:`, the kind-specific `options:`, the author `message:`, the `when:`
+clause, and the auto-fix — with a `docs:` deep link, and `alint rules show
+<kind>` / `alint rules list --search` browse the catalog offline. A new
+`scope_filter: include_manifest_paths:` / `exclude_manifest_paths:` (ADR-0010)
+scopes a per-file rule by the paths a manifest declares — a workspace's `members`
+(glob or literal, e.g. `crates/*`), or a package's `bin` entrypoints mapped back
+to source via `derive_target:` — so the rule tracks the manifest that owns the
+truth instead of a hand-maintained `paths.exclude` that drifts. Alongside,
+`scope_filter` now resolves under `--changed`, applies on the rule-major kinds,
+and diagnostics never corrupt machine-readable stdout.
+
 ### Added
 
 - `scope_filter:` gains `include_manifest_paths:` / `exclude_manifest_paths:`
@@ -6514,7 +6529,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.14.2...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/asamarts/alint/compare/v0.14.2...v0.15.0
 [0.14.2]: https://github.com/asamarts/alint/compare/v0.14.1...v0.14.2
 [0.14.1]: https://github.com/asamarts/alint/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/asamarts/alint/compare/v0.13.0...v0.14.0
