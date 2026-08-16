@@ -14,9 +14,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   manifest that owns the truth. Each takes a `source:` manifest, the shared
   `{json|toml|yaml|lines|regex}` `extract:`, and an optional
   `derive_target: {from, to}` that maps a declared build output (`package.json`
-  `bin`'s `dist/cli.js`) back to source (`src/cli.ts`). Membership is
-  directory-aware (a declared `workspace.members` entry scopes a rule to files
-  under it); the set resolves once per run; a manifest value gates which files a
+  `bin`'s `dist/cli.js`) back to source (`src/cli.ts`); `include_manifest_paths:`
+  additionally accepts `expect_nonempty:` (default `true`) to warn when the
+  resolved set is empty. Membership is
+  directory-aware (a declared `workspace.members` entry, including a glob such as
+  `crates/*`, scopes a rule to files under each matching directory); the set
+  resolves once per run; a manifest value gates which files a
   rule sees, never what it decides about a file. `alint explain` prints the
   resolved set.
 - `alint explain <rule>` now shows a one-line `summary:` of what the rule's KIND
@@ -122,8 +125,6 @@ working; the only change in what gets flagged is fewer false positives from
 - Every third-party GitHub Actions reference in CI is pinned to a full commit
   SHA, enforced by alint's own `gha-pin-actions-to-sha` dogfood rule (OpenSSF
   Scorecard Pinned-Dependencies hardening).
-
-## [Unreleased]
 
 ## [0.14.1] - 2026-07-24
 
