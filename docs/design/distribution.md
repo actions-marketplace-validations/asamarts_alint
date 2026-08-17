@@ -34,9 +34,7 @@ accretion rather than to a plan. Three problems:
 
 3. **Small correctness debt.** A copy-paste-broken `brew install` command on the
    marketing site, npm advertised on a page that omits it, a Zed extension pinned
-   two minors stale and invisible to the version-pin gate, and a release pipeline
-   that couples the irreversible crates.io publish to an unrelated build-matrix
-   leg.
+   two minors stale and invisible to the version-pin gate.
 
 **Strategic frame (the insight that should drive the plan).** A mature
 single-binary Rust CLI does *not* own every channel. ripgrep is the proof:
@@ -192,7 +190,7 @@ live citations.
 |---|:--:|---|---|---|
 | **MP-H1** | HIGH | No signing / SLSA provenance / SBOM / attestation on any binary artifact; `.sha256` proves transit only. | grep across `.github/`, `install.sh`, `Dockerfile`, `npm/`; v0.15.0 assets carry none; `release.yml:305-317` docker sets no attestation | §6 / P1 |
 | **MP-H2** | HIGH | Official GitHub Action silently fails on Windows runners (composite → install.sh hard-exits) though a win-x64 binary exists. | `action.yml:56-130` (`bash "$install_sh"` at `:129`), `install.sh:32-38` | Windows path in the Action / P2; doc note / P0 |
-| **MP-M1** | MED | Build matrix needlessly gates the irreversible crates.io publish (and docker). A flaky win/aarch64 leg blocks a publish needing zero binaries. | `release.yml:104` (`fail-fast:false`), `:329` (`publish-crates needs: build`) | `publish-crates` → `needs: preflight` / P0 (effect next tag) |
+| **MP-M1** | NOTE | The crates.io publish is coupled to the full build matrix (`publish-crates: needs: build`), so a flaky win/aarch64 leg can block it. **Considered and kept** (decision 2026-08-16): `release.yml:321-328` deliberately uses the matrix as a *cross-platform compile gate* before the irreversible publish (preflight is ubuntu-only), and shipping win/aarch64-broken source to immutable crates.io is the worse harm. A build-blocked publish is recovered by re-running the idempotent `publish-crates` job. | `release.yml:329` + `:321-328` (rationale) | keep as-is; document the re-run recovery in RELEASING.md / P0 (doc only) |
 | **MP-M2** | MED | Four secret-bearing channels, each a split-brain single point of failure, all run after the Release exists. Three are expiring tokens; the Homebrew SSH key is long-lived (compromise, not expiry). | `NPM_TOKEN release.yml:375`; `VSCE_PAT/OVSX_PAT :475-476`; the four JetBrains secrets `:525-528`; `HOMEBREW_TAP_DEPLOY_KEY :420` | migrate npm to OIDC (now GA) / P2; rotation runbook / P0, extended to the P2-added AUR SSH key + WinGet PAT |
 | **MP-M3** | MED | npm declares `win32/arm64` (os×cpu) it cannot serve; hard postinstall error instead of clean `EBADPLATFORM`. | `npm/package.json:31-32`, `npm/install.js:52-58` | fix declaration / P0; add win-arm64 build+package / P2 |
 | **MP-M4** | MED | Air-gapped/enterprise install is impossible from the primary paths: `install.sh` hardcodes `api.github.com` + `github.com` and its `ALINT_REPO` overrides only the repo path, not the host; `npm/install.js`'s repo is a hardcoded const with no env override. | `install.sh:18,48,60`, `npm/install.js:26` | install.sh base-URL override + npm made mirrorable by the optionalDeps migration + mirror docs / §7.2, P0 docs + P2 code |
@@ -569,9 +567,10 @@ benign, no action).
   homebrew form, `D-L1` anchor, `D-L2` docker tags, `D-L3` npm example, `D-L4`
   homepage cargo, `D-L6` RELEASING note, `D-L7` manual-download OS caveat, `D-L8`
   uninstall line, `D-L9` `SECURITY.md` "Supported Versions", `D-L10` `security.txt`. Pin gate: `VP-M1` add
-  editor manifests. Pipeline: `MP-M1` decouple `publish-crates`, `MP-M3` fix the npm
+  editor manifests. Pipeline: `MP-M3` fix the npm
   win-arm64 declaration, `MP-L1` document `ALINT_VERSION`, `MP-L2` bump the selftest
-  pin, `MP-L3` pin `cross`, `MP-M2` write the token-rotation runbook. Doc note for
+  pin, `MP-L3` pin `cross`, `MP-M2` write the token-rotation runbook (and `MP-M1`'s
+  publish-crates re-run recovery note). Doc note for
   `MP-H2` (Action is Linux/macOS-only today) and the `MP-M4` enterprise-mirror paths
   that already work (image retag, cargo source-replacement). **Document** cargo-
   binstall (`G2`), podman (fully-qualified), the fetchers + `cargo install --git`, and
@@ -616,8 +615,9 @@ benign, no action).
 - **P0:** the version-pin gate is green across *all* editor manifests; `cargo
   binstall alint --dry-run` resolves the release; the canonical install page lists
   every live channel including npm, a real Windows path, an uninstall line, and the
-  manual-download caveat; `SECURITY.md` has a "Supported Versions" section;
-  `publish-crates` no longer `needs: build`.
+  manual-download caveat; `SECURITY.md` has a "Supported Versions" section; and
+  RELEASING.md documents the partial-release recovery runbook (`MP-M2` credential
+  rotation + `MP-M1` publish-crates re-run).
 - **P1:** `gh attestation verify` and `cosign verify-blob` succeed against a released
   tarball and the ghcr image; an SBOM + a `THIRD-PARTY-LICENSES` bundle are attached and
   attested; `SHA256SUMS` covers `install.sh`; and the `MP-M5` post-publish smoke job

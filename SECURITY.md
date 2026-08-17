@@ -4,6 +4,14 @@ alint is a build-time / CI-time tool that runs against repository contents.
 Vulnerabilities can affect supply-chain integrity for everyone who uses it,
 so reports are taken seriously and handled privately until a fix ships.
 
+## Supported versions
+
+alint is pre-1.0 and ships from a single line of development. Only the **latest
+released minor** is supported: fixes land in a new release, not as backports to older
+minors. Published versions are **removed only on a confirmed defect, never
+proactively**: crates.io versions can only be yanked (never deleted), and we do not
+unpublish npm releases, so pinned builds keep working. There is no separate LTS line.
+
 ## Reporting a vulnerability
 
 **Do not file a public GitHub issue for security vulnerabilities.**
@@ -48,6 +56,7 @@ In scope:
 - The Docker image (`ghcr.io/asamarts/alint`)
 - The Homebrew formula (`asamarts/homebrew-alint`)
 - The npm package (`@asamarts/alint`)
+- The `install.sh` release installer (served from `alint.org/install.sh`)
 - The `xtask` build/release tooling
 
 Out of scope (report directly to upstream):
