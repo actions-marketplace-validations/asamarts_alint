@@ -108,25 +108,27 @@ case "$CHANNEL" in
       echo "  [smoke] homebrew: skipped (smoked tag ${TAG} is not the latest release)"
       exit 0
     fi
-    # Homebrew refuses formulae from third-party taps it deems "untrusted" in
-    # non-interactive CI. v0.15.1's smoke hit exactly this -- "Refusing to load
-    # formula asamarts/alint/alint from untrusted tap asamarts/alint" -- and the
-    # `brew install` never landed alint, so the later `alint --version` was
-    # command-not-found (exit 127). The leg already taps; the gate is trust, not
-    # order. Cover the two documented gates: read the formula from the local tap
-    # clone (NO_INSTALL_FROM_API), and add our tap to the allowlist IF the runner
-    # set one (leaving it unset when it was unset, so we don't turn on an
-    # allowlist that would then forbid alint's own deps). The diagnostic line
-    # prints brew's version + the allowlist so a still-red run pinpoints the gate.
+    # Homebrew 6.x refuses formulae from an "untrusted" third-party tap in
+    # non-interactive CI ("Refusing to load formula asamarts/alint/alint from
+    # untrusted tap asamarts/alint"; the `brew install` never lands alint, so the
+    # later `alint --version` is command-not-found -> exit 127). The gate is TAP
+    # TRUST -- v0.15.2's env-var attempt (NO_INSTALL_FROM_API + an allowlist) did
+    # NOT clear it, because trust is a separate mechanism with no env override.
+    # `brew trust --tap` records the tap in ~/.homebrew/trust.json so the install
+    # is allowed; NO_INSTALL_FROM_API keeps brew reading from the tapped clone.
     export HOMEBREW_NO_INSTALL_FROM_API=1
-    [ -n "${HOMEBREW_ALLOWED_TAPS:-}" ] && export HOMEBREW_ALLOWED_TAPS="${HOMEBREW_ALLOWED_TAPS} asamarts/alint"
     brew tap asamarts/alint 2>/dev/null || true
-    echo "  [smoke] brew=$(brew --version 2>/dev/null | head -1) HOMEBREW_ALLOWED_TAPS='${HOMEBREW_ALLOWED_TAPS:-<unset>}'"
+    brew trust --tap asamarts/alint || echo "  [smoke] note: 'brew trust --tap' failed/absent on $(brew --version 2>/dev/null | head -1)"
+    echo "  [smoke] brew=$(brew --version 2>/dev/null | head -1)"
     hb_n=1
     while true; do
       brew update >/dev/null 2>&1 || true
       brew reinstall alint >/dev/null 2>&1 || brew install alint || true
-      hb_got="$(alint --version 2>&1 | awk '/^alint [0-9]/ { print $2; exit }')"
+      # `|| true`: when the install did not land (transient bottle blip, a tap still
+      # catching up, trust not cleared), `alint` exits 127 and pipefail would abort
+      # the whole script HERE -- killing the very retry loop this lives in. Swallow
+      # it so an empty hb_got falls through to the retry / graceful-FAIL logic below.
+      hb_got="$(alint --version 2>&1 | awk '/^alint [0-9]/ { print $2; exit }')" || true
       [ "$hb_got" = "$VER" ] && break
       if [ "$hb_n" -ge "$RETRY_MAX" ]; then
         echo "  [smoke] FAIL: homebrew serves '${hb_got:-<none>}', expected '${VER}' after ${RETRY_MAX} attempts" >&2
