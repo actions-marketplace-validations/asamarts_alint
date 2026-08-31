@@ -203,6 +203,17 @@ Query a structured document with a JSONPath expression and assert every match de
 
 Same shape as the `*_equals` variants, but the asserted value is a **regex** matched against string values. Non-string matches produce a clear "value is not a string" violation.
 
+### `json_path_absent`, `yaml_path_absent`, `toml_path_absent`, `xml_path_absent`
+
+**Categories:** Structured query
+
+Assert a JSONPath query over the document matches nothing; one file-level violation if present.
+
+**Semantics**:
+- The query must select zero nodes. Any match fires exactly one violation for the file — never per-match, so a `$[?…]` filter that fans out over every top-level key still yields a single violation.
+- The existence sibling of the value-checking kinds; mirrors `file_absent` for a path. `equals` / `matches` / `if_present` don't apply.
+- Useful for forbidding a key: a `postinstall` script in `package.json`, a `[patch]` table in `Cargo.toml`, or `write-all` permissions in a workflow.
+
 ### `json_schema_passes`
 
 **Categories:** Structured query
@@ -938,7 +949,7 @@ Hardening for `.github/workflows/*.y{,a}ml`, guided by the two OpenSSF Scorecard
 
 | Rule id | Kind | Default level | Fix |
 |---|---|---|---|
-| `gha-workflow-contents-read` | `yaml_path_equals` (`$.permissions.contents == "read"`) | warning | — |
+| `gha-workflow-contents-read` | `yaml_path_absent` (fires on `write-all`, `contents: write`, or no permissions declared anywhere) | warning | — |
 | `gha-pin-actions-to-sha` | `yaml_path_matches` (40-hex SHA on third-party `uses:`; local `./` and digest-pinned `docker://` refs exempt) | warning | — |
 | `gha-workflow-has-name` | `yaml_path_matches` (`$.name`) | info | — |
 
