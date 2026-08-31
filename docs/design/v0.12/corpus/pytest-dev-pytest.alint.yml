@@ -1,0 +1,121 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for pytest-dev/pytest @ 0a465c8a716f37aca0ce456eb34614699ecd701f
+# v0.12 case study (Stage A). Expresses the repo's NATIVELY-addressable
+# bespoke-validation surface. pytest's enforced surface is dominated by
+# tool execution (ruff/ruff-format, mypy, pyright, pylint, codespell,
+# blacken-docs, pyproject-fmt, zizmor, rst-lint, the pytest suite across
+# the OS x interpreter x extra matrix, sphinx doc build + linkcheck) =
+# deliberate non-goals (D). What follows is the A-surface: the local
+# pygrep / naming / ordering conventions that alint expresses declaratively.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+
+rules:
+  # ── A1: changelog newsfragment filename convention ───────────────
+  # Enforced by BOTH the pre-commit `changelogs-rst` local hook AND the
+  # chronographer bot (.github/chronographer.yml, "Changelog entry"
+  # branch-protection check). Every file under changelog/ must be named
+  # <issue>.<type>.rst (towncrier), with README/_template/.gitignore
+  # exempt. One behavior, two enforcers.
+  - id: pytest-changelog-fragment-naming
+    kind: filename_regex
+    paths:
+      include: ["changelog/*"]
+      exclude: ["changelog/README.rst", "changelog/_template.rst", "changelog/.gitignore"]
+    pattern: '^[0-9]+\.(breaking|deprecation|feature|improvement|bugfix|vendor|doc|packaging|contrib|misc)(\.[0-9]+)?\.rst$'
+    level: error
+    message: >-
+      changelog fragments must be named <issue>.<type>.rst where <type>
+      is one of breaking|deprecation|feature|improvement|bugfix|vendor|
+      doc|packaging|contrib|misc (see changelog/README.rst).
+    policy_url: "https://docs.pytest.org/en/latest/contributing.html"
+
+  # ── A2: AUTHORS kept alphabetical ────────────────────────────────
+  # Documented review convention: CONTRIBUTING.rst ("add yourself to the
+  # AUTHORS file, in alphabetical order"). The list starts after the
+  # "Contributors include::" header and runs to EOF; sort is
+  # case-insensitive (e.g. lowercase `algojogacor` sits among the A's).
+  - id: pytest-authors-alphabetical
+    kind: ordered_block
+    paths: "AUTHORS"
+    start: 'Contributors include::'
+    end: '\z'
+    comparator: lexical-ci
+    unique: false
+    level: warning
+    message: "AUTHORS contributors must be listed in alphabetical order (CONTRIBUTING.rst)."
+
+  # ── A3: no trailing whitespace ───────────────────────────────────
+  # pre-commit `trailing-whitespace` hook (pre-commit/pre-commit-hooks).
+  # Trivial text invariant alint expresses directly (python bundle also
+  # ships python-sources-no-trailing-whitespace; this widens it repo-wide
+  # to mirror the pre-commit hook's default all-files scope).
+  - id: pytest-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.py", "**/*.rst", "**/*.ini", "**/*.cfg", "**/*.toml", "**/*.yml", "**/*.yaml"]
+      exclude: ["doc/en/reference/plugin_list.rst"]
+    level: warning
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  # ── A4: final newline at EOF ─────────────────────────────────────
+  # pre-commit `end-of-file-fixer` hook (pre-commit/pre-commit-hooks).
+  - id: pytest-final-newline
+    kind: final_newline
+    paths:
+      include: ["**/*.py", "**/*.rst", "**/*.ini", "**/*.cfg", "**/*.toml", "**/*.yml", "**/*.yaml"]
+      exclude: ["doc/en/reference/plugin_list.rst"]
+    level: warning
+    fix:
+      file_append_final_newline: {}
+
+  # ── A5: deprecated py.path.local usage forbidden ─────────────────
+  # pre-commit `py-path-deprecated` pygrep hook (entry: \bpy\.path\.local,
+  # with the same excludes). match == FAIL → file_content_forbidden.
+  - id: pytest-no-py-path-local
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.py"]
+      exclude:
+        - "doc/**"
+        - "src/_pytest/deprecated.py"
+        - "testing/deprecated_test.py"
+        - "src/_pytest/legacypath.py"
+    pattern: '\bpy\.path\.local'
+    level: warning
+    message: "py.path.local usage is deprecated (use pathlib / os.path)."
+
+  # ── A6: deprecated `py` library submodules forbidden ─────────────
+  # pre-commit `py-deprecated` pygrep hook: the `py` library is deprecated.
+  - id: pytest-no-py-library
+    kind: file_content_forbidden
+    paths: "**/*.py"
+    pattern: '\bpy\.(_code\.|builtin\.|code\.|io\.|path\.local\.sysfind|process\.|std\.|error\.|xml\.)'
+    level: warning
+    message: "the `py` library is deprecated; do not use py.<submodule>."
+
+  # ── A7: changelog :user: role must not be broken ─────────────────
+  # pre-commit `changelogs-user-role` pygrep hook: a broken :user:`name`
+  # role in changelog rst is forbidden. match == FAIL.
+  - id: pytest-changelog-user-role-not-broken
+    kind: file_content_forbidden
+    paths: "changelog/*.rst"
+    pattern: ':user:([^`]+`?|`[^`]+[\s,])'
+    level: warning
+    message: "Changelog files must use a non-broken :user:`name` role."
+
+  # ── value-add (NOT a pytest-enforced gate; recorded separately) ──
+  # The MIT license is declared in pyproject.toml; assert it stays MIT.
+  - id: pytest-license-is-mit
+    kind: toml_path_equals
+    paths: pyproject.toml
+    path: "$.project.license"
+    equals: "MIT"
+    level: info
+    message: "pyproject.toml [project].license should remain MIT."

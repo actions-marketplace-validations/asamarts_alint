@@ -5,14 +5,33 @@ use regex::Regex;
 
 // ─── Parser ──────────────────────────────────────────────────────────
 
+/// Maximum `(`/`[`/call-args nesting depth the parser will descend.
+/// `parse_expr` is mutually recursive through `parse_primary`, so nesting
+/// depth == parse recursion depth; an adversarial `when:` from an
+/// untrusted `extends:` ruleset (e.g. `"(".repeat(1_000_000)`) would
+/// otherwise overflow the parser stack — an uncatchable abort, the
+/// strongest determinism violation. The cap is deliberately conservative:
+/// one nesting level spans six mutually-recursive frames (the large
+/// `parse_primary` among them), and a *debug* build on a small (~2 MiB)
+/// test / rayon-worker stack overflows well before a few hundred levels —
+/// so 64 (still orders of magnitude beyond any real expression) is the safe
+/// ceiling, not a higher round number. The evaluator carries a matching
+/// `MAX_EVAL_DEPTH`.
+const MAX_DEPTH: usize = 64;
+
 pub(super) struct Parser {
     tokens: Vec<(Tok, usize)>,
     pos: usize,
+    depth: usize,
 }
 
 impl Parser {
     pub(super) fn new(tokens: Vec<(Tok, usize)>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
     }
 }
 
@@ -49,14 +68,45 @@ impl Parser {
         }
     }
 
+    /// Deepen the tracked expression depth by one and fail loudly past
+    /// `MAX_DEPTH`. The chain loops (`parse_or`/`parse_and`) call this per
+    /// operator so a long *flat* chain is bounded too — they're iterative and
+    /// never re-enter `parse_expr`, where the paren/bracket re-entry guard
+    /// lives (H5 flat-chain gap).
+    fn bump_depth(&mut self) -> Result<(), WhenError> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            self.depth -= 1;
+            return Err(self.err("expression nests too deeply (max depth 64)"));
+        }
+        Ok(())
+    }
+
     pub(super) fn parse_expr(&mut self) -> Result<WhenExpr, WhenError> {
-        self.parse_or()
+        // Bound recursion before descending: `parse_primary` re-enters
+        // `parse_expr` for every `(`, `[` and call-arg list, so this is the
+        // single re-entry point. Deep input fails loudly here instead of
+        // overflowing the stack. Decrement on the way out so sibling
+        // sub-expressions (list items, call args) don't accumulate depth.
+        self.bump_depth()?;
+        let result = self.parse_or();
+        self.depth -= 1;
+        result
     }
 
     fn parse_or(&mut self) -> Result<WhenExpr, WhenError> {
         let mut left = self.parse_and()?;
         while matches!(self.peek(), Some(Tok::KwOr)) {
             self.advance();
+            // Each `or` node deepens the built AST's left spine by one. Bump per
+            // operator and DO NOT restore: `depth` must bound the CUMULATIVE
+            // structural depth of the AST (a `(…) or a or a …` construction nests
+            // parens AND chains at each level), so a later recursive Drop / eval
+            // of a tall tree can't overflow the stack. `parse_expr` only unwinds
+            // its own single nesting bump, so chain depth correctly accumulates
+            // along the spine (H5 flat-chain gap). Restoring it here would let a
+            // ~MAX_DEPTH² tree parse and abort on Drop — DO NOT.
+            self.bump_depth()?;
             let right = self.parse_and()?;
             left = WhenExpr::Or(Box::new(left), Box::new(right));
         }
@@ -67,6 +117,9 @@ impl Parser {
         let mut left = self.parse_not()?;
         while matches!(self.peek(), Some(Tok::KwAnd)) {
             self.advance();
+            // See `parse_or`: bump per `and` node and never restore, so `depth`
+            // bounds the AST's cumulative structural depth (Drop/eval-safe).
+            self.bump_depth()?;
             let right = self.parse_not()?;
             left = WhenExpr::And(Box::new(left), Box::new(right));
         }
@@ -167,12 +220,13 @@ impl Parser {
                     "facts" => Namespace::Facts,
                     "vars" => Namespace::Vars,
                     "iter" => Namespace::Iter,
+                    "env" => Namespace::Env,
                     other => {
                         return Err(WhenError::Parse {
                             pos,
                             message: format!(
                                 "unknown identifier {other:?}; only `facts.NAME`, \
-                                 `vars.NAME`, and `iter.NAME` are allowed"
+                                 `vars.NAME`, `iter.NAME`, and `env.NAME` are allowed"
                             ),
                         });
                     }

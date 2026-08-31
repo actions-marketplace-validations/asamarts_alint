@@ -1,0 +1,34 @@
+name: file_graph is silent when the import graph is acyclic
+tags: [check, file_graph, cross_file, passing]
+
+docs:
+  title: An acyclic proto import graph
+  case: pass
+  kind: file_graph
+
+given:
+  tree:
+    proto:
+      a.proto: |
+        import "proto/b.proto";
+      b.proto: |
+        import "proto/c.proto";
+      c.proto: |
+        // leaf node, imports nothing
+  config: |
+    version: 1
+    rules:
+      - id: no-proto-import-cycles
+        kind: file_graph
+        nodes: "proto/**/*.proto"
+        edges:
+          from_content:
+            extract: { regex: 'import\s+"([^"]+)"' }
+            resolve: relative_to_repo_root
+        require: acyclic
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

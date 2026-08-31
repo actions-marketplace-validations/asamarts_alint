@@ -1,0 +1,190 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for curl/curl @ ba600296d2a1d8a4e53a36eb4bd30c1f0d0152cc
+# v0.12 100-repo case study, Stage A. Expresses the A-items of curl's
+# bespoke-validation surface (mostly the `scripts/spacecheck.pl` hygiene
+# battery + REUSE/SPDX headers) plus the now-native cross-file value-
+# coherence edges (option<->help set-equality + documented-error<->enum
+# membership; see the `cross_file` rules below). curl's remaining heavy
+# surface is checksrc.pl, codespell/typos/proselint, the codegen-freshness
+# half of the doc<->source consistency suite, and autotools-vs-cmake
+# parity — all D (tool / AST / compile execution).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ------------------------------------------------------------------
+  # REUSE / SPDX headers (gate: `reuse lint` in checksrc.yml).
+  # Every committable source file carries `SPDX-License-Identifier:`.
+  # The full REUSE-spec resolution is D; the per-file header PRESENCE
+  # is natively `file_content_matches`. Scoped to the source trees that
+  # are uniformly annotated (lib/src/include + the C/H test units).
+  # ------------------------------------------------------------------
+  - id: curl-spdx-header-c-sources
+    kind: file_content_matches
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h"]
+    pattern: "SPDX-License-Identifier:"
+    level: error
+    message: "Every curl C/H source file must carry an SPDX-License-Identifier header (enforced by `reuse lint`)."
+    policy_url: "https://reuse.software/spec-3.2/"
+
+  - id: curl-spdx-header-scripts
+    kind: file_content_matches
+    paths:
+      include: ["scripts/**/*.pl", "scripts/**/*.sh", ".github/scripts/**/*.pl", ".github/scripts/**/*.sh"]
+    pattern: "SPDX-License-Identifier:"
+    level: error
+    message: "curl helper scripts must carry an SPDX-License-Identifier header (`reuse lint`)."
+
+  # ------------------------------------------------------------------
+  # Hygiene battery — a subset of scripts/spacecheck.pl, now natively
+  # expressible by the v0.11 hygiene kinds.
+  # ------------------------------------------------------------------
+
+  # spacecheck.pl: max_line_len = 192, repo-wide (with a small skip-list).
+  - id: curl-max-line-192
+    kind: line_max_width
+    paths:
+      include: ["**/*"]
+      exclude:
+        - ".github/workflows/windows.yml"
+        - "renovate.json"
+        - "docs/DISTROS.md"
+        - "tests/data/**"
+        - "tests/certs/**"
+        - "projects/Windows/**"
+    max_width: 192
+    level: warning
+    message: "Line exceeds curl's 192-column hard cap (scripts/spacecheck.pl)."
+
+  # spacecheck.pl: no triple (3+) consecutive empty lines (default files).
+  - id: curl-no-3-blank-lines
+    kind: max_consecutive_blank_lines
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h"]
+    max: 2
+    level: warning
+    message: "3 or more consecutive blank lines (scripts/spacecheck.pl)."
+
+  # spacecheck.pl: source must be ASCII (non-ASCII only on an allow-list).
+  - id: curl-c-sources-ascii
+    kind: file_is_ascii
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h"]
+    level: warning
+    message: "curl C/H sources must be ASCII (scripts/spacecheck.pl non-ASCII gate)."
+
+  # spacecheck.pl / .gitattributes: shell/m4/autotools sources are LF-only.
+  - id: curl-lf-line-endings
+    kind: line_endings
+    paths:
+      include: ["**/*.sh", "**/*.m4", "**/*.am", "**/*.in", "configure.ac"]
+    target: lf
+    level: warning
+    message: "These file types must use LF line endings (.gitattributes / spacecheck.pl)."
+
+  # spacecheck.pl: no tabs in C/H sources (.gitattributes whitespace=tab-in-indent;
+  # editorconfig indent_style=space). spacecheck excludes Makefile.am etc.
+  - id: curl-no-tabs-in-c
+    kind: file_content_forbidden
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h"]
+    pattern: "\t"
+    level: warning
+    message: "Tabs are not allowed in curl C/H sources (spacecheck.pl / .editorconfig)."
+
+  # spacecheck.pl: every non-empty file ends with exactly one newline.
+  # `final_newline` covers the "no EOL at EOF" half; spacecheck also
+  # forbids a *trailing blank line* at EOF, which has no native kind (C).
+  - id: curl-final-newline
+    kind: final_newline
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h", "scripts/**", "**/*.md"]
+    level: warning
+    message: "File must end with a newline (scripts/spacecheck.pl no-EOL-at-EOF gate)."
+
+  # spacecheck.pl: trailing-whitespace gate, repo-wide.
+  - id: curl-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["lib/**/*.c", "lib/**/*.h", "src/**/*.c", "src/**/*.h", "include/**/*.h", "**/*.md"]
+    level: warning
+    message: "Trailing whitespace (scripts/spacecheck.pl / .editorconfig trim_trailing_whitespace)."
+
+  # spacecheck.pl: tracked filenames restricted to [A-Za-z0-9/._-].
+  # filename_regex matches the basename, so the slash isn't needed here.
+  - id: curl-filename-charset
+    kind: filename_regex
+    paths:
+      include: ["**/*"]
+    pattern: "[A-Za-z0-9._-]+"
+    level: warning
+    message: "Tracked filenames must only use [A-Za-z0-9/._-] (scripts/spacecheck.pl)."
+
+  # ------------------------------------------------------------------
+  # No build artifacts committed (.gitignore discipline; curl ships a
+  # clean source tree — distfiles.sh also guards the tarball side).
+  # ------------------------------------------------------------------
+  - id: curl-no-object-files
+    kind: file_absent
+    paths:
+      include: ["**/*.o", "**/*.obj", "**/*.a", "**/*.lib", "**/*.exe", "**/*.dll", "**/*.pyc"]
+    level: error
+    message: "Compiled artifacts must not be committed (see .gitignore)."
+
+  # ------------------------------------------------------------------
+  # Cross-file value-coherence (set relations).
+  #
+  # Closed by v0.12 `cross_file` set relations (was a documented Stage-A/B
+  # gap requiring a "value / set-equality edge" kind that did not yet exist).
+  # ------------------------------------------------------------------
+
+  # GAP CLOSED (v0.12 cross_file set_equals): the command-line option set must
+  # be the SAME on the doc side and in the generated --help table. curl's own
+  # `tests/test1139.pl` enforces option<->docs<->tool_listhelp.c parity; the
+  # set-equality half is now native. Source = the `Long:` name in every
+  # cmdline-opt's frontmatter; target = the leading `--<name>` label in each
+  # `tool_listhelp.c` help entry. Both regexes are line-anchored (`(?m)^`) and
+  # require a lowercase-letter start so the `Long: (long form name ...)`
+  # template line in `docs/cmdline-opts/MANPAGE.md` is excluded; the name class
+  # `[a-z0-9.-]+` keeps the dotted options (`--http1.1`, `--tlsv1.2`).
+  # NOTE: tool_listhelp.c is itself generated (`make listhelp`); the codegen-
+  # FRESHNESS half of test1139 (regenerate + diff) stays D — `cross_file`
+  # asserts set parity of the committed pair, not regeneration.
+  - id: curl-cmdline-opts-help-parity
+    kind: cross_file
+    source:
+      files: "docs/cmdline-opts/*.md"
+      extract: { regex: '(?m)^Long: ([a-z][a-z0-9.-]+)' }
+    targets:
+      files: "src/tool_listhelp.c"
+      extract: { regex: '(?m)^\s*\{ "[^"]*--([a-z][a-z0-9.-]+)' }
+    relation: set_equals
+    level: error
+    message: "The documented option set (cmdline-opts `Long:`) and the `--help` table (src/tool_listhelp.c) must match (tests/test1139.pl)."
+    policy_url: "https://github.com/curl/curl/blob/master/tests/test1139.pl"
+
+  # GAP PARTIALLY CLOSED (v0.12 cross_file subset): every CURLE_* error name
+  # documented in `docs/libcurl/libcurl-errors.md` must be a real enum constant
+  # in the public header. Catches a documented error that was renamed/removed
+  # (stale man page) without running a compiler. Only the SUBSET direction is
+  # enforceable: full set-equality does NOT hold here — the header carries ~53
+  # obsolete/aliased CURLE_* constants deliberately kept for ABI that the man
+  # page (correctly) does not list, so `set_equals` would false-positive on a
+  # healthy tree. The "every enum is documented" reverse + the CURL_DISABLE_*
+  # feature-gate parity remain D (need the build's actual symbol/feature matrix).
+  - id: curl-documented-errors-are-real-enums
+    kind: cross_file
+    source:
+      files: "docs/libcurl/libcurl-errors.md"
+      extract: { regex: '(CURLE_[A-Z0-9_]+)' }
+    targets:
+      files: "include/curl/curl.h"
+      extract: { regex: '(CURLE_[A-Z0-9_]+)' }
+    relation: subset
+    level: error
+    message: "Every CURLE_* error documented in libcurl-errors.md must be a real enum constant in include/curl/curl.h."

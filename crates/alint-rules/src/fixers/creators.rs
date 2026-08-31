@@ -1,7 +1,10 @@
-use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use alint_core::{ContentSourceSpec, Error, FixContext, FixOutcome, Fixer, Result, Violation};
+use alint_core::{
+    ContentSourceSpec, Error, FixContext, FixEdit, FixOutcome, Fixer, Result, Violation,
+};
+
+use crate::io::{looks_binary, write_atomic};
 
 /// UTF-8 byte-order mark. Preserved across prepend operations so
 /// editors that rely on it don't break.
@@ -46,14 +49,21 @@ impl Fixer for FileCreateFixer {
     }
 
     fn apply(&self, _violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome> {
-        let abs = ctx.root.join(&self.path);
+        // Confine the config-declared write target to the repo root (honoring
+        // the owning rule's `allow_out_of_root`), so a `file_create.path` like
+        // `../../x` from an untrusted `extends:`'d ruleset can't write outside
+        // the tree on `alint fix`. Refuse (skip loudly) when it escapes.
+        let abs = match confine_fix_path(&self.path, ctx.root, ctx.allow_out_of_root) {
+            Ok(p) => p,
+            Err(reason) => return Ok(FixOutcome::Skipped(reason)),
+        };
         if abs.exists() {
             return Ok(FixOutcome::Skipped(format!(
                 "{} already exists",
                 self.path.display()
             )));
         }
-        let content = match resolve_source_bytes(&self.source, ctx.root) {
+        let content = match resolve_source_bytes(&self.source, ctx.root, ctx.allow_out_of_root) {
             Ok(bytes) => bytes,
             Err(skip_msg) => return Ok(FixOutcome::Skipped(skip_msg)),
         };
@@ -80,6 +90,38 @@ impl Fixer for FileCreateFixer {
             self.path.display()
         )))
     }
+
+    fn fix_edit(&self, _violation: &Violation, _bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        // The target is set at build time, not taken from the violation. The
+        // editor (LSP) fix path doesn't thread `allow_out_of_root`, so confine
+        // strictly (deny escape): an editor code-action must never create a
+        // file — or read a template — outside the repo root.
+        confine_fix_path(&self.path, root, false).ok()?;
+        let content = resolve_source_bytes(&self.source, root, false).ok()?;
+        Some(FixEdit::CreateFile {
+            path: self.path.clone(),
+            content,
+        })
+    }
+}
+
+/// Confine a config-declared fixer path (a `file_create.path` write target or a
+/// `content_from` read source) to the repo root, honoring the owning rule's
+/// `allow_out_of_root`. Returns the joinable absolute path, or `Err(reason)`
+/// when it escapes and isn't permitted — the write/read is then refused. This is
+/// the fixer-side counterpart of the read rules' `confine_read` gate; without it
+/// an untrusted `extends:`'d ruleset's fixer could write or exfiltrate
+/// out-of-tree on `alint fix`.
+fn confine_fix_path(rel: &Path, root: &Path, allow: bool) -> std::result::Result<PathBuf, String> {
+    match crate::pathsafe::confine_read(rel, root, allow) {
+        crate::pathsafe::Confined::In(p) | crate::pathsafe::Confined::AllowedEscape(p) => {
+            Ok(root.join(p))
+        }
+        crate::pathsafe::Confined::Denied => Err(format!(
+            "{} escapes the repo root (set a top-level `allow_out_of_root` to permit)",
+            rel.display()
+        )),
+    }
 }
 
 /// Read a `ContentSourceSpec` to bytes. Returns the raw payload
@@ -91,11 +133,15 @@ impl Fixer for FileCreateFixer {
 fn resolve_source_bytes(
     source: &ContentSourceSpec,
     ctx_root: &std::path::Path,
+    allow_out_of_root: bool,
 ) -> std::result::Result<Vec<u8>, String> {
     match source {
         ContentSourceSpec::Inline(s) => Ok(s.as_bytes().to_vec()),
         ContentSourceSpec::File(rel) => {
-            let abs = ctx_root.join(rel);
+            // Confine the `content_from` read the same way rule reads are
+            // confined, so an untrusted ruleset can't exfiltrate an out-of-tree
+            // secret (`content_from: ../../secret`) into an in-repo file.
+            let abs = confine_fix_path(rel, ctx_root, allow_out_of_root)?;
             std::fs::read(&abs)
                 .map_err(|e| format!("content_from `{}` could not be read: {e}", rel.display()))
         }
@@ -143,7 +189,7 @@ impl Fixer for FilePrependFixer {
             ));
         };
         let abs = ctx.root.join(path);
-        let prepend = match resolve_source_bytes(&self.source, ctx.root) {
+        let prepend = match resolve_source_bytes(&self.source, ctx.root, ctx.allow_out_of_root) {
             Ok(b) => b,
             Err(skip_msg) => return Ok(FixOutcome::Skipped(skip_msg)),
         };
@@ -158,6 +204,25 @@ impl Fixer for FilePrependFixer {
             alint_core::ReadForFix::Bytes(b) => b,
             alint_core::ReadForFix::Skipped(outcome) => return Ok(outcome),
         };
+        if looks_binary(&existing) {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} looks binary; not prepending content",
+                path.display()
+            )));
+        }
+        // Idempotency guard (L4): if the file already begins with exactly this
+        // content (after any BOM), prepending again would stack a duplicate on
+        // every `--fix` — which happens when the configured content doesn't
+        // satisfy the rule's own pattern, so the violation never clears.
+        // `file_starts_with` refuses a fixer outright for this reason; here we
+        // can at least no-op safely.
+        let body = existing.strip_prefix(UTF8_BOM).unwrap_or(&existing);
+        if body.starts_with(prepend.as_slice()) {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} already begins with the required content",
+                path.display()
+            )));
+        }
         let mut out = Vec::with_capacity(existing.len() + prepend.len());
         if existing.starts_with(UTF8_BOM) {
             out.extend_from_slice(UTF8_BOM);
@@ -167,11 +232,34 @@ impl Fixer for FilePrependFixer {
             out.extend_from_slice(&prepend);
             out.extend_from_slice(&existing);
         }
-        std::fs::write(&abs, &out).map_err(|source| Error::Io {
+        write_atomic(&abs, &out).map_err(|source| Error::Io {
             path: abs.clone(),
             source,
         })?;
         Ok(FixOutcome::Applied(format!("prepended {}", path.display())))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let prepend = resolve_source_bytes(&self.source, root, false).ok()?;
+        // Idempotency guard (L4): already-present content is not re-prepended.
+        let body = bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes);
+        if body.starts_with(prepend.as_slice()) {
+            return None;
+        }
+        let mut out = Vec::with_capacity(bytes.len() + prepend.len());
+        if bytes.starts_with(UTF8_BOM) {
+            out.extend_from_slice(UTF8_BOM);
+            out.extend_from_slice(&prepend);
+            out.extend_from_slice(&bytes[UTF8_BOM.len()..]);
+        } else {
+            out.extend_from_slice(&prepend);
+            out.extend_from_slice(bytes);
+        }
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: out,
+        })
     }
 }
 
@@ -213,7 +301,7 @@ impl Fixer for FileAppendFixer {
             ));
         };
         let abs = ctx.root.join(path);
-        let payload = match resolve_source_bytes(&self.source, ctx.root) {
+        let payload = match resolve_source_bytes(&self.source, ctx.root, ctx.allow_out_of_root) {
             Ok(b) => b,
             Err(skip_msg) => return Ok(FixOutcome::Skipped(skip_msg)),
         };
@@ -224,17 +312,27 @@ impl Fixer for FileAppendFixer {
                 path.display()
             )));
         }
-        if let Some(skip) = alint_core::check_fix_size(&abs, path, ctx)? {
-            return Ok(skip);
+        let existing = match alint_core::read_for_fix(&abs, path, ctx)? {
+            alint_core::ReadForFix::Bytes(b) => b,
+            alint_core::ReadForFix::Skipped(outcome) => return Ok(outcome),
+        };
+        if looks_binary(&existing) {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} looks binary; not appending content",
+                path.display()
+            )));
         }
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&abs)
-            .map_err(|source| Error::Io {
-                path: abs.clone(),
-                source,
-            })?;
-        f.write_all(&payload).map_err(|source| Error::Io {
+        // Idempotency guard (L4): see FilePrependFixer — don't stack the footer
+        // on every `--fix` when the content doesn't satisfy the rule's pattern.
+        if existing.ends_with(payload.as_slice()) {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} already ends with the required content",
+                path.display()
+            )));
+        }
+        let mut out = existing;
+        out.extend_from_slice(&payload);
+        write_atomic(&abs, &out).map_err(|source| Error::Io {
             path: abs.clone(),
             source,
         })?;
@@ -242,6 +340,21 @@ impl Fixer for FileAppendFixer {
             "appended to {}",
             path.display()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let payload = resolve_source_bytes(&self.source, root, false).ok()?;
+        // Idempotency guard (L4): already-present content is not re-appended.
+        if bytes.ends_with(payload.as_slice()) {
+            return None;
+        }
+        let mut out = bytes.to_vec();
+        out.extend_from_slice(&payload);
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: out,
+        })
     }
 }
 
@@ -255,6 +368,7 @@ mod tests {
             root: tmp.path(),
             dry_run,
             fix_size_limit: None,
+            allow_out_of_root: false,
         }
     }
 
@@ -404,6 +518,28 @@ mod tests {
     }
 
     #[test]
+    fn file_prepend_is_idempotent_across_runs() {
+        // L4: a second `--fix` must NOT stack a duplicate header (the failure
+        // mode when the content doesn't satisfy the rule's pattern).
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+        let fixer = FilePrependFixer::new("// Copyright 2026\n".into());
+        let v = Violation::new("missing header").with_path(std::path::Path::new("a.rs"));
+        let first = fixer.apply(&v, &make_ctx(&tmp, false)).unwrap();
+        assert!(matches!(first, FixOutcome::Applied(_)));
+        let second = fixer.apply(&v, &make_ctx(&tmp, false)).unwrap();
+        assert!(matches!(second, FixOutcome::Skipped(_)), "second run skips");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("a.rs")).unwrap(),
+            "// Copyright 2026\nfn main() {}\n",
+            "header not stacked"
+        );
+        // The editor path is idempotent too.
+        let bytes = std::fs::read(tmp.path().join("a.rs")).unwrap();
+        assert!(fixer.fix_edit(&v, &bytes, tmp.path()).is_none());
+    }
+
+    #[test]
     fn file_prepend_preserves_utf8_bom() {
         let tmp = TempDir::new().unwrap();
         // BOM + "hello\n"
@@ -465,6 +601,31 @@ mod tests {
     }
 
     #[test]
+    fn file_append_is_idempotent_across_runs() {
+        // L4: a second `--fix` must NOT stack a duplicate footer.
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("notes.md"), "# Notes\n").unwrap();
+        let fixer = FileAppendFixer::new("\n## Section\n".into());
+        let v = Violation::new("missing section").with_path(std::path::Path::new("notes.md"));
+        assert!(matches!(
+            fixer.apply(&v, &make_ctx(&tmp, false)).unwrap(),
+            FixOutcome::Applied(_)
+        ));
+        assert!(
+            matches!(
+                fixer.apply(&v, &make_ctx(&tmp, false)).unwrap(),
+                FixOutcome::Skipped(_)
+            ),
+            "second run skips"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("notes.md")).unwrap(),
+            "# Notes\n\n## Section\n",
+            "footer not stacked"
+        );
+    }
+
+    #[test]
     fn file_append_dry_run_leaves_file_unchanged() {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("x.txt"), "orig\n").unwrap();
@@ -487,5 +648,61 @@ mod tests {
             .apply(&Violation::new("m"), &make_ctx(&tmp, false))
             .unwrap();
         assert!(matches!(outcome, FixOutcome::Skipped(_)));
+    }
+
+    #[test]
+    fn file_create_fix_edit_returns_create_with_inline_content() {
+        let tmp = TempDir::new().unwrap();
+        let fixer = FileCreateFixer::new(PathBuf::from("LICENSE"), "Apache-2.0\n".into(), true);
+        let edit = fixer
+            .fix_edit(&Violation::new("missing"), &[], tmp.path())
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::CreateFile {
+                path: PathBuf::from("LICENSE"),
+                content: b"Apache-2.0\n".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn file_append_fix_edit_appends_payload() {
+        let tmp = TempDir::new().unwrap();
+        let fixer = FileAppendFixer::new("\n## Section\n".into());
+        let edit = fixer
+            .fix_edit(
+                &Violation::new("m").with_path(std::path::Path::new("notes.md")),
+                b"# Notes\n",
+                tmp.path(),
+            )
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: PathBuf::from("notes.md"),
+                content: b"# Notes\n\n## Section\n".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn file_prepend_fix_edit_inserts_before_existing_bytes() {
+        let tmp = TempDir::new().unwrap();
+        let fixer = FilePrependFixer::new("// header\n".into());
+        let edit = fixer
+            .fix_edit(
+                &Violation::new("m").with_path(std::path::Path::new("a.rs")),
+                b"fn main() {}\n",
+                tmp.path(),
+            )
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: PathBuf::from("a.rs"),
+                content: b"// header\nfn main() {}\n".to_vec(),
+            }
+        );
     }
 }

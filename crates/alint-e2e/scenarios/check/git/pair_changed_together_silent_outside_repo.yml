@@ -1,0 +1,24 @@
+name: pair_changed_together no-ops outside a git repo
+tags: [check, pair_changed_together, git, passing]
+
+# Diff-scoped rule: with no git repo there is no changeset to assert
+# on, so it silently no-ops (the firing path needs a real two-commit
+# co-change repo and is covered natively in shell_out_rules.rs).
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: format-version-bumped
+        kind: pair_changed_together
+        if_changed: "src/format.rs"
+        then_changed: "FORMAT_VERSION"
+        since: HEAD~1
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

@@ -1,0 +1,140 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — llvm/llvm-project @ d7ee01c0fa3113b0b2d98e77273f794a182bf2dd
+#
+# Shape: C++ compiler-infrastructure MONOREPO (~25 top-level subprojects:
+# llvm, clang, mlir, lld, lldb, flang, libcxx, compiler-rt, bolt, polly...),
+# built with CMake, governed by the LLVM Foundation, Apache-2.0-WITH-LLVM-
+# exception. The single biggest enforced bespoke invariant is the LLVM source
+# *file header*: every hand-written source file begins with the canonical
+# "Part of the LLVM Project / SPDX-License-Identifier: Apache-2.0 WITH
+# LLVM-exception" banner (DeveloperPolicy.html#license; reviewers enforce it).
+#
+# Almost the entire ENFORCED surface is execution/tool gates that alint does
+# not reimplement (D, recorded honestly below):
+#   pr-code-format ........ clang-format --diff on changed files (hard gate)
+#   pr-code-lint .......... clang-tidy on clang-tools-extra changes
+#   premerge.yaml ......... CMake build + lit/unit test suite (Linux/Win/ARM)
+#   bazel-checks .......... buildifier --mode=check + bazelisk test
+#   libcxx-check-generated  ninja libcxx-generate-files && git diff --exit-code
+#                           (codegen freshness) + no-non-ASCII / no-hard-tabs
+#   docs.yml .............. sphinx doc build
+#   version-check ......... LLVMVersion.cmake == `git describe` tag (release/**)
+#   email-check ........... PR author email is not a *.noreply.github.com addr
+#   scorecard / zizmor .... OSSF supply-chain + GHA static analysis
+#   check-ci .............. pytest over .ci/*_test.py
+#   pip --require-hashes .. hash-locked .ci/all_requirements.txt install
+#
+# This config declaratively expresses the *repo-state* invariants alint owns
+# (the LLVM license header, the libcxx ASCII/tab forbiddance, a couple of
+# structure/metadata assertions) and adds alint value-add structure checks.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A-items — repo-enforced invariants alint expresses natively
+  # ════════════════════════════════════════════════════════════════
+
+  # A1 — LLVM canonical source-file header (the project-wide license banner).
+  # DeveloperPolicy.html mandates it; reviewers enforce it on every patch.
+  # The SPDX line sits a few lines below the `//===` banner, so scan 8 lines.
+  # Generated TableGen output (*.inc), the .td sources (excluded from
+  # clang-format too, see .clang-format-ignore), and the huge test trees use
+  # different / no headers, so they are excluded.
+  - id: llvm-cxx-license-header
+    kind: file_header
+    paths:
+      include:
+        - "llvm/lib/**/*.{cpp,h}"
+        - "llvm/include/**/*.h"
+        - "clang/lib/**/*.{cpp,h}"
+        - "clang/include/**/*.h"
+        - "mlir/lib/**/*.{cpp,h}"
+        - "lld/**/*.{cpp,h}"
+      exclude:
+        - "**/*.inc"
+        - "**/test/**"
+        - "**/unittests/**"
+        - "**/benchmarks/**"
+        - "third-party/**"
+    lines: 8
+    pattern: 'SPDX-License-Identifier: Apache-2\.0 WITH LLVM-exception'
+    level: warning
+    message: >-
+      Every hand-written LLVM source file must begin with the canonical LLVM
+      header ("Part of the LLVM Project, under the Apache License v2.0 with
+      LLVM Exceptions" + "SPDX-License-Identifier: Apache-2.0 WITH
+      LLVM-exception"). See https://llvm.org/docs/DeveloperPolicy.html#license
+    policy_url: "https://llvm.org/docs/DeveloperPolicy.html#license"
+
+  # A2 — libcxx forbids hard tabs in its public headers/src/test.
+  # Source: libcxx/utils/ci/run-buildbot check-generated-output —
+  #   `! grep -rn '[^ -~]' libcxx/include libcxx/src libcxx/test`
+  # rejects both non-ASCII and (via the tab being outside 0x20-0x7e) hard tabs.
+  # alint expresses the hard-tab arm precisely with file_content_forbidden.
+  - id: llvm-libcxx-no-hard-tabs
+    kind: file_content_forbidden
+    paths: "libcxx/{include,src}/**/*.{h,cpp}"
+    pattern: '\t'
+    level: warning
+    message: >-
+      libcxx headers/sources must not contain hard tabs (run-buildbot
+      check-generated-output rejects any byte outside printable ASCII).
+
+  # A3 — Python tree is black-formatted with third-party/ excluded; the
+  # exclusion is declared in pyproject.toml [tool.black]. Assert the marker
+  # files that the black gate and the .ci tooling depend on actually exist.
+  - id: llvm-pyproject-exists
+    kind: file_exists
+    paths: ["pyproject.toml"]
+    root_only: true
+    level: error
+    message: "Root pyproject.toml (hatch version source + black/pyright config) must exist."
+
+  # ════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD — structure the repo does NOT gate on (NOT in the
+  # coverage ratio; recorded per R3/R5). Asserting the existence + shape
+  # of the load-bearing CI/metadata config files.
+  # ════════════════════════════════════════════════════════════════
+
+  - id: llvm-version-source-of-truth-exists
+    kind: file_exists
+    paths: ["cmake/Modules/LLVMVersion.cmake"]
+    level: warning
+    message: >-
+      cmake/Modules/LLVMVersion.cmake is the version source of truth that
+      version-check.py asserts against the release git tag; it must exist.
+
+  - id: llvm-version-cmake-declares-major
+    kind: file_content_matches
+    paths: "cmake/Modules/LLVMVersion.cmake"
+    pattern: 'set\(LLVM_VERSION_MAJOR [0-9]+\)'
+    level: warning
+    message: "LLVMVersion.cmake must declare LLVM_VERSION_MAJOR as an integer."
+
+  - id: llvm-codeowners-exists
+    kind: file_exists
+    paths: [".github/CODEOWNERS"]
+    level: info
+    message: "CODEOWNERS drives reviewer auto-assignment across the subprojects."
+
+  - id: llvm-ci-requirements-hash-locked
+    kind: file_content_matches
+    paths: ".ci/all_requirements.txt"
+    pattern: '--hash=sha256:'
+    level: warning
+    message: >-
+      .ci/all_requirements.txt must stay hash-locked (pip-compile
+      --generate-hashes); the CI installs it with pip --require-hashes.
+
+  - id: llvm-clang-format-llvm-style
+    kind: file_content_matches
+    paths: ".clang-format"
+    pattern: 'BasedOnStyle:\s*LLVM'
+    level: info
+    message: "Root .clang-format must select the LLVM style (BasedOnStyle: LLVM)."

@@ -8,6 +8,94 @@ use ignore::{
 
 use crate::error::{Error, Result};
 
+/// Shared, thread-safe sink for the walk's escaping-symlink side-list (M4):
+/// `filter_entry` (parallel) pushes each pruned escaping symlink's relative
+/// path; `walk` drains it into the [`FileIndex`].
+type EscapingSink = Arc<Mutex<Vec<Arc<Path>>>>;
+
+/// Hard cap on a single whole-file read by the per-file engine/rule loops
+/// and the direct-read structured-query kinds. Generous — every realistic
+/// source / config / manifest is orders of magnitude smaller — yet bounded so
+/// a hostile or accidental multi-GB file in a linted repo is skipped instead
+/// of OOM-ing the run. Shared source of truth: `alint-rules`'s `read_capped`
+/// family re-exports this constant (M3).
+pub const MAX_ANALYZE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Read a walked file's bytes, first fast-rejecting (loudly) any file whose
+/// walk-time [`FileEntry::size`] exceeds [`MAX_ANALYZE_BYTES`] (no extra `stat`),
+/// then bounding the actual read to the cap (`read_bounded`, TOCTOU-safe). The
+/// per-file loops read the whole file into memory, so an uncapped read of a
+/// committed multi-GB blob would OOM the process; a bounded skip keeps the run
+/// alive and observable (M3). A genuine read error (permission, I/O) is logged
+/// at `warn` so it's observable with `-v` / `RUST_LOG` rather than silent (L7);
+/// a `NotFound` is a silent skip (the benign deleted-between-walk-and-read race).
+pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
+    if size > MAX_ANALYZE_BYTES {
+        tracing::warn!(
+            path = %path.display(),
+            size,
+            cap = MAX_ANALYZE_BYTES,
+            "skipping file larger than the analysis cap"
+        );
+        return None;
+    }
+    // M3-F2 (TOCTOU): the walk-time `size` above is a fast reject only — it can
+    // be stale, so a file that GREW past the cap between the walk and here would
+    // otherwise slip through to an unbounded read. Bound the actual read by
+    // BYTES (not the trusted size) so concurrent growth can't force an OOM.
+    // `size` is ALSO forwarded as the read buffer's preallocation hint — alint
+    // already stat-ed it during the walk, so it costs nothing and lets the read
+    // finish in one syscall (see `read_bounded`).
+    read_bounded(path, MAX_ANALYZE_BYTES, size)
+}
+
+/// Read a whole file bounded to `cap` bytes — TOCTOU-safe: the read itself
+/// stops at `cap + 1` bytes, so the file's size *at read time* (not a possibly
+/// stale earlier stat / walk-time size) decides. A file that measures `> cap`
+/// is skipped (loud `warn`); a missing file is `None`.
+///
+/// `size_hint` (the walk-time [`FileEntry::size`], already stat-ed by the walk
+/// so free here) preallocates the buffer. It is strictly ADVISORY — capacity
+/// only, clamped to `cap + 1`, and it NEVER affects what is accepted: the
+/// `take(cap + 1)` below is the sole correctness bound, so a stale or hostile
+/// hint cannot force an over-read. The preallocation matters because a
+/// `Take<File>` (unlike a bare `File`) has no `read_to_end` fstat-preallocation
+/// specialization: given an empty `Vec` it grows-and-rereads, issuing several
+/// `read()` syscalls per file. That overhead is ~invisible to the deterministic
+/// Valgrind-Ir gate (a `read()` is a handful of guest instructions but a real
+/// kernel round-trip) yet measurably regressed read-heavy scenarios (S2) on the
+/// wall clock. Sizing the buffer up front restores the single-read behaviour
+/// `std::fs::read` had before the OOM cap. See
+/// docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/.
+pub(crate) fn read_bounded(path: &Path, cap: u64, size_hint: u64) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
+            return None;
+        }
+    };
+    let prealloc = usize::try_from(size_hint.min(cap.saturating_add(1))).unwrap_or(0);
+    let mut buf = Vec::with_capacity(prealloc);
+    match file.take(cap.saturating_add(1)).read_to_end(&mut buf) {
+        Ok(_) if u64::try_from(buf.len()).is_ok_and(|n| n > cap) => {
+            tracing::warn!(
+                path = %path.display(),
+                cap,
+                "skipping file larger than the analysis cap (grew past its walk-time size)"
+            );
+            None
+        }
+        Ok(_) => Some(buf),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
+            None
+        }
+    }
+}
+
 /// Debug-only tracing for `FileIndex` lazy index builds. Emits a
 /// `phase=index_build kind=<name> elapsed_us=N entries=M` event so
 /// `xtask bench-scale` profile runs and contributor debugging can
@@ -74,8 +162,33 @@ pub struct FileEntry {
 #[derive(Debug, Default)]
 pub struct FileIndex {
     pub entries: Vec<FileEntry>,
+    /// Symlinks whose target ESCAPES the repo root. Pruned from `entries` by the
+    /// walk (so no content rule can `root.join()` through them to read out-of-
+    /// tree bytes) but recorded here so `no_symlinks` can still flag them (M4).
+    /// Relative paths, sorted + deduped. Empty for a fixture-built index.
+    escaping_symlinks: Vec<Arc<Path>>,
     path_set: OnceLock<HashSet<Arc<Path>>>,
     parent_to_children: OnceLock<HashMap<Arc<Path>, Vec<usize>>>,
+    /// Per-`since`-ref diff sets backing `scope_filter.changed_since:`.
+    /// Populated once by the engine before per-file dispatch (a ref
+    /// that resolves to "not a git repo" stores an empty set, so the
+    /// predicate silently matches nothing). Read lock-free in the
+    /// hot loop after `set`.
+    changed_paths: OnceLock<HashMap<String, HashSet<std::path::PathBuf>>>,
+    /// Per-predicate manifest-derived path sets backing
+    /// `scope_filter.include_manifest_paths:` / `exclude_manifest_paths:`. Keyed
+    /// by each predicate's canonical `(source, extract, derive_target)` cache
+    /// key, so rules sharing a config share one resolved set. Populated once by
+    /// the engine before per-file dispatch (a missing key = empty set, so the
+    /// predicate contributes nothing). Read lock-free in the hot loop after
+    /// `set`.
+    manifest_paths: OnceLock<HashMap<String, crate::scope_filter::ManifestSet>>,
+    /// Evaluated `facts:` values, cached so repeated [`Engine::run_for_file`]
+    /// calls (the LSP per-keystroke path) don't re-scan the tree.
+    /// ASSUMPTION: a given index is evaluated by one engine's fact set
+    /// for its lifetime (true in alint — an index is walked fresh per
+    /// run / per LSP session). Read lock-free after `set`.
+    facts: OnceLock<crate::facts::FactValues>,
 }
 
 impl FileIndex {
@@ -84,11 +197,119 @@ impl FileIndex {
     /// out so test/bench fixtures don't have to know about the
     /// internal lazy `path_set` field.
     pub fn from_entries(entries: Vec<FileEntry>) -> Self {
+        Self::from_entries_with_escaping(entries, Vec::new())
+    }
+
+    /// Like [`from_entries`](Self::from_entries) but also records the walk's
+    /// escaping-symlink side-list (M4). Used by [`walk`]; fixtures use the plain
+    /// constructor (empty side-list).
+    pub(crate) fn from_entries_with_escaping(
+        entries: Vec<FileEntry>,
+        escaping_symlinks: Vec<Arc<Path>>,
+    ) -> Self {
         Self {
             entries,
+            escaping_symlinks,
             path_set: OnceLock::new(),
             parent_to_children: OnceLock::new(),
+            changed_paths: OnceLock::new(),
+            manifest_paths: OnceLock::new(),
+            facts: OnceLock::new(),
         }
+    }
+
+    /// Symlinks whose target escapes the repo root — pruned from `entries` (so no
+    /// content rule reads through them) but surfaced here for `no_symlinks` (M4).
+    /// Relative paths.
+    #[must_use]
+    pub fn escaping_symlinks(&self) -> &[Arc<Path>] {
+        &self.escaping_symlinks
+    }
+
+    /// The cached evaluated `facts:` values, if [`set_facts`](Self::set_facts)
+    /// has run. `None` before the first evaluation.
+    #[must_use]
+    pub fn cached_facts(&self) -> Option<&crate::facts::FactValues> {
+        self.facts.get()
+    }
+
+    /// Cache the evaluated facts (no-op if already set). The engine
+    /// populates this on the first `run_for_file` so subsequent
+    /// per-file re-evaluations reuse it instead of re-scanning the tree.
+    pub fn set_facts(&self, values: crate::facts::FactValues) {
+        let _ = self.facts.set(values);
+    }
+
+    /// Look up the cached changed-paths set for a `since` ref. `None`
+    /// means the cache wasn't populated for this ref (the engine only
+    /// resolves refs that appear on a per-file rule's
+    /// `scope_filter.changed_since:`); the predicate treats that as
+    /// "no file matches".
+    #[must_use]
+    pub fn changed_paths(&self, since: &str) -> Option<&HashSet<std::path::PathBuf>> {
+        self.changed_paths.get()?.get(since)
+    }
+
+    /// `true` once the engine has populated the changed-paths cache.
+    #[must_use]
+    pub fn changed_paths_initialized(&self) -> bool {
+        self.changed_paths.get().is_some()
+    }
+
+    /// Populate the changed-paths cache (engine-only, once per run,
+    /// before parallel dispatch). A no-op if already set, so re-using
+    /// one index across `run` + `fix` is safe.
+    pub fn set_changed_paths(&self, map: HashMap<String, HashSet<std::path::PathBuf>>) {
+        let _ = self.changed_paths.set(map);
+    }
+
+    /// The whole resolved `changed_since` diff map, if populated. Like
+    /// [`Self::manifest_paths_map`], the engine resolves diffs against the FULL
+    /// index and copies the result onto the pre-filtered `--changed` index (whose
+    /// own entries omit the ref-diff set), so a per-file `scope_filter.changed_since:`
+    /// still resolves under `--changed` instead of silently matching nothing.
+    #[must_use]
+    pub(crate) fn changed_paths_map(
+        &self,
+    ) -> Option<&HashMap<String, HashSet<std::path::PathBuf>>> {
+        self.changed_paths.get()
+    }
+
+    /// Look up the cached manifest-derived path set for a predicate's cache key.
+    /// `None` means the cache wasn't populated for this key (manifest absent /
+    /// unresolved); the predicate treats it as the empty set.
+    #[must_use]
+    pub(crate) fn manifest_paths(
+        &self,
+        cache_key: &str,
+    ) -> Option<&crate::scope_filter::ManifestSet> {
+        self.manifest_paths.get()?.get(cache_key)
+    }
+
+    /// `true` once the engine has populated the manifest-paths cache.
+    #[must_use]
+    pub fn manifest_paths_initialized(&self) -> bool {
+        self.manifest_paths.get().is_some()
+    }
+
+    /// Populate the manifest-paths cache (engine-only, once per run, before
+    /// parallel dispatch). A no-op if already set, so re-using one index across
+    /// `run` + `fix` is safe.
+    pub fn set_manifest_paths(&self, map: HashMap<String, crate::scope_filter::ManifestSet>) {
+        let _ = self.manifest_paths.set(map);
+    }
+
+    /// The whole resolved manifest-paths map, if populated. The engine resolves
+    /// manifests against the FULL index (so `find_file` reaches them) and copies
+    /// the result onto the pre-filtered `--changed` index (whose own entries omit
+    /// unchanged manifests), so per-file `matches` against the filtered index
+    /// still sees the set. The declared path set is independent of which files
+    /// the run visits, so the same map is valid for both.
+    #[must_use]
+    pub(crate) fn manifest_paths_map(
+        &self,
+    ) -> Option<&HashMap<String, crate::scope_filter::ManifestSet>> {
+        self.manifest_paths.get()
     }
 
     pub fn files(&self) -> impl Iterator<Item = &FileEntry> {
@@ -298,7 +519,7 @@ impl Default for WalkOptions {
 }
 
 pub fn walk(root: &Path, opts: &WalkOptions) -> Result<FileIndex> {
-    let builder = build_walk_builder(root, opts)?;
+    let (builder, escaping) = build_walk_builder(root, opts)?;
 
     // Per-thread accumulators land in `out_entries`; the first
     // error wins and stops the walk via `WalkState::Quit` (the
@@ -333,14 +554,27 @@ pub fn walk(root: &Path, opts: &WalkOptions) -> Result<FileIndex> {
         .flatten()
         .collect();
     entries.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-    Ok(FileIndex::from_entries(entries))
+
+    // M4: the escaping/broken symlinks the filter pruned. Sort + dedup for a
+    // deterministic side-list (the walk is parallel, order is non-deterministic).
+    let mut escaping_symlinks: Vec<Arc<Path>> = escaping
+        .lock()
+        .expect("walker escaping-symlink lock")
+        .drain(..)
+        .collect();
+    escaping_symlinks.sort_unstable();
+    escaping_symlinks.dedup();
+    Ok(FileIndex::from_entries_with_escaping(
+        entries,
+        escaping_symlinks,
+    ))
 }
 
 /// Build the `ignore::WalkBuilder` we run today. Pure factor-out
 /// of the original `walk()` body's setup half so both the
 /// sequential test path and the parallel runtime path stay in
 /// sync.
-fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<WalkBuilder> {
+fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<(WalkBuilder, EscapingSink)> {
     let mut builder = WalkBuilder::new(root);
     builder
         .standard_filters(opts.respect_gitignore)
@@ -373,7 +607,48 @@ fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<WalkBuilder> {
         .build()
         .map_err(|e| Error::Other(format!("failed to build overrides: {e}")))?;
     builder.overrides(overrides);
-    Ok(builder)
+
+    // Prune symlinks whose target escapes the repo root. With
+    // `follow_links(true)`, a followed out-of-tree symlink would
+    // otherwise be indexed under its in-tree path — and an out-of-tree
+    // symlink-to-dir would have its children descended and indexed too
+    // — letting content rules read outside the tree (the untrusted-PR-
+    // content half of the path-confinement threat; see
+    // `docs/design/v0.12/path-confinement.md`). In-tree symlinks are
+    // still followed. Canonicalising both sides also handles a root
+    // that itself lives under a symlink (e.g. macOS `/tmp` →
+    // `/private/tmp`). Only symlink entries pay the `canonicalize`
+    // syscall; the common non-symlink path is a bare `true`, so the
+    // walk's cost is unchanged for trees without symlinks.
+    let canonical_root = root.canonicalize().ok();
+    // M4 side-list: escaping/broken symlinks are pruned from `entries` (below,
+    // via the `false` return) so no content rule reads through them, but their
+    // relative paths are recorded here so `no_symlinks` can still flag them.
+    let escaping: Arc<Mutex<Vec<Arc<Path>>>> = Arc::new(Mutex::new(Vec::new()));
+    let escaping_filter = Arc::clone(&escaping);
+    let root_for_rel = root.to_path_buf();
+    builder.filter_entry(move |entry| {
+        if !entry.path_is_symlink() {
+            return true;
+        }
+        let keep = match (&canonical_root, entry.path().canonicalize()) {
+            (Some(root), Ok(target)) => target.starts_with(root),
+            // Broken / unresolvable symlink (or an un-canonicalisable
+            // root) — can't be safely read anyway; prune it.
+            _ => false,
+        };
+        if !keep {
+            if let Ok(rel) = entry.path().strip_prefix(&root_for_rel) {
+                if !rel.as_os_str().is_empty() {
+                    if let Ok(mut v) = escaping_filter.lock() {
+                        v.push(Arc::from(rel));
+                    }
+                }
+            }
+        }
+        keep
+    });
+    Ok((builder, escaping))
 }
 
 /// Convert one `ignore::DirEntry` (or its error) into a
@@ -398,6 +673,15 @@ fn result_to_entry(
         path: abs.to_path_buf(),
         source: std::io::Error::other(e.to_string()),
     })?;
+    // Index only regular files and directories. A special file (FIFO/named
+    // pipe, socket, char/block device) is not lintable content, and — worse —
+    // opening a FIFO `O_RDONLY` BLOCKS until a writer appears, so a per-file
+    // content rule reading one would hang the whole run forever. `follow_links`
+    // is on, so a symlink to a special file resolves here to its (non-regular)
+    // target and is dropped too. Skip it rather than index it as a size-0 file.
+    if !metadata.is_dir() && !metadata.is_file() {
+        return Ok(None);
+    }
     Ok(Some(FileEntry {
         path: Arc::from(rel),
         is_dir: metadata.is_dir(),
@@ -526,6 +810,66 @@ mod tests {
         let files: Vec<_> = idx.files().collect();
         assert_eq!(files.len(), 1);
         assert_eq!(&*files[0].path, Path::new("a/x.rs"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_prunes_symlinks_that_escape_the_root() {
+        // Security (untrusted-PR content): a committed symlink whose
+        // target escapes the repo root must NOT be indexed — otherwise a
+        // content rule would read out-of-tree bytes via `root.join(link)`.
+        // In-tree symlinks are still followed.
+        use std::os::unix::fs::symlink;
+        let outside = td();
+        touch(outside.path(), "secret.txt", b"TOPSECRET");
+        touch(outside.path(), "secretdir/inner.txt", b"INNER");
+
+        let root = td();
+        touch(root.path(), "real.txt", b"in-tree");
+        symlink(
+            outside.path().join("secret.txt"),
+            root.path().join("link-file"),
+        )
+        .unwrap();
+        symlink(outside.path(), root.path().join("link-dir")).unwrap();
+        symlink(root.path().join("real.txt"), root.path().join("link-in")).unwrap();
+
+        let idx = walk(root.path(), &WalkOptions::default()).unwrap();
+        let p = paths(&idx);
+
+        assert!(
+            !p.iter().any(|x| x == "link-file"),
+            "escaping symlink-to-file was indexed: {p:?}"
+        );
+        assert!(
+            !p.iter().any(|x| x.starts_with("link-dir")),
+            "escaping symlink-to-dir was descended into: {p:?}"
+        );
+        assert!(
+            p.iter().any(|x| x == "link-in"),
+            "in-tree symlink should still be followed/indexed: {p:?}"
+        );
+        assert!(p.iter().any(|x| x == "real.txt"), "{p:?}");
+
+        // M4: the escaping symlinks are pruned from `entries` (above) but recorded
+        // on the side-list so `no_symlinks` can still flag them.
+        let esc: Vec<String> = idx
+            .escaping_symlinks()
+            .iter()
+            .map(|x| x.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            esc.iter().any(|x| x == "link-file"),
+            "escaping symlink-to-file must be on the side-list: {esc:?}"
+        );
+        assert!(
+            esc.iter().any(|x| x == "link-dir"),
+            "escaping symlink-to-dir must be on the side-list: {esc:?}"
+        );
+        assert!(
+            !esc.iter().any(|x| x == "link-in"),
+            "in-tree symlink must NOT be on the side-list: {esc:?}"
+        );
     }
 
     #[test]
@@ -991,5 +1335,92 @@ mod tests {
         let idx = synthetic_index(&[("deep/nested/a.rs", false), ("deep/nested/b.rs", false)]);
         let children = idx.children_of(Path::new("deep/nested"));
         assert_eq!(children.len(), 2);
+    }
+
+    #[test]
+    fn read_capped_or_skip_gates_on_the_passed_size() {
+        // M3: the cap uses the size argument (the walk-time index size), not
+        // the file — so a tiny, readable file "claimed" to be over the cap is
+        // skipped without reading, and one under the cap is read.
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("small.txt");
+        std::fs::write(&p, b"tiny").unwrap();
+        assert!(
+            read_capped_or_skip(&p, MAX_ANALYZE_BYTES + 1).is_none(),
+            "over-cap size must skip"
+        );
+        assert_eq!(
+            read_capped_or_skip(&p, 4).unwrap(),
+            b"tiny",
+            "under-cap size must read"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_skips_a_fifo_special_file() {
+        // A FIFO (named pipe) must NOT be indexed as a file: opening one
+        // `O_RDONLY` blocks until a writer appears, so a per-file content rule
+        // reading it would hang the whole run forever. Regular files alongside
+        // it are still indexed.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("normal.txt"), b"hi").unwrap();
+        let fifo = root.join("pipe.txt");
+        let ok = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok || !fifo.exists() {
+            eprintln!("mkfifo unavailable; skipping FIFO walk test");
+            return;
+        }
+
+        let idx = walk(root, &WalkOptions::default()).unwrap();
+        let names: Vec<_> = idx.entries.iter().map(|e| e.path.to_path_buf()).collect();
+        assert!(
+            names.iter().any(|p| p.as_os_str() == "normal.txt"),
+            "regular file must still be indexed: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|p| p.as_os_str() == "pipe.txt"),
+            "FIFO must be skipped, not indexed: {names:?}"
+        );
+    }
+
+    #[test]
+    fn read_capped_or_skip_missing_file_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_capped_or_skip(&tmp.path().join("nope"), 0).is_none());
+    }
+
+    #[test]
+    fn read_bounded_bounds_the_actual_read_toctou() {
+        // M3-F2: the read is bounded by the file's real bytes AT READ TIME, not
+        // a (possibly stale) walk-time size — a file whose ACTUAL size exceeds
+        // the cap is skipped, so concurrent growth past the cap can't force an
+        // unbounded read. read_capped_or_skip delegates to this; the internal
+        // cap is 256 MiB (a fixture that large is infeasible), so the bound is
+        // exercised here with a small cap. The `size_hint` arg is strictly a
+        // preallocation hint: a wrong hint must never change what is accepted.
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("grew.txt");
+        std::fs::write(&p, vec![b'x'; 10]).unwrap();
+        assert!(
+            // Hint LIES that the 10-byte file fits the cap (4). The take(cap+1)
+            // bound, not the hint, decides — the over-cap file is still skipped.
+            read_bounded(&p, 4, 4).is_none(),
+            "actual size over the cap must skip (never trust the size hint)"
+        );
+        assert_eq!(
+            // Hint understates (0 = no preallocation); the whole file still reads.
+            read_bounded(&p, 100, 0).unwrap().len(),
+            10,
+            "under the cap reads the whole file regardless of the hint"
+        );
+        assert!(
+            read_bounded(&tmp.path().join("nope"), 100, 50).is_none(),
+            "missing file is None"
+        );
     }
 }

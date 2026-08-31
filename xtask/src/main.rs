@@ -21,6 +21,17 @@
 //!   docs) and the site repo (presentation).
 //! - `gen-public-roadmap` — render the public roadmap from the canonical
 //!   `docs/design/ROADMAP.md` (also invoked internally by `docs-export`).
+//! - `gen-schema`         — regenerate `schemas/v1/config.json` from the rule
+//!   `Options` structs (schemars); `--check` gates drift.
+//! - `gen-facts`          — regenerate `facts.json` (the surface-area contract)
+//!   from canonical sources; `--check` gates drift.
+//! - `gen-roadmap`        — regenerate `roadmap.json` (the public-roadmap
+//!   contract) from `docs/design/ROADMAP.md`; `--check` gates drift.
+//! - `gen-arch`           — regenerate the crate dependency graph from
+//!   `cargo metadata` + check the C4 model; `--check` gates drift.
+//! - `gen-model`          — regenerate the code-derived `LikeC4` model fragments
+//!   (the rule-kind taxonomy, ...) for the architecture diagrams; `--check`
+//!   gates drift.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,10 +39,21 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
+mod arch;
 mod bench;
 mod bench_release;
+mod categories;
+mod categories_line;
+mod docs_checks;
 mod docs_export;
+mod facts;
+mod family_index;
+mod gen_mermaid;
+mod gen_model;
+mod gen_roadmap;
+mod gen_schema;
 mod roadmap_generator;
+mod rule_options_table;
 
 pub(crate) use bench_release::{build_release_binary, git_sha, now_iso, workspace_root};
 
@@ -214,6 +236,22 @@ enum Commands {
         /// bundle.
         #[arg(long)]
         check: bool,
+        /// Generate ONLY the per-rule reference pages (`rules/`), skipping the
+        /// rest of the bundle (long-form prose, the CLI reference, arch
+        /// diagrams, …). Used by the docs-bundle rule-page bridge, which
+        /// overlays only those pages from main. Still builds the release binary
+        /// once so each page's live `alint check` output renders from a real
+        /// run; what it skips is the CLI-reference step's *second* release build.
+        #[arg(long)]
+        rules_only: bool,
+        /// The released version the per-rule reference pages must not document
+        /// ahead of (e.g. `0.13.0`). The docs-bundle rule-page bridge passes the
+        /// `releases/latest` tag here, so an option or prose block introduced
+        /// after the release (schema `x-since` / `<!-- alint:since=X -->`) is
+        /// stripped from the published page. Omitted for a local/dev export,
+        /// where nothing is release-gated. See ADR-0007.
+        #[arg(long)]
+        released_version: Option<String>,
     },
     /// Render the public roadmap from canonical `docs/design/ROADMAP.md`,
     /// stripping `<!-- alint:internal-start -->` /
@@ -233,6 +271,50 @@ enum Commands {
         /// Frontmatter `title:` value injected into the output.
         #[arg(long, default_value = "Roadmap")]
         title: String,
+    },
+    /// Generate `schemas/v1/config.json` from Rust types (schemars) for the
+    /// migrated rule kinds, passing hand-written branches through for the rest.
+    /// See ADR-0001 and docs/design/spec-driven-development.md.
+    GenSchema {
+        /// Verify the committed schema is up to date instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Regenerate `facts.json` (the surface-area contract) from canonical sources.
+    GenFacts {
+        /// Verify the committed `facts.json` is up to date instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Regenerate `roadmap.json` (the public-roadmap contract) from ROADMAP.md.
+    GenRoadmap {
+        /// Verify the committed `roadmap.json` is up to date instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Regenerate the crate dependency graph from `cargo metadata` + gate the C4 model.
+    GenArch {
+        /// Verify the committed crate graph + C4 model instead of rewriting.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Regenerate the in-crate kind-to-category bridge from docs/rules.md `**Categories:**` lines.
+    GenCategories {
+        /// Verify the committed `categories_gen.rs` instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Regenerate the code-derived `LikeC4` model fragments (rule taxonomy, ...).
+    GenModel {
+        /// Verify the committed `*.gen.c4` fragments instead of rewriting them.
+        #[arg(long)]
+        check: bool,
+    },
+    /// Regenerate the GitHub-facing Mermaid diagram gallery from the `LikeC4` model.
+    GenMermaid {
+        /// Verify the committed `DIAGRAMS.md` instead of rewriting it.
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -276,7 +358,12 @@ fn main() -> Result<()> {
         Commands::BenchGate { results, baseline } => {
             bench::gate::run(&results, baseline.as_deref())
         }
-        Commands::DocsExport { out, check } => docs_export::docs_export(out, check),
+        Commands::DocsExport {
+            out,
+            check,
+            rules_only,
+            released_version,
+        } => docs_export::docs_export(out, check, rules_only, released_version.as_deref()),
         Commands::GenPublicRoadmap {
             input,
             output,
@@ -295,6 +382,13 @@ fn main() -> Result<()> {
             };
             roadmap_generator::generate_public_roadmap(&input, &output, &title)
         }
+        Commands::GenSchema { check } => gen_schema::run(check),
+        Commands::GenFacts { check } => facts::run(check),
+        Commands::GenRoadmap { check } => gen_roadmap::run(check),
+        Commands::GenArch { check } => arch::run(check),
+        Commands::GenCategories { check } => categories::run(check),
+        Commands::GenModel { check } => gen_model::run(check),
+        Commands::GenMermaid { check } => gen_mermaid::run(check),
     }
 }
 

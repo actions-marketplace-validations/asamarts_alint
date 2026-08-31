@@ -20,6 +20,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use std::io::Read as _;
+use std::time::{Duration, Instant};
+
 use regex::Regex;
 use serde::Deserialize;
 
@@ -51,7 +54,7 @@ impl FactValue {
 /// A string or a list of strings — accepted by fact kinds whose input is
 /// glob-shaped.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, expecting = "a string, or a list of strings")]
 pub enum OneOrMany {
     One(String),
     Many(Vec<String>),
@@ -77,7 +80,10 @@ pub struct FactSpec {
 /// The closed set of built-in fact kinds. Serde dispatches via `untagged`
 /// — the first variant whose required field is present in the YAML wins.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a fact with exactly one kind key (e.g. `any_file_exists`, `all_files_exist`, `count_files`)"
+)]
 pub enum FactKind {
     AnyFileExists {
         any_file_exists: OneOrMany,
@@ -112,13 +118,31 @@ impl FactKind {
             Self::Custom { .. } => "custom",
         }
     }
+
+    /// Every built-in fact-kind name, sorted — the single source of truth
+    /// the `facts.json` contract (xtask `gen-facts`) consumes, so the
+    /// published `fact_predicates` list can't drift from the engine.
+    ///
+    /// MUST list every variant's `name()`. `name()` above is an
+    /// exhaustive match, so adding a `FactKind` variant forces a new arm
+    /// there — add its name here too (the `all_names_covers_every_variant`
+    /// test fails if this list and `name()` disagree).
+    pub const ALL_NAMES: &'static [&'static str] = &[
+        "all_files_exist",
+        "any_file_exists",
+        "count_files",
+        "custom",
+        "file_content_matches",
+        "git_branch",
+    ];
 }
 
 /// Fact-kind body for `custom`. Spawns `argv` as a child process
 /// rooted at the repo; the process's stdout (trimmed of trailing
 /// whitespace) becomes the fact's `String` value. A non-zero
-/// exit code resolves to the empty string; timeouts and spawn
-/// failures do the same. No shell is invoked — `argv` is passed
+/// exit code resolves to the empty string; a run past the 30s
+/// timeout (the child is killed) and spawn failures do the same.
+/// No shell is invoked — `argv` is passed
 /// to `execve` (or the platform equivalent) verbatim.
 ///
 /// Security: `custom` facts are only allowed in the user's own
@@ -234,7 +258,12 @@ fn evaluate_one(spec: &FactSpec, root: &Path, index: &FileIndex) -> Result<FactV
                 if !scope.matches(&entry.path, index) {
                     return false;
                 }
-                let Ok(bytes) = std::fs::read(root.join(&entry.path)) else {
+                // Cap the read (M3): a fact content-predicate must not read a
+                // multi-GB in-scope file unbounded. Gates on the walk-time size
+                // and bounds the actual read (TOCTOU-safe via read_capped_or_skip).
+                let Some(bytes) =
+                    crate::walker::read_capped_or_skip(&root.join(&entry.path), entry.size)
+                else {
                     return false;
                 };
                 let Ok(text) = std::str::from_utf8(&bytes) else {
@@ -249,27 +278,74 @@ fn evaluate_one(spec: &FactSpec, root: &Path, index: &FileIndex) -> Result<FactV
     }
 }
 
-/// Best-effort: spawn `argv` at `root`, capture stdout. Non-zero
-/// exit / spawn failures / unusable output → empty string.
+/// How long a `custom` fact's process may run before it is killed and the
+/// fact resolves to the empty string. Matches the `command` rule's default
+/// (30s) so the two trust-gated spawn paths behave consistently (L6).
+const CUSTOM_FACT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Best-effort: spawn `argv` at `root`, capture stdout. Non-zero exit / spawn
+/// failures / a run past [`CUSTOM_FACT_TIMEOUT`] / unusable output → empty
+/// string. stdout is drained on a thread so a chatty child can't deadlock on a
+/// full pipe while we wait on the deadline.
 fn run_custom(spec: &CustomFact, root: &Path) -> String {
+    run_custom_with_timeout(spec, root, CUSTOM_FACT_TIMEOUT)
+}
+
+/// [`run_custom`] with an injectable timeout so tests can exercise the
+/// deadline path without sleeping the full 30s.
+fn run_custom_with_timeout(spec: &CustomFact, root: &Path, timeout: Duration) -> String {
     let Some((program, args)) = spec.argv.split_first() else {
         return String::new();
     };
-    let output = std::process::Command::new(program)
+    let Ok(mut child) = std::process::Command::new(program)
         .args(args)
         .current_dir(root)
         .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output();
-    let Ok(output) = output else {
+        .spawn()
+    else {
         return String::new();
     };
-    if !output.status.success() {
-        return String::new();
-    }
-    match std::str::from_utf8(&output.stdout) {
-        Ok(text) => text.trim_end().to_string(),
-        Err(_) => String::new(),
+
+    let mut out_pipe = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(p) = out_pipe.as_mut() {
+            // Custom facts are tiny by nature (a branch, a count); cap defensively.
+            let _ = p.take(1024 * 1024).read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let buf = reader.join().unwrap_or_default();
+                if !status.success() {
+                    return String::new();
+                }
+                return std::str::from_utf8(&buf)
+                    .map(|t| t.trim_end().to_string())
+                    .unwrap_or_default();
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = reader.join();
+                    return String::new();
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return String::new();
+            }
+        }
     }
 }
 
@@ -335,6 +411,52 @@ mod tests {
 
     fn parse(yaml: &str) -> Vec<FactSpec> {
         serde_yaml_ng::from_str(yaml).unwrap()
+    }
+
+    /// `FactKind::ALL_NAMES` is the source of truth for the `facts.json`
+    /// contract; keep it sorted/unique and in step with `name()`. Each
+    /// variant is built via the public parse path, so a renamed
+    /// discriminator or a name dropped from `ALL_NAMES` fails here. (A
+    /// brand-new variant also forces a `name()` arm — exhaustive match —
+    /// so this list can't silently fall behind.)
+    #[test]
+    fn all_names_is_sorted_unique_and_matches_name() {
+        let mut sorted = FactKind::ALL_NAMES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            FactKind::ALL_NAMES,
+            sorted.as_slice(),
+            "FactKind::ALL_NAMES must be sorted and de-duplicated"
+        );
+
+        let cases = [
+            ("- id: f\n  any_file_exists: x\n", "any_file_exists"),
+            ("- id: f\n  all_files_exist: [x]\n", "all_files_exist"),
+            ("- id: f\n  count_files: \"**/*\"\n", "count_files"),
+            (
+                "- id: f\n  file_content_matches:\n    paths: x\n    pattern: y\n",
+                "file_content_matches",
+            ),
+            ("- id: f\n  git_branch: {}\n", "git_branch"),
+            ("- id: f\n  custom:\n    argv: [echo, hi]\n", "custom"),
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for (yaml, expected) in cases {
+            let specs = parse(yaml);
+            assert_eq!(specs[0].kind.name(), expected, "name() drift for {yaml:?}");
+            assert!(
+                FactKind::ALL_NAMES.contains(&expected),
+                "{expected} is produced by name() but missing from ALL_NAMES"
+            );
+            seen.insert(expected);
+        }
+        let listed: std::collections::BTreeSet<&str> =
+            FactKind::ALL_NAMES.iter().copied().collect();
+        assert_eq!(
+            seen, listed,
+            "ALL_NAMES lists a name no covered variant produces (add a case above or fix ALL_NAMES)"
+        );
     }
 
     #[test]
@@ -544,6 +666,34 @@ mod tests {
         assert_eq!(v.get("bad"), Some(&FactValue::String(String::new())));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn custom_fact_times_out_to_empty_string() {
+        // L6: a hanging custom fact is killed at the deadline and resolves to
+        // the empty string (the doc's promise), rather than hanging the run.
+        let spec = CustomFact {
+            argv: vec!["sleep".to_string(), "30".to_string()],
+        };
+        let start = Instant::now();
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_millis(150));
+        assert_eq!(got, "", "timed-out fact is empty");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "must return promptly at the deadline, not run the full sleep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_fact_captures_before_timeout() {
+        // A fast command still returns its output under the injectable timeout.
+        let spec = CustomFact {
+            argv: vec!["echo".to_string(), "hi".to_string()],
+        };
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_secs(5));
+        assert_eq!(got, "hi");
+    }
+
     #[test]
     fn reject_custom_facts_flags_custom_but_passes_others() {
         let facts = parse(
@@ -559,6 +709,8 @@ mod tests {
             rules: Vec::new(),
             fix_size_limit: None,
             nested_configs: false,
+            allow_out_of_root: crate::AllowOutOfRoot::default(),
+            baseline: None,
         };
         let err = reject_custom_facts(&config, "./base.yml").unwrap_err();
         assert!(err.to_string().contains("custom"), "{err}");
@@ -578,6 +730,8 @@ mod tests {
             rules: Vec::new(),
             fix_size_limit: None,
             nested_configs: false,
+            allow_out_of_root: crate::AllowOutOfRoot::default(),
+            baseline: None,
         };
         assert!(reject_custom_facts(&config, "./base.yml").is_ok());
     }

@@ -28,7 +28,7 @@ struct Options {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, expecting = "a basename glob, or a list of basename globs")]
 enum AllowList {
     One(String),
     Many(Vec<String>),

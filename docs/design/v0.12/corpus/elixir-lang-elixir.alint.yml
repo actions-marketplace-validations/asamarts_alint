@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — elixir-lang/elixir @ 55da97b9a329638ed5dfdbb1f8e10c9895829655
+# Stage A (v0.12 100-repo study). Expresses the repo's ADDRESSABLE (A) enforced
+# surface only. Tool-execution checks (mix format, ex_unit/eunit, shellcheck,
+# markdownlint, ORT/ScanCode license resolution, CodeQL, zizmor, reproducible
+# build diff) are deliberate non-goals (D) and are not reimplemented here.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ----- SPDX / REUSE compliance (OPEN_SOURCE_POLICY.md + CONTRIBUTING.md;
+  # enforced in CI by the OSS Review Toolkit). "All files except approved test
+  # fixtures must carry SPDX-License-Identifier + SPDX-FileCopyrightText."
+  # The exclude set mirrors the ORT .ort.yml path_excludes (test/scripts/pages
+  # /examples are exempt). -----
+  - id: elixir-spdx-license-header-ex
+    kind: file_header
+    paths:
+      include: ["lib/**/*.ex", "lib/**/*.exs"]
+      exclude:
+        - "lib/*/test/**"
+        - "lib/*/scripts/**"
+        - "lib/*/pages/**"
+        - "lib/*/examples/**"
+    pattern: "^# SPDX-License-Identifier: Apache-2.0"
+    lines: 3
+    level: error
+
+  - id: elixir-spdx-copyright-header-ex
+    kind: file_header
+    paths:
+      include: ["lib/**/*.ex", "lib/**/*.exs"]
+      exclude:
+        - "lib/*/test/**"
+        - "lib/*/scripts/**"
+        - "lib/*/pages/**"
+        - "lib/*/examples/**"
+    pattern: "SPDX-FileCopyrightText:"
+    lines: 4
+    level: error
+
+  - id: elixir-spdx-license-header-erl
+    kind: file_header
+    paths:
+      include: ["lib/**/*.erl"]
+      exclude:
+        - "lib/*/test/**"
+        - "lib/*/scripts/**"
+        - "lib/elixir/src/*_parser.erl"
+    pattern: "^%% SPDX-License-Identifier: Apache-2.0"
+    lines: 3
+    level: error
+
+  # ----- "No executable binary files" (OPEN_SOURCE_POLICY.md §No Executable
+  # Binaries / CONTRIBUTING.md). Approximated by forbidding committed compiled
+  # BEAM/object artifacts in source dirs. -----
+  # NOTE: scoped OUT lib/*/test/fixtures/** — OPEN_SOURCE_POLICY explicitly
+  # exempts approved test fixtures, and the repo intentionally commits a
+  # decoy fixture named "not_really_an.so" (not a real binary). Extension
+  # matching cannot tell a decoy from a real ELF — see new-kind candidate
+  # `binary_file_forbidden` (content sniff).
+  - id: elixir-no-committed-beam
+    kind: file_absent
+    paths:
+      include: ["lib/**/*.beam", "**/*.o", "**/*.so", "**/*.dll"]
+      exclude: ["lib/*/test/fixtures/**"]
+    level: error
+
+  # ----- REUSE-style LICENSES/ directory must hold every referenced license
+  # text (Apache-2.0 + the two LicenseRef-* recognised in OPEN_SOURCE_POLICY and
+  # whitelisted in .ort/config/evaluator.rules.kts). -----
+  - id: elixir-licenses-apache
+    kind: file_exists
+    paths: "LICENSES/Apache-2.0.txt"
+    level: error
+
+  - id: elixir-licenses-trademark
+    kind: file_exists
+    paths: "LICENSES/LicenseRef-elixir-trademark-policy.txt"
+    level: error
+
+  - id: elixir-licenses-unicode
+    kind: file_exists
+    paths: "LICENSES/LicenseRef-scancode-unicode.txt"
+    level: error
+
+  # ----- Version coherence (RELEASE.md step 1: "Update version in /VERSION,
+  # bin/elixir, and bin/elixir.bat"). The VERSION value must appear in both
+  # launcher scripts (ELIXIR_VERSION=... / set ELIXIR_VERSION=...). -----
+  - id: elixir-version-bin-launchers-coherent
+    kind: cross_file_value_equals
+    source:
+      file: VERSION
+      extract: { regex: "^([^\\s]+)" }
+    targets:
+      files: "bin/elixir{,.bat}"
+      extract: { regex: "ELIXIR_VERSION=([^\\s\"]+)" }
+    allow_missing_target: false
+    level: error
+
+  # ----- Version coherence (RELEASE.md step 2: CHANGELOG.md is versioned to the
+  # current VERSION). The CHANGELOG legitimately lists multiple version headings
+  # (`## v1.21.0-dev` AND the older `## v1.20` branch pointer), so a naive
+  # all-must-match extract false-positives on the second heading. CLOSED in v0.12
+  # via the cross_file "first/topmost match only" extract idiom: anchor the
+  # target regex with `(?s)\A.*?` so the lazy reach captures ONLY the first
+  # `## v<ver>` heading (`## v1.21.0-dev`) and the trailing `## v1.20` pointer is
+  # never seen. `equals` requires the source to extract exactly one value (VERSION
+  # holds a single token), and the single first-heading target value must equal it.
+  - id: elixir-changelog-versioned-to-current
+    kind: cross_file
+    source:
+      file: VERSION
+      extract: { regex: "^([^\\s]+)" }
+    targets:
+      files: CHANGELOG.md
+      extract: { regex: '(?s)\A.*?## v(\S+)' }
+    relation: equals
+    allow_missing_target: false
+    level: error
+
+  # ----- Structure invariant: every first-party app under lib/ ships a mix.exs
+  # (the six umbrella apps: eex/elixir/ex_unit/iex/logger/mix). Documented value
+  # the build relies on; not separately CI-gated. -----
+  - id: elixir-apps-have-mix-exs
+    kind: for_each_dir
+    select: "lib/*"
+    require:
+      - kind: file_exists
+        paths: "{path}/mix.exs"
+    level: warning

@@ -49,7 +49,7 @@ use std::path::Path;
 use std::process::{Command as StdCommand, Stdio};
 use std::time::{Duration, Instant};
 
-use alint_core::template::{PathTokens, render_path};
+use alint_core::template::{PathTokens, render_path_argv};
 use alint_core::{Context, Error, FactValue, Level, Result, Rule, RuleSpec, Scope, Violation};
 use serde::Deserialize;
 
@@ -69,15 +69,21 @@ const OUTPUT_CAP_BYTES: usize = 16 * 1024;
 /// idle while the child runs.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Argv tokens. The first token is the program (looked up via PATH if it's
+    /// a bare name); remaining tokens accept `{path}` and friends.
+    #[schemars(length(min = 1))]
     command: Vec<String>,
-    /// Per-file timeout in seconds. Default
-    /// [`DEFAULT_TIMEOUT_SECS`].
+    /// Per-file timeout in seconds. Default 30. Past this, the child is killed
+    /// and a violation reports the timeout.
     #[serde(default)]
+    #[schemars(range(min = 1))]
     timeout: Option<u64>,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct CommandRule {
@@ -103,7 +109,13 @@ impl Rule for CommandRule {
                 continue;
             }
             let tokens = PathTokens::from_path(&entry.path);
-            let rendered: Vec<String> = self.argv.iter().map(|s| render_path(s, &tokens)).collect();
+            // `render_path_argv` (not `render_path`): guards against a repo
+            // filename rendered from `{path}` masquerading as an option (L13).
+            let rendered: Vec<String> = self
+                .argv
+                .iter()
+                .map(|s| render_path_argv(s, &tokens))
+                .collect();
             if let Outcome::Fail(msg) = run_one(
                 &rendered,
                 ctx.root,

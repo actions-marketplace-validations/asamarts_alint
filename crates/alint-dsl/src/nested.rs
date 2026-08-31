@@ -127,8 +127,20 @@ fn load_nested_config(abs_path: &Path, rel_dir: &Path) -> Result<Vec<Mapping>> {
         path: abs_path.to_path_buf(),
         source,
     })?;
-    let config: RawConfig = serde_yaml_ng::from_str(&contents)
-        .map_err(|e| Error::Other(format!("parsing nested config {}: {e}", abs_path.display())))?;
+    // Route through the shared parse path so nested configs get the
+    // same `{{env.X}}` interpolation as the top-level config and
+    // drop-ins. A YAML/typed error keeps the "parsing nested config"
+    // context; an interpolation error already carries the path.
+    let config: RawConfig = match crate::loader::parse_config_interpolated(&contents, abs_path) {
+        Ok(c) => c,
+        Err(Error::Yaml(e)) => {
+            return Err(Error::Other(format!(
+                "parsing nested config {}: {e}",
+                abs_path.display()
+            )));
+        }
+        Err(other) => return Err(other),
+    };
 
     // MVP: reject nested configs that try to set anything that
     // could affect the whole repo. Only `version:` and `rules:`
@@ -159,6 +171,38 @@ fn load_nested_config(abs_path: &Path, rel_dir: &Path) -> Result<Vec<Mapping>> {
              both are root-only in this release"
         )));
     }
+    if config.baseline.is_some() {
+        return Err(Error::Other(format!(
+            "nested config {source} declares `baseline:` — the baseline is a \
+             trusted, root-only input; declare it in the top-level config"
+        )));
+    }
+    if !config.allow_out_of_root.is_confined() {
+        return Err(Error::Other(format!(
+            "nested config {source} declares `allow_out_of_root:` — the out-of-root \
+             escape hatch is a trusted, root-only grant; declare it in the top-level \
+             config. (It is ignored here, never silently honored.)"
+        )));
+    }
+    if !config.templates.is_empty() {
+        return Err(Error::Other(format!(
+            "nested config {source} declares `templates:` — templates are a root-only \
+             concept (a nested template would be silently dropped, and could otherwise \
+             smuggle a spawning rule into the subtree); declare them in the top-level \
+             config"
+        )));
+    }
+    // A nested config is untrusted in exactly the way an `extends:`'d
+    // ruleset is — a subtree `.alint.yml` may be authored by anyone who
+    // can open a PR against the monorepo — so it may not introduce a
+    // process-spawning rule. `kind: command` / `command_idempotent` /
+    // `generated_file_fresh` are confined to the user's own top-level
+    // config; without this gate a nested `.alint.yml` declaring
+    // `kind: command` achieved arbitrary code execution on `alint check`
+    // (the C2 RCE bypass). Mirrors the `extends:` gate; spawning templates
+    // are refused wholesale just above, and `finalize` re-checks the
+    // expanded rule set as a backstop.
+    crate::reject_command_rules_in(&config.rules, &source)?;
 
     // Glob patterns are platform-agnostic (always `/`); on
     // Windows `rel_dir.to_string_lossy()` would emit `\` and we'd
@@ -204,6 +248,33 @@ fn scope_rule(rule: &mut Mapping, prefix: &str, source: &str) -> Result<()> {
                 Error::rule_config(&id_hint, format!("scoping `{field}` in {source}: {e}"))
             })?;
             any_scoped = true;
+        }
+    }
+
+    // A manifest predicate's `source:` is a path relative to this config's
+    // directory (like `paths:`), so rebase it under the nested prefix — else a
+    // nested rule would read the repo-root manifest, not its own package's, and
+    // silently mis-scope. `has_ancestor:` / `changed_since:` need no rebasing (a
+    // bare filename walked up the tree / a git ref). Not counted toward
+    // `any_scoped`: a per-file rule still needs its own `paths:` base glob.
+    if let Some(sf) = rule
+        .get_mut("scope_filter")
+        .and_then(serde_yaml_ng::Value::as_mapping_mut)
+    {
+        for key in ["include_manifest_paths", "exclude_manifest_paths"] {
+            if let Some(src) = sf
+                .get_mut(key)
+                .and_then(serde_yaml_ng::Value::as_mapping_mut)
+                .and_then(|mp| mp.get_mut("source"))
+                && let serde_yaml_ng::Value::String(s) = src
+            {
+                *s = scope_glob(s, prefix).map_err(|e| {
+                    Error::rule_config(
+                        &id_hint,
+                        format!("scoping `scope_filter.{key}.source` in {source}: {e}"),
+                    )
+                })?;
+            }
         }
     }
 

@@ -2,7 +2,10 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # Three-part version tags only. A bare major tag (v0, v1) is a moving
+    # pointer the `release` job maintains for `asamarts/alint@v0` consumers;
+    # it must NOT re-run this release pipeline.
+    tags: ["v*.*.*"]
 
 permissions:
   contents: write   # required to create GitHub Releases
@@ -52,11 +55,27 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUSTFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: verify tag matches workspace version
+        # release.yml triggers only on `push: tags: ["v*"]`, so
+        # GITHUB_REF_NAME is the tag. Fail fast if the tag doesn't match the
+        # Cargo.toml version publish-crates.sh reads, otherwise a forgotten
+        # bump-version.sh ships a split-brain release (crates.io no-ops on the
+        # already-published version while npm/Docker/GH-Release ship the tag).
+        run: |
+          set -euo pipefail
+          TAG_VER="${GITHUB_REF_NAME#v}"
+          CARGO_VER="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "$TAG_VER" != "$CARGO_VER" ]; then
+            echo "::error::release tag ${GITHUB_REF_NAME} (=> ${TAG_VER}) != Cargo.toml version ${CARGO_VER}. Run ci/scripts/bump-version.sh and re-tag the bumped commit." >&2
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches Cargo.toml version ${CARGO_VER}."
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: stable
           components: rustfmt,clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: release-preflight
       - name: fmt
@@ -80,7 +99,12 @@ jobs:
 
   build:
     name: build (${{ matrix.target }})
-    needs: preflight
+    # Also needs supply-chain so each tarball can embed THIRD-PARTY-LICENSES.html
+    # (release-binary.sh stages it). This makes supply-chain a hard pre-build
+    # gate: a generator failure blocks the whole release (nothing publishes)
+    # rather than leaving a partial release, since docker + publish-crates need
+    # build.
+    needs: [preflight, supply-chain]
     strategy:
       fail-fast: false
       matrix:
@@ -102,11 +126,19 @@ jobs:
             use_cross: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: release-${{ matrix.target }}
+
+      - name: download supply-chain bundle (staged into each tarball)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: supply-chain
+          path: supply-chain
 
       - name: install musl-tools (native Linux musl only)
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -118,10 +150,13 @@ jobs:
           TARGET: ${{ matrix.target }}
           USE_CROSS: ${{ matrix.use_cross }}
           VERSION: ${{ github.ref_name }}
+          # release-binary.sh copies this into the tarball; set here (not for
+          # local runs) so a missing bundle fails the release fail-closed.
+          THIRD_PARTY_BUNDLE: ${{ github.workspace }}/supply-chain/THIRD-PARTY-LICENSES.html
         run: ci/scripts/release-binary.sh
 
       - name: upload artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: alint-${{ matrix.target }}
           path: |
@@ -129,29 +164,105 @@ jobs:
             target/release-artifacts/alint-*.tar.gz.sha256
           if-no-files-found: error
 
+  supply-chain:
+    name: supply-chain artifacts (SBOM + third-party licenses)
+    # Generate the CycloneDX SBOM (alint.cdx.json) and the third-party license
+    # attribution bundle (THIRD-PARTY-LICENSES.html) once, off the tagged
+    # source, and hand them to the `release` job to attach and fold into
+    # SHA256SUMS. Runs in parallel with the build matrix; `needs: preflight` so
+    # a failing correctness gate still blocks it. ci.yml runs the SAME script
+    # (ci/scripts/supply-chain-artifacts.sh) as a pre-merge gate, so about.toml
+    # cannot silently rot between releases.
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # only checks out + uploads an artifact (runtime token)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: release-supply-chain
+      - name: generate SBOM + third-party license bundle
+        run: ci/scripts/supply-chain-artifacts.sh sc-out
+      - name: upload supply-chain bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: supply-chain
+          path: |
+            sc-out/THIRD-PARTY-LICENSES.html
+            sc-out/alint.cdx.json
+          if-no-files-found: error
+
   release:
     name: create GitHub Release
-    needs: build
+    needs: [build, supply-chain]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write       # create the GitHub Release
+      actions: write        # dispatch docs-bundle.yml (workflow_dispatch) below
+      id-token: write       # keyless OIDC for cosign + build-provenance attestation
+      attestations: write   # write the build-provenance + SBOM attestations
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-artifacts
           merge-multiple: true
 
-      - name: aggregate SHA256SUMS
+      - name: aggregate SHA256SUMS (tarballs + installer + supply-chain bundle)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # install.sh ships as a release asset users curl; stage it next to the
+          # tarballs BEFORE hashing so SHA256SUMS covers the installer too
+          # (MP-L8). The supply-chain bundle (THIRD-PARTY-LICENSES.html +
+          # alint.cdx.json) arrived via the merge-multiple download above.
+          cp "${GITHUB_WORKSPACE}/install.sh" release-artifacts/install.sh
+          chmod +x release-artifacts/install.sh
+          cd release-artifacts
+          # Per-tarball .sha256 carries "<hash>  <basename>"; concatenate, then
+          # append the same-format hash of every other published asset so a later
+          # `cosign sign-blob SHA256SUMS` covers the whole release -- installer
+          # and attribution bundle included, not just the tarballs.
+          cat *.tar.gz.sha256 > SHA256SUMS
+          sha256sum install.sh THIRD-PARTY-LICENSES.html alint.cdx.json >> SHA256SUMS
+          echo "=== SHA256SUMS ==="
+          cat SHA256SUMS
+
+      - name: install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Pin cosign too (the action's default floats). v3.0.6 writes the
+          # new-format Sigstore bundle, so consumers verify with cosign v3+
+          # (or `gh attestation verify`, which needs no cosign at all).
+          cosign-release: "v3.0.6"
+
+      - name: cosign sign SHA256SUMS (keyless)
         shell: bash
         run: |
           set -euo pipefail
           cd release-artifacts
-          # Each per-file .sha256 carries the hash + basename; concatenate.
-          cat *.tar.gz.sha256 > SHA256SUMS
-          echo "=== SHA256SUMS ==="
-          cat SHA256SUMS
+          # One keyless signature over the whole manifest covers every asset it
+          # lists (tarballs, installer, SBOM, license bundle). The bundle carries
+          # the signature + Fulcio cert + Rekor entry, so consumers verify offline:
+          #   cosign verify-blob --bundle SHA256SUMS.cosign.bundle \
+          #     --certificate-identity-regexp '^https://github\.com/asamarts/alint/\.github/workflows/release\.yml@refs/tags/v' \
+          #     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+          #     SHA256SUMS
+          cosign sign-blob --yes --bundle SHA256SUMS.cosign.bundle SHA256SUMS
 
+      # Create the Release + its cosign-signed assets FIRST, then attest. The two
+      # attestations below are best-effort (continue-on-error): a broken
+      # attestation must never block the Release itself or the downstream publishes
+      # that `needs:` this job (npm/homebrew/editors). This ordering is the direct
+      # lesson of v0.15.1, where a rejected SBOM attestation -- ordered BEFORE this
+      # step -- skipped the Release even though crates.io + Docker had already
+      # published, stranding a half-released version.
       - name: create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -161,26 +272,96 @@ jobs:
         run: |
           set -euo pipefail
           cd release-artifacts
-          # install.sh lives at the repo root and is committed; copy it alongside
-          # the binary tarballs so users can `curl -sSL <url>/install.sh | bash`.
-          cp "${GITHUB_WORKSPACE}/install.sh" ./install.sh
-          chmod +x install.sh
+          # install.sh + the supply-chain bundle (THIRD-PARTY-LICENSES.html,
+          # alint.cdx.json) were staged / downloaded above and are already
+          # recorded in SHA256SUMS by the aggregate step. SHA256SUMS.cosign.bundle
+          # is the keyless signature over SHA256SUMS produced just above.
           gh release create "$TAG" \
             --repo "$REPO" \
             --title "alint $TAG" \
             --generate-notes \
-            install.sh SHA256SUMS \
+            install.sh SHA256SUMS SHA256SUMS.cosign.bundle \
+            THIRD-PARTY-LICENSES.html alint.cdx.json \
             alint-*.tar.gz alint-*.tar.gz.sha256
+
+      - name: attest build provenance for every asset in SHA256SUMS
+        id: attest_provenance
+        continue-on-error: true   # best-effort: never block a published Release
+        # subject-checksums reads SHA256SUMS and attests each listed file's digest,
+        # so `gh attestation verify <tarball> --repo asamarts/alint` works for the
+        # tarballs, installer, SBOM, and license bundle in one attestation. (Not
+        # SHA256SUMS itself, the .cosign.bundle, or the .sha256 sidecars.)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: release-artifacts/SHA256SUMS
+
+      - name: attest the CycloneDX SBOM against the tarballs
+        id: attest_sbom
+        continue-on-error: true   # best-effort: never block a published Release
+        # attest-sbom is deprecated in favour of actions/attest with an SBOM
+        # predicate, but is SHA-pinned here so it keeps working; it still wraps
+        # actions/attest and handles the CycloneDX predicate for us. Migrate when
+        # convenient. NOTE: actions/attest's checkIsCycloneDX REQUIRES a
+        # serialNumber (optional in the spec); supply-chain-artifacts.sh injects a
+        # deterministic one, without which this step fails "Unsupported SBOM format".
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: "release-artifacts/alint-*.tar.gz"
+          sbom-path: release-artifacts/alint.cdx.json
+
+      - name: surface any incomplete attestation (non-blocking)
+        if: steps.attest_provenance.outcome != 'success' || steps.attest_sbom.outcome != 'success'
+        run: |
+          echo "::warning::Release shipped but an attestation did not succeed (build-provenance=${{ steps.attest_provenance.outcome }}, sbom=${{ steps.attest_sbom.outcome }}). Investigate before relying on 'gh attestation verify'."
+
+      - name: trigger docs-bundle rebuild from the freshly-published Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The Release created above via GITHUB_TOKEN does NOT fire further
+          # workflow runs (GitHub's anti-recursion rule), so docs-bundle.yml's
+          # `release: published` trigger never sees it. The tag-push build of
+          # docs-bundle already ran, but BEFORE this Release existed, so it bundled
+          # the PREVIOUS version and alint.org's STALE DOCS BUNDLE guard would block
+          # until a manual dispatch (as happened for v0.14.1). workflow_dispatch is
+          # the documented exception to the anti-recursion rule, so dispatch the
+          # corrective build explicitly: docs-bundle always checks out the latest
+          # *published* Release (now this one), rebuilds the bundle at the new
+          # version, and pings the deploy hook -- so the guard clears on its own.
+          gh workflow run docs-bundle.yml --ref main
+
+      - name: move the major tag (e.g. v0) to this release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Consumers pin `asamarts/alint@v<major>` (e.g. @v0) to always track the
+          # latest release: the action resolves a non-vX.Y.Z ref to `latest`
+          # (see action.yml), and alint.org's CI pins @v0. Keep the major tag on
+          # the newest release so its action.yml + install.sh stay current. Pushed
+          # with GITHUB_TOKEN, so it does NOT re-trigger this workflow
+          # (anti-recursion); the `v*.*.*` filter above also excludes bare major tags.
+          MAJOR="${GITHUB_REF_NAME%%.*}"   # v0.14.1 -> v0
+          echo "Moving major tag ${MAJOR} -> ${GITHUB_SHA} (from ${GITHUB_REF_NAME})"
+          git tag -f "$MAJOR" "$GITHUB_SHA"
+          git push -f origin "refs/tags/${MAJOR}"
 
   docker:
     name: push Docker image to ghcr.io
-    needs: build
+    # supply-chain (transitively via build) provides THIRD-PARTY-LICENSES.html,
+    # which the Dockerfile COPYs into the image; listed explicitly for clarity.
+    needs: [build, supply-chain]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read        # checkout
+      packages: write       # push the image + its registry attestation to ghcr
+      id-token: write       # keyless OIDC for cosign + build-provenance attestation
+      attestations: write   # write the image build-provenance attestation
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: download linux artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-artifacts
           pattern: alint-*-unknown-linux-musl
@@ -209,15 +390,24 @@ jobs:
           done
           ls -la "${GITHUB_WORKSPACE}"/linux-*/
 
+      - name: download supply-chain bundle (staged into the image)
+        # THIRD-PARTY-LICENSES.html lands at the build-context root so the
+        # Dockerfile COPY (un-ignored in .dockerignore) picks it up. alint.cdx.json
+        # rides along unused and stays ignored.
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: supply-chain
+          path: .
+
       # SHA-pinned per supply-chain hardening; bump alongside
       # any docker/* major-version bump. Dependabot raises a PR
       # on the comment-tagged ref so the human can vet the diff
       # before the SHA flips.
-      - uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
-      - uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: log in to ghcr.io
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -247,7 +437,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: build + push multi-arch image
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: Dockerfile
@@ -259,6 +450,36 @@ jobs:
             org.opencontainers.image.version=${{ github.ref_name }}
             org.opencontainers.image.licenses=Apache-2.0 OR MIT
             org.opencontainers.image.description=Language-agnostic linter for repository structure
+
+      - name: attest build provenance for the image
+        # subject-digest is the multi-arch manifest-list digest; push-to-registry
+        # stores the attestation alongside the image in ghcr, so a consumer can
+        # `gh attestation verify oci://ghcr.io/asamarts/alint:<tag> --repo asamarts/alint`.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.tags.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # Pin cosign too (the action's default floats). v3.0.6 writes the
+          # new-format Sigstore bundle, so consumers verify with cosign v3+
+          # (or `gh attestation verify`, which needs no cosign at all).
+          cosign-release: "v3.0.6"
+
+      - name: cosign sign the image (keyless)
+        env:
+          IMAGE: ${{ steps.tags.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Sign by immutable digest (not tag). Verify with:
+          #   cosign verify ghcr.io/asamarts/alint@<digest> \
+          #     --certificate-identity-regexp '^https://github\.com/asamarts/alint/\.github/workflows/release\.yml@refs/tags/v' \
+          #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          cosign sign --yes "${IMAGE}@${DIGEST}"
 
   publish-crates:
     name: publish to crates.io
@@ -272,18 +493,26 @@ jobs:
     # skipped via the crates.io API check).
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      # OIDC Trusted Publishing — no CARGO_REGISTRY_TOKEN. Configure the
+      # trusted publisher once at crates.io (each crate → Settings →
+      # Trusted Publishing: repo asamarts/alint, workflow release.yml).
+      id-token: write
+      contents: read
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: publish-crates
-      - name: publish all 5 crates in dependency order
+      - name: mint a short-lived crates.io token via OIDC
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1
+        id: crates-auth
+      - name: publish all 6 crates in dependency order
         env:
-          # Set this in repo Settings → Secrets → Actions. Token
-          # comes from https://crates.io/me; needs `publish-update`
-          # scope on each of the five alint crates.
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
         run: ci/scripts/publish-crates.sh
 
   publish-npm:
@@ -296,22 +525,28 @@ jobs:
     # being live.
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC token for npm Trusted Publishing (tokenless publish)
+      contents: read    # checkout only; no writes needed here
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: "20"
+          node-version: "22"   # Trusted Publishing needs Node >= 22.14
           registry-url: "https://registry.npmjs.org"
+      - name: use an OIDC-capable npm (Trusted Publishing needs npm >= 11.5.1; pin the latest 11.x)
+        run: npm install -g npm@11.19.0   # not 12.x: it may drop Node 22 support
       - name: stamp package version from tag + publish
         env:
-          # Set this in repo Settings → Secrets → Actions. Token
-          # is a granular access token (npmjs.com → Access
-          # Tokens → Generate → Granular) with `Read and write`
-          # on packages, scoped to `@asamarts`, no IP restriction.
-          # We tried Trusted Publishing first but npm's UI
-          # currently requires 2FA to enable it and the 2FA
-          # configuration UI was broken; revisit when that ships.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Tokenless publish via npm Trusted Publishing (OIDC): no NPM_TOKEN, so
+          # nothing here can expire mid-release (the v0.15.1 failure mode). Requires a
+          # Trusted Publisher on npmjs.com for @asamarts/alint (repo=asamarts/alint,
+          # workflow=release.yml); npm validates it only at publish time, so a missing
+          # entry fails THIS job on the next release (fix it, then rerun --failed). The
+          # auto-provenance attests only this shim (install script + bin shim), NOT the
+          # binaries it downloads from GitHub Releases -- those carry their own
+          # build-provenance. The optionalDependencies migration (ADR-0015 / P2) will
+          # ship native bytes so the same provenance covers real payload.
           TAG: ${{ github.ref_name }}
         shell: bash
         run: |
@@ -330,14 +565,16 @@ jobs:
             fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           echo "==> package.json version set to $ver"
-          npm publish --access public
+          # --provenance rides the OIDC id-token; with Trusted Publishing npm also
+          # generates provenance automatically, so this is explicit-and-belt.
+          npm publish --access public --provenance
 
   homebrew:
     name: bump Homebrew tap (asamarts/homebrew-alint)
     needs: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: download SHA256SUMS from this release
         env:
@@ -354,7 +591,7 @@ jobs:
         # Dedicated ed25519 deploy key registered on
         # asamarts/homebrew-alint with write access; private half
         # stored as the HOMEBREW_TAP_DEPLOY_KEY secret.
-        uses: webfactory/ssh-agent@v0.10.0
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
           ssh-private-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
 
@@ -388,3 +625,117 @@ jobs:
           fi
           git commit -m "Bump alint to ${TAG}"
           git push origin main
+
+  publish-vscode:
+    name: publish VS Code extension (Marketplace + Open VSX)
+    # `needs: release` so the extension's first-run download finds the
+    # matching binary tarballs on GitHub Releases. The .vsix itself
+    # contains only the bundled JS client — no native bytes — so the
+    # build matrix is irrelevant; we gate on the GH Release being live.
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "20"
+      - name: stamp version from tag + publish to both registries
+        env:
+          # Repo secrets (Settings → Secrets → Actions):
+          #   VSCE_PAT — Azure DevOps PAT for the `asamarts` VS Code
+          #              Marketplace publisher (Marketplace → Manage).
+          #   OVSX_PAT — Open VSX access token (open-vsx.org → settings).
+          # Expiring PATs (unlike the keyless crates.io / npm OIDC
+          # publishes): if either 401s, rotate it and `gh run rerun <id>
+          # --failed` — no new tag needed (the .vsix is idempotent per version).
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd editors/vscode
+          # Strip leading v: v0.10.2 → 0.10.2. The committed source can
+          # stay at any past version (so local `vsce package` during
+          # development works); CI rewrites to the release tag here.
+          ver="${TAG#v}"
+          node -e "
+            const fs = require('fs');
+            const pkg = require('./package.json');
+            pkg.version = '$ver';
+            fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          echo "==> extension version set to $ver"
+          npm ci
+          npm run check-types
+          npm run build
+          # vsce/ovsx read VSCE_PAT/OVSX_PAT from the environment.
+          npx --no-install vsce publish --no-dependencies
+          npx --no-install ovsx publish --no-dependencies
+
+  publish-jetbrains:
+    name: publish JetBrains plugin (Marketplace)
+    # `needs: release` so the plugin's first-run download finds the
+    # matching binary tarballs on GitHub Releases. The plugin .zip is
+    # the LSP4IJ glue only — no native bytes — so it gates on the GH
+    # Release being live, not the build matrix.
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      - name: stamp version from tag + publish
+        env:
+          # Repo secrets (Settings → Secrets → Actions):
+          #   JETBRAINS_MARKETPLACE_TOKEN — Marketplace → My Tokens for
+          #     the `asamarts` vendor (the vendor must exist first).
+          #   JETBRAINS_CERTIFICATE_CHAIN / JETBRAINS_PRIVATE_KEY /
+          #   JETBRAINS_PRIVATE_KEY_PASSWORD — plugin signing (Marketplace
+          #     requires signed uploads). See the IntelliJ Platform docs.
+          # Same mid-release-token-expiry risk as the other token jobs:
+          # rotate + `gh run rerun <id> --failed`, no new tag.
+          JETBRAINS_MARKETPLACE_TOKEN: ${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}
+          JETBRAINS_CERTIFICATE_CHAIN: ${{ secrets.JETBRAINS_CERTIFICATE_CHAIN }}
+          JETBRAINS_PRIVATE_KEY: ${{ secrets.JETBRAINS_PRIVATE_KEY }}
+          JETBRAINS_PRIVATE_KEY_PASSWORD: ${{ secrets.JETBRAINS_PRIVATE_KEY_PASSWORD }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd editors/jetbrains
+          # Strip leading v: v0.10.2 → 0.10.2 (committed value may lag).
+          ver="${TAG#v}"
+          # Pass the version to Gradle without editing the build file.
+          echo "==> plugin version set to $ver"
+          # Use the pinned wrapper (./gradlew) so release matches what CI
+          # validates, not the setup-action's provisioned Gradle.
+          ./gradlew -PpluginVersion="$ver" publishPlugin
+
+  post-publish-smoke:
+    name: dispatch post-publish smoke
+    # Advisory (MP-M5): once every CLI channel has published, fire the
+    # post-publish-smoke workflow to install alint from each and assert the
+    # version. `needs` the CLI-channel publishers so it runs only after they
+    # succeed; a broken publish surfaces as a red smoke run, not a user report.
+    # Not gated by editor channels (vscode/jetbrains), which the smoke doesn't
+    # cover. workflow_dispatch is the documented anti-recursion exception (same
+    # pattern as the docs-bundle dispatch), so the token-triggered run fires.
+    needs: [release, docker, publish-crates, publish-npm, homebrew]
+    # Fire even if a publisher failed (partial publish) -- the smoke then reds on
+    # exactly the un-published channel instead of the monitor going dark. Only a
+    # cancelled run skips it.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write   # workflow_dispatch the smoke workflow
+    steps:
+      - name: dispatch post-publish-smoke.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh workflow run post-publish-smoke.yml --repo "$REPO" --ref main -f tag="$TAG"

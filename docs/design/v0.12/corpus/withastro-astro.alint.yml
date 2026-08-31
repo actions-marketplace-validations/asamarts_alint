@@ -1,0 +1,97 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for withastro/astro @ fa7a26410e487e390e89b1302994aaea150b5bdd
+# (v0.12 case-study Stage A). pnpm monorepo, JS/TS web framework, MIT, community.
+#
+# astro's ENFORCED validation surface is dominated by tool execution (Biome,
+# ESLint, knip, tsc, publint, vitest/node:test, playwright, semgrep, zizmor) —
+# all D (alint orchestrates but does not reimplement). The handful of
+# alint-addressable items are: a manifest path-reference graph (root
+# tsconfig.json `references` must each resolve), the package-manager pin
+# (`only-allow pnpm`), and the OSS/monorepo structure the bundles assert.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+  - alint://bundled/monorepo/pnpm-workspace@v1
+  - alint://bundled/hygiene/lockfiles@v1
+  - alint://bundled/tooling/editorconfig@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # === A: file→file reference graph (the only one astro enforces) =========
+  # CONTRIBUTING.md §"TypeScript project references" / "Per-package layout":
+  # "The repo-root tsconfig.json is the top-level solution file referencing
+  # every package." Maintained MANUALLY (review-enforced). Each
+  # references[].path must resolve to an on-disk tsconfig — a real file→file
+  # reference graph and exactly what registry_paths_resolve targets.
+  #
+  # CASE-STUDY FINDING (v0.12): this rule's LOGIC is correct (all 31 refs
+  # resolve on disk) but it FAILS against the clone because the root
+  # tsconfig.json is JSONC (leading `//` comments) and alint's structured
+  # `json:` extractor uses a strict JSON parser ("could not be parsed for
+  # `extract`: expected value at line 1 column 1"). This is a C tuning gap —
+  # the JS/TS ecosystem (tsconfig.json, *.jsonc, .vscode/*.json) is pervasively
+  # JSONC; registry_paths_resolve / structured-query need JSONC tolerance (or a
+  # `format: jsonc`). Kept here (warning) to document the edge; flip to error
+  # once alint parses JSONC.
+  - id: astro-root-tsconfig-references-resolve
+    kind: registry_paths_resolve
+    source: tsconfig.json
+    extract: { json: "$.references[*].path" }
+    base: lint_root
+    level: warning
+    message: "Every path in the root tsconfig.json `references` must point to an existing tsconfig (CONTRIBUTING: the root solution file references every package; maintained manually). NOTE: blocked today by JSONC parsing — see config comment."
+
+  # === A: package-manager pin =============================================
+  # package.json `preinstall: "npx only-allow pnpm"` + pnpm-workspace.yaml +
+  # engines. Assert the only-allow guard stays wired so contributors can't
+  # silently install with npm/yarn.
+  - id: astro-only-allow-pnpm
+    kind: file_content_matches
+    paths: ["package.json"]
+    pattern: "only-allow pnpm"
+    level: error
+    message: "package.json must keep the `npx only-allow pnpm` preinstall guard (this is a pnpm-only monorepo)."
+
+  # package.json must declare a pnpm packageManager pin (Corepack).
+  - id: astro-package-manager-is-pnpm
+    kind: json_path_matches
+    paths: ["package.json"]
+    path: "$.packageManager"
+    matches: "^pnpm@"
+    level: warning
+    message: "Root package.json should pin pnpm via the `packageManager` field for reproducible installs."
+
+  # === A: root meta the repo relies on ====================================
+  - id: astro-nvmrc-exists
+    kind: file_exists
+    paths: [".nvmrc"]
+    root_only: true
+    level: warning
+    message: "Repo pins the Node version via .nvmrc (used by contributors + Gitpod/devcontainer)."
+
+  - id: astro-changeset-config-exists
+    kind: file_exists
+    paths: [".changeset/config.json"]
+    level: warning
+    message: "Releases are driven by changesets; .changeset/config.json must exist."
+
+  # === A (value-add): config-policy assertions the repo declares ==========
+  # Not what astro *enforces* (those configs are consumed by the tools), but
+  # alint can assert the declarations stay present.
+  - id: astro-biome-config-exists
+    kind: file_exists
+    paths: ["biome.jsonc"]
+    root_only: true
+    level: info
+    message: "Biome is the primary formatter+linter; biome.jsonc must exist."
+
+  - id: astro-eslint-config-exists
+    kind: file_exists
+    paths: ["eslint.config.js"]
+    root_only: true
+    level: info
+    message: "ESLint provides type-aware rules Biome can't; eslint.config.js must exist."

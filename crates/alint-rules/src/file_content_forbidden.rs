@@ -6,11 +6,14 @@ use alint_core::{Context, Error, Level, PerFileRule, Result, Rule, RuleSpec, Sco
 use regex::Regex;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Rust regex. File contents must NOT match.
     pattern: String,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct FileContentForbiddenRule {
@@ -33,9 +36,14 @@ impl Rule for FileContentForbiddenRule {
                 continue;
             }
             let full = ctx.root.join(&entry.path);
-            let bytes = match std::fs::read(&full) {
+            // Cap the read so a multi-GB file matched here can't OOM the run
+            // via the `for_each`-nested path (which bypasses the engine's cap).
+            // Over-cap → skip, matching the engine's per-file batch so the same
+            // rule behaves identically whether top-level or nested (M3-F1).
+            let bytes = match crate::io::read_capped(&full) {
                 Ok(b) => b,
-                Err(e) => {
+                Err(crate::io::ReadCapError::TooLarge(_)) => continue,
+                Err(crate::io::ReadCapError::Io(e)) => {
                     violations.push(
                         Violation::new(format!("could not read file: {e}"))
                             .with_path(entry.path.clone()),
@@ -80,7 +88,12 @@ impl PerFileRule for FileContentForbiddenRule {
         Ok(vec![
             Violation::new(msg)
                 .with_path(std::sync::Arc::<Path>::from(path))
-                .with_location(line, 1),
+                .with_location(line, 1)
+                // First-match rule: the baseline identity is the *file*, not the
+                // matched line's content (which would churn on any edit to that
+                // line). Mirrors `no_trailing_whitespace`/`line_endings` (M14).
+                // See `docs/design/baseline.md` §4.
+                .with_baseline_key(crate::slash(path)),
         ])
     }
 }

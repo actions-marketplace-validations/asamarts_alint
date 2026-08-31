@@ -52,6 +52,8 @@ row() {
   echo "| Docs                  | ${DOCS_CHANGED} |"
   echo "| Bench                 | ${BENCH_CHANGED} |"
   echo "| Examples              | ${EXAMPLES_CHANGED} |"
+  echo "| Editors               | ${EDITORS_CHANGED} |"
+  echo "| Supply chain          | ${SUPPLY_CHAIN_CHANGED} |"
   echo ""
 
   echo "### Rust Pipeline"
@@ -62,10 +64,12 @@ row() {
   row "Test"         "$TEST_RESULT"        "$RUST_CHANGED"
   row "Audit"        "$AUDIT_RESULT"       "$RUST_CHANGED"
   row "Deny"         "$DENY_RESULT"        "$RUST_CHANGED"
+  row "Supply chain" "$SUPPLY_CHAIN_RESULT" "$SUPPLY_CHAIN_CHANGED"
   row "Build"        "$BUILD_RESULT"       "$RUST_CHANGED"
   row "Docs"         "$DOCS_JOB_RESULT"    "$RUST_CHANGED"
   row "Dogfood"      "$DOGFOOD_RESULT"     "$RUST_CHANGED"
   row "Shell tests"  "$SHELL_TESTS_RESULT" "$RUST_CHANGED"
+  row "Secrets inventory" "$SECRETS_INVENTORY_RESULT" "true"
   echo ""
 
   echo "### Bench Pipeline"
@@ -79,15 +83,23 @@ row() {
   echo "|-------|--------|"
   row "Examples validate" "$EXAMPLES_RESULT" "$EXAMPLES_CHANGED"
   echo ""
+
+  echo "### Editors Pipeline"
+  echo "| Check | Result |"
+  echo "|-------|--------|"
+  row "Editors (VS Code + Zed)" "$EDITORS_RESULT" "$EDITORS_CHANGED"
+  echo ""
 } | tee "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 # ── Fail if any critical job failed ──────────────────────────────────
 
 FAILED=false
 for result in \
+  "$SECRETS_INVENTORY_RESULT" \
   "$FMT_RESULT" "$CLIPPY_RESULT" "$TEST_RESULT" "$AUDIT_RESULT" \
-  "$DENY_RESULT" "$BUILD_RESULT" "$DOCS_JOB_RESULT" "$DOGFOOD_RESULT" \
-  "$BENCH_SMOKE_RESULT" "$EXAMPLES_RESULT" "$SHELL_TESTS_RESULT"; do
+  "$DENY_RESULT" "$SUPPLY_CHAIN_RESULT" "$BUILD_RESULT" "$DOCS_JOB_RESULT" \
+  "$DOGFOOD_RESULT" "$BENCH_SMOKE_RESULT" "$EXAMPLES_RESULT" \
+  "$SHELL_TESTS_RESULT" "$EDITORS_RESULT"; do
   if [[ "$result" == "failure" ]]; then
     FAILED=true
   fi

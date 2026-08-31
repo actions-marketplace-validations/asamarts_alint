@@ -29,3 +29,13 @@ target-baseline*/
 # Claude Code workspace artifacts (scheduled task locks, etc).
 .claude/
 
+
+# Local env files (e.g. CARGO_REGISTRY_TOKEN for one-off publishes).
+# Never committed — secrets-scanning push-protection blocks anyway.
+.env
+.env.*
+
+# Python bytecode cache from the xtask/scripts/*.py helpers
+# (e.g. render-history.py) — regenerated on every run, never committed.
+__pycache__/
+*.pyc

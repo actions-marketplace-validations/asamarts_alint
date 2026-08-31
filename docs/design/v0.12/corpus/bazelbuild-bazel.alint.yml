@@ -1,0 +1,151 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config for bazelbuild/bazel @ bda3d1c2b0dd446cfe6918c424deeda2e4efd25f
+#
+# Shape: JVM/Java build-system monorepo (Bazel builds ITSELF with BUILD/.bzl).
+# There is NO Maven/Gradle (no pom.xml / build.gradle / gradlew); the java
+# bundle's `has_java` fact is therefore FALSE and that bundle would no-op, so it
+# is intentionally NOT extended.
+#
+# WHERE THE REPO'S ENFORCED VALIDATION LIVES:
+#   - .bazelci/{presubmit,postsubmit}.yml  -> Buildkite build+test matrix (D),
+#       plus `check_docs: 1` + //scripts/docs:gen_release_docs (docs build, D).
+#   - .github/workflows/*                  -> AUTOMATION ONLY (labeler, cherry-pick,
+#       stale, scorecard cron, ssl-monitor cron, docs-trigger). None gate code.
+#   - bespoke validators (Bazel sh_test, run under bazel test):
+#       src/test/shell/bazel/srcs_test.sh           -> //:srcs filegroup completeness
+#       src/test/tools/bzlmod/verify_default_lock_file.sh -> MODULE.bazel.lock freshness
+#       .github/scripts/check_ssl.py                -> cert-expiry cron (D, network)
+#   - .bazelrc                             -> `--experimental_one_version_enforcement=ERROR`
+#       (+ oneversion_allowlist.csv) and `--check_direct_dependencies=error` (D policy).
+#   - LINT.IfChange / LINT.ThenChange      -> 24 paired-block coherence directives
+#       (Google Critique/Copybara convention; no OSS-CI tool enforces them).
+#   - Conventions: Apache header on every source file (`g-bad-file-header` pylint),
+#       buildifier for BUILD/.bzl, Google Java Style, pyink for .py (AGENTS.md).
+#
+# Most of the enforced surface is build/test EXECUTION (D, per R1/R2). The
+# alint-addressable items are below; the rest are recorded value-add.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ---- A-items: enforced conventions alint expresses natively ----
+
+  # Per-file Apache-2.0 header. Google policy; the `g-bad-file-header` pylint
+  # pragma in combine_distfiles.py proves a header lint is enforced in review.
+  # Verified universal across src/main/java/.../lib (2768 .java), scripts/*.py,
+  # src/test/shell/bazel/*.sh. (Source: AGENTS.md "Linting & Formatting".)
+  - id: bazel-java-apache-header
+    kind: file_content_matches
+    paths:
+      - "src/main/java/**/*.java"
+    pattern: 'Licensed under the Apache License, Version 2\.0'
+    level: error
+    message: "Java source files must carry the Apache-2.0 license header."
+
+  - id: bazel-py-apache-header
+    kind: file_content_matches
+    paths:
+      - "scripts/**/*.py"
+      - "tools/**/*.py"
+    pattern: 'Licensed under the Apache License, Version 2\.0'
+    level: error
+    message: "Python source files must carry the Apache-2.0 license header."
+
+  # .gitattributes encodes load-bearing structure invariants:
+  #   "* -text"  -> CRLF line endings are banned even on Windows
+  #   MODULE.bazel.lock merge=bazel-lockfile-merge  -> the custom merge driver
+  # Assert the file declares both (config-policy assertion, alint value-add).
+  - id: bazel-gitattributes-no-crlf-declared
+    kind: file_content_matches
+    paths:
+      - ".gitattributes"
+    pattern: '(?m)^\* -text$'
+    level: error
+    message: ".gitattributes must declare the repo-wide CRLF ban."
+
+  - id: bazel-gitattributes-lockfile-merge-driver
+    kind: file_content_matches
+    paths:
+      - ".gitattributes"
+    pattern: 'MODULE\.bazel\.lock merge=bazel-lockfile-merge'
+    level: error
+    message: ".gitattributes must wire the custom MODULE.bazel.lock merge driver."
+
+  # The lockfile-merge driver script that .gitattributes references must exist
+  # (a file->file reference: the driver name points at scripts/bazel-lockfile-merge.jq).
+  - id: bazel-lockfile-merge-script-exists
+    kind: file_exists
+    paths:
+      - "scripts/bazel-lockfile-merge.jq"
+    level: error
+    message: "The MODULE.bazel.lock merge-driver jq script must be present."
+
+  # Bazel one-version policy is enforced in CI via
+  # --experimental_one_version_enforcement=ERROR; the allowlist of permitted
+  # duplicate classes is declared in oneversion_allowlist.csv. Assert the policy
+  # flag is wired in .bazelrc (config-policy assertion -> alint value-add, R3).
+  - id: bazel-oneversion-enforced-in-bazelrc
+    kind: file_content_matches
+    paths:
+      - ".bazelrc"
+    pattern: '--experimental_one_version_enforcement=ERROR'
+    level: error
+    message: "One-version enforcement must be ERROR in .bazelrc."
+
+  - id: bazel-check-direct-deps-error
+    kind: file_content_matches
+    paths:
+      - ".bazelrc"
+    pattern: '--check_direct_dependencies=error'
+    level: error
+    message: "Direct-dependency staleness must fail the build (.bazelrc)."
+
+  # Lockfiles are tracked (Bazel's bzlmod + maven). The verify_default_lock_file
+  # test regenerates and diffs MODULE.bazel.lock; the alint-expressible slice is
+  # "these committed lockfiles are present" (presence, not freshness).
+  - id: bazel-module-lock-tracked
+    kind: file_exists
+    paths:
+      - "MODULE.bazel.lock"
+    level: error
+    message: "MODULE.bazel.lock must be committed (bzlmod lockfile)."
+
+  - id: bazel-maven-lock-tracked
+    kind: file_exists
+    paths:
+      - "maven_install.json"
+    level: error
+    message: "maven_install.json (pinned Maven deps) must be committed."
+
+  # Top-level repo invariants the build assumes.
+  - id: bazel-module-file-exists
+    kind: file_exists
+    paths:
+      - "MODULE.bazel"
+    level: error
+    message: "MODULE.bazel must exist (bzlmod root module)."
+
+  # NOTE: .bazelversion IS tracked but is also listed in .gitignore (Bazel's own
+  # convention treats it as a Bazelisk-managed file). alint honors .gitignore by
+  # default, so this rule FAILS against the clone unless run with --no-gitignore.
+  # Recorded as a real alint sharp-edge (tracked-but-gitignored file), not a repo
+  # defect; passes with `alint check --no-gitignore`.
+  - id: bazel-version-pinned
+    kind: file_exists
+    paths:
+      - ".bazelversion"
+    level: error
+    message: ".bazelversion must pin the Bazel release used to build."
+
+  # ---- VALIDATION NOTE (R4) ----
+  # The eight file_content_matches rules above (apache headers x2, .gitattributes
+  # x2, .bazelrc x2) all PASS against the clone and are therefore OMITTED from the
+  # `alint check` results JSON (alint lists a per-file content rule only when it
+  # produces >=1 violation). Confirmed by inverting each pattern to a sentinel:
+  #   - src/main/java/**/*.java header sentinel fires on all 3081 files (scope OK);
+  #     the real Apache pattern yields 0 violations -> every .java carries the header.
+  #   - .gitattributes / .bazelrc real patterns are present (rules pass).

@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# PROPOSED alint config — duckdb/duckdb @ 0a8a19486d7177e74df8c886ef78fd4d49fb1f0e
+# (v0.12 case study, Stage A). C++ · systems/DB · CMake · DuckDB Foundation.
+#
+# DuckDB's enforced surface is dominated by D non-goals: clang-format/black/
+# cmake-format, clang-tidy (naming + no-using-namespace + no-const-cast,
+# enforced via AST), typos (NLP spell), C++ enum-integrity (cxxheaderparser
+# AST), exported/banned symbol checks (nm on compiled .o/.so), the test
+# suite + sanitizers + valgrind + fuzz, and codegen-freshness
+# (`make generate-files && git diff --exit-code`, which runs Python codegen
+# = tool execution per R2). The A-addressable slice below is the
+# documented/enforced *structural* conventions alint expresses natively.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1            # README, LICENSE (MIT), merge-markers, bidi
+  - alint://bundled/ci/github-actions@v1       # workflow hygiene
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════════
+  # A1 — DuckDB canonical header on public headers (file_header)
+  # scripts/format.py:319-331 rewrites every src/include/**/*.hpp to start
+  # with the DuckDB ASCII-art header (the "//   DuckDB" banner + the file's
+  # own relative path on line 4). Enforced via `make format-check-silent`
+  # in Main.yml:238. We assert the static banner frame; the per-file path
+  # line is dynamic and not byte-checkable here.
+  # GAP STILL OPEN after the v0.12 kinds: line 4 must EQUAL this file's own
+  # path (relative to src/include/, e.g. `// duckdb/parser/column_list.hpp`).
+  # That is self-referential content==own-path. None of the v0.12 kinds reach
+  # it: for_each_match `equal:` compares named captures WITHIN one line (no
+  # access to the file's path); file_graph `derive_target` asserts a sibling
+  # FILE exists, not that a content line equals the path. Genuinely deferred.
+  # ════════════════════════════════════════════════════════════════════
+  - id: duckdb-public-header-banner
+    kind: file_header
+    paths:
+      include: ["src/include/**/*.hpp"]
+      exclude: ["**/list.hpp"]        # list.hpp is auto-generated include-aggregation
+    pattern: '^//===-+===//\n//\s+DuckDB\n//'
+    lines: 4
+    level: warning
+    message: >-
+      Every public header under src/include must begin with the canonical
+      DuckDB banner (scripts/format.py injects it; CI enforces via
+      `make format-check-silent`).
+
+  # ════════════════════════════════════════════════════════════════════
+  # A2 — Source filenames are snake_case (filename_case)
+  # CONTRIBUTING.md "Naming Conventions": "Files: lowercase separated by
+  # underscores, e.g. abstract_operator.cpp". clang-tidy does NOT check
+  # filenames, so this is a review-only convention alint can gate.
+  # ════════════════════════════════════════════════════════════════════
+  - id: duckdb-source-filenames-snake-case
+    kind: filename_case
+    paths: "src/**/*.{cpp,hpp}"
+    case: snake_case
+    level: warning
+    message: >-
+      C++ source/header filenames must be snake_case (CONTRIBUTING.md
+      Naming Conventions, e.g. abstract_operator.cpp).
+
+  # ════════════════════════════════════════════════════════════════════
+  # A3 — sqllogictest files declare a name + group header (file_content_matches)
+  # scripts/format_test_benchmark.py rewrites every .test/.test_slow to carry
+  # `# name: <path>` and `# group: [<dir>]`. Enforced via format.py --check.
+  # We assert the header markers are present (the exact path/group values are
+  # self-referential and dir-derived).
+  # GAP STILL OPEN after the v0.12 kinds: `# name:` must equal the test's own
+  # repo-relative path and `# group:` is derived from the parent dir name
+  # (verified at the pinned SHA: every test/sql/create/*.test carries
+  # `# group: [create]`). Both are self-referential / dir-derived content —
+  # not expressible by for_each_match (intra-line capture equality only),
+  # cross_file (set parity across a glob, not per-file path identity),
+  # ordered_block, or file_graph derive_target. Genuinely deferred.
+  # ════════════════════════════════════════════════════════════════════
+  - id: duckdb-test-has-name-header
+    kind: file_content_matches
+    paths: "test/sql/**/*.test"
+    pattern: '(?m)^#\s*name:\s*\S'
+    level: warning
+    message: >-
+      Each sqllogictest must declare `# name: <path>` in its header
+      (scripts/format_test_benchmark.py).
+
+  - id: duckdb-test-has-group-header
+    kind: file_content_matches
+    paths: "test/sql/**/*.test"
+    pattern: '(?m)^#\s*group:\s*\['
+    level: warning
+    message: >-
+      Each sqllogictest must declare `# group: [<group>]` in its header
+      (scripts/format_test_benchmark.py).
+
+  # ════════════════════════════════════════════════════════════════════
+  # A4 — editorconfig hygiene policy expressed natively (no_trailing_whitespace)
+  # .editorconfig declares `trim_trailing_whitespace=true` for {c,cpp,h,hpp}.
+  # The repo *enforces* it via clang-format (a D tool), but the declared
+  # policy is natively expressible. Scoped to src/ to avoid third_party/test.
+  # ════════════════════════════════════════════════════════════════════
+  - id: duckdb-no-trailing-whitespace-cpp
+    kind: no_trailing_whitespace
+    paths: "src/**/*.{cpp,hpp,c,h}"
+    level: warning
+    message: >-
+      .editorconfig sets trim_trailing_whitespace=true for C/C++ sources;
+      no source line may end in whitespace.
+
+  # ════════════════════════════════════════════════════════════════════
+  # VALUE-ADD (recorded separately; NOT in the A/B/C/D coverage ratio per R3/R5)
+  # alint can assert the toolchain-config files are present. DuckDB does not
+  # gate on their existence (they are inputs to the D tools), so these are
+  # structural assertions alint adds, not repo-enforced checks.
+  # ════════════════════════════════════════════════════════════════════
+  - id: duckdb-clang-format-config-exists
+    kind: file_exists
+    paths: [".clang-format"]
+    root_only: true
+    level: info
+    message: ".clang-format pins the clang-format style (value-add assertion)."
+
+  - id: duckdb-clang-tidy-config-exists
+    kind: file_exists
+    paths: [".clang-tidy"]
+    root_only: true
+    level: info
+    message: ".clang-tidy declares the enabled checks (value-add assertion)."
+
+  - id: duckdb-editorconfig-exists
+    kind: file_exists
+    paths: [".editorconfig"]
+    root_only: true
+    level: info
+    message: ".editorconfig declares whitespace/charset policy (value-add assertion)."

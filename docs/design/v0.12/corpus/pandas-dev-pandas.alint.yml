@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+# ════════════════════════════════════════════════════════════════════
+# Proposed alint config for pandas-dev/pandas
+#   pinned @ 3146d10d9ab56369ed9f983eed0006754d63061d
+#   shape: Python + C/Cython · data/ML · meson build · NumFOCUS / BSD-3
+# ════════════════════════════════════════════════════════════════════
+#
+# Source of truth for the bespoke-validation surface:
+#   * .pre-commit-config.yaml  — the PRIMARY enforcement gate (run in CI as
+#     `ci-typing` = pre-commit manual-stage; plus the pre-commit.ci app).
+#     The `language: pygrep` local hooks are pure forbidden-text regexes
+#     → file_content_forbidden (alint's native sweet spot).
+#   * scripts/*.py local hooks that are AST/tokenize-based → D (non-goal).
+#   * .github/workflows/** — tests / wheels / docs / codeql → D tool-runs.
+#
+# This config expresses the A-surface (regex content firewalls + the
+# environment.yml→requirements-dev.txt codegen-freshness pair + structural
+# hygiene). It SITS BENEATH pre-commit as a declarative structural floor;
+# it does NOT reimplement the AST validators or the tool executions.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+
+rules:
+  # ──────────────────────────────────────────────────────────────────
+  # A · forbidden-text firewalls — the `language: pygrep` local hooks
+  #     (.pre-commit-config.yaml). Pure regex on file CONTENT → native.
+  # ──────────────────────────────────────────────────────────────────
+
+  # hook `unwanted-patterns` (.pre-commit-config.yaml:156-182)
+  - id: pandas-no-class-dunder
+    kind: file_content_forbidden
+    paths:
+      include: ["pandas/**/*.{py,pyx,pxd}", "doc/**/*.rst"]
+      exclude: ["pandas/tests/**"]
+    pattern: '\.__class__'
+    level: warning
+    message: >-
+      Use `type(foo)` instead of `foo.__class__` (pandas `unwanted-patterns`
+      pre-commit hook).
+
+  - id: pandas-no-numpy-random-import
+    kind: file_content_forbidden
+    paths:
+      include: ["pandas/**/*.{py,pyx,pxd}", "doc/**/*.rst"]
+    pattern: '(?m)from numpy import random|from numpy\.random import'
+    level: warning
+    message: >-
+      Do not `from numpy import random` / `from numpy.random import ...`
+      (pandas `unwanted-patterns` hook).
+
+  - id: pandas-no-outdated-type-comment
+    kind: file_content_forbidden
+    paths:
+      include: ["pandas/**/*.{py,pyx,pxd}"]
+      exclude: ["pandas/tests/**"]
+    # Rust `regex` has no look-around; the upstream pygrep `(?!ignore)` is
+    # approximated by "`# type:` then a char that can't begin ` ignore`".
+    pattern: '(?m)# type: (?:[^i]|i[^g])'
+    level: warning
+    message: >-
+      Outdated `# type:` annotation syntax (use inline annotations); pandas
+      `unwanted-patterns` hook. `# type: ignore` is allowed.
+
+  # hook `no-return-exception` (.pre-commit-config.yaml:265-271)
+  - id: pandas-raise-not-return-exception
+    kind: file_content_forbidden
+    paths:
+      include: ["pandas/**/*.py"]
+      exclude: ["pandas/tests/**"]
+    pattern: 'return [A-Za-z]+(Error|Exit|Interrupt|Exception|Iteration)'
+    level: error
+    message: "Use `raise` instead of `return` for exceptions (pandas `no-return-exception` hook)."
+
+  # hook `unwanted-patterns-in-tests` (.pre-commit-config.yaml:189-213)
+  - id: pandas-tests-no-bare-testing-import
+    kind: file_content_forbidden
+    paths:
+      include: ["pandas/tests/**/*.py"]
+    pattern: '(?m)from pandas\._testing import|from pandas import _testing as tm|pd\.testing\.|(pd|pandas)\.api\.types\.|(numpy|np)\.array_equal|default_rng\(\)'
+    level: warning
+    message: >-
+      Test uses a discouraged import/idiom (import `pandas._testing as tm`;
+      avoid `pd.testing.`, `pd.api.types.`, `np.array_equal`, unseeded
+      `default_rng()`); pandas `unwanted-patterns-in-tests` hook.
+
+  # hook `pg8000-not-installed-CI` (.pre-commit-config.yaml:277-282)
+  - id: pandas-no-pg8000-in-ci-deps
+    kind: file_content_forbidden
+    paths:
+      include: ["ci/deps/**/*.yaml"]
+    pattern: 'pg8000'
+    level: error
+    message: >-
+      pg8000 must NOT be installed on CI (breaks
+      test_pg8000_sqlalchemy_passthrough_error); pandas `pg8000-not-installed-CI`
+      hook.
+
+  # hook `incorrect-backticks` (.pre-commit-config.yaml:183-188)
+  - id: pandas-rst-backtick-spacing
+    kind: file_content_forbidden
+    paths:
+      include: ["doc/source/**/*.rst"]
+    pattern: '[a-zA-Z0-9]`\`?[a-zA-Z0-9]'
+    level: warning
+    message: >-
+      Backticks render incorrectly without surrounding spaces; pandas
+      `incorrect-backticks` hook.
+
+  # ──────────────────────────────────────────────────────────────────
+  # A · codegen-freshness PAIR — environment.yml → requirements-dev.txt
+  #     (.pre-commit-config.yaml hook `pip-to-conda`, generator:
+  #      scripts/generate_pip_deps_from_conda.py --compare).
+  # ──────────────────────────────────────────────────────────────────
+
+  # the generated file carries a fixed provenance header (line 1).
+  - id: pandas-requirements-dev-autogen-header
+    kind: file_content_matches
+    paths: requirements-dev.txt
+    pattern: '(?m)\A# This file is auto-generated from environment\.yml, do not modify\.'
+    level: error
+    message: >-
+      requirements-dev.txt must keep its auto-generated provenance header
+      (generated from environment.yml).
+
+  # freshness: the generator in --compare mode is a check-style tool that
+  # signals via exit code (it does NOT print fresh content to stdout), so
+  # command_idempotent is the correct dispatch, not generated_file_fresh.
+  - id: pandas-requirements-dev-fresh
+    kind: command_idempotent
+    paths: requirements-dev.txt
+    command: ["python3", "scripts/generate_pip_deps_from_conda.py", "--compare"]
+    timeout: 60
+    level: error
+    message: >-
+      requirements-dev.txt is stale — regenerate with
+      `python scripts/generate_pip_deps_from_conda.py` after editing
+      environment.yml, and commit.
+
+  # ──────────────────────────────────────────────────────────────────
+  # A · structure / metadata invariants the repo relies on
+  # ──────────────────────────────────────────────────────────────────
+
+  # .gitattributes drives text/binary normalization (pandas ships a large one).
+  - id: pandas-gitattributes-text-normalization
+    kind: file_content_matches
+    paths: .gitattributes
+    pattern: '(?m)^\* text=auto'
+    level: warning
+    message: ".gitattributes must declare `* text=auto` for line-ending normalization."
+
+  # CODEOWNERS lives under .github/ (oss-baseline checks root/docs too; assert the path pandas uses).
+  - id: pandas-codeowners-present
+    kind: file_exists
+    paths: .github/CODEOWNERS
+    level: info
+    message: ".github/CODEOWNERS should exist (review-routing for pandas subsystems)."
+
+  # pandas pins versioning via versioneer (dynamic version in pyproject).
+  - id: pandas-pyproject-dynamic-version
+    kind: toml_path_equals
+    paths: pyproject.toml
+    path: "$.project.dynamic[0]"
+    equals: 'version'
+    level: info
+    message: "pyproject.toml [project].dynamic should include `version` (versioneer-driven)."

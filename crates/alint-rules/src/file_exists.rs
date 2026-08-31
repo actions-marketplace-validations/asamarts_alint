@@ -10,12 +10,29 @@ use serde::Deserialize;
 
 use crate::fixers::FileCreateFixer;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// If true, only files directly at the repository root satisfy the rule.
     #[serde(default)]
     root_only: bool,
+    /// Restrict matches to files tracked in git's index: entries present in the
+    /// walked tree but not in `git ls-files` are skipped. No effect outside a
+    /// git repo. Default `false`.
+    #[serde(default)]
+    git_tracked_only: bool,
+    /// Per-rule override for the workspace `respect_gitignore` setting. When
+    /// `false`, this rule's literal-path checks also stat the filesystem
+    /// directly, so it sees files that are tracked AND `.gitignore`-masked
+    /// (the bazel-style `.bazelversion` pattern — pitfall #18 in
+    /// `docs/development/CONFIG-AUTHORING.md`). Honoured only by `file_exists`
+    /// literal paths; glob patterns fall through to the workspace setting.
+    /// Default: inherit the workspace `respect_gitignore`.
+    #[serde(default)]
+    respect_gitignore: Option<bool>,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct FileExistsRule {
@@ -127,8 +144,21 @@ impl Rule for FileExistsRule {
                 if ctx.index.contains_file(p) {
                     return true;
                 }
-                if bypass_walker_for_ignored && ctx.root.join(p).is_file() {
-                    return true;
+                // Confine the literal before the gitignore-bypass stat:
+                // an absolute / `../` `paths:` entry (with
+                // `respect_gitignore: false`) must not stat a host path
+                // outside the repo root — that would be an existence
+                // oracle reachable from an `extends:`'d ruleset.
+                if bypass_walker_for_ignored
+                    && let Some(confined) = crate::pathsafe::normalize_confined(p)
+                {
+                    // normalize_confined is symlink-blind; verify the literal
+                    // doesn't stat through an in-repo symlink out of the tree
+                    // (an existence oracle reachable from an extends'd ruleset).
+                    let abs = ctx.root.join(&confined);
+                    if crate::pathsafe::resolved_within_root(&abs, ctx.root) && abs.is_file() {
+                        return true;
+                    }
                 }
                 false
             })
@@ -168,7 +198,12 @@ impl Rule for FileExistsRule {
                     self.describe_patterns()
                 )
             });
-            Ok(vec![Violation::new(message)])
+            // No path (the file is absent by definition), so without a key
+            // the fingerprint would hash the volatile message. Key on the
+            // pattern set — the rule's stable structural identity.
+            Ok(vec![
+                Violation::new(message).with_baseline_key(self.describe_patterns()),
+            ])
         }
     }
 
@@ -187,9 +222,10 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     };
     let patterns = patterns_of(paths);
     let scope = Scope::from_paths_spec(paths)?;
-    let opts: Options = spec
-        .deserialize_options()
-        .unwrap_or(Options { root_only: false });
+    // Propagate (not swallow) the deserialize error so a typo'd / unknown
+    // option fails loudly, like every other rule kind. `root_only` is
+    // `#[serde(default)]`, so an option-less spec still deserializes fine.
+    let opts: Options = spec.deserialize_options()?;
     // The fast path needs every pattern to be a plain relative
     // path (no glob metacharacters, no `!` exclude). v0.9.11:
     // `git_tracked_only` no longer disqualifies the fast path
@@ -243,8 +279,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         patterns,
         literal_paths,
         root_only: opts.root_only,
-        git_tracked_only: spec.git_tracked_only,
-        respect_gitignore: spec.respect_gitignore,
+        git_tracked_only: opts.git_tracked_only,
+        respect_gitignore: opts.respect_gitignore,
         fixer,
     }))
 }
@@ -373,6 +409,33 @@ mod tests {
         let idx = index(&["README.md"]);
         let v = rule.evaluate(&ctx(Path::new("/fake"), &idx)).unwrap();
         assert_eq!(v.len(), 1, "expected one violation; got: {v:?}");
+    }
+
+    #[test]
+    fn gitignore_bypass_does_not_stat_outside_root() {
+        // Security: `respect_gitignore: false` must not turn an absolute
+        // `paths:` literal into a host-path existence oracle. The
+        // out-of-tree sentinel EXISTS, but the rule must still fire
+        // "missing" — the gitignore-bypass stat is confined to the root.
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("sentinel.txt");
+        std::fs::write(&sentinel, b"exists").unwrap();
+        let spec = spec_yaml(&format!(
+            "id: t\n\
+             kind: file_exists\n\
+             paths: [{:?}]\n\
+             respect_gitignore: false\n\
+             level: error\n",
+            sentinel.to_str().unwrap()
+        ));
+        let rule = build(&spec).unwrap();
+        let idx = index(&[]);
+        let v = rule.evaluate(&ctx(Path::new("/fake"), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "an existing out-of-tree path must NOT satisfy file_exists: {v:?}"
+        );
     }
 
     #[test]

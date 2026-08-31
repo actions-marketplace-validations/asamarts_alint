@@ -1,0 +1,131 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint configuration for Homebrew/brew  (pinned 43039a4500e6eca03c829a269d7b14aac08c0a24)
+# Stage A case-study config — v0.12 100-repo study.
+#
+# Shape: Ruby package-manager CLI (the `brew` command). Its enforced surface
+# is dominated by EXECUTION checks alint does not reimplement (brew style =
+# RuboCop, brew typecheck = Sorbet/Tapioca, brew tests = RSpec, brew audit,
+# brew test-bot, Vale prose-lint, markdownlint, actionlint/zizmor/shellcheck,
+# licensed dep-license scan, codegen-freshness git-diff gates). Those are D.
+# alint expresses the cross-file value coherence + per-file structure
+# conventions + OSS hygiene below.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ── A: cross-file value coherence ──────────────────────────────────────
+  # The repo pins Ruby in several places that must stay coherent. The
+  # `.ruby-version` (4.0.5) must equal the `RUBY VERSION` recorded in the
+  # bundler lockfile. Bundler enforces lock↔installed at runtime, but the
+  # cross-file equality itself (version file vs lockfile) is the invariant.
+  - id: brew-ruby-version-matches-lock
+    kind: cross_file_value_equals
+    source:
+      file: Library/Homebrew/.ruby-version
+      extract:
+        regex: '^([0-9]+\.[0-9]+\.[0-9]+)'
+    targets:
+      - file: Library/Homebrew/Gemfile.lock
+        extract:
+          regex: 'RUBY VERSION\s*\n\s*ruby ([0-9]+\.[0-9]+\.[0-9]+)'
+    level: warning
+    message: >-
+      Library/Homebrew/.ruby-version must match the RUBY VERSION pinned in
+      Library/Homebrew/Gemfile.lock; drift means bundler resolves against a
+      different Ruby than the one developers/CI select.
+
+  # The docs/ site Gemfile.lock pins the same Ruby ABI (docs/.ruby-version is
+  # a symlink to the Library one). Keep the docs lockfile coherent with the
+  # canonical Ruby version too.
+  - id: brew-docs-ruby-version-matches-lock
+    kind: cross_file_value_equals
+    source:
+      file: Library/Homebrew/.ruby-version
+      extract:
+        regex: '^([0-9]+\.[0-9]+\.[0-9]+)'
+    targets:
+      - file: docs/Gemfile.lock
+        extract:
+          regex: 'RUBY VERSION\s*\n\s*ruby ([0-9]+\.[0-9]+\.[0-9]+)'
+    level: warning
+    message: >-
+      docs/Gemfile.lock RUBY VERSION must match Library/Homebrew/.ruby-version;
+      the docs site and the brew runtime should build on the same Ruby.
+
+  # ── A: per-file docs convention (review-enforced) ──────────────────────
+  # The docs Rakefile `:lint` task flags any docs/*.md (except Manpage.md)
+  # that lacks a `last_review_date:` frontmatter key. (The repo's task warns
+  # via `xargs echo`; alint surfaces it as a structured violation.)
+  - id: brew-docs-have-last-review-date
+    kind: file_content_matches
+    paths:
+      include: ["docs/*.md"]
+      exclude: ["docs/Manpage.md"]
+    pattern: '(?m)^last_review_date:'
+    level: warning
+    message: >-
+      Every docs/*.md (except the generated Manpage.md) must carry a
+      `last_review_date:` frontmatter key — see docs/Rakefile `rake lint`.
+
+  # ── A (value-add): config-policy assertions (NOT repo-gated, recorded) ──
+  # The licensed.yml license allowlist is declared here; assert it stays
+  # present. (Enforcement is `licensed status` over the gem graph = D.)
+  - id: brew-licensed-allowlist-declared
+    kind: file_content_matches
+    paths: .github/licensed.yml
+    pattern: '(?m)^allowed:'
+    level: info
+    message: "Licensed config should declare an explicit `allowed:` license allowlist."
+
+  # zizmor pins Homebrew/actions to a ref (supply-chain policy). Assert the
+  # policy block is present. (Enforcement is zizmor itself = D.)
+  - id: brew-zizmor-action-pin-policy
+    kind: file_content_matches
+    paths: .github/zizmor.yml
+    pattern: 'ref-pin'
+    level: info
+    message: "zizmor config should keep the Homebrew/actions ref-pin policy."
+
+  # ── A (value-add): structure / metadata assertions the repo relies on ──
+  - id: brew-editorconfig-exists
+    kind: file_exists
+    paths: .editorconfig
+    root_only: true
+    level: info
+    message: ".editorconfig anchors the 2-space / LF / final-newline conventions."
+
+  - id: brew-shellcheckrc-exists
+    kind: file_exists
+    paths: .shellcheckrc
+    root_only: true
+    level: info
+    message: ".shellcheckrc carries the documented SC2310/2311/2312 suppressions for bin/brew."
+
+  - id: brew-codeowners-exists
+    kind: file_exists
+    paths: CODEOWNERS
+    root_only: true
+    level: info
+    message: "CODEOWNERS gates review of docs/Support-Tiers.md."
+
+  - id: brew-gitattributes-marks-generated
+    kind: file_content_matches
+    paths: .gitattributes
+    pattern: 'linguist-generated=true'
+    level: info
+    message: >-
+      .gitattributes should mark vendored/RBI/licenses dirs linguist-generated
+      so diffs and language stats ignore them.
+
+  # ── A (hygiene): the brew Ruby tree should not ship merge markers ──────
+  - id: brew-no-merge-markers-ruby
+    kind: no_merge_conflict_markers
+    paths:
+      include: ["Library/Homebrew/**/*.rb"]
+      exclude: ["Library/Homebrew/vendor/**", "Library/Homebrew/sorbet/rbi/**"]
+    level: error
+    message: "Merge-conflict markers must not be committed to the Homebrew Ruby tree."

@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config for prometheus/prometheus
+# @ c0b4c5ef183275641526cebb01898b0821fbd527
+#
+# Shape: Go (Go workspace, 6 modules) · infra/monitoring · CNCF · Apache-2.0.
+# All bespoke structural validation lives in:
+#   - Makefile / Makefile.common   (common-check_license, check-go-mod-version,
+#                                    common-style/gofmt, common-unused/go-mod-tidy,
+#                                    the make ... && git diff --exit-code codegen gates)
+#   - .github/workflows/**         (ci.yml ~390 lines, buf, codeql, scorecards,
+#                                    govulncheck, fuzzing, check_release_notes)
+#   - scripts/check-go-mod-version.sh / check_release_notes.sh / check-node-version.sh
+#
+# The DECLARATIVE state-checks that alint expresses natively are below the
+# bundles; the language-aware tools (go test / golangci-lint / gofmt / buf /
+# codeql / fuzz / the codegen-then-diff freshness gates) are deliberate D
+# non-goals and stay in CI (recorded in the case-study catalogue, not wrapped
+# here — this config measures native expressiveness, not orchestration).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1          # README/LICENSE/SECURITY/CODEOWNERS/COC/.gitignore + hygiene
+  - alint://bundled/go@v1                     # go.mod/go.sum present + shape (gated on facts.has_go)
+  - alint://bundled/compliance/apache-2@v1    # LICENSE text + NOTICE + Apache source header
+  - alint://bundled/ci/github-actions@v1      # workflow contents:read + SHA-pinned actions (prom pins by SHA)
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A1 — Go toolchain-version coherence across all 6 module files
+  # scripts/check-go-mod-version.sh: every go.mod/go.work `go` directive
+  # must be identical (CI-gated through `make test` -> check-go-mod-version).
+  # All six currently declare `go 1.25.0`. cross_file_value_equals reads the
+  # source's value and asserts every target matches it.
+  # ════════════════════════════════════════════════════════════════
+  - id: prom-go-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "go.mod"
+      extract: { regex: '(?m)^go\s+(\d+\.\d+\.\d+)' }
+    targets:
+      - file: "go.work"
+        extract: { regex: '(?m)^go\s+(\d+\.\d+\.\d+)' }
+      - file: "compliance/go.mod"
+        extract: { regex: '(?m)^go\s+(\d+\.\d+\.\d+)' }
+      - file: "internal/tools/go.mod"
+        extract: { regex: '(?m)^go\s+(\d+\.\d+\.\d+)' }
+      - file: "documentation/examples/remote_storage/go.mod"
+        extract: { regex: '(?m)^go\s+(\d+\.\d+\.\d+)' }
+      - file: "web/ui/mantine-ui/src/promql/tools/go.mod"
+        extract: { regex: '(?m)^go\s+(\d+\.\d+\.\d+)' }
+    level: error
+    message: >-
+      All go.mod / go.work files must declare the same `go <version>`
+      directive (enforced by scripts/check-go-mod-version.sh). Run
+      `make update-all-go-deps` / sync the `go` directive across modules.
+    policy_url: "https://github.com/prometheus/prometheus/blob/main/scripts/check-go-mod-version.sh"
+
+  # ════════════════════════════════════════════════════════════════
+  # A2 — Every Go source file carries the Apache license banner.
+  # Makefile.common common-check_license: `awk 'NR<=3' | grep -Eq
+  # "(Copyright|generated|GENERATED)"`. The header proper is the
+  # Apache-2 banner; generated files are exempt by carrying "generated".
+  # file_header matches the banner in the first lines; generated .go is
+  # excluded by path so the exemption is preserved.
+  # ════════════════════════════════════════════════════════════════
+  - id: prom-go-license-header
+    kind: file_header
+    paths:
+      include: ["**/*.go"]
+      exclude:
+        - "**/vendor/**"
+    # Faithful to common-check_license: it accepts any of Copyright /
+    # generated / GENERATED in the first lines (the Apache banner OR the
+    # codegen exemption OR a vendored-in third-party Copyright line such as
+    # util/testutil/testing.go's MIT header). NOT an Apache-only match.
+    pattern: 'Copyright|generated|GENERATED'
+    level: warning
+    message: >-
+      Go sources must carry a license banner in their first lines
+      (a "Copyright ..." line; generated files may say "generated");
+      enforced by `make check_license` (common-check_license in
+      Makefile.common).
+
+  # ════════════════════════════════════════════════════════════════
+  # A3 — Forbid future-year copyright stamps.
+  # common-check_license also fails on any `Copyright 2026..2099` in
+  # .go (the project standard is the year-less "Copyright The Prometheus
+  # Authors"). This catches accidental year-stamping. Currently NONE
+  # present -> rule must stay silent on the clone.
+  # ════════════════════════════════════════════════════════════════
+  - id: prom-no-future-year-copyright
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.go"]
+      exclude: ["**/vendor/**"]
+    pattern: 'Copyright (202[6-9]|20[3-9][0-9]) The Prometheus Authors'
+    level: error
+    message: >-
+      Use the year-less "Copyright The Prometheus Authors" banner; a future
+      copyright year (2026+) was found. Enforced by common-check_license.
+    policy_url: "https://github.com/prometheus/prometheus/blob/main/Makefile.common"
+
+  # ════════════════════════════════════════════════════════════════
+  # VALUE-ADD (not a prom-enforced gate; recorded separately in the
+  # catalogue): assert the CODEOWNERS<->MAINTAINERS sync intent exists
+  # by requiring both files. The repo DOCUMENTS "keep this file in sync
+  # with MAINTAINERS.md" (CODEOWNERS line 2) but no tool checks equality
+  # (different formats) -> existence is the most alint can assert.
+  # ════════════════════════════════════════════════════════════════
+  - id: prom-maintainers-file-exists
+    kind: file_exists
+    paths: ["MAINTAINERS.md"]
+    root_only: true
+    level: warning
+    message: >-
+      MAINTAINERS.md must exist and be kept in sync with CODEOWNERS
+      (CODEOWNERS header documents this convention).

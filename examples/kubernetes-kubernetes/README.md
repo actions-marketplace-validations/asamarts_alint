@@ -465,9 +465,12 @@ across the live tree; of those, **34,420 were false positives traceable to 3
 regex bugs in the then-current `.alint.yml`** (pitfalls #13 and #14 from
 the canonical pitfalls catalogue, plus the YAML `|` block-scalar
 trailing-newline issue subsequently codified as **pitfall #22**). The
-remaining **276 were real findings**: trailing whitespace, missing final
-newlines, oversized files, the merge-conflict marker, and the hygiene-rule
-false positives explained below.
+remaining **275 were real findings**: trailing whitespace, missing final
+newlines, oversized files, and the hygiene-rule items explained below.
+The 276th non-regex-FP violation — the `oss-no-merge-conflict-markers`
+hit on the vendored go-socks5 README — is a **false positive** (a
+`Feature` Setext underline, see §6.1), so the 34,696 total still holds
+(34,420 regex FPs + 275 real + 1 bundled-rule FP).
 
 **Status as of v0.9.20 (2026-05-10).** The 3 `.alint.yml` regex bugs
 were **fixed in v0.9.18 commit c5b6df32 ("kubernetes deep-analysis
@@ -485,7 +488,7 @@ script directory.
 
 | Finding | Path | Severity | Rule | Triage |
 |---|---|---|---|---|
-| Merge-conflict marker committed | `vendor/github.com/armon/go-socks5/README.md:9` | error | `oss-no-merge-conflict-markers` | **Real bug.** A `<<<<<<<` / `=======` / `>>>>>>>` block is checked into a vendored README. Existing tooling misses it because k8s `verify-*.sh` doesn't scan vendor for marker patterns; only the upstream maintainer would catch this. **Worth filing upstream** to `armon/go-socks5`. |
+| Merge-conflict marker (false positive) | `vendor/github.com/armon/go-socks5/README.md:9` | error | `oss-no-merge-conflict-markers` | **False positive (v0.9.17 bundled-rule bug, fixed in v0.12 / `0d66ee95`).** Line 9 is the Setext heading underline for the `Feature` heading on line 8 — a 7-character heading underlined with exactly seven `=` — NOT a conflict block. The vendored README has no `<<<<<<<` / `>>>>>>>` / `|||||||` anchor anywhere. The v0.9.17 rule fired on any bare `=======` line; v0.12's `0d66ee95` fix treats `=======` as a conflict separator only when the file also carries an unambiguous anchor line (`<<<<<<< ` / `>>>>>>> ` / `||||||| `, each 7 chars + space + ref). |
 | 92 markdown files lack trailing newline | `CHANGELOG/CHANGELOG-1.{15,16,17,18,19,…}.md` | info | `oss-final-newline` | Real but unweighted — k8s doesn't gate on CHANGELOG newlines. Not a launch-blocking finding. |
 | 160 markdown / yaml files have trailing whitespace | `.github/ISSUE_TEMPLATE/*.yaml`, `CHANGELOG/*.md`, … | info | `oss-no-trailing-whitespace` | Same — not gated upstream. Below k8s's threshold of attention. |
 | 6 vendored Go files lack final newline | `vendor/{github.com/Microsoft/hnslib/hns_v1.go, github.com/modern-go/concurrent/log.go, github.com/modern-go/reflect2/{go_above_118,go_below_118}.go, go.opentelemetry.io/otel/semconv/v1.{37,40}.0/attribute_group.go}` | info | `go-sources-final-newline` | Real upstream issues in 6 distinct vendored modules. k8s `verify-gofmt.sh` excludes vendor (line `'*/vendor/*' -prune`), so these slip through. Worth surfacing to those upstream projects as separate PRs. |
@@ -493,9 +496,11 @@ script directory.
 | 1 forbidden directory (false-positive) | `vendor/sigs.k8s.io/kustomize/api/internal/target` | error | `hygiene-no-cargo-target` | **False positive.** The hygiene rule looks for `**/target` (Cargo build output); kustomize has a Go package literally named `target`. **Recommended fix:** add `vendor/sigs.k8s.io/kustomize/**/target/**` to the rule's exclude list, or scope the rule to repos with a `Cargo.toml`. Filed under the bundled-ruleset refinement queue. |
 | 5 forbidden directories under hygiene `**/build, **/coverage` | `build/`, `pkg/util/coverage/`, `test/e2e_node/conformance/build/`, `vendor/github.com/onsi/ginkgo/v2/ginkgo/build/`, `vendor/sigs.k8s.io/kustomize/kustomize/v5/commands/build/` | warning | `hygiene-no-js-build-outputs` | **Was a false-positive class against v0.9.17; FIXED in v0.9.18 via bundled-rule refinement A1** — `hygiene-no-js-build-outputs` now requires a sibling `package.json` to fire, which eliminates these 5 FPs in the all-Go k8s tree. Same fix benefits vscode, nixpkgs, and node, all of which surfaced this class. |
 
-**Total real findings (alint-surfaced, existing tooling missed): 1
-upstream merge-conflict marker, 6 vendored final-newline issues, 1
-arguable size-allowlist sync. Plus 165 informational / cosmetic
+**Total real findings (alint-surfaced, existing tooling missed): 6
+vendored final-newline issues, 1 arguable size-allowlist sync (the
+`oss-no-merge-conflict-markers` error on the vendored go-socks5 README
+was a false positive on a `Feature` Setext heading underline — see
+§6.1 — fixed in v0.12 / `0d66ee95`). Plus 165 informational / cosmetic
 findings (trailing whitespace + final newlines + over-1MB
 generated files) that are below k8s's explicit gate threshold but are
 real signal.**
@@ -654,3 +659,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
   All 3 historical bugs documented in §6.2 have been resolved in
   v0.9.18; the current config is clean.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (58 rules, ~67% coverage). +10 surfaces, headlined by the
+66 per-directory `.import-restrictions` files -> import_gate (preset go),
+the per-language boilerplate sweep -> file_header (year-optional, since
+post-2025 k8s drops the year), and codegen/vendor freshness ->
+command_idempotent in verify mode. Note: compliance/apache-2@v1 OVER-FIRES
+(branded "Kubernetes Authors" header + generated code) so it is dropped,
+as is ci/github-actions@v1 (k8s runs on Prow, has no .github/workflows).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 4).

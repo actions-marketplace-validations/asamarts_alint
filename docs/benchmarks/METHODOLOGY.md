@@ -33,12 +33,14 @@ syscall instruction counts drift with glibc/kernel versions.
 So we split:
 
 - **criterion micro-benches** isolate the pure-CPU kernels
-  where instruction-ish patterns are stable. 12 bench files
-  under `crates/alint-bench/benches/`; the catalogue with
-  per-bench rationale lives in [`micro/README.md`](micro/README.md).
+  where instruction-ish patterns are stable. 12 criterion bench
+  files under `crates/alint-bench/benches/` (the two `det_*`
+  gungraun benches there back the deterministic gate below, not
+  this layer); the catalogue with per-bench rationale lives in
+  [`micro/README.md`](micro/README.md).
 - **hyperfine macro-benches** measure the actual CLI as
   users will invoke it, across controlled synthetic trees,
-  and publish per-platform numbers. 8 scenarios (S1-S8)
+  and publish per-platform numbers. 14 scenarios (S1-S14)
   under `xtask/src/bench/scenarios/`; catalogue in
   [`macro/README.md`](macro/README.md).
 
@@ -90,7 +92,8 @@ Cross-version reproducibility tells the real story:
 So `xtask bench-gate` (the publish criterion; `RELEASING.md`
 step 1) gates within-run CV only on 100k/1m (1k/10k are advisory
 measurement-floor noise) and gates cross-version regression on
-`min_ms` for `>= 10k` (`1k` is unreliable at every statistic).
+`min_ms` for `>= 10k` at a **+15 % ceiling vs the prior release**
+(`1k` is unreliable at every statistic).
 The published `HISTORY.md` tables and the alint.org trajectory
 deliberately stay `mean +/- stddev`: every historical row and the
 hardcoded v0.5.6 baseline are mean-based, and restating the
@@ -174,6 +177,19 @@ competitive runs" section.
 - **`cargo build --release` is not bit-reproducible across
   rustc versions** even with the same source. That's why
   the fingerprint records the rustc version.
+- **Small-RAM hosts (<= ~16 GB) must run with
+  `ALINT_BENCH_DROP_CACHES=1`.** The full 1M matrix leaves the page
+  cache saturated (two 1M trees + git objects, ~16 GB), and the first
+  content-heavy 1M scenario then stalls in page-cache reclaim mid-
+  measurement (`allocstall`) — a variance artifact invisible to disk-util
+  and `MemAvailable` that spikes one cell's CV to 40-50 %. The flag drops
+  the page cache once per size phase after tree-gen; warmup re-reads the
+  tree so measured runs stay warm. A large-RAM host (e.g. the now-retired
+  62 GB 3900X reference desktop, whose series lives at
+  [`/benchmarks-1/`](https://alint.org/benchmarks-1/)) never reclaims and
+  must leave the flag OFF — it needs passwordless sudo for `drop_caches`
+  and would only add overhead.
+  Investigation: [`investigations/2026-07-1m-writeback-contention/`](investigations/2026-07-1m-writeback-contention/).
 
 ## Why not CodSpeed / iai-callgrind / Bencher
 
@@ -200,18 +216,45 @@ later won't require touching the bench code.
 
 ## Regression gates
 
-Two gates run in CI:
+The CI bench jobs (per PR, `ci.yml`) are **not** the wall-clock
+`bench-compare`:
 
-1. **Per-PR**: `xtask bench-compare --before <floor> --after
-   target/criterion --threshold 10` against the v0.7.0
-   floor under
-   [`micro/results/linux-x86_64/v0.7.0/criterion/`](micro/results/linux-x86_64/v0.7.0/). Catches any micro-bench whose mean
-   has grown more than 10 % vs the v0.7.0 publication.
-2. **Per-release** (manual, before tag): `xtask bench-scale`
-   at the publication-grade matrix; eyeball the headline
-   cells in [`HISTORY.md`](HISTORY.md). Anything > 20 %
-   drift gets an investigation under
-   [`investigations/`](investigations/).
+1. **`bench-smoke`** — a fast hyperfine smoke check that the macro
+   harness still runs end-to-end. **Non-gating** (a perf smoke check,
+   not a correctness gate).
+2. **`perf-gate`** — the deterministic gungraun gate
+   (`ci/scripts/det-perf-gate.sh`): instruction-count `Ir` (+2%) and
+   `EstimatedCycles` (+5%) vs the PR's merge-base, load-immune so it
+   runs on the self-hosted runner regardless of co-tenants. **Advisory
+   today** (`DET_PERF_ADVISORY=1` — it annotates, doesn't fail); see
+   [`../design/deterministic-perf-gating.md`](../design/deterministic-perf-gating.md).
+
+`xtask bench-compare` (micro vs the v0.7.0 floor) is a **local** helper,
+not wired into any workflow. Wall-clock regression is gated
+**per-release** (manual, before tag) by `xtask bench-gate`
+(cross-version `min_ms`; the publish criterion in `RELEASING.md`),
+trustworthy only on a verified-quiet box — `bench-record.yml`'s
+`xtask bench-scale` matrix (S1-S14 × {1k,10k,100k,1m} × {full,changed})
+is otherwise characterization. A gate failure — or any > 20 % drift even
+when the gate passes — gets an investigation under
+[`investigations/`](investigations/) (v0.14.0's S2 read regression failed
+the gate at +15 % and got one, below).
+
+**The deterministic `perf-gate` is load-immune but I/O-blind — this is the concrete
+case for keeping BOTH layers.** It counts *guest instructions*, so a regression that
+lives in syscall / kernel wall-clock (extra `read()`s per file, an added `stat`, a
+spawn) barely moves `Ir` / `EstimatedCycles` while costing real time. v0.14.0 shipped
+exactly such a read-path regression — the OOM cap dropped `File`'s `read_to_end`
+preallocation, so content reads grew-and-reread — that the deterministic gate passed
+flat (±0.4 %) and **only the wall-clock `bench-gate` caught** (S2 +12-15 %). So a
+flat-`Ir`-but-slow scenario is *not* automatically contamination: it can be a real
+I/O regression the deterministic layer structurally cannot see. Disambiguate with a
+syscall count (deterministic, like `Ir`, but sensitive to the I/O path) or a
+quiet-box wall-clock control before concluding either way. Worked example + microbench:
+[`investigations/2026-07-v0.14-s2-harness-artifact/`](investigations/2026-07-v0.14-s2-harness-artifact/);
+the gate's own statement of the limit is in
+[`../design/deterministic-perf-gating.md`](../design/deterministic-perf-gating.md)
+("Known blind spot").
 
 Per-phase gating during a release cut (e.g. v0.9.x's four
 phases) compared each phase against the prior phase's

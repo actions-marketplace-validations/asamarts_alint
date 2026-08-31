@@ -590,3 +590,20 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   **A4** (`monorepo/cargo-workspace@v1` selector parses
   `[workspace]` members), **A5** (`oss-baseline@v1`
   `oss-license-exists` recognises LICENSE.TXT and LICENSE.md).
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (68 rules, ~59% coverage / ~27 behaviors). +6 surfaces:
+ordered_block maps tidy::alphabetical exactly, the whole tidy::style
+whitespace/length/forbidden-token sweep becomes ~10 declarative rules, the
+Cargo.lock `source =` allowlist (tidy::extdeps) becomes exact, rustfmt ->
+command_idempotent, and triagebot path-filters -> registry_paths_resolve.
+Note: the per-tier PERMITTED_DEPENDENCIES allowlist needs a cargo-metadata
+graph walk (not import_gate, which reads source not the resolved graph), so
+it stays a non-replaceable.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 6).

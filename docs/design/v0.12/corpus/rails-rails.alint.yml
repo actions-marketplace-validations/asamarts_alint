@@ -1,0 +1,270 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Proposed alint config for rails/rails — v0.12 100-repo case study.
+# Pin: 6c75e6d5663afa4278ee593c2d6c20c1ee396e32.
+#
+# Shape: a 12-gem Ruby monorepo (the 11 framework gems + the `rails`
+# meta-gem), bundler + rake, plus a 3-package npm sub-workspace
+# (actioncable / actiontext / activestorage). Visible CI is GitHub
+# Actions for bot/devcontainer/releaser/tool jobs; the MAIN test +
+# rubocop gate runs on Buildkite (pipeline defined off-repo, not in
+# tree). So most of the enforced *execution* surface (the full test
+# matrix across 5 DB adapters, rubocop's ~100 cops, eslint, shellcheck,
+# rail_inspector's Prism-AST checks) is D — out of alint scope by design.
+#
+# What alint expresses here (the addressable surface):
+#   - The single-source-of-truth VERSION invariant: the root RAILS_VERSION
+#     file is canonical; every gem's gem_version.rb constants and every
+#     JS package.json "version" must agree with it. The releaser's
+#     `update_versions` rake task writes these; alint asserts the result.
+#   - Per-framework structure (each gem ships CHANGELOG + LICENSE + README).
+#   - The frozen_string_literal magic-comment convention (AGENTS.md /
+#     CONTRIBUTING / RuboCop Style/FrozenStringLiteralComment).
+#   - Hygiene (final newline / no trailing whitespace) on Ruby sources.
+#
+# Genuine non-replaceables (left to the right tool, recorded as D):
+#   - the test suite (rake test across activerecord adapters)  -> Ruby/Minitest
+#   - rubocop ~100 cops (style/layout/perf/minitest/packaging)  -> rubocop AST
+#   - eslint (semi/quotes/import-order)                         -> eslint AST
+#   - shellcheck on .devcontainer/*.sh                          -> shellcheck
+#   - rail_inspector changelogs / configuration / requires      -> Prism AST
+#       (NB: `requires` is an import-firewall and `configuration` is a
+#        doc<->code coherence check — real file->file graph intent, but
+#        enforced via Ruby AST, so D here; see the case-study record.)
+
+version: 1
+
+vars:
+  # The single source of truth. Every value-site below must agree.
+  rails_version: "8.2.0.alpha"     # root RAILS_VERSION file
+  version_core: "8.2.0"            # MAJOR.MINOR.TINY (shared by gem + npm forms)
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════
+  # 1. VERSION SINGLE-SOURCE-OF-TRUTH (the headline cross-file invariant)
+  #    RAILS_VERSION (root) == every gem_version.rb == every package.json.
+  #    gem_version.rb stores the version SPLIT into MAJOR/MINOR/TINY/PRE
+  #    constants and npm package.json uses the dashed pre-release form
+  #    (8.2.0-alpha) — so we compare the numeric CORE (8.2.0) extracted
+  #    from each side, plus a separate PRE-tag check. (A full "compose
+  #    MAJOR.MINOR.TINY.PRE and compare the whole string" would want a
+  #    new primitive — see the case-study B-items.)
+  # ═══════════════════════════════════════════════════════════════════
+
+  # 1a. RAILS_VERSION's own numeric core is what we expect (anchor).
+  - id: rails-version-file-core
+    kind: file_content_matches
+    paths: RAILS_VERSION
+    pattern: '^8\.2\.0'
+    level: error
+    message: "RAILS_VERSION must start with the 8.2.0 numeric core."
+
+  # 1b. Every framework gem_version.rb numeric core == RAILS_VERSION core.
+  #     NOTE: gem_version.rb splits the version into MAJOR/MINOR/TINY
+  #     constants, while alint's regex extract returns only capture
+  #     group 1 — so a single "compose 8.2.0 out of three constants"
+  #     extract is NOT expressible (see the case-study C-item). We
+  #     instead assert each component separately against the matching
+  #     component of RAILS_VERSION. One logical invariant, three rules.
+  - id: rails-gem-version-major-matches-root
+    kind: cross_file_value_equals
+    source:
+      file: RAILS_VERSION
+      extract: { regex: '^(\d+)\.' }
+    targets:
+      files: "*/lib/*/gem_version.rb"
+      extract: { regex: 'MAJOR\s*=\s*(\d+)' }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      gem_version.rb MAJOR in {{ctx.target}} must equal the RAILS_VERSION
+      major {{ctx.source_value}}. Run the releaser's `update_versions`.
+
+  - id: rails-gem-version-minor-matches-root
+    kind: cross_file_value_equals
+    source:
+      file: RAILS_VERSION
+      extract: { regex: '^\d+\.(\d+)\.' }
+    targets:
+      files: "*/lib/*/gem_version.rb"
+      extract: { regex: 'MINOR\s*=\s*(\d+)' }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      gem_version.rb MINOR in {{ctx.target}} must equal the RAILS_VERSION
+      minor {{ctx.source_value}}.
+
+  - id: rails-gem-version-tiny-matches-root
+    kind: cross_file_value_equals
+    source:
+      file: RAILS_VERSION
+      extract: { regex: '^\d+\.\d+\.(\d+)' }
+    targets:
+      files: "*/lib/*/gem_version.rb"
+      extract: { regex: 'TINY\s*=\s*(\d+)' }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      gem_version.rb TINY in {{ctx.target}} must equal the RAILS_VERSION
+      tiny {{ctx.source_value}}.
+
+  # 1c. Every framework gem_version.rb PRE tag == RAILS_VERSION pre tag.
+  - id: rails-gem-version-pre-matches-root
+    kind: cross_file_value_equals
+    source:
+      file: RAILS_VERSION
+      extract: { regex: '^\d+\.\d+\.\d+\.([A-Za-z0-9]+)' }
+    targets:
+      files: "*/lib/*/gem_version.rb"
+      extract: { regex: 'PRE\s*=\s*"([A-Za-z0-9]+)"' }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      gem_version.rb PRE tag in {{ctx.target}} must equal the RAILS_VERSION
+      pre-release tag {{ctx.source_value}} (e.g. "alpha").
+
+  # 1d. Every JS package.json numeric core == RAILS_VERSION core.
+  #     npm uses 8.2.0-alpha; we compare just the 8.2.0 leading core.
+  - id: rails-npm-version-core-matches-root
+    kind: cross_file_value_equals
+    source:
+      file: RAILS_VERSION
+      extract: { regex: '^(\d+\.\d+\.\d+)' }
+    targets:
+      files: "{actioncable,actiontext,activestorage}/package.json"
+      extract: { regex: '"version":\s*"(\d+\.\d+\.\d+)' }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      package.json version core in {{ctx.target}} ({{ctx.target_value}})
+      must equal the RAILS_VERSION core {{ctx.source_value}}. The releaser
+      keeps the npm packages in lockstep with the gems.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 2. PER-FRAMEWORK STRUCTURE — each of the 12 gems ships the canonical
+  #    documents. README is .md OR .rdoc (the repo mixes both), so we
+  #    don't assert a single name; CHANGELOG.md + MIT-LICENSE are uniform.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: rails-framework-has-changelog
+    kind: for_each_dir
+    select: "{actioncable,actionmailbox,actionmailer,actionpack,actiontext,actionview,activejob,activemodel,activerecord,activestorage,activesupport,railties}"
+    require:
+      - kind: file_exists
+        paths: "{path}/CHANGELOG.md"
+    level: error
+    message: "Every Rails framework gem must ship a CHANGELOG.md."
+
+  - id: rails-framework-has-license
+    kind: for_each_dir
+    select: "{actioncable,actionmailbox,actionmailer,actionpack,actiontext,actionview,activejob,activemodel,activerecord,activestorage,activesupport,railties}"
+    require:
+      - kind: file_exists
+        paths: "{path}/MIT-LICENSE"
+    level: error
+    message: "Every Rails framework gem must ship its own MIT-LICENSE."
+
+  - id: rails-framework-has-gemspec
+    kind: for_each_dir
+    select: "{actioncable,actionmailbox,actionmailer,actionpack,actiontext,actionview,activejob,activemodel,activerecord,activestorage,activesupport,railties}"
+    require:
+      - kind: file_exists
+        paths: "{path}/{basename}.gemspec"
+    level: error
+    message: "Every Rails framework gem must ship a <name>.gemspec."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 3. FROZEN_STRING_LITERAL MAGIC COMMENT — a load-bearing, documented
+  #    convention (AGENTS.md: "Use # frozen_string_literal: true at top
+  #    of all files"; RuboCop Style/FrozenStringLiteralComment enforces).
+  #    Native file_header expresses the logic without shelling rubocop.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: rails-ruby-frozen-string-literal
+    kind: file_header
+    paths:
+      include: ["activesupport/lib/**/*.rb", "activerecord/lib/**/*.rb", "actionpack/lib/**/*.rb"]
+    pattern: 'frozen_string_literal:\s*true'
+    lines: 3
+    level: warning
+    message: >-
+      Ruby source must carry `# frozen_string_literal: true` near the top
+      (RuboCop Style/FrozenStringLiteralComment; AGENTS.md convention).
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 4. HYGIENE on Ruby sources (RuboCop Layout/TrailingWhitespace +
+  #    Layout/TrailingEmptyLines enforce these; native here).
+  # ═══════════════════════════════════════════════════════════════════
+  - id: rails-ruby-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["activesupport/lib/**/*.rb", "activerecord/lib/**/*.rb"]
+    level: info
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  - id: rails-ruby-final-newline
+    kind: final_newline
+    paths:
+      include: ["activesupport/lib/**/*.rb", "activerecord/lib/**/*.rb"]
+    level: info
+    fix:
+      file_append_final_newline: {}
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 5. CHANGELOG HEADER FORMAT — rail_inspector's changelog checker
+  #    enforces "header starts with '*' + 3 spaces". The non-empty entry
+  #    shape is partly expressible: the file's first non-blank line is an
+  #    entry header ("*   ") OR a release header ("## Rails"). (The full
+  #    author-presence / 4-space-indent rules need the AST tool — D.)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: rails-changelog-header-shape
+    kind: file_content_matches
+    paths:
+      include:
+        - "activesupport/CHANGELOG.md"
+        - "activerecord/CHANGELOG.md"
+        - "actionpack/CHANGELOG.md"
+    pattern: '\A(\*   \S|## Rails)'
+    level: info
+    message: >-
+      A CHANGELOG entry header must begin with '*' + 3 spaces (rail_inspector
+      changelog convention) — or a '## Rails' release header.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 6. POLICY-CONFIG PRESENCE (alint value-add — asserts the lint/policy
+  #    configs are declared; the tools themselves run off in CI/Buildkite).
+  # ═══════════════════════════════════════════════════════════════════
+  - id: rails-rubocop-config-exists
+    kind: file_exists
+    paths: .rubocop.yml
+    root_only: true
+    level: warning
+    message: "Project-wide RuboCop policy lives in .rubocop.yml."
+
+  - id: rails-eslint-config-exists
+    kind: file_exists
+    paths: eslint.config.mjs
+    root_only: true
+    level: info
+    message: "The JS packages' lint policy lives in eslint.config.mjs."
+
+  - id: rails-contributing-exists
+    kind: file_exists
+    paths: CONTRIBUTING.md
+    root_only: true
+    level: warning
+    message: "CONTRIBUTING.md documents the contribution + review gates."
+
+  - id: rails-agents-guide-exists
+    kind: file_exists
+    paths: AGENTS.md
+    root_only: true
+    level: info
+    message: "AGENTS.md documents the conventions enforced in review."

@@ -44,6 +44,7 @@ fn canonical_report() -> Report {
                         .with_path(std::path::Path::new("src/util.ts"))
                         .with_location(7, 4),
                 ],
+                notes: Vec::new(),
                 is_fixable: false,
             },
             RuleResult {
@@ -58,6 +59,7 @@ fn canonical_report() -> Report {
                         .with_path(std::path::Path::new("CONTRIBUTING.md"))
                         .with_location(3, 1),
                 ],
+                notes: Vec::new(),
                 is_fixable: true,
             },
             RuleResult {
@@ -65,6 +67,7 @@ fn canonical_report() -> Report {
                 level: Level::Info,
                 policy_url: None,
                 violations: vec![Violation::new("informational notice — no path")],
+                notes: Vec::new(),
                 is_fixable: false,
             },
         ],

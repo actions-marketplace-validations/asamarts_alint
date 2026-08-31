@@ -711,3 +711,13 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   `hygiene-no-js-build-outputs` over-broad scope) — the latter was
   fixed in v0.9.18 (A1); the former remains a bundled-ruleset
   refinement candidate
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (128 rules). New: import_gate (ESM/CJS named-import ban + cross-package layering), command_idempotent (8 command wrappers, per-file offender parsing on the format gate), git_commit_no_fixup. Residual: pure-AST tslint rules; a JS-export value extractor for the commit-scope list.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 1).

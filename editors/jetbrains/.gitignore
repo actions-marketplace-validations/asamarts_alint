@@ -1,0 +1,6 @@
+.gradle/
+.intellijPlatform/
+build/
+*.zip
+# The Gradle wrapper (incl. gradle/wrapper/gradle-wrapper.jar) IS
+# committed so `./gradlew buildPlugin` works out of the box.

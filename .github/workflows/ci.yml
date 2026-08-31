@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master]
-    tags: ["v*"]
+    tags: ["v*.*.*"]
   pull_request:
     branches: [main, master]
 
@@ -24,19 +24,50 @@ env:
 # ─────────────────────────────────────────────────────────────────────
 jobs:
 
-  # ── Change detection ──────────────────────────────────────────────
+  # ── Change detection + runner routing ─────────────────────────────
+  # SECURITY (audit H6): this entry job runs on ubuntu-latest, never the
+  # self-hosted box — it's the first job a fork PR reaches and it checks out
+  # (untrusted) PR code. It routes every downstream job's runner from the
+  # IMMUTABLE `head.repo.fork` context: a fork PR → ephemeral ubuntu-latest;
+  # anything trusted (push / tag / same-repo PR) → the warm self-hosted box.
+  # The decision is taken from context, NOT from a checked-out script — see
+  # docs/design/v0.14/ci-fork-pr-isolation.md.
   changes:
     name: Detect Changes
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.detect.outputs.rust }}
       docs: ${{ steps.detect.outputs.docs }}
       bench: ${{ steps.detect.outputs.bench }}
       examples: ${{ steps.detect.outputs.examples }}
+      editors: ${{ steps.detect.outputs.editors }}
+      supply_chain: ${{ steps.detect.outputs.supply_chain }}
+      runner: ${{ steps.route.outputs.runner }}
+      untrusted: ${{ steps.route.outputs.untrusted }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+      # Routing runs FIRST and writes to its OWN step output, which the
+      # (untrusted) detect step below cannot touch — so a fork's
+      # detect-changes.sh can never force the downstream jobs onto the box.
+      # Trust is decided by full_name equality and fails CLOSED: a non-PR
+      # event (push/tag), or a PR whose head repo IS this repo (a collaborator
+      # branch), is trusted → self-hosted. A fork — OR a null/absent head.repo
+      # (a deleted/detached fork) — is untrusted → ephemeral ubuntu-latest.
+      # (`== github.repository`, not the `fork` bit, so it also stays correct
+      # were this repo itself a fork.)
+      - id: route
+        env:
+          IS_TRUSTED: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          if [ "$IS_TRUSTED" = "true" ]; then
+            echo 'runner=["self-hosted","linux","alint"]' >> "$GITHUB_OUTPUT"
+            echo 'untrusted=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'runner=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'untrusted=true' >> "$GITHUB_OUTPUT"
+          fi
       - id: detect
         env:
           GH_EVENT: ${{ github.event_name }}
@@ -44,16 +75,31 @@ jobs:
           PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: ci/scripts/detect-changes.sh
 
+  # Drift gate (trivial, <1s): the release-credentials.md secrets inventory must
+  # stay in sync with the secrets the workflows use -- every referenced secret is
+  # documented, and no deleted/retired secret is still wired in. Unconditional on
+  # ubuntu-latest (no toolchain or secrets needed; the check is cheaper than the
+  # change-filter machinery, and the invariant is global -- a workflow OR a doc
+  # edit can break it, so it must not be gated on the rust/docs flags).
+  secrets-inventory:
+    name: Secrets Inventory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: bash ci/scripts/check-secrets-inventory.sh
+
   # ── Rust pipeline ─────────────────────────────────────────────────
   fmt:
     name: Format
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-fmt
       - run: ci/scripts/fmt.sh
@@ -64,11 +110,13 @@ jobs:
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-clippy
       - run: ci/scripts/clippy.sh
@@ -79,11 +127,13 @@ jobs:
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-test
       - run: ci/scripts/test.sh
@@ -94,11 +144,13 @@ jobs:
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-audit
       - run: ci/scripts/audit.sh
@@ -109,14 +161,39 @@ jobs:
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-deny
       - run: ci/scripts/deny.sh
+
+  supply-chain:
+    name: Supply Chain
+    # Runs the SAME generator release.yml uses, so a broken about.toml/about.hbs,
+    # a lockfile cargo-about can't file-match, or an out-of-policy license fails
+    # the PR instead of first surfacing at release time (where it would block the
+    # GitHub Release after crates.io + ghcr have already published). Gated on the
+    # narrow `supply_chain` filter (lockfile / any Cargo.toml / about.* / deny.toml
+    # / the generator script), so it stays off source-only PRs.
+    needs: [changes, fmt]
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.supply_chain == 'true'
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: ci-supply-chain
+      - run: ci/scripts/supply-chain-artifacts.sh
 
   build:
     name: Build
@@ -124,11 +201,13 @@ jobs:
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-build
       - run: ci/scripts/build.sh
@@ -136,17 +215,35 @@ jobs:
   docs:
     name: Docs
     needs: [changes, fmt]
+    # Runs on `docs` changes too, not just `rust`: docs.sh carries the
+    # gen-{schema,facts,arch} --check and docs-export --check gates, and the
+    # artifacts they guard (facts.json, docs/design/architecture/**, and the
+    # docs bundle from docs/rules.md) live under `docs`/root paths that don't
+    # flip `rust`. Without the `docs` clause, a PR hand-editing a generated
+    # artifact would skip this job and merge stale (the gate bypass the
+    # 2026-06-11 review found).
     if: >-
       !cancelled() && !failure()
-      && needs.changes.outputs.rust == 'true'
-      && github.event_name == 'push'
-    runs-on: [self-hosted, linux, alint]
+      && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.docs == 'true')
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-docs
+      # Ephemeral fork-PR path only: the box's runner image already ships
+      # Node 22, but a fresh ubuntu-latest needs it so docs.sh's
+      # `likec4 validate` + `gen-mermaid --check` gates run (they fetch
+      # likec4 via `npx -y likec4@<pin>`). Skipped on the box.
+      - if: needs.changes.outputs.untrusted == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+      # Load-bearing for schema/parser/contract correctness; must catch drift
+      # on a PR, not only post-merge.
       - run: ci/scripts/docs.sh
 
   dogfood:
@@ -155,30 +252,78 @@ jobs:
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-dogfood
       - run: ci/scripts/dogfood.sh
+      # The README's demo GIF is generated from demo/alint.tape, so a rule or
+      # fixer change can silently turn it into a lie on our main discovery
+      # surface. dogfood.sh has already built target/release/alint, so replay
+      # the tape's command sequence and pin what it actually does.
+      - run: ci/scripts/demo-drift.sh
 
   # ── Bench smoke ───────────────────────────────────────────────────
   bench-smoke:
     name: Bench Smoke
     needs: [changes, build]
+    # `untrusted != 'true'` keeps this box-only job off fork PRs (they route
+    # to ubuntu-latest, where a bench job is meaningless).
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.bench == 'true'
-    runs-on: [self-hosted, linux, alint]
+      && needs.changes.outputs.untrusted != 'true'
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-bench-smoke
       - run: ci/scripts/bench-smoke.sh
+
+  # ── Deterministic perf gate ───────────────────────────────────────
+  # Load-immune instruction / cache / branch counts (Valgrind) for the PR vs its
+  # merge-base, built + benched in this same run. Unlike wall-clock bench-scale,
+  # it is NOT affected by the shared runner's co-tenant load, so it can gate
+  # every rust-touching PR deterministically. Advisory (DET_PERF_ADVISORY=1)
+  # during rollout — flip to "0" to enforce. Design:
+  # docs/design/deterministic-perf-gating.md.
+  perf-gate:
+    name: Perf Gate (deterministic)
+    needs: [changes, build]
+    # `untrusted != 'true'` keeps this box-only (Valgrind) job off fork PRs.
+    if: >-
+      !cancelled() && !failure()
+      && github.event_name == 'pull_request'
+      && needs.changes.outputs.rust == 'true'
+      && needs.changes.outputs.untrusted != 'true'
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
+    env:
+      # Advisory: a perf regression annotates but does not fail the job. When
+      # flipping this to "0" (enforcing), also add `perf-gate` to the `summary`
+      # job's `needs:` so a failed gate is reflected in the aggregate Summary.
+      DET_PERF_ADVISORY: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: ci-perf-gate
+      - env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: ci/scripts/det-perf-gate.sh
 
   # ── Examples validate ────────────────────────────────────────────
   # Run `alint validate-config` against every examples/*/.alint.yml.
@@ -191,11 +336,13 @@ jobs:
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.examples == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-examples
       - run: ci/scripts/examples-validate.sh
@@ -210,10 +357,50 @@ jobs:
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.rust == 'true'
-    runs-on: [self-hosted, linux, alint]
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: ci/scripts/shell-tests.sh
+
+  # ── Editor extensions ─────────────────────────────────────────────
+  # Build the packaged extensions that otherwise only build at release
+  # time: typecheck + bundle the VS Code TS extension, wasm-build the Zed
+  # extension, and build the JetBrains plugin (compiles against LSP4IJ +
+  # the IntelliJ SDK). GitHub-hosted runner (needs Node + the wasm target
+  # + a full JDK 17). setup-gradle caches the IntelliJ SDK between runs.
+  editors:
+    name: Editors (VS Code + Zed + JetBrains)
+    needs: changes
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.editors == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "20"
+      - name: VS Code — install, typecheck, bundle
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm run check-types
+          npm run build
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1
+      - name: Zed — wasm build
+        working-directory: editors/zed
+        run: cargo build --release --target wasm32-wasip1
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+      - name: JetBrains — build + verify plugin
+        working-directory: editors/jetbrains
+        run: ./gradlew buildPlugin verifyPlugin --no-daemon
 
   # ── Summary report ───────────────────────────────────────────────
   summary:
@@ -221,34 +408,45 @@ jobs:
     if: always()
     needs:
       - changes
+      - secrets-inventory
       - fmt
       - clippy
       - test
       - audit
       - deny
+      - supply-chain
       - build
       - docs
       - dogfood
       - bench-smoke
       - examples
       - shell-tests
-    runs-on: [self-hosted, linux, alint]
+      - editors
+    # Defensive default: `summary` is `if: always()`, so it evaluates runs-on
+    # even when `changes` is cancelled before the route step (empty `runner`);
+    # fall back to ubuntu-latest so a clean cancel can't fail on fromJSON('').
+    runs-on: ${{ needs.changes.outputs.runner && fromJSON(needs.changes.outputs.runner) || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - env:
           RUST_CHANGED: ${{ needs.changes.outputs.rust }}
           DOCS_CHANGED: ${{ needs.changes.outputs.docs }}
           BENCH_CHANGED: ${{ needs.changes.outputs.bench }}
           EXAMPLES_CHANGED: ${{ needs.changes.outputs.examples }}
+          EDITORS_CHANGED: ${{ needs.changes.outputs.editors }}
+          SUPPLY_CHAIN_CHANGED: ${{ needs.changes.outputs.supply_chain }}
+          SECRETS_INVENTORY_RESULT: ${{ needs.secrets-inventory.result }}
           FMT_RESULT: ${{ needs.fmt.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
           AUDIT_RESULT: ${{ needs.audit.result }}
           DENY_RESULT: ${{ needs.deny.result }}
+          SUPPLY_CHAIN_RESULT: ${{ needs.supply-chain.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           DOCS_JOB_RESULT: ${{ needs.docs.result }}
           DOGFOOD_RESULT: ${{ needs.dogfood.result }}
           BENCH_SMOKE_RESULT: ${{ needs.bench-smoke.result }}
           EXAMPLES_RESULT: ${{ needs.examples.result }}
           SHELL_TESTS_RESULT: ${{ needs.shell-tests.result }}
+          EDITORS_RESULT: ${{ needs.editors.result }}
         run: ci/scripts/summary.sh

@@ -13,12 +13,14 @@
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     /// `true` → +x must be set; `false` → +x must NOT be set.
     require: bool,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 // Fields are read only by the `#[cfg(unix)]` evaluate path; on
@@ -35,6 +37,13 @@ pub struct ExecutableBitRule {
 }
 
 impl Rule for ExecutableBitRule {
+    /// Expose the per-file scope so the engine resolves this rule's
+    /// `scope_filter` (manifest sets, `changed_since:`) before dispatch and
+    /// can `--changed`-skip it (see `Rule::path_scope`).
+    fn path_scope(&self) -> Option<&Scope> {
+        Some(&self.scope)
+    }
+
     alint_core::rule_common_impl!();
 
     #[cfg(unix)]
@@ -143,6 +152,48 @@ mod tests {
                file_remove: {}\n",
         );
         assert!(build(&spec).is_err());
+    }
+
+    /// ADR-0008: `git_tracked_only` is a kind-specific option on the existence
+    /// family only. A non-existence kind that receives it must reject it at load
+    /// (via the Options `deny_unknown_fields`) rather than silently ignore it.
+    /// This is the fail-loud the divergence used to lack; if it regresses (e.g.
+    /// `git_tracked_only` drifts back onto `RuleSpec`), this test fails.
+    #[test]
+    fn build_rejects_git_tracked_only_on_non_existence_kind() {
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: executable_bit\n\
+             paths: \"scripts/**\"\n\
+             require: true\n\
+             git_tracked_only: true\n\
+             level: error\n",
+        );
+        assert!(
+            build(&spec).is_err(),
+            "git_tracked_only must be rejected on a non-existence kind (ADR-0008)"
+        );
+    }
+
+    /// ADR-0008: `respect_gitignore` is a `file_exists`-only option (the
+    /// pitfall-#18 escape hatch), NOT a `rule_common` field. A non-existence
+    /// kind that receives it must reject it at load — the fail-loud it lacked
+    /// while the field lived on `rule_common` (where `no_bom: respect_gitignore`
+    /// validated, loaded, and was silently ignored).
+    #[test]
+    fn build_rejects_respect_gitignore_on_non_existence_kind() {
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: executable_bit\n\
+             paths: \"scripts/**\"\n\
+             require: true\n\
+             respect_gitignore: false\n\
+             level: error\n",
+        );
+        assert!(
+            build(&spec).is_err(),
+            "respect_gitignore must be rejected on a non-existence kind (ADR-0008)"
+        );
     }
 
     #[cfg(unix)]

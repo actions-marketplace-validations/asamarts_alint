@@ -4,6 +4,59 @@ alint is a build-time / CI-time tool that runs against repository contents.
 Vulnerabilities can affect supply-chain integrity for everyone who uses it,
 so reports are taken seriously and handled privately until a fix ships.
 
+## Supported versions
+
+alint is pre-1.0 and ships from a single line of development. Only the **latest
+released minor** is supported: fixes land in a new release, not as backports to older
+minors. Published versions are **removed only on a confirmed defect, never
+proactively**: crates.io versions can only be yanked (never deleted), and we do not
+unpublish npm releases, so pinned builds keep working. There is no separate LTS line.
+
+## Verifying release artifacts
+
+Releases are signed and carry build provenance, so you can confirm a download was
+built by this repo's CI from this repo's source before you run it. This defends
+against tampered mirrors and tampered downloads. It does not by itself defend a
+compromised publishing account (that account is the root of trust), so the org is
+hardened with 2FA and minimal token scopes alongside these steps. Signing and
+attestation are keyless (Sigstore / GitHub OIDC): there is no long-lived signing
+key to leak, and every signature is logged in the public Rekor transparency log.
+
+The `gh` commands need an authenticated GitHub CLI (`gh auth login`, or a
+`GH_TOKEN`); the `cosign` commands need cosign v3+ (the signatures use the
+new-format Sigstore bundle) but no GitHub account.
+
+**Build provenance** (GitHub CLI). Each tarball, the installer, the SBOM, the
+license bundle, and the container image are attested:
+
+```
+gh attestation verify alint-<version>-<target>.tar.gz --repo asamarts/alint
+gh attestation verify oci://ghcr.io/asamarts/alint:<version> --repo asamarts/alint
+```
+
+**Signature over the checksum manifest**, no GitHub CLI needed. `SHA256SUMS` is
+cosign-signed; the signature travels as `SHA256SUMS.cosign.bundle`. Verify the
+manifest, then check any downloaded asset against it:
+
+```
+cosign verify-blob --bundle SHA256SUMS.cosign.bundle \
+  --certificate-identity-regexp '^https://github\.com/asamarts/alint/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS   # macOS: shasum -a 256 --check --ignore-missing SHA256SUMS
+```
+
+**Container image signature.** cosign resolves the tag to the digest it signed:
+
+```
+cosign verify ghcr.io/asamarts/alint:<version> \
+  --certificate-identity-regexp '^https://github\.com/asamarts/alint/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Provenance and signatures are attached to every release from the version that
+introduced them onward; a release that predates it has none to verify.
+
 ## Reporting a vulnerability
 
 **Do not file a public GitHub issue for security vulnerabilities.**
@@ -42,12 +95,13 @@ In scope:
 
 - The `alint` CLI binary and all crates published from this repo
   (`alint`, `alint-core`, `alint-rules`, `alint-dsl`, `alint-output`,
-  `alint-testkit`)
+  `alint-lsp`)
 - The bundled rulesets compiled into the binary
 - The official GitHub Action (`asamarts/alint`)
 - The Docker image (`ghcr.io/asamarts/alint`)
 - The Homebrew formula (`asamarts/homebrew-alint`)
 - The npm package (`@asamarts/alint`)
+- The `install.sh` release installer (served from `alint.org/install.sh`)
 - The `xtask` build/release tooling
 
 Out of scope (report directly to upstream):
@@ -62,7 +116,7 @@ Out of scope (report directly to upstream):
 Published advisories live at
 https://github.com/asamarts/alint/security/advisories.
 
-No advisories published as of the v0.10.2 release.
+No advisories published as of the v0.15.2 release.
 
 ## Threat model
 

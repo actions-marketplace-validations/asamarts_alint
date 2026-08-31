@@ -185,3 +185,30 @@ Resolve inline when implementation lands.
    offence) vs per offending entry. v0.10: per block — matches
    `keep-sorted` UX and keeps output actionable; revisit if
    users want every offending line surfaced.
+
+## v0.12: optional markers (markerless / sort-to-EOF) — SHIPPED
+
+`start` and `end` were both required. The deep v0.12 case study found ~7 repos
+whose whole-file sorted lists (dictionaries, allow-lists, fully-sorted
+`CODEOWNERS`) have no natural marker pair to delimit — there is no line that
+*isn't* a sortable entry, so the keep-sorted-block framing didn't fit.
+
+Both markers are now `Option<String>`: the block spans an optional `start`
+(default: the start of the file) to an optional `end` (default: EOF).
+
+- omit `end` → sort from `start` to EOF;
+- omit both → sort the whole file (markerless);
+- omit `start`, keep `end` → sort from BOF until the `end` marker.
+
+Implementation is a pure relaxation: with no `start`, the block is initialised
+open at line 1; with no `end`, no marker line closes it. The `unclosed` check
+fires only for the fully-delimited `start`+`end` contract (a block with an
+absent `end` runs to EOF by design), so every existing marker-pair config
+behaves identically. No new dispatch class; rule-kind count unchanged.
+
+This is the surviving slice of the v0.12 "extract/normalize long tail" cluster.
+Reproduce-first dissolved the rest: `split:` (redundant with a `regex` capture
+group + the shipped `semver-minor` normalize), `occurrence: first` (workable
+via the `(?s)\A.*?` first-match-anchor idiom), and inline `values:` / `except:`
+(a one-line committed allow-file + `cross_file` `subset` already expresses it;
+~2 repos). All documented as workaround idioms; revisit on recurrence.

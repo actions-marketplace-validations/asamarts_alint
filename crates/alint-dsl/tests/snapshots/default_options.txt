@@ -1,5 +1,19 @@
 # Default-option snapshot — see default_options_snapshot.rs
 
+=== kind: changeset_requires_path | id: changelog-per-pr ===
+ChangesetRequiresPathRule {
+    id: "changelog-per-pr",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    add_glob: ".changeset/*.md",
+    add_scope: Scope { ... },
+    when_changed: Some(
+        Scope { ... },
+    ),
+    since: "origin/main",
+}
+
 === kind: command | id: shellcheck-shell-scripts ===
 CommandRule {
     id: "shellcheck-shell-scripts",
@@ -72,24 +86,125 @@ FileContentMatchesRule {
     fixer: None,
 }
 
+=== kind: cross_file | id: catalog-refs-resolve ===
+CrossFileRule {
+    id: "catalog-refs-resolve",
+    level: Error,
+    policy_url: None,
+    message: None,
+    source_file: "pnpm-workspace.yaml",
+    source_glob: None,
+    source_extract: Some(
+        Yaml(
+            "$.catalog.*",
+        ),
+    ),
+    targets: Some(
+        Glob {
+            scope: Scope { ... },
+            extract: Some(
+                Json(
+                    "$.dependencies.*",
+                ),
+            ),
+        },
+    ),
+    relation: Subset,
+    normalize: [],
+    allow_missing: false,
+    skip_header_lines: 0,
+}
+
+=== kind: cross_file | id: hl-groups-doc-matches-code ===
+CrossFileRule {
+    id: "hl-groups-doc-matches-code",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    source_file: "runtime/doc/*.txt",
+    source_glob: Some(
+        Scope { ... },
+    ),
+    source_extract: Some(
+        Regex(
+            "\\*hl-(\\w+)\\*",
+        ),
+    ),
+    targets: Some(
+        List(
+            [
+                (
+                    "src/highlight.c",
+                    Some(
+                        Regex(
+                            "default link (\\w+)",
+                        ),
+                    ),
+                ),
+            ],
+        ),
+    ),
+    relation: SetEquals,
+    normalize: [],
+    allow_missing: false,
+    skip_header_lines: 0,
+}
+
+=== kind: cross_file | id: license-copies-have-identical-content ===
+CrossFileRule {
+    id: "license-copies-have-identical-content",
+    level: Error,
+    policy_url: None,
+    message: None,
+    source_file: "LICENSE",
+    source_glob: None,
+    source_extract: Some(
+        WholeFile,
+    ),
+    targets: Some(
+        Glob {
+            scope: Scope { ... },
+            extract: Some(
+                WholeFile,
+            ),
+        },
+    ),
+    relation: Equals,
+    normalize: [],
+    allow_missing: false,
+    skip_header_lines: 0,
+}
+
 === kind: cross_file_value_equals | id: workspace-versions-coherent ===
-CrossFileValueEqualsRule {
+CrossFileRule {
     id: "workspace-versions-coherent",
     level: Error,
     policy_url: None,
     message: None,
     source_file: "Cargo.toml",
-    source_extract: Toml(
-        "$.workspace.package.version",
-    ),
-    targets: Glob {
-        scope: Scope { ... },
-        extract: Toml(
-            "$.package.version",
+    source_glob: None,
+    source_extract: Some(
+        Toml(
+            "$.workspace.package.version",
         ),
-    },
-    normalize: None,
+    ),
+    targets: Some(
+        Glob {
+            scope: Scope { ... },
+            extract: Some(
+                Toml(
+                    "$.package.version",
+                ),
+            ),
+        },
+    ),
+    relation: Equals,
+    normalize: [
+        Trim,
+        SemverMinor,
+    ],
     allow_missing: false,
+    skip_header_lines: 0,
 }
 
 === kind: dir_absent | id: no-target ===
@@ -102,6 +217,7 @@ DirAbsentRule {
     patterns: [
         "**/target",
     ],
+    root_only: false,
     git_tracked_only: false,
 }
 
@@ -132,6 +248,7 @@ DirExistsRule {
     patterns: [
         "docs/**",
     ],
+    root_only: false,
     git_tracked_only: false,
 }
 
@@ -208,7 +325,9 @@ FileAbsentRule {
         "**/Cargo.lock.bak",
         "**/package-lock.json.bak",
     ],
+    root_only: false,
     git_tracked_only: false,
+    content_prefixes: [],
     fixer: Some(
         FileRemoveFixer,
     ),
@@ -355,6 +474,47 @@ FileFooterRule {
     fixer: None,
 }
 
+=== kind: file_graph | id: domain-not-depend-on-infra ===
+FileGraphRule {
+    id: "domain-not-depend-on-infra",
+    level: Error,
+    policy_url: None,
+    message: None,
+    nodes: Scope { ... },
+    edges: FromContent {
+        extract: Regex(
+            "from\\s+\"(\\.[^\"]+)\"",
+        ),
+        resolve: RelativeToFile,
+    },
+    require: ForbiddenEdges(
+        [
+            ForbiddenPattern {
+                from: Scope { ... },
+                to: Scope { ... },
+                from_glob: "src/domain/**",
+                to_glob: "src/infra/**",
+            },
+        ],
+    ),
+}
+
+=== kind: file_graph | id: proto-has-generated-sibling ===
+FileGraphRule {
+    id: "proto-has-generated-sibling",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    nodes: Scope { ... },
+    edges: DeriveTarget {
+        from: Regex(
+            "(.*)\\.proto",
+        ),
+        to: "$1.pb.go",
+    },
+    require: NoDangling,
+}
+
 === kind: file_hash | id: rust-fixture-hash ===
 FileHashRule {
     id: "rust-fixture-hash",
@@ -441,6 +601,12 @@ FileIsAsciiRule {
     policy_url: None,
     message: None,
     scope: Scope { ... },
+    allow: [
+        (
+            160,
+            255,
+        ),
+    ],
 }
 
 === kind: file_is_text | id: all-text ===
@@ -669,19 +835,75 @@ ForEachFileRule {
     ],
 }
 
+=== kind: for_each_match | id: changelog-entries-well-formed ===
+ForEachMatchRule {
+    id: "changelog-entries-well-formed",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    select: Regex(
+        "^[*-] .*\\[#(?P<disp>\\d+)\\]\\([^)]*pull/(?P<url>\\d+)\\)",
+    ),
+    matches: [
+        (
+            "\\)\\.$",
+            Regex(
+                "\\)\\.$",
+            ),
+        ),
+    ],
+    forbid: [
+        (
+            "\\[Fix #\\d+\\]",
+            Regex(
+                "\\[Fix #\\d+\\]",
+            ),
+        ),
+    ],
+    equal: [
+        "disp",
+        "url",
+    ],
+}
+
 === kind: generated_file_fresh | id: bindings-fresh ===
 GeneratedFileFreshRule {
     id: "bindings-fresh",
     level: Error,
     policy_url: None,
     message: None,
-    file: "docs/rules.md",
+    mode: Stdout {
+        file: "docs/rules.md",
+    },
     command: [
         "true",
     ],
     workdir: ".",
     normalize: FinalNewline,
     timeout: 30,
+}
+
+=== kind: generated_file_fresh | id: generated-tree-fresh ===
+GeneratedFileFreshRule {
+    id: "generated-tree-fresh",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    mode: Mutating {
+        outputs: Scope { ... },
+        globs: [
+            "gen/**",
+            "src/generated.rs",
+        ],
+    },
+    command: [
+        "make",
+        "gen",
+    ],
+    workdir: ".",
+    normalize: FinalNewline,
+    timeout: 120,
 }
 
 === kind: git_blame_age | id: stale-todos ===
@@ -695,6 +917,32 @@ GitBlameAgeRule {
         "\\b(TODO|FIXME)\\b",
     ),
     max_age: 15552000s,
+}
+
+=== kind: git_commit_author_allowlist | id: org-authors-only ===
+GitCommitAuthorAllowlistRule {
+    id: "org-authors-only",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    email_pattern: Some(
+        Regex(
+            "^.+@example\\.com$",
+        ),
+    ),
+    name_pattern: None,
+    since_raw: None,
+    include_merges: false,
+}
+
+=== kind: git_commit_gpg_signed | id: signed-commits ===
+GitCommitGpgSignedRule {
+    id: "signed-commits",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    since_raw: None,
+    include_merges: false,
 }
 
 === kind: git_commit_message | id: conventional-commit ===
@@ -714,6 +962,42 @@ GitCommitMessageRule {
     include_merges: false,
 }
 
+=== kind: git_commit_no_fixup | id: no-fixup-commits ===
+GitCommitNoFixupRule {
+    id: "no-fixup-commits",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    since_raw: None,
+    include_merges: false,
+}
+
+=== kind: git_commit_signed_off | id: dco-sign-off ===
+GitCommitSignedOffRule {
+    id: "dco-sign-off",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    pattern: Regex(
+        "(?m)^Signed-off-by: .+ <.+@.+>$",
+    ),
+    since_raw: None,
+    include_merges: false,
+}
+
+=== kind: git_commit_subject_matches | id: subject-grammar ===
+GitCommitSubjectMatchesRule {
+    id: "subject-grammar",
+    level: Warning,
+    policy_url: None,
+    message_override: None,
+    matches: Regex(
+        "^[a-z0-9_/.-]+: [a-z].{0,70}$",
+    ),
+    since_raw: None,
+    include_merges: false,
+}
+
 === kind: git_no_denied_paths | id: no-tracked-secrets ===
 GitNoDeniedPathsRule {
     id: "no-tracked-secrets",
@@ -726,6 +1010,7 @@ GitNoDeniedPathsRule {
         "*.pem",
         "id_rsa",
     ],
+    since_raw: None,
 }
 
 === kind: header | id: header-alias ===
@@ -760,6 +1045,7 @@ ImportGateRule {
     allow: Some(
         Scope { ... },
     ),
+    strip_comments: false,
 }
 
 === kind: indent_style | id: indent-style ===
@@ -782,6 +1068,43 @@ FileIsTextRule {
     policy_url: None,
     message: None,
     scope: Scope { ... },
+}
+
+=== kind: json_path_absent | id: no-postinstall-script ===
+StructuredPathRule {
+    id: "no-postinstall-script",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "package.json",
+        ],
+    ),
+    format: Json,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "scripts",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "postinstall",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.scripts.postinstall",
+    op: Absent,
+    if_present: false,
 }
 
 === kind: json_path_equals | id: package-name-matches ===
@@ -860,6 +1183,7 @@ JsonSchemaPassesRule {
     message: None,
     scope: Scope { ... },
     schema_path: "schemas/package.schema.json",
+    allow_out_of_root: false,
     format_override: None,
     compiled: OnceLock(
         <uninit>,
@@ -1077,10 +1401,19 @@ OrderedBlockRule {
     policy_url: None,
     message: None,
     scope: Scope { ... },
-    start: "# keep-sorted start",
-    end: "# keep-sorted end",
+    start: Some(
+        "# keep-sorted start",
+    ),
+    end: Some(
+        "# keep-sorted end",
+    ),
     comparator: Lexical,
     unique: false,
+    select: Some(
+        Regex(
+            "^\\s*[A-Za-z]",
+        ),
+    ),
 }
 
 === kind: pair | id: c-requires-h ===
@@ -1095,6 +1428,19 @@ PairRule {
     partner_template: "{dir}/{stem}.h",
 }
 
+=== kind: pair_changed_together | id: format-version-bumped ===
+PairChangedTogetherRule {
+    id: "format-version-bumped",
+    level: Error,
+    policy_url: None,
+    message_override: None,
+    if_changed: "src/rustdoc-json-types/lib.rs",
+    if_scope: Scope { ... },
+    then_changed: "src/rustdoc-json-types/FORMAT_VERSION",
+    then_scope: Scope { ... },
+    since: "origin/main",
+}
+
 === kind: pair_hash | id: fips-sum-pins-sources ===
 PairHashRule {
     id: "fips-sum-pins-sources",
@@ -1105,6 +1451,7 @@ PairHashRule {
     target: "src/fips/fips140.sum",
     algorithm: Sha256,
     format: SumsLine,
+    allow_out_of_root: false,
 }
 
 === kind: registry_paths_resolve | id: workspace-members-resolve ===
@@ -1133,6 +1480,7 @@ RegistryPathsResolveRule {
             unreferenced: Warn,
         },
     ),
+    allow_out_of_root: false,
 }
 
 === kind: shebang | id: shebang-alias ===
@@ -1155,6 +1503,37 @@ ShebangHasExecutableRule {
     policy_url: None,
     message: None,
     scope: Scope { ... },
+}
+
+=== kind: toml_path_absent | id: no-cargo-patch-section ===
+StructuredPathRule {
+    id: "no-cargo-patch-section",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "Cargo.toml",
+        ],
+    ),
+    format: Toml,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "patch",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.patch",
+    op: Absent,
+    if_present: false,
 }
 
 === kind: toml_path_equals | id: cargo-edition-2024 ===
@@ -1253,6 +1632,46 @@ UniqueByRule {
     ),
     select_scope: Scope { ... },
     key_template: "{stem}",
+    case_insensitive: true,
+}
+
+=== kind: xml_path_absent | id: no-unsafe-blocks ===
+StructuredPathRule {
+    id: "no-unsafe-blocks",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: None,
+    format: Xml,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "Project",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "PropertyGroup",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "AllowUnsafeBlocks",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.Project.PropertyGroup.AllowUnsafeBlocks",
+    op: Absent,
+    if_present: false,
 }
 
 === kind: xml_path_equals | id: csproj-targets-net8 ===
@@ -1357,6 +1776,78 @@ StructuredPathRule {
         ),
     ),
     if_present: true,
+}
+
+=== kind: yaml_path_absent | id: no-workflow-write-all ===
+StructuredPathRule {
+    id: "no-workflow-write-all",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: None,
+    format: Yaml,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Filter(
+                                Filter(
+                                    LogicalOrExpr(
+                                        [
+                                            LogicalAndExpr(
+                                                [
+                                                    Paren(
+                                                        LogicalOrExpr(
+                                                            [
+                                                                LogicalAndExpr(
+                                                                    [
+                                                                        Relation(
+                                                                            ComparisonExpr {
+                                                                                left: SingularQuery(
+                                                                                    SingularQuery {
+                                                                                        kind: Absolute,
+                                                                                        segments: [
+                                                                                            Name(
+                                                                                                Name(
+                                                                                                    "permissions",
+                                                                                                ),
+                                                                                            ),
+                                                                                        ],
+                                                                                    },
+                                                                                ),
+                                                                                op: EqualTo,
+                                                                                right: Literal(
+                                                                                    String(
+                                                                                        "write-all",
+                                                                                    ),
+                                                                                ),
+                                                                            },
+                                                                        ),
+                                                                    ],
+                                                                ),
+                                                            ],
+                                                        ),
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$[?($.permissions == 'write-all')]",
+    op: Absent,
+    if_present: false,
 }
 
 === kind: yaml_path_equals | id: workflow-uses-checkout ===

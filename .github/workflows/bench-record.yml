@@ -1,15 +1,21 @@
 name: bench-record
 
 # Tag-triggered "publish-grade" bench run for the canonical baseline
-# machine (self-hosted, AMD Ryzen 9 3900X — matches the fingerprint
-# every published row in docs/benchmarks/HISTORY.md was captured on).
+# machine: self-hosted `kbench` (Intel i7-6700HQ laptop, 16 GB), which
+# replaced the 3900X dev box as the bench host on 2026-07-15 (quiet +
+# dedicated + fixed fingerprint). Its 16 GB RAM needs the drop_caches
+# fix (ALINT_BENCH_DROP_CACHES, set below); the trees live on /bench
+# (ext4 NVMe) because kbench's /tmp is a 7.8 GB tmpfs that overflows at
+# 1M. See project docs: the kbench canonical-host note + the
+# 2026-07-1m-writeback-contention investigation.
 #
 # Two layers per run:
 # - macro: `xtask bench-scale --include-1m --warmup 3 --runs 10` over
-#   the full S1-S13 × {1k,10k,100k,1m} × {full,changed} matrix.
-# - micro: `cargo bench -p alint-bench --features fs-benches` against
-#   the criterion harness, then `xtask publish-benches` to land the
-#   trim'd criterion snapshot under
+#   the full S1-S14 × {1k,10k,100k,1m} × {full,changed} matrix.
+# - micro: `cargo bench -p alint-bench --features fs-benches` over the
+#   12 criterion benches EXPLICITLY (not a bare `-p alint-bench`, which
+#   would also fire the gungraun det_engine/det_check benches), then
+#   `xtask publish-benches` to land the trim'd criterion snapshot under
 #   `docs/benchmarks/micro/results/<arch>/v<tag>/criterion/`.
 #
 # Output: a PR adding both directories plus a HISTORY.md update for
@@ -34,7 +40,7 @@ name: bench-record
 on:
   push:
     tags:
-      - "v*"
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       ref:
@@ -58,21 +64,82 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Engine-unchanged guard. A tag whose binary is byte-identical to the previous
+  # release -- no crates/**/*.rs changed, e.g. a supply-chain or CI-only patch
+  # like v0.15.1/v0.15.2 -- can only record bench-host noise against the prior
+  # baseline (spurious short-run swings while 100k/1m stay flat), so skip the
+  # ~3.5h run and its review PR; the prior release's bench already represents the
+  # identical binary. Keyed on .rs only, since Cargo.lock's workspace-version
+  # entries churn on every release; a dependency-only perf change (rare in a
+  # patch) would be missed here, so bench it via workflow_dispatch. A manual
+  # workflow_dispatch always benches -- the maintainer asked for it explicitly.
+  guard:
+    name: engine-change guard
+    runs-on: ubuntu-latest
+    outputs:
+      should_bench: ${{ steps.decide.outputs.should_bench }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "push" ]; then
+            echo "should_bench=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::workflow_dispatch -- benching unconditionally."
+            exit 0
+          fi
+          # The release immediately preceding this tag in version order (NOT merely
+          # the highest other tag, so a re-pushed / non-latest tag still compares
+          # against its true predecessor).
+          prev="$(git tag --list 'v*.*.*' --sort=-v:refname | awk -v t="$TAG" '$0==t{f=1;next} f{print;exit}')"
+          if [ -z "$prev" ]; then
+            echo "should_bench=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::no prior release tag -- benching."
+            exit 0
+          fi
+          # .rs only: Cargo.lock's workspace-version entries churn every release, so
+          # they cannot distinguish a real engine change from the version bump.
+          rs_changed="$(git diff --name-only "${prev}..${TAG}" -- crates/ | grep -c '\.rs$' || true)"
+          if [ "${rs_changed:-0}" -gt 0 ]; then
+            echo "should_bench=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${rs_changed} crates/**/*.rs changed ${prev}..${TAG} -- benching."
+          else
+            echo "should_bench=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no crates/**/*.rs changed ${prev}..${TAG} -- byte-identical binary; skipping bench (the ${prev} bench represents it)."
+          fi
+
   bench:
+    needs: guard
+    if: needs.guard.outputs.should_bench == 'true'
     name: bench (linux-x86_64)
-    # The canonical baseline runner — must match the fingerprint of
-    # every previously published row. ubuntu-latest on github-hosted
-    # would run a different CPU, kernel, and FS, voiding cross-version
+    # The canonical baseline runner is kbench (label `bench`), NOT the
+    # `alint` CI runner (the 3900X dev box) — bench moved to a dedicated,
+    # quiet, fixed-fingerprint host. ubuntu-latest on github-hosted would
+    # run a different CPU, kernel, and FS, voiding cross-version
     # comparability.
-    runs-on: [self-hosted, linux, alint]
+    runs-on: [self-hosted, linux, bench]
     timeout-minutes: 360   # 6h cap; ~3.5h expected at publish-grade flags
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # PINNED, unlike CI's @stable: rustc is part of the bench fingerprint, so
+      # the whole kbench corpus series must stay on one toolchain or numbers stop
+      # being cross-version comparable. 1.97.0 matches the v0.10-v0.13 backfill
+      # that re-based the series onto kbench. Bump deliberately (and re-baseline)
+      # when the fleet moves, never implicitly via `stable` drift.
+      - uses: dtolnay/rust-toolchain@35a842e360814583e976785eeda0bd0655cb8e83 # 1.97.0
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: bench-record
 
@@ -171,26 +238,79 @@ jobs:
             echo "label=v${workspace_ver}-rc-${short_sha}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: graft drop-caches harness onto pre-fix refs
+        run: |
+          set -euo pipefail
+          # The ALINT_BENCH_DROP_CACHES quiescing (mandatory on kbench's 16 GB, or
+          # S2/1m/full blows the CV gate — see
+          # docs/benchmarks/investigations/2026-07-1m-writeback-contention/) was
+          # added to the bench driver AFTER v0.13. Re-benching a pre-fix ref
+          # (v0.10-v0.13, when re-baselining the series onto the runner) with its
+          # OWN driver would reintroduce that artifact. If the checked-out ref's
+          # run.rs lacks the quiescing, graft ONLY the bench driver from origin/main
+          # so the ref's own alint binary is measured with the drop-caches harness.
+          # The driver changes how the bench quiesces the cache between phases, not
+          # what alint DOES — the same graft the manual v0.10-v0.13 backfill used.
+          # Only the results dirs are committed to the PR, never this working-tree
+          # graft (the PR step cp's the results, not the source tree).
+          if grep -q maybe_quiesce_page_cache xtask/src/bench/run.rs; then
+            echo "Ref already carries the drop-caches harness; no graft needed."
+          else
+            git fetch --quiet origin main
+            git checkout origin/main -- xtask/src/bench/run.rs
+            echo "Grafted drop-caches harness (run.rs) from origin/main ($(git rev-parse --short origin/main)) onto $(git rev-parse --short HEAD)."
+          fi
+
       - name: build release binaries
         run: cargo build --release -p alint -p xtask
 
       # ── Macro: full publish-grade matrix ─────────────────────────
-      # 13 scenarios × 4 sizes × 2 modes = 104 cells. The 1M cells
-      # dominate — ~10 min each, so ~3h for the 26 1M cells alone.
+      # 14 scenarios × 4 sizes × 2 modes = 112 cells. The 1M cells
+      # dominate — ~10 min each, so ~3h for the 28 1M cells alone.
       # S10 added in v0.9.9 (scope_filter outside per-file dispatch);
       # S11–S13 added in v0.10 (v0.10 cross-file / per-file /
-      # single-shot dispatch classes — release-gating per audit D5).
+      # single-shot dispatch classes — release-gating per audit D5);
+      # S14 added in v0.12 (the comprehensive v0.12 net-new featureset:
+      # file_graph / for_each_match / glob-union / markerless / gff-mutating).
       - name: macro bench-scale
         env:
           OUT_LABEL: ${{ steps.label.outputs.label }}
+          # kbench (16 GB) needs the page-cache-reclaim fix or S2/1m/full
+          # spikes to 40-50% CV and fails bench-gate; and its trees must
+          # live on the /bench ext4 NVMe, not the 7.8 GB /tmp tmpfs which
+          # overflows at 1M. Both are no-ops/harmless on any large-RAM host.
+          ALINT_BENCH_DROP_CACHES: "1"
+          TMPDIR: /bench
         run: |
           set -euo pipefail
+          # Reduce the runner's footprint on the measurement: give this step (and
+          # the xtask/alint children it forks) top CPU + I/O priority so the runner
+          # agent's concurrent bookkeeping can't inflate wall-clock. The v0.14.0
+          # corpus (the first run through the GHA runner) came out ~6.5% slow vs the
+          # hand-measured v0.10-v0.13 baselines from harness overhead alone — the
+          # deterministic Ir was flat (see
+          # docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/).
+          # renice the step shell; forked children inherit. Best-effort so a
+          # large-RAM host without passwordless sudo is unaffected.
+          sudo -n renice -n -10 -p $$ >/dev/null 2>&1 || true
+          sudo -n ionice -c2 -n0 -p $$ >/dev/null 2>&1 || true
+          sync   # flush the release build's dirty pages before measuring
           out_dir="docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}"
           mkdir -p "$out_dir"
+          # Scenarios present in THIS ref, not a hardcoded list: S10 landed in
+          # v0.9.9, S11-S13 in v0.10, S14 in v0.12, so re-benching an old tag (when
+          # re-baselining v0.10-v0.13 onto the runner) must request only the
+          # scenarios its own xtask knows, or bench-scale errors on an unknown
+          # scenario — the same per-tag adaptation the manual backfill made. Derived
+          # from the scenario definition files; a current release still yields the
+          # full S1..S14.
+          scenarios=$(ls xtask/src/bench/scenarios/s*.yml 2>/dev/null \
+            | sed -E 's#.*/s([0-9]+)_.*#\1#' | sort -n | sed 's/^/S/' | paste -sd,)
+          echo "scenarios for this ref ($(git rev-parse --short HEAD)): $scenarios"
           ./target/release/xtask bench-scale \
             --include-1m \
             --sizes 1k,10k,100k,1m \
-            --scenarios S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,S12,S13 \
+            --scenarios "$scenarios" \
             --modes full,changed \
             --tools alint \
             --warmup 3 --runs 10 \
@@ -202,7 +322,27 @@ jobs:
       - name: micro cargo bench
         run: |
           set -euo pipefail
-          cargo bench -p alint-bench --features fs-benches
+          # Same footprint reduction as the macro step (criterion measures ns/op,
+          # so it is wall-clock sensitive too): renice + ionice this step so the
+          # runner agent's concurrent work can't skew the samples.
+          sudo -n renice -n -10 -p $$ >/dev/null 2>&1 || true
+          sudo -n ionice -c2 -n0 -p $$ >/dev/null 2>&1 || true
+          sync
+          # Criterion micro-benches ONLY (explicit list). A bare
+          # `cargo bench -p alint-bench` would also fire the gungraun
+          # det_engine/det_check benches, which run under Valgrind (slow) and
+          # det_check needs a release binary + baseline. Those are the load-immune
+          # deterministic gate (ci/scripts/det-perf-gate.sh, per-PR; det-100k at
+          # release) and are NOT part of the criterion micro corpus.
+          # Criterion micro-benches present in THIS ref, EXCLUDING the gungraun
+          # det_* Valgrind gate benches (slow, need a baseline; not part of the
+          # criterion micro corpus). Derived rather than hardcoded so re-benching an
+          # old tag (blame_cache / structured_query / etc. were added over time)
+          # doesn't fail on a --bench its alint-bench crate doesn't define.
+          mbenches=$(ls crates/alint-bench/benches/*.rs 2>/dev/null | xargs -n1 basename \
+            | sed 's/\.rs$//' | grep -vE '^det_' | sed 's/^/--bench /' | paste -sd' ')
+          echo "micro benches for this ref: $mbenches"
+          cargo bench -p alint-bench --features fs-benches $mbenches
 
       - name: publish micro snapshot
         env:
@@ -300,7 +440,7 @@ jobs:
           # step; include it in the same commit so the PR is
           # one-merge-completes-everything.
           git add docs/benchmarks/HISTORY.md
-          git commit -m "docs(bench): publish ${OUT_LABEL} matrix (S1-S13 at 1k/10k/100k/1m × full/changed) + HISTORY.md refresh"
+          git commit -m "docs(bench): publish ${OUT_LABEL} matrix (S1-S14 at 1k/10k/100k/1m × full/changed) + HISTORY.md refresh"
           git push origin "$branch" --force
 
           # Render a per-cell summary the maintainer pastes into HISTORY.md.
@@ -315,7 +455,7 @@ jobs:
           ## What landed
 
           - \`docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}/\` — full
-            publish-grade hyperfine matrix (S1-S13 × {1k, 10k, 100k, 1m} × {full,
+            publish-grade hyperfine matrix (S1-S14 × {1k, 10k, 100k, 1m} × {full,
             changed}) at \`--warmup 3 --runs 10\`.
           - \`docs/benchmarks/micro/results/linux-x86_64/${OUT_LABEL}/criterion/\`
             — trimmed criterion snapshot from \`cargo bench -p alint-bench\`.

@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — quarkusio/quarkus @ c8c6babb39fbc117f610cdea2f571cd22311ef7e
+#
+# Shape: huge Maven multi-module JVM (Java) web framework, Red Hat / vendor
+# governance. ~hundreds of Maven modules under extensions/, integration-tests/,
+# core/, devtools/, bom/, tcks/, independent-projects/.
+#
+# Quarkus's ENFORCED validation surface is dominated by tool execution (D):
+#   - net.revelc formatter-maven-plugin + impsort (code style) ......... D (formatter)
+#   - forbidden-apis Maven plugin (.forbiddenapis/banned-signatures) .... D (bytecode AST)
+#   - maven-enforcer-plugin: dependencyConvergence + banned-dependencies
+#     + custom rules (BansRuntimeDependency / RequiresMinimalDeploymentDependency
+#     / DependencyAlignmentRule, all in independent-projects/enforcer-rules) .. D (resolved dep-graph)
+#   - JUnit test suite (JVM + native + virtual-threads + TCKs) ......... D
+#   - Vale prose lint + YamlMetadataGenerator doc-metadata lint ........ D (NLP / custom Java validator)
+#   - CheckCrossReferences (asciidoc xref/anchor resolution) ........... D today (B candidate: cross-ref resolves)
+#   - OWASP dep-check / CodeQL / SonarCloud ............................ D (security/quality scanners)
+#
+# The genuinely DECLARATIVE / state-readable subset is small. This config
+# expresses it: baseline OSS + Java hygiene bundles, GitHub-Actions hardening,
+# and the handful of repo-specific structure/consistency assertions Quarkus
+# either gates on or that are safe value-add. Tool runs stay out (R2);
+# the codegen-freshness `update-*dependencies.sh` scripts are mutating Maven
+# pipelines, not stdout generators, so they are D (a command_idempotent wrap
+# is orchestration value-add, recorded separately, not native expression).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/java@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════════
+  # REPO STRUCTURE / METADATA (alint value-add — Quarkus doesn't all gate
+  # on these, but they encode real invariants of the tree)
+  # ════════════════════════════════════════════════════════════════════
+
+  # Maven wrapper must be committed (CONTRIBUTING tells contributors to use ./mvnw).
+  - id: quarkus-mvnw-committed
+    kind: file_exists
+    paths: mvnw
+    level: error
+    message: "The Maven wrapper ./mvnw must be committed (canonical build entrypoint)."
+
+  - id: quarkus-mvnw-windows-committed
+    kind: file_exists
+    paths: mvnw.cmd
+    level: warning
+    message: "mvnw.cmd should be committed so Windows contributors can build."
+
+  # Root aggregator pom + the build-parent that carries the enforcer/formatter config.
+  - id: quarkus-root-pom-exists
+    kind: file_exists
+    paths: pom.xml
+    level: error
+
+  - id: quarkus-build-parent-pom-exists
+    kind: file_exists
+    paths: build-parent/pom.xml
+    level: error
+    message: "build-parent/pom.xml carries the shared enforcer + formatter + impsort config."
+
+  # The custom enforcer-rules module that the whole build depends on.
+  - id: quarkus-enforcer-rules-module-exists
+    kind: dir_exists
+    paths: independent-projects/enforcer-rules
+    level: warning
+    message: "The home-grown quarkus-enforcer-rules module backs banned/alignment dependency checks."
+
+  # Governance / community-health files Quarkus actually ships.
+  - id: quarkus-contributing-exists
+    kind: file_exists
+    paths: CONTRIBUTING.md
+    level: error
+
+  - id: quarkus-adopters-exists
+    kind: file_exists
+    paths: ADOPTERS.md
+    level: warning
+
+  - id: quarkus-dco-exists
+    kind: file_exists
+    paths: dco.txt
+    level: warning
+    message: "DCO sign-off is required by CONTRIBUTING; dco.txt is the referenced text."
+
+  # ════════════════════════════════════════════════════════════════════
+  # GIT METADATA INVARIANTS the repo deliberately maintains
+  # ════════════════════════════════════════════════════════════════════
+
+  # .gitattributes pins LF line endings for the Maven wrapper config so ./mvnw
+  # works in git-bash on Windows (the file's leading comment explains exactly this).
+  - id: quarkus-gitattributes-lf-mvn-jvm-config
+    kind: file_content_matches
+    paths: .gitattributes
+    pattern: '\.mvn/jvm\.config\s+text eol=lf'
+    level: warning
+    message: ".gitattributes must force LF on .mvn/jvm.config (./mvnw breaks on CRLF in git-bash)."
+
+  - id: quarkus-gitattributes-lf-mvnw
+    kind: file_content_matches
+    paths: .gitattributes
+    pattern: 'mvnw\s+text eol=lf'
+    level: warning
+
+  # ════════════════════════════════════════════════════════════════════
+  # CI MATRIX <-> MODULE-TREE RESOLUTION (the verify-tests-json.sh check)
+  # native-tests.json .include[].test-modules must reference real Maven modules
+  # under integration-tests/. This is the registry_paths_resolve SHAPE, but the
+  # values are COMMA-SEPARATED lists inside each JSON string, and the kind has no
+  # split — so multi-value rows won't resolve cleanly (recorded C / tuning).
+  # Kept as a best-effort assertion + documented gap.
+  # ════════════════════════════════════════════════════════════════════
+  # BLOCKED (C / tuning): registry_paths_resolve extracts each JSON value as ONE
+  # entry, but .include[*].test-modules values are COMMA-SEPARATED module lists
+  # (e.g. "jpa-h2, jpa-h2-embedded, hibernate-orm-tenancy/datasource"). Without a
+  # split:/separator: normalize the multi-module rows resolve as a single bogus
+  # path (25/26 rows fail; only single-module rows like "main" pass). The dashed
+  # key also needs bracket notation $.include[*]['test-modules'] (validated). Once
+  # registry_paths_resolve gains entry-splitting this becomes a clean A. Left
+  # disabled so the committed config stays green; the gap is the headline finding.
+  #
+  # - id: quarkus-native-tests-json-modules-resolve
+  #   kind: registry_paths_resolve
+  #   source: .github/native-tests.json
+  #   extract: { json: "$.include[*]['test-modules']", split: "," }   # split: not yet supported
+  #   base: integration-tests/
+  #   expect: dir
+  #   level: warning
+
+  # ════════════════════════════════════════════════════════════════════
+  # POLICY-DECLARATION ASSERTIONS (alint value-add per R3 — assert the
+  # deny-lists exist / are declared; enforcement itself is D)
+  # ════════════════════════════════════════════════════════════════════
+  - id: quarkus-forbidden-apis-signatures-declared
+    kind: file_exists
+    paths: .forbiddenapis/banned-signatures-common.txt
+    level: warning
+    message: "The forbidden-apis signature deny-list must be present (enforced by forbidden-apis plugin)."
+
+  - id: quarkus-banned-dependencies-declared
+    kind: file_exists
+    paths: independent-projects/enforcer-rules/src/main/resources/enforcer-rules/quarkus-banned-dependencies.xml
+    level: warning
+    message: "The maven-enforcer banned-dependencies allow/deny policy must be declared."

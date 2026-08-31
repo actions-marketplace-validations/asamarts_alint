@@ -24,13 +24,22 @@ use alint_core::template::{PathTokens, render_message, render_path};
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Glob selecting the files to deduplicate.
     select: String,
+    /// Path-template producing a key per matched file. Default: {basename}.
     #[serde(default = "default_key")]
     key: String,
+    /// Fold the key to lowercase before grouping, so keys that
+    /// collide only under case-folding count as duplicates — the
+    /// case-insensitive-filesystem hazard (Windows / macOS).
+    #[serde(default)]
+    case_insensitive: bool,
 }
+
+crate::options_schema_for!(Options);
 
 fn default_key() -> String {
     "{basename}".to_string()
@@ -44,6 +53,7 @@ pub struct UniqueByRule {
     message: Option<String>,
     select_scope: Scope,
     key_template: String,
+    case_insensitive: bool,
 }
 
 impl Rule for UniqueByRule {
@@ -69,7 +79,10 @@ impl Rule for UniqueByRule {
                 continue;
             }
             let tokens = PathTokens::from_path(&entry.path);
-            let key = render_path(&self.key_template, &tokens);
+            let mut key = render_path(&self.key_template, &tokens);
+            if self.case_insensitive {
+                key = key.to_lowercase();
+            }
             if key.is_empty() {
                 // Skip files whose key renders to the empty string — likely a
                 // missing component like `{parent_name}` on a root-level file.
@@ -85,7 +98,15 @@ impl Rule for UniqueByRule {
             paths.sort();
             let anchor = paths[0].clone();
             let msg = self.format_message(&key, &paths);
-            violations.push(Violation::new(msg).with_path(anchor));
+            // The finding is "these files share a key"; key on the duplicate
+            // key + the sorted path SET so a new colliding file is detected
+            // (anchoring on one path alone would mask a new group member).
+            let group: Vec<String> = paths.iter().map(crate::slash).collect();
+            violations.push(
+                Violation::new(msg)
+                    .with_path(anchor)
+                    .with_baseline_key(format!("{key}\u{0}{}", group.join("\u{0}"))),
+            );
         }
         Ok(violations)
     }
@@ -137,6 +158,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         message: spec.message.clone(),
         select_scope,
         key_template: opts.key,
+        case_insensitive: opts.case_insensitive,
     }))
 }
 
@@ -160,6 +182,10 @@ mod tests {
     }
 
     fn rule(select: &str, key: &str) -> UniqueByRule {
+        rule_ci(select, key, false)
+    }
+
+    fn rule_ci(select: &str, key: &str, case_insensitive: bool) -> UniqueByRule {
         UniqueByRule {
             id: "t".into(),
             level: Level::Error,
@@ -167,6 +193,7 @@ mod tests {
             message: None,
             select_scope: Scope::from_patterns(&[select.to_string()]).unwrap(),
             key_template: key.to_string(),
+            case_insensitive,
         }
     }
 
@@ -200,6 +227,19 @@ mod tests {
         assert_eq!(v[0].path.as_deref(), Some(Path::new("src/mod1/foo.rs")));
         assert!(v[0].message.contains("src/mod1/foo.rs"));
         assert!(v[0].message.contains("src/mod2/foo.rs"));
+    }
+
+    #[test]
+    fn case_insensitive_flags_casefold_collision() {
+        // `README.md` and `readme.md` are distinct on Linux but
+        // collide on a case-insensitive filesystem (Windows/macOS).
+        let files = &["docs/README.md", "docs/readme.md"];
+        // Default (case-sensitive): distinct stems, no collision.
+        assert!(eval(&rule("**/*.md", "{basename}"), files).is_empty());
+        // case_insensitive: they fold to the same key → flagged once.
+        let v = eval(&rule_ci("**/*.md", "{basename}", true), files);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].message.contains("readme.md"), "{}", v[0].message);
     }
 
     #[test]
@@ -245,6 +285,7 @@ mod tests {
             message: None,
             select_scope: Scope::from_patterns(&["**/*".to_string()]).unwrap(),
             key_template: default_key(),
+            case_insensitive: false,
         };
         let v = eval(&r, &["src/a/mod.rs", "src/b/mod.rs"]);
         assert_eq!(v.len(), 1);
@@ -259,6 +300,7 @@ mod tests {
             message: None,
             select_scope: Scope::from_patterns(&["**/*".to_string()]).unwrap(),
             key_template: default_key(),
+            case_insensitive: false,
         };
         let v = eval(&r, &["src/foo.rs", "src/foo.md"]);
         assert!(v.is_empty());
@@ -281,6 +323,7 @@ mod tests {
             message: Some("{{ctx.count}} files share stem {{ctx.key}}".into()),
             select_scope: Scope::from_patterns(&["**/*.rs".to_string()]).unwrap(),
             key_template: "{stem}".into(),
+            case_insensitive: false,
         };
         let v = eval(&r, &["a/foo.rs", "b/foo.rs"]);
         assert_eq!(v.len(), 1);

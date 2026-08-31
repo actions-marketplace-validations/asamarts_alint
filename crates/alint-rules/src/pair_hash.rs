@@ -25,9 +25,12 @@ use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+// `pub(crate)` so the `file_graph` `fresh` mode reuses one digest
+// enum instead of triplicating it (the third sha consumer after
+// `file_hash` / `pair_hash`).
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
-enum Algorithm {
+pub(crate) enum Algorithm {
     #[default]
     Sha256,
     Sha512,
@@ -35,14 +38,14 @@ enum Algorithm {
 
 impl Algorithm {
     /// Lowercase hex digest of `bytes`.
-    fn hex(self, bytes: &[u8]) -> String {
+    pub(crate) fn hex(self, bytes: &[u8]) -> String {
         match self {
             Self::Sha256 => encode_hex(Sha256::digest(bytes).as_slice()),
             Self::Sha512 => encode_hex(Sha512::digest(bytes).as_slice()),
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Sha256 => "sha256",
             Self::Sha512 => "sha512",
@@ -50,7 +53,7 @@ impl Algorithm {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 enum Format {
     /// The digest must appear as a substring anywhere in `target`.
@@ -61,18 +64,28 @@ enum Format {
     SumsLine,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Literal path or glob selecting the file(s) whose content is
+    /// hashed (one check per match).
     source: String,
     /// The single file that must carry the digest (a `.sum` /
     /// `SHA256SUMS` / a file with an embedded hash).
     target: String,
+    /// Digest algorithm (default: sha256).
     #[serde(default)]
+    #[schemars(extend("default" = "sha256"))]
     algorithm: Algorithm,
+    /// How the digest must appear in `target`: `contains` = hex
+    /// substring anywhere (default); `sums-line` = a `<hex> [*]<path>`
+    /// line whose path token is the source's path.
     #[serde(default)]
+    #[schemars(extend("default" = "contains"))]
     format: Format,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct PairHashRule {
@@ -84,6 +97,9 @@ pub struct PairHashRule {
     target: String,
     algorithm: Algorithm,
     format: Format,
+    /// Permit reading a `target:` that escapes the repo root — set
+    /// post-build from the top-level `allow_out_of_root:` policy.
+    allow_out_of_root: bool,
 }
 
 impl Rule for PairHashRule {
@@ -97,19 +113,50 @@ impl Rule for PairHashRule {
         true
     }
 
+    fn set_allow_out_of_root(&mut self, allow: bool) {
+        self.allow_out_of_root = allow;
+    }
+
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let target_path = Path::new(&self.target);
-        let b_bytes = match crate::io::read_capped(&ctx.root.join(target_path)) {
+        let mut violations = Vec::new();
+        // Confine the (config-author-controlled) target manifest path
+        // before reading it: an absolute / `../../` `target:` reads a
+        // file outside the repo root only when the user's top-level
+        // config opted this rule into `allow_out_of_root`.
+        let target_rel =
+            match crate::pathsafe::confine_read(target_path, ctx.root, self.allow_out_of_root) {
+                crate::pathsafe::Confined::In(p) => p,
+                crate::pathsafe::Confined::AllowedEscape(p) => {
+                    violations.push(
+                        Violation::new(crate::pathsafe::out_of_root_note(target_path))
+                            .as_note()
+                            .with_path(std::sync::Arc::<Path>::from(target_path)),
+                    );
+                    p
+                }
+                crate::pathsafe::Confined::Denied => {
+                    return Ok(vec![
+                        Violation::new(format!(
+                            "pair_hash target {:?} escapes the repo root",
+                            self.target
+                        ))
+                        .with_path(std::sync::Arc::<Path>::from(target_path)),
+                    ]);
+                }
+            };
+        let b_bytes = match crate::io::read_capped(&ctx.root.join(&target_rel)) {
             Ok(b) => b,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
-                return Ok(vec![
+                violations.push(
                     Violation::new(format!(
-                        "pair_hash target {:?} is too large to analyze \
-                         ({n} bytes; 256 MiB cap)",
-                        self.target
+                        "pair_hash target {:?} is too large to analyze ({})",
+                        self.target,
+                        crate::io::over_cap(n)
                     ))
                     .with_path(std::sync::Arc::<Path>::from(target_path)),
-                ]);
+                );
+                return Ok(violations);
             }
             Err(crate::io::ReadCapError::Io(_)) => {
                 let msg = self.message.clone().unwrap_or_else(|| {
@@ -118,15 +165,14 @@ impl Rule for PairHashRule {
                         self.target
                     )
                 });
-                return Ok(vec![
-                    Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)),
-                ]);
+                violations
+                    .push(Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)));
+                return Ok(violations);
             }
         };
         let b_text = String::from_utf8_lossy(&b_bytes);
         let b_lower = b_text.to_ascii_lowercase();
 
-        let mut violations = Vec::new();
         for entry in ctx.index.files() {
             if !self.source_scope.matches(&entry.path, ctx.index) {
                 continue;
@@ -136,8 +182,9 @@ impl Rule for PairHashRule {
                 Err(crate::io::ReadCapError::TooLarge(n)) => {
                     violations.push(
                         Violation::new(format!(
-                            "{} is too large to hash ({n} bytes; 256 MiB cap)",
-                            entry.path.display()
+                            "{} is too large to hash ({})",
+                            entry.path.display(),
+                            crate::io::over_cap(n)
                         ))
                         .with_path(entry.path.clone()),
                     );
@@ -176,8 +223,23 @@ impl PairHashRule {
                 let want = src.to_string_lossy();
                 for line in b.lines() {
                     let mut tok = line.split_whitespace();
-                    let (Some(hex), Some(path_tok)) = (tok.next(), tok.next()) else {
+                    let (Some(a), Some(rest)) = (tok.next(), tok.next()) else {
                         continue;
+                    };
+                    // The manifest may be hex-first (coreutils / go
+                    // `.sum`: `<hex>  <path>`) or path-first (the Go
+                    // FIPS snapshot manifest: `<path> <hex>`). The
+                    // algorithm fixes the digest's hex length, so
+                    // identify the digest token by shape and either
+                    // order parses; an ambiguous line (both or neither
+                    // hex-shaped) assumes the hex-first default.
+                    let n = digest.len();
+                    let (hex, path_tok) = if is_hex_digest(a, n) && !is_hex_digest(rest, n) {
+                        (a, rest)
+                    } else if is_hex_digest(rest, n) && !is_hex_digest(a, n) {
+                        (rest, a)
+                    } else {
+                        (a, rest)
                     };
                     // Normalise the coreutils binary-mode `*`
                     // marker and a `find`-style `./` prefix
@@ -225,6 +287,13 @@ fn encode_hex(bytes: &[u8]) -> String {
     s
 }
 
+/// True when `tok` is shaped like a digest of the expected hex length
+/// (used to tell the hex token from the path token in a `sums-line`
+/// manifest, regardless of which comes first).
+fn is_hex_digest(tok: &str, expected_len: usize) -> bool {
+    tok.len() == expected_len && tok.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "pair_hash")?;
     let opts: Options = spec
@@ -259,6 +328,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         target: opts.target,
         algorithm: opts.algorithm,
         format: opts.format,
+        allow_out_of_root: false,
     }))
 }
 
@@ -280,6 +350,7 @@ mod tests {
             target: target.into(),
             algorithm,
             format,
+            allow_out_of_root: false,
         }
     }
 
@@ -306,6 +377,53 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].path.as_deref(), Some(Path::new("a.txt")));
         assert!(v[0].message.contains("not found in"));
+    }
+
+    #[test]
+    fn target_escape_fires_without_reading() {
+        // Security regression (v0.12 path-confinement): an absolute
+        // `target:` must produce an "escapes the repo root" violation,
+        // never read an out-of-tree file.
+        let (tmp, idx) = tempdir_with_files(&[("a.txt", b"hello")]);
+        let r = rule(
+            "a.txt",
+            "/etc/hostname",
+            Algorithm::Sha256,
+            Format::Contains,
+        );
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
+    }
+
+    #[test]
+    fn target_out_of_root_read_when_allowed() {
+        // With `allow_out_of_root`, an absolute out-of-tree `target:` is
+        // read; the digest is found there and a note records the escape.
+        let (tmp, idx) = tempdir_with_files(&[("a.txt", b"hello")]);
+        let ext = tempfile::tempdir().unwrap();
+        let manifest = ext.path().join("pin.txt");
+        std::fs::write(&manifest, format!("HASH = {HELLO_SHA256}\n")).unwrap();
+        let mut r = rule(
+            "a.txt",
+            manifest.to_str().unwrap(),
+            Algorithm::Sha256,
+            Format::Contains,
+        );
+        r.set_allow_out_of_root(true);
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(
+            v.iter().all(|x| x.is_note),
+            "only an out-of-root note: {v:?}"
+        );
+        assert!(
+            v.iter().any(|x| x.message.contains("allow_out_of_root")),
+            "{v:?}"
+        );
     }
 
     #[test]
@@ -348,6 +466,33 @@ mod tests {
             r.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty(),
             "a ./-prefixed sums-line path must match the index path"
         );
+    }
+
+    #[test]
+    fn sums_line_tolerates_path_first_order() {
+        // The Go FIPS snapshot manifest writes `<path> <hex>` — the
+        // reverse of the coreutils `<hex>  <path>` order. The digest
+        // token is identified by shape, so both orders parse.
+        let manifest = format!("a.txt {HELLO_SHA256}\n");
+        let (tmp, idx) =
+            tempdir_with_files(&[("a.txt", b"hello"), ("fips140.sum", manifest.as_bytes())]);
+        let r = rule("a.txt", "fips140.sum", Algorithm::Sha256, Format::SumsLine);
+        assert!(
+            r.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty(),
+            "a path-first sums-line must match"
+        );
+    }
+
+    #[test]
+    fn sums_line_path_first_detects_mismatch() {
+        // Path-first order must still catch a wrong digest.
+        let manifest = "a.txt 0000000000000000000000000000000000000000000000000000000000000000\n";
+        let (tmp, idx) =
+            tempdir_with_files(&[("a.txt", b"hello"), ("fips140.sum", manifest.as_bytes())]);
+        let r = rule("a.txt", "fips140.sum", Algorithm::Sha256, Format::SumsLine);
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(v[0].message.contains("digest mismatch"), "{}", v[0].message);
     }
 
     #[test]
@@ -443,12 +588,12 @@ mod tests {
             }
         };
         assert_eq!(n, 10, "TooLarge must carry the real file size");
-        // Byte-identical to the format string in
-        // `pair_hash::evaluate` (target branch, ~line 107).
-        let cap_mib = crate::io::MAX_ANALYZE_BYTES / (1024 * 1024);
+        // Byte-identical to the message `pair_hash::evaluate` emits
+        // for the target branch — whose cap suffix now comes from
+        // `crate::io::over_cap`, exercised here as the oracle.
         let canonical = format!(
-            "pair_hash target {p:?} is too large to analyze \
-             ({n} bytes; {cap_mib} MiB cap)",
+            "pair_hash target {p:?} is too large to analyze ({})",
+            crate::io::over_cap(n),
         );
         assert!(
             canonical.contains("too large to analyze (10 bytes; 256 MiB cap)"),

@@ -3,12 +3,17 @@
 
 === <top-level> ===
   --ascii
+  --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -V, --version
   -c, --config <CONFIG>
@@ -19,13 +24,18 @@
 === check ===
   --ascii
   --base <REF>
+  --baseline <FILE>
   --changed
   --color <WHEN>
   --compact
   --fail-on-warning
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -34,12 +44,18 @@
 
 === list ===
   --ascii
+  --baseline <FILE>
+  --category <CATEGORY>
   --color <WHEN>
   --compact
   --fail-on-warning
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -48,12 +64,17 @@
 
 === explain ===
   --ascii
+  --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -63,6 +84,7 @@
 === fix ===
   --ascii
   --base <REF>
+  --baseline <FILE>
   --changed
   --color <WHEN>
   --compact
@@ -70,7 +92,11 @@
   --fail-on-warning
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -79,12 +105,17 @@
 
 === facts ===
   --ascii
+  --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -93,13 +124,18 @@
 
 === init ===
   --ascii
+  --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
   --monorepo
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -108,6 +144,7 @@
 
 === suggest ===
   --ascii
+  --baseline <FILE>
   --color <WHEN>
   --compact
   --confidence <LEVEL>
@@ -116,7 +153,11 @@
   --include-bundled
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -125,6 +166,7 @@
 
 === export-agents-md ===
   --ascii
+  --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
@@ -132,9 +174,13 @@
   --inline
   --no-docs
   --no-gitignore
+  --only <RULE_ID>
   --output <PATH>
   --progress <WHEN>
   --section-title <TEXT>
+  --show-baselined
+  --show-notes
+  --strict-baseline
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>

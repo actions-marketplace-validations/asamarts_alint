@@ -22,18 +22,23 @@ use globset::{Glob, GlobMatcher};
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Glob selecting the directories to check.
     select: String,
+    /// Basename glob(s): every dir matching `select` must have at least one
+    /// child matching each.
     require: RequireList,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(untagged, expecting = "a basename glob, or a list of basename globs")]
 enum RequireList {
+    /// A single basename glob.
     One(String),
-    Many(Vec<String>),
+    /// A non-empty list of basename globs.
+    Many(#[schemars(length(min = 1))] Vec<String>),
 }
 
 impl RequireList {
@@ -44,6 +49,8 @@ impl RequireList {
         }
     }
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct DirContainsRule {
@@ -99,7 +106,23 @@ impl Rule for DirContainsRule {
                 if !found {
                     let glob = &self.require_globs[i];
                     let msg = self.format_message(&dir.path, glob);
-                    violations.push(Violation::new(msg).with_path(dir.path.clone()));
+                    // One violation per missing `require` glob, all on the same
+                    // dir path with no line — so a `baseline_key` on (dir, glob)
+                    // is required or they collide to one fingerprint and a
+                    // baseline masks a genuinely-new missing-file finding
+                    // (baseline.md §6 collision-invariant).
+                    violations.push(
+                        Violation::new(msg)
+                            .with_path(dir.path.clone())
+                            // `slash()` (not `display()`) so the key matches the
+                            // fingerprint's forward-slash path normalization and a
+                            // baseline stays stable across Windows/Unix, like the
+                            // twin file_graph keys.
+                            .with_baseline_key(format!(
+                                "dir_contains\0{}\0{glob}",
+                                crate::slash(&dir.path)
+                            )),
+                    );
                 }
             }
         }

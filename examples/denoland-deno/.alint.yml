@@ -1,39 +1,29 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
-# Starter alint config for denoland/deno.
 #
-# Replaces 11 of Deno's tools/lint.js + tools/copyright_checker.js +
-# tools/format.js structural checks with declarative rules, plus 4 more
-# via the `command` rule kind shelling out to existing tools (dprint,
-# deno lint, dlint, cargo clippy). Net 15 of ~22 structural checks
-# move to one declarative file.
+# Proposed alint config for denoland/deno  (re-analysis against alint v0.10/v0.11).
 #
-# Adopt by saving as .alint.yml at the repo root and running `alint check`.
-# Tune the `paths:` and `scope_filter:` entries to your local layout if
-# your fork has diverged. The default scope filters narrow each rule to
-# the parts of the tree where it makes sense (Rust under `Cargo.toml`,
-# JS/TS under the agent-context heuristics, etc.).
+# Supersedes examples/denoland-deno/.alint.yml (written v0.9.17-era). That config
+# could only express ~17 of deno's 30 structural surfaces declaratively and shelled
+# the rest out via the legacy per-file `command` kind. The v0.10/v0.11 rule kinds
+# (import_gate, command_idempotent, generated_file_fresh, ordered_block,
+# cross_file_value_equals, git_commit_*) close most of that gap and FOLD the
+# remaining shellouts into single-invocation, per-file-attributed rules.
 #
-# Known limitations versus the existing tools/lint.js pipeline (each
-# requires an alint primitive that doesn't ship today — see this
-# directory's README.md for the full gap catalogue):
-#   - ensureNoNonPermissionCapitalLetterShortFlags  (Rust AST: parse
-#                                                    cli/args/flags.rs
-#                                                    for .short('X') calls)
-#   - ensureNoUnusedOutFiles                        (semantic JSONC
-#                                                    traversal with
-#                                                    `${var}` substitution
-#                                                    against tests/specs/)
-#   - lintNodePolyfillDenoApis                       (per-file violation
-#                                                    counts vs a baseline
-#                                                    in EXPECTED_VIOLATIONS)
-#   - tools/jsdoc_checker.js                        (TypeScript AST: walk
-#                                                    cli/tsc/dts/lib.deno*
-#                                                    and require @category)
-#   - dlintPreferPrimordials                        (dlint with a single
-#                                                    rule, narrowed to
-#                                                    bootstrap files)
-# These remain on the existing scripts (or shell out via `command`) until
-# alint v0.10+ ships the matching primitives.
+# Captured against the live tip of main (2026-05): tools/lint.js (~9 checks),
+# tools/copyright_checker.js, tools/format.js, tools/jsdoc_checker.js,
+# tools/verify_pr_title.js, the 11 .github/workflows/*.ts generators (now
+# self-linting via `--lint`), the per-crate clippy.toml method bans, and the
+# per-language config files.
+#
+# KEY DELTAS vs the v0.9.17 config:
+#   * top-level allowlist now includes DIRECTORY entries (.cargo .claude
+#     .devcontainer .github cli ext libs runtime tests tools) — the curated set
+#     in lint.js grew. dir_only_contains still only checks file children, so the
+#     dir half stays a documented residual gap.
+#   * workflow generators moved from "regenerate + diff" to a built-in `--lint`
+#     self-check — that is a clean command_idempotent target, no longer a `pair`.
+#   * clippy.toml entries are now `{ path = "...", reason = "..." }` objects (was
+#     bare strings); the quoted-path content checks still match.
 
 version: 1
 
@@ -48,46 +38,37 @@ extends:
   - alint://bundled/agent-context@v1
 
 vars:
-  # Centralise the copyright year so the whole header set bumps in one
-  # place (mirrors the `copyrightYear` constant in
-  # tools/copyright_checker.js).
   copyright_year: "2026"
-  copyright_line: "Copyright 2018-2026 the Deno authors. MIT license."
 
 facts:
-  # Deno's polyglot self-detection: a Rust workspace whose tooling is
-  # written in JS/TS that runs on Deno itself. Used by a couple of
-  # rules below to gate JS/TS hygiene on the presence of the .dlint.json.
   - id: has_dlint_config
     any_file_exists: [.dlint.json]
 
 rules:
-  # ─────────────────────────────────────────────────────────────────
-  # tools/copyright_checker.js
-  # Apache-… no, MIT header on every JS/TS/Rust/C/Cargo.toml source
-  # file. Per-language because the comment syntax differs (`//` vs `#`).
-  # The original script accepts `// deno-lint-…`, `// Ported …`, blank
-  # lines, and shebangs *before* the copyright; alint's `file_header`
-  # is line-anchored, so we emulate the prefix tolerance with `(?:…)?`
-  # optional groups. Tighten or split per language if your fork uses
-  # a different ordering.
-  # ─────────────────────────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════════════════
+  # 1. tools/copyright_checker.js  — MIT header on every source file.
+  #    Per-language because the comment leader differs (// vs #). The
+  #    script tolerates a shebang, `// deno-lint-...`, `// Ported ...`,
+  #    `// Copyright ...`, and blank lines BEFORE the canonical line; we
+  #    emulate that with optional leading groups. Exclude set mirrors
+  #    getSources()'s `:!:` negations verbatim.
+  # ═══════════════════════════════════════════════════════════════════
   - id: deno-copyright-rust
     kind: file_header
-    paths: "**/*.rs"
+    paths:
+      include: ["**/*.rs"]
+      exclude: ["ops/optimizer_tests/**"]
     scope_filter:
       has_ancestor: Cargo.toml
     pattern: '^// Copyright 2018-2026 the Deno authors\. MIT license\.'
     level: error
     message: >-
       Every Rust source file must start with
-      `// Copyright 2018-2026 the Deno authors. MIT license.` —
-      tools/copyright_checker.js enforces this in CI.
+      `// Copyright 2018-2026 the Deno authors. MIT license.`
+      (tools/copyright_checker.js).
 
   - id: deno-copyright-js-ts
     kind: file_header
-    # Mirror the script's source-file globset and exclusions
-    # (cli/tsc/dts/** is Microsoft-licensed TypeScript libs, etc.).
     paths:
       include:
         - "**/*.js"
@@ -114,18 +95,15 @@ rules:
         - "tests/wpt/suite/**"
         - "libs/config/testdata/**"
         - "libs/eszip/testdata/**"
-    # The header may sit after a shebang, a `// deno-lint-...` directive,
-    # a `// Ported ...` line, or a blank line — same set the JS script
-    # tolerates.
-    # Pitfall #22 (`|` → `|-`) — defensive block-scalar trailing-
-    # newline fix. Verified NOT firing today (every Deno copyright
-    # line is `\n`-terminated naturally and the regex's terminating
-    # `// Copyright ...` line absorbs the trailing `\n`), but the
-    # `|` form is fragile; switching to `|-` removes the dependency
-    # on regex luck.
+    # `|-` (chomp) so the block scalar does NOT append a trailing \n to
+    # the regex — a source whose final line is the copyright (no newline)
+    # must still match.
     pattern: |-
       ^(?:#!.*\n)?(?:// (?:deno-lint-|Ported|Copyright).*\n|\s*\n)*// Copyright 2018-2026 the Deno authors\. MIT license\.
     level: error
+    message: >-
+      JS/TS source files must carry the MIT copyright header
+      (tools/copyright_checker.js).
 
   - id: deno-copyright-c
     kind: file_header
@@ -141,34 +119,56 @@ rules:
     pattern: '^# Copyright 2018-2026 the Deno authors\. MIT license\.'
     level: error
     message: >-
-      Every Cargo.toml must start with the TOML-style copyright
-      comment so tools/copyright_checker.js passes.
+      Every Cargo.toml must start with the TOML-style copyright comment.
 
   - id: deno-license-md-current-year
-    # The copyright_checker.js asserts LICENSE.md still mentions the
-    # current copyright year. A drop-in `file_content_matches` covers
-    # this — the script currently bumps the year in the source string
-    # at the start of each year.
+    # copyright_checker.js's `copyrightYear` constant asserts LICENSE.md
+    # still mentions the current year. Plain content match.
     kind: file_content_matches
     paths: LICENSE.md
     pattern: 'Copyright 2018-2026 the Deno authors'
     level: error
     message: >-
-      LICENSE.md has an out-of-date copyright year. Update it (and
-      tools/copyright_checker.js's `copyrightYear`) at year-start.
+      LICENSE.md copyright year is stale; bump it (and copyright_checker.js's
+      `copyrightYear`) at year-start.
 
-  # ─────────────────────────────────────────────────────────────────
-  # tools/lint.js → ensureDisallowedMethodsEnforced
-  # Every `ext/*` and `libs/*` crate must carry a clippy.toml that
-  # bans the same set of methods (path / fs / url helpers that don't
-  # honour Deno's permission system). The script also enforces an
-  # extra set on `libs/*` crates (process env, current_dir, time).
-  #
-  # alint expresses the structural piece (clippy.toml exists per
-  # crate, contains a known list of method strings). The
-  # interaction between this and the actual clippy invocation is
-  # handled by the `cargo clippy` command rule below.
-  # ─────────────────────────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════════════════
+  # 2. ★ NEW v0.10  import_gate — the Rust permission-system firewall.
+  #    ext/* / libs/* / runtime crates ban a set of std fs/path/url/env
+  #    helpers that bypass Deno's permission model. The clippy.toml bans
+  #    are the *enforcement*; import_gate adds a fast first-pass on the
+  #    SOURCE so a raw `use std::fs::canonicalize;` is caught even before
+  #    clippy compiles. (clippy still authoritative — see §8.)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: deno-no-raw-std-fs-in-permissioned-crates
+    kind: import_gate
+    language: rust
+    paths:
+      include:
+        - "ext/**/*.rs"
+        - "libs/**/*.rs"
+        - "runtime/**/*.rs"
+      exclude:
+        - "**/tests/**"
+        - "**/benches/**"
+        - "**/build.rs"
+        - "libs/core_testing/**"
+    # import_gate keys on the EXTRACTED `use` target; flag direct std::fs
+    # mutators that the clippy.toml disallowed-methods list also bans.
+    forbid: '^std::fs::(canonicalize|copy|create_dir|create_dir_all|hard_link|remove_dir|remove_dir_all|remove_file|rename|read_dir|read_link|metadata|symlink_metadata)$'
+    level: warning
+    message: >-
+      Permissioned crates must route filesystem access through the
+      FileSystem/NodeFs trait, not raw std::fs (mirrors the per-crate
+      clippy.toml disallowed-methods bans; clippy is authoritative).
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 3. tools/lint.js → ensureDisallowedMethodsEnforced (structural half).
+  #    Every ext/* and libs/* crate (minus libs/core_testing) ships a
+  #    clippy.toml; libs/* additionally bans env/current_dir/time.
+  #    for_each_dir presence checks + sampled content checks. The full
+  #    30-method × N-crate matrix is still the residual gap (see §gaps).
+  # ═══════════════════════════════════════════════════════════════════
   - id: deno-ext-crate-has-clippy-toml
     kind: for_each_dir
     select: "ext/*"
@@ -178,9 +178,8 @@ rules:
         paths: "{path}/clippy.toml"
     level: error
     message: >-
-      Every ext/* crate must have a clippy.toml that bans the
-      common set of fs / path / url helpers. See
-      tools/lint.js → ensureDisallowedMethodsEnforced.
+      Every ext/* crate must ship a clippy.toml banning the common
+      fs/path/url helper set (tools/lint.js).
 
   - id: deno-libs-crate-has-clippy-toml
     kind: for_each_dir
@@ -191,55 +190,46 @@ rules:
         paths: "{path}/clippy.toml"
     level: error
     message: >-
-      Every libs/* crate must have a clippy.toml that bans the
-      common set of fs / path / url helpers PLUS the libs-extra
-      set (process env, current_dir, time).
+      Every libs/* crate (except core_testing) must ship a clippy.toml
+      banning the common set PLUS the libs-extra env/current_dir/time set.
 
-  - id: deno-ext-clippy-toml-bans-fs-helpers
-    # Sample of the COMMON_METHODS set — the full list is 30 entries.
-    # The structural primitive (clippy.toml contains every entry from
-    # a known list) currently has to be expressed as one rule per
-    # entry; v0.10+'s import_gate / disallowed_methods primitive
-    # would collapse this to a single rule sourcing the list from a
-    # registry file.
+  - id: deno-clippy-toml-bans-fs-canonicalize
+    # Sample of COMMON_METHODS. clippy.toml now uses
+    # { path = "std::fs::canonicalize", reason = ... } objects, so the
+    # quoted-path content match still hits.
     kind: file_content_matches
-    paths: ["ext/*/clippy.toml", "libs/*/clippy.toml", "runtime/clippy.toml"]
+    paths:
+      - "ext/*/clippy.toml"
+      - "libs/*/clippy.toml"
+      - "runtime/clippy.toml"
     pattern: '"std::fs::canonicalize"'
     level: error
     message: >-
-      clippy.toml is missing `std::fs::canonicalize` from
-      disallowed-methods. (Sample rule — extend with the full
-      30-entry list from tools/lint.js.)
+      clippy.toml is missing `std::fs::canonicalize` from disallowed-methods
+      (sample of the COMMON_METHODS set in tools/lint.js).
 
   - id: deno-libs-clippy-toml-bans-env-var
     kind: file_content_matches
-    paths: ["libs/*/clippy.toml", "runtime/permissions/clippy.toml"]
+    paths:
+      - "libs/*/clippy.toml"
+      - "runtime/permissions/clippy.toml"
     pattern: '"std::env::var"'
     level: error
     message: >-
-      libs/* clippy.toml must additionally ban `std::env::var`.
-      (Sample rule — see tools/lint.js LIBS_EXTRA_METHODS for the
-      full list.)
+      libs/* clippy.toml must also ban `std::env::var`
+      (sample of LIBS_EXTRA_METHODS in tools/lint.js).
 
-  # ─────────────────────────────────────────────────────────────────
-  # tools/lint.js → ensureNoNewTopLevelEntries
-  # Repo root is curated. Anything new at the top level requires a
-  # discussion (the script carries the explicit allow-list as a Set).
-  #
-  # Partial alint coverage: `dir_only_contains` checks *file*
-  # children of the matched directory; subdirectory children are
-  # silently passed (see crates/alint-rules/src/dir_only_contains.rs).
-  # The rule below catches a stray `secrets.json` at the root but
-  # NOT a stray `pkg/` or `vendor/` subdirectory. The full check
-  # awaits a v0.10+ `dir_contents_match_allowlist` primitive — see
-  # this directory's README for the gap analysis.
-  # ─────────────────────────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════════════════
+  # 4. tools/lint.js → ensureNoNewTopLevelEntries  (file half only).
+  #    The curated allow-list now also lists DIRECTORIES, but
+  #    dir_only_contains checks file children only, so a stray top-level
+  #    *directory* still slips past (documented gap). The file allow-list
+  #    mirrors lint.js's `allowed` Set.
+  # ═══════════════════════════════════════════════════════════════════
   - id: deno-no-new-top-level-files
     kind: dir_only_contains
     select: "."
     allow:
-      # Allow-listed root *files* (subdirs are not checked by this
-      # rule kind today — see comment above).
       - ".dlint.json"
       - ".dprint.json"
       - ".editorconfig"
@@ -260,33 +250,40 @@ rules:
       - "x"
     level: error
     message: >-
-      A new file at the repo root requires explicit discussion;
-      add to the allow-list above (and to tools/lint.js's `allowed`
-      Set) once approved.
+      A new file at the repo root requires discussion; add it to this
+      allow-list (and lint.js's `allowed` Set) once approved.
 
-  # ─────────────────────────────────────────────────────────────────
-  # tools/lint.js → ensureWorkflowYmlsUpToDate
-  # Every `.github/workflows/<name>.ts` generator must have a paired
-  # `.github/workflows/<name>.generated.yml` checked in. The
-  # freshness check (regenerate and diff) needs the `command` rule;
-  # the structural pairing is `pair`.
-  # ─────────────────────────────────────────────────────────────────
-  - id: deno-workflow-generator-pairs
-    kind: pair
-    primary: ".github/workflows/*.ts"
-    partner: ".github/workflows/{stem}.generated.yml"
+  # ═══════════════════════════════════════════════════════════════════
+  # 5. ★ NEW v0.10  command_idempotent — ensureWorkflowYmlsUpToDate.
+  #    The generators are now SELF-LINTING: `deno run --allow-read=. <gen>
+  #    --lint` exits non-zero (printing the stale path) when the checked-in
+  #    .generated.yml is out of date. One invocation per generator; the
+  #    legacy `pair` rule only proved the sibling EXISTS, not that it is
+  #    FRESH. This is the freshness half, finally declarative.
+  #    (NOTE: requires `deno` on PATH at check time — CI-only.)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: deno-ci-workflow-fresh
+    kind: command_idempotent
+    command: ["deno", "run", "--allow-read=.", ".github/workflows/ci.ts", "--lint"]
     level: error
-    message: >-
-      Every workflow generator (.github/workflows/*.ts) must have
-      a checked-in {stem}.generated.yml sibling. Run
-      `deno run --allow-write {generator}` to regenerate.
+    message: "ci.generated.yml is stale — run `.github/workflows/ci.ts` and commit."
 
-  # ─────────────────────────────────────────────────────────────────
-  # .dlint.json / .dprint.json / .gitattributes shape checks.
-  # The configs themselves carry policy that's worth validating —
-  # if someone strips the `recommended` tag or the LF line-ending
-  # rule, we want a structural failure, not silent regression.
-  # ─────────────────────────────────────────────────────────────────
+  - id: deno-pr-workflow-fresh
+    kind: command_idempotent
+    command: ["deno", "run", "--allow-read=.", ".github/workflows/pr.ts", "--lint"]
+    level: error
+    message: "pr.generated.yml is stale — run `.github/workflows/pr.ts` and commit."
+    # The remaining 9 generators (cargo_publish, create_prerelease_tag,
+    # ecosystem_compat_test, node_compat_test, npm_publish, post_publish,
+    # promote_to_release, start_release, version_bump) follow the same
+    # shape; add one command_idempotent rule per generator, or keep them on
+    # tools/lint.js's ensureWorkflowYmlsUpToDate (which fans Promise.all
+    # over the whole list). The two flagship workflows are wired here.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 6. Per-language config-shape guards. If someone drops the recommended
+  #    tag, the deno style, or the LF rule, fail structurally.
+  # ═══════════════════════════════════════════════════════════════════
   - id: deno-dlint-keeps-recommended-tag
     when: facts.has_dlint_config
     kind: json_path_equals
@@ -294,23 +291,18 @@ rules:
     path: "$.rules.tags[0]"
     equals: "recommended"
     level: warning
-    message: >-
-      .dlint.json should keep `recommended` in `rules.tags`. The
-      project relies on the recommended set as the baseline.
+    message: ".dlint.json should keep `recommended` in `rules.tags`."
 
   - id: deno-dlint-includes-camelcase
     when: facts.has_dlint_config
-    # Intent is "camelcase must be present in rules.include" — i.e. ANY
-    # element matches. *_path_equals against [*] would mean EVERY element
-    # must equal "camelcase" (firing on every other listed rule); see
-    # CONFIG-AUTHORING.md pitfall #17. Until v0.10+ ships `*_path_contains`,
-    # the canonical workaround is a regex against the raw JSON text.
+    # ANY-element membership; *_path_equals against [*] would require EVERY
+    # element to equal "camelcase". Regex against raw JSON until a
+    # *_path_contains kind ships.
     kind: file_content_matches
     paths: .dlint.json
     pattern: '"include"\s*:\s*\[[^\]]*"camelcase"'
     level: info
-    message: >-
-      .dlint.json should keep `camelcase` in `rules.include`.
+    message: ".dlint.json should keep `camelcase` in `rules.include`."
 
   - id: deno-dprint-typescript-deno-style
     kind: json_path_equals
@@ -318,57 +310,59 @@ rules:
     path: "$.typescript.deno"
     equals: true
     level: warning
-    message: >-
-      .dprint.json should keep TypeScript in `deno` style — the
-      project's source style is `deno fmt`-equivalent.
+    message: ".dprint.json should keep TypeScript in `deno` style."
 
   - id: deno-gitattributes-enforces-lf
     kind: file_content_matches
     paths: .gitattributes
     pattern: '\* text=auto eol=lf'
     level: warning
-    message: >-
-      .gitattributes should keep `* text=auto eol=lf` so Windows
-      checkouts don't introduce CRLF.
+    message: ".gitattributes should keep `* text=auto eol=lf` (Windows CRLF guard)."
 
-  # ─────────────────────────────────────────────────────────────────
-  # File-size guard. The repo has explicit large files
-  # (Releases.md @ ~570KB, Cargo.lock @ ~300KB, import_map.json @ ~35KB,
-  # plus testdata blobs). Keep the gate at 5 MiB and exclude the
-  # known-large directories — surfaces accidental binary commits.
-  # ─────────────────────────────────────────────────────────────────
-  - id: deno-no-huge-blobs
-    kind: file_max_size
-    paths:
-      include: ["**/*"]
-      exclude:
-        - "tests/testdata/**"
-        - "tests/specs/**"
-        - "tests/bench/testdata/**"
-        - "tests/wpt/**"
-        - "tests/node_compat/**"
-        - "tests/registry/**"
-        - "ext/node/polyfills/deps/**"
-        - "ext/websocket/autobahn/reports/**"
-        - "cli/tsc/dts/**"
-        - "cli/tsc/*typescript.js"
-        - "Releases.md"
-        - "Cargo.lock"
-    max_bytes: 5242880  # 5 MiB
-    level: warning
+  # ═══════════════════════════════════════════════════════════════════
+  # 7. ★ NEW v0.10  command_idempotent — the format / lint engines, now
+  #    single-invocation with per-file attribution (was per-file `command`
+  #    fan-out in the v0.9.17 config). One spawn each, offenders parsed.
+  #    (All require deno/dprint/dlint on PATH — CI-only.)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: deno-dprint-check
+    kind: command_idempotent
+    command: ["deno", "run", "-A", "--no-config", "npm:dprint@0.50.0", "check", "--config=.dprint.json"]
+    files_from: stdout
+    # dprint prints "<path>:" lines for files that would change.
+    files_pattern: '^(.+?):\s*$'
+    timeout: 600
+    level: error
+    message: "Code is not dprint-clean — run `./x fmt` and commit the diff."
 
-  # ─────────────────────────────────────────────────────────────────
-  # tools/lint.js → clippy
-  # Run `cargo clippy` for the workspace except `deno_core`, then
-  # again for `deno_core` with its specific feature set. The two
-  # invocations carry different `--deny` sets — both are reproduced
-  # below as `command` rules so the project's clippy gates run from
-  # alint without depending on tools/lint.js orchestration.
-  # ─────────────────────────────────────────────────────────────────
+  - id: deno-dlint
+    kind: command_idempotent
+    command: ["deno", "run", "-A", "tools/lint.js", "--js"]
+    files_from: stdout
+    files_pattern: '^([^:]+):\d+:\d+:'
+    timeout: 600
+    level: error
+    message: "tools/lint.js --js (dlint) findings — see output for the offending file."
+
+  - id: deno-dlint-prefer-primordials
+    # dlintPreferPrimordials: the single prefer-primordials rule over
+    # runtime/** + ext/** bootstrap JS/TS.
+    kind: command_idempotent
+    command: ["deno", "run", "-A", "tools/lint.js", "--js", "--rule", "prefer-primordials"]
+    files_from: stdout
+    files_pattern: '^([^:]+):\d+:\d+:'
+    timeout: 600
+    level: error
+    message: "prefer-primordials violation in a bootstrap file (dlintPreferPrimordials)."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 8. clippy — the two-invocation workspace gate. Kept as the legacy
+  #    single-shot `command` kind: clippy emits no parseable per-file
+  #    offender list (it streams compiler diagnostics), so command_idempotent
+  #    buys nothing here. Single-shot, triggered by the root Cargo.toml.
+  # ═══════════════════════════════════════════════════════════════════
   - id: deno-cargo-clippy-workspace
     kind: command
-    # Single-shot rule: triggered by the workspace root Cargo.toml so
-    # clippy runs once for the whole workspace, not once per crate.
     paths: Cargo.toml
     command:
       - "cargo"
@@ -392,50 +386,73 @@ rules:
       - "clippy::large_futures"
       - "--deny"
       - "clippy::allow_attributes_without_reason"
-    timeout: 1200
+    timeout: 1800
     level: error
-    message: >-
-      Workspace clippy failed (mirrors tools/lint.js → clippy()).
+    message: "Workspace clippy failed (tools/lint.js → clippy(), invocation 1/2)."
 
-  # ─────────────────────────────────────────────────────────────────
-  # tools/format.js (--check)
-  # Single-shot dprint --check across the repo. Project carries a
-  # rich exclude list in .dprint.json, so we just hand off to dprint.
-  # ─────────────────────────────────────────────────────────────────
-  - id: deno-dprint-check
+  - id: deno-cargo-clippy-deno-core
     kind: command
-    paths: .dprint.json
+    paths: Cargo.toml
     command:
-      - "deno"
-      - "run"
-      - "-A"
-      - "--no-config"
-      - "npm:dprint@0.47.2"
-      - "check"
-      - "--config=.dprint.json"
-    timeout: 600
+      - "cargo"
+      - "clippy"
+      - "-p"
+      - "deno_core"
+      - "--all-targets"
+      - "--locked"
+      - "--features"
+      - "default,unsafe_runtime_options,unsafe_use_unprotected_platform"
+      - "--"
+      - "-D"
+      - "warnings"
+      - "--deny"
+      - "clippy::unused_async"
+      - "--deny"
+      - "clippy::print_stderr"
+      - "--deny"
+      - "clippy::print_stdout"
+      - "--deny"
+      - "clippy::large_futures"
+      - "--deny"
+      - "clippy::allow_attributes_without_reason"
+    timeout: 1800
     level: error
-    message: >-
-      `dprint check` failed — run `./x fmt` (or
-      `deno run -A tools/format.js`) and commit the diff.
+    message: "deno_core clippy failed (tools/lint.js → clippy(), invocation 2/2)."
 
-  # ─────────────────────────────────────────────────────────────────
-  # tools/lint.js → dlint
-  # Single-shot dlint across the JS/TS subset. The exclude set lives
-  # in tools/lint.js → getSources(...); we delegate via a top-level
-  # command rule rather than restate it here.
-  # ─────────────────────────────────────────────────────────────────
-  - id: deno-dlint
-    kind: command
-    paths: .dlint.json
-    command:
-      - "deno"
-      - "run"
-      - "-A"
-      - "tools/lint.js"
-      - "--js"
-    timeout: 600
-    level: error
+  # ═══════════════════════════════════════════════════════════════════
+  # 9. ★ NEW v0.11  git_commit_* — PR hygiene. verify_pr_title.js checks
+  #    the PR *title* (out of scope — not file/commit content), but the
+  #    no-fixup guard IS a commit-history check alint now owns. Deno
+  #    squash-merges, so residual fixup!/squash! commits should never
+  #    reach a merge. (scope-limited to the PR range via ALINT_BASE_SHA.)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: deno-no-fixup-commits
+    kind: git_commit_no_fixup
+    since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
+    level: warning
     message: >-
-      `tools/lint.js --js` failed — see the script output for the
-      offending file.
+      Squash residual fixup!/squash! commits before merge
+      (`git rebase --autosquash`). Deno squash-merges PRs.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 10. File-size guard — surfaces accidental binary commits. Excludes the
+  #     known-large data trees + Releases.md/Cargo.lock.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: deno-no-huge-blobs
+    kind: file_max_size
+    paths:
+      include: ["**/*"]
+      exclude:
+        - "tests/testdata/**"
+        - "tests/specs/**"
+        - "tests/bench/testdata/**"
+        - "tests/wpt/**"
+        - "tests/node_compat/**"
+        - "tests/registry/**"
+        - "ext/node/polyfills/deps/**"
+        - "cli/tsc/dts/**"
+        - "cli/tsc/*typescript.js"
+        - "Releases.md"
+        - "Cargo.lock"
+    max_bytes: 5242880  # 5 MiB
+    level: warning

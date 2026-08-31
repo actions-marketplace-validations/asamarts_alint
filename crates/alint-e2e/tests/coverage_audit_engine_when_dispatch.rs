@@ -152,12 +152,14 @@ fn within_run_entry(lines: &[&str], idx: usize) -> bool {
     false
 }
 
-/// Separate audit for the per-file dispatch path. `run_per_file`
-/// builds a `live` list of (idx, entry) pairs that pass the
-/// `entry.when` gate, then dispatches `PerFileRule::evaluate_file`
-/// against each matched file. The `entry.when` consultation is
-/// inline in the live-list build; this test asserts it stays
-/// there.
+/// Separate audit for the per-file dispatch path. The `entry.when`
+/// gate lives in the shared `collect_live_per_file_entries` helper,
+/// which returns only the entries that passed it; both `run_per_file`
+/// and `run_for_file` obtain their entries from it *before* any
+/// `PerFileRule::evaluate_file` dispatch. This test pins two things:
+/// (1) the helper consults `entry.when`, and (2) `run_per_file` calls
+/// the helper before it dispatches. Together they guarantee a
+/// `when: false` per-file rule can never reach `evaluate_file`.
 #[test]
 fn run_per_file_consults_entry_when() {
     let engine_src_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -167,44 +169,38 @@ fn run_per_file_consults_entry_when() {
     let src = fs::read_to_string(&engine_src_path).unwrap();
     let lines: Vec<&str> = src.lines().collect();
 
-    // Find `fn run_per_file` and check its body contains
-    // `entry.when` somewhere before any `evaluate_file(` call.
-    let mut start = None;
-    for (i, line) in lines.iter().enumerate() {
-        let t = line.trim_start();
-        if t.starts_with("fn run_per_file") || t.starts_with("pub fn run_per_file") {
-            start = Some(i);
-            break;
-        }
-    }
-    let Some(start_idx) = start else {
+    // (1) The shared gate helper must consult `entry.when`.
+    assert!(
+        fn_body_contains(&lines, "collect_live_per_file_entries", "entry.when"),
+        "`collect_live_per_file_entries` does not consult `entry.when` — \
+         silent-no-op risk (disabled per-file rules could fire)",
+    );
+
+    // (2) `run_per_file` must obtain its entries from the gate helper
+    // BEFORE any `evaluate_file(` dispatch.
+    let Some(start_idx) = find_fn(&lines, "run_per_file") else {
         panic!("`fn run_per_file` not found in engine.rs — structure changed");
     };
-
-    // Walk forward until the next top-level fn declaration OR
-    // EOF. Within that span, ensure `entry.when` appears before
-    // `evaluate_file(`.
-    let mut when_idx: Option<usize> = None;
+    let mut gate_idx: Option<usize> = None;
     let mut eval_idx: Option<usize> = None;
     for (j, line) in lines.iter().enumerate().skip(start_idx + 1) {
         let t = line.trim_start();
-        // Stop at the next top-level fn declaration (not nested).
         if (t.starts_with("fn ") || t.starts_with("pub fn ") || t.starts_with("pub(crate) fn "))
             && t.contains('(')
             && !line.starts_with("        ")
         {
             break;
         }
-        if when_idx.is_none() && line.contains("entry.when") {
-            when_idx = Some(j);
+        if gate_idx.is_none() && line.contains("collect_live_per_file_entries(") {
+            gate_idx = Some(j);
         }
         if eval_idx.is_none() && line.contains("evaluate_file(") && !t.starts_with("//") {
             eval_idx = Some(j);
         }
     }
 
-    let when_line = when_idx.unwrap_or_else(|| {
-        panic!("`run_per_file` does not consult `entry.when` — silent-no-op risk");
+    let gate_line = gate_idx.unwrap_or_else(|| {
+        panic!("`run_per_file` does not call `collect_live_per_file_entries` — gate bypassed");
     });
     let eval_line = eval_idx.unwrap_or_else(|| {
         panic!(
@@ -213,12 +209,41 @@ fn run_per_file_consults_entry_when() {
         );
     });
     assert!(
-        when_line < eval_line,
-        "`run_per_file` consults `entry.when` (line {}) AFTER `evaluate_file` \
+        gate_line < eval_line,
+        "`run_per_file` runs the `when` gate (line {}) AFTER `evaluate_file` \
          (line {}) — gate must run BEFORE dispatch or disabled rules will fire",
-        when_line + 1,
+        gate_line + 1,
         eval_line + 1,
     );
+}
+
+/// Index of the line declaring `fn <name>` (or its `pub` form).
+fn find_fn(lines: &[&str], name: &str) -> Option<usize> {
+    lines.iter().position(|line| {
+        let t = line.trim_start();
+        t.starts_with(&format!("fn {name}")) || t.starts_with(&format!("pub fn {name}"))
+    })
+}
+
+/// True iff the body of `fn <name>` (up to the next top-level `fn`)
+/// contains `needle`.
+fn fn_body_contains(lines: &[&str], name: &str, needle: &str) -> bool {
+    let Some(start) = find_fn(lines, name) else {
+        return false;
+    };
+    for line in lines.iter().skip(start + 1) {
+        let t = line.trim_start();
+        if (t.starts_with("fn ") || t.starts_with("pub fn ") || t.starts_with("pub(crate) fn "))
+            && t.contains('(')
+            && !line.starts_with("        ")
+        {
+            break;
+        }
+        if line.contains(needle) {
+            return true;
+        }
+    }
+    false
 }
 
 /// True iff any line in `lines[i.saturating_sub(window)..=i]`

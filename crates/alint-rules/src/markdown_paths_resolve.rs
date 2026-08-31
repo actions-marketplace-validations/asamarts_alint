@@ -17,20 +17,24 @@ use alint_core::{
 };
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     /// Whitelist of path-shape prefixes to validate. A backticked
     /// token must start with one of these to be considered a path
     /// candidate. No defaults — every project's layout differs and
     /// the user must declare which prefixes mark a path.
+    #[schemars(length(min = 1))]
     prefixes: Vec<String>,
 
-    /// Skip backticked tokens containing template-variable
-    /// markers (`{{ }}`, `${ }`, `<…>`). Default true.
+    /// When true (default), skip backticked tokens containing `{{ ... }}`,
+    /// `${ ... }`, or `<...>` template-variable markers. These are
+    /// placeholders, not real paths.
     #[serde(default = "default_ignore_template_vars")]
     ignore_template_vars: bool,
 }
+
+crate::options_schema_for!(Options);
 
 fn default_ignore_template_vars() -> bool {
     true
@@ -94,7 +98,10 @@ impl PerFileRule for MarkdownPathsResolveRule {
             violations.push(
                 Violation::new(msg)
                     .with_path(std::sync::Arc::<Path>::from(path))
-                    .with_location(cand.line, cand.column),
+                    .with_location(cand.line, cand.column)
+                    // Several unresolved links can sit on one line, so
+                    // line-content collapses them. Key on the link target.
+                    .with_baseline_key(cand.token.clone()),
             );
         }
         Ok(violations)

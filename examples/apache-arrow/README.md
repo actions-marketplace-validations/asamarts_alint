@@ -734,3 +734,13 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   coordinations that require `registry_paths_resolve` (v0.10
   ship-target) to resolve declaratively; a one-line `paths.exclude:`
   extension remains the available workaround
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (114 rules). ~80% coverage: registry_paths_resolve closes the rat_exclude_files.txt gap, command_idempotent covers the flatc/cpp11 codegen-freshness gates no existing linter sees, import_gate for cpp layering, git_commit_no_fixup, apache/governance@v1.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 1).

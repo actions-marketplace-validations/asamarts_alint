@@ -5,6 +5,7 @@ members = [
     "crates/alint-dsl",
     "crates/alint-rules",
     "crates/alint-output",
+    "crates/alint-lsp",
     "crates/alint",
     "crates/alint-bench",
     "crates/alint-testkit",
@@ -15,7 +16,7 @@ members = [
 default-members = ["crates/alint"]
 
 [workspace.package]
-version = "0.10.2"
+version = "0.15.2"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0 OR MIT"
@@ -23,12 +24,13 @@ repository = "https://github.com/asamarts/alint"
 authors = ["alint contributors"]
 
 [workspace.dependencies]
-alint-core = { path = "crates/alint-core", version = "0.10.0" }
-alint-dsl = { path = "crates/alint-dsl", version = "0.10.0" }
-alint-rules = { path = "crates/alint-rules", version = "0.10.0" }
-alint-output = { path = "crates/alint-output", version = "0.10.0" }
-alint-bench = { path = "crates/alint-bench", version = "0.10.0" }
-alint-testkit = { path = "crates/alint-testkit", version = "0.10.0" }
+alint-core = { path = "crates/alint-core", version = "0.15.0" }
+alint-dsl = { path = "crates/alint-dsl", version = "0.15.0" }
+alint-rules = { path = "crates/alint-rules", version = "0.15.0" }
+alint-output = { path = "crates/alint-output", version = "0.15.0" }
+alint-lsp = { path = "crates/alint-lsp", version = "0.15.0" }
+alint-bench = { path = "crates/alint-bench", version = "0.15.0" }
+alint-testkit = { path = "crates/alint-testkit", version = "0.15.0" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
@@ -38,13 +40,15 @@ globset = "0.4"
 ignore = "0.4"
 regex = "1"
 rayon = "1"
-clap = { version = "4", features = ["derive", "cargo", "env"] }
+parking_lot = "0.12"
+clap = { version = "4", features = ["derive", "cargo", "env", "wrap_help"] }
 miette = { version = "7", features = ["fancy"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 content_inspector = "0.2"
 anyhow = "1"
-jsonschema = { version = "0.46", default-features = false }
+jsonschema = { version = "0.50", default-features = false }
+schemars = "1"
 criterion = "0.8"
 rand = "0.10"
 rand_chacha = "0.10"
@@ -77,11 +81,19 @@ roxmltree = "0.20"
 # the design docs were relocated to `docs/design/v0.11/` (the
 # move itself shipped in v0.9.22).
 tower-lsp = "0.20"
+# Async runtime for the LSP server (tower-lsp is async). Only
+# `crates/alint-lsp` pulls it in; the CLI enters the runtime via the
+# `lsp` subcommand.
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "sync"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 unused_must_use = "deny"
+# `cfg(kani)` is set by the Kani verifier (`cargo kani`), not cargo, so
+# declare it known to silence `unexpected_cfgs` in normal builds. See the
+# `#[cfg(kani)]` proof harnesses (docs/design/formal-methods.md).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
@@ -94,3 +106,16 @@ must_use_candidate = "allow"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Bench profile: gungraun's deterministic (Valgrind) benches need symbols for the
+# `--toggle-collect=<bench-fn>` collection toggle, and LTO must not inline the
+# toggle target away. Release strips symbols + thin-LTOs, so override here. The
+# absolute counts are bench-profile (not release-identical), which is fine for a
+# RELATIVE gate (delta vs a same-profile baseline). The end-to-end `det_check`
+# binary bench measures the real release `alint` binary, so it stays
+# release-representative. See docs/design/deterministic-perf-gating.md.
+[profile.bench]
+strip = false
+debug = "line-tables-only"
+lto = false
+codegen-units = 1

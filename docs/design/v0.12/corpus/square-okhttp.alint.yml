@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for square/okhttp @ 0c5a45b1174b8f735cc251eb19faaed87b65d868
+# (v0.12 case study — Kotlin/Java HTTP library, Gradle, Block/Square governance).
+#
+# okhttp's enforced-validation surface is dominated by TOOL/TEST EXECUTION
+# (Spotless/ktlint, Checkstyle, AnimalSniffer, Android Lint,
+# binary-compatibility-validator, the huge JVM/Android/GraalVM test matrix,
+# Maven/JPMS consumption tests, mkdocs build) — all D non-goals that alint
+# orchestrates but does not reimplement. The natively-addressable enforced
+# surface is thin; the bundles + repo rules below express it plus structural
+# value-add the repo does not gate on (recorded separately, not in coverage).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/java@v1
+  - alint://bundled/compliance/apache-2@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # === ENFORCED ADDRESSABLE (A) ====================================
+  # A1 (review convention, R5): every source file carries the Apache-2.0
+  # header. okhttp does NOT enforce this with a tool — Spotless runs
+  # `ktlint()` only, with NO licenseHeaderFile step (build-logic/src/main/
+  # kotlin/okhttp.quality-conventions.gradle.kts:80-94) — so it is a
+  # universal de-facto convention reviewers uphold. The apache-2 bundle's
+  # `apache-2-source-has-license-header` already covers .kt/.java; this rule
+  # scopes it to okhttp's own source trees (excludes generated kotlinTemplates
+  # and the vendored hpack-test-case submodule) with an okhttp-specific pattern.
+  # okhttp uses a MIX of Apache-header forms across its history: the short
+  # "Licensed under the Apache License, Version 2.0" form, the long ASF
+  # preamble ("Licensed to the Apache Software Foundation (ASF) under one or
+  # more..."), AND vendored variants ("The Netty Project licenses this file to
+  # you under the Apache License..."). The pattern below accepts all of them
+  # via the invariant phrase "...the Apache License". module-info.java /
+  # package-info.java are JPMS/package descriptors that carry no header (the
+  # apache-2 bundle excludes them too). With this pattern, 578/580 source
+  # files comply — confirming the convention is genuinely universal.
+  - id: okhttp-source-apache-header
+    kind: file_header
+    paths:
+      include: ["**/src/**/*.kt", "**/src/**/*.java"]
+      exclude:
+        - "**/kotlinTemplates/**"
+        - "**/build/**"
+        - "**/hpack-test-case/**"
+        - "**/module-info.java"
+        - "**/package-info.java"
+    lines: 25
+    # The invariant phrase across all three header forms okhttp uses is
+    # "the Apache License"; SPDX form accepted as an alternate.
+    pattern: '(the Apache License|SPDX-License-Identifier:\s*Apache-2\.0)'
+    level: warning
+    message: "okhttp source files must carry the Apache 2.0 license header."
+
+  # === alint VALUE-ADD (NOT enforced by the repo; excluded from the
+  #     A/B/C/D coverage ratio per R3/R5) =============================
+
+  # V1: okhttp pins the Gradle wrapper distribution and CI runs
+  # gradle/actions/wrapper-validation (a TOOL that checksums the jar -> D).
+  # alint can assert the .properties simply *declares* a distribution URL.
+  - id: okhttp-gradle-wrapper-declared
+    kind: file_content_matches
+    paths: ["gradle/wrapper/gradle-wrapper.properties"]
+    pattern: 'distributionUrl=.*gradle-[0-9.]+(-bin|-all)\.zip'
+    level: info
+    message: "Gradle wrapper must declare a pinned distribution URL."
+
+  # V2: every published module ships a binary-compatibility-validator
+  # golden `.api` file under api/. Structural assertion the repo does not
+  # gate on directly (the apiCheck TASK does, by tool comparison -> D);
+  # alint can assert the golden artefact is PRESENT and non-empty.
+  - id: okhttp-core-api-golden-present
+    kind: file_exists
+    paths: ["okhttp/api/jvm/okhttp.api", "okhttp/api/android/okhttp.api"]
+    level: info
+    message: "okhttp core module must ship its binary-compat golden .api files."
+
+  # V3: the root .editorconfig declares the repo's hygiene contract
+  # (2-space indent, trim trailing ws, final newline). ktlint enforces it
+  # at build time (D); alint asserts the contract is declared.
+  - id: okhttp-editorconfig-declares-hygiene
+    kind: file_content_matches
+    paths: [".editorconfig"]
+    pattern: 'trim_trailing_whitespace\s*=\s*true'
+    level: info
+    message: ".editorconfig should declare trim_trailing_whitespace = true."
+
+  # V4: renovate config is present + declares the $schema (CI runs the
+  # renovate-config-validator TOOL -> D; alint asserts the on-disk shape).
+  # NOTE: .github/renovate.json is JSON5 (a trailing comma at line 49), which
+  # Renovate accepts but strict JSON parsers reject — so json_path_matches
+  # ERRORS on it. file_content_matches is the robust expression here; the
+  # JSON5-vs-strict-JSON quirk is itself a corpus data-point.
+  - id: okhttp-renovate-schema-declared
+    kind: file_content_matches
+    paths: [".github/renovate.json"]
+    pattern: '"\$schema":\s*"https://docs\.renovatebot\.com/renovate-schema\.json"'
+    level: info
+    message: "renovate.json should declare the renovate $schema."
+
+  # V5: the published Maven coordinate group is stable across the build.
+  - id: okhttp-publish-group-coordinate
+    kind: file_content_matches
+    paths: ["build-logic/src/main/kotlin/okhttp.base-conventions.gradle.kts"]
+    pattern: 'group = "com\.squareup\.okhttp3"'
+    level: info
+    message: "okhttp publish group must be com.squareup.okhttp3."

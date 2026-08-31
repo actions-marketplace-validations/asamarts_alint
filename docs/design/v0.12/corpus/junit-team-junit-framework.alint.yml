@@ -1,0 +1,132 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for junit-team/junit-framework @ 9a7a266fdd22cbe62d0d06e69fe8aab0dd2649cd
+# v0.12 case-study Stage A. Shape: JVM/Java multi-module Gradle library, community
+# governance. The repo's bespoke-validation surface is almost entirely Gradle-task
+# driven (spotless / checkstyle / nohttp / roseau / OSGi / reproducibility) and runs
+# via tool execution (D in the taxonomy). The genuinely alint-native A-items are:
+#   - the EPL-2.0 license header invariant on every Java source (spotless applies it;
+#     alint expresses the same content invariant via file_header),
+#   - the per-module build-file naming invariant enforced in settings.gradle.kts
+#     ("every subproject must have a <name>.gradle.kts"),
+#   - the DCO Signed-off-by trailer (the .github/dco.yml GitHub-App gate).
+# Everything else below the A-items is alint value-add (structure/governance
+# assertions the repo relies on but does not gate on with a dedicated check).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/java@v1
+
+rules:
+  # === A-items: checks junit-framework actually enforces and alint expresses natively ===
+
+  # A1 — EPL v2.0 license header on every Java source file.
+  # Enforced by spotless `licenseHeaderFile(gradle/config/spotless/eclipse-public-license-2.0.java)`
+  # in junitbuild.spotless-conventions.gradle.kts. alint expresses the content invariant
+  # directly. Pattern matches the invariant EPL lines (the $YEAR line varies, so we
+  # anchor on the license body, not the copyright year).
+  - id: junit-epl-license-header
+    kind: file_header
+    paths:
+      include: ["**/*.java"]
+      exclude:
+        - "**/build/**"
+        # Spotless's java {} target excludes module-info/package-info and does
+        # not lint test *resource* fixtures (deliberately header-less sample
+        # sources under src/test/resources). Mirror that scope so this asserts
+        # the same surface Spotless enforces.
+        - "**/module-info.java"
+        - "**/package-info.java"
+        - "**/src/test/resources/**"
+    lines: 10
+    pattern: "(?s).*Eclipse Public License v2\\.0.*eclipse\\.org/legal/epl-v20\\.html.*"
+    level: error
+    message: "Every Java source must carry the EPL v2.0 license header (enforced by Spotless)."
+
+  # A2 — per-module build-file naming invariant.
+  # settings.gradle.kts:99-104 does `project.buildFileName = "${project.name}.gradle.kts"`
+  # then `require(project.buildFile.isFile)`. i.e. every module directory X must contain
+  # X.gradle.kts. This is a file->file (dir->build-file) reference edge, naming-convention
+  # sourced. Expressed with for_each_dir + {basename} interpolation.
+  - id: junit-module-has-named-build-file
+    kind: for_each_dir
+    select: "junit-*"
+    require:
+      - kind: file_exists
+        paths: "{path}/{basename}.gradle.kts"
+    level: error
+    message: "Every junit-* module directory must contain a <module-name>.gradle.kts build file (settings.gradle.kts require())."
+
+  # A3 — DCO sign-off. .github/dco.yml enables the DCO GitHub App (`require: members: false`),
+  # so every commit must carry a `Signed-off-by:` trailer. alint reimplements the trailer
+  # check natively (not a tool wrap). HEAD-only here; CI/full-history would set since:.
+  # NOTE: only meaningful against a full clone; this study uses a depth-1 clone.
+  - id: junit-dco-signed-off
+    kind: git_commit_signed_off
+    level: warning
+    message: "Commits must carry a DCO Signed-off-by trailer (.github/dco.yml)."
+
+  # === Value-add: structure / governance assertions the repo relies on (not gated) ===
+
+  # Governance documents that this project ships (ASF-like: KEYS for PGP release signing,
+  # NOTICE for third-party licenses, SECURITY policy, RELEASING runbook).
+  - id: junit-notice-exists
+    kind: file_exists
+    paths: ["NOTICE.md", "NOTICE"]
+    root_only: true
+    level: warning
+    message: "Third-party-license NOTICE should exist at the root."
+
+  - id: junit-keys-exists
+    kind: file_exists
+    paths: ["KEYS"]
+    root_only: true
+    level: info
+    message: "Release-signing PGP KEYS file should exist at the root."
+
+  - id: junit-security-policy-exists
+    kind: file_exists
+    paths: ["SECURITY.md"]
+    root_only: true
+    level: info
+    message: "A SECURITY.md policy should exist at the root."
+
+  # Build / quality config files the CI build depends on must be present.
+  - id: junit-build-config-files-exist
+    kind: file_exists
+    paths:
+      - "gradle/config/spotless/eclipse-public-license-2.0.java"
+      - "gradle/config/checkstyle/checkstyleMain.xml"
+      - "gradle/config/checkstyle/checkstyleNohttp.xml"
+      - "gradle/libs.versions.toml"
+    level: warning
+    message: "Required Gradle build/quality config files must be present."
+
+  # Gradle wrapper supply-chain pin: the wrapper must declare a distribution SHA-256
+  # and validate the distribution URL (defense against a tampered Gradle distribution).
+  - id: junit-gradle-wrapper-sha-pinned
+    kind: file_content_matches
+    paths: ["gradle/wrapper/gradle-wrapper.properties"]
+    pattern: "distributionSha256Sum=[0-9a-f]{64}"
+    level: warning
+    message: "gradle-wrapper.properties must pin distributionSha256Sum (supply-chain integrity)."
+
+  - id: junit-gradle-wrapper-validate-url
+    kind: file_content_matches
+    paths: ["gradle/wrapper/gradle-wrapper.properties"]
+    pattern: "validateDistributionUrl=true"
+    level: info
+    message: "gradle-wrapper.properties should set validateDistributionUrl=true."
+
+  # No Javadoc @author tags (checkstyle RegexpSingleline bans them; alint can assert the
+  # same invariant declaratively as value-add over the production Java tree).
+  - id: junit-no-author-tags
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.java"]
+      exclude: ["**/build/**"]
+    pattern: "@author"
+    level: info
+    message: "Don't use Javadoc @author tags (CONTRIBUTING.md / checkstyle)."

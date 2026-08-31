@@ -40,48 +40,44 @@ use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use regex::Regex;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    /// Regex the full commit message (subject + body, joined with
-    /// newlines) must match. When omitted, no regex check is
-    /// applied. Use `(?s)` to make `.` match newlines if you want
-    /// to assert about content past the subject.
+    /// Rust-regex pattern the full message (subject + body, joined with
+    /// newlines) must match. Use `(?s)` to make `.` match newlines.
     #[serde(default)]
     pattern: Option<String>,
-    /// Maximum length of the subject line (the message's first
-    /// line, before any body). When omitted, no length cap.
-    /// Common values: 50 (Tim Pope's recommendation), 72 (GitHub's
-    /// PR-title cutoff).
+    /// Maximum number of characters allowed in the subject line. Common
+    /// values: 50 (Tim Pope's recommendation), 72 (GitHub PR-title cutoff).
     #[serde(default)]
+    #[schemars(range(min = 1))]
     subject_max_length: Option<usize>,
-    /// When `true`, the message must have a non-empty body — at
-    /// least one line of content after the subject's trailing
-    /// blank line. Useful for mandating an explanation on `fix:`
-    /// commits etc.
+    /// When true, the message must have a non-empty body, that is, at least
+    /// one line of content after the subject's blank-line separator.
     #[serde(default)]
     requires_body: bool,
-    /// Git ref to use as the base of the commit range. When set,
-    /// the rule validates every commit in `<since>..HEAD` instead
-    /// of just `HEAD`. Anything `git rev-parse` accepts works: a
-    /// 40-char or abbreviated SHA, a branch (`origin/main`), a tag
-    /// (`v1.2.3`), or a relative ref (`HEAD~5`). Supports POSIX
-    /// `${VAR}` and `${VAR:-default}` env-var interpolation so CI
-    /// can pass a SHA in via an env var (see the GitHub Actions
-    /// integration doc for the canonical recipe).
+    /// Git ref to use as the base of the commit range. When set, validates
+    /// every commit in `<since>..HEAD` instead of just HEAD. Accepts anything
+    /// `git rev-parse` does: SHA (full or abbreviated), branch (`origin/main`),
+    /// tag (`v1.2.3`), or relative ref (`HEAD~5`). Supports POSIX `${VAR}` and
+    /// `${VAR:-default}` env-var interpolation so CI can pass a SHA via an env
+    /// var (e.g. `since: ${ALINT_BASE_SHA:-origin/main}` with `ALINT_BASE_SHA`
+    /// exported in a workflow step from `github.event.pull_request.base.sha`).
+    /// The GitHub Actions double-brace template syntax `${{ ... }}` is NOT
+    /// interpolated by alint.
     #[serde(default)]
     since: Option<String>,
-    /// When validating a range (`since:` set), include merge
-    /// commits in the set of commits to check. Default `false`
-    /// because merge commits in a PR context are typically the
-    /// synthetic merge `actions/checkout` produces (with an
-    /// auto-generated subject the rule would always flag) or
-    /// maintainer-resolved merges from the base branch (also
-    /// uninteresting). Set `true` to lint them anyway. Has no
-    /// effect when `since:` is unset.
+    /// When validating a range (`since:` set), include merge commits. Defaults
+    /// to `false` because merge commits in PR contexts are typically the
+    /// synthetic merge `actions/checkout` produces (with an auto-generated
+    /// subject the rule would always flag) or maintainer-resolved merges from
+    /// the base branch. Has no effect when `since:` is unset; combining
+    /// `include_merges: true` with no `since:` is a load-time error.
     #[serde(default)]
     include_merges: bool,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct GitCommitMessageRule {
@@ -133,6 +129,8 @@ impl Rule for GitCommitMessageRule {
                 Some(message) => vec![CommitRecord {
                     sha: "HEAD".to_string(),
                     message,
+                    author_name: String::new(),
+                    author_email: String::new(),
                 }],
                 None => return Ok(violations), // silent no-op
             },
@@ -170,37 +168,49 @@ impl GitCommitMessageRule {
         if let Some(re) = &self.pattern
             && !re.is_match(&commit.message)
         {
-            violations.push(self.make_violation(format_msg(
-                commit,
-                subject,
-                &format!("commit message does not match pattern `{}`", re.as_str()),
-            )));
+            violations.push(self.make_violation(
+                format_msg(
+                    commit,
+                    subject,
+                    &format!("commit message does not match pattern `{}`", re.as_str()),
+                ),
+                format!("{}\u{0}pattern", commit.sha),
+            ));
         }
 
         if let Some(max) = self.subject_max_length
             && subject.chars().count() > max
         {
-            violations.push(self.make_violation(format_msg(
-                commit,
-                subject,
-                &format!(
-                    "commit subject is {} chars; max allowed is {max}",
-                    subject.chars().count(),
+            violations.push(self.make_violation(
+                format_msg(
+                    commit,
+                    subject,
+                    &format!(
+                        "commit subject is {} chars; max allowed is {max}",
+                        subject.chars().count(),
+                    ),
                 ),
-            )));
+                format!("{}\u{0}subject_max_length", commit.sha),
+            ));
         }
 
         if self.requires_body && body.trim().is_empty() {
-            violations.push(self.make_violation(format_msg(
-                commit,
-                subject,
-                "commit message has no body; this rule requires one",
-            )));
+            violations.push(self.make_violation(
+                format_msg(
+                    commit,
+                    subject,
+                    "commit message has no body; this rule requires one",
+                ),
+                format!("{}\u{0}requires_body", commit.sha),
+            ));
         }
     }
 
-    fn make_violation(&self, default_msg: String) -> Violation {
-        Violation::new(self.message_override.clone().unwrap_or(default_msg))
+    fn make_violation(&self, default_msg: String, key: String) -> Violation {
+        // A single commit can trip several checks (pattern / length / body),
+        // and there is no path, so the baseline key combines the commit's
+        // stable id with the check kind (and never the volatile message).
+        Violation::new(self.message_override.clone().unwrap_or(default_msg)).with_baseline_key(key)
     }
 }
 
@@ -301,6 +311,37 @@ fn env_lookup(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// Rewrite POSIX `${VAR}` / `${VAR:-default}` occurrences into the
+/// canonical v0.11 `{{env.VAR}}` / `{{env.VAR | default('default')}}`
+/// form, for the deprecation warning's actionable suggestion. Mirrors
+/// [`expand_env`]'s grammar; non-`${...}` text passes through.
+fn posix_to_env_template(input: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + 2..];
+        let Some(end) = after_open.find('}') else {
+            out.push_str("${");
+            rest = after_open;
+            continue;
+        };
+        let inner = &after_open[..end];
+        match inner.split_once(":-") {
+            Some((name, def)) => {
+                let _ = write!(out, "{{{{env.{name} | default('{def}')}}}}");
+            }
+            None => {
+                let _ = write!(out, "{{{{env.{inner}}}}}");
+            }
+        }
+        rest = &after_open[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -311,6 +352,14 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             &spec.id,
             "git_commit_message needs at least one of `pattern:`, `subject_max_length:`, \
              or `requires_body: true`",
+        ));
+    }
+    // `subject_max_length: 0` would fail every commit (a 0-char subject is
+    // impossible); the JSON schema declares `minimum: 1`, so enforce it at load.
+    if opts.subject_max_length == Some(0) {
+        return Err(Error::rule_config(
+            &spec.id,
+            "git_commit_message `subject_max_length` must be >= 1 (0 rejects every commit)",
         ));
     }
     if spec.fix.is_some() {
@@ -325,6 +374,27 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "`include_merges: true` has no effect without `since:`. Either remove it \
              or set `since:` to enable range mode.",
         ));
+    }
+
+    // Deprecation: v0.9.21 shipped POSIX `${VAR}` interpolation on
+    // `since:` only. v0.11 generalises env interpolation to the
+    // canonical `{{env.X}}` form (resolved at config load by
+    // `alint-dsl`), so a `since:` value still written as `${VAR}`
+    // is a legacy syntax. It keeps working this one minor (expanded
+    // at evaluate time by `expand_env`) but warns; v1.0 removes it.
+    // Scoped to `since:` because `${VAR}` was never interpolated in
+    // any other field — a literal `${` elsewhere is just a literal.
+    if let Some(raw) = &opts.since {
+        if raw.contains("${") {
+            eprintln!(
+                "alint: warning: rule {:?}: `since: {raw}` uses the deprecated v0.9.21 \
+                 `${{VAR}}` interpolation syntax. The canonical v0.11+ form is `{}`; \
+                 the `${{VAR}}` form will be removed in v1.0. \
+                 See https://alint.org/docs/configuration/#variable-interpolation.",
+                spec.id,
+                posix_to_env_template(raw),
+            );
+        }
     }
 
     let pattern = opts
@@ -415,6 +485,8 @@ mod tests {
         let commit = CommitRecord {
             sha: "a1b2c3d".to_string(),
             message: "fix: thing".to_string(),
+            author_name: String::new(),
+            author_email: String::new(),
         };
         let s = format_msg(&commit, "fix: thing", "subject too long");
         assert!(s.contains("commit a1b2c3d"));
@@ -428,6 +500,8 @@ mod tests {
         let commit = CommitRecord {
             sha: "abc1234".to_string(),
             message: long_subject.clone(),
+            author_name: String::new(),
+            author_email: String::new(),
         };
         let s = format_msg(&commit, &long_subject, "too long");
         // Subject preview is capped at 60 chars + ellipsis.
@@ -544,6 +618,40 @@ mod tests {
             err.to_string().contains("include_merges"),
             "expected include_merges hint, got: {err}"
         );
+    }
+
+    #[test]
+    fn posix_to_env_template_converts_simple_and_default() {
+        assert_eq!(
+            posix_to_env_template("${ALINT_BASE_SHA}"),
+            "{{env.ALINT_BASE_SHA}}"
+        );
+        assert_eq!(
+            posix_to_env_template("${BASE:-origin/main}"),
+            "{{env.BASE | default('origin/main')}}"
+        );
+        // Bare text + embedded form pass through / convert in place.
+        assert_eq!(posix_to_env_template("origin/main"), "origin/main");
+        assert_eq!(posix_to_env_template("refs/${REF}"), "refs/{{env.REF}}");
+    }
+
+    #[test]
+    fn build_accepts_legacy_posix_since_with_deprecation() {
+        // `${VAR}` still builds (deprecation is a stderr warning, not
+        // an error) so existing v0.9.21 configs keep loading. The
+        // value is still expanded at evaluate time by `expand_env`.
+        let s = spec("requires_body = true\nsince = \"${ALINT_BASE_SHA}\"\n");
+        assert!(build(&s).is_ok());
+    }
+
+    #[test]
+    fn build_accepts_canonical_template_since() {
+        // The canonical `{{env.X}}` form is resolved upstream by the
+        // DSL interp pass before the rule sees it; here (no interp)
+        // it simply arrives as a literal ref and builds fine without
+        // triggering the `${VAR}` deprecation path.
+        let s = spec("requires_body = true\nsince = \"{{env.ALINT_BASE_SHA}}\"\n");
+        assert!(build(&s).is_ok());
     }
 
     #[test]

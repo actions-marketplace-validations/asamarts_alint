@@ -1,0 +1,208 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+# ============================================================================
+# alint config for microsoft/TypeScript
+#   pinned @ f3d3968058b5ee0f1c78dc1484a287d9f33bf638 (TypeScript 6.0, the
+#   LAST JavaScript-based release — repo is in MAINTENANCE MODE, see AGENTS.md;
+#   future dev is microsoft/typescript-go).
+#
+# v0.12 case-study Stage-A config. Validated with `alint validate-config` +
+# `alint check` against the pinned clone. Classification rulings R1-R6 from
+# case_study_calibration.md applied:
+#   * The dprint / eslint / knip / dprint-fmt-hook gates are TOOL EXECUTION (D);
+#     they are wrapped here as command_idempotent for single-entrypoint
+#     orchestration VALUE, but the wrap is NOT counted as alint expressing the
+#     check (R2). They fail in a bare clone (no `npm ci`) — expected.
+#   * tsconfig "strict"/"checkJs" and copyright-header assertions are alint
+#     VALUE-ADD (the repo does not gate on them — strictness is enforced by the
+#     compiler build; src/*.ts carry NO per-file header). Recorded separately,
+#     NOT in the coverage ratio (R5). Headers: R6 absent-category.
+#
+# The ONE natively-expressed enforced cross-file invariant that fires correctly
+# against the clone is ts-dprint-ts-plugin-version-agrees (A).
+# ============================================================================
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+  - alint://bundled/tooling/editorconfig@v1
+  - alint://bundled/agent-context@v1
+
+facts:
+  - id: has_dprint_config
+    any_file_exists: [.dprint.jsonc, .dprint.json]
+  - id: has_libs_manifest
+    any_file_exists: [src/lib/libs.json]
+
+rules:
+  # ════════════════════════════════════════════════════════════════════
+  # (A) ENFORCED cross-file invariant that alint expresses natively.
+  # .dprint.jsonc embeds `typescript-0.93.4.wasm` in the plugin URL; the
+  # `@dprint/typescript` devDependency in package.json is the exact same
+  # version. The in-repo comment ".dprint.jsonc: if updating typescript,
+  # update the one in package.json" is the manual ritual this mechanises.
+  # VERIFIED: fires correctly against the clone (0.93.4 == 0.93.4 -> PASS).
+  # ════════════════════════════════════════════════════════════════════
+  - id: ts-dprint-ts-plugin-version-agrees
+    when: facts.has_dprint_config
+    kind: cross_file_value_equals
+    source:
+      file: package.json
+      extract:
+        json: "$.devDependencies['@dprint/typescript']"
+    targets:
+      - file: .dprint.jsonc
+        extract:
+          regex: 'plugins\.dprint\.dev/typescript-([0-9]+\.[0-9]+\.[0-9]+)\.wasm'
+    level: warning
+    message: >-
+      The dprint TypeScript plugin version in .dprint.jsonc must equal the
+      `@dprint/typescript` devDependency in package.json (the repo comment
+      "if updating typescript, update the one in package.json").
+
+  # ════════════════════════════════════════════════════════════════════
+  # ORCHESTRATION VALUE-ADD (D, wrapped): the formatter / linter / dead-code
+  # gates. command_idempotent runs each tool's check arm. NOT counted as A.
+  # Fail in a bare clone (need `npm ci`); shown as the single-entrypoint
+  # orchestration alint adds on top of CI's lint/format/knip jobs.
+  # ════════════════════════════════════════════════════════════════════
+  - id: ts-dprint-check
+    when: facts.has_dprint_config
+    kind: command_idempotent
+    command: ["npx", "dprint", "check"]
+    timeout: 300
+    paths: .dprint.jsonc
+    level: error
+    message: "`npx dprint check` failed. Run `npm run format` and commit the diff."
+
+  - id: ts-eslint
+    kind: command_idempotent
+    command: ["npm", "run", "lint"]
+    timeout: 600
+    paths: package.json
+    level: error
+    message: >-
+      `npm run lint` failed (eslint --max-warnings 0). The 9 custom AST rules
+      under scripts/eslint/rules/ are enforced here, not by alint.
+
+  - id: ts-knip
+    kind: command_idempotent
+    command: ["npm", "run", "knip"]
+    timeout: 600
+    paths: knip.jsonc
+    level: warning
+    message: >-
+      `npm run knip` reported unused exports/dependencies (module-graph
+      analysis - out of alint's static scope).
+
+  # ════════════════════════════════════════════════════════════════════
+  # VALUE-ADD structural assertions the repo does NOT gate on (R5) - kept
+  # because they document real invariants, recorded SEPARATELY from coverage.
+  # ════════════════════════════════════════════════════════════════════
+
+  # The DOM generated d.ts are synced from microsoft/TypeScript-DOM-lib-generator;
+  # pr-modified-files.yml auto-closes PRs that hand-edit them. We assert they
+  # exist (value-add; the "don't edit" guard is a PR-diff gate, not a file state).
+  - id: ts-dom-generated-libs-present
+    kind: file_exists
+    paths:
+      include:
+        - "src/lib/dom.generated.d.ts"
+        - "src/lib/webworker.generated.d.ts"
+    level: info
+    message: >-
+      The DOM/webworker generated lib files are synced from
+      TypeScript-DOM-lib-generator (pr-modified-files.yml closes PRs that edit
+      them by hand).
+
+  # .gitattributes pins binary-default (`* -text`) so CRLF normalisation is
+  # opt-in per the editorconfig. Real invariant, but no CI gate asserts it.
+  - id: ts-gitattributes-keeps-binary-default
+    kind: file_content_matches
+    paths: .gitattributes
+    pattern: '^\* -text$'
+    level: info
+
+  # AGENTS.md maintenance-mode marker - a load-bearing convention (closes
+  # general-dev PRs). Value-add presence/content assertion.
+  - id: ts-agents-md-maintenance-marker
+    kind: file_content_matches
+    paths: AGENTS.md
+    pattern: 'This Repository Is in Maintenance Mode'
+    level: info
+
+  - id: ts-third-party-notice-present
+    kind: file_exists
+    paths: ThirdPartyNoticeText.txt
+    root_only: true
+    level: info
+
+  # package.json wires the canonical task entrypoints (value-add).
+  - id: ts-package-json-has-lint-script
+    kind: json_path_matches
+    paths: package.json
+    path: "$.scripts.lint"
+    matches: '^hereby lint$'
+    level: info
+
+  - id: ts-package-json-has-format-script
+    kind: json_path_matches
+    paths: package.json
+    path: "$.scripts.format"
+    matches: 'dprint fmt'
+    level: info
+
+  - id: ts-package-json-has-knip-script
+    kind: json_path_matches
+    paths: package.json
+    path: "$.scripts.knip"
+    matches: '^hereby knip$'
+    level: info
+
+  # ════════════════════════════════════════════════════════════════════
+  # (C, documented) registry resolution - src/lib/libs.json -> <entry>.d.ts.
+  # Herebyfile `generateLibs` concatenates these; a typo silently drops a lib.
+  # The LOGIC is correct (all 108 entries resolve), but libs.json is JSONC
+  # (// comments) and registry_paths_resolve's `extract.json` is strict JSON,
+  # so it ERRORS today ("expected value at line 3"). Left enabled to surface
+  # the gap; counts as C (wants a JSONC-tolerant parse), NOT A.
+  # ════════════════════════════════════════════════════════════════════
+  - id: ts-libs-manifest-sources-resolve
+    when: facts.has_libs_manifest
+    kind: registry_paths_resolve
+    source: src/lib/libs.json
+    extract:
+      json: "$.libs[*]"
+    base: src/lib
+    entries_are_globs: true
+    expect: file
+    level: info
+    message: >-
+      Every entry in src/lib/libs.json should resolve to a src/lib/<entry>.d.ts
+      source (Hereby `generateLibs` concatenates these). NOTE: libs.json is
+      JSONC; this errors until registry_paths_resolve tolerates // comments.
+
+# ============================================================================
+# GENUINE NON-REPLACEABLES (D - stay in CI; out of alint's no-build scope):
+#   - dprint check / eslint (incl. 9 custom TSESTree AST rules under
+#     scripts/eslint/rules/) / knip dead-export graph - wrapped above, but the
+#     analysis is the tool's.
+#   - runtests / runtests-parallel + the tests/baselines/reference accept loop
+#     (`hereby baseline-accept` then `git diff --staged --exit-code`) - a
+#     compiler test pass followed by a regenerated-baseline diff. NOTE: the
+#     .errors.txt baselines do NOT 1:1 pair with .js (type-only error tests
+#     emit no JS), so a static pair rule does not model this.
+#   - self-check (build tsc, clean, rebuild --built) / typecheck (build-src) /
+#     smoke (npm pack + dynamic import probe via checkModuleFormat.mjs) /
+#     browser-integration (playwright) / package-size (npm pack diff vs base) /
+#     coverage (c8 + codecov) - build/run/diff, all D.
+#   - codeql / scorecard - security scanners (scheduled), D.
+#   - scripts/errorCheck.mjs + find-unused-diganostic-messages.mjs - NOT wired
+#     into CI (manual diagnostic tools); each pairs diagnosticMessages.json keys
+#     against regex-counted occurrences across baselines/source BY CONTENT.
+#     -> NEW-KIND CANDIDATE: registry_value_used (assert each registry key is
+#     referenced >=1x somewhere, by content regex, not by filename).
+# ============================================================================

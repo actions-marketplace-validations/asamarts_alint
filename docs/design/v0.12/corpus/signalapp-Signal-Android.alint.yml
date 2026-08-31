@@ -1,0 +1,129 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Proposed alint config for signalapp/Signal-Android
+# (pinned @ ae2477356bbbd9171b0c2e4ba35f7e6d78297fcf — v0.12 case study).
+#
+# Shape: large Kotlin/Java Android app, Gradle (Kotlin DSL) + an included
+# `build-logic` composite build, single-vendor (Signal Messenger, LLC),
+# AGPL-3.0-only. ~40 Gradle modules (app + core/* + lib/* + feature/* +
+# demo/* + lintchecks + benchmark + microbenchmark + baseline-profile).
+#
+# The repo's ENFORCED validation surface is overwhelmingly tool execution
+# orchestrated through one Gradle entrypoint `./gradlew qa` (run by Android CI):
+#   - ktlintCheck across every module + build-logic   -> ktlint           (D)
+#   - buildQa (build-logic :tools/:plugins tests + ktlint)                (D)
+#   - app unit tests (testPlayProdReleaseUnitTest)                        (D)
+#   - Android lint (lintPlayProdRelease): built-in lint + lint.xml
+#     severities + the in-tree custom UAST detectors in `lintchecks/`
+#     (LogNotSignal / SystemOutPrintLn / VersionCode / RecipientIdDatabase /
+#      ThreadIdDatabase / StartForegroundService / AlertDialogBuilder /
+#      CardView / BlockingGet)                                            (D, AST)
+#   - instrumentation compile + every subproject test/lint               (D)
+#   - checkStopship: bespoke Gradle task — fail if "STOPSHIP" appears in any
+#     committed .kt/.kts/.java/.xml file                                  (A, below)
+# plus, outside `qa`:
+#   - lefthook pre-push `format`: ./gradlew format (ktlintFormat) then
+#     `test -z "$(git status --porcelain)"`                              (D, wraps ktlint)
+#   - Gradle wrapper-validation action (checksum of gradle-wrapper.jar)   (D, tool)
+#   - Gradle dependency verification (gradle/verification-metadata.xml)   (D, Gradle verify)
+#   - docker.yml (daily): reproducible-build image builds + bundles       (D, build)
+#   - diffuse.yml: APK size-diff PR comment (informational, not a gate)   (n/a)
+#
+# Only ONE enforced check is natively alint-addressable: checkStopship
+# (file_content_forbidden). Everything else above is a deliberate non-goal
+# (tool/AST/build execution) that alint can ORCHESTRATE but does not reimplement.
+#
+# The rules below the "VALUE-ADD" banner are structure/coherence alint can
+# assert but the repo does NOT gate or document as a sync rule — recorded as
+# value-add per the case-study protocol (R3/R5), NOT counted in coverage.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+  - alint://bundled/tooling/editorconfig@v1
+
+rules:
+  # ══════════════════════════════════════════════════════════════════════
+  # ENFORCED + addressable (the A surface — counted in coverage_today)
+  # ══════════════════════════════════════════════════════════════════════
+
+  # A1 — checkStopship (build.gradle.kts :checkStopship, wired into `qa`).
+  # The Gradle task walks .kt/.kts/.java/.xml under the repo (skipping build/
+  # dirs without a `src` segment) and fails the build if any file contains the
+  # literal "STOPSHIP". Excludes the root build.gradle.kts, lint.xml, and .idea/.
+  # Android lint *also* enforces this via lint.xml `<issue id="StopShip"
+  # severity="fatal"/>` — same behavior, collapsed to one unit per R1.
+  - id: signal-no-stopship
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.kt", "**/*.kts", "**/*.java", "**/*.xml"]
+      exclude: ["build.gradle.kts", "lint.xml", ".idea/**", "**/build/**"]
+    pattern: 'STOPSHIP'
+    level: error
+    message: >-
+      STOPSHIP marker found. The repo's `checkStopship` Gradle task (run by
+      `./gradlew qa` in CI) and lint.xml (StopShip=fatal) both block release
+      while a STOPSHIP comment remains. Resolve it before merging.
+
+  # ══════════════════════════════════════════════════════════════════════
+  # VALUE-ADD — alint can assert these but Signal does NOT gate/document them
+  # as enforced checks. Recorded for the study; NOT in the A/B/C/D ratio.
+  # ══════════════════════════════════════════════════════════════════════
+
+  # The Android NDK revision is duplicated verbatim in three places that must
+  # agree for a reproducible build: the version catalog (`ndk` in
+  # gradle/libs.versions.toml), the APK-diff workflow env (NDK_VERSION in
+  # .github/workflows/diffuse.yml), and the reproducible-build Dockerfile
+  # (`ndk;<rev>` sdkmanager line). Nothing in the repo gates this coherence.
+  - id: signal-ndk-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: gradle/libs.versions.toml
+      extract:
+        regex: 'ndk\s*=\s*"([0-9.]+)"'
+    targets:
+      - file: .github/workflows/diffuse.yml
+        extract:
+          regex: "NDK_VERSION:\\s*'([0-9.]+)'"
+      - file: reproducible-builds/Dockerfile
+        extract:
+          regex: 'ndk;([0-9.]+)'
+    level: warning
+    message: >-
+      The NDK revision must match across gradle/libs.versions.toml,
+      .github/workflows/diffuse.yml (NDK_VERSION), and the reproducible-build
+      Dockerfile. A drift breaks reproducible builds.
+
+  # The repo ships a NOTICE and an AGPL LICENSE at the root; assert presence.
+  - id: signal-notice-exists
+    kind: file_exists
+    paths: ["NOTICE"]
+    root_only: true
+    level: info
+    message: "Signal ships a root NOTICE file documenting third-party deps."
+
+  # The Smartling-driven license-aggregation task writes this generated file.
+  # No CI freshness gate exists (it is regenerated only at release time), so
+  # this is value-add presence-only, not a generated_file_fresh gate.
+  - id: signal-third-party-licenses-present
+    kind: file_exists
+    paths: ["app/src/main/res/raw/third_party_licenses"]
+    root_only: true
+    level: info
+    message: >-
+      Aggregated third-party license text (written by the `saveLicenses`
+      Gradle task) should be present in the app resources.
+
+  # Reproducible-build assets the daily docker.yml workflow depends on.
+  - id: signal-reproducible-build-assets
+    kind: file_exists
+    paths:
+      - "reproducible-builds/Dockerfile"
+      - "reproducible-builds/apkdiff/apkdiff.py"
+    level: info
+    message: >-
+      The reproducible-build Dockerfile + apkdiff.py underpin Signal's daily
+      reproducible-build verification (docker.yml) and the published verify flow.

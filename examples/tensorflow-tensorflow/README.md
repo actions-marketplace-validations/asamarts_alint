@@ -494,7 +494,7 @@ remains identical until the external tools land on PATH.
 | 12 | 5 | `tensorflow-lite-swift-source-has-test` | **All real findings.** Validates §6 spec: CoreMLDelegate.swift, Delegate.swift, InterpreterError.swift, SignatureRunnerError.swift, SignatureRunner.swift have no matching `*Tests.swift`. |
 | 13 | 4 | `tensorflow-lite-objc-api-has-test` | **All real findings.** Validates §6 spec: 4 ObjC `apis/` headers without `tests/` partners. |
 | 14 | 3 | `gha-workflow-contents-read` | Real findings — workflows lacking permissions block. |
-| 15 | 1 | `oss-no-merge-conflict-markers` | **Validates §6 spec:** the `=======` separator in `tensorflow/tools/pip_package/THIRD_PARTY_NOTICES.txt` (formatting, not a real conflict). **Recommended fix:** add to `paths.exclude` for that one file. |
+| 15 | 1 | `oss-no-merge-conflict-markers` | **False positive** (validates §6 spec): the `=======` separator in `tensorflow/tools/pip_package/THIRD_PARTY_NOTICES.txt` is a text divider (formatting), not a real conflict — the file carries no `<<<<<<<` / `>>>>>>>` anchor. **Fixed in alint v0.12 (commit `0d66ee95`):** the rule now requires an unambiguous anchor line (`<<<<<<< ` / `>>>>>>> ` / `||||||| `) before treating `=======` as a conflict separator, so the earlier `paths.exclude` workaround for that one file is no longer needed. |
 | 16 | 1 | `python-manifest-exists` | **Validates §6 spec:** TF doesn't ship `pyproject.toml` (still on `setup.py` + `requirements_lock_*.txt`, predating PEP 621). **Accurate finding** — flag as such in config's leading comment. |
 | 17 | 1 | `python-has-lockfile` | Same — TF uses `requirements_lock_3_*.txt` matrix, not the PEP 621 lockfile shape the bundled rule expects. |
 | 18 | 1 | `tensorflow-tf-version-bzl-declares-semver` | Real finding — needs investigation. |
@@ -676,3 +676,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   **A5** (`oss-baseline@v1` `oss-license-exists` recognises
   LICENSE.TXT and LICENSE.md). Plus this case study's own
   **B3** repo-config fix (drop/scope the over-eager Bazel-header rule).
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (58 rules, ~78% coverage). +9 surfaces: the bats sanity suite
+(pylint/buildifier/clang-format/codespell/api-compat) -> command_idempotent
+with per-file offender parsing, the tensorflow.org/code/<path> link
+integrity -> registry_paths_resolve, and requirements_lock cross-version pin
+parity -> cross_file_value_equals. Note: compliance/apache-2@v1 OVER-FIRES
+(1,185 generated .pbtxt goldens + _pb2.py + third_party), so it is extended
+with a same-id paths.exclude override rather than used as-is.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 6).

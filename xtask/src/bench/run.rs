@@ -136,6 +136,10 @@ pub fn bench_scale(mut args: ScaleArgs) -> Result<()> {
             }
         }
 
+        // Restore a clean page cache before this size's benchmark loop (opt-in
+        // via ALINT_BENCH_DROP_CACHES). See the helper for why.
+        maybe_quiesce_page_cache(size.label());
+
         for &scenario in &args.scenarios {
             let tree_for_scenario = if scenario.requires_polyglot_tree() {
                 polyglot_tree
@@ -202,6 +206,34 @@ pub fn bench_scale(mut args: ScaleArgs) -> Result<()> {
 
 fn join_labels<T: Copy, F: Fn(T) -> &'static str>(items: &[T], f: F) -> String {
     items.iter().map(|&t| f(t)).collect::<Vec<_>>().join(",")
+}
+
+/// Flush dirty pages and drop the page cache before a size phase's benchmark
+/// loop, when `ALINT_BENCH_DROP_CACHES` is set. On a small-RAM bench host the
+/// cache fills with the previous phase's trees + git objects (two 1M trees plus
+/// their objects is ~16 GB against 16 GB of RAM), which forces page-cache
+/// reclaim — `allocstall`, invisible to disk-util and to `MemAvailable` — mid-
+/// measurement on the first content-heavy scenario. That is the S2/1m/full
+/// variance artifact. Clearing the cache restores the clean-cache start an
+/// isolated run gets for free; hyperfine's warmup re-reads the tree, so the
+/// MEASURED runs stay warm. A 62 GB host never reclaims and so never needs this,
+/// which is why the flag is opt-in and off by default. Requires passwordless
+/// sudo for `drop_caches`; a failure warns and continues, so an unprivileged run
+/// simply degrades to the prior behavior rather than aborting.
+fn maybe_quiesce_page_cache(size_label: &str) {
+    if std::env::var_os("ALINT_BENCH_DROP_CACHES").is_none() {
+        return;
+    }
+    match std::process::Command::new("sudo")
+        .args(["sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches"])
+        .status()
+    {
+        Ok(s) if s.success() => {
+            eprintln!("[xtask] dropped page cache before {size_label} benchmark loop");
+        }
+        Ok(s) => eprintln!("[xtask] WARN: drop_caches exited {s}; cache not cleared, continuing"),
+        Err(e) => eprintln!("[xtask] WARN: drop_caches could not run ({e}); continuing"),
+    }
 }
 
 // ─── Hyperfine driver ────────────────────────────────────────────────

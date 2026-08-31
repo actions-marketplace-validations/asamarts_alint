@@ -112,12 +112,14 @@ rules:
   # Security practice: pin third-party actions to a full commit SHA,
   # not a mutable @v4-style tag. `$.jobs.*.steps[*].uses` iterates
   # every step across every job. `if_present: true` skips workflows
-  # that have no `uses:` at all.
+  # that have no `uses:` at all. The regex also exempts local `./`
+  # actions and digest-pinned `docker://...@sha256:` refs -- both are
+  # already immutable or same-repo, so SHA-pinning doesn't apply.
   - id: pin-actions-to-sha
     kind: yaml_path_matches
     paths: ".github/workflows/*.yml"
     path: "$.jobs.*.steps[*].uses"
-    matches: '^[a-zA-Z0-9._/-]+@[a-f0-9]{40}$'
+    matches: '^(\./.*|docker://[^@]+@sha256:[a-f0-9]{64}|[a-zA-Z0-9._/-]+@[a-f0-9]{40})$'
     if_present: true
     level: warning
 ```
@@ -285,7 +287,9 @@ rules:
     level: warning
 ```
 
-`scope_filter:` is supported on per-file rules only. Cross-file rules (`pair`, `for_each_dir`, `file_exists`, and so on) reject it at build time and direct you to the `for_each_dir + when_iter:` pattern instead.
+`scope_filter:` works on per-file rules and, since v0.15, on the rule-major kinds (`filename_case`, `file_max_size`, and similar); cross-file rules (`pair`, `for_each_dir`, `file_exists`, and so on) reject it at build time and direct you to the `for_each_dir + when_iter:` pattern instead.
+
+The `has_ancestor:` predicate scopes by an ancestor manifest's *presence*. When the manifest also *declares* which paths belong — a workspace's `members`, a package's `bin` entrypoints — `include_manifest_paths:` / `exclude_manifest_paths:` scope by that declaration instead of a hand-maintained glob (v0.15+). See [alint and monorepos](/docs/about/monorepos/) for worked `include` / `exclude` + `derive_target` examples.
 
 ## 12. Cross-file relationships
 
@@ -408,7 +412,7 @@ alint check --format agent
 }
 ```
 
-A typical agent-harness pattern: after each edit, run `alint check --format agent`, parse the JSON, address the first violation, repeat until empty. The `agent_instruction` field is intentionally verbose. It's optimised for an LLM to act on without having to re-derive the action from `rule_id` and `human_message` separately.
+A typical agent-harness pattern: after each edit, run `alint check --format agent`, parse the JSON, address the first violation, repeat until empty. The `agent_instruction` field is intentionally verbose. It's optimised for an LLM to act on without having to re-derive the action from `rule_id` and `human_message` separately. See the [agent format reference](/docs/reference/output-formats/agent/) for the full field-by-field shape.
 
 ### Severity escalation
 

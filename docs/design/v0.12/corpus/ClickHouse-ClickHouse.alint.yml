@@ -1,0 +1,167 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for ClickHouse/ClickHouse @ 044a9bb554755725bed8f150ae7908709ac081a0
+# Stage A case-study config (v0.12 100-repo study). Expresses the A-bucket
+# (natively-expressible) slice of ClickHouse's bespoke validation surface, which
+# lives almost entirely in ci/jobs/scripts/check_style/{check_cpp.sh,various_checks.sh,
+# check_submodules.sh}. The dominant enforced surface (C++ build/clang-tidy/clang-format,
+# the gigantic functional/integration/fuzz/sanitizer test matrix, mypy/pylint, yamllint,
+# xmllint, semantic AST heuristics) is D (non-goal) and intentionally NOT encoded here.
+
+version: 1
+
+# contrib/ holds 131 git submodules (vendored third-party C/C++). At a depth-1
+# clone the submodule working trees are absent, leaving dangling symlinks (e.g.
+# contrib/thrift-cmake/build/cmake/config.h.in) that abort a naive tree walk.
+# None of ClickHouse's own bespoke checks target contrib/ (every check_style
+# script excludes it), so exclude it from the walk. Same for the rust vendored
+# tree and any build output.
+ignore:
+  - "contrib/**"
+  - "rust/workspace/vendor/**"
+  - "**/build/**"
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ---- various_checks.sh: forbidden patterns in functional tests --------------
+  - id: ch-tests-no-global-stop-merges
+    kind: file_content_forbidden
+    paths:
+      include: ["tests/queries/**/*.{sql,sh,py,j2}"]
+    pattern: '(?im)SYSTEM STOP MERGES;?\s*$'
+    level: error
+    message: >-
+      Merges cannot be disabled globally in fast/stateless tests; it breaks
+      concurrently running queries (various_checks.sh).
+
+  - id: ch-tests-no-global-flush-logs
+    kind: file_content_forbidden
+    paths:
+      include: ["tests/queries/**/*.{sql,sh,py,j2}"]
+    pattern: '(?im)system\s+flush\s+logs\s*(;|$|")'
+    level: error
+    message: >-
+      Use `SYSTEM FLUSH LOGS <log_name>` over a global `SYSTEM FLUSH LOGS`
+      (various_checks.sh).
+
+  - id: ch-compose-no-latest-tag
+    kind: file_content_forbidden
+    paths:
+      include: ["tests/integration/compose/**/*.yml"]
+    pattern: '(?m)image:\s*\S+:latest\s*$'
+    level: error
+    message: >-
+      Docker compose files should pin third-party image versions, not :latest
+      (non-reproducible builds) (various_checks.sh).
+
+  # ---- check_cpp.sh: forbidden C++ patterns (subset that is plain content) ----
+  - id: ch-cpp-no-tabs
+    kind: file_content_forbidden
+    paths:
+      include: ["{src,base,programs,utils}/**/*.{h,cpp}"]
+      # Mirror the check_cpp.sh EXCLUDE set: bundled/vendored trees (poco,
+      # glibc-compat, widechar, memcpy-bench, consistent-hashing) are not
+      # subject to ClickHouse's own style rules.
+      exclude:
+        - "base/glibc-compatibility/**"
+        - "base/widechar_width/**"
+        - "base/poco/**"
+        - "**/consistent-hashing/**"
+        - "**/memcpy/**"
+        - "contrib/**"
+    pattern: '\t'
+    level: error
+    message: "Tabs are not allowed in C++ sources (check_cpp.sh #02)."
+
+  - id: ch-cpp-no-std-regex
+    kind: file_content_forbidden
+    paths:
+      include: ["{src,programs,utils}/**/*.{h,cpp}"]
+    pattern: 'std::regex'
+    level: error
+    message: "Use re2 instead of std::regex (too bloated/slow) (check_cpp.sh #12b)."
+
+  - id: ch-cpp-no-std-stringstream
+    kind: file_content_forbidden
+    paths:
+      include: ["{src,programs,utils}/**/*.{h,cpp}"]
+    pattern: 'std::[io]?stringstream'
+    level: error
+    message: >-
+      Use WriteBufferFromOwnString / ReadBufferFromString instead of
+      std::stringstream (check_cpp.sh #07a).
+
+  - id: ch-cpp-no-magic-enum-direct-include
+    kind: file_content_forbidden
+    paths:
+      include: ["{src,base,programs,utils}/**/*.{h,cpp}"]
+      exclude: ["**/EnumReflection.h"]
+    pattern: 'magic_enum\.hpp'
+    level: error
+    message: "Use <base/EnumReflection.h> instead of including magic_enum.hpp (check_cpp.sh #15)."
+
+  - id: ch-cmake-no-find-path-library
+    kind: file_content_forbidden
+    paths:
+      include: ["**/CMakeLists.txt"]
+      exclude: ["contrib/**"]
+    pattern: '(?m)\b(find_path|find_library)\b'
+    level: error
+    message: >-
+      No find_path/find_library: ClickHouse uses everything bundled
+      (check_cpp.sh #11).
+
+  # #pragma once must be the first line of every non-base header.
+  - id: ch-cpp-header-pragma-once
+    kind: file_content_matches
+    paths:
+      include: ["{src,programs,utils}/**/*.h"]
+      exclude:
+        - "contrib/**"
+        - "**/build/**"
+    pattern: '\A#pragma once'
+    level: error
+    message: "Every header must have `#pragma once` on its first line (check_cpp.sh #05)."
+
+  # ---- various_checks.sh: DOS/Windows newlines ------------------------------
+  - id: ch-no-dos-newlines
+    kind: file_content_forbidden
+    paths:
+      include: ["{base,src,programs,utils,docs}/**/*.{md,h,cpp,js,py,html}"]
+    pattern: '\r$'
+    level: error
+    message: "Files must not contain DOS/Windows CRLF newlines (various_checks.sh)."
+
+  # ---- various_checks.sh: __init__.py present in every integration test dir ---
+  - id: ch-integration-tests-have-init-py
+    kind: for_each_dir
+    select: "tests/integration/test_*"
+    require:
+      - kind: file_exists
+        paths: "{path}/__init__.py"
+    level: error
+    message: >-
+      Every tests/integration/test_* directory must contain __init__.py to
+      avoid pytest import-file-mismatch (various_checks.sh).
+
+  # ---- check_submodules.sh: .gitmodules invariants --------------------------
+  # Every submodule path declared in .gitmodules must resolve to an on-disk dir.
+  - id: ch-submodule-paths-resolve
+    kind: registry_paths_resolve
+    source: .gitmodules
+    extract:
+      regex: '(?m)^\s*path\s*=\s*(\S+)\s*$'
+    base: "."
+    expect: dir
+    level: error
+    message: >-
+      Every submodule declared in .gitmodules must have its directory present
+      under contrib/ (check_submodules.sh).
+
+  # NOTE: "all submodule URLs must be https://github.com/*" (check_submodules.sh)
+  # is a C-bucket item: file_content_forbidden cannot express "a url line that is
+  # NOT github" because the Rust regex engine has no negative look-ahead. It would
+  # need either negative-match support or a registry_paths_resolve-style
+  # "every extracted value matches <prefix>" assertion. Recorded, not encoded.

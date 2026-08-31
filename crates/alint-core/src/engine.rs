@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use rayon::prelude::*;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::facts::{FactSpec, FactValues, evaluate_facts};
 use crate::registry::RuleRegistry;
 use crate::report::{FixItem, FixReport, FixRuleResult, FixStatus, Report};
@@ -60,6 +60,12 @@ struct GitTrackedIndexes {
     dir_aware: Option<FileIndex>,
 }
 
+/// Return of [`Engine::collect_live_per_file_entries`]: the per-file
+/// entries that should evaluate this run (paired with their position in
+/// `self.entries`), plus any `when`-evaluation-error results to emit
+/// verbatim.
+type LivePerFileEntries<'a> = (Vec<(usize, &'a RuleEntry)>, Vec<(usize, RuleResult)>);
+
 /// A rule bundled with an optional `when` expression. Rules with a `when`
 /// that evaluates to false at runtime are skipped (no `RuleResult` is
 /// produced) — same observable effect as `level: off`, but gated on facts.
@@ -67,17 +73,100 @@ struct GitTrackedIndexes {
 pub struct RuleEntry {
     pub rule: Box<dyn Rule>,
     pub when: Option<WhenExpr>,
+    /// The rule's originating [`RuleSpec`](crate::config::RuleSpec), retained so
+    /// config-scoped tooling (`alint explain`, `alint list`) can render the
+    /// rule's configured detail — kind, `paths:`, `message:`, `when:` source, and
+    /// kind-specific options — from one source of truth rather than a handful of
+    /// ad-hoc per-field copies. Read only by display code, never on the check
+    /// hot path.
+    ///
+    /// `None` for entries built without a spec (`Engine::new`, nested/iterator
+    /// child rules); such entries render as if every display field were empty.
+    /// INVARIANT: `list --category` maps a `None` spec (an empty
+    /// [`kind`](RuleEntry::kind)) to "no categories" and silently drops the rule,
+    /// so any config-loading path that wants `--category` to work MUST attach the
+    /// spec via [`with_spec`](RuleEntry::with_spec).
+    pub spec: Option<Arc<crate::config::RuleSpec>>,
+    /// The rule's resolved top-level `allow_out_of_root:` permission, threaded
+    /// into the fixer's [`FixContext`] so a config-declared fix path can escape
+    /// the root only when the user's own config opted this rule in. Defaults to
+    /// `false` (confined) — the safe default for `Engine::new` / nested rules.
+    pub allow_out_of_root: bool,
 }
 
 impl RuleEntry {
     pub fn new(rule: Box<dyn Rule>) -> Self {
-        Self { rule, when: None }
+        Self {
+            rule,
+            when: None,
+            spec: None,
+            allow_out_of_root: false,
+        }
+    }
+
+    /// Record the rule's resolved `allow_out_of_root:` permission (see
+    /// [`RuleEntry::allow_out_of_root`]).
+    #[must_use]
+    pub fn with_allow_out_of_root(mut self, allow: bool) -> Self {
+        self.allow_out_of_root = allow;
+        self
     }
 
     #[must_use]
     pub fn with_when(mut self, expr: WhenExpr) -> Self {
         self.when = Some(expr);
         self
+    }
+
+    /// Attach the rule's originating [`RuleSpec`](crate::config::RuleSpec) (see
+    /// [`RuleEntry::spec`]) — the single source config-scoped tooling renders
+    /// the rule's kind, paths, message, `when:` source, and options from.
+    #[must_use]
+    pub fn with_spec(mut self, spec: Arc<crate::config::RuleSpec>) -> Self {
+        self.spec = Some(spec);
+        self
+    }
+
+    /// The rule's kind (e.g. `file_exists`), or `""` when built without a spec.
+    /// An empty kind maps to "no categories" for `list --category` (the rule is
+    /// silently dropped), matching the pre-projection behaviour.
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        self.spec.as_ref().map_or("", |s| s.kind.as_str())
+    }
+
+    /// The rule's `paths:` scope, if the spec configured one.
+    #[must_use]
+    pub fn paths(&self) -> Option<&crate::config::PathsSpec> {
+        self.spec.as_ref().and_then(|s| s.paths.as_ref())
+    }
+
+    /// The rule's `scope_filter:` config, if set — for `alint explain` to render
+    /// the manifest / diff / ancestor gates the `paths:` glob alone doesn't show.
+    #[must_use]
+    pub fn scope_filter(&self) -> Option<&crate::ScopeFilterSpec> {
+        self.spec.as_ref().and_then(|s| s.scope_filter.as_ref())
+    }
+
+    /// The rule's custom `message:`, if set (see [`RuleEntry::spec`]).
+    #[must_use]
+    pub fn message(&self) -> Option<&str> {
+        self.spec.as_ref().and_then(|s| s.message.as_deref())
+    }
+
+    /// The rule's authored `when:` source text, retained so `alint explain` can
+    /// show the written expression rather than the parsed AST. `None` when the
+    /// rule is unconditional.
+    #[must_use]
+    pub fn when_src(&self) -> Option<&str> {
+        self.spec.as_ref().and_then(|s| s.when.as_deref())
+    }
+
+    /// The rule's kind-specific options (the flattened non-common `RuleSpec`
+    /// fields, e.g. `pattern`, `max_lines`), or `None` when built without a spec.
+    #[must_use]
+    pub fn extra(&self) -> Option<&serde_yaml_ng::Mapping> {
+        self.spec.as_ref().map(|s| &s.extra)
     }
 }
 
@@ -166,6 +255,28 @@ impl Engine {
         self.entries.len()
     }
 
+    /// The fixer for the loaded rule with this id, if the rule declares
+    /// one. Lets a caller (the LSP server) build an "Apply fix" edit for
+    /// a specific violation without re-deriving the rule set.
+    pub fn fixer_for(&self, rule_id: &str) -> Option<&dyn crate::rule::Fixer> {
+        self.entries
+            .iter()
+            .find(|e| e.rule.id() == rule_id)
+            .and_then(|e| e.rule.fixer())
+    }
+
+    /// Whether the loaded rule with this id is a per-file rule (the kind
+    /// [`Engine::run_for_file`] re-evaluates). Lets the LSP server tell
+    /// per-file findings (refreshed on every edit) apart from cross-file
+    /// ones (refreshed only on save), so it can preserve the latter
+    /// while re-running the former. Unknown ids return `false`.
+    pub fn is_per_file(&self, rule_id: &str) -> bool {
+        self.entries
+            .iter()
+            .find(|e| e.rule.id() == rule_id)
+            .is_some_and(|e| e.rule.as_per_file().is_some())
+    }
+
     // ~125 lines but each block has its own purpose (changed-set
     // short-circuit, fact eval, git probe, filtered-index build,
     // cross-file partition, per-file partition, assembly). Splitting
@@ -175,6 +286,7 @@ impl Engine {
     #[allow(clippy::too_many_lines)]
     pub fn run(&self, root: &Path, index: &FileIndex) -> Result<Report> {
         let t_total = Instant::now();
+        self.ensure_manifest_scope_resolvable()?;
         // Empty changed-set fast path: nothing to lint, return
         // an empty report rather than walk the entries list at
         // all. Saves the fact-evaluation pass too.
@@ -255,7 +367,38 @@ impl Engine {
             facts: &fact_values,
             vars: &self.vars,
             iter: None,
+            env: None,
         };
+
+        // Resolve `scope_filter.changed_since:` diffs + manifest path sets ONCE,
+        // before ANY dispatch. BOTH the cross-file/rule-major partition below and
+        // the per-file partition read these caches via `Scope::matches` — a
+        // non-per-file rule (e.g. `filename_case`) dispatches in the rule-major
+        // loop, so resolving *after* it silently emptied its manifest/diff scope.
+        // Resolve against the FULL index (so the manifest is reachable even when
+        // unchanged), then copy the maps onto every alternate index a context may
+        // dispatch against (the `--changed` filtered index and the git-tracked
+        // file-only / dir-aware indexes) — each is a fresh FileIndex with empty
+        // caches, and the declared set is independent of which files it holds.
+        self.resolve_changed_paths(root, index)?;
+        self.resolve_manifest_paths(root, index);
+        let alt_indexes = [
+            filtered_index.as_ref(),
+            git_tracked_indexes
+                .as_ref()
+                .and_then(|g| g.file_only.as_ref()),
+            git_tracked_indexes
+                .as_ref()
+                .and_then(|g| g.dir_aware.as_ref()),
+        ];
+        for fi in alt_indexes.into_iter().flatten() {
+            if let Some(map) = index.manifest_paths_map() {
+                fi.set_manifest_paths(map.clone());
+            }
+            if let Some(map) = index.changed_paths_map() {
+                fi.set_changed_paths(map.clone());
+            }
+        }
 
         // Per-rule wall-time accumulator for the cross-file
         // partition. One AtomicU64 per entry, indexed by
@@ -343,6 +486,10 @@ impl Engine {
             }
         }
 
+        // (`scope_filter.changed_since:` diffs + manifest path sets were resolved
+        // and propagated to every index before the cross-file partition above, so
+        // both partitions see a populated `Scope::matches` cache.)
+
         // Per-file partition: file-major loop reads each file
         // once and dispatches to every per-file rule whose scope
         // matches. Coalesces N reads of one file across N rules
@@ -397,47 +544,7 @@ impl Engine {
         filtered_ctx: Option<&'a Context<'a>>,
         when_env: &'a WhenEnv<'a>,
     ) -> Vec<(usize, RuleResult)> {
-        // Pre-filter live per-file entries: opt-in via
-        // `as_per_file`, not skipped by `--changed`, and `when`
-        // resolved. `when` evaluates against constant facts +
-        // vars (no `iter` namespace at the engine level), so its
-        // verdict is independent of the file being scanned —
-        // resolve it once per rule before entering the file
-        // loop. `when` errors short-circuit to a per-rule result
-        // with the error message; behaviour matches the
-        // rule-major path's `run_entry` for parity.
-        let mut live: Vec<(usize, &RuleEntry)> = Vec::new();
-        let mut when_errors: Vec<(usize, RuleResult)> = Vec::new();
-        for (idx, entry) in self.entries.iter().enumerate() {
-            if entry.rule.as_per_file().is_none() {
-                continue;
-            }
-            if self.skip_for_changed(entry.rule.as_ref(), full_ctx.index) {
-                continue;
-            }
-            if let Some(expr) = &entry.when {
-                match expr.evaluate(when_env) {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(e) => {
-                        when_errors.push((
-                            idx,
-                            RuleResult {
-                                rule_id: Arc::from(entry.rule.id()),
-                                level: entry.rule.level(),
-                                policy_url: entry.rule.policy_url().map(Arc::from),
-                                violations: vec![Violation::new(format!(
-                                    "when evaluation error: {e}"
-                                ))],
-                                is_fixable: entry.rule.fixer().is_some(),
-                            },
-                        ));
-                        continue;
-                    }
-                }
-            }
-            live.push((idx, entry));
-        }
+        let (live, when_errors) = self.collect_live_per_file_entries(full_ctx.index, when_env);
         if live.is_empty() {
             return when_errors;
         }
@@ -497,13 +604,16 @@ impl Engine {
                 if applicable.is_empty() {
                     return Vec::new();
                 }
-                // 2. Read once. Read failures (file deleted
-                // mid-walk, permission flake) skip the file
-                // silently — same shape as today's per-rule
-                // `let Ok(bytes) = std::fs::read(...) else
-                // continue;`.
+                // 2. Read once, skipping a file larger than the
+                // analysis cap (from the index size, no extra
+                // stat) so a multi-GB blob can't OOM the run (M3).
+                // A genuinely-absent file (deleted mid-walk) skips
+                // silently; a real read error (permission, I/O) or
+                // an over-cap file is logged at `warn` so it isn't
+                // silently mistaken for "file absent" (L7). Either
+                // way the run stays resilient.
                 let abs = root.join(&file_entry.path);
-                let Ok(bytes) = std::fs::read(&abs) else {
+                let Some(bytes) = crate::walker::read_capped_or_skip(&abs, file_entry.size) else {
                     return Vec::new();
                 };
                 // 3. Dispatch. Every applicable rule sees the
@@ -541,24 +651,193 @@ impl Engine {
         }
         let mut results = when_errors;
         for (idx, entry) in live {
-            let Some(violations) = bucket.remove(&idx) else {
-                // Rule was applicable to zero files (or every
-                // file was empty / unreadable) — passing rule;
-                // omit, matching today's behaviour.
-                continue;
-            };
+            // A live per-file rule that produced no violations is a
+            // passing rule — emit an empty-violations `RuleResult` so
+            // it appears in the pass count, matching the cross-file
+            // path (which always emits a result). Previously these
+            // were dropped, so a silently-passing per-file rule was
+            // missing from "All N rule(s) passed" (the count read as 0).
+            let violations = bucket.remove(&idx).unwrap_or_default();
             results.push((
                 idx,
-                RuleResult {
-                    rule_id: Arc::from(entry.rule.id()),
-                    level: entry.rule.level(),
-                    policy_url: entry.rule.policy_url().map(Arc::from),
+                RuleResult::new(
+                    Arc::from(entry.rule.id()),
+                    entry.rule.level(),
+                    entry.rule.policy_url().map(Arc::from),
                     violations,
-                    is_fixable: entry.rule.fixer().is_some(),
-                },
+                    entry.rule.fixer().is_some(),
+                ),
             ));
         }
         results
+    }
+
+    /// Pre-filter the per-file entries that should evaluate this run:
+    /// opt-in via `as_per_file`, not skipped by `--changed`, and `when`
+    /// resolved. `when` evaluates against constant facts + vars (no
+    /// `iter` namespace at the engine level), so its verdict is
+    /// independent of the file being scanned — resolve it once per rule
+    /// here rather than per file. A `when` error short-circuits to a
+    /// per-rule result carrying the error message, matching the
+    /// rule-major path's `run_entry` for parity.
+    ///
+    /// Returns `(live entries, when-error results)`. Shared by
+    /// [`Engine::run`]'s file-major loop and [`Engine::run_for_file`].
+    fn collect_live_per_file_entries<'a>(
+        &'a self,
+        index: &FileIndex,
+        when_env: &WhenEnv<'_>,
+    ) -> LivePerFileEntries<'a> {
+        let mut live: Vec<(usize, &RuleEntry)> = Vec::new();
+        let mut when_errors: Vec<(usize, RuleResult)> = Vec::new();
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if entry.rule.as_per_file().is_none() {
+                continue;
+            }
+            if self.skip_for_changed(entry.rule.as_ref(), index) {
+                continue;
+            }
+            if let Some(expr) = &entry.when {
+                match expr.evaluate(when_env) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(e) => {
+                        when_errors.push((
+                            idx,
+                            RuleResult {
+                                rule_id: Arc::from(entry.rule.id()),
+                                level: entry.rule.level(),
+                                policy_url: entry.rule.policy_url().map(Arc::from),
+                                violations: vec![Violation::new(format!(
+                                    "when evaluation error: {e}"
+                                ))],
+                                notes: Vec::new(),
+                                is_fixable: entry.rule.fixer().is_some(),
+                            },
+                        ));
+                        continue;
+                    }
+                }
+            }
+            live.push((idx, entry));
+        }
+        (live, when_errors)
+    }
+
+    /// Re-evaluate only the per-file rules that apply to a single file,
+    /// using caller-supplied `bytes` (the LSP server's in-memory edited
+    /// copy is authoritative for unsaved edits — see
+    /// `docs/design/v0.11/single_file_reevaluation.md`). The cost is
+    /// proportional to *one* file's evaluation, not the whole tree's, so
+    /// an editor can call this on every (debounced) keystroke.
+    ///
+    /// Cross-file rules (those without an `as_per_file` view) are
+    /// intentionally NOT run — the caller re-runs those on save, and
+    /// only the ones whose scope intersects the changed file. `when:` is
+    /// resolved once against the engine's constant facts/vars, exactly
+    /// as [`Engine::run`] does.
+    ///
+    /// Returns [`Error::FileNotInIndex`] when `file_path` isn't in the
+    /// cached `index` — distinct from "ran but found nothing." The
+    /// caller reads it as "this file is excluded from linting"
+    /// (`.gitignore` / `ignore:` / outside the walked tree).
+    pub fn run_for_file(
+        &self,
+        root: &Path,
+        index: &FileIndex,
+        file_path: &Path,
+        bytes: &[u8],
+    ) -> Result<Vec<RuleResult>> {
+        if !index.contains_file(file_path) {
+            return Err(Error::file_not_in_index(file_path));
+        }
+
+        // Facts are constant for an index's lifetime, so cache them on
+        // the index: the LSP calls `run_for_file` on every keystroke and
+        // re-scanning the tree for facts each time would dominate the
+        // cost. First call computes + caches; the rest reuse.
+        let fact_values: &FactValues = if let Some(values) = index.cached_facts() {
+            values
+        } else {
+            let computed = evaluate_facts(&self.facts, root, index)?;
+            index.set_facts(computed);
+            index.cached_facts().expect("facts just set on the index")
+        };
+        let git_tracked = self.collect_git_tracked_if_needed(root);
+        let git_blame = self.build_blame_cache_if_needed(root);
+        // Per-file rules may carry `scope_filter.changed_since:`; resolve
+        // (and cache) the diff before any `Scope::matches` reads it.
+        self.resolve_changed_paths(root, index)?;
+        self.resolve_manifest_paths(root, index);
+
+        let ctx = Context {
+            root,
+            index,
+            registry: Some(&self.registry),
+            facts: Some(fact_values),
+            vars: Some(&self.vars),
+            git_tracked: git_tracked.as_ref(),
+            git_blame: git_blame.as_ref(),
+        };
+        let when_env = WhenEnv {
+            facts: fact_values,
+            vars: &self.vars,
+            iter: None,
+            env: None,
+        };
+
+        let (live, when_errors) = self.collect_live_per_file_entries(index, &when_env);
+
+        // Dispatch each in-scope rule against the supplied bytes. The
+        // raw violations (notes included) are bucketed by entry index;
+        // `RuleResult::new` partitions notes out below. A rule that is
+        // applicable but emits nothing leaves no bucket entry → no
+        // result, matching `run`'s "passing rules omitted" semantics.
+        let mut bucket: HashMap<usize, Vec<Violation>> = HashMap::new();
+        for (idx, entry) in &live {
+            let pf = entry
+                .rule
+                .as_per_file()
+                .expect("live entries are per-file rules by construction");
+            if !pf.path_scope().matches(file_path, index) {
+                continue;
+            }
+            match pf.evaluate_file(&ctx, file_path, bytes) {
+                Ok(vs) => {
+                    if !vs.is_empty() {
+                        bucket.entry(*idx).or_default().extend(vs);
+                    }
+                }
+                Err(e) => bucket
+                    .entry(*idx)
+                    .or_default()
+                    .push(Violation::new(format!("rule error: {e}"))),
+            }
+        }
+
+        let mut by_idx: HashMap<usize, RuleResult> = when_errors.into_iter().collect();
+        for (idx, entry) in &live {
+            if let Some(violations) = bucket.remove(idx) {
+                by_idx.insert(
+                    *idx,
+                    RuleResult::new(
+                        Arc::from(entry.rule.id()),
+                        entry.rule.level(),
+                        entry.rule.policy_url().map(Arc::from),
+                        violations,
+                        entry.rule.fixer().is_some(),
+                    ),
+                );
+            }
+        }
+        // Preserve `self.entries` order, mirroring `run`'s assembly.
+        let mut results = Vec::with_capacity(by_idx.len());
+        for idx in 0..self.entries.len() {
+            if let Some(rr) = by_idx.remove(&idx) {
+                results.push(rr);
+            }
+        }
+        Ok(results)
     }
 
     /// Evaluate every rule and apply fixers for their violations.
@@ -569,6 +848,7 @@ impl Engine {
     /// result, same as [`Engine::run`]'s usual behaviour.
     #[allow(clippy::too_many_lines)]
     pub fn fix(&self, root: &Path, index: &FileIndex, dry_run: bool) -> Result<FixReport> {
+        self.ensure_manifest_scope_resolvable()?;
         if self.changed_paths.as_ref().is_some_and(HashSet::is_empty) {
             return Ok(FixReport {
                 results: Vec::new(),
@@ -626,12 +906,42 @@ impl Engine {
             facts: &fact_values,
             vars: &self.vars,
             iter: None,
+            env: None,
         };
-        let fix_ctx = FixContext {
+        let mut fix_ctx = FixContext {
             root,
             dry_run,
             fix_size_limit: self.fix_size_limit,
+            // Set per-entry inside the loop below, so each fixer confines its
+            // config-declared paths against the OWNING rule's permission.
+            allow_out_of_root: false,
         };
+
+        // Same `scope_filter.changed_since:` resolution as `run`, so a
+        // fix pass respects per-rule diff scoping too.
+        self.resolve_changed_paths(root, index)?;
+        self.resolve_manifest_paths(root, index);
+        // Propagate BOTH resolved caches onto every alternate index the fix loop
+        // may `pick_ctx` (see `run`): the `--changed` filtered index and the
+        // git-tracked file-only / dir-aware indexes, so `fix` respects manifest
+        // scope AND `changed_since:` on every dispatch path.
+        let alt_indexes = [
+            filtered_index.as_ref(),
+            git_tracked_indexes
+                .as_ref()
+                .and_then(|g| g.file_only.as_ref()),
+            git_tracked_indexes
+                .as_ref()
+                .and_then(|g| g.dir_aware.as_ref()),
+        ];
+        for fi in alt_indexes.into_iter().flatten() {
+            if let Some(map) = index.manifest_paths_map() {
+                fi.set_manifest_paths(map.clone());
+            }
+            if let Some(map) = index.changed_paths_map() {
+                fi.set_changed_paths(map.clone());
+            }
+        }
 
         let mut results: Vec<FixRuleResult> = Vec::new();
         for entry in &self.entries {
@@ -670,6 +980,7 @@ impl Engine {
                 continue;
             }
             let fixer = entry.rule.fixer();
+            fix_ctx.allow_out_of_root = entry.allow_out_of_root;
             let items: Vec<FixItem> = violations
                 .into_iter()
                 .map(|v| {
@@ -863,6 +1174,163 @@ impl Engine {
         };
         !set.iter().any(|p| scope.matches(p, index))
     }
+
+    /// Resolve every distinct `scope_filter.changed_since:` ref across
+    /// the rule set and cache each `<ref>...HEAD` diff on the index,
+    /// once per run (before any `Scope::matches` reads it). A ref that
+    /// isn't a git repo caches an empty set — the documented silent
+    /// no-op. A ref that doesn't resolve *inside* a repo is a hard
+    /// error with a shallow-clone hint, so the misconfiguration
+    /// surfaces instead of silently matching nothing.
+    fn resolve_changed_paths(&self, root: &Path, index: &FileIndex) -> Result<()> {
+        if index.changed_paths_initialized() {
+            return Ok(());
+        }
+        let mut refs: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for entry in &self.entries {
+            // Per-file rules expose their scope via `PerFileRule::path_scope`
+            // (the `Rule::path_scope` default is `None`); rule-major rules
+            // expose it via `Rule::path_scope`. changed_since is a per-file
+            // concept, so prefer the per-file scope, falling back to the
+            // rule-level one.
+            let scope = entry
+                .rule
+                .as_per_file()
+                .map(super::rule::PerFileRule::path_scope)
+                .or_else(|| entry.rule.path_scope());
+            if let Some(scope) = scope
+                && let Some(filter) = scope.scope_filter()
+                && let Some(since) = filter.changed_since()
+            {
+                refs.insert(since);
+            }
+        }
+        if refs.is_empty() {
+            return Ok(());
+        }
+        let mut map = std::collections::HashMap::new();
+        for since in refs {
+            match crate::git::collect_changed_paths_checked(root, since) {
+                Ok(Some(set)) => {
+                    map.insert(since.to_string(), set);
+                }
+                Ok(None) => {
+                    map.insert(since.to_string(), std::collections::HashSet::new());
+                }
+                Err(crate::git::CommitRangeError::BadRange { stderr }) => {
+                    return Err(crate::error::Error::Other(format!(
+                        "scope_filter.changed_since: could not resolve `{since}...HEAD`: \
+                         {stderr}. Common cause: shallow clone. In a GitHub Actions PR \
+                         workflow, use `actions/checkout@v4` with `fetch-depth: 0` so the \
+                         base ref is reachable."
+                    )));
+                }
+            }
+        }
+        index.set_changed_paths(map);
+        Ok(())
+    }
+
+    /// Resolve every per-file rule's manifest-derived path set once per run and
+    /// cache them on the index, mirroring [`resolve_changed_paths`](Self::resolve_changed_paths).
+    /// Keyed by each predicate's cache key, so rules sharing a `(source,
+    /// extract, derive_target)` config resolve once. A manifest that is absent /
+    /// unreadable yields the empty set (the predicate contributes nothing,
+    /// consistent with `has_ancestor`); an empty set on an
+    /// `include_manifest_paths:` predicate that expects one is warned about (an
+    /// empty include would otherwise silently no-op the whole rule). Reads are
+    /// confined to the repo root; `source` was confined at build time.
+    /// Fail loud if a rule declares a manifest-derived scope (`include`/
+    /// `exclude_manifest_paths`) but exposes no scope for the engine to resolve
+    /// (`as_per_file` and `path_scope` both `None`). Without this the predicate
+    /// silently no-ops: the resolver never discovers it, so its cache stays empty
+    /// and `Scope::matches` reads the empty set (include matches nothing, exclude
+    /// excludes nothing) — the exact silent-no-op class fuzzing found on rule
+    /// kinds that apply a scope but forgot to expose it (see `Rule::path_scope`).
+    fn ensure_manifest_scope_resolvable(&self) -> Result<()> {
+        for entry in &self.entries {
+            let Some(sf) = entry.scope_filter() else {
+                continue;
+            };
+            if sf.include_manifest_paths.is_none() && sf.exclude_manifest_paths.is_none() {
+                continue;
+            }
+            if entry.rule.as_per_file().is_none() && entry.rule.path_scope().is_none() {
+                return Err(Error::rule_config(
+                    entry.rule.id(),
+                    "this rule kind does not support `scope_filter.include_manifest_paths` / \
+                     `exclude_manifest_paths`: it exposes no per-file scope for the engine to \
+                     resolve, so the manifest set would silently never apply"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_manifest_paths(&self, root: &Path, index: &FileIndex) {
+        if index.manifest_paths_initialized() {
+            return;
+        }
+        // Group predicates by cache key: rules sharing a `(source, extract,
+        // derive_target)` config resolve once. BTreeMap keeps the resolution
+        // order deterministic (ADR-0003). The key deliberately omits `sense` /
+        // `expect_nonempty` (the resolved SET doesn't depend on them), so a group
+        // can mix `include` and `exclude` predicates over the same manifest.
+        let mut groups: std::collections::BTreeMap<
+            &str,
+            Vec<&crate::scope_filter::ManifestPredicate>,
+        > = std::collections::BTreeMap::new();
+        for entry in &self.entries {
+            let scope = entry
+                .rule
+                .as_per_file()
+                .map(super::rule::PerFileRule::path_scope)
+                .or_else(|| entry.rule.path_scope());
+            if let Some(scope) = scope
+                && let Some(filter) = scope.scope_filter()
+            {
+                for pred in filter.manifest_predicates() {
+                    groups.entry(pred.cache_key()).or_default().push(pred);
+                }
+            }
+        }
+        if groups.is_empty() {
+            return;
+        }
+        let mut map = std::collections::HashMap::new();
+        for (key, group) in groups {
+            // Every predicate in the group shares one `(source, extract,
+            // derive_target)`, so any member resolves the same set. Read the
+            // manifest with the same confined direct read `explain` uses
+            // (`read_manifest_confined`: canonicalize-confined + is_file +
+            // size-capped), NOT through the walked index: `find_file` also honors
+            // `.gitignore`, so a gitignored manifest would resolve to the empty
+            // set here while `explain` (a direct read) showed a non-empty set — a
+            // legibility split undercutting ADR-0010's "explain shows the resolved
+            // set". A direct confined read matches `registry_paths_resolve` /
+            // `file_graph`, which read their sources via `read_capped(root.join())`
+            // regardless of the walk. Absent / oversized / escaping -> empty set.
+            let rep = group[0];
+            let set = crate::scope_filter::ManifestSet::from_paths(rep.resolve_set(
+                &crate::scope_filter::read_manifest_confined(root, rep.source()),
+            ));
+            // Warn per group, not per first-iterated predicate: an `include` that
+            // expects a non-empty set must be flagged even when an `exclude`
+            // sharing the manifest sorted first (the empty-include silent no-op is
+            // exactly the footgun `expect_nonempty` guards).
+            if set.is_empty() && group.iter().any(|p| p.warns_on_empty()) {
+                tracing::warn!(
+                    "scope_filter.include_manifest_paths: `{}` resolved to no paths (the manifest \
+                     is missing, unreadable, or declares none), so the rule matches nothing. Set \
+                     `expect_nonempty: false` if that is intended.",
+                    rep.source().display()
+                );
+            }
+            map.insert(key.to_string(), set);
+        }
+        index.set_manifest_paths(map);
+    }
 }
 
 /// Pick the [`Context`] a rule should evaluate against:
@@ -914,6 +1382,7 @@ fn run_entry(
                     level: entry.rule.level(),
                     policy_url: entry.rule.policy_url().map(Arc::from),
                     violations: vec![Violation::new(format!("when evaluation error: {e}"))],
+                    notes: Vec::new(),
                     is_fixable: entry.rule.fixer().is_some(),
                 });
             }
@@ -927,13 +1396,14 @@ fn run_one(rule: &dyn Rule, ctx: &Context<'_>) -> RuleResult {
         Ok(v) => v,
         Err(e) => vec![Violation::new(format!("rule error: {e}"))],
     };
-    RuleResult {
-        rule_id: Arc::from(rule.id()),
-        level: rule.level(),
-        policy_url: rule.policy_url().map(Arc::from),
+    // `new` partitions any note-flagged violations into `notes`.
+    RuleResult::new(
+        Arc::from(rule.id()),
+        rule.level(),
+        rule.policy_url().map(Arc::from),
         violations,
-        is_fixable: rule.fixer().is_some(),
-    }
+        rule.fixer().is_some(),
+    )
 }
 
 #[cfg(test)]
@@ -1265,11 +1735,13 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_flip_passes_when_no_violations() {
-        // A per-file rule that finds no violations in any file
-        // should be omitted from the report entirely (matching
-        // the rule-major path's "passing rules omitted"
-        // semantics).
+    fn passing_per_file_rule_appears_in_the_report() {
+        // A live per-file rule that finds no violations is a PASSING
+        // rule — it now appears in the report with empty violations,
+        // so the pass count ("All N rule(s) passed") includes it,
+        // matching the cross-file path (which always emits a result).
+        // Previously these were dropped, so a silently-passing
+        // per-file rule read as "All 0 rule(s) passed".
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"MAGIC ok").unwrap();
 
@@ -1284,7 +1756,139 @@ mod tests {
         let index = crate::walk(tmp.path(), &opts).unwrap();
         let report = engine.run(tmp.path(), &index).unwrap();
 
-        assert!(report.results.is_empty(), "results: {:?}", report.results);
+        assert_eq!(report.results.len(), 1, "results: {:?}", report.results);
+        assert!(report.results[0].violations.is_empty());
+        assert_eq!(report.passing_rules(), 1);
+    }
+
+    #[test]
+    fn run_for_file_runs_only_in_scope_per_file_rules() {
+        // 3-rule fixture: a per-file rule in scope for `.txt`, a
+        // per-file rule scoped to `.rs` (out of scope), and a
+        // cross-file rule (must never run via run_for_file). Only the
+        // in-scope per-file rule should fire.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"no magic").unwrap();
+
+        let in_scope = Box::new(PerFileStub {
+            id: "txt-needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let out_of_scope = Box::new(PerFileStub {
+            id: "rs-needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.rs".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let cross = stub("cross", "**/*.txt");
+        let engine = Engine::new(vec![in_scope, out_of_scope, cross], RuleRegistry::new());
+
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let results = engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"no magic")
+            .unwrap();
+
+        assert_eq!(results.len(), 1, "results: {results:?}");
+        assert_eq!(&*results[0].rule_id, "txt-needs-magic");
+        assert_eq!(results[0].violations.len(), 1);
+    }
+
+    #[test]
+    fn run_for_file_uses_supplied_bytes_not_disk() {
+        // On-disk content passes the rule; the in-memory edited bytes
+        // (handed to run_for_file) fail it. The supplied bytes win —
+        // this is the whole point of the LSP unsaved-edit contract.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"MAGIC on disk").unwrap();
+
+        let rule = Box::new(PerFileStub {
+            id: "needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let engine = Engine::new(vec![rule], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+
+        let results = engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"edited, no prefix")
+            .unwrap();
+        assert_eq!(results.len(), 1, "edited bytes should fail the rule");
+        assert_eq!(&*results[0].rule_id, "needs-magic");
+    }
+
+    #[test]
+    fn run_for_file_passing_rule_omitted() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"whatever").unwrap();
+        let rule = Box::new(PerFileStub {
+            id: "needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let engine = Engine::new(vec![rule], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let results = engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"MAGIC passes")
+            .unwrap();
+        assert!(
+            results.is_empty(),
+            "passing rule must be omitted: {results:?}"
+        );
+    }
+
+    #[test]
+    fn is_per_file_classifies_rules() {
+        let pf = Box::new(PerFileStub {
+            id: "pf".into(),
+            scope: Scope::from_patterns(&["**/*".to_string()]).unwrap(),
+            prefix: b"X".to_vec(),
+        });
+        let cross = stub("cross", "**/*");
+        let engine = Engine::new(vec![pf, cross], RuleRegistry::new());
+        assert!(engine.is_per_file("pf"));
+        assert!(!engine.is_per_file("cross"));
+        assert!(!engine.is_per_file("unknown-id"));
+    }
+
+    #[test]
+    fn run_for_file_caches_facts_on_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let rule = Box::new(PerFileStub {
+            id: "pf".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let engine = Engine::new(vec![rule], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+
+        assert!(index.cached_facts().is_none());
+        engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"x")
+            .unwrap();
+        assert!(
+            index.cached_facts().is_some(),
+            "facts should be cached after the first run_for_file"
+        );
+        // Second call reuses the cache without error.
+        engine
+            .run_for_file(tmp.path(), &index, Path::new("a.txt"), b"x")
+            .unwrap();
+    }
+
+    #[test]
+    fn run_for_file_errors_when_file_not_in_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let engine = Engine::new(vec![], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let err = engine
+            .run_for_file(tmp.path(), &index, Path::new("ghost.txt"), b"x")
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::FileNotInIndex { .. }),
+            "expected FileNotInIndex, got: {err:?}"
+        );
     }
 
     #[test]

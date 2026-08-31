@@ -1,0 +1,116 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for ansible/ansible @ 1d398ae8af25132dc5290226517a7c8763ae295b
+# v0.12 case-study Stage A.
+#
+# Ansible's bespoke-validation surface is almost entirely `ansible-test
+# sanity` (Azure Pipelines, NOT GitHub Actions). The bulk is tool/AST/NLP
+# execution (pylint, mypy, pep8, validate-modules, black, codespell) = D.
+# The A-items below are the *declarative* file-content / structure / hygiene
+# checks from test/sanity/code-smell/*.py, re-expressed natively.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+
+rules:
+  # === A-items: native re-expression of code-smell validators ===========
+
+  # code-smell/trailing-newline.py — every text file ends with "\n"
+  # (the .py excludes .json; alint's final_newline is text-only already).
+  - id: ans-trailing-newline
+    kind: final_newline
+    paths: ["**/*.py", "**/*.txt", "**/*.yml", "**/*.yaml", "**/*.cs", "**/*.ps1", "**/*.psm1", "**/*.md", "**/*.rst"]
+    level: error
+    message: "text files should end with a newline character (code-smell/trailing-newline)."
+
+  # code-smell/no-s3.py — disallow direct S3 bucket links (use CloudFront).
+  - id: ans-no-s3-links
+    kind: file_content_forbidden
+    paths: ["lib/**", "test/**", "docs/**", "changelogs/**"]
+    pattern: 'http.*?s3\..*?amazonaws\.com'
+    level: error
+    message: "use a CloudFront distribution instead of an S3 bucket (code-smell/no-s3)."
+
+  # code-smell/no-unwanted-characters.py — no Unicode no-break space (U+00A0).
+  - id: ans-no-nbsp
+    kind: file_content_forbidden
+    paths: ["lib/**/*.py", "test/**/*.py", "docs/**", "changelogs/**/*.yml", "changelogs/**/*.yaml"]
+    pattern: " "
+    level: error
+    message: "use an ASCII space instead of a Unicode no-break space (code-smell/no-unwanted-characters)."
+
+  # code-smell/boilerplate.py — every lib/ansible *.py declares
+  # `from __future__ import annotations` (modulo AST-only edge cases the
+  # native rule can't see — see notes; this is the common case).
+  - id: ans-future-annotations-boilerplate
+    kind: file_content_matches
+    paths: ["lib/ansible/**/*.py"]
+    pattern: 'from __future__ import annotations'
+    level: warning
+    message: "lib/ansible *.py must declare `from __future__ import annotations` (code-smell/boilerplate)."
+
+  # code-smell/obsolete-files.py — these directories are obsolete and must
+  # contain no files. Expressed as dir_absent per obsolete prefix.
+  - id: ans-obsolete-test-runner-absent
+    kind: dir_absent
+    paths: ["test/runner"]
+    level: error
+    message: "directory is obsolete and must contain no files (code-smell/obsolete-files)."
+
+  - id: ans-obsolete-sanity-dirs-absent
+    kind: dir_absent
+    paths:
+      - "test/sanity/ansible-doc"
+      - "test/sanity/compile"
+      - "test/sanity/import"
+      - "test/sanity/pep8"
+      - "test/sanity/pslint"
+      - "test/sanity/pylint"
+      - "test/sanity/rstcheck"
+      - "test/sanity/shellcheck"
+      - "test/sanity/validate-modules"
+      - "test/sanity/yamllint"
+    level: error
+    message: "obsolete sanity directory must not exist (code-smell/obsolete-files)."
+
+  # code-smell/changelog.py (partial) — changelog fragments must be .yml/.yaml
+  # (the schema validation itself is antsibull-changelog = D).
+  - id: ans-changelog-fragments-yaml-only
+    kind: dir_only_contains
+    select: "changelogs/fragments/*"
+    allow: ["*.yml", "*.yaml", ".keep", ".gitkeep"]
+    level: warning
+    message: "changelog fragments must be YAML (.yml/.yaml) (code-smell/changelog)."
+
+  # === alint value-add: config-policy + structure (NOT enforced-as-gate) ===
+  # Recorded per R3/R5 as bonus assertions; excluded from the coverage ratio.
+
+  - id: ans-copying-exists
+    kind: file_exists
+    paths: ["COPYING"]
+    root_only: true
+    level: warning
+    message: "GPLv3 COPYING must exist at the repo root."
+
+  - id: ans-pyproject-license-gpl
+    kind: toml_path_equals
+    paths: ["pyproject.toml"]
+    path: "$.project.license"
+    equals: "GPL-3.0-or-later"
+    level: info
+    message: "pyproject license must be GPL-3.0-or-later (ansible-core licensing policy)."
+
+  - id: ans-azure-pipelines-exists
+    kind: file_exists
+    paths: [".azure-pipelines/azure-pipelines.yml"]
+    level: info
+    message: "CI entrypoint (.azure-pipelines/azure-pipelines.yml) should exist."
+
+  - id: ans-sanity-ignore-exists
+    kind: file_exists
+    paths: ["test/sanity/ignore.txt"]
+    level: info
+    message: "sanity ignore manifest should exist."

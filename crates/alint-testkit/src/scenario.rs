@@ -53,6 +53,45 @@ pub struct Scenario {
     pub expect_tree: Option<TreeSpec>,
     #[serde(default)]
     pub expect_tree_mode: ExpectTreeMode,
+    /// Optional opt-in marking this scenario as a rule page's rendered
+    /// example. When present, `xtask docs-export` renders this fixture
+    /// (its tree, config, and a real `alint check` run) onto its
+    /// `alint.org/docs/rules/<kind>` page. See ADR-0014.
+    #[serde(default)]
+    pub docs: Option<DocsExample>,
+}
+
+/// `docs:` block - opt a scenario in as a rule page's rendered example.
+/// The gate (`xtask docs-export`) requires every canonical kind to carry
+/// one `fail` and one `pass` documented scenario, and asserts `kind`
+/// equals the single top-level rule kind in `given.config`. The kind is
+/// explicit and registry-validated - never inferred from `tags:`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DocsExample {
+    /// Heading shown above the example, e.g. "Require a README".
+    pub title: String,
+    /// Which state this fixture demonstrates.
+    pub case: DocsCase,
+    /// The rule kind this scenario documents. Must be the CANONICAL kind
+    /// (the one with its own page); the docs-export gate rejects an alias
+    /// spelling since aliases have no page of their own.
+    pub kind: String,
+    /// Tie-breaker when a kind documents more than the fail+pass pair
+    /// (a promoted edge case). Lower sorts first.
+    #[serde(default)]
+    pub order: i32,
+}
+
+/// Whether a documented scenario demonstrates the rule firing (`fail`)
+/// or a compliant repo (`pass`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocsCase {
+    /// The rule fires - "what this catches".
+    Fail,
+    /// The rule stays silent - "what a compliant repo looks like".
+    Pass,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,15 +142,41 @@ pub struct GivenGit {
     /// "fully checked-in repo."
     #[serde(default = "default_true")]
     pub commit: bool,
-    /// Make a chain of empty commits, oldest first. Each entry is
-    /// the subject line of one commit; the runner uses
-    /// `git commit --allow-empty -m <subject>` for every entry so
-    /// no working-tree file is required. Mutually exclusive with
-    /// `add:`/`commit:` (which write one mass commit of the
-    /// staged files). Used to fixture multi-commit shapes the
-    /// `git_commit_message` rule's `since:` mode needs to walk.
+    /// Make a chain of commits, oldest first. Each entry is either a bare
+    /// subject string (an empty commit with that subject) or a detailed
+    /// `{ message, add, date }` mapping that stages the listed paths and can
+    /// backdate the commit. Mutually exclusive with the top-level
+    /// `add:`/`commit:` path (which writes one mass commit of the staged
+    /// files). Used to fixture multi-commit shapes and the real file-delta
+    /// history the git rules inspect.
     #[serde(default)]
-    pub commits: Vec<String>,
+    pub commits: Vec<CommitSpec>,
+}
+
+/// One entry in `git.commits`: either a bare subject (an empty commit) or a
+/// detailed commit that stages files, sets a message, and optionally backdates.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum CommitSpec {
+    /// An empty commit with this subject line.
+    Subject(String),
+    /// A commit that stages `add` paths (empty -> `--allow-empty`), uses a
+    /// custom `message`, and optionally backdates via `date`.
+    Detailed(DetailedCommit),
+}
+
+/// The detailed form of a [`CommitSpec`].
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DetailedCommit {
+    /// Commit message (subject).
+    pub message: String,
+    /// Paths to `git add` before committing. Empty commits with `--allow-empty`.
+    #[serde(default)]
+    pub add: Vec<String>,
+    /// Sets `GIT_AUTHOR_DATE` + `GIT_COMMITTER_DATE`, e.g. `2000-01-01T00:00:00`.
+    #[serde(default)]
+    pub date: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -260,5 +325,110 @@ expect:
 "#;
         let s = Scenario::from_yaml(src).unwrap();
         assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn parses_docs_block() {
+        let src = r#"
+name: file_exists flags a missing README
+tags: [check, file_exists]
+docs:
+  title: Require a README
+  case: fail
+  kind: file_exists
+given:
+  tree:
+    Cargo.toml: "x"
+  config: |
+    version: 1
+    rules: []
+when: [check]
+expect:
+  - violations: []
+"#;
+        let s = Scenario::from_yaml(src).unwrap();
+        let docs = s.docs.expect("docs block should parse");
+        assert_eq!(docs.title, "Require a README");
+        assert_eq!(docs.case, DocsCase::Fail);
+        assert_eq!(docs.kind, "file_exists");
+        assert_eq!(docs.order, 0);
+    }
+
+    #[test]
+    fn docs_block_rejects_unknown_field() {
+        let src = r#"
+name: x
+docs:
+  title: t
+  case: pass
+  kind: file_exists
+  bogus: true
+given:
+  tree: {}
+  config: "version: 1\nrules: []\n"
+"#;
+        assert!(Scenario::from_yaml(src).is_err());
+    }
+
+    #[test]
+    fn scenario_without_docs_block_defaults_to_none() {
+        let s = Scenario::from_yaml(SRC).unwrap();
+        assert!(s.docs.is_none());
+    }
+
+    #[test]
+    fn docs_block_rejects_invalid_case() {
+        let src = r#"
+name: x
+docs:
+  title: t
+  case: sometimes
+  kind: file_exists
+given:
+  tree: {}
+  config: "version: 1\nrules: []\n"
+"#;
+        assert!(Scenario::from_yaml(src).is_err());
+    }
+
+    #[test]
+    fn docs_block_requires_kind_title_and_case() {
+        // Each required field, omitted in turn, must fail to parse.
+        let full = "name: x\n\
+                    docs:\n  title: t\n  case: fail\n  kind: file_exists\n\
+                    given:\n  tree: {}\n  config: \"version: 1\\nrules: []\\n\"\n";
+        for line in ["  title: t\n", "  case: fail\n", "  kind: file_exists\n"] {
+            let src = full.replace(line, "");
+            assert!(
+                Scenario::from_yaml(&src).is_err(),
+                "omitting `{}` should fail to parse",
+                line.trim()
+            );
+        }
+    }
+
+    #[test]
+    fn parses_commit_spec_forms() {
+        let src = r#"
+name: x
+given:
+  tree: {}
+  config: "version: 1\nrules: []\n"
+  git:
+    commits:
+      - "bare subject"
+      - { message: "detailed", add: ["a.txt"], date: "2000-01-01T00:00:00" }
+"#;
+        let s = Scenario::from_yaml(src).unwrap();
+        let commits = &s.given.git.unwrap().commits;
+        assert!(matches!(commits[0], CommitSpec::Subject(_)));
+        match &commits[1] {
+            CommitSpec::Detailed(d) => {
+                assert_eq!(d.message, "detailed");
+                assert_eq!(d.add, vec!["a.txt"]);
+                assert_eq!(d.date.as_deref(), Some("2000-01-01T00:00:00"));
+            }
+            CommitSpec::Subject(_) => panic!("expected Detailed"),
+        }
     }
 }

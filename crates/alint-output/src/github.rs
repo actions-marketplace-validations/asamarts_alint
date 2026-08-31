@@ -79,6 +79,7 @@ mod tests {
                     level: Level::Error,
                     policy_url: None,
                     violations: vec![Violation::new("boom")],
+                    notes: Vec::new(),
                     is_fixable: false,
                 },
                 RuleResult {
@@ -86,6 +87,7 @@ mod tests {
                     level: Level::Warning,
                     policy_url: None,
                     violations: vec![Violation::new("careful")],
+                    notes: Vec::new(),
                     is_fixable: false,
                 },
                 RuleResult {
@@ -93,6 +95,7 @@ mod tests {
                     level: Level::Info,
                     policy_url: None,
                     violations: vec![Violation::new("fyi")],
+                    notes: Vec::new(),
                     is_fixable: false,
                 },
             ],
@@ -111,6 +114,7 @@ mod tests {
                 level: Level::Off,
                 policy_url: None,
                 violations: vec![Violation::new("should not appear")],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
@@ -129,7 +133,10 @@ mod tests {
                     message: "bad".into(),
                     line: Some(12),
                     column: Some(4),
+                    is_note: false,
+                    baseline_key: None,
                 }],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
@@ -148,6 +155,7 @@ mod tests {
                 level: Level::Error,
                 policy_url: None,
                 violations: vec![Violation::new("m")],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
@@ -163,6 +171,7 @@ mod tests {
                 level: Level::Error,
                 policy_url: None,
                 violations: vec![Violation::new("a: b\nc")],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };

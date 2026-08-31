@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for encode/httpx @ b5addb64f0161ff6bfe94c124ef76f6a1fba5254
+# (v0.12 case study, Stage A). Shape: Python HTTP library, hatch build,
+# custom `scripts/` (check/test/build/lint/coverage), no pre-commit/hooks.
+#
+# Enforced addressable surface is tiny: the repo delegates ALL semantic
+# checking to ruff + mypy + pytest + coverage + twine + mkdocs (all D,
+# tool execution). The one cross-file value coherence the repo gates on is
+# `scripts/sync-version` (CHANGELOG latest-release version == __version__.py).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+
+rules:
+  # === Enforced addressable (C — version<->CHANGELOG coherence) =========
+  # scripts/sync-version: the version in httpx/__version__.py must equal the
+  # *latest released* version in CHANGELOG.md (the repo greps the 2nd semver
+  # via `sed -n 2p`, skipping the keepachangelog `1.0.0` URL + the
+  # `[UNRELEASED]` header). cross_file_value_equals is the right KIND, but
+  # CHANGELOG.md carries the full release HISTORY (73 version headers); the
+  # source side requires exactly ONE value and the target side compares the
+  # source value against EVERY match, so a naive rule reports 72 false
+  # mismatches against the older versions. This is the v0.12 R4 trap:
+  # verified against the clone, the rule below FIRES 73x (not A).
+  # => Recorded as C: cross_file_value_equals wants an
+  #    `occurrence: first|nth` (or `match_count: 1`) selector on the
+  #    extract so a single value can be pulled from a multi-match file.
+  #    Left disabled so the shipped config is clean; uncomment once the
+  #    selector exists.
+  # - id: httpx-version-matches-changelog
+  #   kind: cross_file_value_equals
+  #   source:
+  #     file: httpx/__version__.py
+  #     extract: { regex: '__version__\s*=\s*"([^"]+)"' }
+  #   targets:
+  #     - file: CHANGELOG.md
+  #       extract: { regex: '\n## (\d+\.\d+\.\d+) \(', occurrence: first }  # <- the gap
+  #   level: error
+
+  # === alint value-add (NOT repo-enforced; recorded separately) =========
+  # The repo's bespoke validators live in scripts/; assert they exist so a
+  # rename doesn't silently break the CI entrypoints.
+  - id: httpx-scripts-present
+    kind: file_exists
+    paths:
+      - scripts/check
+      - scripts/test
+      - scripts/build
+      - scripts/lint
+      - scripts/coverage
+    level: warning
+    message: "The bespoke scripts/ entrypoints (check/test/build/lint/coverage) must exist."
+
+  # pyproject.toml pins the hatchling build backend the scripts/build uses.
+  # (toml_path_matches only sees STRING leaves, so assert a string field —
+  # $.tool.mypy.strict is a TOML boolean and would never match.)
+  - id: httpx-pyproject-hatchling-backend
+    kind: toml_path_matches
+    paths: pyproject.toml
+    path: "$['build-system']['build-backend']"
+    matches: '^hatchling\.build$'
+    level: info
+    message: "pyproject must use the hatchling build backend (scripts/build runs `python -m build`)."

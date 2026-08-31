@@ -12,13 +12,17 @@ use serde::Deserialize;
 
 use crate::fixers::{FileNormalizeLineEndingsFixer, LineEndingTarget};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Required line ending style: `lf` or `crlf`. Mixed endings within a
+    /// file also fail.
     target: TargetName,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+crate::options_schema_for!(Options);
+
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum TargetName {
     Lf,
@@ -84,7 +88,11 @@ impl PerFileRule for LineEndingsRule {
         Ok(vec![
             Violation::new(msg)
                 .with_path(std::sync::Arc::<Path>::from(path))
-                .with_location(line_no, 1),
+                .with_location(line_no, 1)
+                // First-offender rule: only the first mismatched line is
+                // reported, so line-content churns when it's fixed and the
+                // next surfaces. Key on the path (the file is the debt unit).
+                .with_baseline_key(crate::slash(path)),
         ])
     }
 }

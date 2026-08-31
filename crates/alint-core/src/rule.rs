@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -28,6 +28,22 @@ pub struct Violation {
     pub message: Cow<'static, str>,
     pub line: Option<usize>,
     pub column: Option<usize>,
+    /// Transient flag: when `true`, this is an informational *note*
+    /// (a non-violation finding — e.g. an entry a rule skipped rather
+    /// than failed on), not a real violation. Defaults to `false`.
+    /// The engine partitions notes out of [`RuleResult::violations`]
+    /// into [`RuleResult::notes`] at result-assembly time, so the flag
+    /// never reaches a formatter and pass/fail logic is unaffected.
+    pub is_note: bool,
+    /// Optional stable structural identity for baseline fingerprinting
+    /// ([`crate::baseline`]). A rule sets this when its violation is not
+    /// uniquely identified by `(path, offending-line content)` — e.g. a
+    /// structured-query rule (the JSONPath/value), a cross-file rule (the
+    /// sorted involved paths), or a first-offender / threshold rule (the
+    /// path). `None` (the default) means "use the offending line's
+    /// content" (see [`crate::baseline::violation_fingerprint`]). It
+    /// never affects rendering or pass/fail.
+    pub baseline_key: Option<Cow<'static, str>>,
 }
 
 impl Violation {
@@ -37,7 +53,17 @@ impl Violation {
             message: message.into(),
             line: None,
             column: None,
+            is_note: false,
+            baseline_key: None,
         }
+    }
+
+    /// Mark this finding as an informational note rather than a
+    /// violation. See [`Violation::is_note`].
+    #[must_use]
+    pub fn as_note(mut self) -> Self {
+        self.is_note = true;
+        self
     }
 
     /// Attach a path to the violation. Accepts anything convertible
@@ -60,6 +86,15 @@ impl Violation {
         self.column = Some(column);
         self
     }
+
+    /// Set the baseline fingerprint key — the rule's stable structural
+    /// identity for this violation. See [`Violation::baseline_key`] and
+    /// [`crate::baseline::violation_fingerprint`].
+    #[must_use]
+    pub fn with_baseline_key(mut self, key: impl Into<Cow<'static, str>>) -> Self {
+        self.baseline_key = Some(key.into());
+        self
+    }
 }
 
 /// The collected outcome of evaluating a single rule.
@@ -75,6 +110,11 @@ pub struct RuleResult {
     pub level: Level,
     pub policy_url: Option<Arc<str>>,
     pub violations: Vec<Violation>,
+    /// Informational notes (non-violation findings) the rule
+    /// produced — e.g. entries it skipped rather than failed on.
+    /// Partitioned out of the rule's raw output by
+    /// [`RuleResult::new`]; never counted in pass/fail.
+    pub notes: Vec<Violation>,
     /// Whether the rule declares a [`Fixer`] — surfaced here so
     /// the human formatter can tag violations as `fixable`
     /// without threading the rule registry into the renderer.
@@ -82,6 +122,30 @@ pub struct RuleResult {
 }
 
 impl RuleResult {
+    /// Build a result from a rule's raw output, partitioning
+    /// note-flagged [`Violation`]s (`is_note`) into [`notes`](Self::notes)
+    /// and the rest into [`violations`](Self::violations). Centralises
+    /// the note/violation split so pass/fail and formatters only ever
+    /// see real violations in `violations`.
+    #[must_use]
+    pub fn new(
+        rule_id: Arc<str>,
+        level: Level,
+        policy_url: Option<Arc<str>>,
+        raw: Vec<Violation>,
+        is_fixable: bool,
+    ) -> Self {
+        let (notes, violations): (Vec<_>, Vec<_>) = raw.into_iter().partition(|v| v.is_note);
+        Self {
+            rule_id,
+            level,
+            policy_url,
+            violations,
+            notes,
+            is_fixable,
+        }
+    }
+
     pub fn passed(&self) -> bool {
         self.violations.is_empty()
     }
@@ -255,6 +319,34 @@ pub trait Rule: Send + Sync + std::fmt::Debug {
         false
     }
 
+    /// Permit this rule's *read* sites to read a config-declared path
+    /// that escapes the repo root. Default no-op (hard confinement).
+    /// The loader calls this post-build with the result of the
+    /// top-level `allow_out_of_root:` policy for the rule's id/kind;
+    /// only the read-confinement rule kinds override it to store the
+    /// flag. NEVER reachable from an `extends:`'d ruleset — the policy
+    /// is parsed from the user's own top-level config only, mirroring
+    /// the `SPAWNING_RULE_KINDS` trust gate. A build site that forgets
+    /// to call this leaves the rule confined (the safe default). See
+    /// `docs/design/v0.12/allow_out_of_root.md`.
+    fn set_allow_out_of_root(&mut self, _allow: bool) {}
+
+    /// Validate this rule's nested sub-rules (the `require:` block of
+    /// `for_each_dir` / `for_each_file` / `every_matching_has`) against the
+    /// registry at config-load time. Default no-op — most rules have none.
+    ///
+    /// The cross-file iteration rules store their nested specs and build
+    /// them lazily, once per matched iteration, so a nested rule with an
+    /// unknown kind, an unknown option, or a missing required field would
+    /// otherwise slip past `validate-config` entirely — and past `check`
+    /// too whenever the selector matches no entries. Overriders dry-build
+    /// each nested spec here (with placeholder path tokens) so those
+    /// structural errors surface at load. The loader calls this post-build
+    /// at both the `validate-config` and `check` build sites.
+    fn validate_nested(&self, _registry: &RuleRegistry) -> Result<()> {
+        Ok(())
+    }
+
     /// In `--changed` mode, return `true` to evaluate this rule
     /// against the **full** [`FileIndex`] rather than the
     /// changed-only filtered subset. Default `false` (per-file
@@ -395,7 +487,9 @@ pub fn eval_per_file<R: PerFileRule + ?Sized>(
             continue;
         }
         let full = ctx.root.join(&entry.path);
-        let Ok(bytes) = std::fs::read(&full) else {
+        // Skip a file larger than the analysis cap (index size, no extra
+        // stat) so a multi-GB blob can't OOM the run (M3).
+        let Some(bytes) = crate::walker::read_capped_or_skip(&full, entry.size) else {
             continue;
         };
         violations.extend(rule.evaluate_file(ctx, &entry.path, &bytes)?);
@@ -414,6 +508,12 @@ pub struct FixContext<'a> {
     /// `None` means no cap. Honored by the `read_for_fix` helper
     /// (and any custom fixer that opts in).
     pub fix_size_limit: Option<u64>,
+    /// The owning rule's resolved `allow_out_of_root:` permission (top-level
+    /// policy only — an `extends:`'d rule is always `false`). Fixers that
+    /// resolve a config-declared path (`file_create.path`, `content_from`)
+    /// MUST confine it to the repo root unless this is `true`, so an untrusted
+    /// ruleset can't make `alint fix` write or read outside the tree.
+    pub allow_out_of_root: bool,
 }
 
 /// The result of applying (or simulating) one fix against one violation.
@@ -429,6 +529,26 @@ pub enum FixOutcome {
     Skipped(String),
 }
 
+/// A proposed fix expressed as data, so a caller can turn it into an
+/// editor edit (an LSP `WorkspaceEdit`) instead of writing the file.
+/// Returned by [`Fixer::fix_edit`]. Paths are relative to the alint
+/// root, matching [`Violation::path`].
+///
+/// `fix_edit` is the non-writing sibling of [`Fixer::apply`]: `apply`
+/// mutates the filesystem (for `alint fix`); `fix_edit` describes the
+/// same change so the editor can apply it to the buffer (with undo).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FixEdit {
+    /// Replace the full contents of an existing file.
+    SetContent { path: PathBuf, content: Vec<u8> },
+    /// Create a file that doesn't exist yet.
+    CreateFile { path: PathBuf, content: Vec<u8> },
+    /// Delete a file.
+    DeleteFile { path: PathBuf },
+    /// Rename a file (same directory or not).
+    RenameFile { from: PathBuf, to: PathBuf },
+}
+
 /// A mechanical corrector for a specific rule's violations.
 pub trait Fixer: Send + Sync + std::fmt::Debug {
     /// Short human-readable summary of what this fixer does,
@@ -437,6 +557,25 @@ pub trait Fixer: Send + Sync + std::fmt::Debug {
 
     /// Apply the fix against a single violation.
     fn apply(&self, violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome>;
+
+    /// Express the fix for `violation` as a [`FixEdit`] without touching
+    /// the filesystem, given the current `bytes` of the violation's file
+    /// (empty for create-style fixers) and the workspace `root` (so
+    /// content sourced from a template can be read). Returns `None` when
+    /// the fixer has no editor-expressible form, or when there's nothing
+    /// to change.
+    ///
+    /// Used by the LSP server to offer an "Apply fix" code action as a
+    /// `WorkspaceEdit`. The default returns `None` — a fixer opts in by
+    /// overriding it. Implementations MUST NOT write to disk (reading a
+    /// declared template is allowed). Unlike [`apply`](Self::apply),
+    /// this is not `fix_size_limit`-guarded: the caller already holds
+    /// the bytes (an open editor buffer), so size is bounded by what the
+    /// editor opened.
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        let _ = (violation, bytes, root);
+        None
+    }
 }
 
 /// Result of [`read_for_fix`] — either the bytes of the file,
@@ -536,12 +675,40 @@ mod tests {
     }
 
     #[test]
+    fn new_partitions_notes_out_of_violations() {
+        let raw = vec![
+            Violation::new("real one"),
+            Violation::new("a skipped entry").as_note(),
+            Violation::new("real two"),
+        ];
+        let r = RuleResult::new("x".into(), Level::Error, None, raw, false);
+        assert_eq!(r.violations.len(), 2, "notes excluded from violations");
+        assert_eq!(r.notes.len(), 1);
+        assert_eq!(r.notes[0].message, "a skipped entry");
+        assert!(!r.passed(), "real violations present → not passed");
+
+        // A result whose only finding is a note passes (notes never
+        // affect pass/fail).
+        let only_notes = RuleResult::new(
+            "y".into(),
+            Level::Error,
+            None,
+            vec![Violation::new("just a note").as_note()],
+            false,
+        );
+        assert!(only_notes.passed(), "notes-only result passes");
+        assert!(only_notes.violations.is_empty());
+        assert_eq!(only_notes.notes.len(), 1);
+    }
+
+    #[test]
     fn rule_result_passed_iff_violations_empty() {
         let mut r = RuleResult {
             rule_id: "x".into(),
             level: Level::Error,
             policy_url: None,
             violations: Vec::new(),
+            notes: Vec::new(),
             is_fixable: false,
         };
         assert!(r.passed());
@@ -622,6 +789,7 @@ mod tests {
             root: dir.path(),
             dry_run: false,
             fix_size_limit: None,
+            allow_out_of_root: false,
         };
         let outcome = check_fix_size(&f, Path::new("a.txt"), &ctx).unwrap();
         assert!(outcome.is_none());
@@ -636,6 +804,7 @@ mod tests {
             root: dir.path(),
             dry_run: false,
             fix_size_limit: Some(64),
+            allow_out_of_root: false,
         };
         let outcome = check_fix_size(&f, Path::new("big.txt"), &ctx).unwrap();
         match outcome {
@@ -656,6 +825,7 @@ mod tests {
             root: dir.path(),
             dry_run: false,
             fix_size_limit: Some(1 << 20),
+            allow_out_of_root: false,
         };
         match read_for_fix(&f, Path::new("a.txt"), &ctx).unwrap() {
             ReadForFix::Bytes(b) => assert_eq!(b, b"hello"),
@@ -672,6 +842,7 @@ mod tests {
             root: dir.path(),
             dry_run: false,
             fix_size_limit: Some(64),
+            allow_out_of_root: false,
         };
         match read_for_fix(&f, Path::new("big.txt"), &ctx).unwrap() {
             ReadForFix::Skipped(FixOutcome::Skipped(_)) => {}

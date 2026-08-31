@@ -34,28 +34,36 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{Context, Error, Format, Level, Result, Rule, RuleSpec, Scope, Violation};
 use jsonschema::Validator;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::structured_path::Format;
+/// The `format:` override values for `json_schema_passes`. Distinct from
+/// `structured_path::Format` (which has `xml`, not `yml`): this validator targets
+/// json/yaml/toml documents and accepts `yml` as a `yaml` alias.
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum TargetFormat {
+    Json,
+    Yaml,
+    Yml,
+    Toml,
+}
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    /// Path to a JSON Schema file, relative to the lint root.
-    /// JSON only — even when validating YAML / TOML targets,
-    /// the schema document itself must be JSON. Most upstream
-    /// schemas (Cargo's, GitHub Actions') ship as JSON anyway.
+    /// Path to a JSON Schema file relative to the lint root. The schema must
+    /// itself be JSON even when validating YAML / TOML targets.
     schema_path: PathBuf,
-    /// Override the auto-detected target file format. One of
-    /// `json` / `yaml` / `toml`. When omitted, the format is
-    /// detected from the target file's extension; targets with
-    /// no detectable extension produce a per-file violation.
+    /// Override the auto-detected target format. When omitted, format is inferred
+    /// from each target file's extension (.json / .yaml / .yml / .toml).
     #[serde(default)]
-    format: Option<String>,
+    format: Option<TargetFormat>,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct JsonSchemaPassesRule {
@@ -65,6 +73,9 @@ pub struct JsonSchemaPassesRule {
     message: Option<String>,
     scope: Scope,
     schema_path: PathBuf,
+    /// Permit reading a `schema_path:` that escapes the repo root —
+    /// set post-build from the top-level `allow_out_of_root:` policy.
+    allow_out_of_root: bool,
     /// Explicit format, if the user passed `format:`. When
     /// `None`, the format is detected per-file from the
     /// extension.
@@ -78,12 +89,52 @@ pub struct JsonSchemaPassesRule {
 }
 
 impl Rule for JsonSchemaPassesRule {
+    /// Expose the per-file scope so the engine resolves this rule's
+    /// `scope_filter` (manifest sets, `changed_since:`) before dispatch and
+    /// can `--changed`-skip it (see `Rule::path_scope`).
+    fn path_scope(&self) -> Option<&Scope> {
+        Some(&self.scope)
+    }
+
     alint_core::rule_common_impl!();
+
+    fn set_allow_out_of_root(&mut self, allow: bool) {
+        self.allow_out_of_root = allow;
+    }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
 
-        let schema_abs = ctx.root.join(&self.schema_path);
+        // Confine the (config-author-controlled) schema path before any
+        // read: an absolute / `../../` `schema_path:` reads outside the
+        // repo root only when the user's top-level config opted this rule
+        // into `allow_out_of_root`.
+        let schema_rel = match crate::pathsafe::confine_read(
+            &self.schema_path,
+            ctx.root,
+            self.allow_out_of_root,
+        ) {
+            crate::pathsafe::Confined::In(p) => p,
+            crate::pathsafe::Confined::AllowedEscape(p) => {
+                violations.push(
+                    Violation::new(crate::pathsafe::out_of_root_note(&self.schema_path))
+                        .as_note()
+                        .with_path(self.schema_path.clone()),
+                );
+                p
+            }
+            crate::pathsafe::Confined::Denied => {
+                violations.push(
+                    Violation::new(format!(
+                        "schema path {} escapes the repo root",
+                        self.schema_path.display()
+                    ))
+                    .with_path(self.schema_path.clone()),
+                );
+                return Ok(violations);
+            }
+        };
+        let schema_abs = ctx.root.join(&schema_rel);
         let validator_res = self.compiled.get_or_init(|| compile_schema(&schema_abs));
         let validator = match validator_res {
             Ok(v) => v,
@@ -92,7 +143,12 @@ impl Rule for JsonSchemaPassesRule {
                 // violation, then we're done. Per-file
                 // validation against a broken schema would
                 // dump the same error N times.
-                violations.push(Violation::new(msg.clone()));
+                // No path (a repo-level schema-load failure) → a fixed key so
+                // the fingerprint doesn't fall through to the volatile message.
+                violations.push(
+                    Violation::new(msg.clone())
+                        .with_baseline_key("json-schema-passes-schema-unusable"),
+                );
                 return Ok(violations);
             }
         };
@@ -112,8 +168,8 @@ impl Rule for JsonSchemaPassesRule {
                     // candidate files).
                     violations.push(
                         Violation::new(format!(
-                            "file is too large to analyze ({n} bytes; {} MiB cap)",
-                            crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+                            "file is too large to analyze ({})",
+                            crate::io::over_cap(n),
                         ))
                         .with_path(entry.path.clone()),
                     );
@@ -156,7 +212,19 @@ impl Rule for JsonSchemaPassesRule {
                 // it via the `instance_path()` accessor method.
                 let detail = format!("schema violation at `{}`: {error}", error.instance_path());
                 let msg = self.message.clone().unwrap_or(detail);
-                violations.push(Violation::new(msg).with_path(entry.path.clone()));
+                // One document can fail N schema constraints; without a key the
+                // N path-only findings collapse to one fingerprint and a new
+                // schema violation would be masked. Key on the (data location,
+                // schema constraint) pair — stable and reword-proof.
+                violations.push(
+                    Violation::new(msg)
+                        .with_path(entry.path.clone())
+                        .with_baseline_key(format!(
+                            "schema\u{0}{}\u{0}{}",
+                            error.instance_path(),
+                            error.schema_path()
+                        )),
+                );
             }
         }
         Ok(violations)
@@ -166,9 +234,9 @@ impl Rule for JsonSchemaPassesRule {
 fn compile_schema(schema_abs: &std::path::Path) -> std::result::Result<Validator, String> {
     let bytes = crate::io::read_capped(schema_abs).map_err(|e| match e {
         crate::io::ReadCapError::TooLarge(n) => format!(
-            "schema {} is too large to read ({n} bytes; {} MiB cap)",
+            "schema {} is too large to read ({})",
             schema_abs.display(),
-            crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+            crate::io::over_cap(n),
         ),
         crate::io::ReadCapError::Io(e) => {
             format!("could not read schema {}: {e}", schema_abs.display())
@@ -192,18 +260,11 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .deserialize_options()
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
 
-    let format_override = match opts.format.as_deref() {
-        None => None,
-        Some("json") => Some(Format::Json),
-        Some("yaml" | "yml") => Some(Format::Yaml),
-        Some("toml") => Some(Format::Toml),
-        Some(other) => {
-            return Err(Error::rule_config(
-                &spec.id,
-                format!("unknown format `{other}`; expected json | yaml | toml"),
-            ));
-        }
-    };
+    let format_override = opts.format.map(|f| match f {
+        TargetFormat::Json => Format::Json,
+        TargetFormat::Yaml | TargetFormat::Yml => Format::Yaml,
+        TargetFormat::Toml => Format::Toml,
+    });
 
     if spec.fix.is_some() {
         return Err(Error::rule_config(
@@ -219,6 +280,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         message: spec.message.clone(),
         scope: Scope::from_spec(spec)?,
         schema_path: opts.schema_path,
+        allow_out_of_root: false,
         format_override,
         compiled: OnceLock::new(),
     }))
@@ -243,6 +305,65 @@ mod tests {
         let instance = json!({ "name": "alint" });
         let errors: Vec<_> = v.iter_errors(&instance).collect();
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn schema_path_escape_fires_without_reading() {
+        use crate::test_support::{ctx, tempdir_with_files};
+        // Security regression (v0.12 path-confinement): an absolute
+        // `schema_path:` must produce an "escapes the repo root"
+        // violation, never read/compile an out-of-tree file.
+        let r = JsonSchemaPassesRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::from_patterns(&["**/*.json".to_string()]).unwrap(),
+            schema_path: "/etc/hostname".into(),
+            allow_out_of_root: false,
+            format_override: None,
+            compiled: OnceLock::new(),
+        };
+        let (tmp, idx) = tempdir_with_files(&[("data.json", b"{}")]);
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
+    }
+
+    #[test]
+    fn schema_path_out_of_root_read_when_allowed() {
+        use crate::test_support::{ctx, tempdir_with_files};
+        // With `allow_out_of_root`, an absolute out-of-tree schema is
+        // read + compiled; the in-tree file validates and a note records
+        // the escape.
+        let ext = tempfile::tempdir().unwrap();
+        let schema = ext.path().join("schema.json");
+        std::fs::write(&schema, r#"{"type":"object"}"#).unwrap();
+        let r = JsonSchemaPassesRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::from_patterns(&["**/*.json".to_string()]).unwrap(),
+            schema_path: schema.clone(),
+            allow_out_of_root: true,
+            format_override: None,
+            compiled: OnceLock::new(),
+        };
+        let (tmp, idx) = tempdir_with_files(&[("data.json", b"{}")]);
+        let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(
+            v.iter().all(|x| x.is_note),
+            "only an out-of-root note: {v:?}"
+        );
+        assert!(
+            v.iter().any(|x| x.message.contains("allow_out_of_root")),
+            "{v:?}"
+        );
     }
 
     #[test]

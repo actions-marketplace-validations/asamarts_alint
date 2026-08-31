@@ -1,0 +1,125 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# PROPOSED alint config for swiftlang/swift
+# Pinned clone: swiftlang/swift @ 09dfb9b25be4a2a84e9a7d40b1128dd9cb8e7e55 (2026-06-01, depth 1).
+# Shape: Swift + C/C++ language/compiler monorepo, CMake build, Apple/swift.org governance.
+#
+# HOW THIS REPO ENFORCES VALIDATION (the key shape fact)
+# ------------------------------------------------------
+# swiftlang/swift has NO in-repo CI: there are NO .github/workflows, no GitLab/
+# Circle/Azure/Jenkins config in-tree, no pre-commit/husky/lefthook, no committed
+# git hooks, no Makefile/justfile/Taskfile, no package.json scripts. CI is
+# EXTERNAL: docs/ContinuousIntegration.md documents `@swift-ci Please <test>`
+# comment triggers that drive an off-repo Jenkins fleet. The only CI-documented
+# lint gate that maps to an in-repo script is `@swift-ci Please Python lint` ->
+# ./utils/python_lint.py (flake8 wrapper). Everything else enforced is a
+# documented REVIEW CONVENTION (CONTRIBUTING.md) or a build/test-execution check.
+#
+# THE ENFORCED ADDRESSABLE SURFACE IS THEREFORE TINY.
+# The single native-expressible enforced behavior is the source-file LICENSE
+# HEADER (CONTRIBUTING.md "Code Templates": every new source file must carry the
+# Swift.org Apache-2.0-with-Runtime-Library-Exception header). That is the A1
+# below. Almost everything else swift enforces is tool/build/AST/symbol-graph
+# execution (D) -- formatters, flake8, the C++/Swift compile, the test suites,
+# sanitizers, the freestanding-symbol allowlist, ABI symbol diffing -- which
+# alint can ORCHESTRATE via command kinds but does not itself express.
+#
+# Items below the "VALUE-ADD" divider are structure/coherence assertions swift
+# does NOT gate on; per the case-study protocol R3/R5 they are recorded as alint
+# value-add and are NOT in the coverage denominator.
+
+version: 1
+
+# Broken symlinks in this clone crash the tree walk. One is a deliberate test
+# fixture; the other (lib/ASTGen/_RegexParser_Sources) is a dangling symlink to
+# a sister repo only populated by `update-checkout` in a full build. Both are
+# ignored so `alint check` can walk the partial clone.
+ignore:
+  - "lib/ASTGen/_RegexParser_Sources"
+  - "test/CAS/Inputs/create-casfs/broken_symlink"
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════════
+  # A1 (ENFORCED). SOURCE-FILE LICENSE/COPYRIGHT HEADER.
+  # CONTRIBUTING.md "Code Templates": every new source file MUST start with
+  # the Swift.org header whose invariant line is
+  #   "This source file is part of the Swift.org open source project".
+  # This is the one enforced check that maps to a native alint kind. Scoped
+  # to lib/**/*.{cpp,h} (the hand-written compiler core) where it is clean:
+  # 966/970 lib/*.cpp already carry it. gyb-generated, vendored, and
+  # test-input trees are excluded (they stamp their own / no header).
+  # ════════════════════════════════════════════════════════════════════
+  - id: swift-license-header-cxx
+    kind: file_header
+    paths:
+      include: ["lib/**/*.cpp", "lib/**/*.h", "include/swift/**/*.h"]
+      exclude:
+        - "**/*.def"
+        - "**/*.gyb"
+        - "**/*.inc"
+    pattern: 'This source file is part of the Swift\.org open source project'
+    lines: 12
+    level: warning
+    message: >-
+      Every hand-written Swift/C/C++ source file MUST begin with the
+      canonical Swift.org header (Apache License v2.0 with Runtime Library
+      Exception; see CONTRIBUTING.md "Code Templates"). Generated (.def /
+      .gyb / .inc) files are excluded.
+
+  # ────────────────────────────────────────────────────────────────────
+  # VALUE-ADD (NOT enforced by the repo; excluded from the coverage ratio
+  # per R3/R5). Structure + config-policy assertions alint can add for free.
+  # ────────────────────────────────────────────────────────────────────
+
+  # The convention/metadata anchors the project keeps but does not gate on.
+  - id: swift-contributing-exists
+    kind: file_exists
+    paths: ["CONTRIBUTING.md"]
+    root_only: true
+    level: warning
+    message: "CONTRIBUTING.md carries the enforced review conventions (headers, code review, testing)."
+
+  - id: swift-license-file-present
+    kind: file_content_matches
+    paths: ["LICENSE.txt"]
+    pattern: 'Apache License,?\s*Version 2'
+    level: error
+    message: "LICENSE.txt must carry the Apache-2.0 text (Runtime Library Exception variant)."
+
+  # NOTE: .github/CODEOWNERS is NOT at repo root, so `root_only` would make
+  # this match nothing and falsely report "missing"; pathed without root_only.
+  - id: swift-codeowners-present
+    kind: file_exists
+    paths: [".github/CODEOWNERS"]
+    level: warning
+    message: "The component-ownership map (.github/CODEOWNERS) gates review routing."
+
+  # .editorconfig POLICY assertion: the repo declares 2-space indent +
+  # final-newline but enforces it only via editors. alint can assert the
+  # declaration exists (config-policy, value-add).
+  - id: swift-editorconfig-declares-final-newline
+    kind: file_content_matches
+    paths: [".editorconfig"]
+    pattern: 'insert_final_newline\s*=\s*true'
+    level: info
+    message: ".editorconfig should keep declaring insert_final_newline = true."
+
+  # .clang-format POLICY assertion: C/C++ style is LLVM-based.
+  - id: swift-clang-format-llvm-base
+    kind: file_content_matches
+    paths: [".clang-format"]
+    pattern: 'BasedOnStyle:\s*LLVM'
+    level: info
+    message: "C/C++ formatting policy is BasedOnStyle: LLVM."
+
+  # The .gitattributes gyb-language mapping the repo relies on for GitHub
+  # language stats / diff behaviour.
+  - id: swift-gitattributes-gyb-mapping
+    kind: file_content_matches
+    paths: [".gitattributes"]
+    pattern: 'linguist-language=Swift'
+    level: info
+    message: ".gitattributes maps *.swift.gyb to Swift for linguist."

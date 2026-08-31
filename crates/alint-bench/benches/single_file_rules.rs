@@ -7,6 +7,7 @@
 //! from disk — `tempfile` materialisation noise is unavoidable.
 
 use std::io::Write;
+use std::path::Path;
 
 use alint_core::{Engine, Rule, WalkOptions, walk};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -179,6 +180,62 @@ rules:
     );
 }
 
+/// A realistic multi-rule per-file config: four content rules sharing
+/// one `src/**/*.rs` scope. Used by the reeval-vs-full comparison so the
+/// per-call cost reflects more than a single rule.
+const MULTI_RULE_YAML: &str = r#"
+version: 1
+rules:
+  - id: requires-spdx
+    kind: file_content_matches
+    paths: "src/**/*.rs"
+    pattern: "SPDX-License-Identifier"
+    level: warning
+  - id: no-todo
+    kind: file_content_forbidden
+    paths: "src/**/*.rs"
+    pattern: '\bTODO\b'
+    level: warning
+  - id: clean-tail
+    kind: no_trailing_whitespace
+    paths: "src/**/*.rs"
+    level: warning
+  - id: trailing-nl
+    kind: final_newline
+    paths: "src/**/*.rs"
+    level: warning
+"#;
+
+/// The single-file hot path (`Engine::run_for_file`, the v0.11 LSP
+/// per-keystroke path) vs a full `Engine::run`, at growing workspace
+/// sizes. `run_for_file` should stay roughly flat as the tree grows
+/// (it evaluates one file) while the full run scales with file count —
+/// this group makes that ratio visible on the diff.
+fn reeval_vs_full(c: &mut Criterion) {
+    let mut group = c.benchmark_group("single_file/reeval_vs_full");
+    let target = Path::new("src/m0/file_0.rs");
+    for &n in &[1_000usize, 10_000] {
+        let tmp = make_tree(n, FIXTURE_RS);
+        let index = walk(tmp.path(), &WalkOptions::default()).expect("walk");
+        let engine = build_engine(MULTI_RULE_YAML);
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_with_input(BenchmarkId::new("full_run", n), &index, |b, idx| {
+            b.iter(|| engine.run(tmp.path(), idx).unwrap());
+        });
+        // One file regardless of `n` — the whole point of the hot path.
+        group.throughput(Throughput::Elements(1));
+        group.bench_with_input(BenchmarkId::new("run_for_file", n), &index, |b, idx| {
+            b.iter(|| {
+                engine
+                    .run_for_file(tmp.path(), idx, target, FIXTURE_RS)
+                    .unwrap()
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     file_content_matches,
@@ -189,5 +246,6 @@ criterion_group!(
     file_is_text,
     no_trailing_whitespace,
     final_newline,
+    reeval_vs_full,
 );
 criterion_main!(benches);

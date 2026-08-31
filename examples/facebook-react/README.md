@@ -518,3 +518,19 @@ Three concrete unanalyzed angles for a future revalidation pass:
   bundled-only pass) on `/tmp/react`'s 6,878-file tree (v0.9.17 numbers;
   v0.9.20's width-aware human output and message audits do not
   materially affect walk timing)
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (82 rules, ~77% coverage). +4 surfaces: cross_file_value_equals
+natively replaces version-check.js (the exact primitive the old example
+flagged as a non-replaceable node shell-out) plus a new
+ReactVersions.js <-> ReactVersion.js sync, registry_paths_resolve resolves
+the package.json `files` tarball allow-list, and generated_file_fresh
+covers extract-errors codes.json freshness. Residual: N-in-1 set membership
+(every thrown Error literal in codes.json) and an append-only registry kind.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 3).

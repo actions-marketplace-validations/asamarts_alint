@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -57,6 +57,25 @@ pub struct Config {
     /// configs themselves cannot spawn further nested discovery.
     #[serde(default)]
     pub nested_configs: bool,
+    /// Resolved `allow_out_of_root:` policy — which rules may read a
+    /// config-declared path that escapes the repo root. Set by the
+    /// loader's `finalize()` from the user's *top-level* config only
+    /// (rejected from `extends:`); `#[serde(skip)]` so a directly
+    /// deserialized or bundled `Config` can never set it. Default
+    /// [`AllowOutOfRoot::Confined`]. See
+    /// `docs/design/v0.12/allow_out_of_root.md`.
+    #[serde(skip)]
+    pub allow_out_of_root: AllowOutOfRoot,
+    /// Resolved `baseline:` path — the committed baseline file that `check`
+    /// suppresses against when no `--baseline` flag is given (the flag
+    /// overrides it). Like `allow_out_of_root`, set by the loader from the
+    /// user's *top-level* config only (rejected from `extends:` and nested
+    /// configs); `#[serde(skip)]` so a bundled/inherited `Config` can never
+    /// carry it. A trusted top-level input like `-c`, resolved relative to the
+    /// repo root and not subject to read-path confinement. See
+    /// `docs/design/baseline.md` §2.3.
+    #[serde(skip)]
+    pub baseline: Option<PathBuf>,
 }
 
 // Returning `Option<u64>` (rather than bare `u64`) keeps the
@@ -75,6 +94,82 @@ fn default_respect_gitignore() -> bool {
 
 impl Config {
     pub const CURRENT_VERSION: u32 = 1;
+}
+
+/// Which rules may *read* a config-declared path that escapes the
+/// repo root — the parsed form of the top-level `allow_out_of_root:`
+/// key. Default [`Confined`](Self::Confined) (hard confinement, the
+/// secure default). Honored only from the user's own top-level config;
+/// the loader rejects it from any `extends:`'d ruleset (the same trust
+/// model as the spawning-rule gate). See
+/// `docs/design/v0.12/allow_out_of_root.md`.
+///
+/// YAML forms: `true` (all rules), or `{ kinds: [...], rules: [...] }`
+/// (a rule is permitted if its kind or id is listed). Absent / `false`
+/// → `Confined`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AllowOutOfRoot {
+    /// No rule may read outside the repo root (default).
+    #[default]
+    Confined,
+    /// Every rule may (`allow_out_of_root: true`).
+    All,
+    /// Only rules whose `kind` ∈ `kinds` or `id` ∈ `rules` may.
+    Selective {
+        kinds: HashSet<String>,
+        rules: HashSet<String>,
+    },
+}
+
+impl AllowOutOfRoot {
+    /// Whether a rule with this `id` / `kind` may read out of root.
+    #[must_use]
+    pub fn allows(&self, id: &str, kind: &str) -> bool {
+        match self {
+            Self::Confined => false,
+            Self::All => true,
+            Self::Selective { kinds, rules } => kinds.contains(kind) || rules.contains(id),
+        }
+    }
+
+    /// `true` when nothing is permitted (the default). The `extends:`
+    /// trust gate rejects an inherited ruleset whose value is not this.
+    #[must_use]
+    pub fn is_confined(&self) -> bool {
+        matches!(self, Self::Confined)
+    }
+}
+
+impl<'de> Deserialize<'de> for AllowOutOfRoot {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SelectiveSpec {
+            #[serde(default)]
+            kinds: Vec<String>,
+            #[serde(default)]
+            rules: Vec<String>,
+        }
+        #[derive(Deserialize)]
+        #[serde(
+            untagged,
+            expecting = "a boolean, or a map with optional `kinds` and `rules` lists"
+        )]
+        enum Raw {
+            Flag(bool),
+            Selective(SelectiveSpec),
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Flag(true) => Self::All,
+            Raw::Flag(false) => Self::Confined,
+            Raw::Selective(s) => Self::Selective {
+                kinds: s.kinds.into_iter().collect(),
+                rules: s.rules.into_iter().collect(),
+            },
+        })
+    }
 }
 
 /// A single `extends:` entry. Accepts either a bare string (the
@@ -97,7 +192,10 @@ impl Config {
 /// unknown rule id is a config error so typos surface at load
 /// time.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a URL or path string, or a `{ url, only?, except? }` map"
+)]
 pub enum ExtendsEntry {
     Url(String),
     Filtered {
@@ -144,7 +242,10 @@ impl ExtendsEntry {
 /// For the include/exclude form, each field accepts either a single string
 /// or a list of strings.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a glob string, a list of globs, or an `{ include, exclude }` map"
+)]
 pub enum PathsSpec {
     Single(String),
     Many(Vec<String>),
@@ -156,12 +257,67 @@ pub enum PathsSpec {
     },
 }
 
+impl PathsSpec {
+    /// Split a raw pattern list into `(include, exclude)` exactly as the scope
+    /// matcher does (`Scope::from_patterns`): a leading `!` marks an exclusion,
+    /// with the `!` stripped. Keeps `alint explain` honest about a rule that
+    /// uses inline negations (`paths: ["src/**", "!src/tests/**"]`).
+    fn split_patterns(patterns: &[String]) -> (Vec<String>, Vec<String>) {
+        let mut include = Vec::new();
+        let mut exclude = Vec::new();
+        for p in patterns {
+            if let Some(rest) = p.strip_prefix('!') {
+                exclude.push(rest.to_string());
+            } else {
+                include.push(p.clone());
+            }
+        }
+        (include, exclude)
+    }
+
+    /// Normalised `(include, exclude)` glob lists, for machine output. Mirrors
+    /// how `Scope::from_paths_spec` classifies each form, so inline `!`
+    /// negations report as excludes rather than includes.
+    #[must_use]
+    pub fn include_exclude(&self) -> (Vec<String>, Vec<String>) {
+        match self {
+            PathsSpec::Single(s) => Self::split_patterns(std::slice::from_ref(s)),
+            PathsSpec::Many(v) => Self::split_patterns(v),
+            PathsSpec::IncludeExclude { include, exclude } => {
+                // The include list may itself carry `!` negations (the matcher
+                // folds them in); split it, then append the explicit excludes.
+                let (inc, mut exc) = Self::split_patterns(include);
+                exc.extend(exclude.iter().cloned());
+                (inc, exc)
+            }
+        }
+    }
+
+    /// Human-readable one-line rendering of the scope, for `alint explain`.
+    /// Built from [`include_exclude`](Self::include_exclude) so it classifies
+    /// inline `!` negations the same way the matcher does.
+    #[must_use]
+    pub fn render_scope(&self) -> String {
+        let (include, exclude) = self.include_exclude();
+        let inc = if include.is_empty() {
+            "**".to_string()
+        } else {
+            include.join(", ")
+        };
+        if exclude.is_empty() {
+            inc
+        } else {
+            format!("{inc}  (excluding {})", exclude.join(", "))
+        }
+    }
+}
+
 fn string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     #[derive(Deserialize)]
-    #[serde(untagged)]
+    #[serde(untagged, expecting = "a string, or a list of strings")]
     enum OneOrMany {
         One(String),
         Many(Vec<String>),
@@ -193,41 +349,16 @@ pub struct RuleSpec {
     /// at build time.
     #[serde(default)]
     pub fix: Option<FixSpec>,
-    /// Restrict the rule to files / directories tracked in git's index.
-    /// When `true`, the rule's `paths`-matched entries are intersected
-    /// with the set of git-tracked files; entries that exist in the
-    /// walked tree but aren't in `git ls-files` output are skipped.
-    /// Only meaningful for rule kinds that opt in (currently the
-    /// existence family — `file_exists`, `file_absent`, `dir_exists`,
-    /// `dir_absent`); rule kinds that don't support it surface a clean
-    /// config error when this is `true` so silent mis-configuration
-    /// doesn't slip through.
-    ///
-    /// Default `false`. Has no effect outside a git repo.
-    #[serde(default)]
-    pub git_tracked_only: bool,
-    /// Per-rule override for the workspace-level
-    /// `respect_gitignore:` setting. When `Some(false)`, this
-    /// rule treats `.gitignore`-listed files as if they were
-    /// untracked-but-on-disk: the rule sees them. The canonical
-    /// use case is the bazel-style "tracked AND gitignored"
-    /// pattern (a file like `.bazelversion` ships a default
-    /// upstream and contributors override it locally without
-    /// committing the override) — the workspace walker honours
-    /// the gitignore, so `file_exists` reports "no match"
-    /// against a file that's both on disk AND in `git ls-files`.
-    /// This per-rule knob lets that single rule see the file
-    /// without flipping the workspace-wide setting.
-    ///
-    /// Currently honoured by `file_exists` for literal-path
-    /// patterns (the common case the pitfall surfaced). Other
-    /// rule kinds + glob patterns fall through to the workspace
-    /// setting; future versions will broaden coverage.
-    ///
-    /// Default `None` (inherit the workspace `respect_gitignore`).
-    /// See `docs/development/CONFIG-AUTHORING.md` pitfall #18.
-    #[serde(default)]
-    pub respect_gitignore: Option<bool>,
+    // Neither `git_tracked_only` nor `respect_gitignore` is a RuleSpec field:
+    // both are kind-specific options (ADR-0008). `git_tracked_only` lives in
+    // each existence kind's `Options` struct (`file_exists`/`file_absent`/
+    // `dir_exists`/`dir_absent`) — the engine reads it via the
+    // `Rule::git_tracked_mode()` trait method, never a RuleSpec field.
+    // `respect_gitignore` lives only in `file_exists`'s `Options` — the sole
+    // kind that honours a per-rule override (the bazel-style "tracked AND
+    // gitignored" pitfall #18). Keeping both off `rule_common` means a rule of
+    // any other kind that sets either is rejected at load by
+    // `deny_unknown_fields`, rather than silently ignored.
     /// Per-file ancestor-manifest gate. When set, the rule
     /// only fires on files that have at least one ancestor
     /// directory (including the file's own directory)
@@ -253,7 +384,10 @@ pub struct RuleSpec {
 /// The `fix:` block on a rule. Exactly one op key must be present —
 /// alint errors at load time when the op and rule kind are incompatible.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[serde(
+    untagged,
+    expecting = "a map with exactly one fix op (e.g. `file_create`, `file_remove`, `file_prepend`)"
+)]
 pub enum FixSpec {
     FileCreate {
         file_create: FileCreateFixSpec,
@@ -454,9 +588,9 @@ pub struct FileNormalizeLineEndingsFixSpec {}
 pub struct FileStripBidiFixSpec {}
 
 /// Empty marker. Behavior: remove every zero-width character
-/// (U+200B / U+200C / U+200D / U+FEFF) from the file's content,
-/// *except* a leading BOM (U+FEFF at position 0) — that's the
-/// responsibility of the `no_bom` rule.
+/// (U+200B / U+200C / U+200D / U+2060 / U+180E / U+FEFF) from the
+/// file's content, *except* a leading BOM (U+FEFF at position 0) —
+/// that's the responsibility of the `no_bom` rule.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct FileStripZeroWidthFixSpec {}
@@ -485,6 +619,20 @@ impl RuleSpec {
         Ok(serde_yaml_ng::from_value(serde_yaml_ng::Value::Mapping(
             self.extra.clone(),
         ))?)
+    }
+
+    /// Reject any leftover option key on this spec — for rule kinds that take
+    /// NO kind-specific options. Option-bearing kinds reject unknown fields via
+    /// their `deserialize_options::<Options>()` (a `deny_unknown_fields`
+    /// struct); this is the equivalent loud failure for option-less kinds,
+    /// used by `RuleRegistry::register_optionless`. Without it, a typo'd option
+    /// on an option-less rule silently no-ops.
+    pub fn deny_unknown_options(&self) -> crate::error::Result<()> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct NoOptions {}
+        self.deserialize_options::<NoOptions>()
+            .map(|_: NoOptions| ())
     }
 
     /// Parse and validate this spec's optional `scope_filter:`
@@ -618,15 +766,32 @@ impl NestedRuleSpec {
             policy_url: self.policy_url.clone(),
             when: self.when.clone(),
             fix: None,
-            // Nested rules don't currently expose
-            // `git_tracked_only` or `respect_gitignore` from their
-            // parent's spec — both options are meaningful on
-            // top-level rules only for now. If/when `for_each_dir`'s
-            // nested rules need either, plumb them through here.
-            git_tracked_only: false,
-            respect_gitignore: None,
+            // `git_tracked_only` and `respect_gitignore` are both kind-specific
+            // options now (ADR-0008), stripped from the nested `extra` via
+            // PARENT_FIELDS below, so a nested existence rule doesn't silently
+            // inherit either. If/when nested rules need one, drop it from
+            // PARENT_FIELDS and let it flow into the leaf's option set.
             scope_filter: self.scope_filter.clone(),
-            extra: crate::template::render_mapping(self.extra.clone(), tokens),
+            // `NestedRuleSpec` doesn't name `id`/`level` (synthesized from the
+            // parent) or the top-level-only `fix`/git toggles, so a nested
+            // config that supplies them leaves them in `extra`. Strip them
+            // before they reach the leaf rule's option set — they are not
+            // options, and would otherwise trip the leaf's unknown-option
+            // validation (a deny-unknown-fields `Options` struct, or an
+            // option-less rule's `deny_unknown_options`).
+            extra: {
+                const PARENT_FIELDS: &[&str] = &[
+                    "id",
+                    "level",
+                    "fix",
+                    "git_tracked_only",
+                    "respect_gitignore",
+                ];
+                crate::template::render_mapping(self.extra.clone(), tokens)
+                    .into_iter()
+                    .filter(|(k, _)| k.as_str().is_none_or(|s| !PARENT_FIELDS.contains(&s)))
+                    .collect()
+            },
         }
     }
 }
@@ -636,6 +801,75 @@ mod tests {
     use super::*;
     use crate::template::PathTokens;
     use std::path::Path;
+
+    #[test]
+    fn allow_out_of_root_policy_resolves() {
+        assert!(!AllowOutOfRoot::Confined.allows("r", "k"));
+        assert!(AllowOutOfRoot::All.allows("r", "k"));
+        let sel = AllowOutOfRoot::Selective {
+            kinds: ["json_schema_passes".to_string()].into_iter().collect(),
+            rules: ["my-rule".to_string()].into_iter().collect(),
+        };
+        assert!(sel.allows("anything", "json_schema_passes"), "by kind");
+        assert!(sel.allows("my-rule", "other_kind"), "by id");
+        assert!(!sel.allows("nope", "other_kind"), "neither id nor kind");
+        assert!(AllowOutOfRoot::Confined.is_confined());
+        assert!(!AllowOutOfRoot::All.is_confined());
+    }
+
+    #[test]
+    fn allow_out_of_root_deserializes_bool_and_map() {
+        let t: AllowOutOfRoot = serde_yaml_ng::from_str("true").unwrap();
+        assert_eq!(t, AllowOutOfRoot::All);
+        let f: AllowOutOfRoot = serde_yaml_ng::from_str("false").unwrap();
+        assert_eq!(f, AllowOutOfRoot::Confined);
+        let m: AllowOutOfRoot = serde_yaml_ng::from_str("kinds: [pair_hash]\nrules: [x]").unwrap();
+        match m {
+            AllowOutOfRoot::Selective { kinds, rules } => {
+                assert!(kinds.contains("pair_hash"));
+                assert!(rules.contains("x"));
+            }
+            other => panic!("expected Selective, got {other:?}"),
+        }
+        // an unknown key in the map form is rejected with a message that names
+        // the accepted forms, not the internal untagged-enum type.
+        let err = serde_yaml_ng::from_str::<AllowOutOfRoot>("bogus: 1").unwrap_err();
+        assert!(
+            err.to_string().contains("a boolean, or a map"),
+            "expected a friendly message, got: {err}"
+        );
+        assert!(
+            !err.to_string().contains("Raw"),
+            "message leaks the internal enum name: {err}"
+        );
+    }
+
+    #[test]
+    fn untagged_config_enums_name_accepted_forms_not_internal_type() {
+        // A value matching no variant reports the accepted forms (via
+        // `#[serde(expecting)]`), never the internal untagged-enum type name.
+        let p = serde_yaml_ng::from_str::<PathsSpec>("42")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            p.contains("a glob string") && !p.contains("PathsSpec"),
+            "PathsSpec: {p}"
+        );
+        let e = serde_yaml_ng::from_str::<ExtendsEntry>("42")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("a URL or path") && !e.contains("ExtendsEntry"),
+            "ExtendsEntry: {e}"
+        );
+        let f = serde_yaml_ng::from_str::<FixSpec>("42")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            f.contains("exactly one fix op") && !f.contains("FixSpec"),
+            "FixSpec: {f}"
+        );
+    }
 
     #[test]
     fn config_default_respects_gitignore_and_caps_fix_size() {
@@ -721,6 +955,42 @@ mod tests {
         };
         assert_eq!(include, vec!["a"]);
         assert_eq!(exclude, vec!["b", "c"]);
+    }
+
+    #[test]
+    fn paths_spec_include_exclude_classifies_negations() {
+        let inc = |s: &str| vec![s.to_string()];
+
+        // A leading `!` marks an exclusion (matching `Scope::from_patterns`),
+        // not an include — `explain` must not mislabel it.
+        let single = PathsSpec::Single("src/**".to_string());
+        assert_eq!(single.include_exclude(), (inc("src/**"), Vec::new()));
+
+        let many = PathsSpec::Many(vec!["src/**".to_string(), "!src/vendor/**".to_string()]);
+        assert_eq!(
+            many.include_exclude(),
+            (inc("src/**"), inc("src/vendor/**"))
+        );
+        assert_eq!(many.render_scope(), "src/**  (excluding src/vendor/**)");
+
+        // Explicit include/exclude, plus a `!` inside the include list: both
+        // land in the exclude bucket (mirroring `from_paths_spec`).
+        let inc_exc = PathsSpec::IncludeExclude {
+            include: vec!["a/**".to_string(), "!a/gen/**".to_string()],
+            exclude: vec!["a/test/**".to_string()],
+        };
+        assert_eq!(
+            inc_exc.include_exclude(),
+            (
+                inc("a/**"),
+                vec!["a/gen/**".to_string(), "a/test/**".to_string()],
+            )
+        );
+
+        // An exclusion-only Single renders as match-all minus the exclude.
+        let excl_only = PathsSpec::Single("!dist/**".to_string());
+        assert_eq!(excl_only.include_exclude(), (Vec::new(), inc("dist/**")));
+        assert_eq!(excl_only.render_scope(), "**  (excluding dist/**)");
     }
 
     #[test]
@@ -828,8 +1098,15 @@ mod tests {
             other => panic!("unexpected paths shape: {other:?}"),
         }
         assert_eq!(spec.message.as_deref(), Some("missing in packages/foo"));
-        // Nested rules don't propagate git_tracked_only — the
-        // option is meaningful on top-level rules only.
-        assert!(!spec.git_tracked_only);
+        // Nested rules don't propagate git_tracked_only: it is a kind-specific
+        // option (ADR-0008) stripped from the nested `extra` via PARENT_FIELDS,
+        // so it never reaches the leaf rule's options.
+        assert!(
+            !spec
+                .extra
+                .keys()
+                .any(|k| k.as_str() == Some("git_tracked_only")),
+            "git_tracked_only should be stripped from nested extra"
+        );
     }
 }

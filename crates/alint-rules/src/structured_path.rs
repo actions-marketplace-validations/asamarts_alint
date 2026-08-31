@@ -1,8 +1,8 @@
 //! Structured-query rule family:
-//! `{json,yaml,toml,xml}_path_{equals,matches}`.
+//! `{json,yaml,toml,xml}_path_{equals,matches,absent}`.
 //!
-//! Eight rule kinds share a single implementation that varies
-//! along two axes:
+//! The eight value-checking kinds (`equals` / `matches`) share a
+//! single implementation that varies along two axes:
 //!
 //! - **Format** — `Json`, `Yaml`, `Toml`, or `Xml`. The file is
 //!   parsed into a `serde_json::Value` tree regardless (YAML and
@@ -40,6 +40,16 @@
 //! pinned to a commit SHA" (a workflow with only `run:` steps
 //! has no `uses:` at all and shouldn't be flagged).
 //!
+//! ## `{json,yaml,toml,xml}_path_absent`
+//!
+//! A third op — **existence** — mirrors `file_absent` for a path:
+//! the query must select *nothing*, and any match produces exactly
+//! one file-level violation (never per-match, so a `$[?…]` filter
+//! that fans out over every root key still yields one violation).
+//! `equals` / `matches` / `if_present` don't apply. Shipped for all
+//! four formats, kept symmetric with `equals`/`matches` by the
+//! `structured_family_is_symmetric` test.
+//!
 //! Unparseable files (bad JSON / YAML / TOML, not-well-formed
 //! XML) produce one violation per file. An unparseable file is a
 //! documentation problem, not the structured rule's concern —
@@ -48,7 +58,7 @@
 use std::path::{Path, PathBuf};
 
 use alint_core::{
-    Context, Error, Level, PathsSpec, PerFileRule, Result, Rule, RuleSpec, Scope, Violation,
+    Context, Error, Format, Level, PathsSpec, PerFileRule, Result, Rule, RuleSpec, Scope, Violation,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -86,51 +96,6 @@ fn extract_literal_paths(spec: &PathsSpec) -> Option<Vec<PathBuf>> {
     }
 }
 
-/// Which YAML-flavoured parser to use on the target file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Format {
-    Json,
-    Yaml,
-    Toml,
-    Xml,
-}
-
-impl Format {
-    pub(crate) fn parse(self, text: &str) -> std::result::Result<Value, String> {
-        match self {
-            Self::Json => serde_json::from_str(text).map_err(|e| e.to_string()),
-            Self::Yaml => serde_yaml_ng::from_str(text).map_err(|e| e.to_string()),
-            Self::Toml => toml::from_str(text).map_err(|e| e.to_string()),
-            Self::Xml => xml_to_value(text),
-        }
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Json => "JSON",
-            Self::Yaml => "YAML",
-            Self::Toml => "TOML",
-            Self::Xml => "XML",
-        }
-    }
-
-    /// Detect the format from a path's extension. Returns `None`
-    /// for unknown extensions; callers decide how to fall back
-    /// (require an explicit `format:` override, default to JSON,
-    /// emit a per-file violation, etc).
-    pub(crate) fn detect_from_path(path: &std::path::Path) -> Option<Self> {
-        match path.extension()?.to_str()? {
-            "json" => Some(Self::Json),
-            "yaml" | "yml" => Some(Self::Yaml),
-            "toml" => Some(Self::Toml),
-            "xml" | "csproj" | "props" | "targets" | "vbproj" | "fsproj" | "nuspec" => {
-                Some(Self::Xml)
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Comparison op — keeps the rule builders thin.
 #[derive(Debug)]
 pub enum Op {
@@ -142,6 +107,12 @@ pub enum Op {
     /// A non-string match produces a violation with a clear
     /// `expected string, got <kind>` message.
     Matches(Regex),
+    /// Existence assertion: the query must match **nothing**. Any
+    /// match produces exactly one file-level violation (no per-match
+    /// value check). Resolved early in `evaluate_file`; the per-match
+    /// helpers (`check_match`, `match_baseline_key`) are never reached
+    /// with this variant.
+    Absent,
 }
 
 // ---------------------------------------------------------------
@@ -149,23 +120,66 @@ pub enum Op {
 // ---------------------------------------------------------------
 
 /// Options shared by every `*_path_equals` rule kind.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct EqualsOptions {
+    /// `JSONPath` expression rooted at `$`. Supports dot-access (`$.foo.bar`),
+    /// array index (`$.deps[0]`), wildcards (`$.deps[*]`), filters, and every
+    /// other RFC 9535 construct.
     path: String,
+    /// Expected value. Any JSON type (string, number, boolean, null, array, object).
     equals: Value,
+    /// When true, a query returning zero matches is silently OK - only real
+    /// matches that fail the op produce violations.
     #[serde(default)]
     if_present: bool,
 }
 
 /// Options shared by every `*_path_matches` rule kind.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct MatchesOptions {
+    /// `JSONPath` expression rooted at `$`.
     path: String,
+    /// Rust-regex pattern to match against the value at `path`.
     matches: String,
+    /// When true, a query returning zero matches is silently OK - only real
+    /// matches that fail the op produce violations.
     #[serde(default)]
     if_present: bool,
+}
+
+/// schemars-derived options schema for the four `*_path_equals` kinds; composed
+/// into their `$defs` branches by `xtask gen-schema`. See
+/// [`crate::migrated_option_schemas`].
+#[must_use]
+pub fn equals_options_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(EqualsOptions))
+        .expect("EqualsOptions JSON schema serializes")
+}
+
+/// schemars-derived options schema for the four `*_path_matches` kinds.
+#[must_use]
+pub fn matches_options_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(MatchesOptions))
+        .expect("MatchesOptions JSON schema serializes")
+}
+
+/// Options for the `*_path_absent` kinds. Existence-only: there is no value to
+/// compare and no `if_present` (the rule *is* a presence check).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AbsentOptions {
+    /// `JSONPath` expression rooted at `$`. The rule fires one violation per
+    /// file if the query matches any node (the path must be absent).
+    path: String,
+}
+
+/// schemars-derived options schema for the `*_path_absent` kinds.
+#[must_use]
+pub fn absent_options_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(AbsentOptions))
+        .expect("AbsentOptions JSON schema serializes")
 }
 
 // ---------------------------------------------------------------
@@ -234,7 +248,9 @@ impl Rule for StructuredPathRule {
                     continue;
                 }
                 let full = ctx.root.join(literal);
-                let Ok(bytes) = std::fs::read(&full) else {
+                // Cap the read so a multi-GB file matched here can't OOM the
+                // run; over-cap or unreadable → skip (M3).
+                let Ok(bytes) = crate::io::read_capped(&full) else {
                     continue;
                 };
                 violations.extend(self.evaluate_file(ctx, literal, &bytes)?);
@@ -245,9 +261,9 @@ impl Rule for StructuredPathRule {
                     continue;
                 }
                 let full = ctx.root.join(&entry.path);
-                let Ok(bytes) = std::fs::read(&full) else {
-                    // permission / race — silent skip, like other
-                    // content rules
+                // Cap the read (multi-GB OOM guard, M3); permission / race /
+                // over-cap → silent skip, like other content rules.
+                let Ok(bytes) = crate::io::read_capped(&full) else {
                     continue;
                 };
                 violations.extend(self.evaluate_file(ctx, &entry.path, &bytes)?);
@@ -288,6 +304,25 @@ impl PerFileRule for StructuredPathRule {
             }
         };
         let matches = self.path_expr.query(&root_value);
+        // Existence assertion: the query must select nothing. Any match is
+        // exactly one file-level violation -- never per-match, so a `$[?...]`
+        // filter that fans out over every root key still yields one violation.
+        if matches!(self.op, Op::Absent) {
+            if matches.is_empty() {
+                return Ok(Vec::new());
+            }
+            let msg = self.message.clone().unwrap_or_else(|| {
+                format!(
+                    "JSONPath `{}` matched, but this rule requires it to be absent",
+                    self.path_src
+                )
+            });
+            return Ok(vec![
+                Violation::new(msg)
+                    .with_path(std::sync::Arc::<Path>::from(path))
+                    .with_baseline_key(format!("{}\u{0}absent", self.path_src)),
+            ]);
+        }
         if matches.is_empty() {
             if self.if_present {
                 return Ok(Vec::new());
@@ -304,16 +339,50 @@ impl PerFileRule for StructuredPathRule {
         for m in matches.iter() {
             if let Some(v) = check_match(m, &self.op) {
                 let base = self.message.clone().unwrap_or(v);
-                violations.push(Violation::new(base).with_path(std::sync::Arc::<Path>::from(path)));
+                // Baseline identity: the query + operator + the specific
+                // matched value. One JSONPath can match N nodes (e.g.
+                // `$.scripts[*]`), so without a key the N path-only
+                // violations would collapse to one fingerprint and mask a
+                // genuinely new failing node; and a reworded `message:`
+                // must not churn the baseline. (v3 audit, §2.4.)
+                violations.push(
+                    Violation::new(base)
+                        .with_path(std::sync::Arc::<Path>::from(path))
+                        .with_baseline_key(match_baseline_key(&self.path_src, &self.op, m)),
+                );
             }
         }
         Ok(violations)
     }
 }
 
+/// A reword-proof baseline identity for one failing match: the query source,
+/// the operator (with its expected value / regex), and the specific matched
+/// value. Distinct failing nodes from one query get distinct keys (no
+/// masking); two nodes that fail with the *same* value collapse to a count
+/// (legitimate). Independent of the rendered `message`, so a reword is inert.
+///
+/// The value is rendered in **full** (not `short_render`, which truncates at
+/// 80 chars for human messages): a truncated value would collapse two distinct
+/// long values sharing an 80-char prefix into one fingerprint — a masking bug.
+/// `Value`'s `Display` is compact JSON with control characters escaped, so a
+/// value can never contain a literal `\0` and forge the NUL separators.
+fn match_baseline_key(path_src: &str, op: &Op, m: &Value) -> String {
+    let op_descr = match op {
+        Op::Equals(expected) => format!("== {expected}"),
+        Op::Matches(re) => format!("=~ {}", re.as_str()),
+        // Unreached: `Absent` violations are file-level (built in `evaluate_file`).
+        Op::Absent => "absent".to_string(),
+    };
+    format!("{path_src}\u{0}{op_descr}\u{0}got {m}")
+}
+
 /// Return `Some(message)` if the match fails the op; `None` if it passes.
 fn check_match(m: &Value, op: &Op) -> Option<String> {
     match op {
+        // `Absent` is resolved file-level in `evaluate_file` and never reaches
+        // the per-match loop; a stray call is a pass.
+        Op::Absent => None,
         Op::Equals(expected) => {
             if m == expected {
                 None
@@ -349,10 +418,17 @@ fn check_match(m: &Value, op: &Op) -> Option<String> {
 /// dumping a whole object when the mismatch is on a sub-key.
 fn short_render(v: &Value) -> String {
     let raw = v.to_string();
-    if raw.len() <= 80 {
-        raw
-    } else {
-        format!("{}…", &raw[..80])
+    // Truncate on a char boundary, not a byte index: `raw` is the JSON
+    // rendering of an untrusted matched value (serde_json does not escape
+    // non-ASCII), so a fixed byte slice `&raw[..80]` can split a multibyte
+    // codepoint and panic. With no catch_unwind on the per-file path that
+    // aborts the whole parallel `check` run (and the LSP server).
+    // `char_indices().nth(80)` yields the byte offset of the 81st char:
+    // `None` (≤ 80 chars) returns the string whole; otherwise we slice at
+    // that guaranteed-valid boundary.
+    match raw.char_indices().nth(80) {
+        None => raw,
+        Some((boundary, _)) => format!("{}…", &raw[..boundary]),
     }
 }
 
@@ -365,98 +441,6 @@ fn kind_name(v: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
-}
-
-// ---------------------------------------------------------------
-// XML → serde_json::Value
-//
-// xmltodict-style convention so the JSONPath a user writes reads
-// like the XML they see. Full rationale + false-positive surface:
-// `docs/design/v0.10/xml_path.md`.
-// ---------------------------------------------------------------
-
-/// Maximum XML element-nesting depth `xml_to_value` will
-/// descend. Real config/manifest XML (`.csproj`, `pom.xml`, …)
-/// is a handful of levels deep; 256 is far beyond any real
-/// manifest yet far below the recursion depth that would
-/// overflow the stack. A document nested deeper is rejected as a
-/// parse error (one per-file violation via the existing
-/// parse-error path) rather than recursed into — a crafted or
-/// accidental deeply-nested file must never abort the run. The
-/// other formats' parsers carry their own internal recursion
-/// limits; this is the XML arm's equivalent.
-const MAX_XML_DEPTH: usize = 256;
-
-/// Parse XML into the same `serde_json::Value` tree the rest of
-/// the family queries. The document maps to
-/// `{ <root-element-name>: <root value> }` so the root element is
-/// the first `JSONPath` segment (`$.Project…`, `$.project…`).
-fn xml_to_value(text: &str) -> std::result::Result<Value, String> {
-    let doc = roxmltree::Document::parse(text).map_err(|e| e.to_string())?;
-    let root = doc.root_element();
-    let mut obj = serde_json::Map::new();
-    obj.insert(
-        root.tag_name().name().to_owned(),
-        element_to_value(root, 0)?,
-    );
-    Ok(Value::Object(obj))
-}
-
-/// One element → its `Value`. Attributes become `@name` keys;
-/// repeated child elements of the same (local) name become a JSON
-/// array in document order; loose text becomes `#text` when the
-/// element also has attributes/children, or *is* the value when
-/// the element is a pure leaf. Empty element → `null`. Namespaces
-/// are flattened to the local name (Open question 1 in the design
-/// doc). `depth` bounds recursion at `MAX_XML_DEPTH`: past the
-/// bound it returns `Err` (surfaced as one parse-error violation
-/// via the caller) instead of recursing into a stack abort.
-fn element_to_value(node: roxmltree::Node, depth: usize) -> std::result::Result<Value, String> {
-    if depth >= MAX_XML_DEPTH {
-        return Err(format!(
-            "XML nesting exceeds the maximum supported depth ({MAX_XML_DEPTH})"
-        ));
-    }
-    let mut obj = serde_json::Map::new();
-    for attr in node.attributes() {
-        obj.insert(
-            format!("@{}", attr.name()),
-            Value::String(attr.value().to_owned()),
-        );
-    }
-    let mut has_child_elem = false;
-    for child in node.children().filter(roxmltree::Node::is_element) {
-        has_child_elem = true;
-        let name = child.tag_name().name().to_owned();
-        let val = element_to_value(child, depth + 1)?;
-        match obj.get_mut(&name) {
-            Some(Value::Array(arr)) => arr.push(val),
-            Some(slot) => {
-                let prev = slot.take();
-                *slot = Value::Array(vec![prev, val]);
-            }
-            None => {
-                obj.insert(name, val);
-            }
-        }
-    }
-    let text: String = node
-        .children()
-        .filter(roxmltree::Node::is_text)
-        .filter_map(|n| n.text())
-        .collect();
-    let text = text.trim();
-    if obj.is_empty() && !has_child_elem {
-        return Ok(if text.is_empty() {
-            Value::Null
-        } else {
-            Value::String(text.to_owned())
-        });
-    }
-    if !text.is_empty() {
-        obj.insert("#text".to_owned(), Value::String(text.to_owned()));
-    }
-    Ok(Value::Object(obj))
 }
 
 // ---------------------------------------------------------------
@@ -497,6 +481,50 @@ pub fn xml_path_equals_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 
 pub fn xml_path_matches_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     build_matches(spec, Format::Xml, "xml_path_matches")
+}
+
+pub fn json_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_absent(spec, Format::Json, "json_path_absent")
+}
+
+pub fn yaml_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_absent(spec, Format::Yaml, "yaml_path_absent")
+}
+
+pub fn toml_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_absent(spec, Format::Toml, "toml_path_absent")
+}
+
+pub fn xml_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_absent(spec, Format::Xml, "xml_path_absent")
+}
+
+fn build_absent(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Box<dyn Rule>> {
+    let paths = spec.paths.as_ref().ok_or_else(|| {
+        Error::rule_config(&spec.id, format!("{kind_label} requires a `paths` field"))
+    })?;
+    let opts: AbsentOptions = spec
+        .deserialize_options()
+        .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
+    let path_expr = JsonPath::parse(&opts.path).map_err(|e| {
+        Error::rule_config(
+            &spec.id,
+            alint_core::jsonpath_diagnostics::format_parse_error(&opts.path, e),
+        )
+    })?;
+    Ok(Box::new(StructuredPathRule {
+        id: spec.id.clone(),
+        level: spec.level,
+        policy_url: spec.policy_url.clone(),
+        message: spec.message.clone(),
+        scope: Scope::from_spec(spec)?,
+        literal_paths: extract_literal_paths(paths),
+        format,
+        path_expr,
+        path_src: opts.path,
+        op: Op::Absent,
+        if_present: false,
+    }))
 }
 
 fn build_equals(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Box<dyn Rule>> {
@@ -562,6 +590,20 @@ fn build_matches(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Bo
 mod tests {
     use super::*;
     use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
+
+    #[test]
+    fn short_render_truncates_on_a_char_boundary_without_panicking() {
+        // Regression: `short_render` byte-sliced `&raw[..80]`, which panics
+        // when an untrusted matched value puts a multibyte codepoint across
+        // byte 80 — crashing the whole parallel run (and the LSP). 78 ASCII
+        // + `é`s: serde_json quotes the string, so the byte-80 boundary
+        // lands mid-`é`. Must truncate (with the ellipsis), not abort.
+        let value = Value::String(format!("{}{}", "a".repeat(78), "é".repeat(8)));
+        let rendered = short_render(&value);
+        assert!(rendered.ends_with('…'), "expected truncation: {rendered}");
+        // A short non-ASCII value is returned whole (quoted JSON rendering).
+        assert_eq!(short_render(&Value::String("café".to_string())), "\"café\"");
+    }
 
     // ─── build-path errors ────────────────────────────────────
 
@@ -751,6 +793,90 @@ mod tests {
         assert!(v.is_empty(), "bracket notation should match: {v:?}");
     }
 
+    // ─── yaml_path_absent ────────────────────────────────────
+
+    #[test]
+    fn yaml_path_absent_passes_when_query_matches_nothing() {
+        // The path the rule forbids isn't there -> pass.
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: yaml_path_absent\n\
+             paths: \".github/workflows/*.yml\"\n\
+             path: \"$.permissions\"\n\
+             level: error\n",
+        );
+        let rule = yaml_path_absent_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[(
+            ".github/workflows/ci.yml",
+            b"name: CI\non: push\njobs: {}\n",
+        )]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(v.is_empty(), "absent path should pass: {v:?}");
+    }
+
+    #[test]
+    fn yaml_path_absent_fires_once_when_query_matches() {
+        // The forbidden path exists -> exactly one file-level violation.
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: yaml_path_absent\n\
+             paths: \".github/workflows/*.yml\"\n\
+             path: \"$.permissions\"\n\
+             level: error\n",
+        );
+        let rule = yaml_path_absent_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[(
+            ".github/workflows/ci.yml",
+            b"name: CI\npermissions: write-all\non: push\njobs: {}\n",
+        )]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(v.len(), 1, "present path should fire once: {v:?}");
+    }
+
+    #[test]
+    fn yaml_path_absent_filter_fanout_collapses_to_one_violation() {
+        // A root-level filter `$[?…]` selects *every* top-level key when the
+        // predicate holds (N nodes). Absent-mode must still yield exactly ONE
+        // file-level violation -- this is the whole point of the kind (vs. a
+        // `yaml_path_equals` + sentinel filter, which fans out to N warnings).
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: yaml_path_absent\n\
+             paths: \"w.yml\"\n\
+             path: \"$[?($.permissions == 'write-all')]\"\n\
+             level: error\n",
+        );
+        let rule = yaml_path_absent_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[(
+            "w.yml",
+            b"name: CI\npermissions: write-all\non: push\njobs: {}\n",
+        )]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "filter fan-out must collapse to one file-level violation: {v:?}"
+        );
+    }
+
+    #[test]
+    fn yaml_path_absent_rejects_value_and_if_present_options() {
+        // `if_present` / `equals` / `matches` are not valid on an absent rule
+        // (deny_unknown_fields).
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: yaml_path_absent\n\
+             paths: \"w.yml\"\n\
+             path: \"$.x\"\n\
+             if_present: true\n\
+             level: error\n",
+        );
+        assert!(
+            yaml_path_absent_build(&spec).is_err(),
+            "if_present must be rejected on yaml_path_absent"
+        );
+    }
+
     // ─── toml_path_* ─────────────────────────────────────────
 
     #[test]
@@ -934,7 +1060,7 @@ mod tests {
         // whole process. The `MAX_XML_DEPTH` guard must instead
         // yield exactly one ordinary parse-error violation for
         // the file (no panic, no abort, per-file contained).
-        let depth = MAX_XML_DEPTH + 50;
+        let depth = alint_core::MAX_XML_DEPTH + 50;
         let xml = format!("{}deep{}", "<a>".repeat(depth), "</a>".repeat(depth));
         let spec = spec_yaml(
             "id: t\n\
@@ -955,6 +1081,60 @@ mod tests {
         assert!(
             v[0].message.contains("not a valid XML") && v[0].message.contains("depth"),
             "expected a depth parse-error message, got: {}",
+            v[0].message
+        );
+    }
+
+    #[test]
+    fn xml_depth_beyond_parse_recursion_limit_is_rejected_pre_parse_not_aborted() {
+        // The MAX_XML_DEPTH guard above is POST-parse; a document deep enough to
+        // overflow `roxmltree::Document::parse` itself (tens of thousands of
+        // levels) aborts the whole process before that guard runs. The pre-parse
+        // `xml_depth_within_limit` scan must reject it as an ordinary parse error.
+        // (Without the pre-scan this test would SIGABRT the whole test binary.)
+        let depth = 100_000;
+        let xml = format!("{}deep{}", "<a>".repeat(depth), "</a>".repeat(depth));
+        let spec = spec_yaml(
+            "id: t\nkind: xml_path_equals\npaths: \"deep.xml\"\n\
+             path: \"$.a\"\nequals: \"x\"\nlevel: error\n",
+        );
+        let rule = xml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[("deep.xml", xml.as_bytes())]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "must be one contained parse-error, no abort: {v:?}"
+        );
+        assert!(v[0].message.contains("depth"), "{}", v[0].message);
+    }
+
+    #[test]
+    fn yaml_flow_depth_bomb_is_rejected_pre_parse_not_hung() {
+        // W2 wiring regression: a `yaml_path_*` rule over a deeply-nested FLOW
+        // document (`[[[…`) must be rejected as a contained parse-error, not fed
+        // to libyaml (which is super-linear on flow nesting and would hang the
+        // run). This exercises the `flow_depth_within_limit` guard *at its
+        // structured-query call site* — the yaml_depth unit tests only cover the
+        // scanner in isolation, so without this a deleted guard here would pass
+        // CI while reopening the DoS.
+        let depth = 5000;
+        let yaml = format!("x: {}1{}", "[".repeat(depth), "]".repeat(depth));
+        let spec = spec_yaml(
+            "id: t\nkind: yaml_path_equals\npaths: \"bomb.yml\"\n\
+             path: \"$.x\"\nequals: \"1\"\nlevel: error\n",
+        );
+        let rule = yaml_path_equals_build(&spec).unwrap();
+        let (tmp, idx) = tempdir_with_files(&[("bomb.yml", yaml.as_bytes())]);
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "must be one contained parse-error, no hang: {v:?}"
+        );
+        assert!(
+            v[0].message.contains("depth"),
+            "the flow-depth guard message should mention depth: {}",
             v[0].message
         );
     }

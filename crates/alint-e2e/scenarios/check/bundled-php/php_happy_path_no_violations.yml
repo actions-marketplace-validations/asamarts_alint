@@ -1,0 +1,37 @@
+name: alint://bundled/php passes a well-formed Composer package
+tags: [check, extends, bundled, php]
+
+# A PHP repo (composer.json present → facts.has_php true) whose
+# autoload roots, autoload-dev files, and console binary all
+# resolve, with a valid `vendor/package` name and no committed
+# vendor/. Every rule is silent.
+
+given:
+  tree:
+    composer.json: |
+      {
+        "name": "acme/widget",
+        "license": "MIT",
+        "require": { "php": "^8.1" },
+        "autoload": {
+          "psr-4": { "Acme\\Widget\\": "src/" },
+          "files": ["src/helpers.php"]
+        },
+        "autoload-dev": { "files": ["tests/bootstrap.php"] },
+        "bin": ["bin/widget"]
+      }
+    src:
+      "helpers.php": "<?php\n"
+    tests:
+      "bootstrap.php": "<?php\n"
+    bin:
+      "widget": "#!/usr/bin/env php\n<?php\n"
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/php@v1
+
+when: [check]
+
+expect:
+  - violations: []

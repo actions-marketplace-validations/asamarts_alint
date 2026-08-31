@@ -1,0 +1,159 @@
+==== det_check v0.11.0 vs HEAD — 17:10:39Z ====
+HEAD=7146aec9  v0.11.0=93a64e87
+[17:10:39Z] building HEAD release alint...
+[17:10:39Z] HEAD    = alint 0.12.0 (2d400c839017, built 2026-06-08)
+[17:10:39Z] adding worktree @ v0.11.0...
+[17:10:41Z] building v0.11.0 release alint (fresh target)...
+[17:16:48Z] v0.11.0 = alint 0.11.0 (5d57b60bdc71, built 2026-06-08)
+[17:16:48Z] smoke-checking v0.11.0 understands the s12 config...
+  v0.11.0 check rc=0 (config parsed; exit is just findings)
+[17:16:48Z] benching v0.11.0 under valgrind (save-baseline=v0110)...
+[17:18:37Z] v0.11.0 bench rc=0
+[17:18:37Z] benching HEAD under valgrind (baseline=v0110)...
+[17:20:27Z] HEAD bench rc=0
+
+==== DONE — 17:20:28Z ====
+----------- HEAD vs v0.11.0 — full det_check comparison -----------
+    Finished `bench` profile [optimized + debuginfo] target(s) in 0.11s
+     Running benches/det_check.rs (target/release/deps/det_check-b4eebeea43739f38)
+det_check::check_grp::check s1_1k:(materialize("s1", S1, 1_000)) -> crates/alint-ben...
+  Baselines:                               |v0110
+  Instructions:                    39439884|39677598             (-0.59911%) [-1.00603x]
+  L1 Hits:                         54764349|55157495             (-0.71277%) [-1.00718x]
+  LL Hits:                           206015|214193               (-3.81805%) [-1.03970x]
+  RAM Hits:                           50659|50931                (-0.53406%) [-1.00537x]
+  Total read+write:                55021023|55422619             (-0.72461%) [-1.00730x]
+  Estimated Cycles:                57567489|58011045             (-0.76461%) [-1.00770x]
+  Bc:                               6811754|6906961              (-1.37842%) [-1.01398x]
+  Bcm:                               290345|279435               (+3.90431%) [+1.03904x]
+  Bi:                                307009|307363               (-0.11517%) [-1.00115x]
+  Bim:                                36318|27338                (+32.8481%) [+1.32848x]
+det_check::check_grp::check s1_10k:(materialize("s1", S1, 10_000)) -> crates/alint-be...
+  Baselines:                               |v0110
+  Instructions:                   323713659|321922662            (+0.55634%) [+1.00556x]
+  L1 Hits:                        449130696|446583636            (+0.57034%) [+1.00570x]
+  LL Hits:                          1235519|1290905              (-4.29048%) [-1.04483x]
+  RAM Hits:                           81256|80833                (+0.52330%) [+1.00523x]
+  Total read+write:               450447471|447955374            (+0.55633%) [+1.00556x]
+  Estimated Cycles:               458152251|455867316            (+0.50123%) [+1.00501x]
+  Bc:                              58698081|58316479             (+0.65436%) [+1.00654x]
+  Bcm:                              2158779|2079745              (+3.80018%) [+1.03800x]
+  Bi:                               2589366|2569638              (+0.76773%) [+1.00768x]
+  Bim:                               188420|108656               (+73.4097%) [+1.73410x]
+Performance has regressed: Bim (108656 -> 188420) regressed by +73.4097% (>+50.0000%)
+det_check::check_grp::check s2_1k:(materialize("s2", S2, 1_000)) -> crates/alint-ben...
+  Baselines:                               |v0110
+  Instructions:                    50383167|50196928             (+0.37102%) [+1.00371x]
+  L1 Hits:                         69439052|69190883             (+0.35867%) [+1.00359x]
+  LL Hits:                           336283|371177               (-9.40091%) [-1.10376x]
+  RAM Hits:                           77475|76812                (+0.86315%) [+1.00863x]
+  Total read+write:                69852810|69638872             (+0.30721%) [+1.00307x]
+  Estimated Cycles:                73832092|73735188             (+0.13142%) [+1.00131x]
+  Bc:                               8402061|8383634              (+0.21980%) [+1.00220x]
+  Bcm:                               334783|324729               (+3.09612%) [+1.03096x]
+  Bi:                                344816|342498               (+0.67679%) [+1.00677x]
+  Bim:                                49613|36836                (+34.6862%) [+1.34686x]
+det_check::check_grp::check s2_10k:(materialize("s2", S2, 10_000)) -> crates/alint-be...
+  Baselines:                               |v0110
+  Instructions:                   377244954|376064237            (+0.31397%) [+1.00314x]
+  L1 Hits:                        518264736|516281676            (+0.38410%) [+1.00384x]
+  LL Hits:                          2263960|2517237              (-10.0617%) [-1.11187x]
+  RAM Hits:                          193893|190513               (+1.77416%) [+1.01774x]
+  Total read+write:               520722589|518989426            (+0.33395%) [+1.00334x]
+  Estimated Cycles:               536370791|535535816            (+0.15591%) [+1.00156x]
+  Bc:                              66279429|66140456             (+0.21012%) [+1.00210x]
+  Bcm:                              2401179|2357088              (+1.87057%) [+1.01871x]
+  Bi:                               2724380|2717490              (+0.25354%) [+1.00254x]
+  Bim:                               242002|117689               (+105.628%) [+2.05628x]
+Performance has regressed: Bim (117689 -> 242002) regressed by +105.628% (>+50.0000%)
+det_check::check_grp::check s6_1k:(materialize("s6", S6, 1_000)) -> crates/alint-ben...
+  Baselines:                               |v0110
+  Instructions:                   172107395|171812982            (+0.17136%) [+1.00171x]
+  L1 Hits:                        218842312|218228401            (+0.28132%) [+1.00281x]
+  LL Hits:                           477993|514824               (-7.15410%) [-1.07705x]
+  RAM Hits:                           91968|91336                (+0.69195%) [+1.00692x]
+  Total read+write:               219412273|218834561            (+0.26399%) [+1.00264x]
+  Estimated Cycles:               224451157|223999281            (+0.20173%) [+1.00202x]
+  Bc:                              35704707|35583417             (+0.34086%) [+1.00341x]
+  Bcm:                              1061221|984141               (+7.83221%) [+1.07832x]
+  Bi:                               1193022|1192176              (+0.07096%) [+1.00071x]
+  Bim:                               243445|219054               (+11.1347%) [+1.11135x]
+det_check::check_grp::check s6_10k:(materialize("s6", S6, 10_000)) -> crates/alint-be...
+  Baselines:                               |v0110
+  Instructions:                  1766648362|1765270569           (+0.07805%) [+1.00078x]
+  L1 Hits:                       2234818256|2232524385           (+0.10275%) [+1.00103x]
+  LL Hits:                          3637542|4091548              (-11.0962%) [-1.12481x]
+  RAM Hits:                          505080|496126               (+1.80478%) [+1.01805x]
+  Total read+write:              2238960878|2237112059           (+0.08264%) [+1.00083x]
+  Estimated Cycles:              2270683766|2270346535           (+0.01485%) [+1.00015x]
+  Bc:                             374008116|373806746            (+0.05387%) [+1.00054x]
+  Bcm:                             10862814|10082590             (+7.73833%) [+1.07738x]
+  Bi:                              12411089|12396519             (+0.11753%) [+1.00118x]
+  Bim:                              2397519|2148861              (+11.5716%) [+1.11572x]
+det_check::check_grp::check s7_1k:(materialize("s7", S7, 1_000)) -> crates/alint-ben...
+  Baselines:                               |v0110
+  Instructions:                    68534497|68082116             (+0.66446%) [+1.00664x]
+  L1 Hits:                         94624458|94009694             (+0.65394%) [+1.00654x]
+  LL Hits:                           596651|602635               (-0.99297%) [-1.01003x]
+  RAM Hits:                           55818|56851                (-1.81703%) [-1.01851x]
+  Total read+write:                95276927|94669180             (+0.64197%) [+1.00642x]
+  Estimated Cycles:                99561343|99012654             (+0.55416%) [+1.00554x]
+  Bc:                              11147260|11045210             (+0.92393%) [+1.00924x]
+  Bcm:                               543598|534352               (+1.73032%) [+1.01730x]
+  Bi:                                495666|493304               (+0.47881%) [+1.00479x]
+  Bim:                                93477|86070                (+8.60579%) [+1.08606x]
+det_check::check_grp::check s7_10k:(materialize("s7", S7, 10_000)) -> crates/alint-be...
+  Baselines:                               |v0110
+  Instructions:                   484825443|483651651            (+0.24269%) [+1.00243x]
+  L1 Hits:                        664037834|662296206            (+0.26297%) [+1.00263x]
+  LL Hits:                          3777409|3909641              (-3.38220%) [-1.03501x]
+  RAM Hits:                           94616|95200                (-0.61345%) [-1.00617x]
+  Total read+write:               667909859|666301047            (+0.24145%) [+1.00241x]
+  Estimated Cycles:               686236439|685176411            (+0.15471%) [+1.00155x]
+  Bc:                              86388910|86254044             (+0.15636%) [+1.00156x]
+  Bcm:                              3463327|3425562              (+1.10245%) [+1.01102x]
+  Bi:                               3469037|3455348              (+0.39617%) [+1.00396x]
+  Bim:                               404387|331392               (+22.0268%) [+1.22027x]
+det_check::check_grp::check s12_1k:(materialize("s12", S12, 1_000)) -> crates/alint-b...
+  Baselines:                               |v0110
+  Instructions:                    64601820|64137657             (+0.72370%) [+1.00724x]
+  L1 Hits:                         90120261|89367882             (+0.84189%) [+1.00842x]
+  LL Hits:                           420112|425579               (-1.28460%) [-1.01301x]
+  RAM Hits:                           84064|81996                (+2.52207%) [+1.02522x]
+  Total read+write:                90624437|89875457             (+0.83335%) [+1.00833x]
+  Estimated Cycles:                95163061|94365637             (+0.84504%) [+1.00845x]
+  Bc:                              11157852|11030366             (+1.15577%) [+1.01156x]
+  Bcm:                               453295|427052               (+6.14515%) [+1.06145x]
+  Bi:                                472522|470633               (+0.40137%) [+1.00401x]
+  Bim:                                88246|43364                (+103.501%) [+2.03501x]
+Performance has regressed: Bim (43364 -> 88246) regressed by +103.501% (>+50.0000%)
+det_check::check_grp::check s12_10k:(materialize("s12", S12, 10_000)) -> crates/alint-...
+  Baselines:                               |v0110
+  Instructions:                   526209255|524423005            (+0.34061%) [+1.00341x]
+  L1 Hits:                        731274519|728445365            (+0.38838%) [+1.00388x]
+  LL Hits:                          2703689|2705081              (-0.05146%) [-1.00051x]
+  RAM Hits:                          200285|201133               (-0.42161%) [-1.00423x]
+  Total read+write:               734178493|731351579            (+0.38653%) [+1.00387x]
+  Estimated Cycles:               751802939|749010425            (+0.37283%) [+1.00373x]
+  Bc:                              92434359|92030635             (+0.43868%) [+1.00439x]
+  Bcm:                              3575189|3269048              (+9.36484%) [+1.09365x]
+  Bi:                               3956440|3945984              (+0.26498%) [+1.00265x]
+  Bim:                               672571|212377               (+216.687%) [+3.16687x]
+Performance has regressed: Bim (212377 -> 672571) regressed by +216.687% (>+50.0000%)
+
+Regressions:
+
+  det_check::check_grp::check s1_10k:
+    Callgrind: Bim (108656 -> 188420): +73.4097% exceeds limit of +50.0000%
+  det_check::check_grp::check s2_10k:
+    Callgrind: Bim (117689 -> 242002): +105.628% exceeds limit of +50.0000%
+  det_check::check_grp::check s12_1k:
+    Callgrind: Bim (43364 -> 88246): +103.501% exceeds limit of +50.0000%
+  det_check::check_grp::check s12_10k:
+    Callgrind: Bim (212377 -> 672571): +216.687% exceeds limit of +50.0000%
+
+Gungraun result: Regressed. 6 without regressions; 4 regressed; 0 filtered; 10 benchmarks finished in 109.271s
+error: bench failed, to rerun pass `-p alint-bench --bench det_check`
+
+Caused by:
+  process didn't exit successfully: `/home/kaminsod/projects/alint/target/release/deps/det_check-b4eebeea43739f38 --baseline=v0110 --bench` (exit status: 3)

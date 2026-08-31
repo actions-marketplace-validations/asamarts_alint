@@ -54,6 +54,7 @@ const SCENARIO_S10: &str = include_str!("scenarios/s10_scope_filter_outside_per_
 const SCENARIO_S11: &str = include_str!("scenarios/s11_v010_cross_file.yml");
 const SCENARIO_S12: &str = include_str!("scenarios/s12_v010_per_file.yml");
 const SCENARIO_S13: &str = include_str!("scenarios/s13_v010_single_shot.yml");
+const SCENARIO_S14: &str = include_str!("scenarios/s14_v012_featureset.yml");
 
 /// Parameters parsed from CLI flags. Defaults pick the
 /// "publish-grade run" — full size matrix (excluding 1m), all
@@ -163,6 +164,14 @@ pub enum Scenario {
     ///   so the row measures `crate::spawn::run_capturing`, not
     ///   the user's tool. Needs a `.gff_target` overlay file.
     S13,
+    /// v0.12 net-new featureset (comprehensive) — one deliberately-
+    /// mixed scenario over the regular tree exercising every v0.12
+    /// file-shape kind/mode: `file_graph` (`no_dangling` over
+    /// `from_content` + over `derive_target`), `for_each_match`,
+    /// `cross_file` glob-union `source.files`, markerless
+    /// `ordered_block`, and `generated_file_fresh` mutating mode.
+    /// Needs a `.v012_editions` overlay (see `setup_overlay`).
+    S14,
 }
 
 impl Scenario {
@@ -181,7 +190,8 @@ impl Scenario {
             "S11" => Ok(Self::S11),
             "S12" => Ok(Self::S12),
             "S13" => Ok(Self::S13),
-            other => bail!("unknown scenario {other:?}; expected one of S1..S13"),
+            "S14" => Ok(Self::S14),
+            other => bail!("unknown scenario {other:?}; expected one of S1..S14"),
         }
     }
 
@@ -200,6 +210,7 @@ impl Scenario {
             Self::S11 => "S11",
             Self::S12 => "S12",
             Self::S13 => "S13",
+            Self::S14 => "S14",
         }
     }
 
@@ -230,6 +241,9 @@ impl Scenario {
             Self::S13 => {
                 "v0.10 single-shot (generated_file_fresh / command_idempotent, command=[\"true\"])"
             }
+            Self::S14 => {
+                "v0.12 net-new featureset (file_graph no_dangling [from_content + derive_target] / for_each_match / cross_file glob-union / markerless ordered_block / generated_file_fresh mutating)"
+            }
         }
     }
 
@@ -248,6 +262,7 @@ impl Scenario {
             Self::S11 => SCENARIO_S11,
             Self::S12 => SCENARIO_S12,
             Self::S13 => SCENARIO_S13,
+            Self::S14 => SCENARIO_S14,
         }
     }
 
@@ -292,6 +307,7 @@ impl Scenario {
             Self::S11,
             Self::S12,
             Self::S13,
+            Self::S14,
         ]
     }
 
@@ -301,7 +317,7 @@ impl Scenario {
     /// data files the config references). Called once per
     /// scenario per size, paired with [`Scenario::teardown_overlay`]
     /// so the overlay never persists across scenarios that share
-    /// the regular tree. No-op for S1..S10; S11/S12/S13 each
+    /// the regular tree. No-op for S1..S10; S11/S12/S13/S14 each
     /// write a tiny, deterministic fixture.
     pub fn setup_overlay(self, root: &Path) -> Result<()> {
         match self {
@@ -328,6 +344,29 @@ impl Scenario {
             .with_context(|| format!("writing S12 sample.csproj to {}", root.display()))?,
             Self::S13 => std::fs::write(root.join(".gff_target"), b"")
                 .with_context(|| format!("writing S13 .gff_target to {}", root.display()))?,
+            Self::S14 => {
+                // The single value every member crate's edition unions
+                // to, so the glob-union `set_equals` rule stays silent.
+                std::fs::write(root.join(".v012_editions"), "2024\n")
+                    .with_context(|| format!("writing S14 .v012_editions to {}", root.display()))?;
+                // A small fixed CYCLIC file_graph so the `acyclic` rule
+                // exercises the cycle-detection DFS + edge resolution —
+                // the synthetic lorem `.rs` form an EMPTY graph, so the
+                // traversal code would otherwise never run. 24 nodes in
+                // one ring: g{i} -> g{(i+1) % 24}. The one cycle is a
+                // deterministic violation (like S11's pair_hash).
+                let graph = root.join("graph");
+                std::fs::create_dir_all(&graph)
+                    .with_context(|| format!("creating S14 graph/ in {}", root.display()))?;
+                for i in 0u32..24 {
+                    let next = (i + 1) % 24;
+                    std::fs::write(
+                        graph.join(format!("g{i:02}.rs")),
+                        format!("// dep: graph/g{next:02}.rs\n"),
+                    )
+                    .with_context(|| format!("writing S14 graph/g{i:02}.rs"))?;
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -342,6 +381,7 @@ impl Scenario {
             Self::S11 => Some(root.join("manifest.sha256")),
             Self::S12 => Some(root.join("sample.csproj")),
             Self::S13 => Some(root.join(".gff_target")),
+            Self::S14 => Some(root.join(".v012_editions")),
             _ => None,
         };
         if let Some(p) = path {
@@ -350,6 +390,17 @@ impl Scenario {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => {
                     return Err(e).with_context(|| format!("removing overlay {}", p.display()));
+                }
+            }
+        }
+        // S14 also writes a `graph/` subtree (the cyclic file_graph).
+        if self == Self::S14 {
+            match std::fs::remove_dir_all(root.join("graph")) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(e)
+                        .with_context(|| format!("removing S14 graph/ in {}", root.display()));
                 }
             }
         }
@@ -515,7 +566,7 @@ mod tests {
     }
 
     /// `Scenario::all()` must enumerate every variant — the
-    /// `parse` / `label` match arms cover S1..S13, so `all()`
+    /// `parse` / `label` match arms cover S1..S14, so `all()`
     /// must too. Detects "added an enum variant, forgot to
     /// update `all()`".
     #[test]

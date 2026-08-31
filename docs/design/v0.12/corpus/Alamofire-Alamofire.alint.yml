@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Proposed alint config for Alamofire/Alamofire @ 7595cbcf (v0.12 case study).
+#
+# IMPORTANT — the enforced surface:
+#   Alamofire's ENFORCED validation surface is two D non-goals: the multi-
+#   platform xcodebuild/swift-test matrix ("the package builds + tests pass")
+#   and CodeQL static security analysis. There are NO shell validators, hooks,
+#   pre-commit, Makefile/Rakefile, codegen-freshness diff, format/lint gate,
+#   version-coherence gate, or structural-invariant gate. So the *enforced*
+#   addressable (A/B/C) surface is EMPTY (A=B=C=0); coverage_today is 0/0.
+#
+#   Everything below is alint VALUE-ADD (R3/R5): structure alint can assert
+#   but that the repo does NOT gate on. It is recorded separately, NOT in the
+#   coverage denominator. It is included here so the kinds can be validated
+#   against the pinned clone (R4) and to show the config alint WOULD add.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+vars:
+  pod_version: "5.12.0"
+
+rules:
+  # ── VALUE-ADD: per-file MIT header convention ──────────────────────────
+  # 43/43 Source/*.swift carry the canonical MIT permission block. Match the
+  # INVARIANT substring of the block (NOT the copyright year, which varies
+  # 2014-2022 / 2014-2025 file to file). Un-gated convention (no CI check).
+  - id: af-source-mit-header
+    kind: file_content_matches
+    paths:
+      include: ["Source/**/*.swift"]
+    pattern: "Permission is hereby granted, free of charge, to any person obtaining a copy"
+    level: warning
+
+  # ── VALUE-ADD (DEFERRED — C tuning gap): podspec version ≡ newest CHANGELOG ─
+  # Intent: Alamofire.podspec s.version (5.12.0) must equal the TOP/newest
+  # CHANGELOG entry. cross_file_value_equals can't express this: it requires
+  # EVERY regex match in the target to equal the source, so it flags all 85
+  # historical CHANGELOG entries (5.11.2, 5.11.1, …). The missing primitive is a
+  # "first-match-only / newest-entry" extract (a C tuning on extract:). Omitted
+  # from the active config to avoid 85 false positives; recorded as the gap.
+
+  # ── VALUE-ADD: structure assertions the repo relies on but does not gate ─
+  - id: af-podspec-exists
+    kind: file_exists
+    paths: Alamofire.podspec
+    root_only: true
+    level: warning
+
+  - id: af-privacy-manifest-exists
+    kind: file_exists
+    paths: Source/PrivacyInfo.xcprivacy
+    level: warning
+
+  - id: af-swiftformat-config-exists
+    kind: file_exists
+    paths: .swiftformat
+    root_only: true
+    level: info

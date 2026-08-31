@@ -23,30 +23,45 @@ env:
 jobs:
   coverage:
     name: cargo-llvm-cov
+    # SECURITY (audit H6): never run on the self-hosted box for a fork PR.
+    # Coverage needs the box's pids-limit / CARGO_BUILD_JOBS tuning (a hosted
+    # instrumented build OOMs/hangs) and its Codecov secret is withheld from
+    # forks anyway. The ALINT_COVERAGE_FLOOR gate still runs on push-to-main
+    # and on every same-repo (collaborator) PR. See
+    # docs/design/v0.14/ci-fork-pr-isolation.md.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, alint]
+    # Self-fail fast if the runner ever hangs again, instead of sitting at the
+    # 360-min GitHub default and holding the single self-hosted runner. 90 min
+    # comfortably covers a cold-cache, parallelism-capped instrumented build
+    # (typical warm runs finish in minutes); well under bench's 360 / mutants'
+    # 240. The pids-limit + CARGO_BUILD_JOBS fixes should keep hangs from
+    # recurring — this is the belt-and-suspenders net.
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
+          toolchain: stable
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: coverage
 
       - run: ci/scripts/coverage.sh
 
       - name: Upload LCOV artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-lcov
           path: target/coverage/coverage.lcov
           retention-days: 30
 
       - name: Upload HTML artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: coverage-html
           path: target/coverage/html/
@@ -68,7 +83,7 @@ jobs:
           fi
       - name: Upload to Codecov
         if: steps.codecov_token.outputs.present == 'true'
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: target/coverage/coverage.lcov

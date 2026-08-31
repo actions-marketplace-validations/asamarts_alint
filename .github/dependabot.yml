@@ -25,6 +25,14 @@ updates:
         update-types:
           - patch
           - minor
+    # roxmltree 0.21 regressed deep-nesting parsing: Document::parse
+    # stack-overflows (SIGABRT) on deeply-nested XML instead of returning
+    # a parse error, before alint's MAX_XML_DEPTH guard (post-parse
+    # tree-walk) can fire. alint parses untrusted XML from linted repos,
+    # so hold at 0.20 until a fixed release. Repro in closed PR #44.
+    ignore:
+      - dependency-name: "roxmltree"
+        versions: ["0.21.x"]
     commit-message:
       prefix: "chore(deps)"
       include: scope
@@ -42,6 +50,14 @@ updates:
         update-types:
           - patch
           - minor
+    # dtolnay/rust-toolchain is now SHA-pinned with an explicit `toolchain:`
+    # input (bench-record.yml uses `toolchain: 1.97.0`, the canonical bench
+    # fingerprint the whole macro corpus is measured on). Holding it here keeps
+    # both the action SHA and that pinned rustc stable: the rustc bump is done
+    # MANUALLY in lock-step with a re-baseline, not by Dependabot (which once
+    # bumped 1.97.0 -> 1.100.0 in #132, silently breaking fingerprint repro).
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
     commit-message:
       prefix: "chore(actions)"
       include: scope

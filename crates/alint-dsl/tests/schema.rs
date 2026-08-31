@@ -43,6 +43,61 @@ fn schema_is_well_formed_json() {
     let _: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA_V1).expect("valid JSON");
 }
 
+/// Every kind-specific rule option must render a non-blank Options-table cell on
+/// alint.org (that table is generated from this schema). An option with no
+/// `description` — inline, or on the `$ref` target it points to — ships as a
+/// blank cell: the class of bug that once left 16 fields empty. This gate fails
+/// the build if any rule-branch option would render blank, whether the schema is
+/// hand-authored (`"description"` in the branch) or schemars-derived (a `///`
+/// doc-comment on the `Options` field). The `kind` discriminator is exempt.
+#[test]
+fn every_rule_option_has_a_description() {
+    let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA_V1).expect("valid JSON");
+    let defs = schema["$defs"].as_object().expect("schema has $defs");
+
+    let has_desc = |node: &serde_json::Value| {
+        node.get("description")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|s| !s.trim().is_empty())
+    };
+
+    let mut gaps: Vec<String> = Vec::new();
+    for (branch_name, branch) in defs {
+        if !branch_name.starts_with("rule_") {
+            continue;
+        }
+        let Some(props) = branch
+            .get("properties")
+            .and_then(serde_json::Value::as_object)
+        else {
+            continue;
+        };
+        for (prop_name, prop) in props {
+            if prop_name == "kind" || has_desc(prop) {
+                continue; // the discriminator, or an inline description is present
+            }
+            // No inline description — a `$ref` is acceptable only if its target is described.
+            let ref_ok = prop
+                .get("$ref")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|r| r.rsplit('/').next())
+                .and_then(|target| defs.get(target))
+                .is_some_and(has_desc);
+            if !ref_ok {
+                gaps.push(format!("{branch_name}.{prop_name}"));
+            }
+        }
+    }
+
+    assert!(
+        gaps.is_empty(),
+        "these rule options have no description and would render as blank cells in \
+         alint.org's Options tables — add one (a `///` doc-comment on the schemars \
+         `Options` field, or a `\"description\"` in the hand-authored schema branch):\n  {}",
+        gaps.join("\n  "),
+    );
+}
+
 #[test]
 fn schema_compiles_as_draft_2020_12() {
     let _ = compile_schema();
@@ -128,6 +183,62 @@ fn fixture_covers_every_registered_rule_kind() {
             bullets,
         );
     }
+}
+
+/// Every registered rule kind — **including aliases** — must reject an
+/// unknown option at load. Drives the loader (not just the schema) off
+/// `all_kinds.yaml`, which `fixture_covers_every_registered_rule_kind`
+/// guarantees holds one building entry per registered kind. Guards against
+/// an alias registered via `register` instead of `register_optionless` (the
+/// v0.13 `is_text` regression): the doc-example probe in alint-e2e's
+/// `coverage_audit_doc_examples` misses such aliases because no documentation
+/// example uses them, so only a registry-driven probe catches the divergence.
+#[test]
+fn every_registered_kind_rejects_an_unknown_option() {
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/all_kinds.yaml");
+    let config = alint_dsl::load(&path).expect("all_kinds.yaml loads");
+    let registry = alint_rules::builtin_registry();
+
+    let mut swallowers: Vec<String> = Vec::new();
+    let mut probed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for spec in &config.rules {
+        // Only probe specs that build cleanly, so a build failure under the
+        // probe is attributable to the injected option, not a terse entry.
+        if registry.build(spec).is_err() {
+            continue;
+        }
+        let mut bogus = spec.clone();
+        bogus.extra.insert(
+            serde_yaml_ng::Value::String("__alint_unknown_option_probe__".into()),
+            serde_yaml_ng::Value::Bool(true),
+        );
+        probed.insert(spec.kind.clone());
+        if registry.build(&bogus).is_ok() {
+            swallowers.push(spec.kind.clone());
+        }
+    }
+    swallowers.sort();
+    swallowers.dedup();
+    assert!(
+        swallowers.is_empty(),
+        "rule kind(s) SILENTLY ACCEPT an unknown option (register via \
+         `register_optionless` if the kind takes none, else propagate \
+         `deserialize_options()`): {swallowers:?}",
+    );
+
+    // Completeness: every registered kind must have been probed, so a newly
+    // added kind or alias can't slip the check by lacking a building fixture
+    // entry. `fixture_covers_every_registered_rule_kind` guarantees presence;
+    // this asserts the entry builds and was actually probed.
+    let registered: std::collections::BTreeSet<String> =
+        registry.known_kinds().map(str::to_string).collect();
+    let unprobed: Vec<&String> = registered.difference(&probed).collect();
+    assert!(
+        unprobed.is_empty(),
+        "registered kind(s) not probed for unknown-option rejection — their \
+         `all_kinds.yaml` entry must build cleanly: {unprobed:?}",
+    );
 }
 
 #[test]

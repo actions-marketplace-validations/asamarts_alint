@@ -1,0 +1,108 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — pnpm/pnpm @ ae6e07705d55d2e0057f85731ef92ea4559431ee
+# Shape: TS monorepo (pnpm-managed, ~300 workspace packages) + a vendored Rust
+# sub-project (pacquet/ + pnpr/). Governance: single-vendor/community (zkochan).
+#
+# What pnpm ENFORCES is dominated by tool execution (D, not reimplemented by
+# alint): TS compile, eslint, cspell, the @pnpm/meta-updater canonicalize-and-diff
+# (`pn lint:meta`), jest, npm audit, zizmor, CodeQL; and on the Rust side clippy,
+# rustfmt, taplo, cargo-doc, dylint(perfectionist), cargo-deny, typos, nextest.
+# This config expresses the ADDRESSABLE remainder: editorconfig hygiene, the
+# conventional-commit convention, the lockfile invariant, plus repo value-add
+# structural assertions the meta-updater bakes in (license/repo-url/engines).
+
+version: 1
+
+# Exclude the large fixture trees and a deliberately-broken-symlink test
+# fixture (store/cafs/.../broken-symlink/doesnt-exist) that otherwise aborts
+# the directory walk. These are test inputs, not the validation surface.
+ignore:
+  - "**/node_modules/**"
+  - "**/__fixtures__/**"
+  - "**/fixtures/**"
+  - "**/.fixtures/**"
+  - "store/cafs/test/fixtures/**"
+  - "**/lib/**"
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+
+rules:
+  # ── A: editorconfig hygiene (root `.editorconfig`, review/editor-enforced;
+  #     `eol=lf` additionally git-enforced via `.gitattributes: * text eol=lf`).
+  #     The bundles cover md/txt/yml + src/** ts; these widen to the editorconfig
+  #     surface the repo actually declares.
+  - id: pnpm-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.{ts,js,cjs,mjs,json,md}"]
+      exclude: ["**/node_modules/**", "**/lib/**", "**/__fixtures__/**", "**/fixtures/**", "**/*.snap"]
+    level: info
+
+  - id: pnpm-final-newline
+    kind: final_newline
+    paths:
+      include: ["**/*.{ts,js,cjs,mjs,json,md}"]
+      exclude: ["**/node_modules/**", "**/lib/**", "**/__fixtures__/**", "**/fixtures/**", "**/*.snap"]
+    level: info
+
+  - id: pnpm-line-endings-lf
+    kind: line_endings
+    target: lf
+    paths:
+      include: ["**/*.{ts,js,cjs,mjs,json,md}"]
+      exclude: ["**/node_modules/**", "**/lib/**", "**/__fixtures__/**", "**/fixtures/**", "**/*.snap"]
+    level: info
+
+  - id: pnpm-indent-two-spaces
+    # .editorconfig: [*.{ts,js,cjs,json}] indent_style=space indent_size=2
+    kind: indent_style
+    style: spaces
+    width: 2
+    paths:
+      include: ["**/*.{ts,js,cjs,json}"]
+      exclude: ["**/node_modules/**", "**/lib/**", "**/__fixtures__/**", "**/fixtures/**", "**/*.snap", "**/CHANGELOG.md"]
+    level: info
+
+  # ── A: conventional-commit convention (husky `commit-msg` → commitlint with
+  #     @commitlint/config-conventional; also documented in AGENTS.md). alint
+  #     expresses the LOGIC natively via git_commit_message (NOT by wrapping
+  #     commitlint), so it is A, not a D tool-wrap.
+  - id: pnpm-conventional-commits
+    kind: git_commit_message
+    pattern: '^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\([^)]+\))?!?: .+'
+    level: warning
+
+  # ── C: permalink-not-branch-link convention (AGENTS.md: cite a commit SHA, not
+  #     a branch URL). Expressible via file_content_forbidden, but over-fires on
+  #     CHANGELOGs and on AGENTS.md itself (which quotes the anti-pattern), so it
+  #     is scoped to the normative contributor docs only — the tuning that makes
+  #     it usable. (Real convention is about PR/comment text, not committed files.)
+  - id: pnpm-docs-permalink-not-branch
+    kind: file_content_forbidden
+    paths:
+      include: ["CONTRIBUTING.md"]
+    pattern: 'github\.com/[^/]+/[^/]+/(blob|tree)/(main|master)/'
+    level: info
+    message: "Cite a commit SHA permalink, not an impermanent branch (main/master) link."
+
+  # ── value-add (NOT pnpm-enforced as a standalone gate; the @pnpm/meta-updater
+  #     bakes these into manifests and `pn lint:meta` re-derives+diffs them, so
+  #     they are recorded here as alint utility, excluded from the coverage ratio).
+  - id: pnpm-root-private
+    kind: json_path_equals
+    paths: ["package.json"]
+    path: "$.private"
+    equals: true
+    level: info
+    message: "The monorepo root package.json must stay private (never published)."
+
+  - id: pnpm-package-manager-pinned
+    kind: json_path_matches
+    paths: ["package.json"]
+    path: "$.packageManager"
+    matches: '^pnpm@\d+\.\d+\.\d+$'
+    level: info
+    message: "Root must pin packageManager to an exact pnpm version (Corepack contract)."

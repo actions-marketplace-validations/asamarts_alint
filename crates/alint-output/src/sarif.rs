@@ -8,23 +8,71 @@
 //! a subset of SARIF 2.1.0 — just enough that GitHub renders the findings
 //! in the Security → Code scanning tab.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 
-use alint_core::{Level, Report};
+use alint_core::{Level, Report, Violation};
 use serde::Serialize;
 
+use crate::{BaselineMarks, ResultMarks};
+
+/// `partialFingerprints` key carrying alint's baseline fingerprint, so GitHub
+/// Code Scanning's alert correlation aligns with the baseline.
+const FINGERPRINT_KEY: &str = "alint/v1";
+
 pub fn write_sarif(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
-    let sarif = build_sarif(report);
-    serde_json::to_writer_pretty(&mut *w, &sarif)?;
+    write_sarif_with_baseline(report, None, w)
+}
+
+/// SARIF with baseline awareness. When `baseline` is supplied (a baseline is in
+/// effect), every **live** finding gains `baselineState: "new"` +
+/// `partialFingerprints`, and each **baselined** finding is re-emitted — not
+/// dropped — with `suppressions: [{ "kind": "external" }]` +
+/// `baselineState: "unchanged"`, so GitHub Code Scanning keeps the alert
+/// dismissed-not-fixed (no close/reopen flapping). Without a baseline the
+/// output is unchanged.
+pub fn write_sarif_with_baseline(
+    report: &Report,
+    baseline: Option<&BaselineMarks>,
+    w: &mut dyn Write,
+) -> std::io::Result<()> {
+    emit_sarif(&build_sarif(report, baseline, None), w)
+}
+
+/// SARIF with pre-computed canonical fingerprints but no baseline in effect.
+///
+/// `fingerprints` is indexed `[result][violation]`, aligned with
+/// `report.results[i].violations[j]` (the same shape the GitLab path builds), so
+/// every finding carries the canonical `baseline::violation_fingerprint` under
+/// `partialFingerprints` — the same identity baseline mode and GitLab Code
+/// Quality use. GitHub Code Scanning can then correlate alerts across runs even
+/// without `--baseline`. No `baselineState` is emitted (no baseline is in
+/// effect). `None` (generic dispatch / callers with no file access) emits no
+/// fingerprints, matching [`write_sarif`].
+pub fn write_sarif_with_fingerprints(
+    report: &Report,
+    fingerprints: Option<&[Vec<String>]>,
+    w: &mut dyn Write,
+) -> std::io::Result<()> {
+    emit_sarif(&build_sarif(report, None, fingerprints), w)
+}
+
+/// Serialize a built [`Sarif`] as pretty JSON with a trailing newline.
+fn emit_sarif(sarif: &Sarif, w: &mut dyn Write) -> std::io::Result<()> {
+    serde_json::to_writer_pretty(&mut *w, sarif)?;
     writeln!(w)?;
     Ok(())
 }
 
-fn build_sarif(report: &Report) -> Sarif {
+fn build_sarif(
+    report: &Report,
+    baseline: Option<&BaselineMarks>,
+    fingerprints: Option<&[Vec<String>]>,
+) -> Sarif {
     let mut rules = Vec::with_capacity(report.results.len());
     let mut results = Vec::new();
 
-    for rr in &report.results {
+    for (idx, rr) in report.results.iter().enumerate() {
         rules.push(SarifRule {
             id: rr.rule_id.to_string(),
             short_description: SarifText {
@@ -33,35 +81,42 @@ fn build_sarif(report: &Report) -> Sarif {
             help_uri: rr.policy_url.as_deref().map(str::to_string),
         });
 
-        for v in &rr.violations {
-            let region = if v.line.is_some() || v.column.is_some() {
-                Some(SarifRegion {
-                    start_line: v.line,
-                    start_column: v.column,
-                })
-            } else {
-                None
-            };
-            let locations = if let Some(path) = &v.path {
-                vec![SarifLocation {
-                    physical_location: SarifPhysicalLocation {
-                        artifact_location: SarifArtifactLocation {
-                            uri: path.display().to_string(),
-                        },
-                        region,
-                    },
-                }]
-            } else {
-                Vec::new()
-            };
-            results.push(SarifResult {
-                rule_id: rr.rule_id.to_string(),
-                level: level_to_sarif(rr.level),
-                message: SarifText {
-                    text: v.message.to_string(),
-                },
-                locations,
+        let marks: Option<&ResultMarks> = baseline.and_then(|b| b.per_result.get(idx));
+
+        // Live (new) findings — drive the exit code; tagged `new` under a baseline.
+        for (vi, v) in rr.violations.iter().enumerate() {
+            let mut res = base_result(rr.rule_id.as_ref(), rr.level, v);
+            // `partialFingerprints` carries the canonical `violation_fingerprint`
+            // so GitHub Code Scanning correlates alerts across runs. The value is
+            // the baseline marks' fingerprint when a baseline is in effect, else
+            // the pre-computed source the CLI supplies for the no-baseline path;
+            // both are the same canonical identity. `baselineState: new` is
+            // baseline-specific, so it stays gated on an active baseline while the
+            // fingerprint is emitted either way.
+            let fp = marks.and_then(|m| m.live_fingerprints.get(vi)).or_else(|| {
+                fingerprints
+                    .and_then(|f| f.get(idx))
+                    .and_then(|r| r.get(vi))
             });
+            if let Some(fp) = fp {
+                if baseline.is_some() {
+                    res.baseline_state = Some("new");
+                }
+                res.partial_fingerprints = Some(fingerprint_map(fp));
+            }
+            results.push(res);
+        }
+
+        // Baselined findings — marked, not removed, so Code Scanning dismisses
+        // (rather than closes-then-reopens) the alert.
+        if let Some(m) = marks {
+            for sf in &m.suppressed {
+                let mut res = base_result(rr.rule_id.as_ref(), rr.level, &sf.violation);
+                res.suppressions = vec![SarifSuppression { kind: "external" }];
+                res.baseline_state = Some("unchanged");
+                res.partial_fingerprints = Some(fingerprint_map(&sf.fingerprint));
+                results.push(res);
+            }
         }
     }
 
@@ -89,6 +144,91 @@ fn level_to_sarif(l: Level) -> &'static str {
         Level::Info => "note",
         Level::Off => "none",
     }
+}
+
+/// Render a repo-relative path as a SARIF `uri-reference` (RFC 3986):
+/// forward-slash separators (a Windows `\` otherwise breaks GitHub Code
+/// Scanning's repo-file mapping) and percent-encoding of every byte that
+/// isn't URI-path-safe (space, `#`, `%`, controls, non-ASCII), so a path
+/// like `src/a b#c.rs` neither mis-parses nor fails a format-asserting
+/// SARIF validator.
+fn path_to_uri(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' | '/' => out.push('/'),
+            'A'..='Z'
+            | 'a'..='z'
+            | '0'..='9'
+            | '-'
+            | '.'
+            | '_'
+            | '~'
+            | '!'
+            | '$'
+            | '&'
+            | '\''
+            | '('
+            | ')'
+            | '*'
+            | '+'
+            | ','
+            | ';'
+            | '='
+            | ':'
+            | '@' => out.push(ch),
+            other => {
+                use std::fmt::Write as _;
+                let mut buf = [0u8; 4];
+                for b in other.encode_utf8(&mut buf).bytes() {
+                    let _ = write!(out, "%{b:02X}");
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A SARIF result with the shared fields filled in (no baseline annotations).
+fn base_result(rule_id: &str, level: Level, v: &Violation) -> SarifResult {
+    let region = if v.line.is_some() || v.column.is_some() {
+        Some(SarifRegion {
+            start_line: v.line,
+            start_column: v.column,
+        })
+    } else {
+        None
+    };
+    let locations = if let Some(path) = &v.path {
+        vec![SarifLocation {
+            physical_location: SarifPhysicalLocation {
+                artifact_location: SarifArtifactLocation {
+                    uri: path_to_uri(path),
+                },
+                region,
+            },
+        }]
+    } else {
+        Vec::new()
+    };
+    SarifResult {
+        rule_id: rule_id.to_string(),
+        level: level_to_sarif(level),
+        message: SarifText {
+            text: v.message.to_string(),
+        },
+        locations,
+        suppressions: Vec::new(),
+        baseline_state: None,
+        partial_fingerprints: None,
+    }
+}
+
+fn fingerprint_map(fp: &str) -> BTreeMap<&'static str, String> {
+    let mut m = BTreeMap::new();
+    m.insert(FINGERPRINT_KEY, fp.to_string());
+    m
 }
 
 // ─── SARIF serde types ───────────────────────────────────────────────
@@ -142,6 +282,26 @@ struct SarifResult {
     level: &'static str,
     message: SarifText,
     locations: Vec<SarifLocation>,
+    /// `[{ "kind": "external" }]` for a baselined finding; empty otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    suppressions: Vec<SarifSuppression>,
+    /// `"new"` for a live finding under a baseline, `"unchanged"` for a
+    /// baselined one; absent when no baseline is in effect.
+    #[serde(rename = "baselineState", skip_serializing_if = "Option::is_none")]
+    baseline_state: Option<&'static str>,
+    /// The alint baseline fingerprint, for Code Scanning alert correlation.
+    #[serde(
+        rename = "partialFingerprints",
+        skip_serializing_if = "Option::is_none"
+    )]
+    partial_fingerprints: Option<BTreeMap<&'static str, String>>,
+}
+
+/// A SARIF `suppression` — alint emits `kind: "external"` for findings
+/// dismissed by the committed baseline file.
+#[derive(Serialize)]
+struct SarifSuppression {
+    kind: &'static str,
 }
 
 #[derive(Serialize)]
@@ -178,6 +338,16 @@ mod tests {
     use serde_json::Value;
     use std::path::Path;
 
+    #[test]
+    fn path_to_uri_slashes_and_percent_encodes() {
+        // Plain ASCII paths are unchanged (keeps existing snapshots stable).
+        assert_eq!(path_to_uri(Path::new("src/lib.rs")), "src/lib.rs");
+        // Windows-style separators become `/` (GitHub Code Scanning mapping).
+        assert_eq!(path_to_uri(Path::new("src\\a\\b.rs")), "src/a/b.rs");
+        // Space / `#` / `%` are percent-encoded per RFC 3986 uri-reference.
+        assert_eq!(path_to_uri(Path::new("a b#c%d.rs")), "a%20b%23c%25d.rs");
+    }
+
     fn render(report: &Report) -> Value {
         let mut buf = Vec::new();
         write_sarif(report, &mut buf).unwrap();
@@ -211,6 +381,7 @@ mod tests {
                     level: Level::Error,
                     policy_url: Some("https://example.com/a".into()),
                     violations: vec![Violation::new("va1"), Violation::new("va2")],
+                    notes: Vec::new(),
                     is_fixable: false,
                 },
                 RuleResult {
@@ -218,6 +389,7 @@ mod tests {
                     level: Level::Warning,
                     policy_url: None,
                     violations: vec![Violation::new("vb")],
+                    notes: Vec::new(),
                     is_fixable: false,
                 },
             ],
@@ -249,6 +421,7 @@ mod tests {
                     level: Level::Off,
                     policy_url: None,
                     violations: vec![Violation::new("x")],
+                    notes: Vec::new(),
                     is_fixable: false,
                 },
                 RuleResult {
@@ -256,6 +429,7 @@ mod tests {
                     level: Level::Info,
                     policy_url: None,
                     violations: vec![Violation::new("y")],
+                    notes: Vec::new(),
                     is_fixable: false,
                 },
             ],
@@ -278,7 +452,10 @@ mod tests {
                     message: "m".into(),
                     line: Some(7),
                     column: Some(3),
+                    is_note: false,
+                    baseline_key: None,
                 }],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
@@ -297,11 +474,202 @@ mod tests {
                 level: Level::Error,
                 policy_url: None,
                 violations: vec![Violation::new("no-path")],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
         let v = render(&report);
         let locs = v["runs"][0]["results"][0]["locations"].as_array().unwrap();
         assert!(locs.is_empty());
+    }
+
+    #[test]
+    fn baseline_marks_suppressed_and_tags_live_findings() {
+        use crate::{BaselineMarks, ResultMarks, SuppressedFinding};
+        let report = Report {
+            results: vec![RuleResult {
+                rule_id: "no-todo".into(),
+                level: Level::Error,
+                policy_url: None,
+                violations: vec![Violation::new("new TODO").with_path(Path::new("b.txt"))],
+                notes: Vec::new(),
+                is_fixable: false,
+            }],
+        };
+        let marks = BaselineMarks {
+            per_result: vec![ResultMarks {
+                live_fingerprints: vec!["fp-live".into()],
+                suppressed: vec![SuppressedFinding {
+                    violation: Violation::new("old TODO").with_path(Path::new("a.txt")),
+                    fingerprint: "fp-supp".into(),
+                }],
+            }],
+            suppressed_total: 1,
+        };
+        let mut buf = Vec::new();
+        write_sarif_with_baseline(&report, Some(&marks), &mut buf).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        let results = v["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(
+            results.len(),
+            2,
+            "live + suppressed both emitted (marked, not removed)"
+        );
+
+        // The live (new) finding is tagged but not suppressed.
+        let live = &results[0];
+        assert_eq!(live["message"]["text"], "new TODO");
+        assert_eq!(live["baselineState"], "new");
+        assert_eq!(live["partialFingerprints"]["alint/v1"], "fp-live");
+        assert!(live.get("suppressions").is_none());
+
+        // The baselined finding is re-emitted, marked dismissed-not-fixed.
+        let supp = &results[1];
+        assert_eq!(supp["message"]["text"], "old TODO");
+        assert_eq!(supp["baselineState"], "unchanged");
+        assert_eq!(supp["suppressions"][0]["kind"], "external");
+        assert_eq!(supp["partialFingerprints"]["alint/v1"], "fp-supp");
+    }
+
+    #[test]
+    fn no_baseline_leaves_results_unannotated() {
+        let report = Report {
+            results: vec![RuleResult {
+                rule_id: "r".into(),
+                level: Level::Error,
+                policy_url: None,
+                violations: vec![Violation::new("v").with_path(Path::new("f"))],
+                notes: Vec::new(),
+                is_fixable: false,
+            }],
+        };
+        let v = render(&report); // write_sarif — no baseline
+        let r = &v["runs"][0]["results"][0];
+        assert!(r.get("baselineState").is_none());
+        assert!(r.get("suppressions").is_none());
+        assert!(r.get("partialFingerprints").is_none());
+    }
+
+    #[test]
+    fn fingerprints_without_baseline_attach_partialfingerprints_only() {
+        // The CLI's no-baseline SARIF path passes canonical fingerprints (indexed
+        // [result][violation]) so Code Scanning can correlate alerts without a
+        // baseline. Each result must carry its OWN `partialFingerprints` and NO
+        // `baselineState` (no baseline is in effect). Distinct fingerprints pin
+        // each to its own result — a desync would stamp fp-a1 onto rule-b.
+        let report = Report {
+            results: vec![
+                RuleResult {
+                    rule_id: "rule-a".into(),
+                    level: Level::Error,
+                    policy_url: None,
+                    violations: vec![Violation::new("a1").with_path(Path::new("a.txt"))],
+                    notes: Vec::new(),
+                    is_fixable: false,
+                },
+                RuleResult {
+                    rule_id: "rule-b".into(),
+                    level: Level::Error,
+                    policy_url: None,
+                    violations: vec![Violation::new("b1").with_path(Path::new("b.txt"))],
+                    notes: Vec::new(),
+                    is_fixable: false,
+                },
+                RuleResult {
+                    rule_id: "rule-c".into(),
+                    level: Level::Error,
+                    policy_url: None,
+                    // Two violations in ONE result exercises the vi (violation)
+                    // axis of the [result][violation] grid; the two results above
+                    // only vary the result index.
+                    violations: vec![
+                        Violation::new("c1").with_path(Path::new("c.txt")),
+                        Violation::new("c2").with_path(Path::new("c.txt")),
+                    ],
+                    notes: Vec::new(),
+                    is_fixable: false,
+                },
+            ],
+        };
+        let fps = vec![
+            vec!["fp-a1".to_string()],
+            vec!["fp-b1".to_string()],
+            vec!["fp-c1".to_string(), "fp-c2".to_string()],
+        ];
+        let mut buf = Vec::new();
+        write_sarif_with_fingerprints(&report, Some(&fps), &mut buf).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        let results = v["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 4);
+        let by_msg = |m: &str| {
+            results
+                .iter()
+                .find(|r| r["message"]["text"] == m)
+                .unwrap_or_else(|| panic!("no result for {m}"))
+        };
+        assert_eq!(by_msg("a1")["partialFingerprints"]["alint/v1"], "fp-a1");
+        assert_eq!(by_msg("b1")["partialFingerprints"]["alint/v1"], "fp-b1");
+        // vi>0: the second violation of rule-c gets its OWN fingerprint, proving
+        // the grid is indexed [result][violation], not just per-result.
+        assert_eq!(by_msg("c1")["partialFingerprints"]["alint/v1"], "fp-c1");
+        assert_eq!(by_msg("c2")["partialFingerprints"]["alint/v1"], "fp-c2");
+        // No baseline in effect → no `baselineState` on any result.
+        assert!(results.iter().all(|r| r.get("baselineState").is_none()));
+    }
+
+    #[test]
+    fn live_fingerprints_attach_to_their_own_result() {
+        use crate::{BaselineMarks, ResultMarks};
+        // Two rules, each with one live finding carrying a DISTINCT
+        // fingerprint. The marks are positionally indexed, so a desync would
+        // stamp fp-a1 onto rule-b's finding — this pins each to its own.
+        let report = Report {
+            results: vec![
+                RuleResult {
+                    rule_id: "rule-a".into(),
+                    level: Level::Error,
+                    policy_url: None,
+                    violations: vec![Violation::new("a1").with_path(Path::new("a.txt"))],
+                    notes: Vec::new(),
+                    is_fixable: false,
+                },
+                RuleResult {
+                    rule_id: "rule-b".into(),
+                    level: Level::Error,
+                    policy_url: None,
+                    violations: vec![Violation::new("b1").with_path(Path::new("b.txt"))],
+                    notes: Vec::new(),
+                    is_fixable: false,
+                },
+            ],
+        };
+        let marks = BaselineMarks {
+            per_result: vec![
+                ResultMarks {
+                    live_fingerprints: vec!["fp-a1".into()],
+                    suppressed: Vec::new(),
+                },
+                ResultMarks {
+                    live_fingerprints: vec!["fp-b1".into()],
+                    suppressed: Vec::new(),
+                },
+            ],
+            suppressed_total: 0,
+        };
+        let mut buf = Vec::new();
+        write_sarif_with_baseline(&report, Some(&marks), &mut buf).unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        let results = v["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        let by_msg = |m: &str| {
+            results
+                .iter()
+                .find(|r| r["message"]["text"] == m)
+                .unwrap_or_else(|| panic!("no result for {m}"))
+        };
+        assert_eq!(by_msg("a1")["ruleId"], "rule-a");
+        assert_eq!(by_msg("a1")["partialFingerprints"]["alint/v1"], "fp-a1");
+        assert_eq!(by_msg("b1")["ruleId"], "rule-b");
+        assert_eq!(by_msg("b1")["partialFingerprints"]["alint/v1"], "fp-b1");
     }
 }

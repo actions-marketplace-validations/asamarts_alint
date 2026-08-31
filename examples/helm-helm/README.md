@@ -567,3 +567,20 @@ Three concrete unanalyzed angles for a future revalidation pass:
   messages on the validation env without `misspell` installed) on
   `/tmp/helm`'s 1,990-file tree (v0.9.17 numbers; v0.9.20's width-aware
   human output and message audits do not materially affect walk timing)
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (58 rules, ~78% coverage). +5 surfaces: DCO sign-off ->
+git_commit_signed_off (the load-bearing CNCF gate), depguard/gomodguard ->
+import_gate (preset go), the .github/env Go pin <-> go.mod ->
+cross_file_value_equals, the golangci "keep sorted" linter list ->
+ordered_block, and gofmt/golangci/tidy -> command_idempotent. Note:
+compliance/apache-2@v1 OVER-FIRES (helm uses an abbreviated branded header)
+so it is deliberately not extended; bespoke file_header rules mirror
+validate-license.sh instead.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 3).

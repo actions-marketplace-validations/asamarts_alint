@@ -1,0 +1,220 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Proposed alint config for BurntSushi/ripgrep
+# @ 4857d6fa67db69a95cd4b6f2adda5d807d4d0119 (v0.12 case study, Stage A).
+#
+# Shape: solo-maintainer Rust CLI, cargo workspace (10 crates: the `rg`
+# binary at the root + 9 published `grep-*`/`globset`/`ignore` library
+# crates under crates/). Build: cargo (no xtask/just/make). Governance:
+# single maintainer (BurntSushi).
+#
+# THE HONEST PICTURE (why this config is mostly value-add):
+# ripgrep's ENTIRE enforced-validation surface is tool execution that
+# alint deliberately does NOT reimplement (R2 non-goals):
+#   - ci.yml: cargo build (+pcre2) × big OS/target matrix, cargo test,
+#     wasm32-wasip1 build, `cargo fmt --all --check`, `cargo doc
+#     -D warnings`, fuzz-target compile.
+#   - ci/test-complete: runs the built `rg --help` and diffs its option
+#     set against the committed zsh completion (crates/core/flags/
+#     complete/rg.zsh). Executes the binary + semantic option-set diff —
+#     not reimplementable declaratively.
+#   - release.yml: the only non-tool gate — asserts Cargo.toml `version`
+#     equals the pushed git tag (`grep -q 'version = "$VERSION"'`).
+# The single ADDRESSABLE enforced check is that release-time tag/version
+# coherence, and it is awkward (the authoritative side is a git TAG, not
+# a file — alint has no git-tag source). Expressed below as the closest
+# native shape: assert the root version is a well-formed SemVer triple.
+#
+# Everything else in this file is alint VALUE-ADD (R3/R5): structural
+# invariants ripgrep relies on but does not gate on in CI — the dual
+# Unlicense-OR-MIT license string replicated across all 10 manifests,
+# the three license artifacts, edition coherence, tracked Cargo.lock.
+# These are NOT counted in coverage_today; they are the reason a real
+# adopter would still run alint here.
+#
+# Genuine non-replaceables (correctly left to the right tool):
+#   cargo build/test matrix, rustfmt, cargo doc -D warnings, fuzz
+#   compile, the rg-help-vs-completion option diff -> compiler / rg / zsh.
+
+version: 1
+
+vars:
+  # ripgrep's MSRV, declared once (Cargo.toml `rust-version`, ci.yml's
+  # `pinned` matrix row `rust: 1.85.0`). Documented intent for readers;
+  # the cross_file rule below asserts the in-tree copies agree.
+  msrv: "1.85"
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+  - alint://bundled/monorepo/cargo-workspace@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════
+  # 1. THE ONE ADDRESSABLE ENFORCED CHECK (release.yml tag/version).
+  #    release.yml gates `version = "$TAG"` in Cargo.toml. alint cannot
+  #    read the git tag, so the most we can natively assert is that the
+  #    root version is a valid x.y.z triple (the precondition for that
+  #    grep to ever match). Recorded as the C / tuning item in the study
+  #    (wants a git-ref source for cross_file_value_equals).
+  # ═══════════════════════════════════════════════════════════════════
+  - id: ripgrep-version-is-semver
+    kind: toml_path_matches
+    paths: Cargo.toml
+    path: "$.package.version"
+    matches: '^\d+\.\d+\.\d+$'
+    level: error
+    message: >-
+      ripgrep's root version must be a bare x.y.z SemVer triple — the
+      release workflow gates `version = "<tag>"` against it, and a
+      non-triple value (pre-release suffix, missing patch) breaks the
+      `x.y.z`-tag-only release.yml trigger.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 2. VALUE-ADD: MSRV coherence (Cargo.toml <-> ci.yml pinned row).
+  #    Not gated by ripgrep CI as an equality (the `pinned` job would
+  #    fail to BUILD on a higher MSRV, but never asserts the two values
+  #    are equal). cross_file_value_equals makes the drift a structural
+  #    error. Recorded as value-add, NOT in the coverage ratio (R5).
+  # ═══════════════════════════════════════════════════════════════════
+  - id: ripgrep-msrv-coherent-with-ci
+    kind: cross_file_value_equals
+    source:
+      file: Cargo.toml
+      extract: { toml: "$.package['rust-version']" }
+    targets:
+      files: ".github/workflows/ci.yml"
+      extract: { regex: 'rust:\s*(\d+\.\d+)\.0' }
+    normalize: none
+    allow_missing_target: false
+    level: warning
+    message: >-
+      MSRV in {{ctx.target}} ({{ctx.target_value}}) must equal the
+      Cargo.toml rust-version {{ctx.source_value}}. The `pinned` CI row
+      and the manifest floor are bumped together.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 3. VALUE-ADD: dual-license invariant. ripgrep is "Unlicense OR MIT".
+  #    Every one of the 10 manifests carries that exact SPDX string; all
+  #    three artifacts (UNLICENSE, LICENSE-MIT, COPYING) sit at the root.
+  #    Not CI-gated; recorded as value-add.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: ripgrep-root-license-spdx
+    kind: toml_path_equals
+    paths: Cargo.toml
+    path: "$.package.license"
+    equals: "Unlicense OR MIT"
+    level: error
+    message: 'Root crate must declare `license = "Unlicense OR MIT"`.'
+
+  - id: ripgrep-member-license-identity
+    kind: cross_file_value_equals
+    source:
+      file: Cargo.toml
+      extract: { toml: "$.package.license" }
+    targets:
+      files: "crates/*/Cargo.toml"
+      extract: { toml: "$.package.license" }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      Member {{ctx.target}} license {{ctx.target_value}} must equal the
+      root crate's {{ctx.source_value}} — every ripgrep crate is dual
+      Unlicense OR MIT.
+
+  - id: ripgrep-license-mit-exists
+    kind: file_exists
+    paths: LICENSE-MIT
+    root_only: true
+    level: error
+    message: "Dual-licensed project must ship LICENSE-MIT at the root."
+
+  - id: ripgrep-unlicense-exists
+    kind: file_exists
+    paths: UNLICENSE
+    root_only: true
+    level: error
+    message: "Dual-licensed project must ship UNLICENSE at the root."
+
+  - id: ripgrep-copying-exists
+    kind: file_exists
+    paths: COPYING
+    root_only: true
+    level: warning
+    message: "COPYING points users at the dual-license arrangement."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 4. VALUE-ADD: edition coherence. All 10 manifests pin edition 2024.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: ripgrep-root-edition-2024
+    kind: toml_path_equals
+    paths: Cargo.toml
+    path: "$.package.edition"
+    equals: "2024"
+    level: error
+    message: "Root crate pins Cargo edition 2024."
+
+  - id: ripgrep-member-edition-identity
+    kind: cross_file_value_equals
+    source:
+      file: Cargo.toml
+      extract: { toml: "$.package.edition" }
+    targets:
+      files: "crates/*/Cargo.toml"
+      extract: { toml: "$.package.edition" }
+    normalize: none
+    allow_missing_target: false
+    level: warning
+    message: >-
+      Member {{ctx.target}} edition {{ctx.target_value}} must match the
+      root edition {{ctx.source_value}} (every crate is on edition 2024).
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 5. VALUE-ADD: each published crate's repository points INTO ripgrep.
+  #    NOTE: this is deliberately a per-crate `matches` (set-membership),
+  #    NOT a cross_file IDENTITY: each crate legitimately points at its
+  #    own subtree (`.../tree/master/crates/<name>`), so the URLs are NOT
+  #    equal — only their shared prefix is invariant. (A cross_file_value
+  #    _equals identity rule was tried and correctly fired 8x against the
+  #    distinct per-crate URLs; dropped as mis-modeling the invariant.)
+  # ═══════════════════════════════════════════════════════════════════
+  - id: ripgrep-member-repository-points-into-ripgrep
+    kind: for_each_dir
+    select: "{globset,grep,cli,matcher,pcre2,printer,regex,searcher,ignore}"
+    when_iter: 'iter.has_file("Cargo.toml")'
+    require:
+      - kind: toml_path_matches
+        paths: "crates/{path}/Cargo.toml"
+        path: "$.package.repository"
+        matches: '^https://github\.com/BurntSushi/ripgrep'
+    level: info
+    message: >-
+      Each ripgrep library crate's `repository` should point into the
+      BurntSushi/ripgrep repo (per-crate subtree URLs are expected).
+
+  # ═══════════════════════════════════════════════════════════════════
+  # 6. VALUE-ADD: governance / policy artifacts ripgrep ships.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: ripgrep-contributing-exists
+    kind: file_exists
+    paths: CONTRIBUTING.md
+    root_only: true
+    level: info
+    message: "CONTRIBUTING.md routes contributors to the AI policy."
+
+  - id: ripgrep-ai-policy-exists
+    kind: file_exists
+    paths: AI_POLICY.md
+    root_only: true
+    level: info
+    message: "AI_POLICY.md states the LLM-contribution rules CONTRIBUTING points at."
+
+  - id: ripgrep-changelog-exists
+    kind: file_exists
+    paths: CHANGELOG.md
+    root_only: true
+    level: warning
+    message: "Release notes live in CHANGELOG.md (the release checklist updates it per tag)."

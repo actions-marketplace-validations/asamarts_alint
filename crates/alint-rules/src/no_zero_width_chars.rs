@@ -5,10 +5,20 @@
 //!   - U+200B ZERO WIDTH SPACE
 //!   - U+200C ZERO WIDTH NON-JOINER
 //!   - U+200D ZERO WIDTH JOINER
+//!   - U+2060 WORD JOINER (the no-break sibling of U+200B)
+//!   - U+180E MONGOLIAN VOWEL SEPARATOR (renders zero-width)
 //!   - U+FEFF ZERO WIDTH NO-BREAK SPACE (BOM) — *but only when
 //!     not at byte position 0*. A leading BOM is `no_bom`'s
 //!     territory; this rule stays focused on body-internal ZWs
 //!     so the two rules don't double-report.
+//!
+//! Note on U+200D (ZWJ): it is flagged even though it joins emoji
+//! sequences (e.g. the multi-person "family" emoji, built by joining
+//! several person glyphs with ZWJ), because in source it is far more
+//! often an obfuscation vector than legitimate. The strip fixer
+//! therefore *will* break a literal emoji ZWJ sequence — scope the rule
+//! away from files that legitimately carry such emoji. (Grapheme-cluster-
+//! aware ZWJ handling is a possible future refinement.)
 
 use std::path::Path;
 
@@ -24,7 +34,7 @@ use crate::fixers::FileStripZeroWidthFixer;
 /// the file (the BOM case) — that's deliberately NOT flagged.
 pub fn is_flagged_zero_width(c: char, is_leading_feff: bool) -> bool {
     match c {
-        '\u{200B}' | '\u{200C}' | '\u{200D}' => true,
+        '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{180E}' => true,
         '\u{FEFF}' => !is_leading_feff,
         _ => false,
     }
@@ -67,10 +77,11 @@ impl PerFileRule for NoZeroWidthCharsRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return Ok(Vec::new());
-        };
-        let Some((line_no, col, codepoint)) = first_zero_width(text) else {
+        // Lossily decode rather than abandon the file on the first invalid byte:
+        // this is a security-posture rule, so a stray non-UTF-8 byte must NOT
+        // suppress detection of a zero-width char elsewhere (fail-open evasion).
+        let text = String::from_utf8_lossy(bytes);
+        let Some((line_no, col, codepoint)) = first_zero_width(&text) else {
             return Ok(Vec::new());
         };
         let msg = self.message.clone().unwrap_or_else(|| {
@@ -148,6 +159,13 @@ mod tests {
     }
 
     #[test]
+    fn flags_word_joiner_and_mongolian_vowel_separator() {
+        // L1: U+2060 (WORD JOINER) and U+180E complete the zero-width set.
+        assert_eq!(first_zero_width("a\u{2060}b").unwrap().2, 0x2060);
+        assert_eq!(first_zero_width("a\u{180E}b").unwrap().2, 0x180E);
+    }
+
+    #[test]
     fn leading_bom_is_not_flagged() {
         assert!(first_zero_width("\u{FEFF}hello\n").is_none());
     }
@@ -161,5 +179,43 @@ mod tests {
     #[test]
     fn clean_ascii_passes() {
         assert!(first_zero_width("nothing hidden here\n").is_none());
+    }
+
+    fn rule() -> NoZeroWidthCharsRule {
+        NoZeroWidthCharsRule {
+            id: "no-zw".to_string(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::match_all(),
+            fixer: None,
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_byte_does_not_suppress_a_later_zero_width_char() {
+        // Fail-open evasion regression (mirrors no_bidi_controls): a stray
+        // `0xFF` must not abandon the scan — a hidden ZWSP after it is still
+        // flagged. evaluate_file decodes lossily rather than strictly.
+        let idx = alint_core::FileIndex::from_entries(Vec::new());
+        let ctx = Context {
+            root: Path::new("/r"),
+            index: &idx,
+            registry: None,
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+        };
+        let mut bytes = vec![0xFFu8];
+        bytes.extend_from_slice("a\u{200B}b".as_bytes());
+        let vs = rule()
+            .evaluate_file(&ctx, Path::new("a.rs"), &bytes)
+            .unwrap();
+        assert_eq!(
+            vs.len(),
+            1,
+            "the ZWSP after a bad byte must still be flagged"
+        );
     }
 }

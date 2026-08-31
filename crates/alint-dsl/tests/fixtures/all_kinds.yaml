@@ -150,9 +150,65 @@ rules:
     targets:
       files: "crates/*/Cargo.toml"
       extract: { toml: "$.package.version" }
-    normalize: none
+    normalize: [trim, semver-minor]
     allow_missing_target: false
     level: error
+
+  - id: catalog-refs-resolve
+    kind: cross_file
+    source:
+      file: pnpm-workspace.yaml
+      extract: { yaml: "$.catalog.*" }
+    targets:
+      files: "packages/*/package.json"
+      extract: { json: "$.dependencies.*" }
+    relation: subset
+    normalize: none
+    level: error
+
+  - id: license-copies-have-identical-content
+    kind: cross_file
+    source:
+      file: LICENSE
+      extract: { whole_file: {} }
+    targets:
+      files: "LICENSE-*"
+      extract: { whole_file: {} }
+    relation: equals
+    level: error
+
+  - id: hl-groups-doc-matches-code
+    kind: cross_file
+    source:
+      files: "runtime/doc/*.txt"
+      extract: { regex: '\*hl-(\w+)\*' }
+    targets:
+      - file: src/highlight.c
+        extract: { regex: 'default link (\w+)' }
+    relation: set_equals
+    level: warning
+
+  - id: domain-not-depend-on-infra
+    kind: file_graph
+    nodes: "src/**/*.ts"
+    edges:
+      from_content:
+        extract: { regex: 'from\s+"(\.[^"]+)"' }
+        resolve: relative_to_file
+    require:
+      forbidden_edges:
+        - { from: "src/domain/**", to: "src/infra/**" }
+    level: error
+
+  - id: proto-has-generated-sibling
+    kind: file_graph
+    nodes: "proto/**/*.proto"
+    edges:
+      derive_target:
+        from: '(.*)\.proto'
+        to: '$1.pb.go'
+    require: no_dangling
+    level: warning
 
   - id: keep-sorted
     kind: ordered_block
@@ -161,6 +217,17 @@ rules:
     end: "# keep-sorted end"
     comparator: lexical
     unique: false
+    select: '^\s*[A-Za-z]'
+    level: warning
+
+  - id: changelog-entries-well-formed
+    kind: for_each_match
+    paths: ["CHANGELOG.md"]
+    select: '^[*-] .*\[#(?P<disp>\d+)\]\([^)]*pull/(?P<url>\d+)\)'
+    require:
+      matches: ['\)\.$']
+      forbid: ['\[Fix #\d+\]']
+      equal: [disp, url]
     level: warning
 
   - id: bindings-fresh
@@ -171,6 +238,12 @@ rules:
     normalize: final-newline
     timeout: 30
     level: error
+  - id: generated-tree-fresh
+    kind: generated_file_fresh
+    outputs: ["gen/**", "src/generated.rs"]
+    command: ["make", "gen"]
+    normalize: final-newline
+    level: warning
 
   - id: no-internal-imports
     kind: import_gate
@@ -216,6 +289,7 @@ rules:
     kind: unique_by
     select: "**/*.rs"
     key: "{stem}"
+    case_insensitive: true
     level: warning
     message: "{{ctx.count}} files share stem {{ctx.key}}: {{ctx.paths}}"
 
@@ -350,6 +424,7 @@ rules:
   - id: rust-must-be-ascii
     kind: file_is_ascii
     paths: "src/**/*.rs"
+    allow: ["U+00A0-U+00FF"]
     level: info
 
   # ─── Structured-query family ───────────────────────────────────
@@ -379,6 +454,26 @@ rules:
     matches: "^read$"
     level: warning
     if_present: true
+  - id: no-workflow-write-all
+    kind: yaml_path_absent
+    paths: ".github/workflows/*.yml"
+    path: "$[?($.permissions == 'write-all')]"
+    level: warning
+  - id: no-postinstall-script
+    kind: json_path_absent
+    paths: "package.json"
+    path: "$.scripts.postinstall"
+    level: warning
+  - id: no-cargo-patch-section
+    kind: toml_path_absent
+    paths: "Cargo.toml"
+    path: "$.patch"
+    level: warning
+  - id: no-unsafe-blocks
+    kind: xml_path_absent
+    paths: "*.csproj"
+    path: "$.Project.PropertyGroup.AllowUnsafeBlocks"
+    level: warning
   - id: cargo-edition-2024
     kind: toml_path_equals
     paths: "Cargo.toml"
@@ -430,6 +525,18 @@ rules:
     pattern: '\b(TODO|FIXME)\b'
     max_age_days: 180
     level: warning
+  - id: changelog-per-pr
+    kind: changeset_requires_path
+    add_glob: ".changeset/*.md"
+    when_changed: "src/**"
+    since: origin/main
+    level: warning
+  - id: format-version-bumped
+    kind: pair_changed_together
+    if_changed: "src/rustdoc-json-types/lib.rs"
+    then_changed: "src/rustdoc-json-types/FORMAT_VERSION"
+    since: origin/main
+    level: error
 
   # ─── Git-aware family ──────────────────────────────────────────
   - id: no-tracked-secrets
@@ -439,6 +546,23 @@ rules:
   - id: conventional-commit
     kind: git_commit_message
     pattern: "^(feat|fix|chore): "
+    level: warning
+  - id: dco-sign-off
+    kind: git_commit_signed_off
+    level: warning
+  - id: subject-grammar
+    kind: git_commit_subject_matches
+    matches: '^[a-z0-9_/.-]+: [a-z].{0,70}$'
+    level: warning
+  - id: no-fixup-commits
+    kind: git_commit_no_fixup
+    level: warning
+  - id: org-authors-only
+    kind: git_commit_author_allowlist
+    email_pattern: '^.+@example\.com$'
+    level: warning
+  - id: signed-commits
+    kind: git_commit_gpg_signed
     level: warning
 
   # ─── Plugin tier 1 ─────────────────────────────────────────────

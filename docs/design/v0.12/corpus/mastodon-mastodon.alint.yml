@@ -1,0 +1,172 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config — mastodon/mastodon
+# Pinned @ facb552c9cdbe8a2ebff0b94ebf2c9e9ec385347
+#
+# Shape: Ruby on Rails 8 monolith (bundler) + a JS/TS front-end and a
+# Node streaming server (yarn 4 / Berry, single root workspace), community
+# governance, AGPLv3.
+#
+# WHERE THE ENFORCED VALIDATION LIVES
+#   .github/workflows/*  — almost entirely TOOL RUNS (D per ruling R2):
+#     oxfmt format:check · stylelint · eslint+tsc · rubocop+brakeman ·
+#     haml-lint · vitest · bundler-audit · codeql · the rails test/migration
+#     matrices · chromatic. alint can shell-wrap these for single-entry
+#     orchestration (value-add) but does not re-express their logic.
+#   .husky/pre-commit -> lint-staged  — same tools, incrementally (D).
+#   check-i18n.yml + bin/i18n-tasks + bin/rake repo:check_locales_files —
+#     the bespoke surface (i18n normalization, unused/missing strings,
+#     locale-file parity, en.json codegen freshness).
+#
+# This config expresses the repo-STATE / cross-file-coherence subset that
+# alint covers natively, and orchestrates the language tools. The enforced
+# addressable surface is small; most repo rules below are alint VALUE-ADD
+# (structure the repo does not itself gate on) and are flagged as such.
+
+version: 1
+
+# Mastodon commits symlinks under public/ that point at build-time-generated
+# asset bundles (public/assets, public/packs) absent from a fresh checkout.
+# They are dangling until `rails assets:precompile` / `vite build` runs, so we
+# exclude them from the walk (they are not source the repo validates anyway).
+ignore:
+  - 'public/500.html'
+  - 'public/sw.js'
+  - 'public/sw.js.map'
+  - 'public/assets/**'
+  - 'public/packs/**'
+  - 'public/packs-test/**'
+
+extends:
+  - alint://bundled/oss-baseline@v1 # README/LICENSE/SECURITY/CoC/.gitignore + hygiene
+  - alint://bundled/node@v1 # has_node-gated: lockfile, no tracked node_modules/dist, engines/.nvmrc
+  - alint://bundled/tooling/editorconfig@v1 # .editorconfig + .gitattributes eol normalization
+  - alint://bundled/hygiene/lockfiles@v1 # no nested/stray lockfiles
+  - alint://bundled/ci/github-actions@v1 # workflow hardening assertions (value-add)
+  - alint://bundled/monorepo/yarn-workspace@v1 # is_yarn_workspace-gated: members (., streaming) declare name/README
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A1 — Ruby version coherence across .ruby-version / Gemfile.lock / Dockerfile
+  #      kind: cross_file_value_equals  [ENFORCED-as-convention]
+  # .ruby-version is the source of truth (4.0.5). Gemfile.lock's
+  # `RUBY VERSION\n  ruby 4.0.5` must match, and the renovate.json5 rule
+  # for `moritzheiber/ruby-jemalloc` / the ruby image explicitly says it
+  # "needs to be synced with .ruby-version". This is the classic hand-sync
+  # drift cross_file_value_equals exists for.
+  # ════════════════════════════════════════════════════════════════
+  - id: mastodon-ruby-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: '.ruby-version'
+      extract: { regex: '^([0-9]+\.[0-9]+\.[0-9]+)' }
+    targets:
+      - file: 'Gemfile.lock'
+        extract: { regex: 'RUBY VERSION\s+ruby\s+([0-9]+\.[0-9]+\.[0-9]+)' }
+      - file: 'Dockerfile'
+        extract: { regex: 'ARG RUBY_VERSION="([0-9]+\.[0-9]+\.[0-9]+)"' }
+    level: error
+    message: |
+      The Ruby version must agree across .ruby-version (source of truth),
+      Gemfile.lock's `RUBY VERSION`, and the Dockerfile `ARG RUBY_VERSION`.
+      renovate.json5 documents the Dockerfile<->.ruby-version sync as a
+      manual-approval invariant.
+
+  # ════════════════════════════════════════════════════════════════
+  # A2 — Node MAJOR version coherence: .nvmrc vs both Dockerfiles
+  #      kind: cross_file_value_equals  [ENFORCED-as-convention]
+  # .nvmrc is 24.16; Dockerfile + streaming/Dockerfile pin
+  # ARG NODE_MAJOR_VERSION="24". renovate.json5 says the node image
+  # "needs to be synced with .nvmrc". We compare the MAJOR component.
+  # ════════════════════════════════════════════════════════════════
+  - id: mastodon-node-major-coherence
+    kind: cross_file_value_equals
+    source:
+      file: '.nvmrc'
+      extract: { regex: '^([0-9]+)' }
+    targets:
+      - file: 'Dockerfile'
+        extract: { regex: 'ARG NODE_MAJOR_VERSION="([0-9]+)"' }
+      - file: 'streaming/Dockerfile'
+        extract: { regex: 'ARG NODE_MAJOR_VERSION="([0-9]+)"' }
+    level: error
+    message: |
+      The Node MAJOR version must agree across .nvmrc and both Dockerfiles'
+      `ARG NODE_MAJOR_VERSION`. renovate.json5 documents the node-image
+      <-> .nvmrc sync as a manual-approval invariant.
+
+  # ════════════════════════════════════════════════════════════════
+  # VALUE-ADD (NOT in the enforced denominator, ruling R3/R5) — these
+  # assert structure the repo relies on but does not itself gate on.
+  # ════════════════════════════════════════════════════════════════
+
+  # The bespoke rubocop MiddleDot cop + its require wiring must remain present.
+  - id: mastodon-custom-rubocop-cop-present
+    kind: file_exists
+    paths: ['lib/linter/rubocop_middle_dot.rb']
+    level: warning
+    message: 'Custom rubocop MiddleDot linter must remain present.'
+
+  # The bespoke haml MiddleDot linter (haml-lint require) must remain present.
+  - id: mastodon-custom-haml-linter-present
+    kind: file_exists
+    paths: ['lib/linter/haml_middle_dot.rb']
+    level: warning
+    message: 'Custom haml MiddleDot linter must remain present.'
+
+  # The base EN formatjs JSON locale source must exist (codegen target).
+  - id: mastodon-locale-en-json-exists
+    kind: file_exists
+    paths: ['app/javascript/mastodon/locales/en.json']
+    level: error
+    message: 'The base EN formatjs JSON locale source must exist.'
+
+  # The base EN Rails YML locale must exist.
+  - id: mastodon-locale-en-yml-exists
+    kind: file_exists
+    paths: ['config/locales/en.yml']
+    level: error
+    message: 'The base EN Rails YML locale must exist.'
+
+  # i18n-tasks config (consumed by check-i18n.yml + repo:check_locales_files).
+  - id: mastodon-i18n-tasks-config-present
+    kind: file_exists
+    paths: ['config/i18n-tasks.yml']
+    level: warning
+    message: 'i18n-tasks configuration must remain present.'
+
+  # crowdin config (translation source/target mapping).
+  - id: mastodon-crowdin-config-present
+    kind: file_exists
+    paths: ['crowdin.yml']
+    level: warning
+    message: 'crowdin configuration must remain present.'
+
+  # AGPLv3 license content assertion — DISABLED (cannot be expressed
+  # cleanly today; a TUNING gap, see the case-study notes). Three problems
+  # surfaced only by running `alint check` vs the clone (R4), not by
+  # validate-config:
+  #   * a bare `paths: ['LICENSE']` SILENTLY matches nothing for
+  #     file_content_matches (only file_exists honours `root_only`);
+  #   * `**/LICENSE` EXCLUDES the root file and instead matches the three
+  #     VENDORED nested LICENSE files (material-icons = Apache, mailer
+  #     image sets) which are legitimately NOT AGPL -> false positives;
+  #   * there is no wildcard that targets ONLY the root LICENSE.
+  # oss-license-exists already asserts root LICENSE *existence*; the AGPL
+  # *content* check needs a root-anchored path scope for content kinds.
+  # - id: mastodon-license-is-agpl
+  #   kind: file_content_matches
+  #   paths: ['LICENSE']            # <- silently no-ops at root
+  #   pattern: 'GNU AFFERO GENERAL PUBLIC LICENSE'
+
+  # publiccode.yml SPDX should stay AGPL-3.0-or-later (machine-readable
+  # metadata consumed by software catalogues). DISABLED: yaml_path_equals
+  # cannot target a single ROOT file by exact name — `publiccode.yml`,
+  # `**/publiccode.yml`, `*publiccode.yml` all match nothing, and `*.yml`
+  # over-scopes to every root YAML. Tracked as a tuning gap (root-file
+  # scoping for structured-query kinds). Left here as documentation only.
+  # - id: mastodon-publiccode-license
+  #   kind: yaml_path_equals
+  #   paths: ['publiccode.yml']   # <- silently no-ops; see note
+  #   path: '$.legal.license'
+  #   equals: 'AGPL-3.0-or-later'

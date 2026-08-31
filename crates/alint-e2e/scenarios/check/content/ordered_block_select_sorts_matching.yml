@@ -1,0 +1,28 @@
+name: ordered_block select sorts only matching lines, ignoring the rest
+tags: [check, ordered_block, content, passing]
+
+given:
+  tree:
+    Gemfile: |
+      # keep-sorted start
+      require 'alpha'
+      # a comment, not an entry
+      require 'bravo'
+      gem 'zzz'
+      require 'charlie'
+      # keep-sorted end
+  config: |
+    version: 1
+    rules:
+      - id: keep-requires-sorted
+        kind: ordered_block
+        paths: "Gemfile"
+        start: "# keep-sorted start"
+        end: "# keep-sorted end"
+        select: '^\s*require '
+        level: warning
+
+when: [check]
+
+expect:
+  - violations: []

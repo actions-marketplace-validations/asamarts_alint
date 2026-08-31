@@ -1,0 +1,36 @@
+name: alint://bundled/php flags a misconfigured Composer package
+tags: [check, extends, bundled, php]
+
+# A PHP repo (composer.json present) with: an upper-cased
+# (invalid) name, a PSR-4 root + an autoload file + a bin that do
+# not exist on disk, and a committed vendor/. The autoload-dev
+# rule stays silent (no autoload-dev declared → nothing to
+# resolve).
+
+given:
+  tree:
+    composer.json: |
+      {
+        "name": "Acme/Widget",
+        "autoload": {
+          "psr-4": { "Acme\\Widget\\": "src/" },
+          "files": ["src/missing.php"]
+        },
+        "bin": ["bin/gone"]
+      }
+    vendor:
+      "autoload.php": "<?php\n"
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/php@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: php-composer-name-format, level: warning}
+      - {rule: php-composer-psr4-dirs-resolve, level: warning}
+      - {rule: php-composer-autoload-files-resolve, level: warning}
+      - {rule: php-composer-bin-resolve, level: warning}
+      - {rule: php-no-vendor-committed, level: warning}

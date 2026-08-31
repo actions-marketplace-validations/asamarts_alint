@@ -6,15 +6,17 @@ use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation
 use regex::Regex;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Rust regex, automatically anchored with ^...$ by the engine.
     pattern: String,
-    /// Check against the file *stem* (no final extension) instead of the
-    /// full basename. Defaults to `false` (full basename is matched).
+    /// Match the file stem (no extension) instead of the full basename.
     #[serde(default)]
     stem: bool,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct FilenameRegexRule {
@@ -29,6 +31,13 @@ pub struct FilenameRegexRule {
 }
 
 impl Rule for FilenameRegexRule {
+    /// Expose the per-file scope so the engine resolves this rule's
+    /// `scope_filter` (manifest sets, `changed_since:`) before dispatch and
+    /// can `--changed`-skip it (see `Rule::path_scope`).
+    fn path_scope(&self) -> Option<&Scope> {
+        Some(&self.scope)
+    }
+
     alint_core::rule_common_impl!();
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -46,10 +55,15 @@ impl Rule for FilenameRegexRule {
             if !self.pattern.is_match(name) {
                 let target = if self.stem { "stem" } else { "basename" };
                 let msg = self.message.clone().unwrap_or_else(|| {
-                    format!(
-                        "filename {target} {:?} does not match /^{}$/",
-                        name, self.pattern_src
-                    )
+                    // The rule auto-anchors with `^…$`; strip any redundant
+                    // user-supplied anchors so the displayed regex doesn't
+                    // double them (e.g. a `^test_` pattern → `/^test_$/`, not
+                    // `/^^test_$/`).
+                    let shown = self
+                        .pattern_src
+                        .trim_start_matches('^')
+                        .trim_end_matches('$');
+                    format!("filename {target} {name:?} does not match /^{shown}$/")
                 });
                 violations.push(Violation::new(msg).with_path(entry.path.clone()));
             }
@@ -127,6 +141,25 @@ mod tests {
         let idx = index(&["tests/test_basic.rs", "tests/test_widget.rs"]);
         let v = rule.evaluate(&ctx(Path::new("/fake"), &idx)).unwrap();
         assert!(v.is_empty(), "unexpected: {v:?}");
+    }
+
+    #[test]
+    fn message_does_not_double_a_user_supplied_anchor() {
+        // The rule auto-anchors with `^…$`; a redundant `^` in the user's
+        // pattern must not render as `/^^…$/` in the violation message.
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: filename_regex\n\
+             paths: \"*.rs\"\n\
+             pattern: \"^test_\"\n\
+             level: error\n",
+        );
+        let rule = build(&spec).unwrap();
+        let idx = index(&["BADNAME.rs"]);
+        let v = rule.evaluate(&ctx(Path::new("/fake"), &idx)).unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(v[0].message.contains("/^test_$/"), "{}", v[0].message);
+        assert!(!v[0].message.contains("^^"), "{}", v[0].message);
     }
 
     #[test]

@@ -1,0 +1,30 @@
+name: file_graph derive_target + no_dangling fires when a derived sibling is missing
+tags: [check, file_graph, cross_file]
+
+given:
+  tree:
+    licenses:
+      arrow-LICENSE.txt: |
+        Apache License 2.0
+      arrow-NOTICE.txt: |
+        Arrow NOTICE
+      lucene-LICENSE.txt: |
+        Apache License 2.0
+  config: |
+    version: 1
+    rules:
+      - id: license-has-notice
+        kind: file_graph
+        nodes: "licenses/**"
+        edges:
+          derive_target:
+            from: '(.+)-LICENSE\.txt'
+            to: '$1-NOTICE.txt'
+        require: no_dangling
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: license-has-notice, level: error, path: licenses/lucene-LICENSE.txt}

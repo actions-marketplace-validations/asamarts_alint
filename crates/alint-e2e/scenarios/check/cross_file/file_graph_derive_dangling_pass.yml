@@ -1,0 +1,25 @@
+name: file_graph derive_target + no_dangling is silent when every sibling exists
+tags: [check, file_graph, cross_file, passing]
+
+given:
+  tree:
+    licenses:
+      arrow-LICENSE.txt: "Apache License 2.0\n"
+      arrow-NOTICE.txt: "Arrow NOTICE\n"
+      lucene-LICENSE.txt: "Apache License 2.0\n"
+      lucene-NOTICE.txt: "Lucene NOTICE\n"
+  config: |
+    version: 1
+    rules:
+      - id: license-has-notice
+        kind: file_graph
+        nodes: "licenses/**"
+        edges:
+          derive_target: { from: '(.+)-LICENSE\.txt', to: '$1-NOTICE.txt' }
+        require: no_dangling
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

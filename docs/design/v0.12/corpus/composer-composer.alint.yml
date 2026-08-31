@@ -1,0 +1,187 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for composer/composer @ 7b3147f083b120846d16c3dc371e61268e0c129e
+# (v0.12 case study — Stage A). PHP CLI package-manager, MIT, community-governed.
+#
+# Composer's enforced validation surface is dominated by tool execution
+# (PHPUnit, php -l, PHPStan lvl 8, `composer validate --strict`, php-cs-fixer,
+# zizmor, api-surface diff, phar build) — all D non-goals alint can orchestrate
+# but does not reimplement. The natively-expressible (A) surface is the set of
+# declarative per-file content/hygiene invariants the repo declares in
+# .php-cs-fixer.php (header_comment, declare_strict_types), .gitattributes
+# (whitespace / eol=lf) and .editorconfig (trim_trailing_whitespace,
+# insert_final_newline).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # =====================================================================
+  # A1 — license header on every source PHP file.
+  # Declared by .php-cs-fixer.php `header_comment` (maintainer-applied per
+  # .github/CONTRIBUTING.md "CS fixes done by maintainers"). Present in
+  # 307/307 src files. The Fixtures/, ClassLoader.php, InstalledVersions.php
+  # and MinimumVersionSupport paths are notPath-excluded by the fixer.
+  # =====================================================================
+  - id: composer-license-header
+    kind: file_header
+    paths:
+      include: ["src/**/*.php"]
+      exclude:
+        - "src/Composer/Autoload/ClassLoader.php"
+        - "src/Composer/InstalledVersions.php"
+    lines: 12
+    pattern: "This file is part of Composer\\."
+    level: error
+    message: "Every source file must carry the Composer license header (see .php-cs-fixer.php header_comment)."
+
+  # =====================================================================
+  # A2 — strict_types declaration on every source PHP file.
+  # Declared by .php-cs-fixer.php `declare_strict_types`. Present in 305/307
+  # src files (same two excluded vendored files). The header_comment fixer
+  # places `<?php declare(strict_types=1);` on line 1.
+  # =====================================================================
+  - id: composer-strict-types
+    kind: file_content_matches
+    paths:
+      include: ["src/**/*.php"]
+      exclude:
+        - "src/Composer/Autoload/ClassLoader.php"
+        - "src/Composer/InstalledVersions.php"
+    pattern: "declare\\(strict_types=1\\)"
+    level: error
+    message: "Every source file must `declare(strict_types=1)` (see .php-cs-fixer.php declare_strict_types)."
+
+  # =====================================================================
+  # A3 — no trailing whitespace.
+  # Declared by .gitattributes (whitespace=blank-at-eol) + .editorconfig
+  # (trim_trailing_whitespace = true) + .php-cs-fixer.php no_whitespace_in_blank_line.
+  # =====================================================================
+  - id: composer-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["src/**/*.php", "tests/**/*.php", "**/*.json", "**/*.md", "**/*.yml", "**/*.yaml"]
+      exclude: ["tests/**/Fixtures/**", "composer.lock", "vendor/**"]
+    level: warning
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  # =====================================================================
+  # A4 — final newline.
+  # Declared by .editorconfig (insert_final_newline = true) + .gitattributes
+  # (whitespace=blank-at-eof).
+  # =====================================================================
+  - id: composer-final-newline
+    kind: final_newline
+    paths:
+      include: ["src/**/*.php", "tests/**/*.php", "*.json", "*.md", "*.yml", "*.yaml"]
+      exclude: ["tests/**/Fixtures/**", "composer.lock"]
+    level: warning
+    fix:
+      file_append_final_newline: {}
+
+  # =====================================================================
+  # A5 — LF line endings.
+  # Declared by .gitattributes (* text=auto eol=lf; *.php eol=lf).
+  # =====================================================================
+  - id: composer-lf-line-endings
+    kind: line_endings
+    paths:
+      include: ["src/**/*.php", "tests/**/*.php", "*.json", "*.md", "*.yml", "*.yaml"]
+      exclude: ["tests/**/Fixtures/**", "composer.lock"]
+    target: lf
+    level: warning
+
+  # =====================================================================
+  # VALUE-ADD (recorded separately, NOT in the A/B/C/D coverage ratio per
+  # R3/R5). These assert structure Composer does not gate on directly.
+  # =====================================================================
+
+  # The custom JSON schemas shipped under res/ must be valid JSON (composer
+  # validate uses res/composer-schema.json as the source of truth).
+  - id: composer-schemas-exist
+    kind: file_exists
+    paths:
+      - "res/composer-schema.json"
+      - "res/composer-lock-schema.json"
+      - "res/composer-repository-schema.json"
+    level: info
+    message: "Composer ships JSON schemas under res/ that `composer validate` resolves against."
+
+  # composer.json declares the package as MIT and a library.
+  - id: composer-manifest-license-mit
+    kind: json_path_equals
+    paths: ["composer.json"]
+    path: "$.license"
+    equals: "MIT"
+    level: info
+    message: "composer.json license must stay MIT (matches root LICENSE)."
+
+  - id: composer-manifest-type-library
+    kind: json_path_equals
+    paths: ["composer.json"]
+    path: "$.type"
+    equals: "library"
+    level: info
+
+  # composer.lock is tracked (application/tool convention — Composer ships a
+  # bin and pins its own deps). NOT gitignored.
+  - id: composer-lock-tracked
+    kind: file_exists
+    paths: ["composer.lock"]
+    root_only: true
+    level: info
+    message: "Composer commits its own composer.lock (it ships a binary)."
+
+  # ---------------------------------------------------------------------
+  # v0.12 GAP CLOSURES.
+  # These three invariants were documented as out of reach in Stage A:
+  # composer.json's path registries (bin / extra.phpstan.includes) had no
+  # one-rule "every declared path resolves" expression, and the CHANGELOG's
+  # per-heading date grammar is a per-line for-all that file_content_matches
+  # (existence-only) cannot state. The shipped `cross_file relation: resolves`
+  # and `for_each_match` kinds close both. Verified against the pinned tree:
+  # bin/composer + phpstan/rules.neon resolve; all 218 `### ` headings carry
+  # an ISO date (so the rules are clean-latent here, not firing).
+  # ---------------------------------------------------------------------
+
+  # composer.json `bin` enumerates the shipped executables; each must exist
+  # on disk (`bin/composer`). Forward-resolution half of a path registry —
+  # previously inexpressible (registry_paths_resolve targets a list, but the
+  # `cross_file resolves` form keeps this co-located with the other
+  # composer.json assertions). NEW (v0.12 cross_file resolves).
+  - id: composer-bin-paths-resolve
+    kind: cross_file
+    source: { file: composer.json, extract: { json: "$.bin[*]" } }
+    relation: resolves
+    level: error
+    message: "Every composer.json `bin` entry must resolve to a real file."
+
+  # composer.json `extra.phpstan.includes` points the PHPStan config at
+  # in-repo .neon fragments (`phpstan/rules.neon`); a rename that misses this
+  # entry silently drops the rules. NEW (v0.12 cross_file resolves).
+  - id: composer-phpstan-includes-resolve
+    kind: cross_file
+    source: { file: composer.json, extract: { json: "$.extra.phpstan.includes[*]" } }
+    relation: resolves
+    level: warning
+    message: "Every composer.json extra.phpstan.includes entry must resolve to a real file."
+
+  # CHANGELOG per-line grammar: every release heading (`### …`) must carry an
+  # ISO `YYYY-MM-DD` date. This is a per-line for-all over the selected
+  # heading lines — file_content_matches only asserts at-least-one date
+  # exists in the file, not that EVERY heading has one. The version-bracket
+  # form is deliberately NOT pinned: the history mixes `[v]`, `[v] -` and a
+  # bare `v` (1.0.0-alpha1), so only the universally-present date is required.
+  # NEW (v0.12 for_each_match per-line quantifier).
+  - id: composer-changelog-heading-has-date
+    kind: for_each_match
+    paths: ["CHANGELOG.md"]
+    select: '^### '
+    require:
+      matches: ['\b\d{4}-\d{2}-\d{2}\b']
+    level: warning
+    message: "Every CHANGELOG release heading must carry an ISO (YYYY-MM-DD) date."

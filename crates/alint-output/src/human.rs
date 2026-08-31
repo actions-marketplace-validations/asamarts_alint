@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use alint_core::{FixReport, FixStatus, Level, Report, RuleResult, Violation};
 
+use crate::sanitize::sanitize_terminal;
 use crate::style::{self, GlyphSet, HumanOptions, write_hyperlink};
 
 // ---------------------------------------------------------------
@@ -82,7 +83,9 @@ pub fn write_human(report: &Report, w: &mut dyn Write, opts: HumanOptions) -> st
 
         let label = bucket.as_ref().map_or_else(
             || "Repository-level".to_string(),
-            |p| p.display().to_string(),
+            // The path is attacker-controlled (a repo file name) — neutralize
+            // any terminal escapes before it lands in the header (M8).
+            |p| sanitize_terminal(&p.display().to_string()).into_owned(),
         );
         write_section_header(w, &label, width, &opts.glyphs)?;
 
@@ -135,18 +138,21 @@ fn write_violation(
 
     let rule_style = style::RULE_ID;
     // First line: indent + sigil + level + rule_id + optional `fixable` tag.
+    // The rule id comes from the linted repo's own `.alint.yml`, so a hostile
+    // repo can hide terminal escapes in it (YAML `\x1b` decodes to a real ESC
+    // byte past the parser's raw-control-char check) — sanitize it like the
+    // message + path (M8).
+    let safe_rule_id = sanitize_terminal(&result.rule_id);
     if result.is_fixable {
         let fix = style::FIXABLE;
         writeln!(
             w,
-            "  {level_style}{sigil}  {level_name}{level_style:#}  {rule_style}{}{rule_style:#}   {fix}fixable{fix:#}",
-            result.rule_id,
+            "  {level_style}{sigil}  {level_name}{level_style:#}  {rule_style}{safe_rule_id}{rule_style:#}   {fix}fixable{fix:#}",
         )?;
     } else {
         writeln!(
             w,
-            "  {level_style}{sigil}  {level_name}{level_style:#}  {rule_style}{}{rule_style:#}",
-            result.rule_id,
+            "  {level_style}{sigil}  {level_name}{level_style:#}  {rule_style}{safe_rule_id}{rule_style:#}",
         )?;
     }
 
@@ -159,7 +165,11 @@ fn write_violation(
     // line and let the terminal handle any overflow).
     let dim = style::DIM;
     let total_width = opts.effective_width();
-    let lines = wrap_message(&violation.message, MSG_INDENT.len(), total_width);
+    // The message can embed a matched value or a `kind: command` rule's
+    // subprocess output — neutralize terminal escapes before wrapping, while
+    // preserving the intentional `\n` paragraph breaks wrap_message honors (M8).
+    let safe_message = sanitize_terminal(&violation.message);
+    let lines = wrap_message(&safe_message, MSG_INDENT.len(), total_width);
     let (first_line, rest) = lines
         .split_first()
         .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
@@ -201,8 +211,13 @@ fn write_violation(
         } else {
             style::DOCS
         };
+        // The policy_url is also config-controlled; an embedded ESC/BEL would
+        // otherwise close the OSC-8 hyperlink sequence early and let the tail be
+        // interpreted as terminal control. Sanitize before emitting (target +
+        // visible text).
+        let safe_url = sanitize_terminal(url);
         write!(w, "{MSG_INDENT}{dim}docs:{dim:#} {docs}")?;
-        write_hyperlink(w, url, url, opts.hyperlinks)?;
+        write_hyperlink(w, &safe_url, &safe_url, opts.hyperlinks)?;
         writeln!(w, "{docs:#}")?;
     }
     Ok(())
@@ -303,13 +318,19 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
 ///
 /// ```text
 /// <path>:<line>:<col>: <level>: <rule-id>: <message>[  [fixable]]
+/// <path>: <level>: <rule-id>: <message>                  (no location)
+/// <repo>: <level>: <rule-id>: <message>                  (repo-level)
 /// ```
 ///
-/// Path-less violations use the literal `<repo>` so every line
-/// parses uniformly. Missing line / col are rendered as `0`.
-/// Levels are color-tagged to aid visual scanning even in
-/// compact form; the `AutoStream` still strips SGR escapes when
-/// the sink isn't a TTY, so pipe-safe output is automatic.
+/// The `:line:col` suffix is emitted only when the violation actually
+/// carries a location, so an editor / grep can still jump to it. A
+/// whole-file or repo-level finding has nothing to point at, so the old
+/// `:0:0` was noise that also misleadingly implied line 0 / col 0.
+/// Path-less violations use the literal `<repo>`. The location prefix is
+/// color-tagged (bright magenta + bold) so each finding's start is visually
+/// obvious even without the grouped format's per-file separators; levels are
+/// color-tagged too. The `AutoStream` strips SGR escapes when the sink
+/// isn't a TTY, so pipe-safe `path:line:col` output is automatic.
 fn write_human_compact(
     report: &Report,
     w: &mut dyn Write,
@@ -325,12 +346,21 @@ fn write_human_compact(
             continue;
         }
         for v in &result.violations {
-            let path = v
-                .path
-                .as_ref()
-                .map_or_else(|| "<repo>".to_string(), |p| p.display().to_string());
-            let line = v.line.unwrap_or(0);
-            let col = v.column.unwrap_or(0);
+            // Path + message are attacker-controlled; neutralize terminal
+            // escapes for this single-line format (M8).
+            let path = v.path.as_ref().map_or_else(
+                || "<repo>".to_string(),
+                |p| sanitize_terminal(&p.display().to_string()).into_owned(),
+            );
+            let message = sanitize_terminal(&v.message);
+            // Append `:line:col` only for findings that actually have a
+            // location. A repo-level or whole-file finding points at nothing,
+            // so `:0:0` was misleading noise. Located findings keep the full
+            // `path:line:col` an editor / grep jumps on.
+            let loc = match (v.line, v.column) {
+                (Some(line), Some(col)) => format!("{path}:{line}:{col}"),
+                _ => path,
+            };
             let (level_style, level_name) = match result.level {
                 Level::Error => {
                     errors += 1;
@@ -357,10 +387,11 @@ fn write_human_compact(
             } else {
                 String::new()
             };
+            let safe_rule_id = sanitize_terminal(&result.rule_id);
+            let loc_style = style::LOCATION;
             writeln!(
                 w,
-                "{path}:{line}:{col}: {level_style}{level_name}{level_style:#}: {rule_style}{}{rule_style:#}: {}{fix_tag}",
-                result.rule_id, v.message,
+                "{loc_style}{loc}{loc_style:#}: {level_style}{level_name}{level_style:#}: {rule_style}{safe_rule_id}{rule_style:#}: {message}{fix_tag}",
             )?;
         }
     }
@@ -433,10 +464,10 @@ pub fn write_fix_human(
             Level::Off => (style::DIM, "off"),
         };
         let rule_style = style::RULE_ID;
+        let safe_rule_id = sanitize_terminal(&rule.rule_id);
         writeln!(
             w,
-            "{level_style}{level_name}{level_style:#} {rule_style}[{}]{rule_style:#}:",
-            rule.rule_id
+            "{level_style}{level_name}{level_style:#} {rule_style}[{safe_rule_id}]{rule_style:#}:",
         )?;
         for item in &rule.items {
             let path_prefix = item
@@ -471,6 +502,10 @@ pub fn write_fix_human(
                     format!("{path_prefix}{} (no fixer)", item.violation.message),
                 ),
             };
+            // `content` embeds the attacker-controlled path + message (alint's
+            // own status prose is clean ASCII); styling is applied separately
+            // below, so sanitizing the whole string is safe (M8).
+            let content = sanitize_terminal(&content);
             let lines = wrap_message(&content, FIX_INDENT.len(), total_width);
             let (first_line, rest) = lines
                 .split_first()
@@ -623,5 +658,148 @@ mod tests {
         // so tokens up to 20 chars fit on one line.
         let out = wrap_message("twenty-char-token-ok", 14, 10);
         assert_eq!(out, vec!["twenty-char-token-ok".to_string()]);
+    }
+
+    // M8: the three human render paths must neutralize terminal escapes in
+    // attacker-controlled paths/messages. alint emits its own SGR (e.g.
+    // `\x1b[2m` dim) but never the clear-screen `\x1b[2J`, so a raw `\x1b[2J`
+    // in the output would be an injection that slipped through; its
+    // neutralized form `\x1b[2J` (literal text) proves the sanitizer ran.
+    const RAW_CLEAR: &str = "\x1b[2J\x1b[H";
+
+    /// Drop `ESC [ ... m` SGR sequences so a test can assert on the plain-text
+    /// shape of colored output.
+    fn strip_sgr(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' && chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                for e in chars.by_ref() {
+                    if e == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    fn evil_report() -> Report {
+        use std::path::PathBuf;
+        let v = Violation::new(format!("{RAW_CLEAR}forged: all rules passed."))
+            .with_path(PathBuf::from(format!("src/{RAW_CLEAR}evil.rs")));
+        // The rule_id and policy_url are ALSO config-controlled (a hostile repo's
+        // own `.alint.yml`), so they must be sanitized too.
+        Report {
+            results: vec![RuleResult::new(
+                format!("{RAW_CLEAR}evil-rule").into(),
+                Level::Error,
+                Some(format!("https://example.test/{RAW_CLEAR}x").into()),
+                vec![v],
+                true,
+            )],
+        }
+    }
+
+    fn assert_neutralized(out: &str) {
+        assert!(
+            !out.contains("\x1b[2J"),
+            "a raw clear-screen escape survived: {out:?}"
+        );
+        assert!(
+            out.contains("\\x1b[2J"),
+            "expected the neutralized \\x1b[2J text: {out:?}"
+        );
+    }
+
+    #[test]
+    fn human_format_neutralizes_terminal_escapes() {
+        let mut buf = Vec::new();
+        write_human(&evil_report(), &mut buf, HumanOptions::default()).unwrap();
+        assert_neutralized(&String::from_utf8(buf).unwrap());
+    }
+
+    #[test]
+    fn compact_format_neutralizes_terminal_escapes() {
+        let mut buf = Vec::new();
+        let opts = HumanOptions {
+            compact: true,
+            ..HumanOptions::default()
+        };
+        write_human(&evil_report(), &mut buf, opts).unwrap();
+        assert_neutralized(&String::from_utf8(buf).unwrap());
+    }
+
+    #[test]
+    fn compact_omits_line_col_when_the_finding_has_no_location() {
+        use std::path::PathBuf;
+        // Three shapes: located (path + line/col), whole-file (path, no
+        // line/col), and repo-level (no path at all).
+        let located = Violation::new("located msg")
+            .with_path(PathBuf::from("src/lib.rs"))
+            .with_location(12, 5);
+        let whole_file = Violation::new("whole-file msg").with_path(PathBuf::from("PLAN.md"));
+        let repo_level = Violation::new("repo msg");
+        let report = Report {
+            results: vec![
+                RuleResult::new("r-loc".into(), Level::Warning, None, vec![located], false),
+                RuleResult::new(
+                    "r-file".into(),
+                    Level::Warning,
+                    None,
+                    vec![whole_file],
+                    false,
+                ),
+                RuleResult::new("r-repo".into(), Level::Error, None, vec![repo_level], false),
+            ],
+        };
+        let mut buf = Vec::new();
+        let opts = HumanOptions {
+            compact: true,
+            ..HumanOptions::default()
+        };
+        write_human(&report, &mut buf, opts).unwrap();
+        // Strip SGR so the assertions read against the plain text shape.
+        let raw = String::from_utf8(buf).unwrap();
+        let out = strip_sgr(&raw);
+        assert!(
+            out.contains("src/lib.rs:12:5: warning: r-loc: located msg"),
+            "located finding keeps path:line:col for editor/grep jump:\n{out}"
+        );
+        assert!(
+            out.contains("PLAN.md: warning: r-file: whole-file msg"),
+            "whole-file finding drops the :0:0 noise:\n{out}"
+        );
+        assert!(
+            out.contains("<repo>: error: r-repo: repo msg"),
+            "repo-level finding is <repo> with no :0:0:\n{out}"
+        );
+        assert!(
+            !out.contains(":0:0"),
+            "no finding should render the misleading :0:0:\n{out}"
+        );
+    }
+
+    #[test]
+    fn fix_format_neutralizes_terminal_escapes() {
+        use std::path::PathBuf;
+        let v = Violation::new(format!("{RAW_CLEAR}forged"))
+            .with_path(PathBuf::from(format!("src/{RAW_CLEAR}evil.rs")));
+        let report = FixReport {
+            results: vec![alint_core::FixRuleResult {
+                rule_id: "demo".into(),
+                level: Level::Warning,
+                items: vec![alint_core::FixItem {
+                    violation: v,
+                    status: FixStatus::Unfixable,
+                }],
+            }],
+        };
+        let mut buf = Vec::new();
+        write_fix_human(&report, &mut buf, HumanOptions::default()).unwrap();
+        assert_neutralized(&String::from_utf8(buf).unwrap());
     }
 }

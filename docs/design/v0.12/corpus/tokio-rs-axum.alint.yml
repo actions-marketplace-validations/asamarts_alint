@@ -1,0 +1,118 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for tokio-rs/axum @ 4a72e063b916f39e0698a345a99a755deb8f345b
+# v0.12 case-study Stage A draft. Scores ONLY the repo's bespoke-validation
+# surface that alint can express natively (A-items); tool-execution gates
+# (clippy/fmt/test/cargo-deny/cargo-hack/typos/cargo-sort/external-types) are
+# deliberate non-goals (D) that alint orchestrates but does not reimplement.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+  - alint://bundled/monorepo@v1
+
+rules:
+  # --- A: cross-file VERSION coherence (the review-checklist twin) ----------
+  # axum/Cargo.toml, axum-extra/Cargo.toml et al carry literal comments
+  # "# remember to bump the version that axum-extra depends on". The sibling
+  # crate version is authored in its own [package].version and RESTATED in the
+  # path+version dependency declarations of the other crates. No tool gates
+  # this equality (cargo resolves via `path`, ignoring the version field for
+  # the workspace build) -> a pure review convention, exactly R5's denominator.
+
+  # axum-core: own version == the version pin in axum + axum-extra deps
+  - id: axum-core-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: axum-core/Cargo.toml
+      extract: { toml: "$.package.version" }
+    targets:
+      - file: axum/Cargo.toml
+        extract: { regex: 'axum-core = \{ path = "\.\./axum-core", version = "([^"]+)"' }
+      - file: axum-extra/Cargo.toml
+        extract: { regex: 'axum-core = \{ path = "\.\./axum-core", version = "([^"]+)"' }
+    level: error
+    message: "axum-core version drift: {{ctx.target}} pins {{ctx.target_value}} but axum-core/Cargo.toml is {{ctx.source_value}}"
+
+  # axum-macros: own version == the version pin in axum + axum-extra deps
+  - id: axum-macros-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: axum-macros/Cargo.toml
+      extract: { toml: "$.package.version" }
+    targets:
+      - file: axum/Cargo.toml
+        extract: { regex: 'axum-macros = \{ path = "\.\./axum-macros", version = "([^"]+)"' }
+      - file: axum-extra/Cargo.toml
+        extract: { regex: 'axum-macros = \{ path = "\.\./axum-macros", version = "([^"]+)"' }
+    level: error
+    message: "axum-macros version drift: {{ctx.target}} pins {{ctx.target_value}} but axum-macros/Cargo.toml is {{ctx.source_value}}"
+
+  # axum: own version == the version pin in axum-extra's optional dep
+  - id: axum-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: axum/Cargo.toml
+      extract: { toml: "$.package.version" }
+    targets:
+      - file: axum-extra/Cargo.toml
+        extract: { regex: 'axum = \{ path = "\.\./axum", version = "([^"]+)"' }
+    level: error
+    message: "axum version drift: axum-extra pins {{ctx.target_value}} but axum/Cargo.toml is {{ctx.source_value}}"
+
+  # --- alint value-add (NOT in coverage denominator; structure axum does ----
+  # --- not itself gate on, recorded per R5 as bonus assertions) -------------
+
+  # CI workflow declares the MSRV env that test-msrv builds against
+  - id: ci-declares-msrv
+    kind: file_content_matches
+    paths: [".github/workflows/CI.yml"]
+    pattern: "MSRV: '1\\.80'"
+    level: info
+    message: "CI.yml should declare the MSRV env var."
+
+  # deny.toml policy assertions (R3: alint can assert the DECLARATION; the
+  # enforcement is cargo-deny resolving the graph, which stays D)
+  - id: deny-license-allowlist-declared
+    kind: toml_path_matches
+    paths: ["deny.toml"]
+    path: "$.licenses.allow[*]"
+    matches: "^(MIT|Apache-2.0|BSD-3-Clause|Unicode-3.0)$"
+    level: info
+    message: "deny.toml license allowlist should be declared."
+
+  - id: deny-bans-multiple-versions
+    kind: toml_path_equals
+    paths: ["deny.toml"]
+    path: "$.bans['multiple-versions']"
+    equals: "deny"
+    level: info
+    message: "deny.toml should ban duplicate dependency versions."
+
+  # workspace forbids unsafe (a strong, load-bearing invariant)
+  - id: workspace-forbids-unsafe
+    kind: toml_path_equals
+    paths: ["Cargo.toml"]
+    path: "$.workspace.lints.rust.unsafe_code"
+    equals: "forbid"
+    level: info
+    message: "workspace should forbid unsafe_code."
+
+  # every published crate carries a CHANGELOG (Keep-a-Changelog convention)
+  - id: crates-have-changelog
+    kind: for_each_dir
+    select: "axum*"
+    require:
+      - kind: file_exists
+        paths: "{path}/CHANGELOG.md"
+    level: info
+    message: "Each published crate directory should keep a CHANGELOG.md."
+
+  # axum-macros pins its own nightly toolchain (used by test-nightly)
+  - id: axum-macros-toolchain-pinned
+    kind: file_exists
+    paths: ["axum-macros/rust-toolchain"]
+    level: info
+    message: "axum-macros should pin a nightly toolchain for trybuild tests."

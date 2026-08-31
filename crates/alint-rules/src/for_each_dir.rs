@@ -37,10 +37,48 @@ use alint_core::{
 };
 use serde::Deserialize;
 
+/// `select:` accepts a single glob (`"src/*"`) or a list with
+/// `!`-prefixed excludes (`["packages/*", "!packages/internal"]`).
+/// A YAML string vs sequence are structurally distinct, so an
+/// untagged enum decodes them unambiguously. Shared by the
+/// select-family (`for_each_dir`, `for_each_file`,
+/// `every_matching_has`).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(
+    untagged,
+    expecting = "a glob string, or a list of globs (with `!`-prefixed excludes)"
+)]
+pub(crate) enum SelectSpec {
+    /// A single glob.
+    One(String),
+    /// A non-empty list of globs (`!`-prefixed entries are excludes).
+    Many(#[schemars(length(min = 1))] Vec<String>),
+}
+
+/// Resolve a `select:` spec to a validated `Scope`: non-empty, with
+/// at least one include (non-`!`) pattern; `!`-prefixed patterns
+/// become excludes (handled by `Scope::from_patterns`).
+pub(crate) fn resolve_select(spec: SelectSpec, rule_id: &str) -> Result<Scope> {
+    let patterns = match spec {
+        SelectSpec::One(s) => vec![s],
+        SelectSpec::Many(v) => v,
+    };
+    if patterns.is_empty() {
+        return Err(Error::rule_config(rule_id, "`select:` must not be empty"));
+    }
+    if !patterns.iter().any(|p| !p.trim_start().starts_with('!')) {
+        return Err(Error::rule_config(
+            rule_id,
+            "`select:` needs at least one include pattern (a non-`!` glob)",
+        ));
+    }
+    Scope::from_patterns(&patterns)
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    select: String,
+    select: SelectSpec,
     /// Optional per-iteration filter — evaluated against each
     /// iterated entry's `iter` context. Common shape:
     /// `iter.has_file("Cargo.toml")` to scope the iteration to
@@ -72,6 +110,10 @@ impl Rule for ForEachDirRule {
         true
     }
 
+    fn validate_nested(&self, registry: &alint_core::RuleRegistry) -> Result<()> {
+        validate_nested_require(&self.id, self.level, &self.require, registry)
+    }
+
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         evaluate_for_each(
             &self.id,
@@ -96,7 +138,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "for_each_dir requires at least one nested rule under `require:`",
         ));
     }
-    let select_scope = Scope::from_patterns(&[opts.select])?;
+    let select_scope = resolve_select(opts.select, &spec.id)?;
     let when_iter = parse_when_iter(spec, opts.when_iter.as_deref())?;
     let require = compile_nested_require(&spec.id, opts.require)?;
     Ok(Box::new(ForEachDirRule {
@@ -126,6 +168,35 @@ pub(crate) fn compile_nested_require(
         .enumerate()
         .map(|(idx, spec)| CompiledNestedSpec::compile(spec, parent_id, idx))
         .collect()
+}
+
+/// Dry-build each nested `require:` spec against the registry so a
+/// nested rule with an unknown kind, an unknown option, or a missing
+/// required field fails at config-load time — not lazily on the first
+/// matching iteration, and not silently when the selector matches
+/// nothing. Shared by `for_each_dir`, `for_each_file`, and
+/// `every_matching_has` via their `Rule::validate_nested` impls.
+///
+/// A placeholder path token set is used: only structural errors
+/// (kind / option / required-field) surface here — the per-iteration
+/// path *values* are irrelevant to whether a nested spec builds.
+pub(crate) fn validate_nested_require(
+    parent_id: &str,
+    level: Level,
+    require: &[CompiledNestedSpec],
+    registry: &alint_core::RuleRegistry,
+) -> Result<()> {
+    let tokens = alint_core::template::PathTokens::from_path(std::path::Path::new("_"));
+    for (idx, compiled) in require.iter().enumerate() {
+        let synthesized = compiled.spec.instantiate(parent_id, idx, level, &tokens);
+        registry.build(&synthesized).map_err(|e| {
+            Error::rule_config(
+                parent_id,
+                format!("nested rule #{idx} (`{}`): {e}", compiled.spec.kind),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 /// Compile a `when_iter:` source string into a `WhenExpr` at
@@ -204,6 +275,7 @@ pub(crate) fn evaluate_for_each(
                     facts,
                     vars,
                     iter: Some(iter_env),
+                    env: None,
                 };
                 match expr.evaluate(&env) {
                     Ok(true) => {}
@@ -236,6 +308,7 @@ pub(crate) fn evaluate_for_each(
                         facts,
                         vars,
                         iter: Some(iter_env),
+                        env: None,
                     };
                     match expr.evaluate(&env) {
                         Ok(true) => {}
@@ -379,9 +452,9 @@ fn evaluate_one_per_file_rule(
             return vec![
                 Violation::new(format!(
                     "{parent_id}: nested rule #{nested_i} cannot analyze {} \
-                     — file is too large ({n} bytes; {} MiB cap)",
+                     — file is too large ({})",
                     literal.display(),
-                    crate::io::MAX_ANALYZE_BYTES / (1024 * 1024),
+                    crate::io::over_cap(n),
                 ))
                 .with_path(literal),
             ];
@@ -394,10 +467,18 @@ fn evaluate_one_per_file_rule(
     };
     match pf.evaluate_file(ctx, literal, &bytes) {
         Ok(vs) => vs,
-        Err(e) => vec![Violation::new(format!(
-            "{parent_id}: nested rule #{nested_i} error on {}: {e}",
-            literal.display()
-        ))],
+        Err(e) => vec![
+            // No path; the message embeds a volatile error string, so key on
+            // the (dir, nested-rule index) identity instead of the message.
+            Violation::new(format!(
+                "{parent_id}: nested rule #{nested_i} error on {}: {e}",
+                literal.display()
+            ))
+            .with_baseline_key(format!(
+                "for-each-dir-nested-error\u{0}{}\u{0}{nested_i}",
+                crate::slash(literal)
+            )),
+        ],
     }
 }
 
@@ -494,6 +575,36 @@ mod tests {
         let r = rule("components/*", vec![require_file_exists("{dir}/index.tsx")]);
         let v = eval_with(&r, &[("src", true), ("src/foo", true)]);
         assert!(v.is_empty());
+    }
+
+    #[test]
+    fn validate_nested_rejects_unknown_kind_and_option() {
+        let reg = registry();
+
+        // A valid nested rule validates clean.
+        let good = rule("src/*", vec![require_file_exists("{path}/mod.rs")]);
+        assert!(good.validate_nested(&reg).is_ok());
+
+        // Unknown nested KIND → Err naming the kind. The selector deliberately
+        // matches nothing: `validate_nested` runs at load, before any walk, so
+        // a nested typo is caught even when no directory would be iterated
+        // (the gap where `check` previously reported "passed").
+        let bad_kind: NestedRuleSpec =
+            serde_yaml_ng::from_str("kind: totally_fake_kind\npaths: \"{path}/x\"\n").unwrap();
+        let r = rule("matches-nothing/*", vec![bad_kind]);
+        let err = r.validate_nested(&reg).unwrap_err().to_string();
+        assert!(err.contains("totally_fake_kind"), "{err}");
+
+        // Unknown nested OPTION → Err.
+        let bad_opt: NestedRuleSpec =
+            serde_yaml_ng::from_str("kind: file_exists\npaths: \"{path}/x\"\nbogusopt: true\n")
+                .unwrap();
+        let r = rule("src/*", vec![bad_opt]);
+        let err = r.validate_nested(&reg).unwrap_err().to_string();
+        assert!(
+            err.contains("bogusopt") || err.contains("unknown field"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for numpy/numpy @ 55460a7e71b004f104ca629622ab116e467b8931
+# v0.12 case study (Stage A). Expresses the natively-addressable (A) slice of
+# numpy's enforced bespoke-validation surface plus a small value-add layer.
+#
+# NOTE on the unit: numpy's enforced surface is dominated by TOOL EXECUTION
+# (ruff, cython-lint, mypy/pyrefly/basedpyright, stubtest, vulture, the C-API
+# borrowed-ref linter, the sanitizers, the test suite, meson build/install
+# checks) — all D non-goals per R2. The A-items below are the cross-file value
+# coherences + the license-files manifest resolution.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ---- A-items: enforced cross-file / structure coherences --------------
+
+  # A1: line-length must stay 88 in ruff.toml (the value .editorconfig declares
+  # for *.py, which says verbatim "Keep in sync with tools/lint_diff.ini and
+  # tools/linter.py"). We anchor the canonical value at ruff.toml.
+  - id: numpy-ruff-line-length-88
+    kind: toml_path_equals
+    paths: ruff.toml
+    path: "$['line-length']"
+    equals: 88
+    level: error
+    message: >-
+      ruff line-length must stay 88 (the value .editorconfig declares for *.py
+      and that tools/linter.py / lint_diff.ini are kept in sync with).
+
+  # A2: scipy-openblas32 pin coherence between the two CI requirements files.
+  # Both ci_requirements.txt and ci32_requirements.txt carry
+  # "Keep this in sync with ..." and pin scipy-openblas32==<ver>;
+  # check_openblas_version.py enforces the numpy-release side of the same idea.
+  - id: numpy-openblas32-pin-coherent
+    kind: cross_file_value_equals
+    source:
+      file: requirements/ci_requirements.txt
+      extract: { regex: 'scipy-openblas32==(\S+)' }
+    targets:
+      files: requirements/ci32_requirements.txt
+      extract: { regex: 'scipy-openblas32==(\S+)' }
+    allow_missing_target: false
+    level: error
+    message: >-
+      scipy-openblas32 pin must match between ci_requirements.txt and
+      ci32_requirements.txt (both say "keep this in sync").
+
+  # A3: every license file declared in pyproject [project] license-files must
+  # exist on disk (PEP 639 manifest -> real path). A registry that resolves.
+  - id: numpy-license-files-resolve
+    kind: registry_paths_resolve
+    source: pyproject.toml
+    extract:
+      toml: "$.project['license-files'][*]"
+    expect: file
+    level: error
+    message: >-
+      A path listed in pyproject.toml [project] license-files does not exist.
+
+  # ---- value-add (NOT enforced by numpy CI; recorded separately) --------
+
+  # numpy declares its SPDX expression; assert the BSD-3-Clause core is present.
+  - id: numpy-spdx-declared
+    kind: toml_path_matches
+    paths: pyproject.toml
+    path: "$.project.license"
+    matches: 'BSD-3-Clause'
+    level: warning
+    message: pyproject [project] license SPDX expression should name BSD-3-Clause.
+
+  # Root license + contributor guide presence (structural; numpy does not gate).
+  - id: numpy-license-file-exists
+    kind: file_exists
+    paths: LICENSE.txt
+    level: warning
+
+  - id: numpy-contributing-exists
+    kind: file_exists
+    paths: CONTRIBUTING.rst
+    level: warning
+
+  # News-fragment dir exists with its format README (towncrier workflow anchor).
+  - id: numpy-newsfragments-readme-exists
+    kind: file_exists
+    paths: doc/release/upcoming_changes/README.rst
+    level: warning

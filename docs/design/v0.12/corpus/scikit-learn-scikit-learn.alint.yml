@@ -1,0 +1,169 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# scikit-learn/scikit-learn @ 65ab405b996c10c22392b3118f26d35ccf8e49a0
+# v0.12 case-study config. Python ML library, meson build, NumFOCUS.
+#
+# Bundles cover OSS hygiene + Python conventions. Repo rules below
+# express the bespoke checks scikit-learn enforces in build_tools/linting.sh,
+# pre-commit, and the documented cross-file version-coherence conventions.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+
+rules:
+  # === A: pre-commit hygiene hooks (trailing-ws / EOF fixer) ========
+  # .pre-commit-config.yaml runs trailing-whitespace + end-of-file-fixer
+  # repo-wide (exclude sklearn/externals + asv env). Expressed natively.
+  - id: skl-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.py", "**/*.pyx", "**/*.pxd", "**/*.rst", "**/*.yml", "**/*.yaml", "**/*.toml"]
+      exclude: ["sklearn/externals/**", "asv_benchmarks/env/**"]
+    level: warning
+    message: "trailing whitespace (enforced by pre-commit trailing-whitespace hook)."
+
+  - id: skl-final-newline
+    kind: final_newline
+    paths:
+      include: ["**/*.py", "**/*.pyx", "**/*.pxd", "**/*.rst"]
+      exclude: ["sklearn/externals/**", "asv_benchmarks/env/**"]
+    level: warning
+    message: "missing final newline (enforced by pre-commit end-of-file-fixer hook)."
+
+  # === A: per-file copyright/SPDX header (ruff CPY001) =============
+  # pyproject flake8-copyright notice-rgx requires every non-excluded
+  # sklearn/**.py to start with the Authors + SPDX two-line header.
+  # Logic is a content-match; expressed natively (ruff is the vehicle).
+  - id: skl-spdx-author-header
+    kind: file_content_matches
+    paths:
+      include: ["sklearn/**/*.py"]
+      exclude:
+        - "sklearn/externals/**"
+        - "sklearn/**/tests/**"
+        - "sklearn/_build_utils/**"
+        - "sklearn/utils/_metadata_requests.py"
+    pattern: 'Authors: The scikit-learn developers'
+    level: warning
+    message: "missing the '# Authors: The scikit-learn developers' header (ruff CPY001 / flake8-copyright)."
+
+  - id: skl-spdx-identifier-header
+    kind: file_content_matches
+    paths:
+      include: ["sklearn/**/*.py"]
+      exclude:
+        - "sklearn/externals/**"
+        - "sklearn/**/tests/**"
+        - "sklearn/_build_utils/**"
+        - "sklearn/utils/_metadata_requests.py"
+    pattern: 'SPDX-License-Identifier: BSD-3-Clause'
+    level: warning
+    message: "missing the '# SPDX-License-Identifier: BSD-3-Clause' header (ruff CPY001)."
+
+  # === A: bespoke linting.sh content firewalls ====================
+  # Forbid the default doctest directives (ELLIPSIS / NORMALIZE_WHITESPACE
+  # are enabled by default in conftest) -- build_tools/linting.sh.
+  - id: skl-no-default-doctest-directives
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.py", "**/*.pyx"]
+      exclude: ["sklearn/externals/**"]
+    pattern: '# doctest: \+(ELLIPSIS|NORMALIZE_WHITESPACE)'
+    level: warning
+    message: "ELLIPSIS / NORMALIZE_WHITESPACE doctest directives are enabled by default (build_tools/linting.sh)."
+
+  # joblib import firewall: use sklearn.utils.parallel, not joblib
+  # directly -- build_tools/linting.sh, all *.py except parallel.py.
+  - id: skl-no-joblib-delayed
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.py"]
+      exclude:
+        - "sklearn/utils/parallel.py"
+        - "sklearn/externals/**"
+    pattern: 'joblib import.+delayed'
+    level: warning
+    message: "use `from sklearn.utils.parallel import delayed`, not joblib.delayed (build_tools/linting.sh)."
+
+  - id: skl-no-joblib-parallel
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.py"]
+      exclude:
+        - "sklearn/utils/parallel.py"
+        - "sklearn/externals/**"
+    pattern: 'joblib import.+Parallel'
+    level: warning
+    message: "use `from sklearn.utils.parallel import Parallel`, not joblib.Parallel (build_tools/linting.sh)."
+
+  # === A: cross-file version coherence (documented conventions) ====
+  # ruff version must match across .pre-commit-config, _min_dependencies,
+  # and the dev-setup docs. .pre-commit-config carries a "remember to
+  # update _min_dependencies.py and doc .rst files" warning comment.
+  - id: skl-ruff-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: sklearn/_min_dependencies.py
+      extract:
+        regex: '"ruff": \("([^"]+)"'
+    targets:
+      - file: .pre-commit-config.yaml
+        extract:
+          regex: 'ruff-pre-commit[\s\S]*?rev:\s*v([0-9.]+)'
+    level: warning
+    message: "ruff version drift: _min_dependencies.py vs .pre-commit-config.yaml (see the update-reminder comment in .pre-commit-config.yaml)."
+
+  # scipy floor must be in sync between _min_dependencies.py and
+  # pyproject.toml ("scipy and cython should be in sync with pyproject.toml").
+  - id: skl-scipy-floor-coherent
+    kind: cross_file_value_equals
+    source:
+      file: sklearn/_min_dependencies.py
+      extract:
+        regex: 'SCIPY_MIN_VERSION = "([^"]+)"'
+    targets:
+      - file: pyproject.toml
+        extract:
+          regex: '"scipy>=([0-9.]+)"'
+    level: warning
+    message: "scipy floor drift: _min_dependencies.py SCIPY_MIN_VERSION vs pyproject.toml (the in-file sync comment)."
+
+  - id: skl-cython-floor-coherent
+    kind: cross_file_value_equals
+    source:
+      file: sklearn/_min_dependencies.py
+      extract:
+        regex: 'CYTHON_MIN_VERSION = "([^"]+)"'
+    targets:
+      - file: pyproject.toml
+        extract:
+          regex: '"cython>=([0-9.]+)"'
+    level: warning
+    message: "cython floor drift: _min_dependencies.py CYTHON_MIN_VERSION vs pyproject.toml build-system requires."
+
+  # === value-add: structure / metadata assertions =================
+  - id: skl-cython-lint-bans-relative-imports
+    kind: toml_path_equals
+    paths: pyproject.toml
+    path: "$.tool['ruff'].lint['flake8-tidy-imports']['ban-relative-imports']"
+    equals: "all"
+    level: info
+    message: "relative-import ban should stay declared (TID252) in ruff config."
+
+  - id: skl-pyproject-license-bsd
+    kind: toml_path_equals
+    paths: pyproject.toml
+    path: "$.project.license"
+    equals: "BSD-3-Clause"
+    level: info
+    message: "project license should remain BSD-3-Clause."
+
+  - id: skl-contributing-exists
+    kind: file_exists
+    paths: ["CONTRIBUTING.md"]
+    root_only: true
+    level: info
+    message: "CONTRIBUTING.md should exist."

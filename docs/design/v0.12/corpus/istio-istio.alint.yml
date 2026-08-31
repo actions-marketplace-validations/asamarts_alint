@@ -1,0 +1,257 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for istio/istio @ 5112958faa0bec6129a806fc6e4b361b5f11ebe3
+# (v0.12 case-study Stage A; pinned, depth-1).
+#
+# istio is a CNCF Apache-2.0 service mesh: single-module Go monorepo (one
+# root go.mod, module istio.io/istio), Helm-chart packaging (9 Chart.yaml
+# under manifests/charts/), ~1,700 release-note YAML fragments, cross-repo
+# SHA pins in istio.deps. CI runs out-of-tree in Prow (istio/test-infra),
+# so .github/workflows/ is empty and the ci/github-actions@v1 bundle would
+# no-op (NOT extended). The enforced surface is `make lint` (a chain of
+# tool wrappers), `make gen-check` (codegen freshness), CODEOWNERS review,
+# and bin/check_samples.sh.
+#
+# Per the v0.12 protocol R2/R3/R5: tool-wrapping (golangci-lint, gofmt,
+# shellcheck, hadolint, yamllint, mdl, autopep8, license-lint, istioctl
+# validate, the depguard import firewall RUN BY golangci) is D and excluded
+# from the coverage ratio. This config expresses the A-items (the checks
+# whose LOGIC a native alint kind captures) plus structural value-add.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/go@v1
+  - alint://bundled/compliance/apache-2@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A-ITEMS — native expression of repo-ENFORCED logic
+  # ════════════════════════════════════════════════════════════════
+
+  # A: lint-copyright-banner (common/scripts/lint_copyright_banner.sh)
+  # enforces an Apache header + Copyright line on every source file,
+  # excluding *.gen.go / *.pb.go / *_pb2.py. istio's banner is the
+  # short SPDX-template form ("Licensed under the Apache License,
+  # Version 2.0..."), which the apache-2 bundle's file_header rule
+  # (apache-2-source-has-license-header) accepts and whose exclude set
+  # matches istio's FINDFILES prune. This repo-rule is the istio-tuned
+  # twin scoped to istio's exact source extensions, so it expresses the
+  # check's LOGIC directly (not by shelling the script out).
+  - id: istio-apache-header
+    kind: file_header
+    paths:
+      include:
+        - "**/*.{go,cc,h,proto,py,sh,rs}"
+      exclude:
+        - "**/*.gen.go"
+        - "**/*.pb.go"
+        - "**/*_pb2.py"
+        - "vendor/**"
+        - "common/**"
+        - "out/**"
+        - "licenses/**"
+    lines: 25
+    pattern: 'Licensed under the Apache License,?\s*Version 2'
+    level: warning
+    message: >-
+      Apache header missing (lint-copyright-banner). Run
+      `make fix-copyright-banner`.
+
+  # B GAP — PARTIALLY closed by v0.12 `cross_file` set relations.
+  # dependabot.yml `ignore:` and `groups.exclude-patterns:` MUST mirror
+  # each other (the file's own comment: "Must mirror the ignore list
+  # above — see comment there for why both are needed"). The shipped
+  # v0.12 `cross_file` `set_equals`/`superset` relations gave us the
+  # list-vs-list set primitive the original note asked for — but the
+  # TRUE invariant is a *per-stanza* bidirectional mirror and that exact
+  # shape is STILL unexpressible:
+  #   * istio's dependabot.yml has 8 `updates[*]` stanzas. The 4 gomod
+  #     branch stanzas (master/release-1.30/-1.29/-1.28) each carry both
+  #     an `ignore` list AND a `groups.all-dependencies.exclude-patterns`
+  #     list; the 4 samples stanzas (pip/npm/bundler/gomod) carry
+  #     `ignore: [{dependency-name: "*"}]` and NO `groups:` block.
+  #   * A whole-file UNION `set_equals` therefore FALSE-POSITIVES on the
+  #     correct tree (verified at the pin: `missing: "*"` — the samples
+  #     stanzas' "*" is on the ignore side with no exclude counterpart).
+  #   * alint's JSONPath is RFC 9535 WITHOUT filter selectors
+  #     (`$.updates[?(@.groups)]` => parser error), so we cannot scope
+  #     the union to the stanzas that actually carry a groups block, and
+  #     there is no per-array-element (per-stanza) set-equality mode.
+  # So full closure stays deferred (needs per-stanza set pairing or a
+  # JSONPath filter selector; see new_kind_candidates). What IS now
+  # enforceable and TRUE at the pin is the dangerous half-direction:
+  # every `exclude-patterns` token (union across stanzas) must also be a
+  # known `ignore` token (a stray exclude with no matching ignore would
+  # let Dependabot still raise standalone PRs for it). That is a
+  # whole-file `superset` (ignore-union ⊇ exclude-union) — it does NOT
+  # catch a per-stanza ignore-without-exclude omission that some OTHER
+  # stanza's exclude happens to cover, but it does catch the inverse.
+  # NOTE the dashed YAML keys require RFC-9535 bracket notation
+  # (`['dependency-name']`, `['all-dependencies']`, `['exclude-patterns']`).
+  # Provenance: v0.12 cross_file set relations (set_equals/superset).
+  - id: istio-dependabot-exclude-known-to-ignore
+    kind: cross_file
+    source:
+      file: ".github/dependabot.yml"
+      extract: { yaml: "$.updates[*].ignore[*]['dependency-name']" }
+    targets:
+      - file: ".github/dependabot.yml"
+        extract:
+          yaml: "$.updates[*].groups['all-dependencies']['exclude-patterns'][*]"
+    relation: superset
+    level: warning
+    message: >-
+      Every dependabot `groups.all-dependencies.exclude-patterns` entry must
+      also appear in some stanza's `ignore:` list (otherwise Dependabot can
+      still open standalone PRs for it). NOTE: this is the one-directional
+      union check; the full per-stanza bidirectional mirror is not yet
+      expressible — keep the two lists in sync per stanza by hand.
+
+  # ════════════════════════════════════════════════════════════════
+  # VALUE-ADD — structural assertions istio does NOT gate on but that
+  # encode real invariants (recorded separately from the A/B/C/D
+  # ratio per R3/R5). Kept because they make the config useful.
+  # ════════════════════════════════════════════════════════════════
+
+  # Cross-chart dev-build hub pin equality. Every chart's
+  # _internal_defaults_do_not_set.global.hub must equal
+  # istio-discovery's (registry.istio.io/testing). istio does not gate
+  # on this; it is a genuine value-add invariant.
+  - id: istio-chart-hub-consistent
+    kind: cross_file_value_equals
+    source:
+      file: "manifests/charts/istio-control/istio-discovery/values.yaml"
+      extract: { yaml: "$._internal_defaults_do_not_set.global.hub" }
+    targets:
+      # ztunnel's chart intentionally omits global.hub, so it is NOT a
+      # target (alint correctly flagged "matched nothing" at the pin).
+      - file: "manifests/charts/istio-cni/values.yaml"
+        extract: { yaml: "$._internal_defaults_do_not_set.global.hub" }
+      - file: "manifests/charts/gateways/istio-ingress/values.yaml"
+        extract: { yaml: "$._internal_defaults_do_not_set.global.hub" }
+    level: warning
+    message: >-
+      Every chart's dev-build global.hub must match istio-discovery's
+      (registry.istio.io/testing).
+
+  # Chart.yaml structural pins. release-builder substitutes the real
+  # version at build time, so the tracked value must stay 1.0.0.
+  - id: istio-chart-version-templated
+    kind: yaml_path_equals
+    paths: "manifests/charts/**/Chart.yaml"
+    path: "$.version"
+    equals: "1.0.0"
+    level: warning
+    message: 'Chart.yaml version must stay "1.0.0" (release-builder substitutes it).'
+
+  - id: istio-chart-appversion-templated
+    kind: yaml_path_equals
+    paths: "manifests/charts/**/Chart.yaml"
+    path: "$.appVersion"
+    equals: "1.0.0"
+    level: warning
+    message: 'Chart.yaml appVersion must stay "1.0.0".'
+
+  - id: istio-chart-apiversion-v2
+    kind: yaml_path_equals
+    paths: "manifests/charts/**/Chart.yaml"
+    path: "$.apiVersion"
+    equals: "v2"
+    level: warning
+    message: 'Chart.yaml apiVersion must be "v2" (Helm 3+).'
+
+  # istio.deps cross-repo SHA/tag pins must be a 40-char SHA or semver.
+  - id: istio-deps-proxy-sha
+    kind: json_path_matches
+    paths: "istio.deps"
+    path: "$[0].lastStableSHA"
+    matches: '^[a-f0-9]{40}$|^v\d+\.\d+\.\d+$'
+    level: warning
+    message: "istio.deps[0] (PROXY) needs a 40-char SHA or semver."
+
+  - id: istio-deps-ztunnel-sha
+    kind: json_path_matches
+    paths: "istio.deps"
+    path: "$[1].lastStableSHA"
+    matches: '^[a-f0-9]{40}$|^v\d+\.\d+\.\d+$'
+    level: warning
+    message: "istio.deps[1] (ZTUNNEL) needs a 40-char SHA or semver."
+
+  # Release-note fragment schema. The documented template
+  # (releasenotes/template.yaml + README) requires apiVersion
+  # release-notes/v2 and an enumerated kind. istio validates these
+  # with an external release-notes tool (D); the apiVersion pin is the
+  # safe machine-checkable subset alint adds.
+  - id: istio-releasenotes-apiversion
+    kind: yaml_path_equals
+    paths: "releasenotes/notes/*.yaml"
+    path: "$.apiVersion"
+    equals: "release-notes/v2"
+    level: warning
+    message: "release note must declare apiVersion: release-notes/v2."
+
+  - id: istio-releasenotes-kind
+    kind: yaml_path_matches
+    paths: "releasenotes/notes/*.yaml"
+    path: "$.kind"
+    matches: '^(bug-fix|bug|security-fix|feature|enhancement|test|promotion)\s*$'
+    if_present: true
+    level: info
+    message: "release-note kind should be one of the documented values."
+
+  # VERSION file shape.
+  - id: istio-version-file-shape
+    kind: file_content_matches
+    paths: "VERSION"
+    pattern: '^\d+\.\d+(\.\d+)?(-\w+)?\s*$'
+    level: warning
+    message: "VERSION must be a single semver line (e.g. 1.31 or 1.31.0-dev)."
+
+  # istio.deps presence (release-build prerequisite).
+  - id: istio-deps-exists
+    kind: file_exists
+    paths: "istio.deps"
+    root_only: true
+    level: warning
+    message: "istio.deps (cross-repo SHA pins) is required for release builds."
+
+  # CODEOWNERS must declare a `* @owner` fallback (it does, first line).
+  - id: istio-codeowners-fallback
+    kind: file_content_matches
+    paths: "CODEOWNERS"
+    pattern: '(?m)^\*\s+@\S+'
+    level: warning
+    message: "CODEOWNERS must declare a `* @owner` fallback."
+
+  # values.yaml under multi-key charts wrap defaults under
+  # _internal_defaults_do_not_set (Helm-3 --set ergonomics). base /
+  # default / gateway use a flatter shape, so exclude them.
+  - id: istio-chart-internal-defaults-wrapper
+    kind: file_content_matches
+    paths:
+      include:
+        - "manifests/charts/*/values.yaml"
+        - "manifests/charts/*/*/values.yaml"
+      exclude:
+        - "manifests/charts/base/values.yaml"
+        - "manifests/charts/default/values.yaml"
+        - "manifests/charts/gateway/values.yaml"
+    pattern: '(?m)^_internal_defaults_do_not_set:'
+    level: info
+    message: >-
+      values.yaml should wrap defaults under
+      `_internal_defaults_do_not_set:` (Helm-3 --set ergonomics).
+
+  # common/ is vendored from istio/common-files; the do-not-edit marker
+  # should be present on each copied file.
+  - id: istio-common-files-marker
+    kind: file_content_matches
+    paths:
+      include: ["common/**/*.mk", "common/**/*.sh"]
+    pattern: 'DO NOT EDIT.*PROBABLY A COPY'
+    level: info
+    message: >-
+      common/ is vendored from istio/common-files (`make update-common`).

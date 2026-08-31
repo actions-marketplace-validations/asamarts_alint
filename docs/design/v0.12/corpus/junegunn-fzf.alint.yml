@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for junegunn/fzf @ 7d647c70c286720c225ebb8ab75896e5dbee6af6
+# v0.12 case-study Stage A. Go CLI tool, solo maintainer (junegunn),
+# go + make build, Ruby/minitest integration tests.
+#
+# Enforced ADDRESSABLE surface expressed here:
+#   - A1 version coherence across release-gated files (Makefile `prerelease`
+#     + release.yml "Verify version consistency"): install/install.ps1/the two
+#     man pages all carry the same vX.Y.Z, and CHANGELOG.md has a matching
+#     top heading. ONE behavior -> cross_file_value_equals + a heading guard.
+# The rest of fzf's enforced surface (gofmt, rubocop, shfmt, typos, codeql,
+# fuzz, unit/integration tests, the common.sh shell codegen) is D / B — see
+# the case-study record; not expressed as native A rules here.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/go@v1
+
+rules:
+  # ---- A1: release version coherence (the enforced "version consistency" gate)
+  # Source of truth = `install` (`version=0.73.1`). Every other release file
+  # must carry the identical X.Y.Z. Mirrors Makefile:148-152 / release.yml:41-50.
+  - id: fzf-version-coherent
+    kind: cross_file_value_equals
+    level: error
+    message: >-
+      Release version must match across install, install.ps1, and both man
+      pages (Makefile `prerelease` / release.yml "Verify version consistency").
+    source:
+      file: install
+      extract:
+        regex: '(?m)^version=([0-9]+\.[0-9]+\.[0-9]+)'
+    targets:
+      - file: install.ps1
+        extract:
+          regex: '\$version="([0-9]+\.[0-9]+\.[0-9]+)"'
+      - file: man/man1/fzf.1
+        extract:
+          regex: '"fzf ([0-9]+\.[0-9]+\.[0-9]+)"'
+      - file: man/man1/fzf-tmux.1
+        extract:
+          regex: '"fzf ([0-9]+\.[0-9]+\.[0-9]+)"'
+
+  # Same behavior's existence-guard: the current version has a CHANGELOG heading
+  # (Makefile `grep -q ^$(VERSION_REGEX)$$ CHANGELOG.md`). Content-presence only;
+  # CHANGELOG lists all past versions so it cannot be a value-equality target.
+  - id: fzf-changelog-has-version-heading
+    kind: file_content_matches
+    level: error
+    paths: CHANGELOG.md
+    pattern: '(?m)^[0-9]+\.[0-9]+\.[0-9]+$'
+    message: CHANGELOG.md must contain a top-level version heading line (X.Y.Z).
+
+  # ---- alint value-add (NOT enforced by fzf; recorded separately in the study)
+  # Structural/config assertions fzf does not gate on but that alint can add.
+  - id: fzf-release-doc-exists
+    kind: file_exists
+    level: info
+    paths: RELEASE.md
+    message: Release process is documented (RELEASE.md).
+
+  - id: fzf-editorconfig-exists
+    kind: file_exists
+    level: info
+    paths: .editorconfig
+    message: .editorconfig present (shell indentation policy).
+
+  - id: fzf-codeowners-exists
+    kind: file_exists
+    level: info
+    paths: .github/CODEOWNERS
+    message: CODEOWNERS present.
+
+  - id: fzf-tool-versions-exists
+    kind: file_exists
+    level: info
+    paths: .tool-versions
+    message: .tool-versions pins the toolchain (golang/ruby/shfmt).

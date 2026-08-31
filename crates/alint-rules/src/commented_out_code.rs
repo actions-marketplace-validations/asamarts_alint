@@ -57,29 +57,35 @@ use alint_core::{
 };
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     /// `auto` (default) infers the comment-marker set from
     /// each file's extension. Explicit override useful for
     /// embedded DSLs or cases where the extension lies.
     #[serde(default)]
+    #[schemars(extend("default" = "auto"))]
     language: Language,
     /// Minimum consecutive comment-line count for a block to
     /// be considered. 1-2 line comments are almost always
     /// prose; 3+ starts looking like dead code. Default 3.
     #[serde(default = "default_min_lines")]
+    #[schemars(range(min = 2))]
     min_lines: usize,
-    /// Token-density floor (0.0-1.0). Higher = stricter (only
-    /// the most code-shaped blocks fire). Default 0.5.
+    /// Density floor for code-shapedness. Higher = stricter. Default 0.5 sits
+    /// at the midpoint between obvious-prose (0.0) and obvious-code (1.0);
+    /// lower it to widen the catch (more FPs), raise it to narrow.
     #[serde(default = "default_threshold")]
+    #[schemars(range(min = 0.0, max = 1.0))]
     threshold: f64,
-    /// Skip the first N lines of any file. Defaults to 30 to
-    /// pass over license headers without false-positive
-    /// flagging them as commented-out code.
+    /// Skip blocks whose first line is at or before this line number. Default
+    /// 30 - covers typical license headers without false-positive flagging
+    /// them as commented-out code.
     #[serde(default = "default_skip_leading_lines")]
     skip_leading_lines: usize,
 }
+
+crate::options_schema_for!(Options);
 
 fn default_min_lines() -> usize {
     3
@@ -91,7 +97,7 @@ fn default_skip_leading_lines() -> usize {
     30
 }
 
-#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Default, Clone, Copy, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum Language {
     #[default]

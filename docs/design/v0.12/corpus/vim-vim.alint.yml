@@ -1,0 +1,299 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# v0.12 case-study config for vim/vim @ fd30a736cc4acbefe3a1b05e6051f8df13aa6b2b
+# Shape: C (+ Vim Script) · editor · autotools + make · community.
+#
+# vim's ENFORCED bespoke-validation surface lives almost entirely in
+# .github/workflows/** (reusable ci-linux/macos/windows/asan workflows +
+# two composite actions) and a handful of ci/*.make / runtime Makefile
+# targets driven by the `matrix.extra` knob in ci-linux.yml. There is NO
+# pre-commit / lefthook / husky / committed git hook, NO scripts/ validator
+# dir beyond ci/, and NO commit-lint (the strict commit format in AGENTS.md
+# is review-enforced only).
+#
+# The enforced checks split into:
+#   * EXECUTION / SEMANTIC (D, out of alint scope) — build+test across
+#     OS×features×compilers, ASan/UBSan, Coverity, CodeQL, codecov,
+#     `make -C src/testdir codestyle` (a Vim-script AST style test),
+#     lychee link-check.
+#   * CODEGEN-FRESHNESS git-diff gates (proto/, runtime/doc tags,
+#     preproc_indent) — these run a GENERATOR then `git diff --exit-code`;
+#     alint expresses them via generated_file_fresh (A, shell-tier).
+#   * STRUCTURE / CROSS-FILE invariants (Filelist completeness, hlgroups
+#     doc<->highlight.c coherence, utf-8 runtime encoding, no-executable
+#     syntax-test inputs) — mostly NEW-KIND candidates (B); see notes.
+#
+# Bundles: oss-baseline (README/LICENSE/SECURITY/dependabot/.gitignore all
+# present) + ci/github-actions hygiene. No C/native ecosystem bundle exists
+# (there is no rust/go-equivalent c@v1), so the C surface is repo rules.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # ORCHESTRATION VALUE-ADD (recorded, NOT in coverage ratio — R2/R3):
+  # the ci-linux.yml `proto` / `vimtags` / `preproc_indent` extras run a
+  # GENERATOR (cproto / gen_prototypes.py / vim itself) then
+  # `git diff --exit-code`. That is tool EXECUTION needing the full build
+  # toolchain (D); alint could shell-wrap it via command_idempotent for
+  # single-entrypoint orchestration, but wrapping the generator is not
+  # alint expressing the check's logic, so it is NOT counted A. Left to CI
+  # (and documented in the D / value-add notes at the bottom).
+  #
+  # NOTE on generated_file_fresh: its model is "run command, diff its
+  # STDOUT against a declared `file`"; vim's gates mutate many files
+  # in-place then git-diff the tree, which that kind does not express — so
+  # it is genuinely not an A here.
+  # ════════════════════════════════════════════════════════════════
+
+  # ════════════════════════════════════════════════════════════════
+  # A — STRUCTURE / EXISTENCE invariants the CI surface relies on
+  # ════════════════════════════════════════════════════════════════
+
+  # The reusable CI orchestrator + its two composite actions must exist;
+  # ci.yml wires the four reusable workflows. (Value-add existence checks —
+  # vim does not itself gate on these, recorded as alint structural value.)
+  - id: vim-ci-orchestrator-exists
+    kind: file_exists
+    paths: ".github/workflows/ci.yml"
+    level: error
+  - id: vim-ci-linux-workflow-exists
+    kind: file_exists
+    paths: ".github/workflows/ci-linux.yml"
+    level: error
+  - id: vim-ci-build-action-exists
+    kind: file_exists
+    paths: ".github/actions/build_vim_on_linux/action.yml"
+    level: error
+  - id: vim-filelist-exists
+    kind: file_exists
+    paths: "Filelist"
+    root_only: true
+    level: error
+  - id: vim-hlgroups-ignore-exists
+    kind: file_exists
+    paths: "ci/hlgroups.ignore"
+    level: warning
+
+  # The `.github/MAINTAINERS` file is a CODEOWNERS-FORMAT maintainer
+  # registry (it ends `# vim:ft=codeowners`) but lives at a NON-CODEOWNERS
+  # path, so GitHub does NOT auto-route review from it. CONTRIBUTING.md
+  # tells new runtime-file authors to "add yourself to the MAINTAINERS
+  # file" — a documented (human-enforced) convention. alint can at least
+  # assert the registry exists and is non-trivial.
+  - id: vim-maintainers-registry-exists
+    kind: file_exists
+    paths: ".github/MAINTAINERS"
+    level: warning
+    message: |
+      .github/MAINTAINERS is the runtime-file ownership registry referenced
+      by CONTRIBUTING.md ("add yourself to the MAINTAINERS file"). It is
+      CODEOWNERS-format but at a non-CODEOWNERS path (informational only).
+  - id: vim-maintainers-registry-non-empty
+    kind: file_min_size
+    paths: ".github/MAINTAINERS"
+    min_bytes: 200
+    level: info
+
+  # ════════════════════════════════════════════════════════════════
+  # A — .editorconfig coherence (the declared whitespace policy)
+  # .editorconfig declares trim_trailing_whitespace=true + insert_final
+  # _newline=true repo-wide, with documented per-glob OPT-OUTS (markdown,
+  # runtime/doc/*.txt, src/testdir/test*.vim need trailing ws; *.ok need
+  # eol=lf via .gitattributes). We enforce the GLOBAL policy on the file
+  # types that are NOT opted out. (vim does not run an editorconfig-checker
+  # in CI — this is alint value-add asserting the declared policy holds.)
+  # ════════════════════════════════════════════════════════════════
+  # NOTE (validated): alint globs are NOT anchored to a `src/` prefix from
+  # the scan root — a `src/**/*.c` pattern matches ZERO files here and the
+  # rule is then silently dropped. Use `**/`-prefixed globs + an exclude.
+  - id: vim-no-trailing-whitespace-c
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*.c", "**/*.h", "**/*.proto"]
+      # generated / vendored / intentionally-special excluded. The
+      # runtime/**/testdir/** trees are crafted syntax/indent TEST INPUT
+      # fixtures (intentional odd whitespace) — vim's .editorconfig opts
+      # them out and test_codestyle.vim only checks real source.
+      exclude:
+        - "**/libvterm/**"
+        - "src/proto/**"
+        - "src/po/**"
+        - "**/testdir/**"
+    level: info
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  - id: vim-final-newline-c
+    kind: final_newline
+    paths:
+      include: ["**/*.c", "**/*.h"]
+      exclude:
+        - "**/libvterm/**"
+        - "src/po/**"
+    level: info
+    fix:
+      file_append_final_newline: {}
+
+  # ════════════════════════════════════════════════════════════════
+  # A — CODESTYLE line-regex checks (the `codestyle` CI gate logic)
+  # src/testdir/test_codestyle.vim (the `make -C src/testdir codestyle`
+  # gate) is a Vim-SCRIPT test, but the checks it runs on src/*.[ch] are
+  # plain per-line REGEX forbids — exactly alint's wheelhouse (NOT AST /
+  # semantic). The simple, exclusion-free ones port 1:1:
+  #   test_codestyle.vim:44  trailing white space  (\s$)  -> above
+  #   test_codestyle.vim:42  space before Tab      ( \t)
+  #   test_codestyle.vim:46  double semicolon      (;;\+$)
+  # The brace/keyword-spacing checks (lines 64-73) carry per-line skip
+  # directives (`codestyle: ignore`) + many content-based exclusions
+  # (`condition) {`, `{{{`, struct initializers) that file_content_forbidden
+  # cannot express → recorded as ONE C item, not ported here.
+  # NOTE: test_codestyle.vim hard-excludes dlldata.c / if_ole.h / iid_ole.c
+  # / iscygpty.c / strptime.c — mirrored below.
+  # ════════════════════════════════════════════════════════════════
+  - id: vim-codestyle-no-space-before-tab
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.c", "**/*.h"]
+      exclude:
+        - "**/libvterm/**"
+        - "src/proto/**"
+        - "src/po/**"
+        - "**/testdir/**"
+        - "**/dlldata.c"
+        - "**/if_ole.h"
+        - "**/iid_ole.c"
+        - "**/iscygpty.c"
+        - "**/strptime.c"
+    pattern: ' \t'
+    level: info
+    message: "space before Tab (test_codestyle.vim:42)"
+
+  - id: vim-codestyle-no-double-semicolon
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.c", "**/*.h"]
+      exclude:
+        - "**/libvterm/**"
+        - "src/proto/**"
+        - "src/po/**"
+        - "**/testdir/**"
+        - "**/dlldata.c"
+        - "**/if_ole.h"
+        - "**/iid_ole.c"
+    pattern: ';;+$'
+    level: info
+    message: "double semicolon at end of line (test_codestyle.vim:46)"
+
+  # ════════════════════════════════════════════════════════════════
+  # A — CONTRIBUTING references the MAINTAINERS file (doc cross-link)
+  # CONTRIBUTING.md instructs contributors to update MAINTAINERS; assert
+  # the instruction is present so the convention is not silently dropped.
+  # ════════════════════════════════════════════════════════════════
+  - id: vim-contributing-mentions-maintainers
+    kind: file_content_matches
+    paths: "CONTRIBUTING.md"
+    pattern: "MAINTAINERS"
+    level: info
+    message: |
+      CONTRIBUTING.md should keep pointing new runtime-file authors at the
+      MAINTAINERS registry.
+
+  # AGENTS.md documents the strict commit format + AI-disclosure policy.
+  - id: vim-agents-doc-exists
+    kind: file_exists
+    paths: "AGENTS.md"
+    root_only: true
+    level: info
+
+  # ════════════════════════════════════════════════════════════════
+  # B2 (PARTIALLY CLOSED, v0.12 cross_file set relations) — hlgroups
+  # doc<->highlight.c coherence. ci/hlgroups.make computes:
+  #   hlgroups  = every `*hl-X*` tag across runtime/doc/*.txt
+  #   deflinks  = every `default link X` group in src/highlight.c
+  # then `diff (hlgroups MINUS hlgroups.ignore) deflinks` — a bidirectional
+  # set_equals AFTER subtracting the ~70-entry hlgroups.ignore allow-list.
+  #
+  # The FULL set_equals stays a B candidate: cross_file has no "subtract a
+  # third file's set from the source" operator, so the ignore-list arm is
+  # not expressible (verbatim B2 is still deferred — see the note below).
+  #
+  # But ONE arm needs no ignore-list and is now a REAL rule: every group
+  # that highlight.c gives a `default link X` to MUST be documented as
+  # `*hl-X*` (deflinks ⊆ hlgroups). That is the `superset` relation —
+  # source (the union of `*hl-X*` across the doc glob) ⊇ targets (the
+  # `default link X` set in highlight.c). Verified at this pin: 91 doc-side
+  # groups cover all 24 default-link groups, zero uncovered. The ignore-list
+  # only ever subtracts from the OTHER direction (groups documented but not
+  # default-linked), so the superset arm is unaffected by it.
+  # ════════════════════════════════════════════════════════════════
+  - id: vim-hlgroups-default-links-are-documented
+    kind: cross_file
+    source:
+      files: "runtime/doc/*.txt"
+      extract: { regex: '\*hl-(\w+)\*' }
+    targets:
+      files: "src/highlight.c"
+      extract: { regex: '"default link (\w+)' }
+    relation: superset
+    level: warning
+    message: |
+      Every highlight group that src/highlight.c gives a `default link` to
+      must be documented with a `*hl-<group>*` tag under runtime/doc/*.txt
+      (the deflinks ⊆ hlgroups arm of ci/hlgroups.make). The reverse arm
+      (groups documented but intentionally not default-linked) is governed
+      by ci/hlgroups.ignore and is left to the CI `hlgroups` gate.
+
+# ══════════════════════════════════════════════════════════════════
+# DELIBERATE NON-GOALS (D) — recorded so the denominator is honest
+# ══════════════════════════════════════════════════════════════════
+#  - Build+test matrix (ci-linux/macos/windows × tiny/normal/huge ×
+#    gcc/clang × native/arm64/i386 + FreeBSD via .cirrus.yml): one D
+#    "tests pass" behavior (R1 matrix collapse).
+#  - ASan/UBSan job (ci-linux_asan.yml): distinct runtime-instrumentation
+#    behavior → D.
+#  - `make -C src/testdir codestyle` (test_codestyle.vim): a Vim-script
+#    AST/style TEST that compiles+runs vim over the sources → D (R2).
+#  - Coverity scan, CodeQL (cpp+python), codecov upload: SAST / coverage
+#    execution → D.
+#  - lychee link-check (ci/lychee.toml): network link validation → D.
+#  - executable-syntax-test report (`make -C runtime/syntax executables`,
+#    runtime/syntax/Makefile:56) — a `find -perm /a+x` permission scan;
+#    alint has no file-permission primitive → see B candidate below.
+#  - utf-8 runtime encoding (`iconv -f utf-8 -t utf-8`, ci-linux.yml:153)
+#    — round-trip encoding validity; no "valid-UTF-8" primitive → B.
+#  - Filelist completeness (ci/unlisted.make) — orphan detection, but the
+#    registry is MAKEFILE-VARIABLE syntax (multi-line `VAR = \` continued
+#    lists) that alint's extract: cannot parse → B.
+#  - hlgroups coherence (ci/hlgroups.make) — doc `*hl-X*` set must equal
+#    highlight.c `default link X` set (minus hlgroups.ignore) → B.
+#  - vimtags freshness (`git diff --exit-code -- tags` then `make html`)
+#    is generated_file_fresh-shaped (A) but needs a built vim; left to CI.
+#
+# ══════════════════════════════════════════════════════════════════
+# NEW-RULE-KIND CANDIDATES (B) — with file:line evidence
+# ══════════════════════════════════════════════════════════════════
+#  B1 registry_orphans_from_text_list — "every git-tracked file must be
+#     enumerated in a plaintext/Makefile manifest". registry_paths_resolve
+#     has an `orphans` mode but only with a STRUCTURED (toml/json) source;
+#     Filelist is Make-variable syntax. Evidence: ci/unlisted.make:11-49
+#     (`diff <(git ls-files) <(Filelist patterns)`).
+#  B2 cross_file_symbol_set_equals — "the set of symbols matched by regex
+#     R1 in file set A must equal the set matched by R2 in file B (minus an
+#     ignore-list)". Evidence: ci/hlgroups.make:8-18 (doc `*hl-X*` vs
+#     highlight.c `default link X`, minus ci/hlgroups.ignore).
+#     PARTIALLY CLOSED by v0.12 cross_file `superset`: the ignore-free arm
+#     (every `default link X` group is documented as `*hl-X*`,
+#     deflinks ⊆ hlgroups) is now the real rule
+#     vim-hlgroups-default-links-are-documented above. The FULL bidirectional
+#     set_equals still needs a "subtract ci/hlgroups.ignore from the source
+#     set" operator that cross_file does not provide → that arm stays B.
+#  B3 file_encoding_valid — "files matching a glob are valid <encoding>"
+#     (round-trip iconv). Evidence: ci-linux.yml:153-162 (utf-8 runtime
+#     files). no_bom is adjacent but not the same.
+#  B4 no_executable_bit — "files under <glob> must not have the executable
+#     permission bit". Evidence: runtime/syntax/Makefile:56-57
+#     (`find testdir/input -type f -perm /a+x`).

@@ -1,0 +1,134 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config for valkey-io/valkey
+# pinned @ c15ecf1dd83cd045fc3538e81df4ae91ab0ff11c
+#
+# Shape: C / systems-DB / C99 server / make + cmake (dual build) / LF foundation
+# (Linux Foundation, TSC governance). Fork of redis/redis with provenance tracking.
+#
+# WHAT THE REPO ACTUALLY ENFORCES (the denominator, per protocol R5):
+# Almost the entire enforced surface is TOOL/BUILD execution (D), which alint
+# orchestrates but does not reimplement:
+#   ci.yml / daily.yml ... make -Werror build matrix (ubuntu/macos/debian/alma/
+#                          alpine/freebsd/s390x/arm/32bit; libc & jemalloc;
+#                          TLS builtin+module; RDMA) + Tcl integration suite
+#                          (runtest / -cluster / -sentinel / -moduleapi) + gtest
+#                          unit tests + ASan + UBSan + Valgrind  -> all D (R1: the
+#                          matrix collapses to a handful of distinct behaviors)
+#   clang-format.yml ..... clang-format-18 -i + git diff   -> D (formatter exec)
+#   ci.yml format-yaml ... yamlfmt -lint                   -> D (formatter exec)
+#   spell-check.yml ...... typos (.config/typos.toml)      -> D (NLP spell)
+#   reply-schemas-linter . node reply_schema_linter.js (ajv compile)  -> D (semantic)
+#   daily reply-res-validator (jsonschema)                 -> D (semantic)
+#   provenance-check.yml . valkey-io/verify-provenance (cross-repo blame/graph) -> D
+#   codeql / coverity / scorecard / codecov                -> D (SAST/coverage)
+#   DCO Signed-off-by (CONTRIBUTING, copilot-instructions) -> D (commit-message; alint
+#                          sees the working tree, not commit metadata)
+#
+# The ONE repo-state check whose LOGIC alint can express natively is the
+# commands.def codegen-freshness gate (ci.yml:47-52). It is the only
+# file->file reference-graph edge source in the repo (codegen-freshness git-diff).
+# See the rule below for why it lands as a TUNING (C) item, not a clean A.
+#
+# Everything else here is alint VALUE-ADD (NOT in the coverage denominator, per
+# R3/R5): the OSS-baseline docs, no-tracked-runtime-artifacts hygiene, action
+# SHA-pinning, and assertions that valkey's config/governance files exist. These
+# are real utility alint adds on top of what CI gates.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # CODEGEN FRESHNESS  (the only natively-expressible ENFORCED check)
+  # ci.yml:47-52
+  #   touch src/commands/ping.json && make commands.def && git diff (fail if dirty)
+  #
+  # src/commands.def is a CHECKED-IN generated file, produced from the 425
+  # src/commands/*.json descriptors + utils/generate-command-code.py
+  # (src/Makefile:765-766). This is exactly the shape generated_file_fresh
+  # exists for. BUT valkey's generator writes the file IN-PLACE (f.write to
+  # src/commands.def) and must run from src/ with the build toolchain — it does
+  # NOT emit the file to stdout, which is generated_file_fresh's contract. So the
+  # clean native expression is unavailable; the faithful fallback is to wrap the
+  # CI recipe via command_idempotent (a tool-orchestration wrap, R2 value-add).
+  #
+  # CLASSIFICATION: C (tuning) — the codegen-freshness PRIMITIVE is present and
+  # the right shape, but the stdout-only generator contract + build-env coupling
+  # make it awkward here. Tuning ask: a generated_file_fresh "generator writes
+  # file X in place; diff X" mode (vs the current "generator emits to stdout").
+  #
+  # Left commented because it cannot run in this study env (no make/python build);
+  # per R4 an un-runnable spawning rule is not validated, so it is NOT counted A.
+  # - id: valkey-commands-def-fresh
+  #   kind: generated_file_fresh
+  #   file: src/commands.def
+  #   command: ["sh", "-c", "cd src && make -s commands.def >/dev/null 2>&1 && cat commands.def"]
+  #   normalize: none
+  #   timeout: 300
+  #   level: error
+
+  # ════════════════════════════════════════════════════════════════
+  # VALUE-ADD (NOT in the coverage denominator; per R3/R5)
+  # Structural / governance / hygiene assertions valkey does not CI-gate but
+  # that are sensible for a Linux-Foundation systems project.
+  # ════════════════════════════════════════════════════════════════
+
+  # --- Governance & community docs present (LF/TSC project) ---------
+  - id: valkey-governance-docs-exist
+    kind: file_exists
+    paths: ["GOVERNANCE.md", "MAINTAINERS.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "CONTRIBUTING.md"]
+    root_only: true
+    level: warning
+    message: "Valkey is a TSC-governed LF project; these governance/community docs should exist at the root."
+
+  # --- The license file is BSD-3-Clause (COPYING declares SPDX) ------
+  - id: valkey-license-is-bsd3
+    kind: file_content_matches
+    paths: "COPYING"
+    pattern: 'SPDX-License-Identifier:\s*BSD-3-Clause'
+    level: warning
+    message: "COPYING must declare the BSD-3-Clause SPDX identifier (valkey's license)."
+
+  # --- Tooling config files that the CI gates depend on must exist ---
+  # If these go missing, the corresponding CI gate silently degrades.
+  - id: valkey-tooling-config-exists
+    kind: file_exists
+    paths:
+      - ".config/typos.toml"        # spell-check.yml reads this
+      - ".config/format.yml"        # ci.yml format-yaml (yamlfmt) reads this
+      - "src/.clang-format"         # clang-format.yml / CONTRIBUTING reference this
+      - ".github/dependabot.yml"
+    level: info
+    message: "A CI gate depends on this config file; keep it present so the gate doesn't silently no-op."
+
+  # --- The checked-in generated artifacts must remain present --------
+  # commands.def / commands.c / fmtargs.h are committed generated sources; the
+  # build and the codegen-freshness gate assume they exist in-tree.
+  - id: valkey-generated-sources-present
+    kind: file_exists
+    paths:
+      - "src/commands.def"
+      - "src/commands.c"
+      - "src/fmtargs.h"
+    level: info
+    message: "Checked-in generated sources must stay committed (build + codegen-freshness gate depend on them)."
+
+  # --- The command-descriptor directory must be non-empty ------------
+  # commands.def is generated from src/commands/*.json; an empty dir = broken codegen.
+  - id: valkey-command-descriptors-present
+    kind: file_exists
+    paths: "src/commands/*.json"
+    level: info
+    message: "src/commands/*.json descriptors drive commands.def codegen; the directory must be populated."
+
+  # --- Don't ship a per-file SPDX header policy the repo doesn't keep -
+  # NOTE (R6 absent category): only 42/211 src/*.{c,h} carry an SPDX header and
+  # there is NO header-enforcement gate, plus 6 files use a non-canonical
+  # "BSD 3-Clause" (space, no hyphens) expression. A file_header rule WOULD
+  # express this, but enforcing it here would fail ~169 files the repo never
+  # gated — so it is recorded as a finding, NOT enabled (would be value-add only).

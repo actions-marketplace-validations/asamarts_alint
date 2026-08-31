@@ -210,6 +210,7 @@ mod tests {
             level,
             policy_url: None,
             violations,
+            notes: Vec::new(),
             is_fixable: false,
         }
     }
@@ -245,6 +246,8 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
+                    is_note: false,
+                    baseline_key: None,
                 }],
             )],
         };
@@ -301,6 +304,8 @@ mod tests {
                     message: "<bad> & \"quoted\"".into(),
                     line: None,
                     column: None,
+                    is_note: false,
+                    baseline_key: None,
                 }],
             )],
         };
@@ -322,6 +327,8 @@ mod tests {
                     message: "before\u{0001}\u{0008}after".into(),
                     line: None,
                     column: None,
+                    is_note: false,
+                    baseline_key: None,
                 }],
             )],
         };
@@ -341,6 +348,8 @@ mod tests {
                     message: "line1\nline2".into(),
                     line: None,
                     column: None,
+                    is_note: false,
+                    baseline_key: None,
                 }],
             )],
         };
@@ -359,6 +368,7 @@ mod tests {
                 level: Level::Error,
                 policy_url: Some("https://example.com/p".into()),
                 violations: vec![Violation::new("x").with_path(PathBuf::from("a"))],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
@@ -374,6 +384,7 @@ mod tests {
                 level: Level::Off,
                 policy_url: None,
                 violations: vec![Violation::new("ignored").with_path(PathBuf::from("a"))],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };

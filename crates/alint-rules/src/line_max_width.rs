@@ -16,11 +16,15 @@ use alint_core::{
 };
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Maximum number of Unicode scalar values (chars) allowed per line.
+    #[schemars(range(min = 1))]
     max_width: usize,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct LineMaxWidthRule {
@@ -73,7 +77,12 @@ impl PerFileRule for LineMaxWidthRule {
         Ok(vec![
             Violation::new(msg)
                 .with_path(std::sync::Arc::<Path>::from(path))
-                .with_location(line_no, self.max_width + 1),
+                .with_location(line_no, self.max_width + 1)
+                // First-offender rule: the baseline identity is the *file*, not
+                // the offending line's content (which would churn on any edit
+                // to that line). Mirrors `no_trailing_whitespace`/`line_endings`
+                // (M14). See `docs/design/baseline.md` §4.
+                .with_baseline_key(crate::slash(path)),
         ])
     }
 }

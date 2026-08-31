@@ -17,6 +17,9 @@ default = []
 # Filesystem-walking benches are feature-gated because they are inherently
 # noisier than the pure-CPU benches — useful for characterizing, not gating.
 fs-benches = []
+# Adds the 100k tier to the deterministic `det_check` binary bench. Heavy under
+# valgrind (~100s/cell), so it's release-time only — the per-PR gate runs 1k/10k.
+det-100k = []
 
 [[bench]]
 name = "glob_compile"
@@ -72,6 +75,17 @@ name = "blame_cache"
 harness = false
 required-features = ["fs-benches"]
 
+# Deterministic (Valgrind) benches — the load-immune regression gate.
+# Run with: cargo bench -p alint-bench --bench det_engine
+[[bench]]
+name = "det_engine"
+harness = false
+
+# End-to-end: needs the release binary first (`cargo build --release -p alint`).
+[[bench]]
+name = "det_check"
+harness = false
+
 [dependencies]
 alint-core.workspace = true
 alint-dsl.workspace = true
@@ -85,6 +99,7 @@ tempfile.workspace = true
 criterion.workspace = true
 regex.workspace = true
 globset.workspace = true
+gungraun = "0.19.1"
 
 [lints]
 workspace = true

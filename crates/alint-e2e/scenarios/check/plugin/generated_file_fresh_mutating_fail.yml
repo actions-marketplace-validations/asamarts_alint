@@ -1,0 +1,26 @@
+name: generated_file_fresh mutating mode fires when an in-place output is stale
+tags: [check, generated_file_fresh, plugin]
+
+# The generator rewrites gen/list.txt in place; the committed copy is
+# stale, so it fires. alint snapshots, runs, diffs, reports, and
+# RESTORES — the tree is left byte-identical (verified in the rule's
+# native tests).
+
+given:
+  tree:
+    gen/list.txt: "STALE\n"
+  config: |
+    version: 1
+    rules:
+      - id: list-regen-fresh
+        kind: generated_file_fresh
+        outputs: "gen/list.txt"
+        command: ["sh", "-c", "printf 'fresh\\n' > gen/list.txt"]
+        normalize: none
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: list-regen-fresh, level: error, path: gen/list.txt}

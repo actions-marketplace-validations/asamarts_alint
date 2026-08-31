@@ -1,0 +1,246 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for astral-sh/ruff @ 11723aeb5b9bcdbc25240c9bb04908057c862100
+# v0.12 case-study Stage-A pass (rulings R1-R6 applied).
+#
+# WHAT RUFF ENFORCES (the denominator), bucketed:
+#   D (tool/AST/test/build execution — NOT alint's job, R2):
+#     cargo fmt/clippy(+disallowed-methods firewall)/test/build-msrv/shear/
+#     fuzz, shellcheck, typos(NLP), validate-pyproject, zizmor, actionlint,
+#     check-github-workflows, prettier, mdformat, markdownlint, ruff self
+#     check/format (dogfood), mkdocs build --strict, check_docs_formatted.py,
+#     formatter-instability/black-similarity, ecosystem regression,
+#     ty-completion-eval, benchmarks, python wheel build/test,
+#     [tool.ruff.lint] required-imports (ruff enforces it).
+#   A (alint expresses the logic — validated below):
+#     codegen freshness (generate-all then git-clean) ........ generated_file_fresh / command_idempotent
+#     version_files coherence (rooster) ..................... cross_file_value_equals
+#     edition coherence (Cargo.toml <-> rustfmt.toml) ....... cross_file_value_equals
+#   value-add (asserted but NOT ruff-gated, excluded from the ratio per R3/R5):
+#     internal-crates publish=false; pyproject PEP-621 fields; the D-tool
+#     orchestration shellouts; CODEOWNERS exists; crate-layering proxy.
+#   ABSENT (R6): no per-file license/SPDX headers (root MIT LICENSE +
+#     per-crate Cargo.toml license only) -> apache-header bundle must NOT
+#     fire. MSRV is workspace-inherited ([workspace.package] rust-version)
+#     -> NO cross-crate MSRV coherence gate (unlike tokio). rust-toolchain
+#     channel(1.96) deliberately != MSRV(1.94) -> not a coherence pair.
+#     Cargo.lock IS tracked (binary/app, not a library) -> lockfile rule OK.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/agent-context@v1
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════
+  # A1 — CODEGEN FRESHNESS  (the headline alint primitive here)
+  # ═══════════════════════════════════════════════════════════════════
+  # ruff's single biggest bespoke gate: the `scripts` CI job runs the
+  # generators then `test -z "$(git status --porcelain)"`, and AGENTS.md
+  # mandates `cargo dev generate-all` after option/CLI/rule changes.
+  # Generated, checked-in artefacts (per .gitattributes linguist-generated):
+  #   ruff.schema.json, ty.schema.json, crates/*/src/generated.rs,
+  #   docs/configuration.md, docs/editors/settings.md, CLI references.
+  # generated_file_fresh / command_idempotent ARE alint's own primitives
+  # (run a declared generator, diff its output) — this is alint expressing
+  # the check, not wrapping a third-party linter.
+  - id: ruff-codegen-fresh
+    kind: command_idempotent
+    paths: "Cargo.toml"                       # one repo-wide invocation
+    command: ["cargo", "dev", "generate-all", "--mode", "check"]
+    timeout: 600
+    level: error
+    message: |
+      Generated assets are stale (ruff.schema.json / ty.schema.json /
+      docs/configuration.md / generated.rs / CLI refs). Run
+      `cargo dev generate-all` and commit the result.
+
+  # The two JSON schemas are the highest-stakes generated artefacts and
+  # have dedicated generators; gate each on its own so a failure names the
+  # exact file independent of doc drift.
+  - id: ruff-schema-json-fresh
+    kind: generated_file_fresh
+    file: ruff.schema.json
+    command: ["cargo", "dev", "generate-json-schema", "--mode", "check"]
+    timeout: 300
+    level: error
+    message: "{{ctx.file}} is stale — run `cargo dev generate-json-schema` and commit."
+
+  - id: ruff-ty-schema-json-fresh
+    kind: generated_file_fresh
+    file: ty.schema.json
+    command: ["cargo", "dev", "generate-ty-schema", "--mode", "check"]
+    timeout: 300
+    level: error
+    message: "{{ctx.file}} is stale — run `cargo dev generate-ty-schema` and commit."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # A2 — VERSION-FILES COHERENCE  (cross_file_value_equals)
+  # ═══════════════════════════════════════════════════════════════════
+  # The version (0.15.15) is NOT workspace-inherited; each crate hard-codes
+  # it. `[tool.rooster] version_files` in pyproject.toml is the documented
+  # hand-sync list (README, pyproject, crates/ruff & crates/ruff_linter
+  # Cargo.toml, several docs). This is the classic drift cross_file_value_equals
+  # exists for: take pyproject.version as source of truth, require the
+  # ruff crate manifests AND the README install URL to match.
+  - id: ruff-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "pyproject.toml"
+      extract: { toml: "$.project.version" }
+    targets:
+      - file: "crates/ruff/Cargo.toml"
+        extract: { toml: "$.package.version" }
+      - file: "crates/ruff_linter/Cargo.toml"
+        extract: { toml: "$.package.version" }
+      - file: "README.md"
+        extract: { regex: 'astral\.sh/ruff/([0-9]+\.[0-9]+\.[0-9]+)/install' }
+    level: error
+    message: |
+      pyproject.toml `version`, the crates/ruff + crates/ruff_linter
+      [package] version, and the README install URL must all agree.
+      `[tool.rooster] version_files` lists these as the hand-synced set.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # A3 — EDITION COHERENCE  (cross_file_value_equals)
+  # ═══════════════════════════════════════════════════════════════════
+  # Cargo.toml carries a load-bearing comment: "Please update rustfmt.toml
+  # when bumping the Rust edition". The workspace [package] edition must
+  # equal rustfmt.toml's `edition` (and `style_edition`). A documented
+  # review convention with a concrete drift target.
+  - id: ruff-edition-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "Cargo.toml"
+      extract: { toml: "$.workspace.package.edition" }
+    targets:
+      - file: "rustfmt.toml"
+        extract: { toml: "$.edition" }
+      - file: "rustfmt.toml"
+        extract: { toml: "$.style_edition" }
+    level: error
+    message: |
+      The workspace Rust edition (Cargo.toml [workspace.package] edition)
+      must match rustfmt.toml's edition + style_edition. Cargo.toml's own
+      comment requires updating rustfmt.toml when the edition changes.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # VALUE-ADD (NOT in the A/B/C/D ratio per R3/R5) — structure alint can
+  # assert that ruff does not itself gate on, plus D-tool orchestration.
+  # ═══════════════════════════════════════════════════════════════════
+
+  # Internal crates convention: publish=false on everything except the
+  # three published manifests. ruff does not gate on this; alint can.
+  - id: ruff-internal-crates-unpublished
+    kind: toml_path_equals
+    paths:
+      include: ["crates/*/Cargo.toml"]
+      exclude:
+        - "crates/ruff/Cargo.toml"
+        - "crates/ruff_linter/Cargo.toml"
+        - "crates/ruff_wasm/Cargo.toml"
+    path: "$.package.publish"
+    equals: false
+    level: info
+
+  # Shallow validate-pyproject: load-bearing PEP-621 fields.
+  - id: ruff-pyproject-name
+    kind: toml_path_equals
+    paths: "pyproject.toml"
+    path: "$.project.name"
+    equals: "ruff"
+    level: warning
+
+  - id: ruff-pyproject-license
+    kind: toml_path_equals
+    paths: "pyproject.toml"
+    path: "$.project.license"
+    equals: "MIT"
+    level: warning
+
+  - id: ruff-pyproject-requires-python
+    kind: toml_path_matches
+    paths: "pyproject.toml"
+    path: "$.project['requires-python']"       # bracket notation: dashed key
+    matches: '^>=3\.[0-9]+$'
+    level: info
+
+  # CODEOWNERS presence (review-routing; ruff relies on it but no CI gate).
+  - id: ruff-codeowners-exists
+    kind: file_exists
+    paths: ".github/CODEOWNERS"
+    level: info
+
+  # ── D-tool orchestration: single-entrypoint wraps (R2 value-add) ──
+  # Recorded so alint can drive ruff's gates locally; NONE counted as A.
+  - id: ruff-rustfmt-clean
+    kind: command_idempotent
+    paths: "Cargo.toml"
+    command: ["cargo", "fmt", "--all", "--", "--check"]
+    files_from: stdout
+    files_pattern: "Diff in (.+) at"           # rustfmt's offender format
+    timeout: 300
+    level: warning
+
+  - id: ruff-self-format-clean
+    kind: command_idempotent
+    paths: "Cargo.toml"
+    command: ["ruff", "format", "--check", "."]
+    files_from: stderr
+    files_pattern: "Would reformat: (.+)"
+    timeout: 120
+    level: warning
+
+  - id: ruff-self-lint-clean
+    kind: command
+    paths: "Cargo.toml"
+    command: ["ruff", "check", "."]
+    timeout: 120
+    level: warning
+
+  - id: ruff-cargo-clippy
+    kind: command
+    paths: "Cargo.toml"
+    command: ["cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings"]
+    timeout: 600
+    level: warning
+
+  - id: ruff-cargo-shear
+    kind: command
+    paths: "Cargo.toml"
+    command: ["cargo", "shear", "--deny-warnings"]
+    timeout: 120
+    level: warning
+
+  - id: ruff-typos
+    kind: command
+    paths: "_typos.toml"
+    command: ["typos"]
+    timeout: 120
+    level: warning
+
+  - id: ruff-shellcheck
+    kind: command
+    paths:
+      include: ["scripts/**/*.sh", ".github/**/*.sh"]
+    command: ["shellcheck", "-x", "{path}"]
+    timeout: 30
+    level: warning
+
+  - id: ruff-zizmor
+    kind: command
+    paths: ".github/workflows"
+    command: ["zizmor", "--config", ".github/zizmor.yml", ".github/workflows"]
+    timeout: 60
+    level: info
+
+  - id: ruff-actionlint
+    kind: command
+    paths: ".github/workflows"
+    command: ["actionlint", "-config-file", ".github/actionlint.yaml"]
+    timeout: 60
+    level: info

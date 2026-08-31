@@ -25,13 +25,14 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Context, Error, Extract, ExtractSpec, Level, Result, Rule, RuleSpec, Scope, Violation,
+    extract_values, is_non_literal,
+};
 use regex::Regex;
 use serde::Deserialize;
 
-use crate::extract::{Extract, ExtractSpec, extract_values, is_non_literal};
-
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum Expect {
     #[default]
@@ -40,7 +41,7 @@ enum Expect {
     Dir,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum Severity {
     #[default]
@@ -49,33 +50,59 @@ enum Severity {
     Off,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// Enable the reverse-completeness check: on-disk artefacts under the `space`
+/// glob that no entry references (the "new crate not wired into the workspace"
+/// detector).
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct OrphansSpec {
     /// Glob of on-disk artefacts that should each be referenced.
     space: String,
+    /// Severity when an on-disk artefact is unreferenced: `warn` (default),
+    /// `error`, or `off`.
     #[serde(default)]
     unreferenced: Severity,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// The manifest/registry file (path, or a glob to run once per matching
+    /// manifest) that enumerates the path entries.
     source: String,
+    // A registry entry is a PATH; `whole_file` (the entire manifest as one
+    // value) is nonsensical here, and the hand-written schema excluded it.
+    // schemars cannot drop a field from the shared extract_spec, so exclude it
+    // schema-side with a `not: { required: [whole_file] }` guard. The loader is
+    // unchanged (it was already lenient here, as it is for the other kinds).
+    #[schemars(extend("not" = {"required": ["whole_file"]}))]
     extract: ExtractSpec,
+    /// Resolve entries relative to: `registry_dir` (default), `lint_root`, or
+    /// an explicit path.
     #[serde(default)]
     base: Option<String>,
+    /// Expand each extracted entry as a glob rather than treating it as a
+    /// single literal path; a glob that matches nothing is a violation.
     #[serde(default)]
     entries_are_globs: bool,
+    /// Constrain the kind each entry must resolve to on disk: `any` (default),
+    /// `file`, or `dir`.
     #[serde(default)]
     expect: Expect,
+    /// When an entry resolves to a directory, that directory must contain this
+    /// named child (e.g. `Cargo.toml`), else the entry is a violation.
     #[serde(default)]
     must_contain: Option<String>,
+    /// A structured query selecting entries to subtract from the extracted list
+    /// before resolution is checked.
     #[serde(default)]
     exclude_query: Option<String>,
+    /// Enable the reverse-completeness check (see `OrphansSpec`).
     #[serde(default)]
     orphans: Option<OrphansSpec>,
 }
+
+crate::options_schema_for!(Options);
 
 /// Resolution base for entries.
 #[derive(Debug, Clone)]
@@ -114,6 +141,10 @@ pub struct RegistryPathsResolveRule {
     must_contain: Option<String>,
     exclude_query: Option<String>,
     orphans: Option<OrphansSpec>,
+    /// Permit reading a `source:` registry file that escapes the repo
+    /// root — set post-build from the top-level `allow_out_of_root:`
+    /// policy. (The declared *entries* stay confined regardless.)
+    allow_out_of_root: bool,
 }
 
 impl Rule for RegistryPathsResolveRule {
@@ -124,6 +155,10 @@ impl Rule for RegistryPathsResolveRule {
         // target exists anywhere in the tree, and the orphan
         // check needs the whole index — never `--changed`-scoped.
         true
+    }
+
+    fn set_allow_out_of_root(&mut self, allow: bool) {
+        self.allow_out_of_root = allow;
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -142,13 +177,20 @@ impl Rule for RegistryPathsResolveRule {
         };
 
         for registry_rel in self.registry_files(ctx) {
+            // Confine the (config-author-controlled) registry path before
+            // reading it (the glob-source arm yields in-tree index paths,
+            // for which this is a no-op).
+            let Some(registry_rel) = self.confine_source(registry_rel, ctx.root, &mut violations)
+            else {
+                continue;
+            };
             let abs = ctx.root.join(&registry_rel);
             let text = match crate::io::read_capped(&abs) {
                 Ok(b) => String::from_utf8_lossy(&b).into_owned(),
                 Err(e) => {
                     let why = match e {
                         crate::io::ReadCapError::TooLarge(n) => {
-                            format!("is too large to analyze ({n} bytes; 256 MiB cap)")
+                            format!("is too large to analyze ({})", crate::io::over_cap(n))
                         }
                         crate::io::ReadCapError::Io(e) => {
                             format!("could not be read: {e}")
@@ -176,12 +218,8 @@ impl Rule for RegistryPathsResolveRule {
                 }
             };
             // Non-literal (computed/interpolated) entries are
-            // intentionally skipped, not failed. The skip is
-            // silent in v0.10 — `alint check` has no
-            // informational-finding / `--explain` channel;
-            // visibly surfacing the skip list is a tracked
-            // v0.11 item (see the design doc).
-            let _ = skipped;
+            // intentionally skipped, not failed — surfaced as notes.
+            Self::note_skipped(&registry_rel, &skipped, &mut violations);
 
             let excluded = self.excluded_entries(&text);
             let base_dir = self.base_dir(&registry_rel);
@@ -191,7 +229,13 @@ impl Rule for RegistryPathsResolveRule {
                 if excluded.contains(entry) {
                     continue;
                 }
-                let resolved = normalise(&base_dir.join(entry));
+                let Some(resolved) = crate::pathsafe::normalize_confined(&base_dir.join(entry))
+                else {
+                    // An absolute / root-escaping declared path can never
+                    // resolve to an in-tree path.
+                    violations.push(self.violation(&registry_rel, entry, "escapes the repo root"));
+                    continue;
+                };
                 if self.entries_are_globs {
                     let matches = Self::glob_matches(ctx, &resolved);
                     if matches.is_empty() {
@@ -259,11 +303,15 @@ impl RegistryPathsResolveRule {
         }
     }
 
-    fn extract_entries(&self, text: &str) -> std::result::Result<(Vec<String>, usize), String> {
+    fn extract_entries(
+        &self,
+        text: &str,
+    ) -> std::result::Result<(Vec<String>, Vec<String>), String> {
         let raw = extract_values(&self.extract, text)?;
-        let before = raw.len();
-        let kept: Vec<String> = raw.into_iter().filter(|e| !is_non_literal(e)).collect();
-        let skipped = before - kept.len();
+        // Non-literal (computed/interpolated) entries can't be
+        // statically resolved; they're surfaced as notes, not failed.
+        let (skipped, kept): (Vec<String>, Vec<String>) =
+            raw.into_iter().partition(|e| is_non_literal(e));
         Ok((kept, skipped))
     }
 
@@ -372,32 +420,71 @@ impl RegistryPathsResolveRule {
         None
     }
 
+    /// Confine the registry `source:` path, honoring `allow_out_of_root`.
+    /// Returns the path to read; `None` (with a violation or note already
+    /// pushed to `out`) when the source escapes the root and isn't
+    /// permitted. The declared *entries* stay confined regardless.
+    fn confine_source(
+        &self,
+        rel: PathBuf,
+        root: &Path,
+        out: &mut Vec<Violation>,
+    ) -> Option<PathBuf> {
+        match crate::pathsafe::confine_read(&rel, root, self.allow_out_of_root) {
+            crate::pathsafe::Confined::In(p) => Some(p),
+            crate::pathsafe::Confined::AllowedEscape(p) => {
+                out.push(
+                    Violation::new(crate::pathsafe::out_of_root_note(&rel))
+                        .as_note()
+                        .with_path(rel),
+                );
+                Some(p)
+            }
+            crate::pathsafe::Confined::Denied => {
+                out.push(
+                    Violation::new(format!(
+                        "registry source {} escapes the repo root",
+                        rel.display()
+                    ))
+                    .with_path(rel),
+                );
+                None
+            }
+        }
+    }
+
+    /// Surface each non-literal (interpolated/computed) entry as an
+    /// informational note rather than a silent skip (v0.11; see
+    /// `docs/design/v0.11/informational_findings.md`).
+    fn note_skipped(registry: &Path, skipped: &[String], out: &mut Vec<Violation>) {
+        for entry in skipped {
+            out.push(
+                Violation::new(format!(
+                    "registry {}: skipped non-literal entry {entry:?} \
+                     (cannot statically resolve an interpolated/computed path)",
+                    registry.display()
+                ))
+                .with_path(registry.to_path_buf())
+                .as_note(),
+            );
+        }
+    }
+
     fn violation(&self, registry: &Path, entry: &str, reason: &str) -> Violation {
         let msg = self
             .message
             .clone()
             .unwrap_or_else(|| format!("{}: entry {entry:?} {reason}", registry.display()));
-        Violation::new(msg).with_path(registry.to_path_buf())
+        // One manifest can enumerate many failing entries → key on the
+        // registry, the offending entry, and the machine reason so a new
+        // broken entry isn't masked by an existing one.
+        Violation::new(msg)
+            .with_path(registry.to_path_buf())
+            .with_baseline_key(format!(
+                "entry\u{0}{}\u{0}{entry}\u{0}{reason}",
+                crate::slash(registry)
+            ))
     }
-}
-
-/// Collapse `a/./b` and `a/b/../c` so index lookups (which key on
-/// the walked relative path) match. Does not touch the
-/// filesystem.
-fn normalise(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        use std::path::Component::{CurDir, Normal, ParentDir, Prefix, RootDir};
-        match comp {
-            CurDir => {}
-            ParentDir => {
-                out.pop();
-            }
-            Normal(c) => out.push(c),
-            RootDir | Prefix(_) => out.push(comp.as_os_str()),
-        }
-    }
-    out
 }
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
@@ -450,13 +537,14 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         must_contain: opts.must_contain,
         exclude_query: opts.exclude_query,
         orphans: opts.orphans,
+        allow_out_of_root: false,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extract::LinesOpts;
+    use alint_core::LinesOpts;
     use alint_core::{FileEntry, FileIndex};
 
     fn index(files: &[&str], dirs: &[&str]) -> FileIndex {
@@ -491,6 +579,7 @@ mod tests {
             must_contain: opts.must_contain,
             exclude_query: opts.exclude_query,
             orphans: opts.orphans,
+            allow_out_of_root: false,
         }
     }
 
@@ -540,6 +629,51 @@ mod tests {
         let v = eval(&r, dir.path(), &index(&["src/a.rs", "MANIFEST"], &[]));
         assert_eq!(v.len(), 1);
         assert!(v[0].message.contains("src/b.rs"));
+    }
+
+    #[test]
+    fn source_escape_fires_without_reading() {
+        // Security regression (v0.12 path-confinement): an absolute literal
+        // `source:` registry path must produce an "escapes the repo root"
+        // violation, never read an out-of-tree file.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("MANIFEST"), "src/a.rs\n").unwrap();
+        let r = rule(opts("/etc/hostname", Extract::Lines(LinesOpts::default())));
+        let v = eval(&r, root, &index(&["src/a.rs", "MANIFEST"], &[]));
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("escapes the repo root"),
+            "{}",
+            v[0].message
+        );
+    }
+
+    #[test]
+    fn source_out_of_root_read_when_allowed() {
+        // With `allow_out_of_root`, an absolute out-of-tree `source:`
+        // manifest is read; its entries still resolve against the lint
+        // root (base: lint_root) and a note records the escape.
+        let ext = tempfile::tempdir().unwrap();
+        std::fs::write(ext.path().join("MANIFEST"), "src/a.rs\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut o = opts(
+            ext.path().join("MANIFEST").to_str().unwrap(),
+            Extract::Lines(LinesOpts::default()),
+        );
+        o.base = Some("lint_root".into());
+        let mut r = rule(o);
+        r.set_allow_out_of_root(true);
+        let v = eval(&r, root, &index(&["src/a.rs"], &[]));
+        assert!(
+            v.iter().all(|x| x.is_note),
+            "only an out-of-root note: {v:?}"
+        );
+        assert!(
+            v.iter().any(|x| x.message.contains("allow_out_of_root")),
+            "{v:?}"
+        );
     }
 
     #[test]
@@ -594,7 +728,20 @@ mod tests {
         // real literal path (v0.10 post-audit P2).
         let idx = index(&["pkgs.nix"], &["pkgs/real"]);
         let v = eval(&r, dir.path(), &idx);
-        assert!(v.is_empty(), "non-literal must be skipped, got {v:?}");
+        // The non-literal entry is skipped (not a violation) but
+        // surfaces as an informational note (v0.11).
+        let real: Vec<_> = v.iter().filter(|x| !x.is_note).collect();
+        let notes: Vec<_> = v.iter().filter(|x| x.is_note).collect();
+        assert!(
+            real.is_empty(),
+            "non-literal must not be a violation, got {real:?}"
+        );
+        assert_eq!(notes.len(), 1, "skipped entry surfaces as one note");
+        assert!(
+            notes[0].message.contains("skipped non-literal"),
+            "note message: {:?}",
+            notes[0].message
+        );
     }
 
     #[test]

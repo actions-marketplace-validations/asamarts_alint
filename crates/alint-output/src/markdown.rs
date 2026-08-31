@@ -293,7 +293,11 @@ fn md_escape(s: &str) -> String {
 /// disallowed by the schema. Net: this only matters for
 /// truly adversarial inputs.
 fn md_inline_code(s: &str) -> String {
-    s.replace('`', "ʼ")
+    // Inline code is single-line by definition: a `\n`/`\r` (legal in a path on
+    // Unix) would break out of the span and split the enclosing `## ` heading,
+    // so collapse them to a space. A backtick would close the span early, so
+    // swap in the modifier-letter look-alike.
+    s.replace(['\r', '\n'], " ").replace('`', "ʼ")
 }
 
 /// Escape a URL for use in a markdown link target.
@@ -301,7 +305,28 @@ fn md_inline_code(s: &str) -> String {
 /// inside `(...)`. We percent-encode parens conservatively;
 /// browsers handle the rest.
 fn md_url(s: &str) -> String {
-    s.replace('(', "%28").replace(')', "%29")
+    // A CommonMark inline-link destination `[text](DEST)` (unbracketed) must not
+    // contain ASCII whitespace or control chars, and its parentheses must
+    // balance — any of those lets a config-controlled policy_url break out of
+    // the link and inject live markdown into a PR-comment surface. Percent-encode
+    // exactly those: parens, ASCII space, and every ASCII control byte
+    // (`0x00-0x1F` + `0x7F`, incl. tab/newline/CR). Other URL chars (including
+    // `[ ] < >`) are left intact so valid URLs — e.g. an IPv6 literal
+    // `http://[::1]/docs` — still render.
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '(' => out.push_str("%28"),
+            ')' => out.push_str("%29"),
+            ' ' => out.push_str("%20"),
+            c if c.is_ascii_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{:02X}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -328,8 +353,28 @@ mod tests {
             level,
             policy_url: None,
             violations,
+            notes: Vec::new(),
             is_fixable: false,
         }
+    }
+
+    #[test]
+    fn md_url_percent_encodes_link_breaking_chars() {
+        // A config-controlled `policy_url` must not break out of the CommonMark
+        // link destination `[text](DEST)`. Every ASCII whitespace/control byte
+        // and paren is percent-encoded (a control byte mid-destination aborts the
+        // link, letting the tail reparse as live markdown).
+        let out = md_url("https://x/a b\tc\nd\re)f\x0c\x01g");
+        for bad in [' ', '\t', '\n', '\r', '(', ')', '\x0c', '\x01'] {
+            assert!(
+                !out.contains(bad),
+                "md_url left a raw {bad:?} that can break the link: {out:?}"
+            );
+        }
+        assert_eq!(out, "https://x/a%20b%09c%0Ad%0De%29f%0C%01g");
+        // But it must NOT over-encode `[ ] < >` — a valid IPv6-literal URL and
+        // angle chars stay intact.
+        assert_eq!(md_url("http://[::1]/a<b>c"), "http://[::1]/a<b>c");
     }
 
     #[test]
@@ -361,6 +406,8 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
+                    is_note: false,
+                    baseline_key: None,
                 }],
             )],
         };
@@ -382,6 +429,8 @@ mod tests {
                         message: "z".into(),
                         line: None,
                         column: None,
+                        is_note: false,
+                        baseline_key: None,
                     }],
                 ),
                 rule(
@@ -392,6 +441,8 @@ mod tests {
                         message: "a".into(),
                         line: None,
                         column: None,
+                        is_note: false,
+                        baseline_key: None,
                     }],
                 ),
             ],
@@ -470,6 +521,7 @@ mod tests {
                 level: Level::Error,
                 policy_url: Some("https://example.com/policy".into()),
                 violations: vec![Violation::new("x").with_path(PathBuf::from("a.rs"))],
+                notes: Vec::new(),
                 is_fixable: false,
             }],
         };
@@ -517,6 +569,8 @@ mod tests {
                     message: "x".into(),
                     line: Some(7),
                     column: None,
+                    is_note: false,
+                    baseline_key: None,
                 }],
             )],
         };
@@ -532,12 +586,16 @@ mod tests {
             message: "a".into(),
             line: Some(1),
             column: Some(1),
+            is_note: false,
+            baseline_key: None,
         };
         let v2 = Violation {
             path: Some(Path::new("a.rs").into()),
             message: "b".into(),
             line: Some(2),
             column: Some(1),
+            is_note: false,
+            baseline_key: None,
         };
         let r1 = Report {
             results: vec![rule("r1", Level::Error, vec![v1.clone(), v2.clone()])],
@@ -569,6 +627,8 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: Some(1),
                             column: None,
+                            is_note: false,
+                            baseline_key: None,
                         },
                         status: FixStatus::Applied("removed 3 trailing spaces".into()),
                     },
@@ -578,6 +638,8 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: None,
                             column: None,
+                            is_note: false,
+                            baseline_key: None,
                         },
                         status: FixStatus::Unfixable,
                     },

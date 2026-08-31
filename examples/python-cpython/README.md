@@ -726,3 +726,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   single source — cpython CODEOWNERS). None shipped in
   v0.9.18-v0.9.20.
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (78 rules, ~81% coverage). +8 surfaces: `make regen-all`
+codegen freshness -> command_idempotent (was a static file_exists stub),
+ruff/black -> command_idempotent, configure.ac <-> patchlevel.h version
+coherence -> cross_file_value_equals, .gitattributes generated markers ->
+registry_paths_resolve. Non-replaceable: Argument Clinic self-checksums,
+the NEWS.d-blurb-per-PR rule (a diff must-ADD predicate), the C-API
+semantic checks (stable_abi/smelly/check-c-globals).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 5).

@@ -1,7 +1,13 @@
 # Roadmap generator from canonical ROADMAP.md
 
-Status: **Design draft**, written 2026-05-14 as the v0.9.22 cleanup
-cycle's E1 batch. Implementation targets the v0.11 / v0.12 window.
+Status: **Implemented** (commit `8afc01b7`). All three migration
+phases shipped: `xtask/src/roadmap_generator.rs` + the
+`gen-public-roadmap` subcommand + the `generate_public_roadmap`
+call in `docs_export` (Phase 1, byte-identical via the round-trip
+fixture); `alint:internal-*` markers in canonical `docs/design/ROADMAP.md`
+(Phase 2); and the convention documented in the ROADMAP.md intro +
+CONTRIBUTING.md's "Editing the roadmap" section (Phase 3). Written
+2026-05-14 as the v0.9.22 cleanup cycle's E1 batch.
 
 ## Why
 

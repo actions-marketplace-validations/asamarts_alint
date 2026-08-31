@@ -1,0 +1,137 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for apache/kafka @ 115d6d31858b13704128505ea46ccedb85d818e0
+# (v0.12 case study — Stage A). JVM Java/Scala monorepo, Gradle build, ASF TLP.
+#
+# WHAT KAFKA ENFORCES, AND WHERE ALINT FITS
+# -----------------------------------------
+# Kafka's enforced validation surface is overwhelmingly TOOL EXECUTION
+# (D, per ruling R2): `./gradlew check` runs checkstyle (incl. the 17
+# import-control firewalls), spotbugs, spotless (import-order + format),
+# Apache RAT (per-file ASF header), dependency-check (OWASP CVE), the
+# JUnit suite (JDK 17 + 25 matrix), scalafmt, and the protocol message
+# code-generator (`processMessages`). alint does NOT reimplement any of
+# these — they belong to their tools. The docker workflows add trivy CVE
+# scans (D) and the PR-linter (pr-format.py) gates PR *title/body* (a
+# GitHub-object convention, outside alint's file scope).
+#
+# The genuinely alint-shaped, addressable surface is small but real:
+#   A1  checkJsonLicenseHeader (build.gradle:917) — a BESPOKE groovy
+#       assertion (NOT a tool): every JSON under src/{main,test}/resources
+#       must begin with the `//`-prefixed ASF header in gradle/LICENSE.json.
+#       RAT/checkstyle do not cover .json; this is expressed natively below.
+#   A2  the documented "requests version must match" cross-file convention
+#       (tests/setup.py:43 + .github/scripts/requirements.txt) — a
+#       review-checklist convention (R5). Expressed via cross_file_value_equals.
+#
+# value-add (NOT in the coverage ratio): the ASF-governance + Java-hygiene
+# bundles assert structure Kafka relies on but does not itself gate
+# (LICENSE/NOTICE present, source headers, no tracked build artifacts).
+
+version: 1
+
+# ──────────────────────────────────────────────────────────────────────
+# BUNDLED RULESETS
+# ──────────────────────────────────────────────────────────────────────
+extends:
+  - alint://bundled/oss-baseline@v1               # README/LICENSE, no merge markers/bidi
+  - alint://bundled/apache/governance@v1          # ASF TLP: LICENSE+NOTICE+headers+no-binaries
+  - alint://bundled/compliance/apache-2@v1        # Apache-2.0 license text + source headers
+  - alint://bundled/java@v1                        # Gradle hygiene: wrapper committed, no target/build, PascalCase
+  - alint://bundled/ci/github-actions@v1          # workflow hardening (action pinning, perms)
+
+# ──────────────────────────────────────────────────────────────────────
+# REPO RULES — the addressable bespoke surface (A) + a little value-add
+# ──────────────────────────────────────────────────────────────────────
+rules:
+
+  # ── A1: bespoke JSON ASF-header check (maps checkJsonLicenseHeader) ──
+  # build.gradle:917-938 reads gradle/LICENSE.json and requires every JSON
+  # under src/{main,test}/resources/** to begin with that header. The
+  # message-definition schemas (282 of them) and other resource JSON carry
+  # a `//`-comment ASF preamble that RAT/checkstyle never inspect. Match
+  # the invariant first line of that header.
+  # NOTE (alint glob limitation surfaced here, see study notes): the
+  # faithful scope is `**/src/{main,test}/resources/**/*.json`, but the
+  # file_header path engine does NOT match a mid-path `**` followed by a
+  # typed tail (`**/resources/**/*.json` matches ZERO files, while
+  # `**/*.json` and `**/resources/**` both work). Workaround: include all
+  # JSON and exclude the only non-resource JSON trees. The src-resource
+  # JSON (282 message schemas + others) all carry the header → rule PASSES,
+  # matching checkJsonLicenseHeader's verdict.
+  - id: kafka-json-resources-asf-header
+    kind: file_header
+    paths:
+      include:
+        - "**/*.json"
+      exclude:
+        - "**/build/**"
+        - "**/generated/**"
+        # GraalVM native-image configs are NOT src resources — Kafka's
+        # checkJsonLicenseHeader does not glob these, so neither do we.
+        - "**/native-image-configs/**"
+        # serialized binary fixtures (mirrors build.gradle RAT excludes)
+        - "**/serializedData/**"
+    pattern: 'Licensed to the Apache Software Foundation \(ASF\)'
+    level: error
+    message: >-
+      JSON resources under src/{main,test}/resources must carry the ASF
+      header (gradle/LICENSE.json). Mirrors Kafka's checkJsonLicenseHeader
+      Gradle task, which RAT/checkstyle do not cover for .json files.
+    policy_url: "https://www.apache.org/legal/src-headers.html"
+
+  # ── A2: documented cross-file 'requests' version coherence (R5) ─────
+  # tests/setup.py:43 and .github/scripts/requirements.txt BOTH carry an
+  # explicit "Ensure the 'requests' version here matches ..." comment —
+  # a review-checklist convention. (NOTE: at this pin the two values are
+  # NOT equal — setup.py declares `requests>=2.32.4`, requirements.txt
+  # `requests==2.33.0` — so this rule is EXPECTED to fire, demonstrating
+  # exactly the drift the convention warns about.)
+  - id: kafka-requests-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: "tests/setup.py"
+      extract: { regex: 'requests[>=]+([0-9]+\.[0-9]+\.[0-9]+)' }
+    targets:
+      files: ".github/scripts/requirements.txt"
+      extract: { regex: 'requests==([0-9]+\.[0-9]+\.[0-9]+)' }
+    normalize: none
+    allow_missing_target: false
+    level: warning
+    message: >-
+      The 'requests' version in {{ctx.target}} ({{ctx.target_value}}) must
+      match tests/setup.py ({{ctx.source_value}}) — both files carry a
+      "keep these in sync" comment. Bump them together.
+
+  # ── value-add: generated-source trees must stay untracked ───────────
+  # .gitignore declares **/src/generated, **/src/generated-test,
+  # jmh-benchmarks/generated etc. The processMessages codegen writes there;
+  # committing generated output would rot against the JSON schemas. alint
+  # asserts the invariant the .gitignore encodes (Kafka has no gate for it).
+  - id: kafka-no-tracked-generated-sources
+    kind: file_absent
+    paths:
+      - "**/src/generated/**"
+      - "**/src/generated-test/**"
+      - "**/jmh-benchmarks/generated/**"
+    git_tracked_only: true
+    level: error
+    message: >-
+      Generated sources (processMessages output) must not be committed —
+      they are reproduced from the *.json message schemas at build time
+      and are .gitignore'd. A tracked file here is stale codegen.
+
+  # ── value-add: per-module checkstyle import-control firewall present ─
+  # Kafka layers the monorepo with 17 checkstyle/import-control*.xml files
+  # (the architecture firewall, 478 allow/disallow rules). alint can't
+  # enforce the Java import edges (that's checkstyle's AST job — D), but it
+  # CAN assert the firewall config itself exists and is non-trivial.
+  - id: kafka-import-control-present
+    kind: file_exists
+    # NOT root_only — the firewall config lives at checkstyle/import-control.xml
+    # (a nested path); root_only:true would scope file_exists to the repo root.
+    paths: ["checkstyle/import-control.xml"]
+    level: warning
+    message: >-
+      The root checkstyle import-control.xml (the package-layering
+      firewall) must exist; checkstyle enforces the edges against it.

@@ -19,21 +19,27 @@
 //! `git rm --cached`, which is a sensitive operation alint
 //! should never automate.
 
-use alint_core::git::collect_tracked_paths;
+use alint_core::git::{CommitRangeError, collect_changed_paths_checked, collect_tracked_paths};
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    /// Glob patterns (`globset` syntax — same as `paths:` on
-    /// other rules) that no tracked path may match. Patterns
-    /// that match the whole path (e.g. `secrets/**`) and
-    /// basename-only patterns (`*.env`) both work; `globset`'s
-    /// matcher checks both forms.
+    /// Globset patterns no tracked path may match. Both whole-path patterns
+    /// (`secrets/**`) and basename-only patterns (`*.env`) work.
+    #[schemars(length(min = 1))]
     denied: Vec<String>,
+    /// Optional git ref. When set, only denied paths that changed in the
+    /// `<since>...HEAD` diff are flagged, catches a secret added in a PR even if
+    /// HEAD's tree still tracks an older one. Accepts the `{{env.X}}`
+    /// interpolation, e.g. `since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"`.
+    #[serde(default)]
+    since: Option<String>,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct GitNoDeniedPathsRule {
@@ -45,6 +51,10 @@ pub struct GitNoDeniedPathsRule {
     /// Original patterns, kept for the violation message so the
     /// user sees which entry on their denylist matched.
     denied_src: Vec<String>,
+    /// `since:` value (already `{{env.X}}`-interpolated at load).
+    /// `None` checks every tracked path; `Some` restricts to the
+    /// `<since>...HEAD` diff.
+    since_raw: Option<String>,
 }
 
 impl Rule for GitNoDeniedPathsRule {
@@ -59,7 +69,33 @@ impl Rule for GitNoDeniedPathsRule {
             return Ok(violations);
         };
 
+        // When `since:` is set, restrict to paths that changed in the
+        // `<since>...HEAD` diff. A bad ref hard-fails (shallow-clone
+        // hint); no-git is already covered by the `tracked` guard.
+        let diff = match &self.since_raw {
+            None => None,
+            Some(since) => match collect_changed_paths_checked(ctx.root, since) {
+                Ok(diff) => diff,
+                Err(CommitRangeError::BadRange { stderr }) => {
+                    return Err(Error::rule_config(
+                        &self.id,
+                        format!(
+                            "could not resolve `{since}...HEAD`: {stderr}. Common cause: \
+                             shallow clone. In a GitHub Actions PR workflow, use \
+                             `actions/checkout@v4` with `fetch-depth: 0` so the base ref is \
+                             reachable."
+                        ),
+                    ));
+                }
+            },
+        };
+
         for path in &tracked {
+            if let Some(diff) = &diff
+                && !diff.contains(path)
+            {
+                continue;
+            }
             let matches = self.denied_set.matches(path);
             if matches.is_empty() {
                 continue;
@@ -84,6 +120,22 @@ impl Rule for GitNoDeniedPathsRule {
     }
 }
 
+/// Auto-anchor a *bare* denied pattern (one with no `/`) to match at any
+/// depth: `*.pem` → `**/*.pem`, `id_rsa` → `**/id_rsa`. A pattern that
+/// already names a path (`secrets/*.key`, `**/*.pem`) is taken as written.
+/// `**/` matches zero or more segments, so the anchored form still catches
+/// the root-level file. This is the secure default for a denylist: a bare
+/// *literal* like `id_rsa` should ban that file anywhere in the tree, not only
+/// at the root — globset root-anchors a bare literal. (A bare *wildcard* like
+/// `*.pem` already spans depths in globset, so anchoring it is a no-op.)
+fn anchor_denied_pattern(pattern: &str) -> std::borrow::Cow<'_, str> {
+    if pattern.contains('/') {
+        std::borrow::Cow::Borrowed(pattern)
+    } else {
+        std::borrow::Cow::Owned(format!("**/{pattern}"))
+    }
+}
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -104,7 +156,15 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 
     let mut builder = GlobSetBuilder::new();
     for pattern in &opts.denied {
-        let glob = Glob::new(pattern).map_err(|e| {
+        // Auto-anchor a *bare* pattern (no `/`) to `**/…` so it matches at ANY
+        // depth. The real gap this closes is bare *literals*: globset anchors
+        // `id_rsa` to the repo root, so a tracked `secrets/id_rsa` would evade a
+        // *security* denylist (M5). A bare *wildcard* like `*.pem` already
+        // crosses `/` in globset (default `literal_separator = false`), so
+        // anchoring it is a harmless no-op that keeps the mental model uniform.
+        // The original spelling is kept for the violation message.
+        let effective = anchor_denied_pattern(pattern);
+        let glob = Glob::new(&effective).map_err(|e| {
             Error::rule_config(&spec.id, format!("invalid denied pattern `{pattern}`: {e}"))
         })?;
         builder.add(glob);
@@ -120,12 +180,33 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         message: spec.message.clone(),
         denied_set,
         denied_src: opts.denied,
+        since_raw: opts.since,
     }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn anchor_denied_pattern_anchors_bare_to_any_depth() {
+        assert_eq!(anchor_denied_pattern("*.pem"), "**/*.pem");
+        assert_eq!(anchor_denied_pattern("id_rsa"), "**/id_rsa");
+        // explicit-path patterns are taken as written
+        assert_eq!(anchor_denied_pattern("secrets/*.key"), "secrets/*.key");
+        assert_eq!(anchor_denied_pattern("**/*.env"), "**/*.env");
+    }
+
+    #[test]
+    fn bare_pattern_denies_nested_path() {
+        // M5: a bare `*.pem` must ban a secret at any depth, not only root.
+        let mut b = GlobSetBuilder::new();
+        b.add(Glob::new(&anchor_denied_pattern("*.pem")).unwrap());
+        let set = b.build().unwrap();
+        assert!(set.is_match("secrets/server.pem"), "nested .pem denied");
+        assert!(set.is_match("server.pem"), "root .pem still denied");
+        assert!(!set.is_match("server.txt"));
+    }
 
     fn build_set(patterns: &[&str]) -> GlobSet {
         let mut b = GlobSetBuilder::new();
@@ -136,18 +217,41 @@ mod tests {
     }
 
     #[test]
-    fn extension_glob_matches_root_basename() {
-        // `*.env` is a basename pattern: it matches `.env` at
-        // the repo root but not under subdirectories (globset's
-        // `*` doesn't cross `/`). Users who want recursive
-        // matching write `**/.env`.
-        let set = build_set(&["*.env"]);
-        assert!(!set.matches(std::path::Path::new(".env")).is_empty());
+    fn bare_wildcard_crosses_slashes_bare_literal_does_not() {
+        // The globset semantics behind M5 (default `literal_separator = false`):
+        // a bare *wildcard* `*.env` DOES cross `/`, so it already matches at any
+        // depth — it was never the M5 gap. A bare *literal* is what globset
+        // root-anchors, so `id_rsa` alone misses `secrets/id_rsa` — the real gap
+        // `anchor_denied_pattern` closes. (`config/.envrc` is unmatched by
+        // *suffix*, not by `/`.)
+        let wild = build_set(&["*.env"]);
         assert!(
-            set.matches(std::path::Path::new("config/.envrc"))
-                .is_empty()
+            !wild.matches(std::path::Path::new(".env")).is_empty(),
+            "root .env"
         );
-        assert!(set.matches(std::path::Path::new("README.md")).is_empty());
+        assert!(
+            !wild
+                .matches(std::path::Path::new("config/app.env"))
+                .is_empty(),
+            "*.env crosses / to a nested .env"
+        );
+        assert!(
+            wild.matches(std::path::Path::new("config/.envrc"))
+                .is_empty(),
+            "unmatched by suffix"
+        );
+        assert!(wild.matches(std::path::Path::new("README.md")).is_empty());
+
+        let lit = build_set(&["id_rsa"]);
+        assert!(
+            !lit.matches(std::path::Path::new("id_rsa")).is_empty(),
+            "root literal"
+        );
+        assert!(
+            lit.matches(std::path::Path::new("secrets/id_rsa"))
+                .is_empty(),
+            "a bare literal is root-anchored — the real M5 gap"
+        );
     }
 
     #[test]
@@ -183,6 +287,21 @@ mod tests {
         assert_eq!(set.matches(std::path::Path::new("private.pem")).len(), 1);
         assert_eq!(set.matches(std::path::Path::new(".env")).len(), 1);
         assert_eq!(set.matches(std::path::Path::new("README.md")).len(), 0);
+    }
+
+    fn spec(toml: &str) -> RuleSpec {
+        let mut full =
+            String::from("id = \"d\"\nkind = \"git_no_denied_paths\"\nlevel = \"error\"\n");
+        full.push_str(toml);
+        toml::from_str(&full).unwrap()
+    }
+
+    #[test]
+    fn build_accepts_optional_since() {
+        assert!(build(&spec("denied = [\"*.env\"]\n")).is_ok());
+        assert!(build(&spec("denied = [\"*.env\"]\nsince = \"origin/main\"\n")).is_ok());
+        // `denied` is still required.
+        assert!(build(&spec("since = \"origin/main\"\n")).is_err());
     }
 
     #[test]

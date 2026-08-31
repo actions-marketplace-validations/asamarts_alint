@@ -1,0 +1,31 @@
+id = "alint"
+name = "alint"
+version = "0.15.2"
+schema_version = 1
+authors = ["alint contributors"]
+description = "Repository-structure linting (alint) in Zed via the alint language server."
+repository = "https://github.com/asamarts/alint"
+
+# Zed attaches a language server to specific languages — there is no
+# "all files" wildcard. alint is repo-structural (it lints every file),
+# so we register it against a broad set of common languages its users
+# work in. KNOWN LIMITATION: files in languages not listed here won't
+# get alint diagnostics in Zed; extend this list (or revisit once Zed
+# grows a workspace-wide LSP attachment) as needed.
+[language_servers.alint]
+name = "alint"
+languages = [
+    "Rust",
+    "Python",
+    "JavaScript",
+    "TypeScript",
+    "TSX",
+    "Go",
+    "C",
+    "C++",
+    "Ruby",
+    "JSON",
+    "YAML",
+    "TOML",
+    "Markdown",
+]

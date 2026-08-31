@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use alint_core::{Error, FixContext, FixOutcome, Fixer, Result, Violation};
+use alint_core::{Error, FixContext, FixEdit, FixOutcome, Fixer, Result, Violation};
 
 use crate::case::CaseConvention;
 
@@ -38,6 +38,13 @@ impl Fixer for FileRemoveFixer {
             source,
         })?;
         Ok(FixOutcome::Applied(format!("removed {}", path.display())))
+    }
+
+    fn fix_edit(&self, violation: &Violation, _bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        Some(FixEdit::DeleteFile {
+            path: path.to_path_buf(),
+        })
     }
 }
 
@@ -125,6 +132,32 @@ impl Fixer for FileRenameFixer {
             new_path.display()
         )))
     }
+
+    fn fix_edit(&self, violation: &Violation, _bytes: &[u8], root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let stem = path.file_stem().and_then(|s| s.to_str())?;
+        let new_stem = self.case.convert(stem);
+        if new_stem == stem || new_stem.is_empty() {
+            return None;
+        }
+        let mut new_basename = new_stem;
+        if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+            new_basename.push('.');
+            new_basename.push_str(ext);
+        }
+        let new_path: PathBuf = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p.join(&new_basename),
+            _ => PathBuf::from(&new_basename),
+        };
+        // Collision: don't propose a rename onto an existing file.
+        if root.join(&new_path).exists() {
+            return None;
+        }
+        Some(FixEdit::RenameFile {
+            from: path.to_path_buf(),
+            to: new_path,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -137,6 +170,7 @@ mod tests {
             root: tmp.path(),
             dry_run,
             fix_size_limit: None,
+            allow_out_of_root: false,
         }
     }
 
@@ -252,6 +286,48 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("foo_bar.rs")).unwrap(),
             "B"
+        );
+    }
+
+    #[test]
+    fn file_remove_fix_edit_returns_delete() {
+        let v = Violation::new("forbidden").with_path(std::path::Path::new("debug.log"));
+        let edit = FileRemoveFixer
+            .fix_edit(&v, &[], std::path::Path::new("/repo"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::DeleteFile {
+                path: std::path::PathBuf::from("debug.log")
+            }
+        );
+    }
+
+    #[test]
+    fn file_rename_fix_edit_returns_rename_to_target_case() {
+        let tmp = TempDir::new().unwrap();
+        let v = Violation::new("case").with_path(std::path::Path::new("FooBar.rs"));
+        let edit = FileRenameFixer::new(CaseConvention::Snake)
+            .fix_edit(&v, &[], tmp.path())
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::RenameFile {
+                from: std::path::PathBuf::from("FooBar.rs"),
+                to: std::path::PathBuf::from("foo_bar.rs"),
+            }
+        );
+    }
+
+    #[test]
+    fn file_rename_fix_edit_skips_on_collision() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("foo_bar.rs"), "B").unwrap();
+        let v = Violation::new("case").with_path(std::path::Path::new("FooBar.rs"));
+        assert!(
+            FileRenameFixer::new(CaseConvention::Snake)
+                .fix_edit(&v, &[], tmp.path())
+                .is_none()
         );
     }
 

@@ -19,9 +19,12 @@ pub mod strategies;
 pub mod treespec;
 
 pub use error::{Error, Result};
-pub use runner::{ScenarioRun, StepOutcome, assert_scenario, run_scenario};
-pub use scenario::{ExpectStep, ExpectTreeMode, ExpectViolation, Given, LevelName, Scenario, Step};
+pub use runner::{ScenarioRun, StepOutcome, assert_scenario, run_scenario, setup_git};
+pub use scenario::{
+    CommitSpec, DetailedCommit, DocsCase, DocsExample, ExpectStep, ExpectTreeMode, ExpectViolation,
+    Given, GivenGit, LevelName, Scenario, Step,
+};
 pub use treespec::{
-    Discrepancy, ExtractOpts, TreeNode, TreeSpec, VerifyMode, VerifyReport, extract, materialize,
-    verify,
+    Discrepancy, ExecNode, ExtractOpts, SymlinkNode, TreeNode, TreeSpec, VerifyMode, VerifyReport,
+    extract, materialize, verify,
 };

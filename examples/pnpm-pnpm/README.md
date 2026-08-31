@@ -626,3 +626,20 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   A4 (`cargo-workspace` selector) does not apply (pnpm is JS); A5
   (LICENSE.TXT/LICENSE.md recognition) didn't change anything (pnpm's
   LICENSE was already canonical-cased).
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (92 rules, ~77% coverage). Note: pnpm went polyglot since the
+original study (it now has a full Rust half). +6 surfaces:
+registry_paths_resolve resolves the pnpm-workspace.yaml `packages:` globs to
+real dirs, toml_path_matches covers the new Rust toolchain, and
+command_idempotent handles meta-updater-no-drift + cargo fmt/taplo/typos.
+Honest finding: meta-updater's invariants are computed-value syncs
+(pnpm@11.3.0 vs 11.3.0), not verbatim equality, so they fall back to dual
+regex pins (a normalize/transform on cross_file_value_equals would close it).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 5).

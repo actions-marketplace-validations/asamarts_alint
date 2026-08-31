@@ -1,0 +1,160 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for systemd/systemd @ 414fc6e3b200eea45ee97eddb79c7496e01db16c
+# v0.12 case-study Stage A. C / meson / Red Hat + community.
+#
+# systemd's enforced surface is overwhelmingly D (meson test suites:
+# clang-tidy, coccinelle, ruff, mypy, shellcheck, the C unit-test corpus,
+# sanitizers, fuzzers, coverity, scorecards). The A-expressible slice is
+# the hygiene / structure / cross-config-coherence layer enforced by
+# .gitattributes, .editorconfig, the tools/check-*.sh scripts and the
+# meson `dist` suite. Those are below.
+
+version: 1
+
+# test/testdata is a self-referential symlink ("testdata -> .") that the
+# filesystem walk would otherwise choke on; ignore it (plus other test
+# fixture symlink trees) explicitly.
+ignore:
+  - "test/testdata"
+  - "**/testdata"
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ---------------------------------------------------------------
+  # A — license/SPDX headers. Every C/H source carries
+  # `/* SPDX-License-Identifier: ... */`; meson.build / python carry the
+  # `# SPDX-License-Identifier:` form. Enforced de-facto repo-wide (every
+  # src/**/*.c+*.h in the tree has it) and required by the contribution
+  # docs (each new file gets an SPDX tag). file_content_matches over the
+  # head of the file.
+  - id: systemd-spdx-header-c
+    kind: file_content_matches
+    paths:
+      include: ["src/**/*.c", "src/**/*.h"]
+      exclude: ["src/include/uapi/**", "**/*.in"]
+    pattern: "SPDX-License-Identifier:"
+    level: warning
+    message: "Every C source/header must carry an SPDX-License-Identifier tag (see docs/CODING_STYLE.md)."
+
+  - id: systemd-spdx-header-meson
+    kind: file_content_matches
+    paths:
+      include: ["meson.build", "**/meson.build"]
+    pattern: "SPDX-License-Identifier:"
+    level: warning
+    message: "Every meson.build must carry an SPDX-License-Identifier tag."
+
+  # ---------------------------------------------------------------
+  # A — .gitattributes whitespace policy for C/H/XML:
+  #   *.[ch]            whitespace=tab-in-indent,trailing-space
+  # i.e. no trailing whitespace, no tab-in-indent. The trailing-space
+  # half is natively expressible (no_trailing_whitespace); the
+  # tab-in-indent half (indent must not start with a tab) is a python
+  # CI step: `! git grep -P "\t" -- <python files>` and the C policy.
+  - id: systemd-no-trailing-whitespace-c
+    kind: no_trailing_whitespace
+    paths:
+      include: ["src/**/*.c", "src/**/*.h", "man/**/*.xml"]
+      exclude: ["**/*.in"]
+    level: warning
+    message: ".gitattributes marks *.[ch] and man/*.xml trailing-space; strip trailing whitespace."
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  # The other half of `.gitattributes: *.[ch] whitespace=tab-in-indent`
+  # plus `.editorconfig [*.{c,h}] indent_style = space`: C source must
+  # indent with spaces, never a leading tab.
+  - id: systemd-c-indent-spaces
+    kind: indent_style
+    paths:
+      include: ["src/**/*.c", "src/**/*.h"]
+      exclude: ["src/include/uapi/**", "**/*.in"]
+    style: spaces
+    level: warning
+    message: "C sources must indent with spaces (.gitattributes tab-in-indent + .editorconfig indent_style=space)."
+
+  # ---------------------------------------------------------------
+  # A — final newline (.editorconfig: insert_final_newline = true, [*]).
+  # oss-baseline covers md/txt/toml/yml; extend to the source tree the
+  # editorconfig [*] glob actually targets.
+  - id: systemd-final-newline-src
+    kind: final_newline
+    paths:
+      include: ["src/**/*.c", "src/**/*.h", "**/meson.build", "units/**", "rules.d/**"]
+      exclude: ["**/*.in"]
+    level: info
+    fix:
+      file_append_final_newline: {}
+
+  # ---------------------------------------------------------------
+  # A — Python tabs ban. linter.yml: "Check that tabs are not used in
+  # Python code" -> `! git grep -P "\t"` over the four named .py files.
+  # Generalised to the whole tool/python surface that ruff formats.
+  - id: systemd-no-tabs-in-python
+    kind: file_content_forbidden
+    paths:
+      include: ["tools/**/*.py", "src/**/*.py", "test/**/*.py"]
+      exclude: ["tools/chromiumos/**"]
+    pattern: "\t"
+    level: warning
+    message: "Python code must not contain tab characters (linter.yml + ruff)."
+
+  # ---------------------------------------------------------------
+  # A — structure invariants the repo relies on (REUSE/license dir,
+  # the dual GPL/LGPL license files, the meson build entrypoints).
+  - id: systemd-licenses-dir
+    kind: dir_exists
+    paths: ["LICENSES"]
+    level: warning
+    message: "REUSE-style LICENSES/ directory must exist (per-file SPDX tags resolve against it)."
+
+  - id: systemd-license-files
+    kind: file_exists
+    paths: ["LICENSE.GPL2", "LICENSE.LGPL2.1"]
+    root_only: true
+    level: warning
+    message: "The canonical dual GPL2 / LGPL2.1 license texts must be present at the root."
+
+  - id: systemd-meson-version-file
+    kind: file_exists
+    paths: ["meson.version", "meson_options.txt"]
+    root_only: true
+    level: warning
+    message: "meson.version + meson_options.txt are load-bearing build entrypoints."
+
+  # ---------------------------------------------------------------
+  # A (value-add) — the editorconfig/.vimrc/.dir-locals.el triple-sync
+  # convention. CODING_STYLE.md: "If you update .editorconfig make sure
+  # to update .dir-locals.el and .vimrc too." The three editor configs
+  # must coexist; the 109-char line limit is declared in all of them +
+  # .clang-format + ruff.toml. file_exists guards the triple's presence.
+  - id: systemd-editor-config-triple
+    kind: file_exists
+    paths: [".editorconfig", ".vimrc", ".dir-locals.el"]
+    root_only: true
+    level: info
+    message: ".editorconfig/.vimrc/.dir-locals.el are a documented triple-sync set (CODING_STYLE.md)."
+
+  # ---------------------------------------------------------------
+  # A (value-add) — CI / metadata files the repo's automation depends on.
+  - id: systemd-ci-metadata-present
+    kind: file_exists
+    paths: [".github/dependabot.yml"]
+    level: info
+    message: "dependabot config keeps GitHub Actions / pip / docker deps current."
+
+  # ---------------------------------------------------------------
+  # A (value-add) — assert the ruff line-length policy is declared (109,
+  # matching .editorconfig + .clang-format ColumnLimit). This is a
+  # config-policy assertion (R3): alint asserts the declaration; the
+  # *enforcement* (ruff format --check) is D.
+  - id: systemd-ruff-line-length-declared
+    kind: toml_path_equals
+    paths: ["ruff.toml"]
+    path: "$['line-length']"
+    equals: 109
+    level: info
+    message: "ruff line-length must stay 109 to match .editorconfig/.clang-format/.vimrc."

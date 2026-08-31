@@ -218,7 +218,36 @@ SCENARIOS = [
         "S10", "scope_filter outside per-file dispatch",
         "Five rules from outside the `PerFileRule` dispatch path (`file_max_size`, `no_empty_files`, `no_symlinks`, `filename_case`, `filename_regex`) each with `scope_filter: { has_ancestor: <manifest> }` over the polyglot tree. Per-rule `evaluate()` iterating `ctx.index.files()` with both path-glob AND scope_filter narrowing — the dispatch shape v0.9.9 wired through (v0.9.8 silently dropped `scope_filter:` on these 17 rule kinds). **New in v0.9.9.**",
     ),
+    (
+        "S11", "v0.10 cross-file dispatch class",
+        "Three v0.10 cross-file kinds (`registry_paths_resolve`, `cross_file_value_equals`, `pair_hash`) over the regular synthetic monorepo with a `manifest.sha256` overlay. Exercises the whole-repo entry points the v0.10 cross-file engine uses, plus the new `crate::extract` / `crate::io::read_capped` helpers. Adds to S7 (the v0.2-era cross-file family: `pair` / `unique_by` / `for_each_*` / `dir_only_contains` / `every_matching_has`) by covering the v0.10 additions. **New in v0.10.0.**",
+    ),
+    (
+        "S12", "v0.10 per-file dispatch class",
+        "Three v0.10 per-file kinds (`ordered_block`, `import_gate`, `xml_path_equals` + `xml_path_matches`) over `**/*.rs` plus a single root-level `.csproj` overlay (per-package fan-out skipped to keep cross-version file counts stable). Exercises the per-file dispatch path made fast by v0.9.3, with the v0.10-new extraction / regex / XML structured-query paths. Adds to S6 (dense content fan-out on `**/*.rs`) by covering the v0.10 additions independently of S6's pure-content baseline. **New in v0.10.0.**",
+    ),
+    (
+        "S13", "v0.10 single-shot dispatch class",
+        "Two v0.10 single-shot kinds (`generated_file_fresh`, `command_idempotent`) declared with `command: [\"true\"]` so the row measures `crate::spawn::run_capturing` (fork / exec / concurrent pipe-drain / wait / stdout-parse), not the user's tool. Single-shot rules add a fixed cost per run; tree walk dominates the row. Signal of interest is cross-version stability of the spawn path — regressions in `crate::spawn` or the engine's single-shot dispatch surface here in isolation. **New in v0.10.0.**",
+    ),
+    (
+        "S14", "v0.12 featureset",
+        "A single deliberately-mixed scenario exercising every file-shape rule kind / mode the v0.12 cycle added, so one row catches a regression anywhere in the v0.12 surface. Where S11-S13 are per-dispatch-class, this is per-feature-set — the v0.12 analogue of running the whole new vocabulary over the macro tree once. **New in v0.12.0.**",
+    ),
 ]
+
+# Per-scenario "this is the first version where the scenario exists".
+# Older versions render `n/a` (vs `—` which means "version exists but
+# wasn't measured at that size"). Extend when adding a scenario; no
+# need to enumerate every prior tag.
+FIRST_VERSION: Dict[str, str] = {
+    "S9": "v0.9.6",
+    "S10": "v0.9.9",
+    "S11": "v0.10.0",
+    "S12": "v0.10.0",
+    "S13": "v0.10.0",
+    "S14": "v0.12.0",
+}
 
 # Manual cells from the published v0.5.6 markdown (no JSON exists).
 MANUAL = {
@@ -226,9 +255,21 @@ MANUAL = {
     ("v0.5.6", "S3", "1m", "changed"): (528103.0, 2537.0),
 }
 
+# Host fingerprint per published arch series, for the HISTORY header line.
+# `linux-x86_64` is the canonical kbench series (2026-07 onward); the retired
+# 3900X dev-box series lives at `linux-x86_64-ryzen-3900x` (alint.org/benchmarks-1).
+FINGERPRINT = {
+    "linux-x86_64": "Intel Core i7-6700HQ 4-core / 15 GB / ext4 / rustc 1.97.0",
+    "linux-x86_64-ryzen-3900x": "AMD Ryzen 9 3900X 12-core / 62 GB / ext4 / rustc 1.95",
+}
+
 
 def load_arch(base: str, arch: str) -> Dict[Cell, Stat]:
-    data = dict(MANUAL)
+    # The v0.5.6 MANUAL cells are 3900X numbers (that release predates the
+    # results.json format). They belong only to the retired 3900X series
+    # (`linux-x86_64-ryzen-3900x`); the canonical kbench `linux-x86_64`
+    # series starts at v0.10 and must not inherit a foreign-host baseline row.
+    data = dict(MANUAL) if arch == "linux-x86_64-ryzen-3900x" else {}
     arch_dir = os.path.join(base, arch)
     if not os.path.isdir(arch_dir):
         print(f"warning: {arch_dir} missing; nothing to load", file=sys.stderr)
@@ -249,11 +290,10 @@ def load_arch(base: str, arch: str) -> Dict[Cell, Stat]:
 def fmt(data: Dict[Cell, Stat], v: str, s: str, sz: str, m: str) -> str:
     cell = data.get((v, s, sz, m))
     if cell is None:
-        # S9 didn't exist before v0.9.6.
-        if s == "S9" and v in ("v0.9.5", "v0.9.4", "v0.5.7", "v0.5.6"):
-            return "n/a"
-        # S10 didn't exist before v0.9.9.
-        if s == "S10" and v in ("v0.9.8", "v0.9.7", "v0.9.6", "v0.9.5", "v0.9.4", "v0.5.7", "v0.5.6"):
+        # Scenarios that don't exist at the rendered tag get `n/a`;
+        # `—` is reserved for "version exists, size not measured".
+        first = FIRST_VERSION.get(s)
+        if first is not None and semver_key(v) < semver_key(first):
             return "n/a"
         return "—"
     mean, sd = cell
@@ -267,6 +307,7 @@ def fmt(data: Dict[Cell, Stat], v: str, s: str, sz: str, m: str) -> str:
 def render(
     data: Dict[Cell, Stat],
     changelog_headlines: Dict[str, Tuple[str, str]] | None = None,
+    arch: str = "linux-x86_64",
 ) -> str:
     """Produce the full HISTORY.md text. Caller redirects to file.
 
@@ -278,12 +319,29 @@ def render(
     automatically — no edit to this script required.
     """
     versions_present = sorted({k[0] for k in data}, key=semver_key, reverse=True)
+
+    # Recurrence guard (added after S14 was silently dropped): every scenario
+    # measured in the corpus MUST have a SCENARIOS entry, else its section is
+    # skipped and HISTORY.md under-reports the matrix while nothing complains.
+    # Fail loudly so bench-record.yml's re-render surfaces a new scenario that
+    # needs a hand-written intro here.
+    known = {sid for sid, _title, _intro in SCENARIOS}
+    measured = {k[1] for k in data}
+    missing = sorted(measured - known, key=lambda s: int(s[1:]) if s[1:].isdigit() else 0)
+    if missing:
+        sys.stderr.write(
+            f"render-history: {len(missing)} benched scenario(s) missing from the "
+            f"SCENARIOS list, so they would be dropped from HISTORY.md: "
+            f"{', '.join(missing)}. Add each to SCENARIOS (+ FIRST_VERSION).\n"
+        )
+        sys.exit(1)
+
     out: list[str] = []
     out += [
         "# alint perf history",
         "",
         "Per-scenario tables, version-trajectory shape. Headline cells fingerprinted",
-        "to `linux-x86_64` (AMD Ryzen 9 3900X 12-core / 62 GB / ext4 / rustc 1.95) —",
+        f"to `{arch}` ({FINGERPRINT.get(arch, 'see METHODOLOGY.md')}) —",
         "see [`METHODOLOGY.md`](METHODOLOGY.md) for the hardware contract and why",
         "cross-machine comparisons need like-for-like.",
         "",
@@ -427,18 +485,12 @@ def render_trajectory_json(
         for json_key, scenario in cell_keys:
             stat = data.get((v, scenario, "1m", "full"))
             if stat is None:
-                # Scenarios didn't exist at older tags. Mirror
-                # render()'s fmt() rules so the JSON and the
-                # markdown agree byte-for-byte on those cells.
-                if scenario == "S9" and v in ("v0.9.5", "v0.9.4", "v0.5.7", "v0.5.6"):
-                    cells[json_key] = None
-                elif scenario == "S10" and v in (
-                    "v0.9.8", "v0.9.7", "v0.9.6", "v0.9.5",
-                    "v0.9.4", "v0.5.7", "v0.5.6",
-                ):
-                    cells[json_key] = None
-                else:
-                    cells[json_key] = None
+                # Scenarios that don't exist at this tag, AND scenarios
+                # that exist but lack the 1M cell, both fall through to
+                # `None` here. Mirror fmt()'s n/a-vs-— distinction via
+                # FIRST_VERSION so the markdown table and this JSON
+                # don't drift on those cells.
+                cells[json_key] = None
                 continue
             mean_ms, stddev_ms = stat
             cells[json_key] = {
@@ -502,7 +554,7 @@ def main() -> int:
     changelog_headlines = parse_changelog(args.changelog)
     if not data:
         return 1
-    sys.stdout.write(render(data, changelog_headlines))
+    sys.stdout.write(render(data, changelog_headlines, args.arch))
     if args.json_out:
         os.makedirs(os.path.dirname(os.path.abspath(args.json_out)) or ".", exist_ok=True)
         with open(args.json_out, "w", encoding="utf-8") as f:

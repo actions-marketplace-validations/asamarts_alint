@@ -1,0 +1,218 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# PROPOSED alint config for AvaloniaUI/Avalonia — v0.12 case-study draft.
+# Pinned commit 5ad8b75427a73721be3b6ed5c11e6aff0d7bad21 (depth-1).
+#
+# Shape: large .NET/C# cross-platform UI framework, community-governed,
+# built with a Nuke (C#) build orchestrating dotnet restore/compile/test/pack
+# across Linux/macOS/Windows. CI is Azure Pipelines (azure-pipelines*.yml),
+# NOT GitHub Actions — the 3 GH workflows (api-diff, update-api, CLA) are
+# command-triggered bot operations, not the build matrix.
+#
+# HONEST SCOPING (calibration rulings R1-R6 applied):
+#   * Avalonia's ENFORCED validation surface is ~entirely DELIBERATE-NON-GOAL
+#     (D): the Nuke targets run restore + compile + the unit/render/leak/tools
+#     test suites + integration tests (Appium / WinAppDriver) + XAML-IL
+#     verification (Mono.Cecil) + a NativeAOT publish-and-run smoke + the
+#     Microsoft.DotNet.ApiCompat breaking-change gate + analyzer enforcement
+#     (TreatWarningsAsErrors in Release). None of these are alint reimplements.
+#   * The ONE natively-addressable check Avalonia *enforces as a documented
+#     review convention* is "DO NOT USE #REGIONS" (CONTRIBUTING.md) — a
+#     file_content_forbidden, expressed below.
+#   * EVERYTHING ELSE in this config is alint VALUE-ADD: structural / config
+#     assertions Avalonia relies on but does not itself gate (global.json SDK
+#     pin, CPM enabled, the version registry, submodule paths, governance
+#     docs). These are recorded as value-add, NOT counted in coverage_today.
+#
+# GENUINE NON-REPLACEABLES (kept on their tool — do NOT subsume):
+#   - Nuke ValidateApiDiff: Microsoft.DotNet.ApiCompat binary-shape diff of the
+#     packed assemblies against the previous-release NuGet baseline, with
+#     api/Avalonia.nupkg.xml as the suppression manifest. Not a committed
+#     file<->file source diff; an execution tool over compiled DLLs (D).
+#   - XamlCompilationVerifier (nukebuild): inspects compiled IL with Cecil (D).
+#   - GenerateCppHeaders (avn.idl -> avalonia-native.h) + GenerateUnicodeData:
+#     codegen, but the outputs are gitignored / regenerated, with NO
+#     `git diff --exit-code` freshness gate — nothing for alint to assert.
+#   - dotnet analyzers + TreatWarningsAsErrors: AST/semantic (D).
+
+version: 1
+
+extends:
+  # .NET ecosystem baseline (facts.has_dotnet -> silent no-op off-.NET).
+  # Brings: global.json exists + $.sdk.version json_path pin, csproj Sdk-style
+  # xml_path, Nullable convention, ManagePackageVersionsCentrally (CPM) check,
+  # bin/obj hygiene, .editorconfig presence. All warning/info; the load-bearing
+  # ones are upgraded below. VALUE-ADD (Avalonia does not gate on these).
+  - alint://bundled/dotnet@v1
+
+  # OSS hygiene baseline (README/SECURITY/CoC presence, no merge markers, no
+  # bidi controls, final newline). NOTE: oss-license-exists matches LICENSE /
+  # LICENSE.{md,txt,...} but Avalonia ships `licence.md` (British spelling,
+  # lowercase) — so the bundle's license rule FALSE-FIRES here. Tracked as a
+  # bundle tuning gap; a repo-level override is added below.
+  - alint://bundled/oss-baseline@v1
+
+  # GitHub Actions hardening. The 3 in-repo workflows are bot/operational, but
+  # update-api.yml carries `contents: write` and the CLA workflow uses
+  # pull_request_target — SHA-pinning + least-privilege still matter. VALUE-ADD.
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ──────────────────────────────────────────────────────────────────
+  # THE enforced, natively-addressable check (counts toward coverage_today).
+  # CONTRIBUTING.md: "**DO NOT USE #REGIONS** full stop". A review-enforced
+  # convention (R5 includes documented conventions). file_content_forbidden
+  # expresses the logic exactly. Three legacy exceptions exist in vendored
+  # Pooled* collections + HtmlTransport (predating the rule) — excluded so the
+  # rule is green against the clone while still guarding new code.
+  # ──────────────────────────────────────────────────────────────────
+  - id: avalonia-no-regions
+    kind: file_content_forbidden
+    paths:
+      include: ["src/**/*.cs"]
+      exclude:
+        - "src/Avalonia.Base/Collections/Pooled/**"   # vendored upstream
+        - "src/Avalonia.DesignerSupport/Remote/HtmlTransport/HtmlTransport.cs"
+    # NOTE: file_content_forbidden matches against WHOLE file content, not
+    # per-line — `^`/`$` anchor the file, not each line (alint sharp-edge).
+    # Use the plain literal so an indented `#region` is caught.
+    pattern: '#region'
+    level: warning
+    message: >-
+      CONTRIBUTING.md: "DO NOT USE #REGIONS full stop." Remove the #region/
+      #endregion folding directive.
+    policy_url: "https://github.com/AvaloniaUI/Avalonia/blob/master/CONTRIBUTING.md"
+
+  # ──────────────────────────────────────────────────────────────────
+  # VALUE-ADD below this line — structural/config assertions Avalonia depends
+  # on but does NOT itself gate. Recorded as value-add per R3/R5, excluded from
+  # the coverage_today / coverage_with_tuning / gap ratios.
+  # ──────────────────────────────────────────────────────────────────
+
+  # global.json is the SDK bootstrap anchor: dotnet@v1 covers existence + a soft
+  # $.sdk.version shape; upgrade to error and assert the major (10.0.x) the repo
+  # targets (AvsCurrentTargetFramework = net10.0).
+  - id: avalonia-global-json-pins-sdk-10
+    kind: json_path_matches
+    paths: global.json
+    path: "$.sdk.version"
+    matches: '^10\.0\.\d+'
+    level: error
+    message: >-
+      global.json $.sdk.version must pin a concrete .NET 10 SDK (10.0.x) — the
+      Azure build installs the SDK via useGlobalJson and the repo targets net10.0.
+
+  # global.json also pins the Traversal MSBuild SDK (dirs.proj is the build
+  # entry-point; MSBuildSolution = dirs.proj). A floating pin breaks restore.
+  - id: avalonia-global-json-pins-traversal-sdk
+    # Dotted JSON key -> bracket notation (alint pitfall #10).
+    kind: json_path_matches
+    paths: global.json
+    path: "$['msbuild-sdks']['Microsoft.Build.Traversal']"
+    matches: '^\d+\.\d+\.\d+$'
+    level: error
+    message: >-
+      global.json msbuild-sdks.Microsoft.Build.Traversal must pin a concrete
+      version — dirs.proj (the build's MSBuildSolution) is a Traversal project.
+
+  # Central Package Management is the version-pinning model (Directory.Packages
+  # .props). dotnet@v1 checks this if_present at info; upgrade to error — every
+  # PackageReference omits Version by design, so a disabled CPM silently breaks.
+  - id: avalonia-cpm-enabled
+    kind: xml_path_equals
+    paths: Directory.Packages.props
+    path: "$.Project.PropertyGroup.ManagePackageVersionsCentrally"
+    equals: "true"
+    level: error
+    message: >-
+      Directory.Packages.props must set ManagePackageVersionsCentrally=true —
+      the repo relies on CPM (every <PackageReference> omits its Version).
+
+  # The version registry. SharedVersion.props is the single source of the
+  # package version (BuildParameters.GetVersion reads <Version> from it).
+  - id: avalonia-shared-version-present
+    kind: file_exists
+    paths: build/SharedVersion.props
+    level: error
+    message: >-
+      build/SharedVersion.props is the single source of the Avalonia package
+      version (nukebuild/BuildParameters reads <Version> from it).
+
+  - id: avalonia-shared-version-format
+    kind: xml_path_matches
+    paths: build/SharedVersion.props
+    path: "$.Project.PropertyGroup.Version"
+    matches: '^\d+\.\d+\.\d+'
+    if_present: true
+    level: error
+    message: >-
+      SharedVersion.props <Version> must be a concrete x.y.z — it brands every
+      packed assembly and the NuGet package id.
+
+  # MIT licence — oss-baseline's license glob does not match the British
+  # `licence.md`, so assert it explicitly (and the third-party NOTICE).
+  - id: avalonia-licence-present
+    kind: file_exists
+    paths: licence.md
+    root_only: true
+    level: error
+    message: >-
+      Avalonia ships its MIT licence as `licence.md` (British spelling) — the
+      generic LICENSE glob misses it.
+
+  - id: avalonia-notice-present
+    kind: file_exists
+    paths: NOTICE.md
+    root_only: true
+    level: warning
+    message: >-
+      NOTICE.md enumerates third-party code (WPF, etc.) bundled/derived under
+      their own licences.
+
+  # MSBuild parent-config anchors (every project inherits these).
+  - id: avalonia-root-directory-build-props
+    kind: file_exists
+    paths: Directory.Build.props
+    root_only: true
+    level: error
+    message: "Root Directory.Build.props is the MSBuild parent every project inherits."
+
+  - id: avalonia-root-directory-build-targets
+    kind: file_exists
+    paths: Directory.Build.targets
+    root_only: true
+    level: warning
+    message: "Root Directory.Build.targets is the post-import MSBuild counterpart."
+
+  # NuGet.config wires the api.nuget.org + dotnet10-transport feeds + package-
+  # source mapping that restore needs (the ApiDiff tool comes from the Azure feed).
+  - id: avalonia-nuget-config-present
+    kind: file_exists
+    paths: NuGet.Config
+    root_only: true
+    level: error
+    message: >-
+      NuGet.Config pins the package sources + packageSourceMapping (the ApiDiff
+      tool resolves only from the dotnet10-transport Azure feed).
+
+  # Submodule path anchors — .gitmodules declares XamlX + Avalonia.DBus under
+  # external/; the build references them, so the checkout paths must exist.
+  - id: avalonia-submodule-paths-declared
+    kind: file_exists
+    paths: .gitmodules
+    root_only: true
+    level: warning
+    message: >-
+      .gitmodules declares external/XamlX + external/Avalonia.DBus; the build
+      consumes them as submodules (checkout uses submodules: recursive).
+
+  # The API-diff suppression manifest the Nuke ValidateApiDiff target consumes.
+  # (The validation itself is execution/ApiCompat = D; this only asserts the
+  # manifest the workflow reads/writes is present.)
+  - id: avalonia-api-suppression-manifest-present
+    kind: file_exists
+    paths: api/Avalonia.nupkg.xml
+    level: warning
+    message: >-
+      api/Avalonia.nupkg.xml is the ApiCompat suppression manifest read by the
+      Nuke ValidateApiDiff gate (and rewritten by the /update-api workflow).

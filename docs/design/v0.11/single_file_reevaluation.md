@@ -1,13 +1,19 @@
 # Single-file re-evaluation contract
 
-Status: Design draft, written 2026-05-02 after v0.9.6.
+Status: **Implemented** (2026-05-24). `Engine::run_for_file` ships in
+`crates/alint-core/src/engine.rs` with the contract below; the LSP
+server's `didChange` handler now drives it for live per-keystroke
+diagnostics (`crates/alint-lsp`). A `reeval_vs_full` group in
+`crates/alint-bench/benches/single_file_rules.rs` captures the hot-path
+vs full-`run` ratio. Original design draft written 2026-05-02 after
+v0.9.6. Deviations from the draft are flagged inline below.
 
 ## Problem
 
 The LSP server (see [`lsp_server.md`](./lsp_server.md)) needs to
 re-evaluate rules against a single file on every keystroke (debounced).
 A full `Engine::run` on a 100k-file workspace takes ~186ms (per
-`docs/benchmarks/macro/results/linux-x86_64/v0.9.5/`); on every keystroke
+`docs/benchmarks/macro/results/linux-x86_64-ryzen-3900x/v0.9.5/`); on every keystroke
 that's a UX disaster. We need a `run_for_file` contract that costs
 proportional to *one* file's evaluation, not the whole tree's.
 
@@ -102,7 +108,15 @@ Complexity estimate: ~150 lines, plus a refactor of the existing
   fires; cross-file rule absent from result.
 - Integration: e2e scenario `crates/alint-e2e/scenarios/check/lsp/`
   that exercises the run_for_file path against a small polyglot tree.
-- Bench: `single_file_rules` micro-bench (mentioned above).
+  **Deviation:** there is no `alint check` CLI surface for
+  `run_for_file` (it's driven by the LSP server, not the CLI), so the
+  trycmd-style e2e harness can't reach it. Coverage instead lives in
+  `engine::tests` (in-scope / out-of-scope / cross-file fixture,
+  supplied-bytes-win, passing-rule-omitted, `FileNotInIndex`) plus the
+  `alint-lsp` unit tests. A full LSP stdio smoke harness is tracked with
+  the rest of the LSP epic.
+- Bench: `single_file_rules` micro-bench — the `reeval_vs_full` group
+  (added with this work) is the run_for_file-vs-`run` ratio.
 
 ## Open questions
 

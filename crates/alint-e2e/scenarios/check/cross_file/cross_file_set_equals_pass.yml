@@ -1,0 +1,27 @@
+name: cross_file set_equals is silent when the source and target sets match
+tags: [check, cross_file, cross_file, passing]
+
+given:
+  tree:
+    needs.json: |
+      {"need": ["b", "a"]}
+    have.json: |
+      {"have": ["a", "b"]}
+  config: |
+    version: 1
+    rules:
+      - id: sets-match
+        kind: cross_file
+        source:
+          file: needs.json
+          extract: { json: "$.need[*]" }
+        targets:
+          files: "have.json"
+          extract: { json: "$.have[*]" }
+        relation: set_equals
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

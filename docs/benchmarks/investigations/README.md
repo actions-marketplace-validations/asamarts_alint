@@ -56,6 +56,62 @@ super-linearly in file count. Functions whose share grows
 monotonically are super-linear suspects, even when the wall-time
 absolute number doesn't yet flag them as a regression.
 
+### [`2026-07-1m-writeback-contention/`](2026-07-1m-writeback-contention/)
+
+`S2/1m/full` blows the 10 % CV gate (37–51 %) on a 16 GB bench host,
+while the *same cell, same box, same tag, same flags* measured in
+isolation is clean (0.4 %). Not an alint regression: a measurement
+artifact. A single `bench-scale` invocation writes ~16 GB (two 1M
+trees — S9 forces a second — plus git objects) and then starts
+hyperfine immediately, while the kernel is still draining gigabytes
+of dirty pages; `S2` is the first scenario that reads the whole tree's
+*content*, so it eats the contention. The 1M `runs = 3`
+auto-reduction turns one stalled run into a gate failure.
+
+Ten hypotheses were tested and falsified before the right one, and the
+README records all of them — because a future engineer seeing high 1M
+CV will reach for most of them first. Notably **it is not RAM**
+(`MemAvailable` never below 14.8 GB of 15.8 GB) and **not thermal**
+(NVMe peaked 44 °C against a ~70 °C throttle point).
+
+The diagnostic that cracked it: compare each 1M cell's **isolated** vs
+**in-matrix** mean. The CV gate only catches *variance*, so a
+uniformly-slow cell would pass while being wrong; that comparison
+proves the inflation is real and confined to one cell.
+
+Also: the harness bug is **latent on the 62 GB 3900X**, not absent —
+that box just holds the whole tree in page cache, so its reads never
+touch the disk.
+
+### [`2026-07-v0.14-s2-harness-artifact/`](2026-07-v0.14-s2-harness-artifact/)
+
+v0.14.0's `bench-record` failed the wall-clock gate: **S2 `10k full` +17.6 %
+`min_ms`** vs v0.13.0, with the other content scenarios up ~+6.5 % and the
+filename-only S1 flat. A code scan surfaced the culprit — v0.14's OOM-cap fix
+(`c845f7d3`) routed every content read through `File::open + take(cap+1)
+.read_to_end(Vec::new())`.
+
+**First misdiagnosed as a harness artifact, then corrected to a REAL regression.**
+`det_check` under Valgrind (Ir + EstimatedCycles) is flat ±0.4 % including S2, which
+the first pass read as "not in the binary." But Ir is **I/O-blind**: a `Take<File>`
+loses `File`'s `read_to_end` fstat-preallocation, so it grows-and-rereads → extra
+`read()` **syscalls** per file — real wall-clock, ~zero guest instructions.
+Re-baselining v0.13 and v0.14 on the *same* runner still showed S2 +12–15 %, and a
+back-to-back microbench measured +46 % (fixed: −8.8 %). Fixed by preallocating the
+read buffer from the walk-time `FileEntry::size` (`walker::read_bounded` +
+`io::read_capped_with`), keeping the `take(cap+1)` TOCTOU bound. A harness offset
+was real but secondary — it explained only +17.6 → +15.1 %.
+
+Reusable traps: `read_to_end` is specialized to preallocate for a bare `File` but
+NOT a `Take<File>` — a `.take()` OOM/TOCTOU wrapper silently drops the specialization
+and regresses read-heavy paths; preallocate from a size you already have. And a flat
+deterministic (Valgrind-Ir) gate rules out a compute/cache regression but is
+**I/O-blind** — confirm read- or spawn-heavy scenarios with a quiet-box wall-clock
+control before concluding "no regression." A real CI bug fell out on the way:
+`det-perf-gate.sh` pins `gungraun-runner` older than the `gungraun` library, so the
+deterministic gate mis-reports a tooling failure as an Ir regression on any
+post-bump PR.
+
 ## Tooling
 
 - `ALINT_LOG=alint_core=info target/release/alint check <root>` —

@@ -13,7 +13,7 @@
 //! literal    := STRING | INT | BOOL | 'null' | list
 //! list       := '[' [expr (',' expr)*] ']'
 //! ident_or_call := NS '.' NAME ['(' [expr (',' expr)*] ')']
-//! NS         := 'facts' | 'vars' | 'iter'
+//! NS         := 'facts' | 'vars' | 'iter' | 'env'
 //! ```
 //!
 //! Design choices (all load-bearing):
@@ -108,6 +108,12 @@ pub enum Namespace {
     /// evaluates to `null` and `iter.has_file(_)` to `false` —
     /// matching the "missing fact is falsy" rule.
     Iter,
+    /// Environment variables. `env.CI`, `env.GITHUB_ACTIONS`, etc.
+    /// Resolved at evaluation time (env is constant during a run);
+    /// an unset variable evaluates to `null`, matching the
+    /// "missing fact is falsy" rule. Value-only — there are no
+    /// callable methods on `env`.
+    Env,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,18 +173,28 @@ pub struct WhenEnv<'a> {
     /// resolve to falsy / null per the "unknown fact is
     /// falsy" convention.
     pub iter: Option<IterEnv<'a>>,
+    /// Optional environment-variable snapshot backing the `env.*`
+    /// namespace. `None` — the production default — means the
+    /// evaluator reads the live process environment via
+    /// `std::env::var` (env is constant during a run, so the
+    /// eval-time read matches a load-time snapshot). Tests inject
+    /// a fake map via [`WhenEnv::with_env`] so they never touch
+    /// the real environment (Rust 2024 marks `set_var` unsafe).
+    pub env: Option<&'a HashMap<String, String>>,
 }
 
 impl<'a> WhenEnv<'a> {
     /// Construct a `WhenEnv` without iteration context — the
     /// shape every existing call site uses. `iter.*` references
-    /// in the expression resolve to null / false.
+    /// in the expression resolve to null / false; `env.*` reads
+    /// the live process environment.
     #[must_use]
     pub fn new(facts: &'a FactValues, vars: &'a HashMap<String, String>) -> Self {
         Self {
             facts,
             vars,
             iter: None,
+            env: None,
         }
     }
 
@@ -188,6 +204,15 @@ impl<'a> WhenEnv<'a> {
     #[must_use]
     pub fn with_iter(mut self, iter: IterEnv<'a>) -> Self {
         self.iter = Some(iter);
+        self
+    }
+
+    /// Back the `env.*` namespace with an explicit map instead of
+    /// the live process environment. Used by tests to resolve
+    /// `env.X` hermetically.
+    #[must_use]
+    pub fn with_env(mut self, env: &'a HashMap<String, String>) -> Self {
+        self.env = Some(env);
         self
     }
 }
@@ -342,6 +367,7 @@ mod tests {
             facts: &facts,
             vars: &vars,
             iter: None,
+            env: None,
         })
         .unwrap()
     }
@@ -391,6 +417,14 @@ mod tests {
         assert!(check("vars.org matches \"^Acme\""));
         assert!(check("vars.year matches \"^\\\\d{4}$\""));
         assert!(!check("vars.org matches \"^Xyz\""));
+    }
+
+    #[test]
+    fn matches_on_missing_fact_is_false_not_error() {
+        // L10: a missing fact (Null) on the LHS of `matches` is falsy, mirroring
+        // how `null == "x"` is falsy — not a hard error. (`check` unwraps, so a
+        // regression here would panic.)
+        assert!(!check("facts.nonexistent_fact matches \"anything\""));
     }
 
     #[test]
@@ -463,6 +497,7 @@ mod tests {
             facts: &facts,
             vars: &vars,
             iter: None,
+            env: None,
         });
         assert!(result.is_err());
     }
@@ -476,6 +511,7 @@ mod tests {
                 facts: &facts,
                 vars: &vars,
                 iter: None,
+                env: None,
             })
             .unwrap()
         );
@@ -486,6 +522,142 @@ mod tests {
         assert!(check(
             "not (facts.is_node or (facts.n_files == 0 and facts.is_rust))"
         ));
+    }
+
+    #[test]
+    fn deeply_nested_input_is_a_parse_error_not_a_stack_overflow() {
+        // Untrusted `extends:` rulesets reach the `when:` parser; deeply
+        // nested parens must fail loudly here, never overflow the parser
+        // stack (an uncatchable abort). Run on a deliberately small (1 MiB)
+        // stack so this asserts the depth cap is low enough for a constrained
+        // stack — a rayon worker, or a debug build on a macOS test thread —
+        // not only the 8 MiB main thread. (Regression: this overflowed on
+        // macOS CI at depth 256; the parser's six-frame-per-level recursion
+        // through the large `parse_primary` is the cost driver.)
+        let err = std::thread::Builder::new()
+            .stack_size(1 << 20)
+            .spawn(|| {
+                let src = format!("{}true{}", "(".repeat(10_000), ")".repeat(10_000));
+                parse(&src)
+            })
+            .unwrap()
+            .join()
+            .expect("parser must not overflow a 1 MiB stack")
+            .unwrap_err();
+        assert!(matches!(err, WhenError::Parse { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn long_flat_chain_is_a_parse_error_not_a_stack_overflow() {
+        // A flat `a and a and …` chain parses iteratively but builds a tall
+        // left-nested tree that a later recursive Drop / eval would overflow
+        // the stack on (H5 flat-chain gap — `parse_or`/`parse_and` are `while`
+        // loops that never re-enter the `parse_expr` depth guard). The parser
+        // now bounds the chain length, so it fails loudly at PARSE — before the
+        // overflowing tree is ever built (only a ≤64-deep partial AST is dropped).
+        let chain = vec!["facts.x == 1"; 10_000].join(" and ");
+        let err = parse(&chain).unwrap_err();
+        assert!(matches!(err, WhenError::Parse { .. }), "{err:?}");
+        // And an `or`-chain is bounded the same way.
+        let or_chain = vec!["facts.x == 1"; 10_000].join(" or ");
+        assert!(matches!(
+            parse(&or_chain).unwrap_err(),
+            WhenError::Parse { .. }
+        ));
+    }
+
+    #[test]
+    fn nested_parens_with_per_level_chains_are_bounded_at_parse() {
+        // The chain-depth bumps must bound the AST's CUMULATIVE structural depth,
+        // not just one flat chain: nesting parens AND a chain at every level
+        // (`(…) and a and a …`) builds a tall left-nested tree whose later
+        // recursive Drop / eval would overflow the stack. `depth` accumulates
+        // along the spine, so this fails loudly at PARSE rather than aborting.
+        // (An earlier "restore after each chain" attempt let this parse and
+        // reopened the overflow — the chain bumps must NOT be restored.)
+        let mut expr = String::from("facts.x == 1");
+        for lvl in (1..=62).rev() {
+            expr = format!("({expr}){}", " and facts.x == 1".repeat(63 - lvl));
+        }
+        let err = parse(&expr).unwrap_err();
+        assert!(
+            matches!(err, WhenError::Parse { .. }),
+            "a deep nested-chain AST must be rejected at parse: {err:?}"
+        );
+    }
+
+    // ─── env namespace ───────────────────────────────────────────
+
+    fn check_env(src: &str, vars_env: &[(&str, &str)]) -> bool {
+        let (facts, vars) = env();
+        let env_map: HashMap<String, String> = vars_env
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        let expr = parse(src).unwrap();
+        expr.evaluate(&WhenEnv::new(&facts, &vars).with_env(&env_map))
+            .unwrap()
+    }
+
+    #[test]
+    fn env_namespace_resolves_injected_value() {
+        assert!(check_env("env.CI == \"true\"", &[("CI", "true")]));
+        assert!(check_env(
+            "env.GITHUB_ACTIONS == \"true\" or env.CI == \"true\"",
+            &[("CI", "true")],
+        ));
+    }
+
+    #[test]
+    fn env_unset_var_is_null_and_falsy() {
+        assert!(!check_env("env.NOT_SET", &[]));
+        assert!(check_env("env.NOT_SET == null", &[]));
+        assert!(!check_env("env.NOT_SET == \"true\"", &[]));
+    }
+
+    #[test]
+    fn env_composes_with_facts_and_vars() {
+        assert!(check_env(
+            "facts.is_rust and env.CI == \"true\"",
+            &[("CI", "true")],
+        ));
+        assert!(!check_env(
+            "facts.is_node and env.CI == \"true\"",
+            &[("CI", "true")],
+        ));
+    }
+
+    #[test]
+    fn env_values_are_always_strings_compare_against_string_literals() {
+        // env vars resolve to `String`, never `Int`. Comparing to a
+        // bare integer literal is silently false (mixed-type `==`),
+        // so users must quote: `env.PORT == "8080"`, not `== 8080`.
+        assert!(check_env("env.PORT == \"8080\"", &[("PORT", "8080")]));
+        assert!(!check_env("env.PORT == 8080", &[("PORT", "8080")]));
+    }
+
+    #[test]
+    fn env_matches_and_in_operators() {
+        assert!(check_env(
+            "env.REF matches \"^refs/tags/\"",
+            &[("REF", "refs/tags/v1.0",)]
+        ));
+        assert!(check_env(
+            "\"prod\" in env.ENVIRONMENT",
+            &[("ENVIRONMENT", "prod-east",)]
+        ));
+    }
+
+    #[test]
+    fn env_parses_as_valid_namespace() {
+        // `env.X` parses cleanly (regression guard for the parser
+        // namespace dispatch); a bogus namespace still rejects with
+        // the updated allowed-list message.
+        assert!(parse("env.CI == \"true\"").is_ok());
+        let WhenError::Parse { message, .. } = parse("environ.CI").unwrap_err() else {
+            panic!("expected parse error");
+        };
+        assert!(message.contains("env.NAME"), "msg: {message}");
     }
 
     // ─── iter namespace ──────────────────────────────────────────
@@ -517,6 +689,7 @@ mod tests {
                 is_dir,
                 index,
             }),
+            env: None,
         })
         .unwrap()
     }
@@ -670,6 +843,7 @@ mod tests {
                     is_dir: true,
                     index: &index,
                 }),
+                env: None,
             })
             .unwrap_err();
         let WhenError::Eval(msg) = err else {

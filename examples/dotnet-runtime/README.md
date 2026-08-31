@@ -738,3 +738,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   catalogue. The two high-count warnings (4,843 + 2,243) remain the
   expected behaviour of the regex fallback at scale until `xml_path_*`
   ships in v0.10.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (59 rules, ~84% coverage). +9 surfaces, headlined by the
+dotnet@v1 bundled ruleset: `extends: [alint://bundled/dotnet@v1]`
+(ecosystem-gated) subsumes ~6 hand-written rules; xml_path_* replaces
+fragile <Project Sdk=...> substring regexes with real root-attribute
+assertions; json_path_* pins the Arcade/Helix SDK families in
+global.json. Confirmed runtime has no root Directory.Packages.props, so
+dotnet@v1's if_present CPM rule correctly no-ops (no false positive).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 2).

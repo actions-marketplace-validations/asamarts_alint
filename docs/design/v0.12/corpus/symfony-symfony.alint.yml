@@ -1,0 +1,289 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Case-study config — symfony/symfony @ 9f30c2bb7f560974f408b6b1aae8e8da2000b3a8
+# (v0.12 100-repo study, Stage A). PHP web-framework MONOREPO: 58 Components +
+# 6 Bundles + 5 Bridges + 13 Contracts under src/Symfony/, each git-split into a
+# read-only standalone package (symfony/console, symfony/yaml, ...). composer.lock
+# is gitignored (library convention — R6 absent category; do NOT add a lockfile rule).
+#
+# alint has NO php/composer bundle (corpus finding — ecosystem gap), so this config
+# leans on oss-baseline + bespoke repo rules. The enforced bespoke surface lives in:
+#   .github/workflows/package-tests.yml ... per-package META-FILE invariants
+#                                            + LICENSE-template + replace-section
+#                                            + deprecation-contracts coherence
+#   .github/workflows/unit-tests.yml ....... patch-types.php (return-type AST = D)
+#   .github/workflows/static-analysis.yml .. psalm + phpstan (D, baselined)
+#   .github/workflows/fabbot.yml ........... php-cs-fixer @Symfony + header_comment
+#   .github/workflows/twig-cs-fixer.yml .... twig CS (D)
+#   .github/workflows/intl-data-tests.yml .. committed data is UNCOMPRESSED .php
+#   .editorconfig .......................... LF + final newline + trim trailing ws
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A — PER-FILE LICENSE HEADER  (file_header)
+  # .php-cs-fixer.dist.php `header_comment` enforces the canonical Symfony
+  # header on every file under src/ (gated by the fabbot CS workflow). The
+  # header is a CONTENT invariant alint expresses natively; php-cs-fixer
+  # merely executes/auto-fixes it. ~5,865 non-test src/*.php carry it.
+  # Excludes mirror the fixer's Finder ->exclude/->notPath (generated data,
+  # Fixtures, generated proxies/SVG/HTML templates).
+  # ════════════════════════════════════════════════════════════════
+  - id: symfony-source-license-header
+    kind: file_header
+    paths:
+      include: ["src/**/*.php"]
+      exclude:
+        - "src/**/Tests/**"
+        - "src/**/Fixtures/**"
+        - "src/Symfony/Component/Emoji/Resources/**"
+        - "src/Symfony/Component/Intl/Resources/data/**"
+        - "src/Symfony/Component/String/Resources/data/**"
+        - "src/Symfony/Bridge/PhpUnit/**Mock.php"
+        - "src/Symfony/Bridge/PhpUnit/**Legacy**"
+        - "src/Symfony/Component/Cache/Traits/**Proxy.php"
+        # CI's php-cs-fixer Finder also ->notPath these (HTML templates, SVG,
+        # and the binary classmap file is non-UTF-8 so cannot match a header).
+        - "src/**/*.html.php"
+        - "src/Symfony/Component/ErrorHandler/Resources/assets/images/symfony-ghost.svg.php"
+        - "src/Symfony/Component/Cache/Traits/ValueWrapper.php"
+    lines: 8
+    pattern: 'This file is part of the Symfony package\.'
+    level: warning
+    message: >-
+      Every src/ PHP file must carry the Symfony license header
+      ("This file is part of the Symfony package. (c) Fabien Potencier ...").
+      Enforced by php-cs-fixer `header_comment` via the fabbot CS workflow.
+
+  # ════════════════════════════════════════════════════════════════
+  # A — PER-PACKAGE META-FILE INVARIANTS  (for_each_dir + file_exists)
+  # .github/workflows/package-tests.yml "Verify meta files are correct":
+  # every modified package must ship README.md, CHANGELOG.md, LICENSE,
+  # .gitignore, .gitattributes, phpunit.xml.dist — and must NOT commit
+  # phpunit.xml (the gitignored copy). We assert this over ALL packages
+  # (CI only checks the modified subset; asserting all is value-add-leaning
+  # but mirrors the same per-package contract; see notes).
+  # NOTE: Contracts/* and the bare Contracts dir are special-cased by CI
+  #   (no .gitattributes / no phpunit.xml.dist requirement) — handled by
+  #   scoping the strict rules to Component/Bundle/Bridge only.
+  # ════════════════════════════════════════════════════════════════
+  - id: symfony-package-has-readme
+    kind: for_each_dir
+    select: "src/Symfony/{Component,Bundle,Bridge,Contracts}/*"
+    when_iter: 'iter.has_file("composer.json")'
+    require:
+      - kind: file_exists
+        paths: "{path}/README.md"
+    level: warning
+    message: "Every Symfony package must have a README.md (package-tests.yml)."
+
+  - id: symfony-package-has-changelog
+    kind: for_each_dir
+    select: "src/Symfony/{Component,Bundle,Bridge,Contracts}/*"
+    when_iter: 'iter.has_file("composer.json")'
+    require:
+      - kind: file_exists
+        paths: "{path}/CHANGELOG.md"
+    level: warning
+    message: "Every Symfony package must have a CHANGELOG.md (package-tests.yml)."
+
+  - id: symfony-package-has-license
+    kind: for_each_dir
+    select: "src/Symfony/{Component,Bundle,Bridge,Contracts}/*"
+    when_iter: 'iter.has_file("composer.json")'
+    require:
+      - kind: file_exists
+        paths: "{path}/LICENSE"
+    level: warning
+    message: "Every Symfony package must have a LICENSE (package-tests.yml)."
+
+  - id: symfony-package-has-gitignore
+    kind: for_each_dir
+    select: "src/Symfony/{Component,Bundle,Bridge,Contracts}/*"
+    when_iter: 'iter.has_file("composer.json")'
+    require:
+      - kind: file_exists
+        paths: "{path}/.gitignore"
+    level: warning
+    message: "Every Symfony package must have a .gitignore (package-tests.yml)."
+
+  - id: symfony-package-has-phpunit-dist
+    kind: for_each_dir
+    select: "src/Symfony/{Component,Bundle,Bridge}/*"
+    when_iter: 'iter.has_file("composer.json")'
+    require:
+      - kind: file_exists
+        paths: "{path}/phpunit.xml.dist"
+    level: warning
+    message: "Every Component/Bundle/Bridge package must ship phpunit.xml.dist (package-tests.yml)."
+
+  - id: symfony-package-has-gitattributes
+    kind: for_each_dir
+    select: "src/Symfony/{Component,Bundle,Bridge}/*"
+    when_iter: 'iter.has_file("composer.json")'
+    require:
+      - kind: file_exists
+        paths: "{path}/.gitattributes"
+    level: warning
+    message: "Every Component/Bundle/Bridge package must ship .gitattributes (package-tests.yml; Contracts exempt)."
+
+  # CI: `_file_not_exist $DIR/phpunit.xml` — the non-dist phpunit.xml is the
+  # gitignored, locally-generated copy and must never be committed.
+  - id: symfony-no-committed-phpunit-xml
+    kind: file_absent
+    paths:
+      include: ["src/Symfony/**/phpunit.xml"]
+    level: error
+    message: "phpunit.xml (non-.dist) is gitignored and must not be committed (package-tests.yml `_file_not_exist`)."
+
+  # ════════════════════════════════════════════════════════════════
+  # A — REGISTRY: every package name is declared in root `replace`
+  # package-tests.yml (new packages): root composer.json's `replace` must
+  # contain "$NAME": "self.version". registry_paths_resolve treats the
+  # root composer.json's replace KEYS as a registry and resolves each to the
+  # on-disk package. Here we assert the structural invariant that the
+  # replace map's value is always the self-version sentinel (a config-policy
+  # assertion of the SoT manifest) AND that the keys form a non-empty set.
+  # ════════════════════════════════════════════════════════════════
+  - id: symfony-replace-uses-self-version
+    kind: json_path_matches
+    paths: "composer.json"
+    path: "$.replace['symfony/console']"
+    matches: '^self\.version$'
+    level: warning
+    message: "Root composer.json `replace` must map each subpackage to self.version (package-tests.yml)."
+
+  # ════════════════════════════════════════════════════════════════
+  # A — COMMITTED INTL/EMOJI DATA IS UNCOMPRESSED (.php, not .php.gz)
+  # intl-data-tests.yml asserts `[ -f .../locales/en.php ]` and
+  # `[ ! -f .../locales/en.php.gz ]` BEFORE running the compressor — i.e.
+  # the tracked data must be the plain .php form, never the .gz. Two halves:
+  # file_exists(.php) + file_absent(.php.gz).
+  # ════════════════════════════════════════════════════════════════
+  - id: symfony-intl-data-uncompressed-present
+    kind: file_exists
+    paths: "src/Symfony/Component/Intl/Resources/data/locales/en.php"
+    level: warning
+    message: "Tracked Intl locale data must be the plain en.php (intl-data-tests.yml pre-check)."
+
+  - id: symfony-intl-data-not-gz
+    kind: file_absent
+    paths:
+      include: ["src/Symfony/Component/Intl/Resources/data/**/*.php.gz"]
+    level: error
+    message: "Compressed *.php.gz Intl data must not be committed (intl-data-tests.yml asserts the uncompressed form)."
+
+  - id: symfony-emoji-data-uncompressed-present
+    kind: file_exists
+    paths: "src/Symfony/Component/Emoji/Resources/data/emoji-en.php"
+    level: warning
+    message: "Tracked Emoji data must be the plain emoji-en.php (intl-data-tests.yml pre-check)."
+
+  - id: symfony-emoji-data-not-gz
+    kind: file_absent
+    paths:
+      include: ["src/Symfony/Component/Emoji/Resources/data/**/*.php.gz"]
+    level: error
+    message: "Compressed *.php.gz Emoji data must not be committed (intl-data-tests.yml)."
+
+  # ════════════════════════════════════════════════════════════════
+  # A — HYGIENE (.editorconfig contract: LF, final newline, no trailing ws)
+  # .editorconfig declares trim_trailing_whitespace + insert_final_newline
+  # for all files; php-cs-fixer @Symfony also enforces these on src/*.php.
+  # ════════════════════════════════════════════════════════════════
+  - id: symfony-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["src/**/*.php", "**/*.md", "**/*.yml", "**/*.yaml"]
+      exclude:
+        - "src/**/Tests/**"
+        - "src/**/Fixtures/**"
+        - "src/Symfony/Component/Intl/Resources/data/**"
+        - "src/Symfony/Component/Emoji/Resources/**"
+    level: info
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  - id: symfony-final-newline
+    kind: final_newline
+    paths:
+      include: ["src/**/*.php"]
+      exclude:
+        - "src/**/Tests/**"
+        - "src/**/Fixtures/**"
+    level: info
+    fix:
+      file_append_final_newline: {}
+
+  # ════════════════════════════════════════════════════════════════
+  # A — CONFIG / CI FILES EXIST (structure invariants; value-add-leaning)
+  # ════════════════════════════════════════════════════════════════
+  - id: symfony-cs-config-exists
+    kind: file_exists
+    paths: ".php-cs-fixer.dist.php"
+    level: warning
+  - id: symfony-phpstan-config-exists
+    kind: file_exists
+    paths: "phpstan.dist.neon"
+    level: warning
+  - id: symfony-psalm-config-exists
+    kind: file_exists
+    paths: "psalm.xml"
+    level: warning
+  - id: symfony-package-verify-workflow-exists
+    kind: file_exists
+    paths: ".github/workflows/package-tests.yml"
+    level: warning
+
+  # ════════════════════════════════════════════════════════════════
+  # CODEGEN FRESHNESS (B gap — NOW CLOSED): translations XLIFF must be in sync.
+  # integration-tests.yml:249-251 runs `php .github/sync-translations.php`
+  # then `git diff --exit-code src/`. This is the "run a MUTATING generator,
+  # then assert the working tree is git-clean" shape.
+  # v0.12 `generated_file_fresh` gained the MUTATING / in-place mode (`outputs:`):
+  # it SNAPSHOTS the `outputs` glob, runs the generator (which rewrites those
+  # files in place), DIFFS each output (stale / newly-created / removed = one
+  # violation), then RESTORES the snapshot — i.e. it expresses exactly
+  # run-mutator-then-git-clean natively (the alint form of `make gen && git diff
+  # --exit-code`), leaving the tree byte-identical. The `regen_git_clean`
+  # new-kind candidate is retired by this mode; alint now expresses the
+  # freshness logic, not just an opaque `command` wrapper.
+  # `outputs:` is scoped to exactly the dirs sync-translations.php writes —
+  # the generator iterates {Security/Core, Form, Validator}, all under
+  # Component/**/Resources/translations/*.xlf (the two test-fixture translation
+  # dirs live under Bundle/, outside this glob, so they are not snapshotted).
+  # Spawn-gated kind (declarable only in this top-level config); like the
+  # other shell-outs below it needs `composer install` (vendor/autoload.php)
+  # to actually run — a spawn failure is itself a distinct violation.
+  # ════════════════════════════════════════════════════════════════
+  - id: symfony-translations-in-sync
+    kind: generated_file_fresh
+    outputs: "src/Symfony/Component/**/Resources/translations/*.xlf"
+    command: ["php", ".github/sync-translations.php"]
+    timeout: 300
+    level: warning
+    message: >-
+      XLIFF translation files must be in sync — run
+      `php .github/sync-translations.php` (integration-tests.yml git-diff gate).
+
+  # ════════════════════════════════════════════════════════════════
+  # SHELL-OUTS (orchestration value-add; the underlying checks are D)
+  # The real enforcement is tool execution (R2). Wrapping for a single
+  # entrypoint is legitimate, recorded separately from the A/B/C ratio.
+  # ════════════════════════════════════════════════════════════════
+  - id: symfony-php-cs-fixer
+    kind: command
+    paths: ".php-cs-fixer.dist.php"
+    command: ["php", "vendor/bin/php-cs-fixer", "fix", "--dry-run", "--diff"]
+    timeout: 600
+    level: warning
+  - id: symfony-phpstan
+    kind: command
+    paths: "phpstan.dist.neon"
+    command: ["php", "vendor/bin/phpstan", "analyse", "--no-progress"]
+    timeout: 600
+    level: warning

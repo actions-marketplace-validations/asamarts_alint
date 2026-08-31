@@ -1,0 +1,79 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for spf13/cobra @ ad460ea8f249db69c943a365fb84f3a59042d54e
+# (v0.12 100-repo case study — Go CLI-framework library, community governance).
+#
+# The ONLY bespoke validation cobra actually GATES on (its denominator):
+#   - CI `lic-headers`: addlicense -check enforces the Apache header
+#     (-c 'The Cobra Authors' -y '2013-2023' -l apache) on every *.go
+#     file except under .github/**.   -> A1 (file_header repo rule below)
+#   - CI golangci-lint / gofmt / go test  -> D (tool execution, not alint).
+#
+# Everything from the bundles below that cobra does NOT gate on is alint
+# value-add (structure cobra happens to satisfy), recorded as such — not in
+# the coverage ratio.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/go@v1
+  - alint://bundled/compliance/apache-2@v1
+
+rules:
+  # ---------------------------------------------------------------------------
+  # A1 — THE enforced check.  CI job `lic-headers` runs:
+  #   addlicense -c 'The Cobra Authors' -y '2013-2023' -l apache \
+  #     -ignore '.github/**' -check .
+  # i.e. every *.go file (cobra has Go only under . and doc/) must open with
+  # the Cobra copyright line AND the Apache-2.0 license boilerplate. This is
+  # stricter than the generic apache-2 bundle rule (it pins the exact
+  # copyright owner + year), so we express cobra's precise contract here.
+  # ---------------------------------------------------------------------------
+  - id: cobra-go-apache-header
+    kind: file_header
+    paths:
+      include: ["**/*.go"]
+      exclude:
+        - ".github/**"          # addlicense -ignore '.github/**'
+        - "**/*.pb.go"          # generated (none today; future-proof)
+        - "**/*_generated.go"
+        - "**/zz_generated.*.go"
+    lines: 13
+    pattern: 'Copyright 2013-2023 The Cobra Authors[\s\S]*Licensed under the Apache License, Version 2\.0'
+    level: error
+    message: >-
+      Every Go source must carry the Cobra Apache-2.0 header
+      (`// Copyright 2013-2023 The Cobra Authors` + the Apache 2.0
+      boilerplate). Enforced in CI by `addlicense -check`.
+    policy_url: "https://www.apache.org/licenses/LICENSE-2.0#apply"
+
+  # ---------------------------------------------------------------------------
+  # apache-2 bundle tuning: cobra ships LICENSE.txt (Apache) but deliberately
+  # has NO NOTICE file and does not gate on one (R6 absent-category) — silence
+  # the bundle's NOTICE recommendation. The bundle's generic source-header
+  # warning is superseded by the stricter cobra-go-apache-header above.
+  # ---------------------------------------------------------------------------
+  - id: apache-2-notice-file-exists
+    level: off
+  - id: apache-2-source-has-license-header
+    level: off
+
+  # ---------------------------------------------------------------------------
+  # value-add (NOT in cobra's enforced denominator): cobra's CONTRIBUTING +
+  # repo structure satisfy these, but cobra does not CI-gate them. Recorded as
+  # structural assertions alint can add for free.
+  # ---------------------------------------------------------------------------
+  - id: cobra-maintainers-file-exists
+    kind: file_exists
+    paths: MAINTAINERS
+    root_only: true
+    level: info
+    message: "cobra tracks its maintainer roster in a root MAINTAINERS file."
+
+  - id: cobra-golangci-config-exists
+    kind: file_exists
+    paths: .golangci.yml
+    root_only: true
+    level: info
+    message: "cobra's lint policy lives in .golangci.yml; keep it committed."

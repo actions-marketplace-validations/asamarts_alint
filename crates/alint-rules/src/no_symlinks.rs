@@ -22,11 +22,23 @@ pub struct NoSymlinksRule {
 }
 
 impl Rule for NoSymlinksRule {
+    /// Expose the per-file scope so the engine resolves this rule's
+    /// `scope_filter` (manifest sets, `changed_since:`) before dispatch and
+    /// can `--changed`-skip it (see `Rule::path_scope`).
+    fn path_scope(&self) -> Option<&Scope> {
+        Some(&self.scope)
+    }
+
     alint_core::rule_common_impl!();
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
-        for entry in ctx.index.files() {
+        // Iterate ALL indexed entries, not just `files()`: a symlink whose
+        // target is a *directory* is indexed as a dir entry (the walk follows
+        // it), so a `files()`-only scan silently missed dir symlinks (M4). The
+        // per-entry `symlink_metadata` re-stat below is what actually decides —
+        // a regular directory is never flagged.
+        for entry in &ctx.index.entries {
             if !self.scope.matches(&entry.path, ctx.index) {
                 continue;
             }
@@ -41,6 +53,20 @@ impl Rule for NoSymlinksRule {
                     .unwrap_or_else(|| "path is a symbolic link".to_string());
                 violations.push(Violation::new(msg).with_path(entry.path.clone()));
             }
+        }
+        // Symlinks whose target ESCAPES the repo root are pruned from the index
+        // by the walker (so no content rule can read out-of-tree through them),
+        // but recorded on the side-list — flag them here too (M4). They are
+        // symlinks by construction, so no re-stat is needed.
+        for link in ctx.index.escaping_symlinks() {
+            if !self.scope.matches(link, ctx.index) {
+                continue;
+            }
+            let msg = self
+                .message
+                .clone()
+                .unwrap_or_else(|| "path is a symbolic link".to_string());
+            violations.push(Violation::new(msg).with_path(link.clone()));
         }
         Ok(violations)
     }
@@ -154,6 +180,87 @@ mod tests {
         });
         let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert_eq!(v.len(), 1, "symlink should fire: {v:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn evaluate_fires_on_directory_symlink_via_real_walk() {
+        // M4: a symlink whose target is a *directory* is indexed as a dir
+        // entry by the real walk, so a `files()`-only scan missed it. Uses the
+        // real walker (not a hand-built index) to prove the dir symlink is both
+        // indexed and flagged.
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir(root.join("realdir")).unwrap();
+        std::fs::write(root.join("realdir/f.txt"), b"hi").unwrap();
+        symlink(root.join("realdir"), root.join("linkdir")).unwrap();
+
+        let idx = alint_core::walk(root, &alint_core::WalkOptions::default()).unwrap();
+        assert!(
+            idx.entries
+                .iter()
+                .any(|e| &*e.path == std::path::Path::new("linkdir")),
+            "the dir symlink must be indexed as an entry"
+        );
+
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: no_symlinks\n\
+             paths: \"**/*\"\n\
+             level: warning\n",
+        );
+        let rule = build(&spec).unwrap();
+        let v = rule.evaluate(&ctx(root, &idx)).unwrap();
+        // Exactly one violation, on the symlink itself — proving BOTH that the
+        // dir symlink fires AND that the regular `realdir` and the descended
+        // `linkdir/f.txt` (also in the index) are NOT flagged.
+        assert_eq!(v.len(), 1, "only the dir symlink should fire: {v:?}");
+        assert_eq!(
+            v[0].path.as_deref(),
+            Some(std::path::Path::new("linkdir")),
+            "the flagged path must be the symlink"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn evaluate_fires_on_escaping_symlink_via_side_list() {
+        // M4: a symlink whose target ESCAPES the repo root is pruned from the
+        // index (so no content rule reads through it) but recorded on the
+        // side-list — the real walk + no_symlinks must still flag it.
+        use std::os::unix::fs::symlink;
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"TOPSECRET").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("real.txt"), b"in-tree").unwrap();
+        symlink(outside.path().join("secret.txt"), root.join("escape")).unwrap();
+
+        let idx = alint_core::walk(root, &alint_core::WalkOptions::default()).unwrap();
+        assert!(
+            !idx.entries
+                .iter()
+                .any(|e| &*e.path == std::path::Path::new("escape")),
+            "the escaping symlink must be PRUNED from entries (confinement)"
+        );
+
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: no_symlinks\n\
+             paths: \"**/*\"\n\
+             level: warning\n",
+        );
+        let rule = build(&spec).unwrap();
+        let v = rule.evaluate(&ctx(root, &idx)).unwrap();
+        // Only the escaping symlink fires: real.txt isn't a symlink and `escape`
+        // isn't in entries — so the single fire must come from the side-list.
+        assert_eq!(v.len(), 1, "only the escaping symlink should fire: {v:?}");
+        assert_eq!(
+            v[0].path.as_deref(),
+            Some(std::path::Path::new("escape")),
+            "the flagged path must be the escaping symlink"
+        );
     }
 
     #[cfg(unix)]

@@ -21,6 +21,17 @@ if [[ -d "$CONFIG_DIR" && -f "$CONFIG_DIR/.runner" ]]; then
     done
 fi
 
+# Drop credentials whose server-side registration is gone. Without this the agent
+# connects, is told "the runner registration has been deleted from the server",
+# exits, and `--restart unless-stopped` starts it again forever. Clearing them
+# turns that into a normal re-registration below, or the explicit failure there.
+discard_stale_credentials() {
+    echo "==> The stored registration is no longer valid on the server; discarding it"
+    for f in "${CREDENTIAL_FILES[@]}"; do
+        rm -f "$f" "${CONFIG_DIR}/${f}"
+    done
+}
+
 # Register runner if not already configured
 if [[ ! -f .runner ]]; then
     MAX_ATTEMPTS=5
@@ -54,14 +65,49 @@ if [[ ! -f .runner ]]; then
     fi
 fi
 
-# Deregister runner on shutdown (uses stored credentials, token not needed)
+# Stop the agent on a signal. Deliberately NOT deregistering here.
+#
+# SIGTERM arrives on an ordinary `podman restart`, on `podman stop`, and on host
+# shutdown. Removing the registration there invalidates the very identity the
+# config volume exists to preserve: the next start restores credentials the
+# server has already deleted, and `--restart unless-stopped` turns that into a
+# loop. The failure is delayed and confusing, because `config.sh remove` needs a
+# still-valid registration token, so a restart in the first hour after setup
+# destroys the runner while a restart the next day appears to work.
+#
+# Found in the wubhub pilot of `aplan`, which copied this runner pattern: one
+# restart minutes after provisioning produced fifteen container restarts and
+# zero registered runners. Deregistration is an explicit teardown action
+# (`teardown.sh --purge`), never something a routine restart does by accident.
 cleanup() {
-    echo "==> Caught signal, deregistering runner..."
-    ./config.sh remove --token "${GITHUB_TOKEN}" 2>/dev/null || true
+    echo "==> Caught signal, stopping the runner agent"
+    kill -TERM "${AGENT_PID:-0}" 2>/dev/null || true
 }
 trap cleanup SIGTERM SIGINT
 
-# Run the agent in foreground
 echo "==> Starting runner agent"
-./run.sh &
-wait $!
+AGENT_LOG="$(mktemp)"
+set +e
+# Process substitution, NOT `./run.sh | tee`: after a pipeline bash sets `$!` to
+# the LAST element, so a pipe would make AGENT_PID the tee process and the
+# handler would stop tee while the agent never got a signal at all.
+./run.sh > >(tee "$AGENT_LOG") 2>&1 &
+AGENT_PID=$!
+
+# Wait again after the handler runs. `wait` returns as soon as a trap fires,
+# *before* the child has exited, so a single `wait` lets this script finish while
+# the agent is still shutting down and the container stops out from under it.
+AGENT_STATUS=0
+while :; do
+    wait "$AGENT_PID"
+    AGENT_STATUS=$?
+    kill -0 "$AGENT_PID" 2>/dev/null || break
+done
+set -e
+
+if grep -qF 'registration has been deleted from the server' "$AGENT_LOG"; then
+    discard_stale_credentials
+fi
+rm -f "$AGENT_LOG"
+
+exit "$AGENT_STATUS"

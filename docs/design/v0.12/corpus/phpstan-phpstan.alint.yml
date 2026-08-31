@@ -1,0 +1,104 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for phpstan/phpstan (the DISTRIBUTION repo) @ e336b2b9dd4f2c8b6af3a0b46d75bbf1ea0932e5
+#
+# NOTE ON SHAPE: this is the dist/shim repo — it ships a prebuilt 26 MB
+# `phpstan.phar` + GPG sig; the actual source lives in phpstan/phpstan-src.
+# Consequently the enforced surface is dominated by D non-goals (PHPUnit
+# e2e/integration/extension test matrices, actionlint/zizmor/poutine/octoscan,
+# `typos`, the website TS/ESLint/Playwright/CDK toolchain). The genuinely
+# addressable surface is small. The bundles below are alint value-add
+# (structure/hygiene the repo does NOT itself gate on, per R5); the `rules:`
+# block holds the handful of repo-enforced A-items + value-add assertions.
+#
+# Deliberately NOT extended:
+#   - hygiene/no-tracked-artifacts@v1  -> this repo INTENTIONALLY tracks the
+#     `phpstan.phar` binary (its whole purpose). Would false-positive.
+#   - node@v1 / hygiene/lockfiles@v1   -> no ROOT package.json or lockfile;
+#     `composer.lock` is gitignored (library). Node lives under website/.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ---------------------------------------------------------------
+  # A-items: checks the repo ENFORCES (convention / CI gate), expressed natively
+  # ---------------------------------------------------------------
+
+  # The dist package's PHP support range is a load-bearing convention:
+  # composer.json `require.php` MUST be `^7.4|^8.0` (CLAUDE.md "PHP Version
+  # Support"; the PHAR is downgraded specifically so the published package
+  # accepts PHP 7.4+). A drift here changes who can `composer require phpstan`.
+  - id: composer-php-constraint
+    kind: json_path_equals
+    paths: ["composer.json"]
+    path: "$.require.php"
+    equals: "^7.4|^8.0"
+    level: error
+    message: "composer.json require.php must stay ^7.4|^8.0 (the downgraded-PHAR support range)."
+
+  # The dist contract: the package exposes BOTH the shell shim and the phar as
+  # console bins (composer.json `bin`). Used by `composer global require`.
+  - id: composer-bin-shim
+    kind: json_path_matches
+    paths: ["composer.json"]
+    path: "$.bin[*]"
+    matches: "^phpstan(\\.phar)?$"
+    level: error
+    message: "composer.json bin must list the phpstan shim and phpstan.phar."
+
+  # ---------------------------------------------------------------
+  # value-add (NOT repo-gated; recorded separately per R3/R5) -------
+  # ---------------------------------------------------------------
+
+  # .editorconfig declares the project-wide line-ending + final-newline policy.
+  # Assert the policy is DECLARED (config-policy assertion, R3 value-add).
+  - id: editorconfig-declares-lf
+    kind: file_content_matches
+    paths: [".editorconfig"]
+    pattern: '(?m)^end_of_line = lf$'
+    level: info
+    message: ".editorconfig should declare lf line endings."
+
+  - id: editorconfig-declares-final-newline
+    kind: file_content_matches
+    paths: [".editorconfig"]
+    pattern: '(?m)^insert_final_newline = true$'
+    level: info
+    message: ".editorconfig should declare a final newline."
+
+  # The committed `.phar` must ship with its detached GPG signature alongside
+  # (release.yml uploads both phpstan.phar + phpstan.phar.asc). Existence-pair.
+  - id: phar-has-signature
+    kind: file_exists
+    paths: ["phpstan.phar.asc"]
+    root_only: true
+    level: warning
+    message: "phpstan.phar should ship with its detached GPG signature phpstan.phar.asc."
+
+  # The CLI shim must exist next to the phar it loads.
+  - id: phpstan-shim-exists
+    kind: file_exists
+    paths: ["phpstan"]
+    root_only: true
+    level: warning
+    message: "The phpstan CLI shim must be present at the repo root."
+
+  # NEON config hygiene (the repo's primary config format; .editorconfig sets
+  # final-newline for all files). Native, auto-fixable.
+  - id: neon-final-newline
+    kind: final_newline
+    paths: ["**/*.neon"]
+    level: info
+    fix:
+      file_append_final_newline: {}
+
+  - id: neon-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths: ["conf/**/*.neon", "e2e/**/*.neon"]
+    level: info
+    fix:
+      file_trim_trailing_whitespace: {}

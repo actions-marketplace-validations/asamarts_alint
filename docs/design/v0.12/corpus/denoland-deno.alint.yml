@@ -1,0 +1,205 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for denoland/deno @ 351d8fbfeec253d3b590f956e32f981adad91ce2
+# (v0.12 100-repo case study — Stage A). Expresses the repo's bespoke-validation
+# surface that alint can natively assert. Tool/AST/test execution (clippy, dlint,
+# dprint, jsdoc_checker, miri, WPT, the full test matrices) stays in CI — alint
+# does not reimplement it (D non-goals). See the case-study record for the
+# A/B/C/D breakdown.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+
+# Deno's bespoke validators live under tools/ and are orchestrated by
+# tools/lint.js (run in the CI `lint` job). The rules below mirror the
+# subset that is pure file/structure/content assertion.
+rules:
+  # === 1. Per-file copyright header (tools/copyright_checker.js) ===========
+  # C-style `// Copyright 2018-<year> the Deno authors. MIT license.` on every
+  # tracked .rs/.js/.mjs/.jsx/.ts/.tsx/.c source.
+  #
+  # TUNING GAP (case-study C-item): the real checker TRIMS a tolerated preamble
+  # (shebang `#!`, `// deno-lint-*`, `// Ported*`, blank lines) before checking
+  # the copyright line. alint `file_header` anchors the pattern at line 1 only —
+  # it cannot "skip a tolerated preamble", so this rule OVER-FIRES on the many
+  # legitimate shebang-prefixed scripts (e.g. tools/*.js, .github/workflows/*.ts).
+  # Wants a `file_header` `skip_preamble:`/`after:` option. Set `level: off`
+  # until that lands, or accept the false positives. Kept here as the faithful
+  # (over-firing) expression of the convention; the clean half is the Cargo.toml
+  # header rule below (always line 1).
+  - id: deno-copyright-header-source
+    level: warning
+    kind: file_header
+    lines: 4
+    paths:
+      include:
+        - "**/*.rs"
+        - "**/*.js"
+        - "**/*.mjs"
+        - "**/*.jsx"
+        - "**/*.ts"
+        - "**/*.tsx"
+        - "**/*.c"
+      exclude:
+        # Mirror tools/copyright_checker.js + tools/lint.js exclusion lists:
+        # vendored, generated, test fixtures, and third-party trees.
+        - "**/target/**"
+        - ".github/mtime_cache/action.js"
+        - "cli/tsc/*typescript.js"
+        - "cli/tsc/compiler.d.ts"
+        - "cli/tsc/dts/**"
+        - "cli/tools/doc/prism.css"
+        - "cli/tools/doc/prism.js"
+        - "cli/tools/init/templates/**"
+        - "cli/tools/bench/mitata.rs"
+        - "ext/node/ops/llhttp/c/**"
+        - "ext/node/polyfills/deps/**"
+        - "libs/config/testdata/**"
+        - "libs/eszip/testdata/**"
+        - "libs/ops/optimizer_tests/**"
+        - "tests/**"
+    pattern: '^// Copyright 2018-2026 the Deno authors\. MIT license\.'
+    message: >-
+      Source files must begin with the Deno copyright header
+      `// Copyright 2018-2026 the Deno authors. MIT license.`
+      (enforced by tools/copyright_checker.js).
+
+  # `# `-style header on every workspace `Cargo.toml` (TOML branch of the
+  # same checker). Manifests live one-per-crate across ext/ libs/ cli/ etc.
+  - id: deno-copyright-header-cargo-toml
+    kind: file_header
+    lines: 1
+    paths:
+      include: ["**/Cargo.toml"]
+      exclude:
+        - "**/target/**"
+        # tools/copyright_checker.js excludes test-fixture trees; their
+        # Cargo.toml files are deliberately header-less scaffolding.
+        - "tests/**"
+    pattern: '^# Copyright 2018-2026 the Deno authors\. MIT license\.'
+    level: error
+    message: >-
+      Every Cargo.toml must begin with
+      `# Copyright 2018-2026 the Deno authors. MIT license.`
+      (tools/copyright_checker.js, TOML branch).
+
+  # === 2. LICENSE.md carries the current copyright year ===================
+  # tools/copyright_checker.js asserts LICENSE.md contains the up-to-date
+  # `Copyright 2018-<year> the Deno authors` line.
+  - id: deno-license-current-year
+    kind: file_content_matches
+    paths: "LICENSE.md"
+    pattern: 'Copyright 2018-2026 the Deno authors'
+    level: error
+    message: "LICENSE.md must carry the current copyright year (tools/copyright_checker.js)."
+
+  # === 3+4. Every ext/ and libs/ crate ships a clippy.toml with the ========
+  # mandated disallowed-methods (tools/lint.js ensureDisallowedMethodsEnforced).
+  # alint expresses the presence + the common-method content; the libs-only
+  # extra ban set (env/time methods) is the C-tuning refinement noted in the
+  # record. `when_iter` skips non-crate subdirs (must contain a Cargo.toml).
+  - id: deno-ext-crates-have-clippy-toml
+    kind: for_each_dir
+    select: "ext/*"
+    when_iter: 'iter.has_file("Cargo.toml")'
+    level: error
+    message: "Every ext/* crate must ship a clippy.toml (tools/lint.js disallowed-methods gate)."
+    require:
+      - kind: file_exists
+        paths: "{path}/clippy.toml"
+
+  - id: deno-libs-crates-have-clippy-toml
+    # tools/lint.js skips libs/core_testing ("skip only test crates").
+    kind: for_each_dir
+    select: "libs/*"
+    when_iter: 'iter.has_file("Cargo.toml") and iter.basename != "core_testing"'
+    level: error
+    message: "Every libs/* crate (except core_testing) must ship a clippy.toml (tools/lint.js disallowed-methods gate)."
+    require:
+      - kind: file_exists
+        paths: "{path}/clippy.toml"
+
+  # Content side: a representative mandated FileSystem-trait ban must appear in
+  # every committed clippy.toml. (Full method-list parity is the awkward part —
+  # see record; this asserts the load-bearing invariant.)
+  - id: deno-clippy-toml-bans-fs-canonicalize
+    kind: file_content_matches
+    paths:
+      include: ["ext/*/clippy.toml", "libs/*/clippy.toml", "runtime/clippy.toml", "runtime/permissions/clippy.toml"]
+    pattern: '"std::fs::canonicalize"'
+    level: error
+    message: >-
+      clippy.toml must keep the mandated disallowed-methods set
+      (e.g. std::fs::canonicalize) — tools/lint.js enforces the full list.
+
+  # === 5. Generated GitHub workflow YAMLs are fresh ========================
+  # tools/lint.js ensureWorkflowYmlsUpToDate regenerates each ci.ts/pr.ts/...
+  # and fails if the committed *.generated.yml drifted. generated_file_fresh
+  # runs the generator and diffs stdout. (Requires a Deno toolchain to run;
+  # under `alint check` without Deno this errors rather than passing silently —
+  # noted in the record. Kept as the faithful expression of the gate.)
+  - id: deno-ci-yml-generated-fresh
+    kind: generated_file_fresh
+    file: ".github/workflows/ci.generated.yml"
+    command: ["deno", "run", "--allow-read=.", ".github/workflows/ci.ts"]
+    level: error
+    message: ".github/workflows/ci.generated.yml is stale — re-run .github/workflows/ci.ts."
+
+  # === 6. Repo root contains only an allowlisted set of entries ============
+  # tools/lint.js ensureNoNewTopLevelEntries: keep the repo root clean; any new
+  # top-level file/dir must be discussed and added to the allowlist.
+  - id: deno-root-only-allowed-entries
+    kind: dir_only_contains
+    select: "."
+    allow:
+      - ".cargo"
+      - ".claude"
+      - ".devcontainer"
+      - ".github"
+      - ".gitignore"
+      - ".gitattributes"
+      - ".gitmodules"
+      - ".dlint.json"
+      - ".dprint.json"
+      - ".editorconfig"
+      - ".rustfmt.toml"
+      - "x"
+      - "cli"
+      - "ext"
+      - "libs"
+      - "runtime"
+      - "tests"
+      - "tools"
+      - "CLAUDE.md"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "LICENSE.md"
+      - "README.md"
+      - "Releases.md"
+      - "import_map.json"
+      - "rust-toolchain.toml"
+      - "flake.nix"
+      - "flake.lock"
+    level: error
+    message: >-
+      New top-level entry detected. Keep the repo root clean — additions must be
+      discussed (tools/lint.js ensureNoNewTopLevelEntries).
+
+  # === 7. (C-tuning) Uppercase short CLI flags are permission-only =========
+  # tools/lint.js ensureNoNonPermissionCapitalLetterShortFlags asserts the set
+  # of `.short('X')` uppercase flags in cli/args/flags.rs equals a fixed
+  # allowlist {A,D,E,I,L,N,P,R,S,V,W}. alint can FORBID any uppercase short flag
+  # outside that set; exact set-equality (catching a *removed* flag) is the
+  # awkward part (recorded as the B/C gap). This is the forbid-half.
+  - id: deno-no-unexpected-uppercase-short-flag
+    kind: file_content_forbidden
+    paths: "cli/args/flags.rs"
+    pattern: "\\.short\\('[BCFGHJKMOQTUXYZ]'\\)"
+    level: error
+    message: >-
+      Uppercase short flags must be permission-related and pre-approved
+      (allowed: A D E I L N P R S V W). See tools/lint.js
+      ensureNoNonPermissionCapitalLetterShortFlags.

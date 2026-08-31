@@ -628,3 +628,16 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 - **Open suspected bugs in this directory's `.alint.yml`:** **none.**
   The B2 fix landed in v0.9.18; config is clean against the v0.9.20
   engine + canonical-22 pitfall catalogue.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (81 rules). +6 surfaces: command_idempotent collapses the
+dprint / deno fmt --check + clippy per-file spawns, import_gate
+expresses the cli -> runtime layering rule, json_path_equals pins config
+shape, and git_commit_no_fixup catches PR-range fixups.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 2).

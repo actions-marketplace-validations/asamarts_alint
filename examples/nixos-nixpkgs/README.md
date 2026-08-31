@@ -770,3 +770,19 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   rule now requires a sibling `package.json`.
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
   Config is clean.
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (58 rules, ~67% coverage). +3 surfaces: ordered_block finally
+gets clean targets (maintainer-list.nix + team-list.nix wrap their lists in
+literal `# keep-sorted start/end` markers), command_idempotent collapses the
+treefmt suite (nixfmt/actionlint/zizmor), and for_each_dir enforces the
+pkgs/by-name shard file-shape. No nix ecosystem bundle exists yet (a gap).
+Non-replaceable: nix eval, nixfmt semantics, the meta.maintainers/license
+cross-refs (need a nix-value extractor).
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 4).

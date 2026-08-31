@@ -1,0 +1,483 @@
+# v0.12 100-repo case study — running log
+
+The per-batch record of the study defined in
+[`case_study_100_repos.md`](./case_study_100_repos.md), calibrated by
+[`case_study_calibration.md`](./case_study_calibration.md) (`tokio-rs/tokio`,
+the six rulings R1-R6). Each batch is run as a multi-agent workflow (per repo:
+Stage A deep-read + draft/validated config → Stage B adversarial verify) against
+depth-1 clones at the pinned SHAs in [`case_study_repos.md`](./case_study_repos.md).
+Counts below are **Stage-B reconciled**. Coverage = `coverage_today = A/(A+B+C)`
+(D non-goals excluded from the denominator, per R5).
+
+Validated draft configs land per repo; corpus-storage (in-repo `examples/` vs a
+separate corpus) is still the protocol's open question, so this log is the
+durable artifact and the configs are staged separately pending that decision.
+
+## Running totals
+
+| | repos | A | B | C | D | coverage_today | file-graph edge sources |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| calibration (tokio) | 1 | 5 | 2 | 0 | ~20 | 71% | 0 |
+| batch 1 | 5 | 31 | 6 | 5 | 81 | **74%** | **21** |
+| batch 2 | 10 | 25 | 10 | 9 | 127 | 57% | 13 |
+| batch 3 | 20 | 85 | 30 | 25 | 305 | 61% | 48 |
+| batch 4 | 20 | 125 | 42 | 57 | 357 | 56% | 81 |
+| batch 5 | 20 | 95 | 30 | 33 | 380 | 60% | 45 |
+| batch 6 | 20 | 54 | 12 | 14 | 239 | 68% | 18 |
+| batch 7 | 15 | 37 | 12 | 4 | 222 | 70% | 31 |
+| **TOTAL (111 repos)** | **111** | **457** | **144** | **147** | **~1731** | **61%** | **257** |
+
+---
+
+## Batch 1 — 2026-06-01 (diverse 5: Python / Go / Ruby / C / JS)
+
+Workflow: 10 agents, ~1.1M tokens. Every Stage-A config was validated with
+`alint check` against its clone and every non-trivial A-rule positive-controlled
+(R4); Stage B independently re-derived or corrected each record.
+
+| repo | shape | A | B | C | D | cov_today | file-graph | Stage B |
+|---|---|--:|--:|--:|--:|--:|--:|---|
+| `pallets/flask` | Python web-fw lib | 8 | 0 | 0 | 10 | **100%** | 1 | no change (HQ) |
+| `prometheus/prometheus` | Go infra/CNCF | 4 | 0 | 0 | 22 | **100%** | 5 | +1 A |
+| `rubocop/rubocop` | Ruby CLI/linter | 5 | 3 | 1 | 13 | 56% | 1 | +1 B |
+| `curl/curl` | C systems CLI+lib | 9 | 2 | 2 | 24 | 69% | 8 | +1 A |
+| `eslint/eslint` | JS CLI/linter | 5 | 1 | 2 | 12 | 63% | 6 | +1 A |
+
+**Coverage shape.** Pooled 31/42 = **74%** (vs the tokio calibration's 71%),
+per-repo range 56-100%. The split is informative: libraries whose bespoke
+validation is **cross-file value-coherence + hygiene + an import firewall**
+(flask, prometheus) score ~100% of their addressable surface; **linters / systems
+projects with bespoke per-line grammars, set-equality, or path constraints**
+(rubocop, curl, eslint) carry real B gaps. As with tokio, the bulk of every
+repo's enforced surface is D (execution / AST / build) — 81 of 123 behaviors —
+that alint orchestrates but does not reimplement.
+
+### Headline: the `file_dependency_graph` gate flips
+
+tokio surfaced **0** file-reference-graph edge sources; batch 1 surfaced **21**,
+in **every** repo, spanning all the edge shapes the
+[`file_dependency_graph`](./file_dependency_graph.md) design names:
+
+- **Existence edges** (every-X-has-a-Y): eslint rule→doc + rule→test
+  (`Makefile.js:848,916`, basename convention).
+- **Value / set-equality edges**: curl option↔`docs/curl.1`↔`tool_listhelp.c`
+  set-equality (`tests/test1139.pl`); eslint rule→doc-title value
+  (`Makefile.js:775` `hasIdInTitle`).
+- **Codegen-freshness edges** (generate then `git diff --exit-code`): prometheus
+  ×5 (PromQL function sigs/docs, goyacc parser — `Makefile:106`), curl ×1.
+- **Import-layering / module-boundary firewalls**: flask `sansio/` cannot import
+  the Flask globals (content-regex over imports, `import_gate`); eslint.
+- **Intra-file reference / dangling-edge**: rubocop CHANGELOG implicit-link
+  resolution (`spec/project_spec.rb:371`).
+
+Edge *sources* vary (content-regex, naming-convention, manifest-declaration,
+generated-diff) — which is exactly the case for a **generic** file-graph kind
+rather than per-ecosystem rules. **Recommendation: lift `file_dependency_graph`
+from "study-gated (0 sources)" to a v0.12 build candidate.** Note many of these
+edges are enforced today via bespoke Perl/Ruby/JS (so D as *current* alint kinds)
+but are precisely what the new kind would express natively.
+
+### New-kind candidates (B) — ranked by cross-repo demand
+
+1. **`file_dependency_graph` / generic file-reference graph** — 21 sources, all
+   5 repos, all edge shapes (above). The dominant signal of the batch.
+2. **`every_X_has_Y` with a value-equality predicate on the partner**
+   (parameterized cross-file: "every rule file's basename == its doc's `title:`
+   frontmatter") — eslint `Makefile.js:775`; overlaps curl set-equality. A
+   focused cross-file primitive distinct from today's existence-only
+   `every_matching_has`.
+3. **`implicit_link_resolves`** — every `[name][]` Markdown reference has a
+   co-file `[name]: http…` definition (rubocop `spec/project_spec.rb:371`). An
+   intra-file orphan-edge graph; subsumed by (1) if the file-graph kind handles
+   intra-file edges.
+4. **`changelog_entry_format`** — per-line conjunctive grammar ("every line
+   matching `^\* ` must also satisfy Q1..Qn") — rubocop changelog discipline
+   (`spec/project_spec.rb:200-284`).
+5. **`in_file_line_uniqueness`** — uniqueness of lines matching a regex *within
+   one file* (today `unique_by` is path-keyed) — rubocop contributor names.
+6. **`path_length_cap`** — `len(path) <= N` / `len(basename) <= M` — curl
+   `scripts/spacecheck.pl:111` (64/48 caps), CI-gated.
+7. **`max_consecutive_spaces` / `no_repeated_chars`** — forbid a run of ≥N of a
+   character in a line — curl `spacecheck.pl:109`.
+
+### alint sharp-edges surfaced (C-tuning — actionable now, with proof)
+
+These are real product defects/relaxations the corpus proved, independent of any
+new kind:
+
+- **`no_merge_conflict_markers` false-positives on reST/Markdown setext
+  underlines** (a `=======` title underline reads as a conflict marker) — flask
+  `docs/*.rst`. Wants a setext-aware skip. *(clear bug, cheap fix.)*
+- **`file_is_ascii` needs an `allow:` codepoint exemption** — PROVEN firing on
+  curl `lib/mqtt.c`/`.h` ("Björn", U+00F6); curl's own `spacecheck.pl` allows it.
+- **`ordered_block` wants a `pattern:`/`select:` line filter** (sort only matched
+  lines) — rubocop.
+- **`every_matching_has` `select:` needs include/exclude** (negation) — eslint.
+- **`import_gate language: js` over-matches JSDoc `@typedef {import(...)}`** —
+  eslint; the preset should ignore comment context.
+- **`gha-workflow-contents-read` fires on `permissions: {}`** — flask uses the
+  *stricter* empty scope; the bundle should treat empty as satisfying.
+- **`compliance/apache-2` source-header pattern still too strict** for some
+  prometheus headers — a residual of the v0.12 ASF over-fire fix; collect more
+  cases before re-touching.
+- **`final_newline` should pair with a "no trailing blank line at EOF" option**
+  (exactly-one-trailing-newline) — curl.
+- **node bundle `node_modules`/`dist` checks want a default `tests/fixtures`
+  exclude** — eslint.
+
+### Stage-B value (the adversarial pass earned its keep)
+
+Every repo's Stage B added findings — 4 of 5 changed the counts (+1 A on
+prometheus/curl/eslint, +1 B on rubocop) and 12 concrete misses surfaced, e.g.
+flask `.editorconfig`, prometheus Go-toolchain-version coherence (`.promu.yml`)
++ Dockerfile variant-label uniqueness, rubocop `.rubocop.yml inherit_from` edge,
+curl per-file COPYRIGHT presence + `CURL_DISABLE_*` feature-gate set sync +
+typecheck-enum ↔ `libcurl-errors.3` set equality, eslint rule→registry membership
+parity. flask's Stage A was strong enough that Stage B moved nothing.
+
+### Artifacts
+
+5 validated draft configs at `/tmp/cs_out/<owner>-<repo>.alint.yml` (flask 13K,
+prometheus 7K, rubocop 15K, curl 5.8K, eslint 5.6K). Pending the corpus-storage
+decision before integration into the repo.
+
+---
+
+## Batch 2 — 2026-06-01 (scale-up 10: adds PHP / .NET / Elixir / Rust)
+
+Workflow: 20 agents, ~2M tokens. *(The first attempt failed transiently — all 10
+agents, including 222-file ripgrep, died without emitting output during the
+session-exit window. Clean re-run after two safeguards: agents write `alint check`
+JSON to a file and inspect only the summary/failing rules, and both stages are
+told they MUST end with the `StructuredOutput` call.)*
+
+| repo | shape | A | B | C | D | cov | file-graph | Stage B |
+|---|---|--:|--:|--:|--:|--:|--:|---|
+| `pydantic/pydantic` | Python lib | 5 | 0 | 0 | 17 | **100%** | 0 | no change |
+| `vitejs/vite` | JS build tool | 1 | 0 | 0 | 10 | **100%** | 0 | −1 D |
+| `symfony/symfony` | PHP web-fw mono | 8 | 3 | 1 | 11 | 67% | 3 | no change (HQ) |
+| `hashicorp/terraform` | Go infra/ops | 2 | 0 | 1 | 20 | 67% | 3 | no change |
+| `phoenixframework/phoenix` | Elixir web-fw | 2 | 0 | 1 | 7 | 67% | 0 | −1 A |
+| `dotnet/aspnetcore` | .NET web-fw mono | 2 | 1 | 1 | 11 | 50% | 3 | +1 A |
+| `django/django` | Python web-fw | 3 | 1 | 2 | 17 | 50% | 0 | B→C |
+| `spring-projects/spring-boot` | JVM web-fw mono | 2 | 3 | 3 | 14 | 25% | 3 | −2 A (kind-misuse) |
+| `redis/redis` | C systems/DB | 0 | 1 | 0 | 13 | 0% | 1 | no change |
+| `BurntSushi/ripgrep` | Rust CLI | 0 | 1 | 0 | 7 | 0% | 0 | C→B |
+
+Pooled **25/44 = 57%** (vs batch 1's 74%) — deliberately heavy on large
+frameworks/monorepos (django, spring-boot, symfony, aspnetcore), a systems DB
+(redis), and a solo CLI (ripgrep), where alint's addressable share is smaller:
+more codegen-freshness / set-membership / commit-message gaps and a higher D
+(execution) floor. Focused libraries still hit 100% (pydantic, vite).
+**Cumulative across 16 repos: 61/93 = 66%.**
+
+### `file_dependency_graph` keeps climbing — now 34 sources across 16 repos
+
+Batch 2 added 13 edge sources, broadening the *types*: **codegen-freshness
+`git diff --exit-code`** (redis `commands.def` from 442 JSON specs; terraform ×3;
+aspnetcore ×3 in `eng/scripts/CodeCheck.ps1`) and **registry / manifest-
+declaration** edges (spring-boot ×3 buildSrc registry→code; symfony ×3
+`composer.json` `replace`-map → sub-packages). The gate is decisively validated;
+the edge-source variety (content-regex, naming-convention, manifest, generated-
+diff) keeps arguing for a *generic* kind over per-ecosystem rules.
+
+### New-kind candidates — several VALIDATE already-planned v0.12 workstreams
+
+- **`git_commit_subject_matches` / commit-message regex** — recurs in django +
+  spring-boot. Fresh corpus evidence for the planned
+  [`git_commit_subject_matches.md`](./git_commit_subject_matches.md) (Django's
+  period-suffix + `[A.B.x]` stable-branch prefix; Spring's DCO `Signed-off-by`).
+- **`value_set_membership` / cross-file subset** — aspnetcore. Validates
+  [`value_set_membership.md`](./value_set_membership.md).
+- **`files_equal` (whole-file byte-identity)** — recurs (tokio B1 + symfony).
+  Demand accumulating; promote from a tokio singleton to a tracked candidate.
+- **`generated_file_fresh` mutating / regen mode** — redis + symfony want a
+  codegen-freshness variant whose generator writes in place (today gff is
+  stdout-only). Extends an existing kind.
+- **`registry_paths_resolve` extensions** — to code symbols (spring-boot
+  `.imports`/`.factories`) and `.slnx`/`.slnf` project paths (aspnetcore).
+- Singletons: `ordered_values_in_key` (spring-boot), `unique_filename` /
+  no-duplicate-basename (aspnetcore), `manifest_implies_content` (symfony).
+
+### alint sharp-edges (C-tuning) — recurring themes firming up
+
+The **ref-pin-vs-SHA-pin** preset (django, recurring from flask) and the
+**fixture-exclude** preset (django) now have multiple confirmations. New:
+`file_content_forbidden` allowlist + per-subpackage `import_gate` layering preset
+(spring-boot), a `php-symfony` header bundle (symfony), per-directory SPDX
+value-in-allowlist (terraform), within-file version-pin sync (phoenix).
+
+### Stage-B value
+
+4 of 10 records had counts corrected (spring-boot −2 A as kind-misuses,
+ripgrep/django re-bucketed, aspnetcore +1 A); 10 concrete misses surfaced incl.
+symfony's `splitsh.json` 183-entry subtree registry, spring-boot's
+`CheckSpringConfigurationMetadata` family, aspnetcore's shared-framework
+reference-boundary firewall, vite's `patchedDependencies` path resolution.
+
+### Artifacts
+
+10 validated draft configs at `/tmp/cs_out/` (all `config_validated: true`).
+Batch 1-2's 15 configs are now preserved in-repo under
+[`corpus/`](./corpus/) (dogfood-excluded research artifacts).
+
+---
+
+## Batch 3 — 2026-06-02 (20-repo sweep: + Ruby/PHP/JVM/C/Haskell/Swift/Nix breadth)
+
+Workflow: 40 agents, ~3.9M tokens, ~22 min. Repos: rails, laravel, gradle,
+kotlin, postgres, openssl, pandas, numpy, swift, pandoc, hugo, grafana, svelte,
+serde, ansible, elasticsearch, neovim, composer, fastapi, nix.
+
+Stage-B-reconciled **A=85 B=30 C=25 D=305, coverage 85/140 = 61%** (per-repo
+0-100%). Stage B was busy — it changed counts on **13 of 20** records, most
+dramatically **ansible A5→A14** (Stage A under-catalogued ansible's large bespoke
+`test/sanity/` validation surface). 100%-addressable: laravel, swift, serde,
+composer; 0%: hugo, neovim (all-execution repos). **Cumulative across 36 repos:
+146/233 = 63%.**
+
+### `file_dependency_graph`: +48 sources → 82 cumulative across 36 repos
+
+Batch 3 nearly tripled the tally. grafana alone contributed **11** edge sources;
+kotlin 6, gradle 4, numpy 4, and ×3 each from pandoc/svelte/fastapi/neovim. Edge
+types now span the full design surface many times over (import-layering
+firewalls — rails `rail_inspector`; codegen-freshness; registry/manifest;
+every-X-has-Y; set-membership; intra-file reference integrity). The kind is
+**decisively the #1 build candidate.**
+
+### Demand-ranked backlog (synthesis through 36 repos)
+
+The candidate set has converged. Ranked by cross-repo recurrence:
+
+**Tier 1 — build for v0.12 (multi-batch, multi-repo):**
+1. **`file_dependency_graph`** — 82 edge sources, nearly every repo, all edge
+   shapes. (Was study-gated at 0; now overwhelmingly validated.)
+2. **`files_equal`** (whole-file byte-identity) — tokio, symfony, gradle, serde,
+   ansible, fastapi (6 repos). `pair_hash`/`pair` can't express it.
+3. **`generated_file_fresh` mutating/regen mode** (generator writes in place,
+   then `git diff --exit-code`) — redis, symfony, postgres, openssl, svelte,
+   neovim (6). Extends the shipped stdout-only kind.
+4. **`git_commit_subject_matches`** (already a planned workstream) — django,
+   spring-boot, hugo. Corpus-validated.
+5. **`value_set_membership` / cross-file subset** (already planned) —
+   aspnetcore, numpy, elasticsearch, fastapi.
+
+**Tier 2 — recurring (2-3 repos), strong candidates:**
+- **`ordered_block` sectioned / key-extracted mode** (C-tuning) — gradle, pandas,
+  kotlin (sort within marked sections / by a composite key).
+- **repeating-block / `every_element_has`** (for-all over repeated in-file
+  structures: CHANGELOG entries, config blocks) — rails, kotlin, grafana.
+- **ref-pin-vs-SHA-pin + publisher-allowlist preset** (C, GH-Actions) — flask,
+  django, grafana, neovim.
+- **`normalize: semver`** (C) — rails, pandoc.
+
+**Tier 3 — singletons (watch for recurrence):** split-constant version-compose
+(rails), `symlink_target_equals` (serde), `no_filename_case_conflict` (pandas),
+orphan-identifiers (swift), `file_mode`/no-exec-bit (elasticsearch),
+manifest-reachability (kotlin, pandoc), generated-checksum-manifest (openssl).
+
+### alint sharp-edges (C-tuning) — still accumulating
+
+19 more this batch; the firmest recurring themes are the **sectioned
+`ordered_block`** and the **ref/sha pin preset** above, plus `file_header`
+`paths.exclude` (gradle), `.gitattributes`-aware whitespace excludes (postgres),
+and `file_content_forbidden` allow-exceptions (grafana).
+
+### Stage-B value
+
+13/20 records corrected — beyond ansible's +9 A: numpy/composer/aspnetcore-style
++1 A re-bucketings, gradle/grafana/elasticsearch −1 A kind-misuses, and a long
+tail of MISSED items (kotlin CODEOWNERS-validate, swift orphan-identifiers,
+elasticsearch executable-bit, fastapi cross-dir rename pairing).
+
+### Artifacts
+
+20 validated draft configs at `/tmp/cs_out/` (all `config_validated: true`) — to
+append to [`corpus/`](./corpus/) with the next housekeeping commit.
+
+---
+
+## Batch 4 — 2026-06-02 (20 flagships: language/compiler + infra + new ecosystems)
+
+Workflow: 40 agents, ~4.2M tokens, ~21 min. Repos: kubernetes, golang/go, rust,
+cpython, flutter, kafka, spark, llvm, roslyn, react, vscode, discourse, elixir,
+postgrest, systemd, clickhouse, ruff, scikit-learn, okhttp, vim.
+
+Stage-B-reconciled **A=125 B=42 C=57 D=357, coverage 125/224 = 56%**. This batch
+had by far the **largest addressable surface** of the study — `ClickHouse` A34
+(its `utils/check-style` is a grep-rule goldmine), `rust` A18, `flutter` A10,
+`cpython`/`kubernetes` A8-9 — because flagship language/infra repos hand-roll
+huge bespoke validation suites. Stage B corrected **15/20** records. **Cumulative
+across 56 repos (~50% of the corpus): 271/457 = 59%.**
+
+### `file_dependency_graph`: +81 → 163 cumulative sources across 56 repos
+
+The decisive signal got more decisive. **kubernetes** contributed 9 (the 66
+`.import-restrictions` import-boss manifests + 8 codegen-freshness `git status
+--porcelain` verifiers — the canonical example of *both* major edge types in one
+repo); **flutter** 12, **golang/go** 8, **rust** 8, **ClickHouse** 7, **discourse**
+6, **cpython**/**vim** 5. There is no longer any question that `file_dependency_graph`
+is the #1 build candidate.
+
+### Backlog: Tier-1 locked; a few new Tier-2 candidates firming
+
+The Tier-1 set is unchanged and overwhelmingly validated. The **mutating
+`generated_file_fresh`** candidate is now the second-most-recurring need
+(llvm `worktree_clean_after`, roslyn `git_tree_clean_after`, react, spark,
+postgrest `dir_generated_fresh` — ~10 repos cumulative). New **Tier-2** signals
+this batch:
+
+- **charset allowlist** (`file_is_ascii` with permitted-codepoint exceptions /
+  `charset_forbidden`) — llvm, vscode, elixir (+ the curl proof earlier). The
+  `file_is_ascii` C-tuning has graduated to a recurring candidate.
+- **`git_file_mode` / no-executable-bit** — ClickHouse (+ elasticsearch earlier).
+- **dangling-symlink detection** + **`symlink_target_equals`** — ClickHouse,
+  serde, golang/go.
+- **binary-aware `file_max_size`** (cap only `git`-detected binaries) — kubernetes
+  `verify-file-sizes.sh`, ClickHouse.
+- **`every_X_has_Y` / cross-tree key-derived pairing** — golang/go, flutter.
+
+### Stage-B value
+
+15/20 corrected. Largest swings: kubernetes +2 A (missed prerelease-lifecycle-tag
++ test-image checks), spark +2 A, rust +2 A; llvm −1 A and react/roslyn
+re-bucketings (kind-misuses → C). ClickHouse's record (A30→34, C20→17) shows the
+adversarial pass refining a very large catalogue rather than overturning it.
+
+### Artifacts
+
+20 validated configs at `/tmp/cs_out/` (all `config_validated: true`), folded
+into [`corpus/`](./corpus/) (now 55).
+
+---
+
+## Batch 5 — 2026-06-02 (20: remaining baseline-30 flagships + a few new)
+
+Workflow: 40 agents, ~4.1M tokens. Repos: airflow, arrow, angular, node, pytorch,
+tensorflow, deno, bazel, protobuf, prettier, helm, istio, dotnet/runtime,
+typescript, pnpm, mastodon, nixpkgs, valkey, quarkus, avalonia.
+
+Stage-B-reconciled **A=95 B=30 C=33 D=380, coverage 95/158 = 60%** (cumulative
+**76/111 repos (~68% of the corpus): 366/615 = 60%**). airflow A30 (a 117-hook
+pre-commit suite) and pytorch A28 (large bespoke lint suite) dominated the
+addressable surface. file-graph +45 → **208 cumulative sources**.
+
+**A pure confirmation batch — zero new Tier-1 or Tier-2 candidates.** All 39
+new-kind candidates this batch map onto the already-ranked backlog: the
+set-membership / `cross_file_set_equals` / `every_X_has_Y` cluster
+(`value_set_membership` + `file_dependency_graph` territory), `files_equal`, the
+mutating `generated_file_fresh` mode, `git_file_mode`. The backlog has now held
+unchanged for **three straight batches** (3, 4, 5).
+
+### Artifacts
+20 validated configs folded into [`corpus/`](./corpus/) (now 75).
+
+---
+
+## Batch 6 — 2026-06-02 (20: remaining Python / Ruby / PHP / Swift / JVM libs)
+
+Workflow: 40 agents, ~3.8M tokens. Repos: git, guava, netty, junit-framework,
+black, pytest, mypy, poetry, sqlalchemy, rich, httpx, ruby, jekyll, brew,
+fastlane, phpstan, guzzle, vapor, alamofire, signal-android.
+
+Stage-B-reconciled **A=54 B=12 C=14 D=239, coverage 54/80 = 68%** (cumulative
+**96/111 repos: 420/695 = 60%**). High end: guava/httpx/jekyll/phpstan/signal at
+100%; the small Swift/PHP libs (guzzle, vapor, alamofire) at 0% (pure-execution
+surfaces). file-graph +18 → **226 cumulative**.
+
+**Confirmation again — no new Tier-1/2.** Two notable corpus-validations of
+*already-planned* workstreams: `changeset_adds_file` (sqlalchemy) →
+[`changeset_requires_path.md`](./changeset_requires_path.md); and
+`no_filename_case_conflict` recurs (poetry, after pandas). Everything else maps
+to the existing backlog (doc-xref-resolve → file-graph; requirements-consistent →
+set-membership; files-synced-from-upstream → `files_equal`). Tier-1 unchanged for
+a **4th straight batch**.
+
+### Artifacts
+20 validated configs folded into [`corpus/`](./corpus/) (now 95).
+
+---
+
+## Batch 7 — 2026-06-02 (final 15: CLI tools + JS/Go libs + monorepo build tools)
+
+Workflow: 30 agents, ~2.8M tokens. Repos: uv, axios, clap, cli, duckdb, etcd,
+express, docusaurus, gin, fzf, cobra, axum, next.js, turborepo, astro.
+Stage-B-reconciled **A=37 B=12 C=4 D=222, coverage 37/53 = 70%**. duckdb gave 10
+file-graph edges; next.js 5. **This batch completes the 111-repo corpus.**
+Confirmation again — no new Tier-1/2 (everything maps to the locked backlog).
+
+---
+
+# Study complete — final synthesis (2026-06-02)
+
+**All 111 repos worked** (calibration tokio + 7 batches), each pinned, deep-read
+(Stage A) and adversarially verified (Stage B), with a validated `.alint.yml` per
+repo (in [`corpus/`](./corpus/); tokio in `examples/`).
+
+## Headline numbers
+
+- **`coverage_today` = 457 / 748 = 61%** — alint *natively* expresses 457 of the
+  748 *addressable* enforced validations across the corpus. The other **~1731
+  enforced behaviors are D non-goals** (test/build/AST/sanitizer/formatter/
+  type-check/dep-graph/NLP execution) that alint orchestrates but does not
+  reimplement, correctly excluded from the denominator (R2/R5).
+- Per-repo `coverage_today` ranges 0–100%: focused libraries and
+  cross-file-consistency-heavy repos score 70–100%; big flagships with large
+  bespoke per-line/codegen/set-membership suites and pure-execution small libs
+  pull the pooled figure down.
+- **257 file-reference-graph edge sources** harvested (tokio calibration = 0).
+
+Coverage by batch: calib 71% · b1 74% · b2 57% · b3 61% · b4 56% · b5 60% ·
+b6 68% · b7 70% (pooled **61%**).
+
+## The deliverable — demand-ranked new-kind backlog (locked)
+
+The ranking **did not change across the last five batches** (b3–b7). Build order
+for the v0.12 cut:
+
+**Tier 1 — build (high cross-repo demand, additive, no regressions):**
+1. **`file_dependency_graph`** — the generic file→file reference graph
+   (layering/import firewall · codegen-freshness `git diff --exit-code` · orphan
+   /reachability · every-X-has-Y · set-equality). **257 edge sources, ~every
+   repo, every edge shape.** Was study-gated at 0 — **verdict: GO, #1 priority.**
+2. **`generated_file_fresh` mutating/regen mode** — a generator that writes in
+   place, then `git diff --exit-code` (today's kind is stdout-only). ~12 repos
+   (redis, symfony, postgres, openssl, svelte, neovim, llvm, roslyn, react,
+   spark, uv, …).
+3. **`files_equal`** — whole-file byte-identity of A vs B (skip-header option).
+   ~9 repos (tokio, symfony, gradle, serde, ansible, fastapi, golang/go, rust,
+   brew). `pair`/`pair_hash` cannot express it.
+4–6. **`git_commit_subject_matches`**, **`value_set_membership`**,
+   **`changeset_requires_path`** — all three *already-planned* v0.12 workstreams,
+   now corpus-validated with fresh evidence (django/spring-boot/hugo;
+   aspnetcore/numpy/elasticsearch/fastapi; sqlalchemy/cpython).
+
+**Tier 2 — strong, 2–4 repos each:** sectioned/key-extracted `ordered_block`;
+`every_X_has_Y` with a value predicate; charset / `file_is_ascii` allowlist;
+`git_file_mode` / no-exec-bit; dangling-symlink + `symlink_target_equals`;
+binary-aware `file_max_size`; `no_filename_case_conflict`; the GH-Actions
+ref-vs-SHA-pin + publisher-allowlist preset; `normalize: semver`.
+
+**Tier 3 — singletons (watch):** `path_length_cap`, `max_consecutive_spaces`,
+count-header, split-constant version-compose, orphan-identifiers,
+manifest-reachability, generated-checksum-manifest, intra-file reference
+resolution.
+
+## alint sharp-edges (C-tuning, shippable as polish independent of new kinds)
+
+Recurring, corpus-proven: `no_merge_conflict_markers` false-fires on reST/MD
+setext `=====` underlines (flask, git); **`file_is_ascii` `allow:` list —
+SHIPPED 2026-06-03** (single char | `U+XXXX` | `U+XXXX-U+YYYY` range;
+curl-proven, recurs llvm/vscode/elixir); **`ordered_block` `select:` line-filter
+— SHIPPED 2026-06-03**; **`select:` include/exclude on `for_each_dir` /
+`for_each_file` / `every_matching_has` — SHIPPED 2026-06-03** (list with
+`!`-excludes); `import_gate language: js` over-matches JSDoc
+`@typedef`; test-fixture / `test-data/` default excludes for the hygiene bundles;
+ASF source-header exclude tuning.
+
+## Recommendation
+
+The study was the v0.12 gating item ("the study runs first") — **it is complete.**
+Proceed to the build phase, design-doc-first per project convention, in the Tier-1
+order above, starting with **`file_dependency_graph`**. The 110 corpus configs +
+this log are the regression/evidence base for each new kind.

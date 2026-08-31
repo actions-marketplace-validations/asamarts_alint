@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — NixOS/nix @ d212b92f1eaa6fa8d2cbfaaebf5dcf613e2cd02c
+#
+# Shape: C++ package-manager, meson + nix build, NixOS-foundation governance.
+# The repo's ENFORCED validation surface is dominated by Nix-build/test
+# execution (component/VM/functional tests, flake checks, coverage,
+# clang-tidy, nixfmt/clang-format/meson-format/shellcheck formatters,
+# json-schema `jv` runs, doc build) -- all D non-goals alint orchestrates
+# but does not reimplement. The natively-addressable surface is thin:
+#   * merge-conflict markers forbidden (pre-commit check-merge-conflicts-2)
+#     -> the one clean enforced A, broadened to all source types below.
+#   * JSON example data conforms to JSON-Schema -> expressible-but-awkward
+#     (YAML draft-04 schemas + JSON-Pointer sub-schema fragments) = C.
+# Everything else here is alint VALUE-ADD structure the repo does not gate on.
+
+version: 1
+
+# tests/functional/lang/ ships an INTENTIONAL broken symlink
+# (symlink-resolution/broken -> nonexistent) plus deliberately-malformed
+# .nix parse fixtures. The broken symlink aborts alint's directory walk
+# entirely (walk error: No such file or directory) -- a real alint
+# sharp-edge: one dangling symlink in a linted repo halts the whole run.
+# Ignore the fixture tree so the rest of the repo can be analysed.
+ignore:
+  - "tests/functional/lang/**"
+  # src/nix-functional-tests is a symlink to ../tests/functional, so the
+  # same broken symlink is reachable via this aliased path too.
+  - "src/nix-functional-tests/lang/**"
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/tooling/editorconfig@v1
+
+rules:
+  # === ENFORCED (denominator) =======================================
+
+  # A1 -- nix enforces this via the `check-merge-conflicts-2` pre-commit
+  # hook (maintainers/flake-module.nix:24), which greps every staged file
+  # for `>>>>>>> ` conflict markers. oss-baseline's
+  # `oss-no-merge-conflict-markers` only scans md/txt/toml/yml/json; nix's
+  # hook covers ALL source, so widen the include set to the real codebase.
+  - id: nix-no-merge-conflict-markers-source
+    kind: no_merge_conflict_markers
+    paths:
+      include:
+        - "src/**/*.cc"
+        - "src/**/*.hh"
+        - "src/**/*.h"
+        - "src/**/*.c"
+        - "**/*.nix"
+        - "**/*.sh"
+        - "**/meson.build"
+    level: error
+    message: "Merge/patch conflict markers must not be committed (pre-commit check-merge-conflicts-2)."
+
+  # C1 -- json-schema-checks (src/json-schema-checks/meson.build) validates
+  # committed example JSON against committed JSON schemas via the `jv` CLI.
+  # alint's json_schema_passes natively expresses data->schema conformance,
+  # but here the schemas are YAML + draft-04 + many `#/$defs/...` pointer
+  # fragments. This rule probes the SIMPLEST case (top-level hash schema)
+  # to measure feasibility; pointer-fragment + YAML-schema cases are the
+  # awkward remainder.
+  - id: nix-json-schema-hash-example-valid
+    kind: json_schema_passes
+    paths:
+      - "src/libutil-tests/data/hash/sha256.json"
+      - "src/libutil-tests/data/hash/blake3.json"
+    schema_path: "doc/manual/source/protocols/json/schema/hash-v1.yaml"
+    level: warning
+    message: "Hash example JSON must validate against hash-v1 schema (mirrors json-schema-checks)."
+
+  # === VALUE-ADD (NOT in the A/B/C/D ratio; structure nix does not gate on) ===
+
+  # The single source of truth for the project version. meson.build and the
+  # nix packaging both read files('.version') / lib.fileContents ./.version,
+  # so there is no cross-file version COHERENCE to enforce -- but assert the
+  # file exists and is a clean semver line.
+  - id: nix-version-file-present
+    kind: file_exists
+    paths: ".version"
+    root_only: true
+    level: info
+    message: "The repo-global .version file is the single source of truth for the Nix version."
+
+  - id: nix-version-file-is-semver
+    kind: file_content_matches
+    paths: ".version"
+    pattern: '^[0-9]+\.[0-9]+\.[0-9]+\s*$'
+    level: info
+    message: ".version should contain a single bare semver line (read by meson and the nix packaging)."
+
+  # Build-system invariants (value-add: nix builds would fail without these,
+  # but no standalone alint-shaped gate asserts their presence).
+  - id: nix-root-meson-build-present
+    kind: file_exists
+    paths: "meson.build"
+    root_only: true
+    level: info
+    message: "Root meson.build defines the top-level build."
+
+  - id: nix-flake-present
+    kind: file_exists
+    paths: "flake.nix"
+    root_only: true
+    level: info
+    message: "flake.nix is the entrypoint for the Nix build, dev shell, and checks."
+
+  - id: nix-flake-lock-present
+    kind: file_exists
+    paths: "flake.lock"
+    root_only: true
+    level: info
+    message: "flake.lock pins the flake inputs; it should be committed."
+
+  - id: nix-contributing-present
+    kind: file_exists
+    paths: "CONTRIBUTING.md"
+    root_only: true
+    level: info
+    message: "CONTRIBUTING.md documents the contribution process."
+
+  # rl-next changelog fragments: the doc build runs changelog-d over these,
+  # which would fail on a fragment missing its `synopsis:` frontmatter. alint
+  # can assert the structural invariant directly (value-add -- the enforced
+  # check is the changelog-d execution, a D non-goal).
+  - id: nix-rl-next-fragment-has-synopsis
+    kind: file_content_matches
+    paths:
+      include: ["doc/manual/rl-next/*.md"]
+      exclude: ["doc/manual/rl-next/README.md"]
+    pattern: '(?m)^synopsis:'
+    level: info
+    message: "Each rl-next release-note fragment must declare a `synopsis:` in its YAML frontmatter (consumed by changelog-d)."

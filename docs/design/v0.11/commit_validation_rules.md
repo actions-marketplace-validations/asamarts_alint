@@ -1,6 +1,42 @@
 # Commit-validation rule family
 
-Status: Design draft, written 2026-05-14 after v0.9.21 shipped #26.
+Status: **Implemented (2026-05-22).** All four rule kinds shipped:
+`git_commit_signed_off`, `git_commit_no_fixup`,
+`git_commit_author_allowlist`, `git_commit_gpg_signed`. They share
+`alint-rules::commit_range` (head-or-range fetch + per-commit
+violation formatting). Infra extensions to `alint-core::git`:
+`CommitRecord` gained `author_name` / `author_email` (+ a
+`head_commit_record` helper the whole family uses for HEAD mode) for
+the author rule, and a `verify_commit(root, sha)` helper for the GPG
+rule. Open questions resolved below. Original draft written
+2026-05-14 after v0.9.21 shipped #26.
+
+## Resolved decisions
+
+- **`git_commit_signed_off.pattern:` ships a default** — the
+  canonical DCO shape `(?m)^Signed-off-by: .+ <.+@.+>$`. The bare
+  "I just want DCO" config (`kind: git_commit_signed_off` + a level)
+  works with no `pattern:`; override for a stricter form.
+- **`git_commit_no_fixup` does NOT flag empty-body duplicate-subject
+  commits** (the implicit-`--fixup --no-edit` shape) in v0.11 —
+  skipped per the draft's lean. Revisit behind an opt-in option if
+  demand surfaces.
+- **`git_commit_gpg_signed` does NOT surface the GPG-trust chain** —
+  it reports signed-vs-unsigned only; trust is git's
+  (`.git/allowed_signers` / GPG config) job.
+- **`since:` carries no `${VAR}` expansion** — the new rules are
+  v0.11-native, so `{{env.X}}` (resolved at config load by
+  `alint-dsl`) is the only interpolation; the deprecated POSIX form
+  lives only on the legacy `git_commit_message`.
+- **Schema:** each kind gets its own `rule_*` def mirroring
+  `rule_git_commit_message`'s inline `since:` / `include_merges:`
+  (the `$defs/commit_range_options` extraction the draft proposed is
+  deferred — inlining matches the existing schema style and avoids a
+  back-compat refactor of the shipped `git_commit_message` def).
+- **e2e coverage:** git-repo-dependent firing is exercised by a real
+  `given.git:` scenario (the harness builds a repo) plus
+  `crates/alint-rules/tests/shell_out_rules.rs`; the silent path by a
+  no-repo scenario. No `pass_fail` native-allowlist exemption needed.
 
 ## Problem
 

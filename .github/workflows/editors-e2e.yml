@@ -1,0 +1,115 @@
+name: editors e2e (LSP integration)
+
+# Real-client end-to-end for the editor integrations against an `alint`
+# binary built from this branch:
+#   * vscode — launches a real VS Code under Xvfb and asserts the
+#     extension surfaces diagnostics + an apply-fix quick action.
+#   * nvim   — boots headless Neovim with editors/nvim on the
+#     runtimepath, enables the `alint` server, and asserts a diagnostic.
+#
+# Runs on GitHub-hosted ubuntu-latest (ships the GUI libs + xvfb that
+# @vscode/test-electron needs; the self-hosted bench runner is
+# headless-minimal). Gated on the editors, the LSP server, or the binary
+# so a server<->client contract change re-runs the real-client checks.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "editors/**"
+      - "crates/alint-lsp/**"
+      - "crates/alint/**"
+      - ".github/workflows/editors-e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vscode:
+    name: VS Code extension (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - name: Build alint from this branch
+        run: cargo build --release -p alint
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "20"
+
+      - name: VS Code e2e (xvfb)
+        working-directory: editors/vscode
+        env:
+          # The extension resolves this via the `alint.path` setting
+          # written into the temp fixture workspace by runTest.ts.
+          ALINT_TEST_BINARY: ${{ github.workspace }}/target/release/alint
+        run: |
+          npm ci
+          xvfb-run -a npm run test:e2e
+
+  nvim:
+    name: Neovim LSP smoke (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - name: Build alint from this branch
+        run: cargo build --release -p alint
+
+      - name: Install Neovim (stable, 0.11+)
+        run: |
+          curl -fsSL https://github.com/neovim/neovim/releases/download/stable/nvim-linux-x86_64.tar.gz -o /tmp/nvim.tar.gz
+          tar -C /tmp -xzf /tmp/nvim.tar.gz
+          echo "/tmp/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: nvim LSP smoke
+        env:
+          ALINT_TEST_BINARY: ${{ github.workspace }}/target/release/alint
+        run: bash editors/nvim/test/run-smoke.sh
+
+  tier2-configs:
+    name: Tier-2 editor configs (static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # python3 (tomllib) is preinstalled; emacs is needed to byte-compile
+      # the elisp config.
+      - name: Install Emacs
+        run: sudo apt-get update && sudo apt-get install -y emacs-nox
+      - name: Validate Tier-2 configs (helix TOML / sublime JSONC / emacs)
+        run: bash editors/test/lint-configs.sh
+
+  jetbrains:
+    name: JetBrains LSP e2e (headless)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - name: Build alint from this branch
+        run: cargo build --release -p alint
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+
+      - name: JetBrains LSP integration test
+        working-directory: editors/jetbrains
+        env:
+          # The test points the plugin's server command at this binary via
+          # the alint.path setting (AlintSettings).
+          ALINT_TEST_BINARY: ${{ github.workspace }}/target/release/alint
+        run: ./gradlew test --no-daemon

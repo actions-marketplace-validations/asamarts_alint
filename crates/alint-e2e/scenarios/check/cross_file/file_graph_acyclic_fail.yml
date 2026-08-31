@@ -1,0 +1,35 @@
+name: file_graph flags an import cycle under require acyclic
+tags: [check, file_graph, cross_file]
+
+docs:
+  title: An import cycle among proto files
+  case: fail
+  kind: file_graph
+
+given:
+  tree:
+    proto:
+      a.proto: |
+        import "proto/b.proto";
+      b.proto: |
+        import "proto/c.proto";
+      c.proto: |
+        import "proto/a.proto";
+  config: |
+    version: 1
+    rules:
+      - id: no-proto-import-cycles
+        kind: file_graph
+        nodes: "proto/**/*.proto"
+        edges:
+          from_content:
+            extract: { regex: 'import\s+"([^"]+)"' }
+            resolve: relative_to_repo_root
+        require: acyclic
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: no-proto-import-cycles, level: error, path: proto/a.proto}

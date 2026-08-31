@@ -1,91 +1,258 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
-# Starter alint config for kubernetes/kubernetes.
 #
-# Replaces 12 of the 50 hack/verify-*.sh scripts with declarative rules,
-# plus 5 more via the `command` rule kind shelling out to existing tools
-# (shellcheck, misspell, gofmt, golangci-lint, govulncheck) — net 17 scripts.
+# Proposed alint config for kubernetes/kubernetes — v0.11 capabilities.
+# Re-analysis of the v0.9.17-era examples/kubernetes-kubernetes/.alint.yml.
 #
-# Adopt by saving as .alint.yml at the repo root and running `alint check`.
-# Tune the `paths:` and `scope_filter:` entries to your local layout if your
-# fork has diverged. The default scope filters narrow each rule to the parts
-# of the tree where it makes sense.
+# k8s validates almost entirely through hack/verify-*.sh (51 scripts) driven by
+# Prow CI (NOT GitHub Actions — there is no .github/workflows/). Contribution is
+# gated by EasyCLA (Linux Foundation), NOT DCO; PRs are NOT required to carry a
+# Signed-off-by trailer, so git_commit_signed_off is intentionally OMITTED.
 #
-# Known limitations versus the existing hack/verify-*.sh pipeline (each
-# requires an alint primitive that doesn't ship today — see this directory's
-# README.md for the full gap catalogue):
-#   - hack/verify-imports.sh           (restricted package imports per dir)
-#   - hack/verify-import-aliases.sh    (preferred alias per import)
-#   - hack/verify-prometheus-imports.sh (forbidden import per dir)
-#   - hack/verify-internal-modules.sh  (visibility of internal-only modules)
-#   - hack/verify-testing-import.sh    (no `testing` import in prod code)
-#   - hack/verify-readonly-packages.sh (vendor entry hash matches pin)
-#   - hack/verify-metrics-naming.sh    (AST-aware metric name regex)
-# These remain on the existing shell scripts until alint v0.10+ ships
-# the matching primitives.
+# What v0.11 newly unlocks over the v0.9.17 baseline (which listed 7 hard gaps):
+#   - import_gate  -> the 66 .import-restrictions firewall + prometheus-imports
+#                     + testing-import + staging publishing import-restrictions
+#   - command_idempotent -> codegen / docs / openapi / vendor freshness (these
+#                     MUTATE files, so --check/verify mode, not generated_file_fresh)
+#   - scope_filter.changed_since -> PR-scope this 30k-file tree so per-PR runs
+#                     only lint touched files (k8s's own scripts do the same).
+#
+# NOTE on the Apache-2 bundle: compliance/apache-2@v1 OVER-FIRES here. k8s uses
+# a YEAR-substituted "Copyright YYYY The Kubernetes Authors." header (and, post
+# 2025, a year-LESS form) — branded, not the canonical ASF appendix text — and
+# has thousands of generated files that legitimately carry a generated-code
+# header. There is also no top-level NOTICE in the ASF sense. We therefore do
+# NOT extend apache-2@v1 and use bespoke file_header rules below.
+#
+# NOTE on ci/github-actions@v1: the v0.9.17 baseline extended it. k8s has NO
+# .github/workflows/ (it runs on Prow). That bundle would no-op at best and
+# mislead at worst — DROPPED.
 
 version: 1
 
 extends:
-  - alint://bundled/oss-baseline@v1
-  - alint://bundled/go@v1
-  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/oss-baseline@v1   # README/LICENSE/.gitignore hygiene
+  - alint://bundled/go@v1             # go.mod/go.sum sanity, go hygiene
   - alint://bundled/hygiene/no-tracked-artifacts@v1
+  # DROPPED vs baseline: ci/github-actions@v1 (no .github/workflows/),
+  #                      compliance/apache-2@v1 (branded header over-fires).
 
 rules:
-  # ── verify-boilerplate.sh ──────────────────────────────────────
-  # Apache-2 header on every source file. The kubernetes header
-  # uses YEAR substitution; matches a contiguous block ending in
-  # 'Licensed under the Apache License, Version 2.0'.
-  # Pitfall #22 — YAML `|` literal block scalar appends a trailing
-  # newline to the pattern, which causes file_header to require a
-  # newline immediately after the last header line. Real headers
-  # continue with ` (the "License")` on the same line, producing
-  # 17,040 false positives across this tree. Use `|-` to strip the
-  # trailing newline.
-  - id: k8s-go-license-header
+  # ════════════════════════════════════════════════════════════════════
+  # BOILERPLATE — verify-boilerplate.sh + hack/boilerplate/*.txt
+  # Per-language Apache-2 headers. The k8s template substitutes YEAR; real
+  # files carry "Copyright 2015 The Kubernetes Authors." Post-2025, NEW files
+  # carry the year-LESS form, so the year group is OPTIONAL: ([0-9]{4} )?
+  # ════════════════════════════════════════════════════════════════════
+  - id: k8s-go-license-header                 # boilerplate.go.txt + generatego.txt
     kind: file_header
     paths: "**/*.go"
     scope_filter:
-      has_ancestor: go.mod
+      changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
+    # |- strips the trailing newline (baseline pitfall #22): real headers
+    # continue with ` (the "License");` on the same line.
     pattern: |-
       ^/\*
-      Copyright [0-9]{4} The Kubernetes Authors\.
+      Copyright ([0-9]{4} )?The Kubernetes Authors\.
 
       Licensed under the Apache License, Version 2\.0
     level: error
 
-  # Two interacting fixes vs the original:
-  #   1. `|-` (pitfall #22) instead of `|`.
-  #   2. `(?m)` prefix (pitfall #13) so `^` is line-anchor —
-  #      shell scripts open with `#!/usr/bin/env bash` followed by
-  #      a blank line then the copyright, so a file-anchor `^`
-  #      could never match.
-  - id: k8s-shell-license-header
+  - id: k8s-shell-license-header              # boilerplate.sh.txt
     kind: file_header
     paths: "**/*.sh"
     pattern: |-
-      (?m)^# Copyright [0-9]{4} The Kubernetes Authors\.
+      (?m)^# Copyright ([0-9]{4} )?The Kubernetes Authors\.
       #
       # Licensed under the Apache License, Version 2\.0
     level: error
 
-  # ── verify-file-sizes.sh ───────────────────────────────────────
-  # Files > 1MB need explicit allowlisting. The shell script
-  # carries an inline allowlist; here we use `paths:` excludes so
-  # the allowlist lives in the config (not in a side-file).
-  - id: k8s-file-max-1mb
-    kind: file_max_size
+  - id: k8s-python-license-header             # boilerplate.py.txt
+    kind: file_header
+    paths: "**/*.py"
+    pattern: |-
+      (?m)^# Copyright ([0-9]{4} )?The Kubernetes Authors\.
+      #
+      # Licensed under the Apache License, Version 2\.0
+    level: error
+
+  - id: k8s-dockerfile-license-header         # boilerplate.Dockerfile.txt
+    kind: file_header
+    paths: "**/Dockerfile"
+    pattern: |-
+      (?m)^# Copyright ([0-9]{4} )?The Kubernetes Authors\.
+      #
+      # Licensed under the Apache License, Version 2\.0
+    level: error
+
+  # Guard: the literal token "YEAR" must never survive into a real file
+  # (verify-boilerplate.sh checks this — the template placeholder leaked in).
+  - id: k8s-no-literal-year-token
+    kind: file_content_forbidden
     paths:
-      include: ["**/*"]
-      exclude:
-        - "vendor/**"        # vendored code can be larger
-        - "**/testdata/**"   # test fixtures often have large blobs
-        - "docs/**/*.png"    # diagrams in docs
-    max_bytes: 1048576       # 1 MiB
+      include: ["**/*.go", "**/*.sh", "**/*.py"]
+      exclude: ["hack/boilerplate/**", "vendor/**", "**/testdata/**"]
+    pattern: 'Copyright YEAR The Kubernetes Authors'
+    level: error
+
+  # ════════════════════════════════════════════════════════════════════
+  # IMPORT FIREWALL — the HEADLINE win. v0.11 import_gate replaces all of:
+  #   verify-imports.sh / verify-import-boss.sh   (66 .import-restrictions files)
+  #   verify-prometheus-imports.sh
+  #   verify-testing-import.sh
+  #   staging/publishing/import-restrictions.yaml (verify-publishing-bot.sh arm)
+  #
+  # import_gate uses preset language: go (parses Go import blocks). forbid: is a
+  # SINGLE anchored regex; allow: is a list of regexes. The k8s .import-restrictions
+  # files are per-package allow/forbid prefix lists — each maps to one import_gate
+  # rule scoped via paths:. Below are the structurally important ones; a full
+  # port would generate one rule per .import-restrictions file (a registry-driven
+  # form — see NEW-RULE-KIND CANDIDATES in the report — would be far cleaner than
+  # 66 hand-written rules).
+  # ════════════════════════════════════════════════════════════════════
+
+  # pkg/.import-restrictions: pkg/ must not depend on cmd/, ghodss/yaml, sctp,
+  # or kubectl/pkg/scheme.
+  - id: k8s-pkg-import-firewall
+    kind: import_gate
+    language: go
+    paths:
+      include: ["pkg/**/*.go"]
+      exclude: ["pkg/kubemark/**"]   # pkg/kubemark overrides (allows cmd/kubelet/app)
+    forbid: '^(k8s\.io/kubernetes/cmd|github\.com/ghodss/yaml|github\.com/ishidawataru/sctp|k8s\.io/kubectl/pkg/scheme)(/.*)?$'
+    level: error
+
+  # pkg/printers/.import-restrictions: discourage pkg/api & pkg/apis/.
+  - id: k8s-printers-import-firewall
+    kind: import_gate
+    language: go
+    paths: "pkg/printers/**/*.go"
+    forbid: '^k8s\.io/kubernetes/pkg/(api$|apis/.*)$'
     level: warning
 
-  # ── verify-staging-meta-files.sh ───────────────────────────────
-  # Every staging package has the meta files Kubernetes-publishing-bot needs.
+  # test/integration/.import-restrictions: integration tests must not import e2e
+  # (with a handful of allowed helper packages).
+  - id: k8s-integration-no-e2e-import
+    kind: import_gate
+    language: go
+    paths: "test/integration/**/*.go"
+    forbid: '^k8s\.io/kubernetes/test/e2e(/.*)?$'
+    allow:
+      - '^k8s\.io/kubernetes/test/e2e/framework/(pod|daemonset)(/.*)?$'
+      - '^k8s\.io/kubernetes/test/e2e/dra/utils$'
+      - '^k8s\.io/kubernetes/test/e2e/invariants/metrics$'
+    level: error
+
+  # verify-testing-import.sh: production (non-_test.go) code must not import
+  # the stdlib testing package. import_gate's paths excludes the test files.
+  - id: k8s-no-testing-import-in-prod
+    kind: import_gate
+    language: go
+    paths:
+      include: ["**/*.go"]
+      exclude: ["**/*_test.go", "vendor/**", "**/testing/**", "**/test/**"]
+    forbid: '^testing$'
+    level: error
+
+  # verify-prometheus-imports.sh: only an allowlisted set may import prometheus
+  # client_golang directly (everything else must go via component-base/metrics).
+  - id: k8s-prometheus-import-firewall
+    kind: import_gate
+    language: go
+    paths:
+      include: ["pkg/**/*.go", "cmd/**/*.go"]
+      exclude: ["**/*_test.go", "staging/**"]
+    forbid: '^github\.com/prometheus/client_golang(/.*)?$'
+    level: warning   # advisory: full allowlist lives in the script; tune paths
+
+  # ════════════════════════════════════════════════════════════════════
+  # CODEGEN / GENERATED-FILE FRESHNESS — these generators MUTATE the tree,
+  # so command_idempotent in verify/--check mode (NOT generated_file_fresh,
+  # which only diffs stdout). Each shells out to the existing update-*.sh in a
+  # mode that exits non-zero if files would change. PR-scoped & costly -> high
+  # timeouts. These remain shell wrappers; alint just orchestrates + gates them.
+  # ════════════════════════════════════════════════════════════════════
+  - id: k8s-codegen-fresh                     # verify-codegen.sh
+    kind: command_idempotent
+    command: ["hack/verify-codegen.sh"]
+    timeout: 1800
+    level: error
+
+  - id: k8s-generated-docs-fresh              # verify-generated-docs.sh
+    kind: command_idempotent
+    command: ["hack/verify-generated-docs.sh"]
+    timeout: 600
+    level: error
+
+  - id: k8s-openapi-spec-fresh                # verify-openapi-spec.sh
+    kind: command_idempotent
+    command: ["hack/verify-openapi-spec.sh"]
+    timeout: 600
+    level: error
+
+  - id: k8s-vendor-fresh                      # verify-vendor.sh (diffs go.mod/sum)
+    kind: command_idempotent
+    command: ["hack/verify-vendor.sh"]
+    timeout: 900
+    level: error
+
+  - id: k8s-generated-stable-metrics-fresh    # verify-generated-stable-metrics.sh
+    kind: command_idempotent
+    command: ["hack/verify-generated-stable-metrics.sh"]
+    timeout: 600
+    level: error
+
+  # ════════════════════════════════════════════════════════════════════
+  # gofmt / govet / per-tool fan-out — command_idempotent (gofmt -l prints the
+  # offenders; files_from parses them into per-file violations).
+  # ════════════════════════════════════════════════════════════════════
+  - id: k8s-gofmt                             # verify-gofmt.sh
+    kind: command_idempotent
+    command: ["hack/verify-gofmt.sh"]
+    files_from: stdout
+    files_pattern: '^(.+\.go)$'
+    timeout: 300
+    level: error
+
+  - id: k8s-golangci-lint                     # verify-golangci-lint.sh
+    kind: command_idempotent
+    command: ["hack/verify-golangci-lint.sh"]
+    timeout: 1800
+    level: error
+
+  - id: k8s-shellcheck                        # verify-shellcheck.sh
+    kind: command_idempotent
+    command: ["hack/verify-shellcheck.sh"]
+    timeout: 300
+    level: error
+
+  - id: k8s-spelling                          # verify-spelling.sh
+    kind: command_idempotent
+    command: ["hack/verify-spelling.sh"]
+    timeout: 300
+    level: warning
+
+  - id: k8s-owners-fmt                         # verify-owners-fmt.sh
+    kind: command_idempotent
+    command: ["hack/verify-owners-fmt.sh"]
+    timeout: 120
+    level: error
+
+  # ════════════════════════════════════════════════════════════════════
+  # STRUCTURED CONFIG CHECKS
+  # ════════════════════════════════════════════════════════════════════
+  # verify-golangci-lint-config.sh — hack/golangci.yaml is well-formed and has
+  # a run: section. (.golangci.yml is NOT at repo root in k8s; it lives in hack/.)
+  - id: k8s-golangci-config-shape
+    kind: yaml_path_matches
+    paths: "hack/golangci.yaml"
+    path: "$.run"
+    matches: ".+"
+    level: error
+
+  # ════════════════════════════════════════════════════════════════════
+  # STAGING REPO STRUCTURE — verify-staging-meta-files.sh
+  # Every staging package carries the meta files the publishing-bot needs.
+  # ════════════════════════════════════════════════════════════════════
   - id: k8s-staging-meta-files
     kind: for_each_dir
     select: "staging/src/k8s.io/*"
@@ -100,112 +267,52 @@ rules:
         paths: "{path}/LICENSE"
     level: error
 
-  # ── verify-pkg-names.sh ────────────────────────────────────────
-  # Go package names follow lowercase, no-underscore convention.
-  # The verify script's regex is roughly "lower-case alphanumeric, no _".
-  # Pitfall #13 — `^` and `$` anchor to file start / end by default.
-  # Every real Go file has its `package x` declaration AFTER the
-  # license header, not at byte 0. `(?m)` switches to line-anchor
-  # semantics so the rule fires correctly.
+  # verify-pkg-names.sh — Go package names lowercase, no underscores.
   - id: k8s-go-package-names
     kind: file_content_matches
     paths: "**/*.go"
     scope_filter:
-      has_ancestor: go.mod
+      changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
     pattern: '(?m)^package [a-z][a-z0-9]*$'
     level: error
-    message: |
-      Go package names must be lowercase alphanumeric (no underscores or
-      dashes). See https://go.dev/blog/package-names.
 
-  # ── verify-shellcheck.sh ───────────────────────────────────────
-  # Every shell script must pass shellcheck. Shells out to the tool;
-  # `command` is gated to the user's top-level config (it can't be
-  # introduced by an extends'd ruleset), which is the correct
-  # security posture for shelling out per-file.
-  - id: k8s-shellcheck
-    kind: command
-    paths: "**/*.sh"
-    command: ["shellcheck", "-x", "{path}"]
-    timeout: 30
-    level: error
-
-  # ── verify-spelling.sh ─────────────────────────────────────────
-  - id: k8s-spelling
-    kind: command
+  # verify-file-sizes.sh — files > 1MiB need allowlisting.
+  - id: k8s-file-max-1mb
+    kind: file_max_size
     paths:
-      include: ["**/*.md", "**/*.go"]
-      exclude: ["vendor/**", "**/testdata/**"]
-    command: ["misspell", "-error", "{path}"]
-    timeout: 30
+      include: ["**/*"]
+      exclude: ["vendor/**", "**/testdata/**", "docs/**/*.png"]
+    max_bytes: 1048576
     level: warning
 
-  # ── verify-gofmt.sh ────────────────────────────────────────────
-  # gofmt -l prints filenames of unformatted files. The `command`
-  # rule fails if the child exits non-zero OR stdout is non-empty —
-  # gofmt -l exits 0 even on unformatted files, so the empty-stdout
-  # check is what catches the violation. (Note: alint's `command`
-  # rule v0.9.14 currently treats non-zero exit OR non-empty
-  # stdout/stderr as a violation, which matches what we want here.)
-  - id: k8s-gofmt
-    kind: command
-    paths: "**/*.go"
-    scope_filter:
-      has_ancestor: go.mod
-    command: ["gofmt", "-l", "{path}"]
-    timeout: 30
-    level: error
-
-  # ── verify-golangci-lint.sh ────────────────────────────────────
-  # Note: Run once per-package, not per-file. golangci-lint
-  # itself walks the package tree given a directory.
-  # Use a `for_each_dir` over Go module roots, then shell out
-  # to golangci-lint per module.
-  - id: k8s-golangci-lint
-    kind: for_each_dir
-    select: "**/go.mod"  # one entry per module
-    require:
-      - kind: command
-        paths: "{dir}"
-        command: ["golangci-lint", "run", "{dir}/..."]
-        timeout: 600
-    level: error
-
-  # ── verify-golangci-lint-config.sh ─────────────────────────────
-  # .golangci.yml is well-formed YAML matching the published schema.
-  - id: k8s-golangci-lint-config-shape
-    kind: yaml_path_matches
-    paths: ".golangci.yml"
-    path: "$.run"
-    matches: ".+"  # exists and is non-empty
-    level: error
-
-  # ── verify-govulncheck.sh ──────────────────────────────────────
-  - id: k8s-govulncheck
-    kind: for_each_dir
-    select: "**/go.mod"
-    require:
-      - kind: command
-        paths: "{dir}"
-        command: ["govulncheck", "{dir}/..."]
-        timeout: 300
-    level: warning
-
-  # ── verify-owners-fmt.sh ───────────────────────────────────────
-  - id: k8s-owners-fmt
-    kind: command
-    paths: "**/OWNERS"
-    command: ["yamlfmt", "-lint", "{path}"]
-    timeout: 30
-    level: error
-
-  # ── verify-mocks.sh (partial) ──────────────────────────────────
-  # Pair every <pkg>/mocks/<file>.go with the source it mocks.
-  # The `pair` rule asserts the relationship exists; the
-  # freshness check (mock matches source's current interface) is
-  # out of alint's scope.
+  # verify-mocks.sh (partial) — mock files pair with their source.
   - id: k8s-mock-source-pair
     kind: pair
     primary: "**/mocks/mock_*.go"
-    partner: "{dir}/../{stem}.go"   # mocks/mock_foo.go pairs with ../foo.go
+    partner: "{dir}/../{stem}.go"
     level: warning
+
+# ══════════════════════════════════════════════════════════════════════
+# GENUINE NON-REPLACEABLES (stay on hack/verify-*.sh; alint can ORCHESTRATE
+# some via command_idempotent but cannot REPLACE the semantic engine):
+#   - verify-govet / verify-typecheck    : full Go type/semantic analysis.
+#   - verify-import-aliases.sh           : per-import PREFERRED-ALIAS map
+#       (hack/.import-aliases). import_gate gates WHICH imports are allowed,
+#       not what local NAME they're bound to — out of scope. NEW-KIND candidate.
+#   - verify-internal-modules.sh         : Go `internal/` visibility semantics.
+#   - verify-no-vendor-cycles.sh         : import-graph cycle detection.
+#   - verify-deadcode-elimination.sh     : linker/binary analysis.
+#   - verify-conformance-* / verify-test-*: test EXECUTION + AST inspection.
+#   - verify-metrics-naming.sh           : AST-aware metric-name extraction.
+#   - verify-readonly-packages.sh        : vendor entry hash vs pin (pair_hash
+#       could approximate go.sum-style sums-line checks, but the real check is
+#       go-module-graph aware — left on the script).
+#   - verify-publishing-bot.sh           : staging->published repo CONTENT sync
+#       (the actual git-subtree mirror; only the import-restriction arm ports).
+#   - The staging-repo content sync + all test execution are fundamentally
+#     out of a linter's remit.
+#
+# CONTRIBUTION GATING: EasyCLA (Linux Foundation), not DCO. k8s does NOT require
+# Signed-off-by, so git_commit_signed_off is deliberately unused. EasyCLA status
+# is a GitHub status check from an external bot — alint cannot replicate it.
+# ══════════════════════════════════════════════════════════════════════

@@ -1,0 +1,91 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+# ============================================================================
+# alint config for gin-gonic/gin @ 5f4f9643258dc2a65e684b63f12c8d543c936c67
+#
+# CASE-STUDY NOTE (v0.12, R5): gin's ENFORCED bespoke-validation surface is
+# essentially 100% deliberate-non-goal (D): golangci-lint (gofmt/gofumpt/
+# goimports + ~14 linters + misspell), `go test` matrix, `go vet`, CodeQL,
+# Trivy, and a Codecov 99% gate. There are NO hand-rolled file-invariant shell
+# checks, NO codegen-freshness `git diff`, NO cross-file value gate, NO import
+# firewall, NO per-file header gate. So the A/B/C "addressable enforced" set is
+# EMPTY — coverage_today is vacuous for this repo.
+#
+# Everything below is alint VALUE-ADD (recorded separately, NOT in the coverage
+# ratio per R3/R5): OSS-hygiene + Go-module structure the repo benefits from but
+# does not itself gate on, plus two coherence rules backed by documented (not
+# CI-gated) conventions.
+# ============================================================================
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/go@v1
+  - alint://bundled/ci/github-actions@v1
+
+facts:
+  - id: has_go
+    any_file_exists: [go.mod]
+
+rules:
+  # --- VALUE-ADD: structural assertions gin does not gate on ----------------
+
+  # gin pins third-party actions by floating tag (@v6, @v9 ...), NOT by SHA.
+  # The bundle's gha-pin-actions-to-sha would fire ~broadly; downgrade to info
+  # so the config is green-ish while still surfacing the supply-chain note.
+  - id: gha-pin-actions-to-sha
+    kind: yaml_path_matches
+    paths: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    path: "$.jobs.*.steps[*].uses"
+    matches: '^[a-zA-Z0-9._/-]+@[a-f0-9]{40}$'
+    if_present: true
+    level: info
+    message: "gin pins actions by tag (e.g. @v6), not by 40-char SHA."
+
+  # VALUE-ADD coherence (documented convention, NOT CI-gated): the README's
+  # stated minimum Go version must equal the `go` directive floor in go.mod.
+  # README line ~47: "Gin requires Go version 1.25 or above"; go.mod: go 1.25.0.
+  - id: gin-readme-go-version-matches-gomod
+    kind: cross_file_value_equals
+    source:
+      file: go.mod
+      extract:
+        regex: '(?m)^go\s+(\d+\.\d+)'
+    targets:
+      - file: README.md
+        extract:
+          regex: 'requires \[Go\]\([^)]*\) version \[(\d+\.\d+)\]'
+    level: info
+    message: "README's stated minimum Go version should match the go.mod `go` directive floor."
+
+  # VALUE-ADD: the version constant carries the canonical vX.Y.Z form.
+  - id: gin-version-constant-semver
+    kind: file_content_matches
+    paths: version.go
+    pattern: 'const Version = "v\d+\.\d+\.\d+"'
+    level: info
+    message: "version.go should declare a canonical `const Version = \"vX.Y.Z\"`."
+
+  # VALUE-ADD: gin documents (CONTRIBUTING + PR template) that new features are
+  # documented in docs/doc.md, not the README — assert the doc target exists.
+  - id: gin-feature-doc-target-exists
+    kind: file_exists
+    paths: docs/doc.md
+    level: info
+    message: "CONTRIBUTING points new-feature docs at docs/doc.md; the target must exist."
+
+  # VALUE-ADD: gin's release flow is goreleaser-driven; assert the config is present.
+  - id: gin-goreleaser-config-exists
+    kind: file_exists
+    paths: [".goreleaser.yaml", ".goreleaser.yml"]
+    root_only: true
+    level: info
+    message: "Release automation expects a goreleaser config at the root."
+
+  # VALUE-ADD: golangci-lint v2 config present (the actual lint gate's config).
+  - id: gin-golangci-config-exists
+    kind: file_exists
+    paths: [".golangci.yml", ".golangci.yaml"]
+    root_only: true
+    level: info
+    message: "The lint CI job runs golangci-lint; its config should be committed."

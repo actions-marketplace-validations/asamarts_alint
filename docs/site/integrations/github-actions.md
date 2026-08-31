@@ -7,10 +7,14 @@ sidebar:
 
 The official Action wraps the `install.sh` flow plus alint invocation into one step.
 
+**Runs on Linux and macOS runners only.** The Action wraps `install.sh` (shell-based), so on `windows-latest` it fails with `unsupported platform`. For Windows CI, install alint in a prior `run:` step (`npm install -g @asamarts/alint` or `cargo install alint`) and invoke `alint` directly.
+
+<likec4-view view-id="ciActionFlow"></likec4-view>
+
 ## Inline PR annotations (default)
 
 ```yaml
-- uses: asamarts/alint@v0.10.2
+- uses: asamarts/alint@v0.15.2
 ```
 
 This runs `alint check --format github` against `.` and emits findings as `::error::` / `::warning::` workflow commands, which GitHub renders inline on the PR.
@@ -18,10 +22,11 @@ This runs `alint check --format github` against `.` and emits findings as `::err
 ## Inputs (all optional)
 
 ```yaml
-- uses: asamarts/alint@v0.10.2
+- uses: asamarts/alint@v0.15.2
   with:
-    version: v0.10.2        # release tag; omit to follow the pinned action ref
+    version: v0.15.2        # release tag; omit to follow the pinned action ref
     path: .                # directory to lint (default: .)
+    working-directory: .   # dir the action runs in (default: the runner workspace)
     format: github         # human | json | sarif | github (default)
     config: |              # extra config path(s), one per line
       .alint.yml
@@ -34,7 +39,7 @@ This runs `alint check --format github` against `.` and emits findings as `::err
 Use `format: sarif` and pipe to the standard upload action:
 
 ```yaml
-- uses: asamarts/alint@v0.10.2
+- uses: asamarts/alint@v0.15.2
   id: alint
   with:
     format: sarif
@@ -47,12 +52,14 @@ Use `format: sarif` and pipe to the standard upload action:
 
 `continue-on-error: true` is what lets the SARIF upload run even when alint finds issues — without it, a non-zero exit short-circuits the upload and the findings never reach Code Scanning.
 
+alint's SARIF carries a stable [`partialFingerprints`](/docs/reference/output-formats/#stable-fingerprints) identity on every run, so Code Scanning correlates each alert across runs — deduping, and tracking a finding as fixed or reopened — with no `--baseline` needed.
+
 ## Pin to a SHA
 
 For supply-chain hygiene (and to satisfy alint's own [`ci/github-actions@v1`](/docs/bundled-rulesets/) bundled ruleset), pin the action to a commit SHA:
 
 ```yaml
-- uses: asamarts/alint@<40-char-sha>  # v0.10.2
+- uses: asamarts/alint@<40-char-sha>  # v0.15.2
 ```
 
 Look up the SHA on the [tag page](https://github.com/asamarts/alint/tags).
@@ -81,7 +88,7 @@ jobs:
       - name: alint check
         env:
           ALINT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        uses: asamarts/alint@v0.10.2
+        uses: asamarts/alint@v0.15.2
 ```
 
 The rule in `.alint.yml`:
@@ -91,8 +98,8 @@ The rule in `.alint.yml`:
   kind: git_commit_message
   pattern: '^(feat|fix|chore|docs|refactor|test|build|ci|perf|style|revert)(\(.+\))?!?: '
   subject_max_length: 72
-  since: ${ALINT_BASE_SHA:-origin/main}
+  since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"
   level: error
 ```
 
-The `${ALINT_BASE_SHA:-origin/main}` default makes the same config work locally too: when you run `alint check` on your feature branch without setting the env var, the rule falls back to `origin/main` and validates everything since you branched. See the [`git_commit_message` reference](/docs/rules/git-hygiene/git_commit_message/) for the full options surface.
+The `{{env.ALINT_BASE_SHA | default('origin/main')}}` default makes the same config work locally too: when you run `alint check` on your feature branch without setting the env var, the rule falls back to `origin/main` and validates everything since you branched. See the [`git_commit_message` reference](/docs/rules/git-hygiene/git_commit_message/) and [variable interpolation](/docs/concepts/variable-interpolation/) for the full surface. (The older POSIX `since: ${ALINT_BASE_SHA:-origin/main}` form still works but is deprecated — alint prints a one-line migration hint at load.)

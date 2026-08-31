@@ -1,0 +1,152 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for serde-rs/serde @ fa7da4a93567ed347ad0735c28e439fca688ef26
+# (v0.12 100-repo case study, Stage A).
+#
+# serde's ENFORCED validation surface is almost entirely tool-execution
+# (D, per ruling R2): ci.yml runs cargo build/test across toolchains +
+# feature powersets, clippy (-Dclippy::pedantic), miri, rustdoc
+# (-Dwarnings), cargo-outdated, minimal-versions. alint does not
+# reimplement those. The thin ADDRESSABLE bespoke surface is cross-file
+# VALUE coherence:
+#   A1 — the three published crates share one version (1.0.228).
+#   A2 — the MSRV pins are coherent with their CI verification jobs
+#        (serde/serde_core => 1.56 build job; serde_derive => 1.71 job).
+# Everything below the "value-add" banner is structure serde does NOT
+# gate on (R5) — recorded for utility, excluded from the coverage ratio.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+
+rules:
+  # ── R6 absent-category relaxations (serde is a LIBRARY) ────────────
+  # Library workspaces gitignore Cargo.lock and pin no toolchain; the
+  # rust@v1 bundle flags both. Silence them so they aren't false noise.
+  - id: rust-cargo-lock-exists
+    level: off
+  - id: rust-toolchain-pinned
+    level: off
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  A1 — published-crate VERSION lockstep (the headline addressable
+  #  check). serde, serde_core and serde_derive are released in lockstep
+  #  at one version; serde's `serde_core = "=1.0.228"` and serde_core's
+  #  cfg(any()) `serde_derive = "=1.0.228"` are exact pins that cargo
+  #  enforces, but the bare [package] version equality across the three
+  #  is a maintainer convention a lone bump would silently break.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: serde-crate-versions-lockstep
+    kind: cross_file_value_equals
+    source:
+      file: serde/Cargo.toml
+      extract: { toml: "$.package.version" }
+    targets:
+      files: "{serde_core,serde_derive}/Cargo.toml"
+      extract: { toml: "$.package.version" }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      {{ctx.target}} version ({{ctx.target_value}}) must equal serde's
+      ({{ctx.source_value}}). serde / serde_core / serde_derive ship in
+      lockstep — bump all three together.
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  A2 — MSRV coherence: each rust-version tier must match the CI job
+  #  that verifies it. Two tiers, one behavior ("keep MSRV in sync").
+  # ═══════════════════════════════════════════════════════════════════
+  # 1.56 tier: serde_core's rust-version must match serde's.
+  - id: serde-msrv-1_56-coherent
+    kind: cross_file_value_equals
+    source:
+      file: serde/Cargo.toml
+      extract: { toml: "$.package['rust-version']" }
+    targets:
+      files: "serde_core/Cargo.toml"
+      extract: { toml: "$.package['rust-version']" }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      serde_core MSRV ({{ctx.target_value}}) must equal serde's
+      ({{ctx.source_value}}); both are the 1.56 tier verified by the CI
+      `build` job (toolchain 1.56.0).
+
+  # 1.71 tier: serde_derive's rust-version must match the CI `derive`
+  # job's pinned toolchain (`dtolnay/rust-toolchain@1.71.0`).
+  - id: serde-derive-msrv-matches-ci
+    kind: cross_file_value_equals
+    source:
+      file: serde_derive/Cargo.toml
+      extract: { toml: "$.package['rust-version']" }
+    targets:
+      files: ".github/workflows/ci.yml"
+      extract: { regex: 'dtolnay/rust-toolchain@(\d+\.\d+)\.\d+' }
+    normalize: none
+    allow_missing_target: false
+    level: error
+    message: >-
+      serde_derive MSRV ({{ctx.source_value}}) must match the CI `derive`
+      job toolchain ({{ctx.target_value}}); they verify the same 1.71 floor.
+
+  # ═══════════════════════════════════════════════════════════════════
+  #  alint VALUE-ADD — structure serde does NOT enforce (R3/R5).
+  #  Recorded for utility; NOT part of coverage_today's denominator.
+  # ═══════════════════════════════════════════════════════════════════
+
+  # Exact-pin dep coherence: serde's serde_core dep is pinned `=<ver>`
+  # and must equal serde_core's own version (cargo enforces this at
+  # build; asserting it declaratively localises the failure).
+  - id: serde-core-dep-pin-coherent
+    kind: cross_file_value_equals
+    source:
+      file: serde_core/Cargo.toml
+      extract: { toml: "$.package.version" }
+    targets:
+      files: "serde/Cargo.toml"
+      extract: { regex: 'serde_core = \{ version = "=(\d+\.\d+\.\d+)"' }
+    normalize: none
+    allow_missing_target: false
+    level: warning
+    message: >-
+      serde's `serde_core = "={{ctx.target_value}}"` pin must equal
+      serde_core's version ({{ctx.source_value}}).
+
+  # Edition coherence across all published crates.
+  - id: serde-edition-coherent
+    kind: cross_file_value_equals
+    source:
+      file: serde/Cargo.toml
+      extract: { toml: "$.package.edition" }
+    targets:
+      files: "{serde_core,serde_derive,serde_derive_internals}/Cargo.toml"
+      extract: { toml: "$.package.edition" }
+    normalize: none
+    allow_missing_target: false
+    level: info
+    message: "Edition should be coherent across serde crates."
+
+  # License coherence across all published crates.
+  - id: serde-license-coherent
+    kind: cross_file_value_equals
+    source:
+      file: serde/Cargo.toml
+      extract: { toml: "$.package.license" }
+    targets:
+      files: "{serde_core,serde_derive,serde_derive_internals}/Cargo.toml"
+      extract: { toml: "$.package.license" }
+    normalize: none
+    allow_missing_target: false
+    level: info
+    message: "License should be coherent across serde crates (MIT OR Apache-2.0)."
+
+  # Dual-license files exist at the root (the licenses Cargo declares).
+  - id: serde-dual-license-files
+    kind: file_exists
+    paths: ["LICENSE-APACHE", "LICENSE-MIT"]
+    root_only: true
+    level: info
+    message: "Both LICENSE-APACHE and LICENSE-MIT should be present (license = MIT OR Apache-2.0)."

@@ -1,0 +1,68 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for dotnet/roslyn @ 4dad8409c1e4ebf99a53df235df76d86083c2ddc
+# v0.12 case-study Stage A draft. Expresses the natively-addressable (A) slice
+# of Roslyn's enforced bespoke-validation surface. The bulk of Roslyn's gates
+# are tool/AST execution (dotnet-format, RoslynEnforceCodeStyle analyzers,
+# PublicApi/BannedApi analyzers, BuildBoss MSBuild-graph checks, determinism /
+# rebuild verification) — those are deliberate non-goals (D), orchestrated but
+# not reimplemented by alint.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/dotnet@v1
+
+rules:
+  # A1 — Every C#/VB source file carries the MIT license file header.
+  # Enforced in CI by the IDE0073 analyzer (RoslynEnforceCodeStyle=true) and
+  # declared in .editorconfig:145 (file_header_template). One behavior; the
+  # comment prefix differs (`//` for C#, `'` for VB) but the invariant text is
+  # the same three-line banner. `file_header` expresses the content-prefix logic
+  # directly (not an AST check).
+  - id: roslyn-license-header
+    kind: file_header
+    level: error
+    paths:
+      include: ["src/**/*.cs", "src/**/*.vb"]
+      exclude:
+        # Generated sources + third-party files carry their own / no header.
+        - "**/Generated/**"
+        - "**/*.Generated.cs"
+        - "**/*.generated.cs"
+        - "**/SyncedSource/**"
+    lines: 4
+    pattern: "Licensed to the \\.NET Foundation under one or more agreements\\.[\\s\\S]*licenses this file to you under the MIT license\\."
+    message: "Source file is missing the standard MIT .NET Foundation license header (enforced by IDE0073)."
+
+  # A2 — No PROTOTYPE markers anywhere in compiler source (eng/todo-check.ps1,
+  # azure-pipelines.yml:566 'Validate TODO/PROTOTYPE comments are not present').
+  - id: roslyn-no-prototype-markers
+    kind: file_content_forbidden
+    level: error
+    paths:
+      include: ["src/**", "eng/**", "scripts/**", "docs/compilers/**"]
+      exclude:
+        - "**/*.dll"
+        - "**/*.exe"
+        - "**/*.pdb"
+        - "**/*.xlf"
+        - "eng/todo-check.ps1"
+    pattern: "PROTOTYPE"
+    message: "PROTOTYPE markers are disallowed in compiler source (eng/todo-check.ps1)."
+
+  # A3 — No TODO2 markers in source (same gate as A2; distinct token).
+  - id: roslyn-no-todo2-markers
+    kind: file_content_forbidden
+    level: error
+    paths:
+      include: ["src/**", "eng/**", "scripts/**", "docs/compilers/**"]
+      exclude:
+        - "**/*.dll"
+        - "**/*.exe"
+        - "**/*.pdb"
+        - "**/*.xlf"
+        - "eng/todo-check.ps1"
+    pattern: "TODO2"
+    message: "TODO2 markers are disallowed in compiler source (eng/todo-check.ps1)."

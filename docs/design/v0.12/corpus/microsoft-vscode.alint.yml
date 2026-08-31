@@ -1,0 +1,177 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# microsoft/vscode @ 07cee71da6523e7dedab6c4ed83a2c41cd5149a6
+# Shape: TS · editor/app · yarn historically, now npm + gulp · Microsoft single-vendor.
+#
+# Where vscode's bespoke validation lives:
+#   - .github/workflows/pr.yml ........ the umbrella PR gate. The "Compile & Hygiene"
+#       step runs:  core-ci hygiene eslint valid-layers-check define-class-fields-check
+#                   vscode-dts-compile-check tsec-compile-check test-build-scripts
+#       then a separate "Check cyclic dependencies" step (checkCyclicDependencies.ts).
+#   - build/hygiene.ts ................ THE bespoke hygiene engine (also the git
+#       pre-commit hook via `npm run precommit`). Distinct behaviors:
+#         * copyright header on TS/JS (A -> file_header)
+#         * product.json must NOT carry `extensionsGallery` (A -> json_path_*)
+#         * no-unexpected-unicode w/ a curated allowlist (B -> charset_forbidden)
+#         * tab indentation (A-ish -> indent_style, but heavily exempted = C)
+#         * TS formatting (D -> tsfmt) / eslint (D) / stylelint (D)
+#         * checkCopilotEnginesVersion: extensions/copilot engines.vscode === ^{root version} (A -> cross_file_value_equals)
+#   - build/gulpfile.hygiene.ts ....... checkPackageJSON: deps/devDeps in
+#       remote/, remote/web/, build/ package.json must equal the root pin (A -> cross_file_value_equals).
+#   - build/checker/layersChecker.ts + tsconfig.<layer>.json (valid-layers-check):
+#       layer/import firewall via the TS *type checker* (D - AST). File->file edge source.
+#   - build/lib/checkCyclicDependencies.ts: import-cycle detection over compiled out (D - AST). Edge source.
+#   - build/lib/propertyInitOrderChecker.ts (define-class-fields-check): AST checker (D).
+#   - src/tsconfig.tsec.json / tsec-compile-check: Trusted Types security-typed compile (D).
+#   - .github/workflows/api-proposal-version-check.yml: bumping `// version: N` in a
+#       proposed-API d.ts must be acknowledged via a maintainer slash-command (D - git-diff + bot policy).
+#   - .github/workflows/no-engineering-system-changes.yml: PRs may not touch
+#       .github/workflows/** | build/** | package.json unless author is privileged / a
+#       sanctioned bot field-only bump (D - role + diff policy, not a tree-state check).
+#   - build/azure-pipelines/dependencies-check.yml -> check-clean-git-state.sh:
+#       after compiling /build, `git status --porcelain` must be empty = the committed
+#       build/**/*.js outputs are fresh vs the .ts sources (codegen freshness). Edge source.
+#   - .github/workflows/telemetry.yml + copilot Check-Telemetry: vscode-telemetry-extractor (D - semantic extract).
+#   - .github/workflows/monaco-editor.yml: monaco-compile-check / esm-check / typings (D - build).
+#   - 10 OS x {electron,browser,remote} test jobs + copilot vitest/sim (D - tests, matrix collapsed).
+#
+# This config expresses the repo-STATE (tree-readable) addressable subset declaratively
+# and records the rest as value-add. The AST/type-checker firewalls (layers, cycles,
+# define-class-fields, tsec) and all tool execution stay in CI by design (D).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # A1 — Microsoft copyright header on every TS/JS source file
+  #      hygiene.ts `copyrights`: first 4 lines must match the MS banner.
+  #      The filters.ts copyrightFilter excludes *.json/*.md/*.sh/etc and
+  #      copilot's own style; we approximate scope with src/ + build/ .ts/.js.
+  # ════════════════════════════════════════════════════════════════
+  - id: vscode-copyright-header
+    kind: file_header
+    paths:
+      include:
+        - "src/**/*.ts"
+        - "src/**/*.js"
+        - "build/**/*.ts"
+        - "extensions/**/*.ts"
+      exclude:
+        - "**/*.d.ts"
+        - "**/node_modules/**"
+        - "extensions/copilot/**"
+        - "**/out/**"
+        - "**/dist/**"
+        - "**/fixtures/**"
+    lines: 4
+    pattern: 'Copyright \(c\) Microsoft Corporation\. All rights reserved\.'
+    level: error
+    message: >-
+      Every TS/JS source file must start with the Microsoft copyright header
+      (build/hygiene.ts `copyrights` check; build/filters.ts copyrightHeaderLines).
+
+  # ════════════════════════════════════════════════════════════════
+  # A2 — product.json must NOT contain `extensionsGallery`
+  #      hygiene.ts `productJson`: presence of extensionsGallery -> error
+  #      (the OSS build must not ship the MS Marketplace endpoint).
+  # ════════════════════════════════════════════════════════════════
+  # NOTE: json_path with if_present silently no-ops when the key is ABSENT,
+  # so to AFFIRMATIVELY forbid the key we use file_content_forbidden on the
+  # serialized "extensionsGallery" property name.
+  - id: vscode-product-no-extensions-gallery
+    kind: file_content_forbidden
+    paths: product.json
+    pattern: '"extensionsGallery"'
+    level: error
+    message: >-
+      product.json must not declare `extensionsGallery` in the OSS build
+      (build/hygiene.ts productJson check).
+
+  # ════════════════════════════════════════════════════════════════
+  # A3 — Copilot engines.vscode pin tracks the root version
+  #      hygiene.ts checkCopilotEnginesVersion:
+  #      extensions/copilot/package.json engines.vscode === "^{root version}".
+  #      Modeled as a cross-file value equality on the bare version
+  #      (regex strips the leading caret in the copilot file).
+  # ════════════════════════════════════════════════════════════════
+  - id: vscode-copilot-engines-version
+    kind: cross_file_value_equals
+    source:
+      file: "package.json"
+      extract: { json: "$.version" }
+    targets:
+      - file: "extensions/copilot/package.json"
+        extract: { regex: '"vscode":\s*"\^([0-9]+\.[0-9]+\.[0-9]+)"' }
+    level: error
+    message: >-
+      extensions/copilot/package.json engines.vscode must equal ^{root package.json version}
+      (build/hygiene.ts checkCopilotEnginesVersion).
+
+  # ════════════════════════════════════════════════════════════════
+  # A4 — Shared dependency version coherence across sub-package.jsons
+  #      gulpfile.hygiene.ts checkPackageJSON: any dep that ALSO exists in
+  #      the root must carry the IDENTICAL version string in remote/,
+  #      remote/web/, build/ package.json. (One behavior; spot-checked on a
+  #      stable shared pin. Full "every shared key matches" is the gap noted
+  #      below as C2 -> wants a cross_file map-intersection variant.)
+  # ════════════════════════════════════════════════════════════════
+  - id: vscode-remote-dep-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "package.json"
+      extract: { json: "$.dependencies['@parcel/watcher']" }
+    targets:
+      - file: "remote/package.json"
+        extract: { json: "$.dependencies['@parcel/watcher']" }
+    level: warning
+    message: >-
+      Dependencies shared with the root package.json must pin the same version in
+      remote/package.json (build/gulpfile.hygiene.ts checkPackageJSON). Spot-check pin.
+
+  # ════════════════════════════════════════════════════════════════
+  # A5 — Tab indentation in TS sources (.editorconfig: indent_style=tab;
+  #      hygiene.ts `indentation`). Heavily exempted in filters.ts, so
+  #      scoped narrowly to core src TS to avoid the known false-positives
+  #      on generated/vendored trees (those exemptions are why the full
+  #      check is really a C tuning item).
+  # ════════════════════════════════════════════════════════════════
+  - id: vscode-tab-indentation
+    kind: indent_style
+    paths:
+      include:
+        - "src/vs/**/*.ts"
+      exclude:
+        - "**/*.d.ts"
+    style: tabs
+    level: warning
+    message: >-
+      Source uses tab indentation (.editorconfig indent_style=tab; build/hygiene.ts indentation).
+
+  # ── value-add assertions (NOT enforced gates; recorded per R3/R5) ──
+  # These assert structure vscode relies on but does not gate on with a
+  # dedicated check. Kept at warning/info and clearly out of the coverage ratio.
+
+  - id: vscode-editorconfig-exists
+    kind: file_exists
+    paths: ".editorconfig"
+    root_only: true
+    level: info
+    message: ".editorconfig present (value-add; vscode does not gate on this)."
+
+  - id: vscode-nvmrc-exists
+    kind: file_exists
+    paths: ".nvmrc"
+    root_only: true
+    level: info
+    message: ".nvmrc pins the Node version used across CI (value-add assertion)."
+
+  - id: vscode-third-party-notices-exists
+    kind: file_exists
+    paths: "ThirdPartyNotices.txt"
+    root_only: true
+    level: info
+    message: "ThirdPartyNotices.txt present (license aggregation; value-add)."

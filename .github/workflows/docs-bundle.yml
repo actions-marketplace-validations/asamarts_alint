@@ -13,11 +13,24 @@ on:
     #   Treats docs as a sixth distribution channel alongside
     #   crates.io / npm / Docker / Homebrew / GH Release.
     branches: [main]
-    tags: ["v*"]
+    tags: ["v*.*.*"]
   workflow_dispatch:
     # Lets the alint.org repo (or a maintainer) re-trigger a
     # rebuild without a code change — useful when only a brand-
     # new alint.org consumer is being onboarded.
+  release:
+    # FALLBACK trigger, for a HUMAN-published Release only. The `tags: v*` push
+    # above fires at tag-push time, BEFORE release.yml has created the GitHub
+    # Release, so it builds from the PREVIOUS published release (this workflow
+    # always checks out the latest *published* release tag, not the triggering
+    # ref). The corrective rebuild against the NEW release is dispatched explicitly
+    # by release.yml (`gh workflow run docs-bundle.yml` right after `gh release
+    # create`) -- NOT by this trigger: a Release created via the default
+    # GITHUB_TOKEN does not fire `release: published` (GitHub's anti-recursion
+    # rule), which is why relying on this trigger alone left the bundle stale until
+    # a manual dispatch for v0.14.1. This trigger still catches the rare case of a
+    # maintainer publishing a Release by hand (UI / PAT, not GITHUB_TOKEN).
+    types: [published]
 
 permissions:
   contents: write   # required to push to the docs-bundle branch
@@ -36,16 +49,221 @@ jobs:
     name: Build + push docs bundle
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Full history + tags: the bundle is built from the latest
+          # *release* tag (next step), not the ref that triggered the
+          # run, so the tags must be present.
+          fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Check out the latest published release
+        # The docs bundle — and therefore alint.org — documents the
+        # latest *released* alint, not main. Between releases, main can
+        # be ahead (new rule kinds, new bundled rulesets); those must
+        # not surface on the site as if they had shipped. Building
+        # docs-export from the release tag makes the manifest's version
+        # AND its rule-kind / ruleset counts match what users can
+        # actually install. `releases/latest` excludes drafts and
+        # prereleases, matching alint.org's check-version-pins.sh.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          LATEST_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          echo "Building docs bundle from latest release: ${LATEST_TAG}"
+          git checkout --detach "${LATEST_TAG}"
+          echo "BUNDLE_SOURCE=${LATEST_TAG}" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: docs-bundle
 
+      - name: Overlay main-tracked docs (reference + design)
+        run: |
+          set -euo pipefail
+          # docs-export (next step) builds from the release TAG checked out
+          # above, but docs/site/reference is hand-written reference for
+          # already-released behaviour (e.g. the output formats). Overlaying it
+          # from main lets reference-doc additions and fixes ship without
+          # waiting for the next release. Keep reference pages to released
+          # behaviour so this can't surface anything unreleased. A few concept /
+          # getting-started pages (concepts/index, concepts/content-from,
+          # getting-started/installation) are overlaid too, so presentation-only
+          # fixes -- e.g. dropping a low-value <likec4-view> -- reach the site
+          # without a release; like reference docs they are release-gated below
+          # and must stay within released behaviour (no count/version drift).
+          # All other docs/site prose stays pinned to the tag, so count- or
+          # version-sensitive pages can't drift ahead of the release.
+          #
+          # docs/design/ARCHITECTURE.md and ROADMAP.md are overlaid too: they
+          # are living design documents for contributors (the
+          # /docs/about/architecture/ and /docs/about/roadmap/ pages) that track
+          # main rather than waiting for the next tag. roadmap.json (the
+          # machine-readable phase contract gen-roadmap derives from ROADMAP.md,
+          # which the alint.org /roadmap/ timeline renders) is overlaid with
+          # them so the published plan tracks main; facts.json deliberately is
+          # NOT overlaid, so the surface-area counts stay pinned to the release.
+          #
+          # The LikeC4 architecture MODEL (docs/design/architecture/model) and
+          # the crate-graph page are deliberately NOT overlaid: the model is
+          # hand-authored LikeC4 that can carry unreleased architecture (e.g. a
+          # config field for an unreleased feature) and cannot be safely
+          # element-stripped without dangling <likec4-view> references, so it is
+          # pinned to the release tag (ADR-0007; docs/design/v0.14/
+          # documentation-drift.md P-C4). The tag's own docs-export emits
+          # architecture-model/ + about/crate-graph.md, so no bridge step is
+          # needed. The two diagram PAGES (architecture-diagrams gallery,
+          # how-it-works) are prose that render the now-tag-pinned model, so
+          # they stay overlaid for released-doc fixes.
+          git fetch --quiet origin main
+          git checkout origin/main -- docs/site/reference docs/design/ARCHITECTURE.md docs/design/ROADMAP.md roadmap.json \
+            docs/site/about/architecture-diagrams.md docs/site/concepts/how-it-works.md \
+            docs/site/concepts/index.md docs/site/concepts/content-from.md docs/site/getting-started/installation.md
+          echo "Overlaid reference + design docs from origin/main ($(git rev-parse --short origin/main))."
+
+      - name: Release-gate the overlaid docs (strip unreleased since-blocks)
+        # The overlay above brings main's reference + design prose into the
+        # tag-built tree, and that prose may carry `<!-- alint:since=X -->` blocks
+        # staged for a FUTURE release (e.g. a v0.14 baseline note). The release
+        # TAG's docs-export (next step) predates the P-REF stripper, so it cannot
+        # gate them — without this step an unreleased block reaches the bundle
+        # AND the live site, and a link inside it to a not-yet-shipped page (a
+        # since-gated whole page the tag correctly omits) dangles the check-links
+        # gate. Strip here with a standalone port of strip_unreleased_prose, keyed
+        # to the release tag, so nothing newer than the released version ships.
+        # This lifts the former "reference overlay stays within released
+        # behaviour by convention" limitation: since-gated prose may now live in
+        # the overlaid docs and is gated mechanically. Idempotent once the tag's
+        # own docs-export gains the stripper. (ADR-0007; documentation-drift.md
+        # P-REF. The rule-page bridge below gates separately via MAIN's xtask.)
+        run: |
+          set -euo pipefail
+          # strip-since.mjs is main-tracked tooling absent from the release tag
+          # checked out above (the bundle is built from the tag), so pull just the
+          # script from main before running it — the same reason the rule-page
+          # bridge below runs MAIN's xtask from a worktree. origin/main was already
+          # fetched by the overlay step; fetch again so this step is self-contained.
+          git fetch --quiet origin main
+          git checkout origin/main -- ci/scripts/strip-since.mjs
+          node ci/scripts/strip-since.mjs --released-version "${BUNDLE_SOURCE#v}" \
+            docs/site/reference \
+            docs/site/about/architecture-diagrams.md \
+            docs/site/concepts/how-it-works.md \
+            docs/site/concepts/index.md \
+            docs/site/concepts/content-from.md \
+            docs/site/getting-started/installation.md \
+            docs/design/ARCHITECTURE.md \
+            docs/design/ROADMAP.md
+
       - name: Generate docs-bundle/
+        # This runs the RELEASE TAG's docs-export, so it must NOT pass a flag the
+        # tag's xtask lacks — the main-overlaid reference/design docs were already
+        # release-gated by the standalone stripper step above (the tag's
+        # copy_site_tree has no stripper of its own). The rule-page bridge below
+        # gates separately, because it runs MAIN's docs-export from a worktree
+        # where `--released-version` exists.
         run: cargo run -q -p xtask -- docs-export
         # Output lives at target/docs-bundle/.
+
+      - name: Ensure roadmap.json is in the bundle (main-tracked)
+        run: |
+          set -euo pipefail
+          # docs-export copies roadmap.json into the bundle, but the bundle is
+          # built from the release TAG's xtask, which predates that copy step.
+          # roadmap.json was overlaid from main above, so copy it in here to
+          # bridge until the docs-export change ships in a release tag. Once it
+          # does this is idempotent (identical, main-tracked content).
+          cp roadmap.json target/docs-bundle/roadmap.json
+          echo "roadmap.json ($(wc -c < roadmap.json) bytes) overlaid into the bundle."
+
+      - name: Bridge main-tracked rule + concept reference pages into the bundle
+        run: |
+          set -euo pipefail
+          # The per-rule pages under rules/ AND the generated concept pages under
+          # concepts/ (fix-operations, nested-configs) are GENERATED by docs-export
+          # from docs/rules.md + the generator (xtask), so a doc-only fix on main —
+          # a corrected example, the structured-query lead-kind ordering, or a
+          # dropped <likec4-view> on a generated concept page — can't reach the site
+          # by overlaying a single file the way ARCHITECTURE.md does above; the
+          # pages have to be re-rendered. Regenerate them from a clean origin/main
+          # worktree and REFRESH the bundle's existing pages only (the --rules-only
+          # export emits both rules/ and the generated concepts/).
+          #
+          # Refresh-existing is the safety property that keeps this from
+          # surfacing anything unreleased: a rule kind added on main since the
+          # release has no page in the tag-built bundle, so its freshly
+          # generated page is never copied in. Only pages the released tool
+          # already documents get their prose/examples refreshed from main —
+          # the same "track main, stay within released behaviour" contract the
+          # docs/site/reference + ARCHITECTURE.md overlays use. Idempotent once
+          # these docs-export changes ship in a release tag.
+          git fetch --quiet origin main
+          main_tree="$(mktemp -d)"
+          git worktree add --quiet --detach "$main_tree" origin/main
+          # Clean up the worktree + temp dir on EXIT so a failure in the
+          # docs-export below can't leak a registered worktree. Harmless on this
+          # ephemeral ubuntu-latest runner (the VM is discarded), but correct
+          # hygiene and safe if the job ever moves to a persistent host.
+          trap 'git worktree remove --force "$main_tree" >/dev/null 2>&1 || true; rm -rf "$main_tree"' EXIT
+          # --rules-only: the bridge reads only rules/ below, so skip the rest of
+          # the export (long-form prose, the CLI reference, arch diagrams, …).
+          # This DOES build the alint release binary once, from main: each rule
+          # page's `alint check` block is the live output of a real run, so a
+          # doc-only refresh deploys pages WITH their output rather than a
+          # stripped-down tree+config (ADR-0014 Phase 5 — the whole point of the
+          # #82 "deploy rule-page fixes without a release" bridge). What
+          # --rules-only still skips is the CLI-reference step's SECOND
+          # `cargo build --release -p alint`; this one build (~7 min, on top of
+          # the tag build above) is the price of faithful, current output.
+          #
+          # --released-version: this bridge runs MAIN's docs-export against MAIN's
+          # schema/rules.md, so an option (schema `x-since`) or prose block
+          # (`<!-- alint:since=X -->`) introduced after the release would render
+          # on the published page. Pass the release tag so docs-export strips
+          # anything newer than it, keeping the per-rule pages within released
+          # behaviour (ADR-0007; documentation-drift.md P1). The main worktree
+          # can't read the tag itself, so it must be supplied explicitly.
+          ( cd "$main_tree" && cargo run -q -p xtask -- docs-export --rules-only --released-version "${BUNDLE_SOURCE#v}" --out "$main_tree/_bundle" )
+          refreshed=0
+          while IFS= read -r page; do
+            src="${main_tree}/_bundle/${page#target/docs-bundle/}"
+            if [[ -f "$src" ]]; then
+              cp "$src" "$page"
+              refreshed=$((refreshed + 1))
+            fi
+          done < <(find target/docs-bundle/rules target/docs-bundle/concepts -type f -name '*.md' 2>/dev/null)
+          echo "Refreshed ${refreshed} rule + concept reference page(s) from origin/main ($(git rev-parse --short origin/main))."
+
+      - name: Refresh cross-version trajectory from main's bench results
+        run: |
+          set -euo pipefail
+          # The bundle's docs are built from the release TAG (above), but the
+          # cross-version BENCH TRAJECTORY is cumulative — and each release's
+          # macro results.json lands on main as a POST-RELEASE bench-record
+          # follow-up, so it is ABSENT at the tag. Without this, /benchmarks/ on
+          # alint.org is always a release behind. Overlay main's bench results +
+          # renderer and regenerate just the trajectory JSON in the bundle.
+          #
+          # `git checkout <ref> -- <dir>` ADDS and OVERWRITES but never DELETES,
+          # so a results dir that main MOVED still survives from the tag's tree
+          # and gets rendered as part of the canonical series. The 2026-07 kbench
+          # re-baseline relocated the pre-v0.10 3900X results to
+          # `linux-x86_64-ryzen-3900x/`; without dropping the tag's copy first,
+          # those 20 stale dirs stayed at `linux-x86_64/` and spliced a foreign
+          # host into the trajectory (kbench v0.10+ rows sitting on top of 3900X
+          # v0.5.7-v0.9.23 rows, under one fingerprint). Delete first so main's
+          # layout REPLACES the tag's rather than merging with it. Safe here: the
+          # bundle payload is already assembled under target/docs-bundle/, and
+          # nothing after this step reads the working tree's docs/benchmarks.
+          git fetch --quiet origin main
+          rm -rf docs/benchmarks
+          git checkout origin/main -- docs/benchmarks xtask/scripts/render-history.py
+          python3 xtask/scripts/render-history.py \
+            --json-out "$(pwd)/target/docs-bundle/benchmarks-trajectory.json"
+          echo "Trajectory refreshed from origin/main ($(git rev-parse --short origin/main))."
 
       - name: Push to docs-bundle branch
         env:
@@ -83,7 +301,7 @@ jobs:
           git add -A
           git -c user.name="alint docs bot" \
               -c user.email="asamarts@alint.org" \
-              commit -m "Docs bundle from ${SOURCE_SHA}" || {
+              commit -m "Docs bundle from release ${BUNDLE_SOURCE} (run triggered by ${SOURCE_SHA})" || {
             echo "No bundle changes; skipping push."
             exit 0
           }

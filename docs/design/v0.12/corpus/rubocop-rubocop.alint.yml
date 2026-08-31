@@ -1,0 +1,378 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# rubocop/rubocop @ 43942e260071e869bccc7497bbba82d5d458530e
+# Shape: Ruby · CLI/linter gem · bundler + rake · community governance.
+#
+# rubocop is the canonical Ruby static analyzer. Its OWN bespoke-validation
+# surface (what THIS repo enforces on its own source) lives in three places:
+#
+#   1. .github/workflows/*.yml — CI gates:
+#        rubocop.yml ...... rake spec / ascii_spec / prism_spec (RSpec suite,
+#                           Ruby 2.7..head × ubuntu/windows/jruby) +
+#                           documentation_syntax_check (parses every cop's
+#                           YARD @example as Ruby)
+#        linting.yml ...... internal_investigation (rubocop on itself) +
+#                           yamllint (strict) on all YAML
+#        spell_checking.yml codespell with a custom ignore-list
+#        github_release.yml on a v* tag, publish relnotes/<tag>.md
+#   2. spec/project_spec.rb — a HAND-ROLLED structural validator suite over
+#        config/default.yml + CHANGELOG.md + changelog/*.md (the richest
+#        alint-shaped surface; see the A-items below)
+#   3. tasks/*.rake + CONTRIBUTING.md/AGENTS.md — release + review conventions
+#
+# The execution-bound checks (RSpec, rubocop-on-itself, yamllint, codespell,
+# YARD example parsing) are alint NON-GOALS (D) — they run a tool / parse an
+# AST. alint can shell-wrap them (command/command_idempotent) for a single
+# entrypoint; those wraps are recorded as value-add, NOT as the check itself.
+#
+# What follows is the STATE-checkable subset of project_spec.rb + the repo
+# conventions, expressed declaratively, plus structural assertions alint adds.
+# Every native rule below was confirmed against the pinned clone with
+# `alint check` (see the case-study record).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # SHELL-OUTS — the D tools, orchestrated through one entrypoint
+  # (value-add; NOT counted as alint expressing the check's logic)
+  # ════════════════════════════════════════════════════════════════
+
+  # `bundle exec rake internal_investigation` == rubocop on its own source.
+  # The Ruby AST lints are intrinsically a tool run; wrap, don't reimplement.
+  - id: rubocop-self-lint
+    kind: command
+    paths: ".rubocop.yml"
+    command: ["bundle", "exec", "rake", "internal_investigation"]
+    timeout: 600
+    level: error
+
+  # The RSpec suite (rubocop.yml `spec` job). Execution → shell-out.
+  - id: rubocop-spec
+    kind: command
+    paths: ".rspec"
+    command: ["bundle", "exec", "rake", "spec"]
+    timeout: 600
+    level: error
+
+  # documentation_syntax_check: parses every cop's YARD @example as Ruby.
+  # AST parsing → shell-out.
+  - id: rubocop-doc-syntax-check
+    kind: command
+    paths: "Rakefile"
+    command: ["bundle", "exec", "rake", "documentation_syntax_check"]
+    timeout: 300
+    level: error
+
+  # codespell with the repo's custom ignore-list (.codespellrc).
+  - id: rubocop-codespell
+    kind: command
+    paths: ".codespellrc"
+    command: ["bundle", "exec", "rake", "codespell"]
+    timeout: 120
+    level: warning
+
+  # ════════════════════════════════════════════════════════════════
+  # A-ITEMS — project_spec.rb structural invariants, expressed natively
+  # ════════════════════════════════════════════════════════════════
+
+  # NOTE: project_spec "sorts configuration keys alphabetically" (lines
+  # 83-86) — config/default.yml's top-level cop keys must be sorted — was
+  # recorded as a C TUNING candidate blocked on a missing line-filter.
+  # ordered_block now HAS `select:`, so the non-contiguous cop-header lines
+  # (`Department/Name:` at col 0, each followed by indented option lines)
+  # CAN be isolated. But it STILL does not close cleanly, and is left out:
+  # verified at this pin that the headers are NOT sorted under any of
+  # ordered_block's comparators (lexical/lexical-ci/numeric) — project_spec
+  # sorts the PARSED `config.keys` under RuboCop's loader collation, which
+  # disagrees with a literal-line sort (e.g. `Gemspec/RequireMFA` lands out
+  # of lexical order). A `select:`-driven ordered_block would FALSE-POSITIVE
+  # on the clean tree. Deferred: this needs a collation-aware comparator,
+  # not a line-filter. Intentionally omitted from this config.
+
+  # project_spec Changelog "has newline at end of file" (line 192).
+  - id: rubocop-changelog-final-newline
+    kind: final_newline
+    paths: "CHANGELOG.md"
+    level: warning
+    message: "CHANGELOG.md must end with a newline (project_spec.rb)."
+    fix:
+      file_append_final_newline: {}
+
+  # project_spec Changelog "has link definitions for all implicit links"
+  # is a cross-reference check (every `[name][]` has a `[name]: http`).
+  # The invariant that the contributor link block exists is partially
+  # expressible: assert the canonical maintainer link line is present.
+  - id: rubocop-changelog-has-contributor-links
+    kind: file_content_matches
+    paths: "CHANGELOG.md"
+    pattern: '(?m)^\[@\S+\]: https?://'
+    level: info
+    message: |
+      CHANGELOG.md must carry the trailing `[@user]: https://github.com/user`
+      contributor link block (project_spec.rb "has link definitions for all
+      implicit links"). Full per-link cross-check needs a new primitive.
+
+  # ── B1 NOW CLOSED by for_each_match (v0.12) ───────────────────────
+  # project_spec's per-line "has Changelog format" entry grammar
+  # (spec/project_spec.rb "describe entry" / "describe body") is a
+  # per-line conjunction over every `* ` entry — exactly the shape
+  # for_each_match expresses (file_content_matches asserts existence,
+  # not a per-line for-all). Two of its assertions are STATE-checkable
+  # against the literal entry line and are now enforced natively:
+  #
+  #   • "does not include a [Fix #x] directive" — body must not carry a
+  #     `[Fix #N]`/`[Fixes #N]` directive (project_spec uses /i).
+  #   • "has a colon and a whitespace at the end" — every entry that
+  #     carries an issue/PR link (`^\*\s*\[`) must include `): `.
+  #
+  # (The remaining body sub-assertions — "does not start with a lower
+  # case", "ends with a punctuation" — need the leading-link + trailing-
+  # contributor STRIP that project_spec does before testing the body;
+  # for_each_match has no split:/separator:, so they stay deferred.)
+  - id: rubocop-changelog-entry-no-fix-directive
+    kind: for_each_match
+    paths: ["CHANGELOG.md"]
+    select: '^\* '
+    require:
+      forbid: ['(?i)\[Fix(es)? #']
+    level: warning
+    message: |
+      A CHANGELOG.md entry must not embed a `[Fix #N]` / `[Fixes #N]`
+      directive (project_spec.rb entry body "does not include a
+      [Fix #x] directive").
+
+  - id: rubocop-changelog-entry-link-colon
+    kind: for_each_match
+    paths: ["CHANGELOG.md"]
+    select: '^\* \['
+    require:
+      matches: ['\): ']
+    level: warning
+    message: |
+      A linked CHANGELOG.md entry (`* [#N](url)…`) must close its link
+      with `): ` before the body (project_spec.rb "has a colon and a
+      whitespace at the end").
+
+  # CHANGELOG.md begins with the "## master (unreleased)" header that the
+  # changelog merge tooling (tasks/changelog.rb FIRST_HEADER) and the
+  # cut_release task (add_header_to_changelog) both pivot on.
+  - id: rubocop-changelog-unreleased-header
+    kind: file_content_matches
+    paths: "CHANGELOG.md"
+    pattern: '## master \(unreleased\)'
+    level: warning
+    message: |
+      CHANGELOG.md must contain the `## master (unreleased)` header that the
+      changelog:merge and cut_release tasks anchor on (tasks/changelog.rb).
+
+  # changelog/ is the pending-entry inbox; project_spec "future entries does
+  # not have a directory" (lines 316-318) requires every child be a file
+  # (no subdirectories). dir_only_contains expresses exactly that.
+  # NOTE: at this pin changelog/ holds only .gitkeep (a clean post-release
+  # state), so this currently has nothing to reject — but it is a real
+  # enforced rule that fires the moment a subdir appears.
+  - id: rubocop-changelog-no-subdirs
+    kind: dir_only_contains
+    select: "changelog"
+    allow: ["*.md", ".gitkeep"]
+    level: info
+    message: |
+      changelog/ may only contain entry files, never subdirectories
+      (project_spec.rb "future entries does not have a directory").
+
+  # project_spec per-entry "starts with `new_`, `fix_`, or `change_`"
+  # (lines 343-345): every changelog/*.md entry filename must carry the
+  # type prefix. filename_regex expresses this directly (cf. nodejs-node's
+  # CHANGELOG_*.md filename rule). Latent: 0 entries at this pin.
+  - id: rubocop-changelog-entry-filename
+    kind: filename_regex
+    paths:
+      include: ["changelog/*.md"]
+    pattern: '^(new|fix|change)_.+\.md$'
+    level: warning
+    message: |
+      changelog entry files must be named `{new,fix,change}_<desc>.md`
+      (project_spec.rb "starts with `new_`, `fix_`, or `change_`").
+
+  # B1 (cont.) — the per-ENTRY grammar applied to pending changelog/*.md
+  # files (project_spec "For #{path}": "has a link to the issue or pull
+  # request address at the beginning" + "has a link to the contributors
+  # at the end"). Each `* ` line in a pending entry must BOTH open with a
+  # `[#N](github issues|pull url):` link AND close with a `([@user][])`
+  # contributor signature — a per-line conjunction → for_each_match.
+  # Latent at this pin (changelog/ holds only .gitkeep), fires the moment
+  # a real entry lands; it is the highest-value gate of the inbox.
+  - id: rubocop-changelog-pending-entry-grammar
+    kind: for_each_match
+    paths:
+      include: ["changelog/*.md"]
+    select: '^\* '
+    require:
+      matches:
+        - '^\* \[#\d+\]\(https://github\.com/rubocop/rubocop/(issues|pull)/\d+\): '
+        - '\(\[@\S+\]\[\](, \[@\S+\]\[\])*\)$'
+    level: warning
+    message: |
+      A pending changelog/*.md entry must open with
+      `* [#N](https://github.com/rubocop/rubocop/{issues,pull}/N): ` and
+      end with a `([@user][])` contributor signature (project_spec.rb
+      "has a link to the issue or pull request address at the beginning"
+      + "has a link to the contributors at the end").
+
+  # The .gitkeep sentinel keeps changelog/ tracked even when empty.
+  - id: rubocop-changelog-dir-gitkeep
+    kind: file_exists
+    paths: "changelog/.gitkeep"
+    level: info
+    message: "changelog/ must stay a tracked directory (its .gitkeep sentinel)."
+
+  # github_release.yml publishes `relnotes/<tag>.md`; the current release
+  # (lib/rubocop/version.rb STRING = 1.87.0) must have its notes file.
+  # This is the release-pairing invariant: a tag without relnotes/<tag>.md
+  # produces an empty GitHub Release body.
+  - id: rubocop-relnotes-for-current-version
+    kind: file_exists
+    paths: "relnotes/v1.87.0.md"
+    level: warning
+    message: |
+      relnotes/v<version>.md must exist for the version in
+      lib/rubocop/version.rb (github_release.yml `bodyFile:
+      relnotes/${tag}.md`). Pinned version: 1.87.0.
+
+  # ── Documented version-coherence (release-time sync; partial) ─────
+  # cut_release.rake hand-syncs the gem version (version_sans_patch) into
+  # the docs. At this pin version.rb=1.87.0 and BOTH docs agree at 1.87:
+  #   installation.adoc:    gem 'rubocop', '~> 1.87'
+  #   integration_*.adoc:   rev: v1.87.0
+  # (README.md still pins '~> 1.82' — it LAGS the cut, so it is deliberately
+  # NOT asserted here; that drift is the case-study finding that this sync is
+  # a release-time mutation, not a continuously-gated invariant.)
+  - id: rubocop-docs-version-coherence
+    kind: cross_file_value_equals
+    source:
+      file: "docs/modules/ROOT/pages/installation.adoc"
+      extract: { regex: "gem 'rubocop', '~> ([0-9]+\\.[0-9]+)'" }
+    targets:
+      - file: "docs/modules/ROOT/pages/integration_with_other_tools.adoc"
+        extract: { regex: "rev: v([0-9]+\\.[0-9]+)\\.[0-9]+" }
+    level: info
+    message: |
+      The gem version pinned in docs/installation.adoc (`~> X.Y`) and the
+      `rev: vX.Y.Z` in integration_with_other_tools.adoc are hand-synced by
+      cut_release.rake and must agree on X.Y.
+
+  # ════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD — structure the repo does NOT gate on (recorded
+  # separately; NOT in the coverage denominator per R3/R5)
+  # ════════════════════════════════════════════════════════════════
+
+  # Trailing whitespace is enforced by Layout/TrailingWhitespace via rubocop
+  # itself (D, AllowInHeredoc:false) over *.rb; alint adds it for the YAML/MD
+  # config surface (.editorconfig sets trim_trailing_whitespace except *.md).
+  - id: rubocop-no-trailing-ws-config
+    kind: no_trailing_whitespace
+    paths:
+      include: ["config/*.yml", ".github/workflows/*.yml", "*.gemspec"]
+    level: info
+    fix:
+      file_trim_trailing_whitespace: {}
+
+  # .rubocop.yml (self-lint config) declares the four plugins the build needs.
+  - id: rubocop-self-config-plugins
+    kind: file_content_matches
+    paths: ".rubocop.yml"
+    pattern: 'rubocop-internal_affairs'
+    level: info
+    message: ".rubocop.yml should load rubocop-internal_affairs for self-lint."
+
+  # Gemspec hygiene: MFA-required + MIT license declared.
+  - id: rubocop-gemspec-mfa-required
+    kind: file_content_matches
+    paths: "rubocop.gemspec"
+    pattern: "rubygems_mfa_required.*true"
+    level: info
+    message: "rubocop.gemspec should require MFA for publishing."
+
+  # Key bespoke validator + convention files exist.
+  - id: rubocop-project-spec-exists
+    kind: file_exists
+    paths: "spec/project_spec.rb"
+    level: warning
+    message: "spec/project_spec.rb is the hand-rolled structural validator."
+  - id: rubocop-default-config-exists
+    kind: file_exists
+    paths: "config/default.yml"
+    level: error
+  - id: rubocop-contributing-exists
+    kind: file_exists
+    paths: "CONTRIBUTING.md"
+    level: warning
+  - id: rubocop-codespellrc-exists
+    kind: file_exists
+    paths: ".codespellrc"
+    level: info
+  - id: rubocop-editorconfig-exists
+    kind: file_exists
+    paths: ".editorconfig"
+    level: info
+
+# ══════════════════════════════════════════════════════════════════
+# GENUINE NON-REPLACEABLES (stay in CI — out of alint's no-build scope)
+# ══════════════════════════════════════════════════════════════════
+#   - The RSpec suite across Ruby 2.7..head × ubuntu/windows/jruby +
+#     ascii_spec (ASCII external encoding) + prism_spec (Prism parser).
+#     One D behavior "tests pass" (matrix collapsed per R1), plus the
+#     encoding/parser variants as distinct guards.
+#   - internal_investigation: rubocop lints its own source (Ruby AST). D.
+#   - documentation_syntax_check: parses every cop's YARD @example as Ruby
+#     across multiple parser generations (Ruby25/26/27/Prism). AST → D.
+#   - yamllint --strict on all YAML (linting.yml lint-yaml). YAML lint → D.
+#   - codespell (spell_checking.yml + codespell.rake). NLP spell-check → D.
+#   - "require all of lib with -w -W2 emits no warnings" (project_spec
+#     389-396): runs Ruby with warnings → D.
+#   - lint-ruby-without-bundler: packages the gem + installs + runs rubocop
+#     (a build+run smoke test). D.
+#   - references:verify (tasks/references.rake): HTTP-GETs every cop's
+#     Reference URL. Network → D.
+#   - the per-cop project_spec invariants that need a YAML AST + the cop
+#     REGISTRY (config-key set == registered cops; SupportedStyles match
+#     EnforcedStyle; @safety YARD tag implies Safe:false): these resolve a
+#     code-derived set against config, not static file content → D.
+#
+# ══════════════════════════════════════════════════════════════════
+# NEW-RULE-KIND CANDIDATES (B) — would close the remaining gaps
+# ══════════════════════════════════════════════════════════════════
+#   1. changelog_entry_format — per-line Markdown changelog-entry grammar
+#      (project_spec lines 187-285): each `* ` entry must have a leading
+#      `[#N](github-url):` issue/PR link, a body that starts uppercase and
+#      ends in punctuation, NO `[Fix #x]` directive, and a trailing
+#      `([@user][])` contributor signature with single-space-after-comma.
+#      ~15 sub-assertions over one line grammar; no native kind expresses
+#      "every line matching P must also match Q1..Qn". HIGH corpus value
+#      (Keep-a-Changelog / changelog-d / towncrier shops all hand-roll it).
+#      >> LARGELY CLOSED in v0.12 by `for_each_match` (the per-line
+#      conjunction kind). Now ENFORCED above: rubocop-changelog-entry-
+#      no-fix-directive (forbid `[Fix #N]`), rubocop-changelog-entry-link-
+#      colon (linked entries close with `): `), and the full per-entry
+#      grammar on the pending inbox (rubocop-changelog-pending-entry-
+#      grammar: link-at-start + contributor-at-end). RESIDUAL: the two body
+#      sub-assertions ("does not start lower-case", "ends with punctuation")
+#      still need project_spec's leading-link + trailing-contributor STRIP
+#      before testing the body — for_each_match has no split:/separator:, so
+#      that slice stays deferred.
+#   2. implicit_link_resolves — every `[name][]` reference in a Markdown
+#      file has a matching `[name]: http...` link definition in the SAME
+#      file (project_spec lines 371-378). An intra-file reference-graph /
+#      orphan check. Generic to any reference-style Markdown.
+#   3. cross_file_value_equals(version) source-of-truth from a Ruby const:
+#      version.rb `STRING = '1.87.0'` is the canonical version; README +
+#      docs + issue-template restate it. extract: {regex} handles the
+#      targets but the canonical "single source → N restatements, report
+#      every drift" is exactly cross_file_value_equals — the gap is only
+#      that the repo does not GATE it (README is allowed to lag), so it is
+#      a convention, not an enforced check.

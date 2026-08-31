@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for spring-projects/spring-boot @ bcecf922c6ee98d9451f414b4bf2213ed8f47922
+# v0.12 case study (Stage A). Large JVM/Gradle multi-module web framework
+# (128 modules, 173 starters). Bespoke validation lives in buildSrc custom
+# Gradle plugins (checkstyle conventions, ArchUnit architecture rules,
+# Check* tasks for the Spring factories / AutoConfiguration registries).
+#
+# Most of Spring Boot's enforced surface is D (tool/AST/semantic execution):
+# spring-javaformat, checkstyle (umbrella), ArchUnit architecture rules,
+# NullAway, BOM dependency-graph resolution, prohibited-classpath-deps,
+# the test suite. The A-items below are the text/structure checks alint
+# expresses natively; the rest are recorded as value-add or D.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/java@v1
+  - alint://bundled/ci/github-actions@v1
+
+# ---------------------------------------------------------------------------
+# Bundle tuning for this repo's shape
+# ---------------------------------------------------------------------------
+rules:
+  # README/LICENSE live as AsciiDoc / .txt here, not Markdown.
+  - id: oss-readme-exists
+    kind: file_exists
+    paths: ["README.adoc", "README.md", "README"]
+    root_only: true
+    level: warning
+
+  # Spring Boot pins SOME actions to SHA and others to floating tags
+  # (actions/checkout@v6 etc.). Keep the OpenSSF signal but non-blocking.
+  - id: gha-pin-actions-to-sha
+    kind: yaml_path_matches
+    paths: [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+    path: "$.jobs.*.steps[*].uses"
+    matches: '^[a-zA-Z0-9._/-]+@[a-f0-9]{40}$'
+    if_present: true
+    level: info
+
+  # =========================================================================
+  # A-ITEMS — checks Spring Boot enforces that alint expresses natively.
+  # These are the coverage_today numerator. Each is validated against the
+  # pinned clone with `alint check` (see check_summary in the record).
+  # =========================================================================
+
+  # A1 — ASF Apache-2.0 license header on every Java source file.
+  # Enforced by checkstyle `SpringHeaderCheck` + config/checkstyle/checkstyle-header.txt,
+  # and required by CONTRIBUTING.adoc ("Add the ASF license header ... to all new .java").
+  - id: sb-java-license-header
+    kind: file_header
+    paths:
+      include: ["**/*.java"]
+      exclude:
+        - "**/build/**"
+        - "**/generated/**"
+        - "**/generated-source/**"
+    lines: 16
+    pattern: 'Licensed under the Apache License, Version 2\.0'
+    level: error
+    message: "Every .java file must carry the ASF Apache-2.0 license header."
+
+  # A2 — AutoConfiguration.imports registry files are alphabetically sorted.
+  # Enforced by buildSrc CheckAutoConfigurationImports (entries sorted
+  # alphabetically). 99 such files in the tree; a flat newline-delimited
+  # list of fully-qualified class names.
+  - id: sb-autoconfig-imports-sorted
+    kind: ordered_block
+    paths:
+      include:
+        - "**/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports"
+    # Whole-file region: first non-blank line through EOF. The file is a
+    # flat, newline-delimited list of fully-qualified class names.
+    start: '^\S'
+    end: '\z'
+    comparator: lexical
+    level: error
+    message: "AutoConfiguration.imports entries must be sorted alphabetically (CheckAutoConfigurationImports)."
+
+  # A3 — Import firewall: forbidden imports (subset of checkstyle
+  # IllegalImportCheck illegalPkgs/illegalClasses). alint's import_gate
+  # matches the extracted import target with a regex + allow globs.
+  - id: sb-import-firewall
+    kind: import_gate
+    paths:
+      include: ["**/*.java"]
+      exclude: ["**/build/**", "**/generated/**"]
+    language: java
+    # Single alternation regex matched against the extracted import target.
+    # Subset of checkstyle IllegalImportCheck illegalPkgs.
+    forbid: '^(sun\.|com\.google\.common\.|org\.jetbrains\.annotations\.|io\.micrometer\.shaded\.|org\.testcontainers\.shaded\.)'
+    level: error
+    message: "Forbidden import (checkstyle IllegalImportCheck): use the approved alternative."
+
+  # A4 — Source-pattern ban: tests must use AssertJ, not JUnit assertions.
+  # One representative of the checkstyle RegexpSinglelineJava family
+  # (also bans assertThatThrownBy(, Mockito.when, List.of(), etc.).
+  - id: sb-no-junit-assert-import
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.java"]
+      exclude: ["**/build/**", "**/generated/**"]
+    pattern: 'import org\.junit\.Assert;'
+    level: error
+    message: "Use AssertJ assertions, not org.junit.Assert (checkstyle convention)."
+
+  # =========================================================================
+  # VALUE-ADD — structure alint can assert that Spring Boot does NOT gate on.
+  # Recorded separately (R3/R5); NOT in the A/B/C/D coverage ratio.
+  # =========================================================================
+
+  # The custom build-logic checkstyle/nohttp config files exist.
+  - id: sb-checkstyle-config-present
+    kind: file_exists
+    paths: ["config/checkstyle/checkstyle.xml"]
+    level: info
+    message: "value-add: the shared checkstyle config should be present."
+
+  - id: sb-import-control-present
+    kind: file_exists
+    paths: ["config/checkstyle/import-control.xml"]
+    level: info
+    message: "value-add: the package-layering import-control config should be present."
+
+  - id: sb-nohttp-allowlist-present
+    kind: file_exists
+    paths: ["config/nohttp/allowlist.lines"]
+    level: info
+    message: "value-add: the nohttp allowlist should be present."
+
+  # DCO is enforced (CONTRIBUTING + .github/dco.yml); assert the config exists.
+  - id: sb-dco-config-present
+    kind: file_exists
+    paths: [".github/dco.yml"]
+    level: info
+    message: "value-add: DCO sign-off is required; the dco.yml config should be present."

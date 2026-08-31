@@ -1,0 +1,205 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for pytorch/pytorch @ 7d2d4404beef557bc5c2e1c8286e600ed30286db
+# v0.12 case-study Stage-A draft. Expresses the A-bucket (natively expressible)
+# slice of PyTorch's enforced validation surface. Almost all of PyTorch's
+# bespoke checks live in .lintrunner.toml (58 linters) + .github/workflows/lint.yml.
+# The grep-based lintrunner linters map cleanly onto file_content_forbidden;
+# the codegen-freshness git-diff gates map onto generated_file_fresh.
+#
+# NOT expressed here (bucket D, recorded in the case-study record): every
+# tool-execution linter (flake8/ruff/pyfmt/mypy/pyrefly/clang-format/clang-tidy/
+# codespell/shellcheck/actionlint/cmakelint), the test/build jobs, the BC/API
+# linter (lint-bc), OSSF scorecard, link/xref checks, and the AST-shaped
+# bespoke validators (set_linter, import_linter, docstring_linter,
+# check_kernel_launches, nativefunctions round-trip, gb_registry, stable-shims).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # ---- whitespace / encoding hygiene (lintrunner TABS/SPACES + quick-checks) ----
+
+  # lintrunner SPACES: no trailing blank/space at EOL, repo-wide.
+  - id: pt-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*"]
+      exclude:
+        - "third_party/**"
+        - "**/*.svg"
+        - "**/*.patch"
+        - "**/contrib/**"
+    level: warning
+
+  # lintrunner TABS: no hard tabs (except Makefiles / .gitattributes / .gitmodules).
+  - id: pt-no-tabs
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*"]
+      exclude:
+        - "**/Makefile"
+        - "third_party/**"
+        - "**/contrib/**"
+        - "**/.gitattributes"
+        - "**/.gitmodules"
+        - "**/*.svg"
+        - "**/*.patch"
+        - ".lintrunner.toml"
+    pattern: "\t"
+    level: warning
+    message: "saw some tabs; PyTorch indents with spaces (lintrunner TABS)"
+
+  # quick-checks: no non-breaking spaces (U+00A0) anywhere.
+  - id: pt-no-nbsp
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*"]
+      exclude: ["third_party/**", "**/*.patch", ".alint.yml"]
+    pattern: " "
+    level: warning
+    message: "non-breaking space (U+00A0); convert to a normal space (lint.yml quick-checks)"
+
+  # quick-checks: no versionless `#!.../python` shebangs (must be python3).
+  - id: pt-no-versionless-python-shebang
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*"]
+      exclude: ["third_party/**"]
+    pattern: '(?m)^#!.*python$'
+    level: warning
+    message: "versionless python shebang; specify python3 (lint.yml quick-checks)"
+
+  # ---- forbidden-API / forbidden-content greps (a representative slice) ----
+
+  # lintrunner INCLUDE: C/C++ must use #include <...>, never #include "...".
+  - id: pt-no-quoted-include
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.{h,hpp,cpp,cc,cxx,cu,cuh}"]
+      exclude: ["third_party/**", "**/fb/**"]
+    pattern: '#include "'
+    level: warning
+    message: 'use #include <...> not #include "..." (lintrunner INCLUDE)'
+
+  # lintrunner CUBINCLUDE: do not include CUB headers directly.
+  - id: pt-no-cub-include
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.{h,hpp,cpp,cc,cxx,cu,cuh}"]
+      exclude: ["third_party/**"]
+    pattern: '#include <cub/'
+    level: warning
+    message: "do not #include <cub/...> directly (lintrunner CUBINCLUDE)"
+
+  # lintrunner RAWCUDA: forbid raw cudaStreamSynchronize.
+  - id: pt-no-raw-cuda-stream-sync
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.{h,hpp,cpp,cc,cxx,cu,cuh}"]
+      exclude: ["third_party/**", "c10/**"]
+    pattern: 'cudaStreamSynchronize'
+    level: warning
+    message: "raw cudaStreamSynchronize; use the c10 CUDA API (lintrunner RAWCUDA)"
+
+  # lintrunner META_NO_CREATE_UNBACKED: forbid create_unbacked* in meta kernels.
+  - id: pt-meta-no-create-unbacked
+    kind: file_content_forbidden
+    paths:
+      include: ["torch/_meta_registrations.py"]
+    pattern: 'create_unbacked'
+    level: warning
+    message: "create_unbacked in meta registration (lintrunner META_NO_CREATE_UNBACKED)"
+
+  # lintrunner SYMPY_MINMAX: forbid sympy.Min / sympy.Max.
+  - id: pt-no-sympy-minmax
+    kind: file_content_forbidden
+    paths:
+      include: ["torch/**/*.py"]
+    pattern: 'sympy\.(Min|Max)'
+    level: warning
+    message: "use torch utils, not sympy.Min/Max (lintrunner SYMPY_MINMAX)"
+
+  # lintrunner COPYRIGHT: no proprietary/confidential source markers.
+  - id: pt-no-confidential-marker
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*"]
+      exclude: [".lintrunner.toml", "**/fb/**", "third_party/**", ".alint.yml"]
+    pattern: 'Confidential and proprietary'
+    level: error
+    message: "proprietary/confidential code must not be contributed (lintrunner COPYRIGHT)"
+
+  # lintrunner PYPIDEP: no unpinned `pip install <pkg>` under .github/ shell.
+  - id: pt-no-unpinned-pypi-in-ci
+    kind: file_content_forbidden
+    paths:
+      include: [".github/**"]
+      exclude: ["**/*.py", "**/*.md", "**/*.rst", "**/*.diff", "**/fb/**"]
+    pattern: '(?:pip|pip3|python -m pip|python3 -m pip) install ([a-zA-Z0-9][A-Za-z0-9._-]+)([^/=<>~!]+)[A-Za-z0-9._*+!-]*$'
+    level: warning
+    message: "unpinned PyPI install in CI; pin to ==version (lintrunner PYPIDEP)"
+
+  # ---- filename invariants (lint.yml quick-checks: cross-OS-safe names) ----
+  - id: pt-cross-os-filenames
+    kind: filename_regex
+    paths:
+      include: ["**/*"]
+      exclude: ["third_party/**", ".git/**"]
+    pattern: '^[^<>:"|?*]*[^<>:"|?* .]$'
+    stem: false
+    level: warning
+    message: "filename not valid across all OSes (no <>:\"|?* and no trailing space/dot) (lint.yml quick-checks)"
+
+  # ---- codegen freshness (lint.yml workflow-checks / toc / doc-redirects) ----
+
+  # workflow-checks: .github/workflows/generated-* are generated from
+  # .github/templates via generate_ci_workflows.py; regen must be a no-op.
+  #
+  # NOTE (case-study B-finding): the natural alint kind here is
+  # generated_file_fresh, but it ONLY supports a single STDOUT-emitting
+  # generator; generate_ci_workflows.py writes ~30 files IN PLACE and only
+  # prints the paths. So the real check is `regen && git diff --exit-code`
+  # over many files -> command_idempotent is the only honest expression
+  # (orchestration value-add, NOT alint expressing the diff logic). This is
+  # the new-kind gap: a multi-file "generate-then-tree-clean" primitive.
+  - id: pt-generated-workflows-fresh
+    kind: command_idempotent
+    command: ["bash", "-c", ".github/scripts/generate_ci_workflows.py >/dev/null && .github/scripts/report_git_status.sh .github/workflows"]
+    workdir: "."
+    timeout: 120
+    level: error
+    message: "committed generated-* workflows are stale; run .github/scripts/generate_ci_workflows.py (lint.yml workflow-checks)"
+
+  # ---- cross-file value coherence (lintrunner CMAKE_MINIMUM_REQUIRED) ----
+
+  # Every cmake_minimum_required(...) must declare the single canonical version
+  # that the root CMakeLists.txt declares. cross-file value coherence.
+  - id: pt-cmake-minimum-version-coherent
+    kind: cross_file_value_equals
+    source:
+      file: CMakeLists.txt
+      extract:
+        regex: 'cmake_minimum_required\(VERSION ([0-9]+\.[0-9]+)'
+    targets:
+      files: "**/CMakeLists.txt"
+      extract:
+        regex: 'cmake_minimum_required\(VERSION ([0-9]+\.[0-9]+)'
+    allow_missing_target: true
+    level: warning
+    message: "cmake_minimum_required version must match the root CMakeLists.txt (lintrunner CMAKE_MINIMUM_REQUIRED)"
+
+  # ---- structure / metadata that PyTorch ships (value-add, low severity) ----
+  - id: pt-editorconfig-exists
+    kind: file_exists
+    paths: [".editorconfig"]
+    level: info
+
+  - id: pt-lintrunner-config-exists
+    kind: file_exists
+    paths: [".lintrunner.toml"]
+    level: info

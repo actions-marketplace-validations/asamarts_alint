@@ -43,7 +43,7 @@ during the v0.9 development cut). One sub-directory per phase:
 - `v0.9.2-memory-pass/criterion/`
 - `v0.9.3-dispatch-flip/criterion/`
 - `v0.9.4-content-rules/criterion/` — the v0.9.4 published numbers
-  (also live under `micro/results/linux-x86_64/v0.9.4/`; this copy
+  (also live under `micro/results/linux-x86_64-ryzen-3900x/v0.9.4/`; this copy
   is intentional redundancy for narrative continuity in
   `docs/design/v0.9/`).
 

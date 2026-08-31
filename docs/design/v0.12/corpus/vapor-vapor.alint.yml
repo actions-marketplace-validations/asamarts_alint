@@ -1,0 +1,94 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for vapor/vapor @ 712b0919a3ba772f7402ccaf07cdb6ca823dd650
+# (Swift web framework, SwiftPM, community governance).
+#
+# IMPORTANT (v0.12 case-study finding): Vapor's ENFORCED validation surface is
+# almost entirely DELEGATED to external `vapor/ci` reusable workflows
+# (run-unit-tests.yml / submit-deps.yml) plus tool execution (swift test,
+# CodeQL) — all D non-goals. There is NO in-repo formatter/linter config, NO
+# lockfile (Package.resolved is gitignored), NO codegen-freshness diff, and NO
+# per-file license headers (2/293 sources carry SPDX). So everything below is
+# alint VALUE-ADD (structure Vapor does not itself gate on), NOT coverage of an
+# enforced check. There is no swift bundle yet, so we extend oss-baseline only.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+# Severities tuned so the value-add baseline is informative, not noisy, against
+# this repo's actual layout.
+rules:
+  # --- Structure / metadata alint can assert (value-add) -----------------
+  - id: vapor-package-manifest-exists
+    kind: file_exists
+    paths: ["Package.swift"]
+    root_only: true
+    level: error
+    message: "A SwiftPM package must declare a root Package.swift."
+
+  - id: vapor-swift-tools-version-declared
+    kind: file_header
+    paths: "Package.swift"
+    pattern: '^// swift-tools-version:\d+\.\d+'
+    level: error
+    message: "Package.swift must begin with a swift-tools-version comment."
+
+  - id: vapor-notices-exists
+    kind: file_exists
+    paths: ["NOTICES.txt"]
+    root_only: true
+    level: warning
+    message: "Third-party derivations are attributed in NOTICES.txt."
+
+  - id: vapor-agents-policy-exists
+    kind: file_exists
+    paths: ["AGENTS.md"]
+    root_only: true
+    level: info
+    message: "Vapor ships an AI/automated-agent contribution policy (AGENTS.md)."
+
+  - id: vapor-contributing-exists
+    kind: file_exists
+    # NOT root_only: Vapor keeps contribution guidelines at .github/contributing.md
+    paths: [".github/contributing.md", "CONTRIBUTING.md"]
+    level: warning
+    message: "Contribution guidelines should be discoverable."
+
+  # --- README content invariants (value-add) ----------------------------
+  # The sponsors workflow (sponsors.yml, workflow_dispatch) rewrites the block
+  # delimited by `<!-- backers -->` markers. Not a PR/push gate, but alint can
+  # assert the markers exist so the generator never silently no-ops.
+  - id: vapor-readme-backers-markers
+    kind: file_content_matches
+    paths: "README.md"
+    pattern: '<!-- backers -->'
+    level: warning
+    message: "README must keep the <!-- backers --> markers the sponsors workflow targets."
+
+  - id: vapor-readme-mentions-docs
+    kind: file_content_matches
+    paths: "README.md"
+    pattern: 'docs\.vapor\.codes'
+    level: info
+    message: "README should link to the documentation site."
+
+  # --- Workflow least-privilege (value-add; Vapor follows this, no meta-gate) ---
+  - id: vapor-test-workflow-named
+    kind: yaml_path_matches
+    paths: ".github/workflows/test.yml"
+    path: "$.name"
+    matches: '.+'
+    level: info
+    message: "Workflows should declare a name."
+
+  # --- C shim header pairing (value-add structure, not repo-enforced) ----
+  # CVaporBcrypt ships matched .c/.h; assert the pairing so a stray .c never
+  # lands without its header. Vapor does not gate on this.
+  - id: vapor-cbcrypt-c-has-header
+    kind: pair
+    primary: "Sources/CVaporBcrypt/*.c"
+    partner: "Sources/CVaporBcrypt/{stem}.h"
+    level: info
+    message: "Each CVaporBcrypt .c should have a sibling .h."

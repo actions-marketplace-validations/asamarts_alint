@@ -1,0 +1,248 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# Proposed alint config for vitejs/vite @ f94df87ff03b40b65e29bacdc04cc18c7bccaa4a
+# (release v8.0.16). Produced for the v0.12 100-repo case study (Stage A).
+#
+# HONEST PICTURE (the headline of this repo):
+# vite's ENFORCED validation surface is dominated by TOOL EXECUTION (D):
+#   - oxfmt formatter  (`pnpm format && git diff --exit-code`)
+#   - eslint           (AST/type-aware lint, incl. no-restricted-globals
+#                        require/__dirname/__filename in src/node — an
+#                        import firewall, but eslint-enforced => D)
+#   - tsc typecheck    (per-package + build-types-check tsconfig.check.json)
+#   - vitest           (unit + serve + build, node 20/22/24/26 x 3 OS)
+#   - actionlint+shellcheck on workflows
+#   - zizmor           (GitHub-Actions security static analysis)
+#   - issue/PR template-check  (LLM-agent semantic eval — non-deterministic)
+#   - semantic-pull-request    (conventional-commit regex on PR TITLE)
+# None of those are alint logic; alint can ORCHESTRATE them (command_idempotent)
+# but wrapping a tool is not alint expressing the check (calibration R2).
+#
+# The ONLY purely-structural ENFORCED check is the pnpm-only package-manager
+# policy (preinstall `only-allow pnpm` + committed pnpm-lock.yaml + no foreign
+# lockfile). That is the single A-item in the enforced denominator (below).
+#
+# Everything else here is alint VALUE-ADD (NOT in the coverage ratio, R3/R5):
+# structural invariants vite happens to hold but does not gate on — per-package
+# license/type/engines coherence, workspace-member shape, workflow presence.
+# These are legitimately useful but excluded from coverage_today by R5.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+  - alint://bundled/monorepo@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+  - alint://bundled/tooling/editorconfig@v1
+
+facts:
+  - id: has_pnpm_workspace
+    any_file_exists: ["pnpm-workspace.yaml", "pnpm-workspace.yml"]
+  - id: has_node
+    any_file_exists: ["package.json"]
+
+rules:
+  # ═══════════════════════════════════════════════════════════════════
+  # ENFORCED (A) — the pnpm-only package-manager policy.
+  # vite enforces this three ways: package.json `preinstall: only-allow
+  # pnpm`, the corepack pin `packageManager: pnpm@10.34.1`, and a committed
+  # pnpm-lock.yaml with NO foreign lockfile. alint expresses all of it
+  # natively (file_exists + file_absent + json_path_matches). This is the
+  # one enforced check that is also addressable.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: vite-pnpm-lockfile-present
+    when: facts.has_pnpm_workspace
+    kind: file_exists
+    paths: "pnpm-lock.yaml"
+    level: error
+    message: >-
+      vite is a pnpm-only repo (`preinstall: only-allow pnpm`); the committed
+      pnpm-lock.yaml must be present and tracked.
+
+  - id: vite-no-foreign-lockfiles
+    kind: file_absent
+    paths: ["package-lock.json", "yarn.lock", "bun.lockb", "npm-shrinkwrap.json"]
+    level: error
+    message: >-
+      No npm/yarn/bun lockfile may be committed — vite enforces pnpm via
+      `only-allow pnpm`. A stray foreign lockfile breaks the single-manager
+      contract.
+
+  - id: vite-root-package-pins-pnpm
+    kind: json_path_matches
+    paths: "package.json"
+    path: "$.packageManager"
+    matches: '^pnpm@\d+\.\d+\.\d+'
+    level: error
+    message: >-
+      Root package.json must pin `packageManager: pnpm@<x.y.z>` (corepack
+      reads this; it is the machine half of the `only-allow pnpm` policy).
+
+  # ═══════════════════════════════════════════════════════════════════
+  # VALUE-ADD (NOT in coverage ratio) — cross-file engines.node coherence.
+  # All 4 manifests (root + the 3 published packages) carry the IDENTICAL
+  # literal `^20.19.0 || >=22.12.0`. Unlike pnpm (whose members use a
+  # differing floor), vite's is a TRUE literal-equal => cross_file_value_equals
+  # fits exactly. vite does NOT gate on this (no CI/script), so it is
+  # value-add, recorded separately from coverage_today per R5.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: vite-engines-node-coherent
+    when: facts.has_node
+    kind: cross_file_value_equals
+    source:
+      file: "package.json"
+      extract:
+        json: "$.engines.node"
+    targets:
+      - file: "packages/vite/package.json"
+        extract:
+          json: "$.engines.node"
+      - file: "packages/create-vite/package.json"
+        extract:
+          json: "$.engines.node"
+      - file: "packages/plugin-legacy/package.json"
+        extract:
+          json: "$.engines.node"
+    level: warning
+    message: >-
+      Every workspace manifest must declare the same engines.node support
+      range as the root (`^20.19.0 || >=22.12.0`). A drifted member ships a
+      different Node floor than the project advertises.
+
+  # ═══════════════════════════════════════════════════════════════════
+  # VALUE-ADD — per published-package manifest shape. The 3 packages under
+  # packages/* are ESM, MIT, and carry a repository.directory. vite doesn't
+  # gate on these, but they are stable invariants worth asserting.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: vite-packages-license-mit
+    when: facts.has_node
+    kind: json_path_matches
+    paths: "packages/*/package.json"
+    path: "$.license"
+    matches: '^MIT$'
+    level: warning
+    message: "Each published package must declare license: MIT (matches the root LICENSE)."
+
+  - id: vite-packages-type-module
+    when: facts.has_node
+    kind: json_path_matches
+    paths: "packages/*/package.json"
+    path: "$.type"
+    matches: '^module$'
+    level: info
+    message: "Each published package is ESM (`type: module`)."
+
+  - id: vite-packages-repository-directory
+    when: facts.has_node
+    kind: json_path_matches
+    paths: "packages/*/package.json"
+    path: "$['repository']['directory']"
+    matches: '^packages/'
+    level: info
+    message: "Each published package must set repository.directory to its packages/* path."
+
+  - id: vite-packages-have-changelog
+    when: facts.has_node
+    kind: for_each_dir
+    select: "packages/*"
+    when_iter: 'iter.has_file("package.json")'
+    require:
+      - kind: file_exists
+        paths: "{path}/CHANGELOG.md"
+    level: info
+    message: "Each published package keeps a CHANGELOG.md (release-scripts appends to it)."
+
+  - id: vite-packages-have-license
+    when: facts.has_node
+    kind: for_each_dir
+    select: "packages/*"
+    when_iter: 'iter.has_file("package.json")'
+    require:
+      - kind: file_exists
+        paths: "{path}/LICENSE*"
+    level: info
+    message: "Each published package ships its own LICENSE (LICENSE or LICENSE.md)."
+
+  # ═══════════════════════════════════════════════════════════════════
+  # VALUE-ADD — metadata invariants vite relies on (editorconfig/gitattributes
+  # LF policy, renovate digest-pinning) and workflow presence.
+  # ═══════════════════════════════════════════════════════════════════
+  - id: vite-gitattributes-eol-lf
+    kind: file_content_matches
+    paths: ".gitattributes"
+    pattern: 'eol=lf'
+    level: warning
+    message: ".gitattributes must enforce LF line endings (`* text=auto eol=lf`)."
+
+  - id: vite-editorconfig-trims-whitespace
+    kind: file_content_matches
+    paths: ".editorconfig"
+    pattern: 'trim_trailing_whitespace\s*=\s*true'
+    level: info
+    message: ".editorconfig declares trim_trailing_whitespace=true (enforced by oxfmt at format time)."
+
+  - id: vite-renovate-pins-action-digests
+    kind: file_content_matches
+    paths: ".github/renovate.json5"
+    pattern: 'pinDigests'
+    level: info
+    message: >-
+      renovate.json5 must keep `pinDigests: true` for the action manager so
+      GitHub Actions stay SHA-pinned (vite pins every action by 40-hex SHA;
+      complements ci/github-actions@v1).
+
+  - id: vite-simple-git-hooks-pre-commit
+    kind: json_path_matches
+    paths: "package.json"
+    path: "$['simple-git-hooks']['pre-commit']"
+    matches: 'lint-staged'
+    level: info
+    message: "package.json must wire the simple-git-hooks pre-commit hook to lint-staged."
+
+  - id: vite-zizmor-workflow-present
+    kind: file_exists
+    paths: ".github/workflows/zizmor.yml"
+    level: info
+    message: "zizmor.yml runs GitHub-Actions security static analysis; complements alint's ci/github-actions@v1 floor."
+
+  - id: vite-commit-convention-doc-present
+    kind: file_exists
+    paths: ".github/commit-convention.md"
+    level: info
+    message: >-
+      The conventional-commit grammar is documented here and enforced on PR
+      titles by the semantic-pull-request workflow (alint cannot check the
+      grammar of a PR title — that is not repo state).
+
+# ═══════════════════════════════════════════════════════════════════════
+# GENUINE NON-REPLACEABLES (D) — why each needs the real tool
+# ═══════════════════════════════════════════════════════════════════════
+#  - oxfmt: full source formatter; the trailing-whitespace / final-newline /
+#    LF rules vite declares in .editorconfig are ENFORCED by oxfmt + the CI
+#    `git diff --exit-code`, not by a bespoke grep gate. One D behavior
+#    ("format clean"), NOT separate alint A-items (contrast tokio, which used
+#    a `grep -rne '\s$'` shell gate => there it was A).
+#  - eslint (typescript-eslint + import-x + n + regexp): AST/type-aware lint,
+#    including the no-restricted-globals require/__dirname/__filename and
+#    n/no-restricted-require firewall in packages/vite/src/node/**. That IS an
+#    import-layering policy, but it is eslint-enforced => D (R2).
+#  - tsc: per-package typecheck + build-types-check (asserts bundled .d.ts do
+#    not leak devDependency types). Type-system reasoning, out of scope.
+#  - vitest: unit + serve + build E2E across the node/OS matrix => one D
+#    ("tests pass") per R1.
+#  - actionlint -shellcheck: workflow + embedded-shell AST lint.
+#  - zizmor: GitHub-Actions security dataflow analysis.
+#  - issue/PR template-check: LLM-agent semantic evaluation of issue/PR bodies
+#    against the templates — non-deterministic, not a static property.
+#  - semantic-pull-request: conventional-commit regex on the PR TITLE (PR
+#    metadata at PR time, not a committed file) — not alint-addressable.
+#
+# ═══════════════════════════════════════════════════════════════════════
+# NEW-RULE-KIND CANDIDATES (B) surfaced by this repo
+# ═══════════════════════════════════════════════════════════════════════
+#  (none enforced-and-missing — vite's enforced addressable surface is the
+#   single pnpm-only A-item. The import firewall in src/node is the closest
+#   graph-shaped check, but it is eslint-enforced, so it is a D, not a
+#   file_dependency_graph edge source vite gates on via alint-style rules.)

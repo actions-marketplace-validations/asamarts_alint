@@ -1,0 +1,31 @@
+name: cross_file superset is silent when the source contains every target value
+
+docs:
+  title: Every used value appears in the allow-list
+  case: pass
+  kind: cross_file
+
+given:
+  tree:
+    allowed.json: |
+      {"allowed": ["a", "b", "c"]}
+    used.json: |
+      {"used": ["a", "c"]}
+  config: |
+    version: 1
+    rules:
+      - id: used-are-allowed
+        kind: cross_file
+        source:
+          file: allowed.json
+          extract: { json: "$.allowed[*]" }
+        targets:
+          files: "used.json"
+          extract: { json: "$.used[*]" }
+        relation: superset
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

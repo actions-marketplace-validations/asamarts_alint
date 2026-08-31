@@ -1,0 +1,995 @@
+//! Baseline (grandfathering) primitives: the per-violation fingerprint
+//! and the committed JSON-Lines baseline file.
+//!
+//! Design: [`docs/design/baseline.md`](../../../docs/design/baseline.md),
+//! [ADR-0006](../../../docs/adr/0006-baseline-suppression.md).
+//!
+//! This module is the dependency-free core: the fingerprint function
+//! ([`violation_fingerprint`]), the JSON-Lines baseline file
+//! ([`Baseline`]), and the report-suppression transform ([`apply`]). The
+//! per-violation [`Violation::baseline_key`] is set by the rules whose
+//! identity isn't `(rule_id, path)`; the boundary is enforced by the
+//! `coverage_audit_baseline_safety` collision-invariant in `alint-e2e`.
+//! `check --baseline` wires this in between `Engine::run` and the
+//! formatters (see `crates/alint/src/main.rs`).
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::report::Report;
+use crate::rule::Violation;
+
+/// The baseline file format this binary reads and writes. A file with
+/// any other version is rejected (§3.9): a newer file may use a
+/// fingerprint scheme this binary computes differently, so silently
+/// proceeding could mis-suppress.
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// Compute a violation's baseline fingerprint (64-hex SHA-256).
+///
+/// The hash is `sha256(lp(rule_id) ‖ lp(path) ‖ lp(discriminator))`,
+/// where `lp(x)` prefixes `x` with its 4-byte little-endian length so
+/// distinct component tuples cannot collide by concatenation. The
+/// **discriminator** is, in priority order (see design §3.1):
+///
+/// 1. `baseline_key`, if the rule supplied one (its own stable identity);
+/// 2. else, for a line-anchored violation, the offending line's content
+///    with any trailing `\r?\n` stripped (so line *number* and CRLF↔LF
+///    don't churn the baseline) — read from `file_bytes`;
+/// 3. else, for a **path-bearing** violation, **empty** — so the identity is
+///    `(rule_id, path)` alone (v3). The (often volatile) message is *not*
+///    hashed; `path` already disambiguates a rule that emits one finding per
+///    path. A rule that emits several findings per `(rule_id, path)`, or has no
+///    path, must set `baseline_key` instead (enforced by the coverage audit).
+/// 4. else (no path, no line, no key), the trimmed message — a last-resort
+///    *anti-panic* fallback only; the audit forbids a kind from relying on it.
+///
+/// `line` / `column` numbers and the violation `level` are never hashed.
+/// `path` is normalised to forward slashes; pass `None` for repo-level
+/// violations. `file_bytes` is the content of the violation's file (only
+/// consulted for case 2); pass `None` when unavailable or irrelevant.
+#[must_use]
+pub fn violation_fingerprint(
+    rule_id: &str,
+    path: Option<&Path>,
+    line: Option<usize>,
+    baseline_key: Option<&str>,
+    message: &str,
+    file_bytes: Option<&[u8]>,
+) -> String {
+    let path_norm = path.map(normalize_path).unwrap_or_default();
+
+    let discriminator: &[u8] = if let Some(key) = baseline_key {
+        key.as_bytes()
+    } else if let Some(content) = line.and_then(|n| file_bytes.and_then(|b| offending_line(b, n))) {
+        content
+    } else if path.is_some() {
+        // v3: path-bearing, key-less, line-less → identity is (rule_id, path).
+        // The message is deliberately not hashed (it is frequently volatile);
+        // multi-finding / no-path rules set `baseline_key` instead.
+        b""
+    } else {
+        // No path, no line, no key: anti-panic fallback only.
+        message.trim().as_bytes()
+    };
+
+    let mut hasher = Sha256::new();
+    for component in [rule_id.as_bytes(), path_norm.as_bytes(), discriminator] {
+        let len = u32::try_from(component.len()).unwrap_or(u32::MAX);
+        hasher.update(len.to_le_bytes());
+        hasher.update(component);
+    }
+    to_hex(&hasher.finalize())
+}
+
+/// Fingerprint a [`Violation`] directly (a convenience over
+/// [`violation_fingerprint`] that reads the violation's fields). `rule_id`
+/// is passed separately because it lives on the owning `RuleResult`, not
+/// the violation. `file_bytes` is the violation's file content, consulted
+/// only for the line-content discriminator.
+#[must_use]
+pub fn fingerprint(rule_id: &str, v: &Violation, file_bytes: Option<&[u8]>) -> String {
+    violation_fingerprint(
+        rule_id,
+        v.path.as_deref(),
+        v.line,
+        v.baseline_key.as_deref(),
+        &v.message,
+        file_bytes,
+    )
+}
+
+/// Normalise a path to a stable, forward-slashed string so a fingerprint
+/// is identical across operating systems.
+fn normalize_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// The bytes of 1-based line `n` in `bytes`, with a trailing `\r`
+/// stripped (the `\n` is consumed by the split). `None` if the line
+/// doesn't exist or `n == 0`.
+fn offending_line(bytes: &[u8], n: usize) -> Option<&[u8]> {
+    let idx = n.checked_sub(1)?;
+    let line = bytes.split(|&b| b == b'\n').nth(idx)?;
+    Some(line.strip_suffix(b"\r").unwrap_or(line))
+}
+
+fn to_hex(digest: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// Errors loading a baseline file.
+#[derive(Debug, thiserror::Error)]
+pub enum BaselineError {
+    /// The file (or its header line) was empty.
+    #[error("baseline file is empty; expected a header line")]
+    Empty,
+    /// A line was not valid JSON.
+    #[error("baseline {what} is not valid JSON: {source}")]
+    Parse {
+        what: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// The file's `schema_version` is not one this binary understands.
+    #[error(
+        "baseline schema_version {found} is unsupported (this alint reads version {SCHEMA_VERSION}); \
+         regenerate with `alint baseline`, or upgrade alint"
+    )]
+    UnsupportedSchema { found: u32 },
+}
+
+/// The header line of a baseline file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Header {
+    schema_version: u32,
+    /// Advisory provenance only; excluded from matching and from
+    /// byte-identical regeneration comparisons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    alint_version: Option<String>,
+}
+
+/// One grandfathered violation. Matching uses **only** `fingerprint`
+/// (and `count`); `rule_id`, `path`, and `message` are advisory — they
+/// exist so a reviewer reading the file's diff can see what is being
+/// suppressed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaselineEntry {
+    pub rule_id: String,
+    #[serde(default)]
+    pub path: Option<String>,
+    pub fingerprint: String,
+    pub count: u32,
+    /// Advisory: the rendered violation message, for human review.
+    /// Never matched on; may drift freely between regenerations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// A parsed baseline: an advisory header plus the suppressed entries,
+/// sorted by `(rule_id, path, fingerprint)` for deterministic output.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Baseline {
+    pub alint_version: Option<String>,
+    pub entries: Vec<BaselineEntry>,
+}
+
+impl Baseline {
+    /// Build a baseline by aggregating fingerprinted violations: entries
+    /// with the same fingerprint collapse into one with a `count`. The
+    /// advisory `rule_id`/`path` are invariant within a fingerprint; the
+    /// advisory `message` is the lexicographically smallest of the group, so
+    /// the file is byte-identical across regenerations regardless of the
+    /// order the engine collected violations in. Output entries are sorted
+    /// for a deterministic, merge-friendly file.
+    pub fn from_fingerprints<I>(alint_version: Option<String>, items: I) -> Self
+    where
+        I: IntoIterator<Item = FingerprintedViolation>,
+    {
+        // Group by fingerprint. `rule_id` and `path` are invariant within a
+        // fingerprint (both are hashed into it), but the advisory `message`
+        // is NOT — a path-identity or shared-key group can collapse
+        // violations whose messages differ, and `items` arrives in the
+        // engine's collection order. Pin the lexicographically smallest
+        // message so the committed file is byte-identical across
+        // regenerations even if that order ever shifts.
+        let mut by_fp: BTreeMap<String, BaselineEntry> = BTreeMap::new();
+        for item in items {
+            if let Some(e) = by_fp.get_mut(&item.fingerprint) {
+                e.count += 1;
+                if item.message < e.message {
+                    e.message = item.message;
+                }
+            } else {
+                by_fp.insert(
+                    item.fingerprint.clone(),
+                    BaselineEntry {
+                        rule_id: item.rule_id,
+                        path: item.path,
+                        fingerprint: item.fingerprint,
+                        count: 1,
+                        message: item.message,
+                    },
+                );
+            }
+        }
+        let mut entries: Vec<BaselineEntry> = by_fp.into_values().collect();
+        entries.sort_by(|a, b| {
+            a.rule_id
+                .cmp(&b.rule_id)
+                .then_with(|| a.path.cmp(&b.path))
+                .then_with(|| a.fingerprint.cmp(&b.fingerprint))
+        });
+        Self {
+            alint_version,
+            entries,
+        }
+    }
+
+    /// Render the baseline as JSON Lines: a header line followed by one
+    /// sorted entry per line. One-entry-per-line keeps the committed file
+    /// merge-friendly (disjoint additions don't conflict).
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
+        let header = Header {
+            schema_version: SCHEMA_VERSION,
+            alint_version: self.alint_version.clone(),
+        };
+        let mut out = serde_json::to_string(&header).expect("header serializes");
+        out.push('\n');
+        for entry in &self.entries {
+            out.push_str(&serde_json::to_string(entry).expect("entry serializes"));
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Parse a baseline from JSON-Lines text. The first non-empty line is
+    /// the header (its `schema_version` is gated); each remaining
+    /// non-empty line is an entry.
+    pub fn load(text: &str) -> Result<Self, BaselineError> {
+        let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+
+        let header_line = lines.next().ok_or(BaselineError::Empty)?;
+        let header: Header =
+            serde_json::from_str(header_line).map_err(|source| BaselineError::Parse {
+                what: "header",
+                source,
+            })?;
+        if header.schema_version != SCHEMA_VERSION {
+            return Err(BaselineError::UnsupportedSchema {
+                found: header.schema_version,
+            });
+        }
+
+        // Collapse duplicate fingerprints by SUMMING counts. A freshly
+        // written baseline has none (`from_fingerprints` dedups), but the
+        // file is line-oriented to be merge-friendly: a git merge of two
+        // baselines that each recorded the same finding — or a hand-edit —
+        // can leave two entries with one fingerprint. Summing keeps the
+        // suppression budget the total (not the last writer's) and gives
+        // `apply`/`stale` the one-entry-per-fingerprint invariant they
+        // assume. First-appearance order and the first entry's advisory
+        // fields win.
+        let mut entries: Vec<BaselineEntry> = Vec::new();
+        let mut pos: BTreeMap<String, usize> = BTreeMap::new();
+        for line in lines {
+            let entry: BaselineEntry =
+                serde_json::from_str(line).map_err(|source| BaselineError::Parse {
+                    what: "entry",
+                    source,
+                })?;
+            if let Some(&i) = pos.get(&entry.fingerprint) {
+                entries[i].count = entries[i].count.saturating_add(entry.count);
+            } else {
+                pos.insert(entry.fingerprint.clone(), entries.len());
+                entries.push(entry);
+            }
+        }
+        Ok(Self {
+            alint_version: header.alint_version,
+            entries,
+        })
+    }
+
+    /// Total grandfathered occurrences (sum of `count`).
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.entries.iter().map(|e| u64::from(e.count)).sum()
+    }
+}
+
+/// A single fingerprinted violation, the input to [`Baseline::from_fingerprints`].
+#[derive(Debug, Clone)]
+pub struct FingerprintedViolation {
+    pub rule_id: String,
+    pub path: Option<String>,
+    pub fingerprint: String,
+    pub message: Option<String>,
+}
+
+/// A violation suppressed by the baseline, with the id of the rule that
+/// produced it. Kept so `--show-baselined` and the SARIF formatter can
+/// render suppressed findings without re-deriving them.
+#[derive(Debug, Clone)]
+pub struct SuppressedViolation {
+    pub rule_id: std::sync::Arc<str>,
+    pub violation: Violation,
+    /// The matched baseline fingerprint — emitted as SARIF
+    /// `partialFingerprints` so Code Scanning correlation aligns with the
+    /// baseline.
+    pub fingerprint: String,
+}
+
+/// The result of applying a baseline to a [`Report`].
+#[derive(Debug, Clone)]
+pub struct AppliedBaseline {
+    /// The report with baselined violations removed — only **new**
+    /// violations remain, so the exit code and the primary formatter
+    /// output reflect the delta. SARIF re-emits the suppressed findings
+    /// "marked not removed" (see [`Self::suppressed`] + [`Self::live_fingerprints`]).
+    pub live: Report,
+    /// Every suppressed violation (for `--show-baselined` / SARIF marking).
+    pub suppressed: Vec<SuppressedViolation>,
+    /// Baseline entries that matched fewer occurrences than recorded
+    /// (the issue was fixed or its discriminator changed); `count` is the
+    /// unfilled remainder. Surfaced as a warning (or a failure under
+    /// `--strict-baseline`).
+    pub stale: Vec<BaselineEntry>,
+    /// Total suppressed occurrences (sum across all fingerprints).
+    pub suppressed_total: u64,
+    /// Fingerprints of the **live** violations, parallel to
+    /// [`live`](Self::live)`.results` (outer) and each result's `violations`
+    /// (inner, in the same deterministic order `apply` emits them). Lets SARIF
+    /// stamp `partialFingerprints` on new findings without recomputing them.
+    pub live_fingerprints: Vec<Vec<String>>,
+}
+
+/// Apply a baseline to a report: suppress up to each fingerprint's
+/// recorded `count` of matching violations and surface the rest as live.
+///
+/// Pure and deterministic: within each rule, violations are matched in a
+/// stable `(path, line, column, message)` order, so *which* of several
+/// byte-identical occurrences is left live (when the baseline count is
+/// below the current count) does not depend on the engine's parallel
+/// collection order. `fingerprint_of(rule_id, violation)` is supplied by
+/// the caller, which holds the file bytes the line-content discriminator
+/// needs (typically `|rid, v| fingerprint(rid, v, file_bytes_for(v))`).
+pub fn apply<F>(report: &Report, baseline: &Baseline, mut fingerprint_of: F) -> AppliedBaseline
+where
+    F: FnMut(&str, &Violation) -> String,
+{
+    use std::collections::HashMap;
+
+    // Remaining suppression budget per fingerprint, drawn down as we go.
+    let mut remaining: HashMap<&str, u32> = baseline
+        .entries
+        .iter()
+        .map(|e| (e.fingerprint.as_str(), e.count))
+        .collect();
+
+    let mut suppressed = Vec::new();
+    let mut suppressed_total = 0u64;
+    let mut live_results = Vec::with_capacity(report.results.len());
+    let mut live_fingerprints: Vec<Vec<String>> = Vec::with_capacity(report.results.len());
+
+    for result in &report.results {
+        // Stable match order so suppression is deterministic regardless
+        // of the engine's parallel collection order. `sort_by_cached_key`
+        // computes each key once (one path allocation per violation) rather
+        // than on every comparison.
+        let mut ordered: Vec<&Violation> = result.violations.iter().collect();
+        ordered.sort_by_cached_key(|v| order_key(v));
+
+        let mut live = Vec::new();
+        let mut live_fps = Vec::new();
+        for v in ordered {
+            let fp = fingerprint_of(&result.rule_id, v);
+            if let Some(count) = remaining.get_mut(fp.as_str()).filter(|c| **c > 0) {
+                *count -= 1;
+                suppressed_total += 1;
+                suppressed.push(SuppressedViolation {
+                    rule_id: result.rule_id.clone(),
+                    violation: v.clone(),
+                    fingerprint: fp,
+                });
+            } else {
+                live.push(v.clone());
+                live_fps.push(fp);
+            }
+        }
+
+        let mut r = result.clone();
+        r.violations = live;
+        live_results.push(r);
+        live_fingerprints.push(live_fps);
+    }
+
+    let stale = baseline
+        .entries
+        .iter()
+        .filter_map(|e| {
+            let unfilled = remaining.get(e.fingerprint.as_str()).copied().unwrap_or(0);
+            (unfilled > 0).then(|| BaselineEntry {
+                count: unfilled,
+                ..e.clone()
+            })
+        })
+        .collect();
+
+    AppliedBaseline {
+        live: Report {
+            results: live_results,
+        },
+        suppressed,
+        stale,
+        suppressed_total,
+        live_fingerprints,
+    }
+}
+
+/// Deterministic match-order key for a violation: by path, then line,
+/// column, and message. Used only to order suppression, not the hash.
+fn order_key(v: &Violation) -> (Option<String>, usize, usize, &str) {
+    (
+        v.path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        v.line.unwrap_or(0),
+        v.column.unwrap_or(0),
+        v.message.as_ref(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fp(
+        rule: &str,
+        path: Option<&str>,
+        line: Option<usize>,
+        key: Option<&str>,
+        msg: &str,
+        bytes: Option<&[u8]>,
+    ) -> String {
+        violation_fingerprint(rule, path.map(Path::new), line, key, msg, bytes)
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_64_hex() {
+        let a = fp("r", Some("a.rs"), Some(2), None, "m", Some(b"x\nbad\ny"));
+        let b = fp("r", Some("a.rs"), Some(2), None, "m", Some(b"x\nbad\ny"));
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 64);
+        assert!(a.bytes().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn line_number_is_excluded_only_content_matters() {
+        // Same offending content, different line position → same hash.
+        let high = fp("r", Some("a.rs"), Some(2), None, "m", Some(b"x\nbad\n"));
+        let low = fp(
+            "r",
+            Some("a.rs"),
+            Some(4),
+            None,
+            "m",
+            Some(b"q\nw\ne\nbad\n"),
+        );
+        assert_eq!(high, low);
+    }
+
+    #[test]
+    fn crlf_and_lf_offending_lines_match() {
+        let lf = fp("r", Some("a.rs"), Some(1), None, "m", Some(b"bad\nrest"));
+        let crlf = fp("r", Some("a.rs"), Some(1), None, "m", Some(b"bad\r\nrest"));
+        assert_eq!(lf, crlf, "trailing \\r must be stripped from the content");
+    }
+
+    #[test]
+    fn editing_the_offending_line_changes_the_hash() {
+        let before = fp("r", Some("a.rs"), Some(1), None, "m", Some(b"bad\n"));
+        let after = fp("r", Some("a.rs"), Some(1), None, "m", Some(b"worse\n"));
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn baseline_key_takes_precedence_over_content() {
+        // Same key, different file content → same hash (key wins).
+        let a = fp(
+            "r",
+            Some("a.rs"),
+            Some(1),
+            Some("$.license"),
+            "m",
+            Some(b"aaa\n"),
+        );
+        let b = fp(
+            "r",
+            Some("a.rs"),
+            Some(1),
+            Some("$.license"),
+            "m",
+            Some(b"bbb\n"),
+        );
+        assert_eq!(a, b);
+        // Different key → different hash.
+        let c = fp(
+            "r",
+            Some("a.rs"),
+            Some(1),
+            Some("$.private"),
+            "m",
+            Some(b"aaa\n"),
+        );
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn path_shape_default_ignores_message() {
+        // v3: a path-bearing, key-less, line-less violation's identity is
+        // (rule_id, path); the (volatile) message is NOT hashed. Two
+        // different messages on the same path → the SAME fingerprint.
+        let a = fp(
+            "r",
+            Some("a.rs"),
+            None,
+            None,
+            "has 320 lines (max 300)",
+            None,
+        );
+        let b = fp(
+            "r",
+            Some("a.rs"),
+            None,
+            None,
+            "has 999 lines (max 300)",
+            None,
+        );
+        assert_eq!(a, b, "message must not affect a path-only fingerprint");
+        // A different path → a different fingerprint.
+        let c = fp(
+            "r",
+            Some("b.rs"),
+            None,
+            None,
+            "has 320 lines (max 300)",
+            None,
+        );
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn message_fallback_only_when_no_path() {
+        // The message is the discriminator ONLY for a no-path, no-line,
+        // no-key violation (the anti-panic branch).
+        let a = fp("r", None, None, None, "multiple lockfiles", None);
+        let b = fp("r", None, None, None, "multiple lockfiles", None);
+        let c = fp("r", None, None, None, "something else", None);
+        assert_eq!(a, b);
+        assert_ne!(a, c, "no-path violations still distinguish by message");
+    }
+
+    #[test]
+    fn length_prefix_prevents_concatenation_collisions() {
+        // ("ab","c") vs ("a","bc") must not collide via the join.
+        let x = fp("ab", Some("c"), None, None, "m", None);
+        let y = fp("a", Some("bc"), None, None, "m", None);
+        assert_ne!(x, y);
+        // Same for baseline_key components: {"a b"} vs {"a","b"}-joined.
+        let p = fp("r", None, None, Some("a b"), "m", None);
+        let q = fp("r", None, None, Some("a"), "b", None); // "b" is the message, unused since key set
+        assert_ne!(p, q);
+    }
+
+    #[test]
+    fn paths_normalize_to_forward_slashes() {
+        let unix = violation_fingerprint("r", Some(Path::new("a/b.rs")), None, None, "m", None);
+        // A backslash path hashes the same as its forward-slash form.
+        let win = violation_fingerprint("r", Some(Path::new("a\\b.rs")), None, None, "m", None);
+        assert_eq!(unix, win);
+    }
+
+    #[test]
+    fn missing_line_falls_through_to_path_identity() {
+        // line points past EOF → no content → path identity (v3), no panic.
+        let a = fp(
+            "r",
+            Some("a.rs"),
+            Some(99),
+            None,
+            "msg",
+            Some(b"only\none\n"),
+        );
+        let b = fp("r", Some("a.rs"), None, None, "msg", None);
+        assert_eq!(a, b);
+        // The message is irrelevant in this branch (path identity wins).
+        let c = fp(
+            "r",
+            Some("a.rs"),
+            Some(99),
+            None,
+            "different message",
+            Some(b"only\none\n"),
+        );
+        assert_eq!(a, c);
+    }
+
+    fn item(rule: &str, path: Option<&str>, fp: &str) -> FingerprintedViolation {
+        FingerprintedViolation {
+            rule_id: rule.into(),
+            path: path.map(str::to_string),
+            fingerprint: fp.into(),
+            message: Some("m".into()),
+        }
+    }
+
+    #[test]
+    fn aggregate_collapses_identical_fingerprints_into_counts() {
+        let b = Baseline::from_fingerprints(
+            None,
+            vec![
+                item("r", Some("a.rs"), "ff"),
+                item("r", Some("a.rs"), "ff"),
+                item("r", Some("a.rs"), "ff"),
+                item("r", Some("b.rs"), "aa"),
+            ],
+        );
+        assert_eq!(b.entries.len(), 2);
+        let ff = b.entries.iter().find(|e| e.fingerprint == "ff").unwrap();
+        assert_eq!(ff.count, 3);
+        assert_eq!(b.total(), 4);
+    }
+
+    #[test]
+    fn jsonl_round_trips_and_is_deterministic() {
+        let b = Baseline::from_fingerprints(
+            Some("0.13.0".into()),
+            vec![
+                item("z-rule", Some("z.rs"), "fff"),
+                item("a-rule", None, "aaa"),
+                item("a-rule", None, "aaa"),
+            ],
+        );
+        let text = b.to_jsonl();
+        // Header first, then one entry per line.
+        assert!(
+            text.lines()
+                .next()
+                .unwrap()
+                .contains("\"schema_version\":1")
+        );
+        let parsed = Baseline::load(&text).unwrap();
+        assert_eq!(parsed, b);
+        // Byte-identical re-serialization (deterministic sort).
+        assert_eq!(parsed.to_jsonl(), text);
+        // Sorted by rule_id: a-rule before z-rule.
+        assert_eq!(parsed.entries[0].rule_id, "a-rule");
+        assert_eq!(parsed.entries[0].count, 2);
+    }
+
+    #[test]
+    fn load_rejects_unsupported_schema_version() {
+        let text = "{\"schema_version\":999}\n";
+        match Baseline::load(text) {
+            Err(BaselineError::UnsupportedSchema { found: 999 }) => {}
+            other => panic!("expected UnsupportedSchema, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_rejects_empty_and_malformed() {
+        assert!(matches!(Baseline::load("   \n"), Err(BaselineError::Empty)));
+        assert!(matches!(
+            Baseline::load("not json\n"),
+            Err(BaselineError::Parse { what: "header", .. })
+        ));
+        let bad_entry = format!("{{\"schema_version\":{SCHEMA_VERSION}}}\nnope\n");
+        assert!(matches!(
+            Baseline::load(&bad_entry),
+            Err(BaselineError::Parse { what: "entry", .. })
+        ));
+    }
+
+    #[test]
+    fn fingerprint_violation_wrapper_reads_fields_incl_baseline_key() {
+        use std::path::Path as P;
+        // Wrapper agrees with the decomposed call for a line violation.
+        let v = Violation::new("msg")
+            .with_path(P::new("a.rs"))
+            .with_location(2, 1);
+        let bytes = b"x\nbad\ny";
+        assert_eq!(
+            fingerprint("r", &v, Some(bytes)),
+            fp("r", Some("a.rs"), Some(2), None, "msg", Some(bytes))
+        );
+        // A baseline_key overrides the line content.
+        let keyed = Violation::new("msg")
+            .with_path(P::new("a.rs"))
+            .with_location(2, 1)
+            .with_baseline_key("$.license");
+        assert_eq!(
+            fingerprint("r", &keyed, Some(bytes)),
+            fp(
+                "r",
+                Some("a.rs"),
+                Some(2),
+                Some("$.license"),
+                "msg",
+                Some(bytes)
+            )
+        );
+        assert_ne!(
+            fingerprint("r", &keyed, Some(bytes)),
+            fingerprint("r", &v, Some(bytes))
+        );
+    }
+
+    #[test]
+    fn empty_baseline_is_valid_and_suppresses_nothing() {
+        let text = format!("{{\"schema_version\":{SCHEMA_VERSION}}}\n");
+        let b = Baseline::load(&text).unwrap();
+        assert!(b.entries.is_empty());
+        assert_eq!(b.total(), 0);
+    }
+
+    #[test]
+    fn load_sums_duplicate_fingerprints() {
+        // Two entries with the SAME fingerprint (e.g. a git merge of two
+        // baselines that each recorded the finding) must SUM, not
+        // last-writer-wins, so the suppression budget is the total.
+        let text = format!(
+            "{{\"schema_version\":{SCHEMA_VERSION}}}\n\
+             {{\"rule_id\":\"r\",\"fingerprint\":\"ff\",\"count\":2}}\n\
+             {{\"rule_id\":\"r\",\"fingerprint\":\"ff\",\"count\":3}}\n"
+        );
+        let b = Baseline::load(&text).unwrap();
+        assert_eq!(b.entries.len(), 1, "duplicates collapse to one entry");
+        assert_eq!(b.entries[0].count, 5, "counts sum (2 + 3)");
+        assert_eq!(b.total(), 5);
+    }
+
+    #[test]
+    fn from_fingerprints_advisory_message_is_order_independent() {
+        // A path-identity group collapses violations whose messages differ;
+        // the committed advisory message must not depend on input order.
+        let mk = |msg: &str| FingerprintedViolation {
+            rule_id: "r".into(),
+            path: Some("a.rs".into()),
+            fingerprint: "shared".into(),
+            message: Some(msg.into()),
+        };
+        let one = Baseline::from_fingerprints(None, vec![mk("zeta"), mk("alpha")]);
+        let two = Baseline::from_fingerprints(None, vec![mk("alpha"), mk("zeta")]);
+        assert_eq!(one, two, "advisory message must not depend on input order");
+        assert_eq!(one.entries.len(), 1);
+        assert_eq!(one.entries[0].count, 2);
+        assert_eq!(
+            one.entries[0].message.as_deref(),
+            Some("alpha"),
+            "the lexicographically smallest message is pinned"
+        );
+    }
+
+    // ─── apply (the suppression transform) ──────────────────────────
+
+    use crate::Level;
+    use crate::report::Report;
+    use crate::rule::RuleResult;
+
+    /// A report with one rule emitting violations `(message, line)`.
+    fn report(rule: &str, level: Level, vs: &[(&str, Option<usize>)]) -> Report {
+        let raw = vs
+            .iter()
+            .map(|(m, line)| {
+                let v = Violation::new((*m).to_string()).with_path(Path::new("f.rs"));
+                match line {
+                    Some(l) => v.with_location(*l, 1),
+                    None => v,
+                }
+            })
+            .collect();
+        Report {
+            results: vec![RuleResult::new(
+                std::sync::Arc::from(rule),
+                level,
+                None,
+                raw,
+                false,
+            )],
+        }
+    }
+
+    fn entry(fp: &str, count: u32) -> BaselineEntry {
+        BaselineEntry {
+            rule_id: "r".into(),
+            path: None,
+            fingerprint: fp.into(),
+            count,
+            message: None,
+        }
+    }
+
+    // Stub fingerprinter: each distinct message is its own fingerprint;
+    // identical messages collide (the count/tie-break case). Decouples
+    // the transform test from the hash.
+    fn by_message(_rule: &str, v: &Violation) -> String {
+        v.message.to_string()
+    }
+
+    #[test]
+    fn apply_suppresses_up_to_count_then_reports_new() {
+        let rep = report(
+            "r",
+            Level::Error,
+            &[("X", Some(1)), ("X", Some(2)), ("X", Some(3))],
+        );
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("X", 2)],
+        };
+        let out = apply(&rep, &base, by_message);
+        assert_eq!(out.suppressed_total, 2);
+        assert_eq!(out.live.total_violations(), 1, "the 3rd X is new");
+        assert!(out.stale.is_empty());
+    }
+
+    #[test]
+    fn apply_reports_unbaselined_as_new() {
+        let rep = report("r", Level::Error, &[("Y", Some(1))]);
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("X", 5)],
+        };
+        let out = apply(&rep, &base, by_message);
+        assert_eq!(out.suppressed_total, 0);
+        assert_eq!(out.live.total_violations(), 1);
+        // X matched nothing → stale with its full count.
+        assert_eq!(out.stale.len(), 1);
+        assert_eq!(out.stale[0].count, 5);
+    }
+
+    #[test]
+    fn apply_detects_partial_stale() {
+        let rep = report("r", Level::Error, &[("X", Some(1))]);
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("X", 3)],
+        };
+        let out = apply(&rep, &base, by_message);
+        assert_eq!(out.suppressed_total, 1);
+        assert_eq!(out.live.total_violations(), 0);
+        assert_eq!(out.stale.len(), 1);
+        assert_eq!(out.stale[0].count, 2, "unfilled remainder");
+    }
+
+    #[test]
+    fn apply_tiebreak_is_deterministic_by_line() {
+        // Same message (same fp), three lines, baseline count 1.
+        let rep = report(
+            "r",
+            Level::Error,
+            &[("X", Some(50)), ("X", Some(1)), ("X", Some(10))],
+        );
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("X", 1)],
+        };
+        let out = apply(&rep, &base, by_message);
+        assert_eq!(out.suppressed_total, 1);
+        // The lowest-ordered occurrence (line 1) is suppressed; lines
+        // 10 and 50 remain live, in sorted order.
+        let live_lines: Vec<usize> = out.live.results[0]
+            .violations
+            .iter()
+            .map(|v| v.line.unwrap())
+            .collect();
+        assert_eq!(live_lines, vec![10, 50]);
+        assert_eq!(out.suppressed[0].violation.line, Some(1));
+    }
+
+    #[test]
+    fn apply_empty_baseline_leaves_everything_live() {
+        let rep = report("r", Level::Error, &[("X", Some(1)), ("Y", Some(2))]);
+        let out = apply(&rep, &Baseline::default(), by_message);
+        assert_eq!(out.suppressed_total, 0);
+        assert_eq!(out.live.total_violations(), 2);
+        assert!(out.stale.is_empty());
+    }
+
+    #[test]
+    fn apply_suppressing_all_errors_clears_the_exit_signal() {
+        let rep = report("r", Level::Error, &[("X", Some(1))]);
+        assert!(rep.has_errors());
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("X", 1)],
+        };
+        let out = apply(&rep, &base, by_message);
+        assert!(
+            !out.live.has_errors(),
+            "a fully-baselined error report must exit clean"
+        );
+    }
+
+    #[test]
+    fn apply_honors_summed_budget_from_merged_duplicates() {
+        // A merged baseline with the same fingerprint twice (2 + 3) must
+        // suppress all five occurrences, not just the last writer's three.
+        let text = format!(
+            "{{\"schema_version\":{SCHEMA_VERSION}}}\n\
+             {{\"rule_id\":\"r\",\"fingerprint\":\"X\",\"count\":2}}\n\
+             {{\"rule_id\":\"r\",\"fingerprint\":\"X\",\"count\":3}}\n"
+        );
+        let base = Baseline::load(&text).unwrap();
+        let rep = report(
+            "r",
+            Level::Error,
+            &[
+                ("X", Some(1)),
+                ("X", Some(2)),
+                ("X", Some(3)),
+                ("X", Some(4)),
+                ("X", Some(5)),
+            ],
+        );
+        let out = apply(&rep, &base, by_message);
+        assert_eq!(out.suppressed_total, 5, "summed budget suppresses all five");
+        assert_eq!(out.live.total_violations(), 0);
+        assert!(out.stale.is_empty());
+    }
+
+    #[test]
+    fn apply_live_fingerprints_align_with_live_violations() {
+        // Two rules, each with one suppressed + one live finding. Every
+        // stored live fingerprint must equal recomputing it on the SAME
+        // live violation it sits beside — the invariant the SARIF/JSON
+        // formatters rely on via positional indexing.
+        let lined = |m: &str, l: usize| {
+            Violation::new(m.to_string())
+                .with_path(Path::new("f.rs"))
+                .with_location(l, 1)
+        };
+        let r1 = RuleResult::new(
+            std::sync::Arc::from("r1"),
+            Level::Error,
+            None,
+            vec![lined("A", 1), lined("B", 2)],
+            false,
+        );
+        let r2 = RuleResult::new(
+            std::sync::Arc::from("r2"),
+            Level::Error,
+            None,
+            vec![lined("C", 1), lined("D", 2)],
+            false,
+        );
+        let rep = Report {
+            results: vec![r1, r2],
+        };
+        // Baseline A and C (by_message fingerprints) → B and D stay live.
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("A", 1), entry("C", 1)],
+        };
+        let out = apply(&rep, &base, by_message);
+        for (ri, rr) in out.live.results.iter().enumerate() {
+            for (vi, v) in rr.violations.iter().enumerate() {
+                assert_eq!(
+                    out.live_fingerprints[ri][vi],
+                    by_message(&rr.rule_id, v),
+                    "live_fingerprints[{ri}][{vi}] must match its own violation"
+                );
+            }
+        }
+        assert_eq!(out.live.results[0].violations[0].message.as_ref(), "B");
+        assert_eq!(out.live.results[1].violations[0].message.as_ref(), "D");
+    }
+}

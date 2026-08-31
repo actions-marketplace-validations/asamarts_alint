@@ -1,0 +1,18 @@
+// alint client for the Sublime Text `LSP` package.
+//
+// Paste this `clients.alint` block into your LSP settings
+// (Preferences → Package Settings → LSP → Settings). Requires the
+// `alint` binary on PATH (Homebrew / cargo / npm / Docker / install.sh).
+{
+  "clients": {
+    "alint": {
+      "enabled": true,
+      "command": ["alint", "lsp"],
+      // alint is repo-structural (it lints every file), but Sublime LSP
+      // attaches by scope selector — there is no "all files" wildcard.
+      // This is a broad common-language selector; extend it as needed.
+      "selector": "source.c | source.c++ | source.go | source.js | source.json | source.python | source.rust | source.ts | source.tsx | source.yaml | source.toml | text.html.markdown",
+      "schemes": ["file"]
+    }
+  }
+}

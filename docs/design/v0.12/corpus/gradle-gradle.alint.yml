@@ -1,0 +1,153 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for gradle/gradle @ b7f4312ca8ef07b8f2ef30818fc85dc209764d46
+# (v0.12 case-study Stage A). Gradle is an Apache-2.0 JVM build tool with a
+# Gradle build-logic meta-build; primary CI is TeamCity (.teamcity/), with
+# GitHub Actions for contributor PRs (`./gradlew sanityCheck` / `compileAll`).
+#
+# The bespoke-validation surface is dominated by execution/semantic checks
+# (checkstyle, codenarc, ArchUnit architecture tests, japicmp binary
+# compatibility, dependency-verification PGP/SHA, the test suite) which are D
+# non-goals. The A-items below are the cross-file / structure / hygiene checks
+# alint expresses natively, plus structural value-add assertions.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/java@v1
+  - alint://bundled/tooling/editorconfig@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/compliance/apache-2@v1
+
+rules:
+  # === A-items: enforced cross-file / structure / hygiene checks ===========
+
+  # A1 — jvmargs coherence. `build-logic/build.gradle.kts` (the `clean` task)
+  # throws if `org.gradle.jvmargs` differs between the root and build-logic
+  # gradle.properties ("may cause two daemons to be spawned on CI and IDEA").
+  # gradle.properties is java-properties (key=value), so extract via regex.
+  - id: gradle-jvmargs-coherent
+    kind: cross_file_value_equals
+    source:
+      file: gradle.properties
+      extract:
+        regex: "(?m)^org\\.gradle\\.jvmargs=(.*)$"
+    targets:
+      - file: build-logic/gradle.properties
+        extract:
+          regex: "(?m)^org\\.gradle\\.jvmargs=(.*)$"
+    normalize: trim
+    level: error
+    message: >-
+      root gradle.properties and build-logic/gradle.properties must declare the
+      same org.gradle.jvmargs (else two daemons spawn on CI and in IDEA).
+
+  # A2 — forbidden IDE/editor residue in committed sources. Enforced by the
+  # checkstyle RegexpSingleline modules (checkstyle.xml lines 140-148):
+  # "Created with IntelliJ IDEA", "File | Settings | File Templates",
+  # and `@author` Javadoc tags are banned across .java sources.
+  - id: gradle-no-ide-template-residue
+    kind: file_content_forbidden
+    paths: ["**/*.java", "**/*.kt", "**/*.groovy"]
+    pattern: "Created with IntelliJ IDEA|File \\| Settings \\| File Templates"
+    level: warning
+    message: >-
+      IDE-generated template comments must not be committed (checkstyle
+      RegexpSingleline bans 'Created with IntelliJ IDEA' / 'File | Settings |
+      File Templates').
+
+  - id: gradle-no-author-javadoc-tag
+    kind: file_content_forbidden
+    paths: ["**/*.java"]
+    pattern: "^\\s*\\*\\s*@author"
+    level: warning
+    message: >-
+      @author Javadoc tags are forbidden in Gradle sources (checkstyle
+      RegexpSingleline ^\\s*\\*\\s*@author).
+
+  # A3 — import firewall. checkstyle IllegalImport (checkstyle.xml lines 89-100)
+  # bans jdk.internal.*, com.beust.*, org.testng.collections.* packages and the
+  # JetBrains nullability annotations (org.jspecify is preferred). Expressed as
+  # a Java import_gate over production sources.
+  - id: gradle-illegal-imports
+    kind: import_gate
+    paths: ["**/src/main/java/**/*.java"]
+    language: java
+    forbid: "^(jdk\\.internal\\.|com\\.beust\\.|org\\.testng\\.collections\\.|org\\.jetbrains\\.annotations\\.(Nullable|NotNull))"
+    level: error
+    message: >-
+      Forbidden imports (checkstyle IllegalImport): jdk.internal.*, com.beust.*,
+      org.testng.collections.*, org.jetbrains.annotations.{Nullable,NotNull}
+      (use org.jspecify for nullability).
+
+  # A4 — Apache-2.0 license header presence on JVM sources. checkstyle
+  # RegexpHeader (required-header.txt) requires the ASF header on every source.
+  # alint expresses header presence natively via `file_header`; the first lines
+  # must open the standard Gradle Apache-2.0 block.
+  - id: gradle-apache-license-header
+    kind: file_header
+    paths:
+      include: ["**/src/main/java/**/*.java"]
+      # Documentation snippets/samples are user-facing example code that
+      # intentionally ships WITHOUT the ASF header (checkstyle does not run on
+      # the docs snippet trees). Excluding them is the documented `paths.exclude`
+      # tuning that turns this from noisy into the real enforced behavior.
+      exclude:
+        - "platforms/documentation/**"
+        - "**/src/docs/**"
+        - "**/snippets/**"
+        - "**/samples/**"
+        # Test-fixture *resources* are sample projects used as test inputs;
+        # checkstyle runs only on real subproject `src/main/java`, never on
+        # these resource trees, so they carry no ASF header by design.
+        - "**/src/*/resources/**"
+        - "**/src/test/**"
+        - "**/src/*Test/**"
+        - "**/src/testFixtures/**"
+    lines: 4
+    pattern: "(?s)/\\*\\s*\\n \\* Copyright \\d{4}.*(the original author or authors|Gradle and contributors).*\\n \\*\\s*\\n \\* Licensed under the Apache License, Version 2\\.0"
+    level: warning
+    message: >-
+      Java sources must carry the Apache-2.0 license header (checkstyle
+      RegexpHeader / required-header.txt).
+
+  # === value-add: structural assertions Gradle does not itself gate on =======
+
+  # Dependency-verification policy is declared (gradle.properties
+  # org.gradle.dependency.verification=strict) and a verification-metadata.xml
+  # is present. Gradle ENFORCES the actual PGP/SHA verification at build time
+  # (that resolution is D); asserting the policy + manifest presence is value-add.
+  - id: gradle-dependency-verification-strict
+    kind: file_content_matches
+    paths: ["gradle.properties"]
+    pattern: "(?m)^org\\.gradle\\.dependency\\.verification=strict$"
+    level: info
+    message: >-
+      Gradle dependency verification should remain strict (the
+      verification-metadata.xml PGP/SHA manifest is the enforcement vehicle).
+
+  - id: gradle-verification-metadata-exists
+    kind: file_exists
+    paths: ["gradle/verification-metadata.xml"]
+    level: info
+    message: "Dependency verification metadata (PGP + SHA256) must be present."
+
+  # The .teamcity/subprojects.json codegen-freshness check (CheckSubprojectsInfo)
+  # requires the committed file to exist; alint asserts presence (the diff-vs-
+  # generator freshness itself is D — it runs the Gradle generator).
+  - id: gradle-subprojects-json-exists
+    kind: file_exists
+    paths: [".teamcity/subprojects.json"]
+    level: info
+    message: >-
+      .teamcity/subprojects.json must exist and stay in sync (CI task
+      checkSubprojectsInfo regenerates and diffs it).
+
+  # Gradle wrapper integrity: validateDistributionUrl must stay on.
+  - id: gradle-wrapper-validate-distribution-url
+    kind: file_content_matches
+    paths: ["gradle/wrapper/gradle-wrapper.properties"]
+    pattern: "(?m)^validateDistributionUrl=true$"
+    level: info
+    message: "The Gradle wrapper should validate its distribution URL."

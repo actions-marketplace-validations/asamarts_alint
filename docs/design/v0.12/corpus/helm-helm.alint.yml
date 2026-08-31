@@ -1,0 +1,122 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for helm/helm @ 59b57c5c31a009d069f9318c9d3ba8b784f1fe97
+# (v0.12 case-study artifact — Stage A deep-read).
+#
+# Helm's enforced bespoke-validation surface is small and dominated by
+# tool-execution (golangci-lint, go mod tidy, tests, govulncheck, CodeQL,
+# Scorecard) which alint orchestrates but does not reimplement (D).
+# The one natively-expressible enforced check is the Apache + copyright
+# source-header gate (scripts/validate-license.sh, run by
+# `make test-source-headers` in build-test.yml). Everything below the
+# "value-add" divider is structure helm does NOT gate on — recorded as
+# alint utility, not part of the coverage ratio.
+
+version: 1
+
+# helm vendors golang/dep's third_party testdata, which contains
+# DELIBERATELY-broken symlinks (windows-file-symlink -> C:/Users/...,
+# invalid-symlink -> /non/existing/file) as fixtures. alint's tree walk
+# errors on a dangling symlink, so this fixture tree is excluded up front.
+ignore:
+  - "internal/third_party/**"
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/go@v1
+  - alint://bundled/compliance/apache-2@v1
+  - alint://bundled/ci/github-actions@v1
+
+rules:
+  # =====================================================================
+  # ENFORCED checks (the A-surface helm actually gates on in CI)
+  # =====================================================================
+
+  # V1 — Apache license header in every *.go / *.sh source file.
+  # Mirrors scripts/validate-license.sh `grep -L 'Licensed under the
+  # Apache License, Version 2.0 (the "License")'` exactly (substring
+  # anywhere in file), with helm's exact exclude set (testdata,
+  # third_party, .git). file_content_matches (not file_header) because
+  # the script greps anywhere, and .go files carry a /* ... */ block
+  # comment, not a line-leading header.
+  - id: helm-source-apache-license-header
+    kind: file_content_matches
+    paths:
+      include:
+        - "**/*.go"
+        - "**/*.sh"
+      exclude:
+        - "**/testdata/**"
+        - "**/third_party/**"
+    pattern: 'Licensed under the Apache License, Version 2\.0 \(the "License"\)'
+    level: error
+    message: "Source files (*.go, *.sh) must carry the Apache-2.0 license header (scripts/validate-license.sh)."
+
+  # V2 — "Copyright The Helm Authors." copyright line, same file set.
+  # Mirrors the second grep in scripts/validate-license.sh.
+  - id: helm-source-copyright-header
+    kind: file_content_matches
+    paths:
+      include:
+        - "**/*.go"
+        - "**/*.sh"
+      exclude:
+        - "**/testdata/**"
+        - "**/third_party/**"
+    pattern: 'Copyright The Helm Authors\.'
+    level: error
+    message: "Source files (*.go, *.sh) must carry the `Copyright The Helm Authors.` header (scripts/validate-license.sh)."
+
+  # =====================================================================
+  # alint VALUE-ADD — structure helm does NOT gate on (recorded
+  # separately per R3/R5; NOT in the A/B/C/D coverage ratio).
+  # =====================================================================
+
+  # Governance docs present (CNCF / Apache-style release governance).
+  - id: helm-owners-exists
+    kind: file_exists
+    paths: ["OWNERS"]
+    level: warning
+    message: "Helm uses a kubernetes-style OWNERS file for maintainer/triage/emeritus roles."
+
+  - id: helm-security-policy-exists
+    kind: file_exists
+    paths: ["SECURITY.md"]
+    level: warning
+
+  # KEYS file: PGP keys used to sign Helm releases (release-integrity
+  # governance — the release.yml `make sign` step detached-signs artifacts).
+  - id: helm-release-keys-exists
+    kind: file_exists
+    paths: ["KEYS"]
+    level: info
+    message: "KEYS holds the PGP keys that sign Helm release artifacts."
+
+  - id: helm-code-of-conduct-exists
+    kind: file_exists
+    paths: ["code-of-conduct.md"]
+    level: info
+
+  # CI version single-source: .github/env declares both pinned toolchain
+  # versions consumed across every workflow (config-policy assertion, R3).
+  - id: helm-ci-env-declares-go-version
+    kind: file_content_matches
+    paths: [".github/env"]
+    pattern: '(?m)^GOLANG_VERSION='
+    level: info
+    message: ".github/env is the single source of GOLANG_VERSION for all workflows."
+
+  - id: helm-ci-env-declares-golangci-version
+    kind: file_content_matches
+    paths: [".github/env"]
+    pattern: '(?m)^GOLANGCI_LINT_VERSION='
+    level: info
+    message: ".github/env is the single source of GOLANGCI_LINT_VERSION (consumed by golangci-lint-action and make test-style)."
+
+  # golangci import firewall is DECLARED here (depguard/gomodguard deny
+  # lists). Enforcement is by golangci-lint (D); asserting the policy is
+  # declared is value-add (R3).
+  - id: helm-golangci-config-exists
+    kind: file_exists
+    paths: [".golangci.yml"]
+    level: info

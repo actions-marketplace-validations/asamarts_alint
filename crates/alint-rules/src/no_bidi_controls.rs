@@ -14,6 +14,13 @@
 //!   - U+2068 FIRST STRONG ISOLATE
 //!   - U+2069 POP DIRECTIONAL ISOLATE
 //!
+//! Plus the implicit directional marks, which reorder neighbouring
+//! runs without an explicit embedding and so can still mislead a
+//! reader (rustc's Trojan-Source lint flags these too):
+//!   - U+061C ARABIC LETTER MARK
+//!   - U+200E LEFT-TO-RIGHT MARK
+//!   - U+200F RIGHT-TO-LEFT MARK
+//!
 //! Non-UTF-8 files are skipped (can't have these codepoints
 //! anyway without being invalid UTF-8).
 
@@ -26,10 +33,15 @@ use alint_core::{
 
 use crate::fixers::FileStripBidiFixer;
 
-/// Returns true if `c` is one of the nine Unicode bidi control
-/// characters.
+/// Returns true if `c` is one of the Unicode bidi control characters
+/// (the five explicit embeddings/overrides, the four isolates, and the
+/// three implicit directional marks ALM/LRM/RLM).
 pub fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    matches!(c,
+        '\u{061C}'                  // ALM
+        | '\u{200E}' | '\u{200F}'   // LRM, RLM
+        | '\u{202A}'..='\u{202E}'   // LRE, RLE, PDF, LRO, RLO
+        | '\u{2066}'..='\u{2069}') // LRI, RLI, FSI, PDI
 }
 
 #[derive(Debug)]
@@ -69,10 +81,13 @@ impl PerFileRule for NoBidiControlsRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return Ok(Vec::new());
-        };
-        let Some((line_no, col, codepoint)) = first_bidi(text) else {
+        // Lossily decode rather than abandon the whole file on the first invalid
+        // byte: this is a Trojan-Source (CVE-2021-42574) defense, so a single
+        // stray `0xFF` must NOT suppress detection of a bidi override elsewhere
+        // in the file (a trivial fail-open evasion otherwise). `U+FFFD` replaces
+        // only the invalid bytes; bidi controls in the valid runs are preserved.
+        let text = String::from_utf8_lossy(bytes);
+        let Some((line_no, col, codepoint)) = first_bidi(&text) else {
             return Ok(Vec::new());
         };
         let msg = self.message.clone().unwrap_or_else(|| {
@@ -160,6 +175,16 @@ mod tests {
     }
 
     #[test]
+    fn flags_implicit_directional_marks() {
+        // L1: ALM, LRM, RLM complete the Trojan-Source set (rustc flags these).
+        for &cp in &[0x061Cu32, 0x200E, 0x200F] {
+            let c = char::from_u32(cp).unwrap();
+            let got = first_bidi(&format!("a{c}b")).unwrap();
+            assert_eq!(got.2, cp, "codepoint U+{cp:04X} must be flagged");
+        }
+    }
+
+    #[test]
     fn clean_ascii_passes() {
         assert!(first_bidi("nothing to see here\n").is_none());
     }
@@ -168,5 +193,45 @@ mod tests {
     fn non_bidi_unicode_passes() {
         // ☃ snowman is not a bidi control.
         assert!(first_bidi("☃ chilly ☃\n").is_none());
+    }
+
+    fn rule() -> NoBidiControlsRule {
+        NoBidiControlsRule {
+            id: "no-bidi".to_string(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::match_all(),
+            fixer: None,
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_byte_does_not_suppress_a_later_bidi_control() {
+        // Fail-open evasion regression: an earlier code path abandoned the whole
+        // file on the first invalid UTF-8 byte (`str::from_utf8` else-return
+        // empty), so appending a stray `0xFF` anywhere hid every bidi override —
+        // a trivial bypass of a CVE-2021-42574 defense. evaluate_file must decode
+        // lossily and still flag the RLO after the bad byte.
+        let idx = alint_core::FileIndex::from_entries(Vec::new());
+        let ctx = Context {
+            root: Path::new("/r"),
+            index: &idx,
+            registry: None,
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+        };
+        let mut bytes = vec![0xFFu8]; // invalid UTF-8 lead byte
+        bytes.extend_from_slice("code\u{202E}evil".as_bytes());
+        let vs = rule()
+            .evaluate_file(&ctx, Path::new("a.rs"), &bytes)
+            .unwrap();
+        assert_eq!(
+            vs.len(),
+            1,
+            "the RLO after a bad byte must still be flagged"
+        );
     }
 }

@@ -121,61 +121,21 @@ fn walkdir(root: &Path) -> Vec<std::path::PathBuf> {
     out
 }
 
-/// Rule kinds whose firing case can't be expressed in the
-/// scenario YAML format because the testkit doesn't yet
-/// materialise the required filesystem primitive. Each entry
-/// must point at a native Rust integration test that DOES
-/// cover the firing case.
-///
-/// These should shrink to zero as the testkit grows
-/// `mode: 0o755`, `symlink_to: <path>`, custom commit
-/// messages, and `GIT_AUTHOR_DATE` overrides — at which point
-/// the YAML coverage becomes feasible and the entry is
-/// removed.
-const NATIVE_FIRES_ALLOWLIST: &[(&str, &str)] = &[
-    (
-        "executable_bit",
-        "crates/alint-e2e/tests/unix_metadata.rs (testkit can't write +x bits)",
-    ),
-    (
-        "executable_has_shebang",
-        "crates/alint-e2e/tests/unix_metadata.rs (testkit can't write +x bits)",
-    ),
-    (
-        "no_symlinks",
-        "crates/alint-e2e/tests/unix_metadata.rs (testkit can't materialise symlinks)",
-    ),
-    (
-        "git_blame_age",
-        "crates/alint-rules/tests/git_blame_age.rs (testkit runner doesn't backdate commits via GIT_AUTHOR_DATE)",
-    ),
-    (
-        "git_commit_message",
-        "crates/alint-rules/tests/shell_out_rules.rs (testkit runner uses a fixed commit message)",
-    ),
-];
+/// Rule kinds whose firing case can't be expressed in scenario YAML. Now
+/// EMPTY: Phase 2 (ADR-0014) grew the testkit's `$exec`/`$symlink` tree nodes
+/// and the git commits DSL (custom messages, `GIT_AUTHOR_DATE`, staged file
+/// deltas), so every registered kind now fires in a YAML scenario. Kept as a
+/// tripwire - `native_fires_allowlist_is_empty` fails if a future kind re-adds
+/// an exemption, forcing the "can this fire in YAML?" question first.
+const NATIVE_FIRES_ALLOWLIST: &[(&str, &str)] = &[];
 
-/// Same alias map as `coverage_audit.rs`. Normalise before
-/// recording status so a single scenario using either form
-/// satisfies the audit.
-const ALIASES: &[(&str, &str)] = &[
-    ("content_matches", "file_content_matches"),
-    ("content_forbidden", "file_content_forbidden"),
-    ("header", "file_header"),
-    ("footer", "file_footer"),
-    ("shebang", "file_shebang"),
-    ("max_size", "file_max_size"),
-    ("min_size", "file_min_size"),
-    ("min_lines", "file_min_lines"),
-    ("max_lines", "file_max_lines"),
-    ("is_text", "file_is_text"),
-];
-
-fn canonical(kind: &str) -> &str {
-    ALIASES
-        .iter()
-        .find(|(alias, _)| *alias == kind)
-        .map_or(kind, |(_, canon)| *canon)
+#[test]
+fn native_fires_allowlist_is_empty() {
+    assert!(
+        NATIVE_FIRES_ALLOWLIST.is_empty(),
+        "the native-fires allowlist should stay empty (Phase 2 zeroed it); a new \
+         entry means a kind cannot express firing in YAML - reconsider before re-adding"
+    );
 }
 
 // 101 lines — the test enumerates every registered rule kind,
@@ -187,6 +147,7 @@ fn canonical(kind: &str) -> &str {
 #[test]
 fn every_registered_rule_kind_has_pass_and_fail_scenarios() {
     let scenarios_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios");
+    let registry = alint_rules::builtin_registry();
     let mut status: HashMap<String, Status> = HashMap::new();
 
     for path in walkdir(&scenarios_dir) {
@@ -214,7 +175,7 @@ fn every_registered_rule_kind_has_pass_and_fail_scenarios() {
         // "silent" — that's correct, the rule did stay silent.
         let mut kinds_in_scenario: HashMap<String, bool> = HashMap::new();
         for (id, kind) in &rules {
-            let canon = canonical(kind).to_string();
+            let canon = registry.canonical_kind(kind).to_string();
             let entry = kinds_in_scenario.entry(canon).or_insert(false);
             if fired.contains(id) {
                 *entry = true;
@@ -230,13 +191,7 @@ fn every_registered_rule_kind_has_pass_and_fail_scenarios() {
         }
     }
 
-    let registry = alint_rules::builtin_registry();
-    let alias_set: HashSet<&str> = ALIASES.iter().map(|(alias, _)| *alias).collect();
-    let canonical_kinds: Vec<String> = registry
-        .known_kinds()
-        .filter(|k| !alias_set.contains(k))
-        .map(str::to_string)
-        .collect();
+    let canonical_kinds: Vec<String> = registry.canonical_kinds().map(str::to_string).collect();
 
     let native_allowlist: HashSet<&str> = NATIVE_FIRES_ALLOWLIST
         .iter()

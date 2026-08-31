@@ -11,11 +11,16 @@ use std::path::PathBuf;
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    /// Maximum number of in-scope files allowed as immediate children
+    /// of any one directory (non-recursive).
+    #[schemars(range(min = 1))]
     max_files: usize,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct MaxFilesPerDirectoryRule {
@@ -28,6 +33,13 @@ pub struct MaxFilesPerDirectoryRule {
 }
 
 impl Rule for MaxFilesPerDirectoryRule {
+    /// Expose the per-file scope so the engine resolves this rule's
+    /// `scope_filter` (manifest sets, `changed_since:`) before dispatch and
+    /// can `--changed`-skip it (see `Rule::path_scope`).
+    fn path_scope(&self) -> Option<&Scope> {
+        Some(&self.scope)
+    }
+
     alint_core::rule_common_impl!();
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {

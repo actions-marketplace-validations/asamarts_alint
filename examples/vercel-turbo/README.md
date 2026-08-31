@@ -587,3 +587,19 @@ Three candidate refinements for the next revalidation pass:
   `[workspace]` members),
   **A5** (`oss-baseline@v1` `oss-license-exists` recognises
   LICENSE.TXT and LICENSE.md).
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (91 rules, ~82% coverage). +6 surfaces: the n-way npm-version
+<-> version.txt coherence -> cross_file_value_equals (the real cross-half
+contract), registry_paths_resolve on [workspace].members, and import_gate
+mirroring the clippy.toml type/method bans. Corrections from the re-analysis:
+turbo is MIT (not MPL-2.0) and Rust files carry no SPDX header (the config
+asserts the #![deny] attr instead); coherence is npm <-> version.txt since
+the Cargo `turbo` crate is pinned 0.1.0.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 6).

@@ -1,0 +1,104 @@
+package org.alint.lsp
+
+import com.intellij.notification.NotificationAction
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.project.Project
+import com.redhat.devtools.lsp4ij.LanguageServerFactory
+import com.redhat.devtools.lsp4ij.server.ProcessStreamConnectionProvider
+import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
+
+/**
+ * Registers `alint lsp` with LSP4IJ. Wired in `plugin.xml` under the
+ * `com.redhat.devtools.lsp4ij` server extension point.
+ *
+ * Uses LSP4IJ's `ProcessStreamConnectionProvider` (`setCommands` /
+ * `setWorkingDirectory`) and the `LanguageServerFactory` interface; the
+ * editors CI job (`./gradlew buildPlugin verifyPlugin`) catches API
+ * drift in the pinned LSP4IJ version.
+ */
+class AlintLanguageServerFactory : LanguageServerFactory {
+    override fun createConnectionProvider(project: Project): StreamConnectionProvider =
+        AlintConnectionProvider(project)
+}
+
+private class AlintConnectionProvider(project: Project) : ProcessStreamConnectionProvider() {
+    init {
+        val binary = AlintBinary.resolve()
+        if (binary != null) {
+            super.setCommands(listOf(binary, "lsp"))
+            project.basePath?.let { super.setWorkingDirectory(it) }
+        } else {
+            thisLogger().warn("alint binary not found on PATH or in settings; server not started")
+            AlintNotifier.binaryMissing(project)
+        }
+    }
+}
+
+/** Surfaces the "alint not found" prompt with an opt-in download action. */
+object AlintNotifier {
+    fun binaryMissing(project: Project) {
+        val group = NotificationGroupManager.getInstance().getNotificationGroup("alint")
+        group
+            .createNotification(
+                "alint binary not found",
+                "Set its path in Settings, install it (brew / cargo / npm), or download the matching release.",
+                NotificationType.WARNING,
+            )
+            .addAction(object : NotificationAction("Download latest") {
+                override fun actionPerformed(
+                    e: com.intellij.openapi.actionSystem.AnActionEvent,
+                    notification: com.intellij.notification.Notification,
+                ) {
+                    notification.expire()
+                    downloadInBackground(project)
+                }
+            })
+            .notify(project)
+    }
+
+    private fun downloadInBackground(project: Project) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val group = NotificationGroupManager.getInstance().getNotificationGroup("alint")
+            try {
+                // Download the alint release matching this plugin's
+                // (release-stamped) version — same strategy as the VS
+                // Code extension. (The Zed extension uses latest, since
+                // its wasm can't read its own version.)
+                val version = pluginVersion()
+                val path = AlintBinary.download(version) { thisLogger().info("alint: $it") }
+                AlintSettings.getInstance().alintPath = path
+                group
+                    .createNotification(
+                        "alint downloaded",
+                        "Installed to $path. Restart the alint language server (or the IDE) to use it.",
+                        NotificationType.INFORMATION,
+                    )
+                    .notify(project)
+            } catch (ex: Exception) {
+                group
+                    .createNotification(
+                        "alint download failed",
+                        ex.message ?: ex.toString(),
+                        NotificationType.ERROR,
+                    )
+                    .notify(project)
+            }
+        }
+    }
+
+    // JetBrains Marketplace validation rejects BOTH `PluginManagerCore.getPlugin(PluginId)`
+    // and `PluginManager.getPluginByClass(Class)` as internal-API usage, even though
+    // released-IDE bytecode marks neither @ApiStatus.Internal. We sidestep the whole
+    // plugin-lookup surface by stamping the version into a generated resource at build
+    // time (see `generateVersionResource` in build.gradle.kts) and reading it from our
+    // own classloader. No platform API touched.
+    // See https://plugins.jetbrains.com/docs/intellij/api-internal.html
+    private fun pluginVersion(): String =
+        AlintNotifier::class.java.classLoader
+            .getResourceAsStream("alint-lsp/version.txt")
+            ?.use { it.readBytes().toString(Charsets.UTF_8).trim() }
+            ?: error("alint-lsp/version.txt not on the classpath; build.gradle.kts wiring broken")
+}

@@ -23,6 +23,7 @@
 //! are non-breaking; field removals or semantic changes bump the
 //! version.
 
+use std::borrow::Cow;
 use std::io::Write;
 use std::path::Path;
 
@@ -57,8 +58,12 @@ struct BySeverity {
 struct AgentViolation<'a> {
     rule_id: &'a str,
     severity: &'static str,
+    // Lossy UTF-8: a non-UTF-8 repo path (legal on Unix) must not error the
+    // whole document the way serde's `&Path` serializer does. Matches the
+    // human `agent_instruction` (built from `path.display()`) and every other
+    // renderer. Invalid bytes → U+FFFD.
     #[serde(skip_serializing_if = "Option::is_none")]
-    file: Option<&'a Path>,
+    file: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     line: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,6 +76,19 @@ struct AgentViolation<'a> {
     /// availability, and policy URL — see `build_agent_instruction`.
     agent_instruction: String,
     fix_available: bool,
+    /// Exact argv (after the `alint` program name) an agent can run to
+    /// auto-fix this single violation, present iff `fix_available`.
+    /// Lets an agent execute the fix programmatically instead of
+    /// parsing the command out of the English `agent_instruction` —
+    /// and is checked by a CLI-parse regression test, so it can never
+    /// name a flag the binary doesn't accept.
+    ///
+    /// Scope note: this is always whole-tree (`fix --only <id>`). When the
+    /// producing `check` ran under `--changed`, the suggested fix is *not*
+    /// scoped to the diff — an agent that wants to stay within its changed
+    /// set should add `--changed` (and `--base <ref>`) itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fix_command: Option<Vec<&'a str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     policy_url: Option<&'a str>,
 }
@@ -98,12 +116,15 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
             violations.push(AgentViolation {
                 rule_id: r.rule_id.as_ref(),
                 severity: severity_str(r.level),
-                file: v.path.as_deref(),
+                file: v.path.as_deref().map(Path::to_string_lossy),
                 line: v.line,
                 column: v.column,
                 human_message: v.message.as_ref(),
                 agent_instruction: build_agent_instruction(r, v),
                 fix_available: r.is_fixable,
+                fix_command: r
+                    .is_fixable
+                    .then(|| vec!["fix", "--only", r.rule_id.as_ref()]),
                 policy_url: r.policy_url.as_deref(),
             });
         }
@@ -240,6 +261,7 @@ mod tests {
                     .with_path(PathBuf::from("src/api.ts"))
                     .with_location(2, 1),
             ],
+            notes: Vec::new(),
             is_fixable: false,
         };
         let out = run(vec![result]);
@@ -267,6 +289,7 @@ mod tests {
             level: Level::Error,
             policy_url: Some("https://example.com/policy".into()),
             violations: vec![Violation::new("A README is required at the root.")],
+            notes: Vec::new(),
             is_fixable: true,
         };
         let out = run(vec![result]);
@@ -294,6 +317,7 @@ mod tests {
             level: Level::Error,
             policy_url: None,
             violations: vec![Violation::new("Multiple lockfiles found.")],
+            notes: Vec::new(),
             is_fixable: false,
         };
         let out = run(vec![result]);
@@ -317,6 +341,7 @@ mod tests {
                 level: Level::Error,
                 policy_url: None,
                 violations: vec![Violation::new("a")],
+                notes: Vec::new(),
                 is_fixable: false,
             },
             RuleResult {
@@ -324,6 +349,7 @@ mod tests {
                 level: Level::Warning,
                 policy_url: None,
                 violations: vec![Violation::new("b1"), Violation::new("b2")],
+                notes: Vec::new(),
                 is_fixable: false,
             },
             RuleResult {
@@ -331,6 +357,7 @@ mod tests {
                 level: Level::Info,
                 policy_url: None,
                 violations: vec![Violation::new("c")],
+                notes: Vec::new(),
                 is_fixable: false,
             },
             RuleResult {
@@ -338,6 +365,7 @@ mod tests {
                 level: Level::Warning,
                 policy_url: None,
                 violations: vec![],
+                notes: Vec::new(),
                 is_fixable: false,
             },
         ];

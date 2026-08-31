@@ -1,0 +1,33 @@
+name: alint://bundled/hygiene/no-tracked-artifacts verifies macOS-junk signatures
+tags: [check, extends, bundled, hygiene, no-tracked-artifacts]
+
+# hygiene-no-macos-junk matches **/.DS_Store and **/._* by name but then
+# verifies the content signature before flagging. It fires on genuine
+# AppleDouble (magic 00 05 16 07) and .DS_Store (magic 00 00 00 01 "Bud1")
+# data, and ignores look-alikes such as Hadoop's ._<name>.crc checksum files
+# (which begin "crc\0"). Regression guard for the ._*.crc false positive that
+# name-only matching produced.
+
+given:
+  tree:
+    README.md: "# demo\n"
+    src:
+      # Genuine macOS AppleDouble sidecar: must fire.
+      "._Main.java": "\u0000\u0005\u0016\u0007rsrc"
+    # Genuine .DS_Store (Bud1 magic): must fire.
+    ".DS_Store": "\u0000\u0000\u0000\u0001Bud1"
+    data:
+      # Hadoop checksum sidecar: matches ._* by name, begins "crc\0", so it is
+      # NOT macOS junk and must NOT fire.
+      "._part-00000.crc": "crc\u0000\u0000\u0000\u0002data"
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: hygiene-no-macos-junk, level: error, path: src/._Main.java}
+      - {rule: hygiene-no-macos-junk, level: error, path: .DS_Store}

@@ -1,0 +1,212 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint v0.12 case-study config for elastic/elasticsearch
+# @ 79aea6d6378fe67b43c124b4589945fe0e94e10a
+#
+# Shape: JVM/Java systems/DB (search), Gradle multi-project monorepo,
+# single-vendor (Elastic B.V.) governance.
+#
+# The bespoke-validation surface is dominated by a Gradle "precommit"
+# plugin suite (build-tools-internal/.../precommit/*) + a few buildkite
+# shell gates. MOST of it is tool/bytecode execution (checkstyle,
+# forbidden-apis, third-party-audit, jarHell, split-package audit,
+# logger-usage, spotless) = deliberate non-goals (D). The repo-STATE
+# checks alint expresses declaratively are catalogued below.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════
+  # LICENSE HEADERS  (Gradle LicenseHeadersTask, Apache-RAT substring)
+  # Two variants per AGENTS.md "License Headers":
+  #   - default (outside x-pack): triple AGPL-3.0 / SSPL-1.0 / Elastic-2.0
+  #   - under x-pack:             Elastic License 2.0 ONLY
+  # file_header matches a regex within the first N lines. We anchor on an
+  # invariant single line of each header block.
+  # ════════════════════════════════════════════════════════════════
+  # NOTE: the Gradle LicenseHeadersTask carries an `approvedLicenses` list
+  # ("AGLP+SSPL+Elastic", "Generated", "Vendored", "Apache LZ4-Java") and
+  # per-project `additionalLicenses` — so a single required-pattern over-fires
+  # on the Apache-2.0-licensed client/rest tree, vendored Lucene code, ANTLR
+  # output, module-info, etc. We therefore accept EITHER the triple header OR
+  # the Apache-2.0 header (the two non-x-pack families) and exclude generated /
+  # vendored trees. Expressing "header is one of {triple, apache-2.0}" cleanly
+  # is the C-tuning need (header-alternation / per-tree allow). See record.
+  - id: es-license-header-default-triple
+    kind: file_header
+    paths:
+      include: ["**/*.java"]
+      exclude:
+        - "x-pack/**"
+        - "**/build/**"
+        - "**/generated/**"
+        - "**/generated-src/**"
+        - "**/*Lexer.java"
+        - "**/*Parser.java"
+        - "**/*BaseListener.java"
+        - "**/*BaseVisitor.java"
+        - "**/module-info.java"
+        # vendored Lucene back-compat tree (Apache-2.0, "Vendored" exemption)
+        - "**/lucene/bwc/**"
+    lines: 12
+    pattern: '(the "GNU Affero General Public License v3.0 only", and the "Server Side|Licensed to Elasticsearch B\.V\. under one or more contributor|under the Apache License, Version 2\.0)'
+    level: error
+    message: |
+      Java sources outside x-pack must carry an approved license header — the
+      triple AGPL-3.0 / SSPL-1.0 / Elastic-2.0 default, or the Apache-2.0 header
+      used by the client/rest tree (Gradle `licenseHeaders` / Apache-RAT check
+      with its approvedLicenses list).
+
+  - id: es-license-header-xpack-elastic-only
+    kind: file_header
+    paths:
+      include: ["x-pack/**/*.java"]
+      exclude:
+        - "**/build/**"
+        - "**/generated/**"
+        - "**/generated-src/**"
+        - "**/*Lexer.java"
+        - "**/*Parser.java"
+        - "**/*BaseListener.java"
+        - "**/*BaseVisitor.java"
+        - "**/*BaseBaseListener.java"
+        - "**/*BaseBaseVisitor.java"
+        - "**/module-info.java"
+        # vendored / Apache-2.0-licensed back-compat + crypto code
+        - "**/lucene/bwc/**"
+        - "**/security/authc/support/BCrypt.java"
+        - "**/es-opensaml-security-api/**"
+    lines: 12
+    pattern: 'the Elastic License\n \* 2\.0; you may not use this file except in compliance with the Elastic License'
+    level: error
+    message: |
+      Java sources under x-pack/ must carry the Elastic-License-2.0-ONLY header
+      (AGENTS.md "License Headers"; Gradle licenseHeaders check).
+
+  # ════════════════════════════════════════════════════════════════
+  # FORBIDDEN PATTERNS  (Gradle ForbiddenPatternsTask mandatory rules)
+  # build-tools-internal/.../precommit/ForbiddenPatternsTask.java seeds:
+  #   - "nocommit|NOCOMMIT"
+  #   - tab character
+  # (the case-mix rule and per-project rules omitted; these two are the
+  # always-on built-ins). Scoped to source text, mirroring the task's
+  # binary-extension excludes.
+  # ════════════════════════════════════════════════════════════════
+  - id: es-forbidden-nocommit
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.{java,gradle,json,yml,yaml,sh,md,asciidoc,py,g4,st,txt,properties}"]
+      exclude:
+        - "**/build/**"
+        - ".git/**"
+        - ".alint.yml"
+        # the files that DEFINE the forbidden pattern literally
+        - "**/precommit/ForbiddenPatternsTask.java"
+        - "**/precommit/ForbiddenPatternsTaskTests.java"
+    pattern: 'nocommit|NOCOMMIT'
+    level: error
+    message: |
+      `nocommit` / `NOCOMMIT` markers must never be committed
+      (Gradle forbiddenPatterns built-in rule).
+
+  - id: es-forbidden-tabs
+    kind: file_content_forbidden
+    paths:
+      include: ["**/*.{java,gradle,json,yml,yaml,py,g4,st}"]
+      exclude:
+        - "**/build/**"
+        - ".git/**"
+        - "**/*.tsv"
+    pattern: '\t'
+    level: error
+    message: |
+      Tab characters are forbidden in source (Gradle forbiddenPatterns "tab"
+      built-in rule); use spaces.
+
+  # ════════════════════════════════════════════════════════════════
+  # ESQL GENERATED-DOC HEADERS
+  # .ci/scripts/check-esql-generated-headers.sh (.github workflow
+  # check-esql-generated-headers.yml): every *.md under the ESQL
+  # fully-generated snippet dirs must start with the generator marker.
+  # ════════════════════════════════════════════════════════════════
+  - id: es-esql-generated-doc-header
+    kind: file_content_matches
+    paths:
+      include:
+        - "docs/reference/query-languages/esql/_snippets/functions/**/*.md"
+        - "docs/reference/query-languages/esql/_snippets/operators/types/**/*.md"
+        - "docs/reference/query-languages/esql/_snippets/operators/examples/**/*.md"
+        - "docs/reference/query-languages/esql/_snippets/operators/detailedDescription/**/*.md"
+        - "docs/reference/query-languages/esql/_snippets/commands/types/**/*.md"
+        - "docs/reference/query-languages/esql/_snippets/commands/settings/**/*.md"
+    pattern: '\A% This is generated by ESQL'
+    level: error
+    message: |
+      Every *.md under the ESQL fully-generated snippet directories must begin
+      with the "% This is generated by ESQL" marker
+      (.ci/scripts/check-esql-generated-headers.sh). A file without it is a
+      hand-written file in the wrong place (silently deleted on regen) or a
+      generator missing the marker.
+
+  # ════════════════════════════════════════════════════════════════
+  # REST-API-SPEC JSON SCHEMA  (Gradle validateRestSpec task)
+  # ValidateRestSpecPlugin validates every rest-api-spec/api/**/*.json
+  # against rest-api-spec/src/main/resources/schema.json.
+  # ════════════════════════════════════════════════════════════════
+  - id: es-rest-api-spec-schema
+    kind: json_schema_passes
+    paths:
+      include: ["rest-api-spec/src/main/resources/rest-api-spec/api/**/*.json"]
+      exclude: ["**/_common.json"]
+    schema_path: "rest-api-spec/src/main/resources/schema.json"
+    level: error
+    message: |
+      Every REST API spec JSON must validate against
+      rest-api-spec/src/main/resources/schema.json (Gradle validateRestSpec).
+
+  # ════════════════════════════════════════════════════════════════
+  # DEPENDENCY-LICENSE FILE PAIRING  (Gradle DependencyLicensesTask)
+  # The task requires every dependency jar to have BOTH a LICENSE and a
+  # NOTICE file in its licenses/ dir, named <dep>-LICENSE.txt /
+  # <dep>-NOTICE.txt. This is a file-PAIR identity, BUT `pair`'s partner
+  # template only offers {stem}/{dir}/{ext}/{basename} — there is no way
+  # to strip the "-LICENSE" suffix and substitute "-NOTICE" (the stem of
+  # "arrow-LICENSE.txt" is "arrow-LICENSE", not "arrow"). So this pairing
+  # is a NEW-PRIMITIVE candidate (B): a capture-group / suffix-rewrite
+  # partner template. Left UNEXPRESSED here; recorded as B.
+  # ════════════════════════════════════════════════════════════════
+
+  # ════════════════════════════════════════════════════════════════
+  # ROOT GOVERNANCE / STRUCTURE FILES
+  # ════════════════════════════════════════════════════════════════
+  - id: es-license-file-exists
+    kind: file_exists
+    paths: "LICENSE.txt"
+    level: error
+
+  - id: es-notice-file-exists
+    kind: file_exists
+    paths: "NOTICE.txt"
+    level: error
+
+  - id: es-gradle-wrapper-jar-exists
+    kind: file_exists
+    paths: "gradle/wrapper/gradle-wrapper.jar"
+    level: error
+    message: |
+      The Gradle wrapper jar must be committed (GitHub workflow
+      gradle-wrapper-validation.yml validates its checksum).
+
+  - id: es-gradle-wrapper-properties-exists
+    kind: file_exists
+    paths: "gradle/wrapper/gradle-wrapper.properties"
+    level: error
+
+  # ── value-add: assert renovate config is the policy-declared one ──
+  - id: es-renovate-config-exists
+    kind: file_exists
+    paths: "renovate.json"
+    level: warning

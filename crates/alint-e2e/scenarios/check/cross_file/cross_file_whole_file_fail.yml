@@ -1,0 +1,28 @@
+name: cross_file whole_file source fires when the file content differs from the target value
+
+given:
+  tree:
+    expected-name.txt: |
+      my-project
+    package.json: |
+      {"name": "WRONG"}
+  config: |
+    version: 1
+    rules:
+      - id: name-matches
+        kind: cross_file
+        source:
+          file: expected-name.txt
+          extract: { whole_file: {} }
+        targets:
+          files: "package.json"
+          extract: { json: "$.name" }
+        relation: equals
+        normalize: trim
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: name-matches, level: error, path: package.json}

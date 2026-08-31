@@ -1,0 +1,106 @@
+{
+  "name": "alint",
+  "displayName": "alint",
+  "description": "Language-agnostic linter for repository structure, file existence, filename conventions, and content rules — in-editor diagnostics, hover-to-explain, and quick-fixes via the alint language server.",
+  "version": "0.10.2",
+  "publisher": "asamarts",
+  "license": "Apache-2.0 OR MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asamarts/alint.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://alint.org",
+  "bugs": {
+    "url": "https://github.com/asamarts/alint/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "keywords": [
+    "lint",
+    "linter",
+    "repository",
+    "monorepo",
+    "structure"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/.alint.yml"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "alint",
+      "properties": {
+        "alint.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the `alint` binary. When empty, the extension looks for `alint` on your `PATH`, then offers to download the matching release."
+        },
+        "alint.serverArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra arguments appended after `alint lsp` when launching the language server."
+        },
+        "alint.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace the communication between VS Code and the alint language server in the 'alint' output channel."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "alint.restartServer",
+        "title": "alint: Restart language server"
+      },
+      {
+        "command": "alint.showRules",
+        "title": "alint: Show effective rules"
+      },
+      {
+        "command": "alint.openConfig",
+        "title": "alint: Open .alint.yml"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "check-types": "tsc --noEmit",
+    "test": "tsc --noEmit",
+    "pretest:e2e": "npm run build && tsc -p ./tsconfig.test.json",
+    "test:e2e": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish:vsce": "vsce publish",
+    "publish:ovsx": "ovsx publish"
+  },
+  "dependencies": {
+    "tar": "^7.4.3",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.7",
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "glob": "^10.4.5",
+    "mocha": "^10.7.3",
+    "ovsx": "^0.10.0",
+    "typescript": "^5.6.0"
+  }
+}

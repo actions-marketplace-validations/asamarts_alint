@@ -576,3 +576,19 @@ Three candidate refinements for the next revalidation pass:
   parses `[workspace] members`) was already correct for tokio's
   pre-fix shape; A6 (`allow_compiler_naming` knob) doesn't apply
   (tokio has no compiler-internal naming).
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (73 rules, ~83% coverage, the corpus high). +5 surfaces, the
+headline being MSRV coherence: the 5 crates' `rust-version` + ci.yml's
+`rust_min` (hand-synced per ci.yml's own comment block) -> one
+cross_file_value_equals from a single source of truth. Also pair_hash for
+the README byte-mirror, ordered_block for spellcheck.dic, and rustfmt ->
+command_idempotent. Non-replaceable: clippy semantics, the compile/run
+matrices, loom/miri dynamic gates.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 6).

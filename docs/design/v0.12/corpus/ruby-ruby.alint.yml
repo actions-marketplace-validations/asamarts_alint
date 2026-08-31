@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for ruby/ruby @ ad14452e3bdcf255a217de7f8c64496e3428bb0f
+# v0.12 case-study draft. Bundles supply the OSS-hygiene + Rust (yjit/zjit)
+# baseline; the repo: rules below express ruby/ruby's *bespoke* enforced
+# validations (the `tool/auto-style.rb` hygiene set + the `check_misc.yml`
+# grep gates).
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/rust@v1
+
+rules:
+  # === ruby/ruby BESPOKE enforced validations ======================
+
+  # A1 + A2 — tool/auto-style.rb (gated on PRs via check_misc.yml's
+  # "Check for code styles"; auto-fixed on push via post_push.yml).
+  # It strips trailing whitespace and appends a final newline on the
+  # curated C/H/Y/Ruby/etc. source set, excluding vendored + default-gem
+  # subtrees (the IGNORED_FILES list in tool/auto-style.rb).
+  # NOTE (v0.12 finding): a *bare-string* glob `internal/**/*.c` matches
+  # ZERO files for per-file rules in this build; only the structured
+  # multi-entry `include:` form resolves. The two-entry include below is
+  # the proven-firing shape (see ruby-core-space-indent / 53 hits).
+  - id: ruby-core-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["internal/**/*.c", "internal/**/*.h"]
+      exclude:
+        - "ccan/**"            # vendored
+        - "enc/**"             # vendored (onigmo)
+    level: info
+    message: "auto-style strips trailing whitespace from core C/H sources (tool/auto-style.rb)."
+
+  - id: ruby-core-final-newline
+    kind: final_newline
+    paths:
+      include: ["internal/**/*.c", "internal/**/*.h"]
+      exclude:
+        - "ccan/**"
+        - "enc/**"
+    level: info
+    message: "auto-style appends a newline at EOF for core C/H sources (tool/auto-style.rb)."
+
+  # A3 — check_misc.yml "Check for bash specific substitution in
+  # configure.ac": `git grep -n '\${[A-Za-z_0-9]*/' -- configure.ac`
+  # must find nothing (autoconf is /bin/sh, not bash).
+  - id: ruby-configure-no-bash-substitution
+    kind: file_content_forbidden
+    paths: ["configure.ac"]
+    pattern: '\$\{[A-Za-z_0-9]*/'
+    level: error
+    message: "configure.ac runs under /bin/sh; bash-only ${var/...} substitution is forbidden (check_misc.yml)."
+
+  # C1 — auto-style.rb expand-tabs: no hard-tab indentation introduced
+  # into core C/H sources (only enforced when the file has no existing
+  # tab indentation; the net invariant on the non-excluded set is
+  # space indentation). DIFFERENT_STYLE_FILES are excluded.
+  - id: ruby-core-space-indent
+    kind: indent_style
+    paths:
+      include: ["internal/**/*.c", "internal/**/*.h"]
+      exclude:
+        - "io_buffer.c"
+        - "scheduler.c"
+    style: spaces
+    width: 4
+    level: info
+    message: "auto-style expands hard tabs to spaces in core C sources (tool/auto-style.rb)."
+
+  # === alint value-add (NOT a ruby-enforced gate; recorded per R3/R5) ==
+
+  # Rust MSRV coherence: zjit + root Cargo.toml share rust-version
+  # 1.85.0 (and zjit-{ubuntu,macos}.yml pin the same). ruby/ruby does
+  # not gate on cross-crate equality, so this is value-add alint can add.
+  - id: ruby-rust-msrv-coherence
+    kind: cross_file_value_equals
+    source:
+      file: Cargo.toml
+      extract: { toml: "$.package['rust-version']" }
+    targets:
+      files: "zjit/Cargo.toml"
+      extract: { toml: "$.package['rust-version']" }
+    normalize: none
+    allow_missing_target: false
+    level: info
+    message: "value-add: root and zjit MSRV (rust-version) are kept in lockstep at 1.85.0."
+
+  # Cargo.lock is tracked (ruby statically links yjit/zjit; reproducible
+  # build). rust@v1's rust-cargo-lock-exists already covers this at
+  # warning; recorded here only for visibility — no extra rule needed.

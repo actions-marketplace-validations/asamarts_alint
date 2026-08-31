@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Detect which components changed to enable conditional CI pipelines.
 # Outputs: rust=true/false, docs=true/false, bench=true/false,
-#          examples=true/false
+#          examples=true/false, editors=true/false
 #
 # Environment variables (set by the workflow):
 #   GH_EVENT         - github.event_name (push | pull_request)
@@ -45,6 +45,8 @@ RUST=false
 DOCS=false
 BENCH=false
 EXAMPLES=false
+EDITORS=false
+SUPPLY_CHAIN=false
 
 # CI infrastructure or workspace manifest changes trigger all pipelines.
 if echo "$CHANGED" | grep -qE '^(\.github/workflows/|ci/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$)'; then
@@ -53,9 +55,41 @@ if echo "$CHANGED" | grep -qE '^(\.github/workflows/|ci/|Cargo\.toml$|Cargo\.loc
   DOCS=true
   BENCH=true
   EXAMPLES=true
+  EDITORS=true
+  SUPPLY_CHAIN=true
 fi
 
-if echo "$CHANGED" | grep -qE '^(crates/|xtask/|schemas/|\.alint\.yml$)'; then
+# Supply-chain artifacts (SBOM + third-party license bundle) depend on the
+# dependency graph and the generator config. Regenerate + validate them when the
+# lockfile, any Cargo.toml, the cargo-about config/template, the license policy,
+# or the generator script changes, so a broken about.toml/template or an
+# out-of-policy license is caught pre-merge instead of only at release time.
+if echo "$CHANGED" | grep -qE '(^|/)Cargo\.(toml|lock)$|^(about\.(toml|hbs)|deny\.toml|ci/scripts/supply-chain-artifacts\.sh)$'; then
+  SUPPLY_CHAIN=true
+fi
+
+# Editor extensions/integrations (VS Code TS + Zed wasm get built in CI).
+if echo "$CHANGED" | grep -qE '^editors/'; then
+  EDITORS=true
+fi
+
+# `.gitattributes` controls the checkout line endings of byte-compared
+# fixtures and generated artifacts (snapshots, trycmd literals, the
+# schema, facts.json, crate-graph.md), so a change to it can flip
+# `gen-*-check` / snapshot tests on a CRLF platform — run the rust suite
+# (and, via `rust || docs`, the docs gates) so that's validated.
+if echo "$CHANGED" | grep -qE '^(crates/|xtask/|schemas/|\.alint\.yml$|\.gitattributes$)'; then
+  RUST=true
+fi
+
+# `demo/**` is the README demo: a fixture repo plus the VHS tape that records
+# `alint check`/`fix` against it. `ci/scripts/demo-drift.sh` replays that exact
+# sequence and asserts what alint really does, and it runs inside the Dogfood
+# job, which is gated on RUST. So a change to the fixture or the tape must set
+# RUST=true, or the one gate that keeps the published GIF honest would skip
+# precisely when the demo itself was edited. (A rule change already sets RUST
+# via `crates/`, which covers the main drift source.)
+if echo "$CHANGED" | grep -qE '^demo/'; then
   RUST=true
 fi
 
@@ -64,7 +98,11 @@ if echo "$CHANGED" | grep -qE '^(crates/alint-bench/|xtask/)'; then
   BENCH=true
 fi
 
-if echo "$CHANGED" | grep -qE '^(docs/|PROPOSAL\.md$|[A-Z_]+\.md$)'; then
+# `facts.json` and `roadmap.json` (repo root) are generated contracts guarded
+# by `gen-facts --check` / `gen-roadmap --check` in the docs job; route them
+# through `docs` so a hand-edit can't skip every gate (the architecture
+# artifacts under docs/ already match here).
+if echo "$CHANGED" | grep -qE '^(docs/|PROPOSAL\.md$|[A-Z_]+\.md$|(facts|roadmap)\.json$)'; then
   DOCS=true
 fi
 
@@ -77,7 +115,7 @@ if echo "$CHANGED" | grep -qE '^(examples/|schemas/|crates/alint-rules/|crates/a
 fi
 
 echo ""
-echo "==> rust=${RUST}  docs=${DOCS}  bench=${BENCH}  examples=${EXAMPLES}"
+echo "==> rust=${RUST}  docs=${DOCS}  bench=${BENCH}  examples=${EXAMPLES}  editors=${EDITORS}  supply_chain=${SUPPLY_CHAIN}"
 
 # ── Write GitHub Actions outputs ─────────────────────────────────────
 
@@ -87,5 +125,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "docs=${DOCS}"
     echo "bench=${BENCH}"
     echo "examples=${EXAMPLES}"
+    echo "editors=${EDITORS}"
+    echo "supply_chain=${SUPPLY_CHAIN}"
   } >> "$GITHUB_OUTPUT"
 fi

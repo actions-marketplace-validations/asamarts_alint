@@ -1,6 +1,22 @@
 //! `dir_exists` — at least one directory matching `paths` must exist.
 
 use alint_core::{Context, Error, Level, PathsSpec, Result, Rule, RuleSpec, Scope, Violation};
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct Options {
+    /// If true, only a directory directly at the repository root satisfies the
+    /// rule; a nested match does not.
+    #[serde(default)]
+    root_only: bool,
+    /// Restrict matches to directories that contain at least one git-tracked
+    /// file. No effect outside a git repo. Default `false`.
+    #[serde(default)]
+    git_tracked_only: bool,
+}
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct DirExistsRule {
@@ -10,6 +26,7 @@ pub struct DirExistsRule {
     message: Option<String>,
     scope: Scope,
     patterns: Vec<String>,
+    root_only: bool,
     /// When `true`, only consider directories that contain at
     /// least one git-tracked file. Outside a git repo the
     /// tracked set is empty, so the rule reports the "missing"
@@ -43,6 +60,10 @@ impl Rule for DirExistsRule {
         // the per-entry `dir_has_tracked_files` check that lived
         // here is now subsumed by the engine narrowing.
         let found = ctx.index.dirs().any(|entry| {
+            // `root_only`: only a directory directly at the repo root counts.
+            if self.root_only && crate::is_nested(&entry.path) {
+                return false;
+            }
             if !self.scope.matches(&entry.path, ctx.index) {
                 return false;
             }
@@ -52,17 +73,26 @@ impl Rule for DirExistsRule {
             Ok(Vec::new())
         } else {
             let msg = self.message.clone().unwrap_or_else(|| {
+                let scope = if self.root_only {
+                    " at the repo root"
+                } else {
+                    ""
+                };
                 let tracked = if self.git_tracked_only {
                     " (with tracked content)"
                 } else {
                     ""
                 };
                 format!(
-                    "expected a directory matching [{}]{tracked}",
+                    "expected a directory matching [{}]{scope}{tracked}",
                     self.patterns.join(", ")
                 )
             });
-            Ok(vec![Violation::new(msg)])
+            // No path (no matching directory exists), so key on the pattern
+            // set rather than relying on the volatile message fingerprint.
+            Ok(vec![
+                Violation::new(msg).with_baseline_key(self.patterns.join(",")),
+            ])
         }
     }
 }
@@ -75,6 +105,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "dir_exists requires a `paths` field",
         ));
     };
+    let opts: Options = spec.deserialize_options()?;
     Ok(Box::new(DirExistsRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -82,7 +113,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         message: spec.message.clone(),
         scope: Scope::from_paths_spec(paths)?,
         patterns: patterns_of(paths),
-        git_tracked_only: spec.git_tracked_only,
+        root_only: opts.root_only,
+        git_tracked_only: opts.git_tracked_only,
     }))
 }
 
@@ -206,6 +238,45 @@ scope_filter:
         assert!(
             err.contains("dir_exists"),
             "expected message to name the cross-file kind, got: {err}",
+        );
+    }
+
+    #[test]
+    fn root_only_requires_a_root_level_directory() {
+        let rule = build(&spec_yaml(
+            "id: t\nkind: dir_exists\npaths: \"**/docs\"\nlevel: error\nroot_only: true\n",
+        ))
+        .unwrap();
+        // Only a nested docs/ → fires (no root-level docs/).
+        let nested = index_with_dirs(&[("a/docs", true)]);
+        assert_eq!(
+            rule.evaluate(&ctx(Path::new("/fake"), &nested))
+                .unwrap()
+                .len(),
+            1,
+        );
+        // A root-level docs/ → satisfied.
+        let root = index_with_dirs(&[("docs", true)]);
+        assert!(
+            rule.evaluate(&ctx(Path::new("/fake"), &root))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn build_accepts_root_only_and_rejects_unknown_option() {
+        assert!(
+            build(&spec_yaml(
+                "id: t\nkind: dir_exists\npaths: \"docs\"\nlevel: error\nroot_only: true\n",
+            ))
+            .is_ok()
+        );
+        assert!(
+            build(&spec_yaml(
+                "id: t\nkind: dir_exists\npaths: \"docs\"\nlevel: error\nbogus: 1\n",
+            ))
+            .is_err()
         );
     }
 }

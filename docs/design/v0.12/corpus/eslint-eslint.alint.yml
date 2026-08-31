@@ -1,0 +1,126 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint config for eslint/eslint @ f99b47a6799be25321552402a49303bb06a43fe4
+# Stage A case-study draft (v0.12 100-repo study).
+#
+# eslint's enforced bespoke surface is NOT cross-file value coherence
+# (its 3 package versions are independent, engines/CI matrix uncoupled)
+# — it is a rule-ecosystem PARITY GRAPH (rule <-> doc <-> test <-> index)
+# plus an internal-module IMPORT FIREWALL and codegen freshness. The
+# A-items below express the parity graph + firewall declaratively.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/node@v1
+
+rules:
+  # --- R6 absent-category overrides ---------------------------------
+  # eslint deliberately commits NO lockfile: `.npmrc` sets
+  # `package-lock = false` and all lockfiles are gitignored. The
+  # node bundle's lockfile warning must not fire here.
+  - id: node-has-lockfile
+    kind: file_exists
+    paths: ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"]
+    root_only: true
+    level: off
+    message: "eslint pins deps without a lockfile (package-lock=false in .npmrc) — intentionally disabled."
+
+  # node bundle's node_modules check fires on eslint's intentional
+  # config-resolution test fixtures (tests/fixtures/**/node_modules).
+  # C-tuning: the bundle should ship a default fixtures exclude.
+  - id: node-no-tracked-node-modules
+    kind: dir_absent
+    paths:
+      include: ["**/node_modules"]
+      exclude: ["tests/fixtures/**", "**/tests/fixtures/**"]
+    level: error
+    message: "`node_modules/` must not be committed (test fixtures excluded)."
+
+  # --- Rule-ecosystem PARITY GRAPH (the bespoke core) ---------------
+  # checkRuleFiles (Makefile.js:739) enforces: every lib/rules/<x>.js
+  # has docs/src/rules/<x>.md and tests/lib/rules/<x>.js. These are
+  # file->file REFERENCE edges keyed by naming convention (the basename).
+  - id: eslint-rule-has-doc
+    kind: every_matching_has
+    select: "lib/rules/*.js"
+    require:
+      - kind: file_exists
+        paths: "docs/src/rules/{stem}.md"
+    level: error
+    message: "Every core rule lib/rules/<x>.js must have a doc page docs/src/rules/<x>.md (Makefile.js checkRuleFiles)."
+
+  - id: eslint-rule-has-test
+    kind: every_matching_has
+    select: "lib/rules/*.js"
+    require:
+      - kind: file_exists
+        paths: "tests/lib/rules/{stem}.js"
+    level: error
+    message: "Every core rule lib/rules/<x>.js must have a test tests/lib/rules/<x>.js (Makefile.js checkRuleFiles)."
+
+  # --- Rule-source content convention (checkRuleFiles, AST-light) ---
+  # checkRuleFiles requires each rule file carry the RuleModule type
+  # JSDoc comment (hasRuleTypeJSDocComment, Makefile.js:841) — a fixed
+  # literal substring, expressible as file_content_matches.
+  - id: eslint-rule-type-jsdoc-comment
+    kind: file_content_matches
+    paths:
+      include: ["lib/rules/*.js"]
+      exclude: ["lib/rules/index.js"]
+    pattern: "@type \\{import\\('\\.\\./types'\\)\\.Rule\\.RuleModule\\}"
+    level: error
+    message: "Each rule file must carry the `/** @type {import('../types').Rule.RuleModule} */` comment (Makefile.js checkRuleFiles)."
+
+  # --- Internal-module IMPORT FIREWALL (eslint.config.js) -----------
+  # eslint.config.js wires n/no-restricted-require so deep internal
+  # modules are off-limits across layers (only each layer's index.js
+  # is importable). alint expresses the same layering declaratively via
+  # import_gate on the extracted require() target. Encoded here:
+  # lib/rules/** must not deep-require lib/linter internals.
+  # NOTE: the bundled `language: js` preset extracts EVERY `import("...")`,
+  # including JSDoc `@typedef {import("../linter/...")}` type-only imports,
+  # which the eslint firewall (runtime `require()` only) permits — so a
+  # custom `import_pattern` matching only `require("...")` is used here to
+  # express the firewall precisely. (See C-tuning note: js preset over-matches
+  # JSDoc type-imports.)
+  - id: eslint-rules-no-deep-require-linter
+    kind: import_gate
+    paths: "lib/rules/**/*.js"
+    import_pattern: "require\\([\"'](\\.\\./linter/[^\"']+)[\"']\\)"
+    forbid: "^\\.\\./linter/.+"
+    level: error
+    message: "lib/rules may only require lib/linter via its index (architecture firewall, eslint.config.js n/no-restricted-require)."
+
+  - id: eslint-rules-no-deep-require-source-code
+    kind: import_gate
+    paths: "lib/rules/**/*.js"
+    import_pattern: "require\\([\"'](\\.\\./source-code/[^\"']+)[\"']\\)"
+    forbid: "^\\.\\./source-code/.+"
+    level: error
+    message: "lib/rules may only require lib/source-code via its index (architecture firewall, eslint.config.js)."
+
+  # --- alint value-add: config-policy assertions (R3, NOT in ratio) -
+  # These assert that declared policy files/contents exist. Recorded
+  # as value-add, excluded from the A/B/C/D coverage denominator.
+  - id: eslint-npmrc-no-package-lock
+    kind: file_content_matches
+    paths: ".npmrc"
+    pattern: "package-lock\\s*=\\s*false"
+    level: info
+    message: "value-add: assert the documented `package-lock = false` install policy is declared."
+
+  - id: eslint-editorconfig-exists
+    kind: file_exists
+    paths: ".editorconfig"
+    root_only: true
+    level: info
+    message: "value-add: .editorconfig present (line-ending / indent invariants)."
+
+  - id: eslint-codeowners-exists
+    kind: file_exists
+    paths: [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"]
+    root_only: false
+    level: info
+    message: "value-add: CODEOWNERS present (review routing)."

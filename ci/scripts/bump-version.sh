@@ -98,6 +98,18 @@ for f in "${SNIPPET_FILES[@]}"; do
   fi
 done
 
+# 2a-bis. Docker `<major>.<minor>` channel tag (docker.md). The loop above only
+#   rewrites full-version pins (`:0.13.0`); the bare minor-channel tag (`:0.13`)
+#   has no patch component, so it never matched and silently rotted for several
+#   releases (shipped `:0.10` at v0.13.0). Rewrite it here. Ordering matters: the
+#   full-version pass already bumped `:0.13.0`, and the trailing `[^0-9.]|$`
+#   guard keeps this pass from re-matching a full pin.
+CUR_MINOR="${CUR%.*}"
+NEW_MINOR="${NEW%.*}"
+if [[ -f docs/site/integrations/docker.md ]]; then
+  sed -i -E "s#:${CUR_MINOR//./\\.}([^0-9.]|\$)#:${NEW_MINOR}\1#g" docs/site/integrations/docker.md
+fi
+
 # 2b. npm shim version. The package itself ships zero JS behaviour
 #     — it downloads the matching binary at install time — but
 #     `npm view @asamarts/alint version` reports whatever is in
@@ -107,6 +119,22 @@ done
 #     match what users see post-publish.
 if [[ -f npm/package.json ]]; then
   sed -i -E "s/^([[:space:]]*\"version\":[[:space:]]+)\"${CUR_ESCAPED}\"/\1\"${NEW}\"/" npm/package.json
+fi
+
+# 2c. Zed extension version. Unlike VS Code/JetBrains (which release.yml
+#     version-stamps from the tag at publish, so their committed value may
+#     lag intentionally), the Zed registry builds the extension from source
+#     at the committed version — so the committed value is what ships and
+#     must track the workspace version. check-version-pins.sh enforces it.
+for zf in editors/zed/extension.toml editors/zed/Cargo.toml; do
+  [[ -f "$zf" ]] && sed -i -E "s/^(version = )\"${CUR_ESCAPED}\"/\1\"${NEW}\"/" "$zf"
+done
+
+# 2d. npm README version example (@asamarts/alint@X.Y.Z + "alint vX.Y.Z").
+#     Illustrative, and not in the SCOPE files (its @-prefixed pin wouldn't match the
+#     SCOPE regex anyway), so keep it current here or it rots (it had gone 10 minors stale).
+if [[ -f npm/README.md ]]; then
+  sed -i -E "s#(@asamarts/alint@|alint v)${CUR_ESCAPED}#\1${NEW}#g" npm/README.md
 fi
 
 # 3. CHANGELOG stub at top so the release date is captured.

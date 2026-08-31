@@ -121,6 +121,7 @@ mod tests {
             violations: (0..n_violations)
                 .map(|i| Violation::new(format!("v{i}")))
                 .collect(),
+            notes: Vec::new(),
             is_fixable: false,
         }
     }

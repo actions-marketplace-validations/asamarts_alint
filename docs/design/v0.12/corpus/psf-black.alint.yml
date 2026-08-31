@@ -1,0 +1,211 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — psf/black @ d246367ab471cd56298407858661d475c33b3e36
+#
+# black is the uncompromising Python code formatter: a mid-size single-language
+# Python library/CLI, built with hatchling (hatch-vcs version-from-tag) + tox,
+# under PSF/foundation governance. Its enforced-validation surface is dominated
+# by TOOL EXECUTION (black --check on itself, flake8, isort, mypy --strict,
+# prettier, pytest across 7 Pythons × 4 OSes, the fuzz harness, the diff-shades
+# style-regression compare, zizmor workflow SAST) — all DELIBERATE NON-GOALS (D)
+# that alint orchestrates but does not reimplement.
+#
+# The DECLARATIVELY-EXPRESSIBLE subset (what alint is scored on) is small but
+# real, and centres on two bespoke release-hygiene validators under scripts/:
+#
+#   scripts/check_pre_commit_rev_in_example.py
+#       the `rev:` in the pre-commit YAML examples embedded in
+#       docs/integrations/source_version_control.md +
+#       docs/guides/using_black_with_jupyter_notebooks.md must equal the latest
+#       (non-"Unreleased") version header in CHANGES.md.
+#   scripts/check_version_in_basics_example.py
+#       the `$ black --version` console example in
+#       docs/usage_and_configuration/the_basics.md must show the latest
+#       CHANGES.md version.
+#   .github/workflows/lint.yml "Regenerate schema" step
+#       `tox -e generate_schema && git diff --exit-code` — the committed
+#       src/black/resources/black.schema.json must equal what
+#       scripts/generate_schema.py emits (codegen freshness).
+#   .pre-commit-config.yaml pre-commit/pre-commit-hooks
+#       trailing-whitespace + end-of-file-fixer (repo hygiene, scoped by the
+#       top-level `exclude: ^(profiling/|tests/data/)`).
+#
+# Cross-file VALUE-coherence + a codegen-freshness git-diff are exactly the
+# alint cross_file_value_equals / generated_file_fresh sweet spot. Everything
+# below the SHELL-OUTS divider is alint value-add (structure black does NOT
+# gate on) recorded for completeness, not in the coverage denominator.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+  - alint://bundled/ci/github-actions@v1
+  - alint://bundled/hygiene/no-tracked-artifacts@v1
+
+rules:
+  # ════════════════════════════════════════════════════════════════════
+  # A — ADDRESSABLE SURFACE (the checks black actually enforces and that a
+  # native alint kind expresses; these are what coverage_today scores).
+  # ════════════════════════════════════════════════════════════════════
+
+  # ── (C, tuning gap) The two release-version-coherence checks below are
+  # cross_file_value_equals in SHAPE, but cannot run today. The source of
+  # truth is "the LATEST released version" = the FIRST non-"Unreleased"
+  # `## Version X` header in CHANGES.md. The repo has ~80 such headers, and
+  # cross_file_value_equals requires the source to resolve to EXACTLY ONE
+  # value (else: "source must resolve to exactly one value (the query matched
+  # several)"). The regex extractor (crate::extract Extract::Regex) returns
+  # ALL capture-group-1 matches via captures_iter with NO first/nth selector.
+  # No regex can isolate "the first `## Version`" since every released entry
+  # is identically shaped — this is positional, not pattern-distinguishable.
+  #
+  # GAP SHAPE (C / tuning): add an `occurrence: first` (or `nth: 0`) option to
+  # the regex extractor so a "newest changelog entry" can be the unique source.
+  # Once that lands these become clean A. Replaces:
+  #   scripts/check_pre_commit_rev_in_example.py  (rev: in 2 docs == latest)
+  #   scripts/check_version_in_basics_example.py  (black --version == latest)
+  #
+  # - id: black-precommit-rev-matches-changelog-svc
+  #   kind: cross_file_value_equals
+  #   source:
+  #     file: "CHANGES.md"
+  #     extract: { regex: '## Version (\d+\.\d+(?:\.\d+)?)', occurrence: first }  # occurrence: NOT YET SUPPORTED
+  #   targets:
+  #     - file: "docs/integrations/source_version_control.md"
+  #       extract: { regex: 'rev:\s*(\d+\.\d+(?:\.\d+)?)' }
+  #   normalize: none
+  #   level: error
+  # - id: black-version-example-matches-changelog
+  #   kind: cross_file_value_equals
+  #   source:
+  #     file: "CHANGES.md"
+  #     extract: { regex: '## Version (\d+\.\d+(?:\.\d+)?)', occurrence: first }  # occurrence: NOT YET SUPPORTED
+  #   targets:
+  #     - file: "docs/usage_and_configuration/the_basics.md"
+  #       extract: { regex: 'black, version (\d+\.\d+(?:\.\d+)?)' }
+  #   normalize: none
+  #   level: error
+
+  # ── A3: black.schema.json is fresh w.r.t. its generator (codegen freshness)
+  # lint.yml runs `tox -e generate_schema && git diff --exit-code`. The
+  # generator prints the schema to stdout when --outfile is omitted, so
+  # generated_file_fresh diffs that stdout against the committed file.
+  - id: black-schema-fresh
+    kind: generated_file_fresh
+    file: "src/black/resources/black.schema.json"
+    # generate_schema.py prints the schema to stdout when --outfile is omitted.
+    # NOTE: requires black importable (a dev venv: `pip install -e .`); in a
+    # bare source-only checkout `import black` fails and this fires spuriously.
+    # Advisory here for that reason; in a real dev env it is an exact mirror of
+    # the lint.yml "Regenerate schema" + `git diff --exit-code` gate.
+    command: ["python", "scripts/generate_schema.py"]
+    timeout: 120
+    level: warning
+    message: >-
+      src/black/resources/black.schema.json is stale relative to
+      scripts/generate_schema.py. Run `tox -e generate_schema` and commit the
+      result (CI: lint.yml "Regenerate schema" + git diff --exit-code).
+
+  # ── A4: trailing whitespace, repo-wide minus the excluded trees
+  # pre-commit `trailing-whitespace` hook; top-level exclude is profiling/ +
+  # tests/data/ (test fixtures intentionally carry odd whitespace).
+  - id: black-no-trailing-whitespace
+    kind: no_trailing_whitespace
+    paths:
+      include: ["**/*"]
+      exclude:
+        - "profiling/**"
+        - "tests/data/**"
+        - "**/*.png"
+        - "**/*.svg"
+    level: error
+    message: "Trailing whitespace (pre-commit trailing-whitespace hook)."
+
+  # ── A5: final newline / end-of-file, repo-wide minus the excluded trees
+  # pre-commit `end-of-file-fixer` hook.
+  - id: black-final-newline
+    kind: final_newline
+    paths:
+      include: ["**/*"]
+      exclude:
+        - "profiling/**"
+        - "tests/data/**"
+        - "**/*.png"
+        - "**/*.svg"
+    level: error
+    message: "File must end with exactly one newline (pre-commit end-of-file-fixer)."
+
+  # ════════════════════════════════════════════════════════════════════
+  # SHELL-OUTS — D non-goals, orchestrated through alint for a single
+  # entrypoint (value-add, NOT in the coverage denominator; per R2 wrapping
+  # a tool is not alint expressing the check). Left commented: a source-only
+  # checkout has no venv with these tools installed, so they would error in
+  # `alint check`; uncomment in a dev environment to use alint as the runner.
+  # ════════════════════════════════════════════════════════════════════
+  # - id: black-format-self        # tox -e run_self  (black --check .)
+  #   kind: command_idempotent
+  #   paths: "pyproject.toml"
+  #   command: ["black", "--check", "."]
+  #   timeout: 300
+  # - id: black-precommit          # the whole .pre-commit-config.yaml
+  #   kind: command_idempotent
+  #   paths: "pyproject.toml"
+  #   command: ["pre-commit", "run", "--all-files"]
+  #   timeout: 600
+
+  # ════════════════════════════════════════════════════════════════════
+  # alint VALUE-ADD — structure black does NOT gate on (recorded separately
+  # per R3/R5, NOT in the A/B/C/D ratio). Assertions about declared policy
+  # and project shape that catch drift black's CI cannot.
+  # ════════════════════════════════════════════════════════════════════
+
+  # pyproject declares the MIT license black ships (LICENSE is MIT).
+  - id: black-pyproject-license-mit
+    kind: toml_path_equals
+    paths: "pyproject.toml"
+    path: "$.project.license"
+    equals: "MIT"
+    level: warning
+    message: "pyproject [project].license should stay 'MIT' (matches LICENSE)."
+
+  # requires-python floor is declared (black supports 3.10+).
+  - id: black-pyproject-requires-python
+    kind: toml_path_matches
+    paths: "pyproject.toml"
+    path: "$.project['requires-python']"
+    matches: '>=3\.\d+'
+    level: info
+    message: "pyproject [project].requires-python should declare a >=3.x floor."
+
+  # The bespoke release-hygiene validators must remain present (deleting one
+  # silently drops a release gate).
+  - id: black-check-precommit-rev-script-present
+    kind: file_exists
+    paths: "scripts/check_pre_commit_rev_in_example.py"
+    level: warning
+    message: "The pre-commit-rev release-hygiene validator is missing."
+
+  - id: black-check-version-script-present
+    kind: file_exists
+    paths: "scripts/check_version_in_basics_example.py"
+    level: warning
+    message: "The version-in-basics release-hygiene validator is missing."
+
+  - id: black-generate-schema-script-present
+    kind: file_exists
+    paths: "scripts/generate_schema.py"
+    level: warning
+    message: "The schema generator is missing."
+
+  # The CHANGES.md changelog must exist and keep its release-discipline shape:
+  # an "## Unreleased" section is always present at the top (release.py rotates
+  # it on each cut; the changelog.yml news gate appends under it).
+  - id: black-changelog-has-unreleased
+    kind: file_content_matches
+    paths: "CHANGES.md"
+    pattern: '## Unreleased'
+    level: warning
+    message: >-
+      CHANGES.md must keep an `## Unreleased` section (release.py rotates it;
+      the changelog news-entry CI gate appends PR lines under it).

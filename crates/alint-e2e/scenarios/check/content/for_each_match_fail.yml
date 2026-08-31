@@ -1,0 +1,30 @@
+name: for_each_match fires when a changelog entry breaks the per-line grammar
+tags: [check, for_each_match, content]
+
+docs:
+  title: A changelog line that breaks the entry grammar
+  case: fail
+  kind: for_each_match
+
+given:
+  tree:
+    CHANGELOG.md: |
+      - Add a feature ([#12](https://github.com/x/pull/12)).
+      - Typo fix ([#5](https://github.com/x/pull/9)).
+  config: |
+    version: 1
+    rules:
+      - id: changelog-entries-well-formed
+        kind: for_each_match
+        paths: ["CHANGELOG.md"]
+        select: '^- .*\[#(?P<disp>\d+)\]\([^)]*pull/(?P<url>\d+)\)'
+        require:
+          matches: ['\)\.$']
+          equal: [disp, url]
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: changelog-entries-well-formed, level: error, path: CHANGELOG.md}

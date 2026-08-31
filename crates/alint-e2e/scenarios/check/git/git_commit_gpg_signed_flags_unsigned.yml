@@ -1,0 +1,32 @@
+name: git_commit_gpg_signed fires on an unsigned commit
+tags: [check, git_commit_gpg_signed, git, failing]
+
+# HEAD mode (no `since:`): the harness commits without GPG signing,
+# so `git verify-commit` exits non-zero on the tip commit and the
+# rule fires once.
+
+docs:
+  title: An unsigned HEAD commit
+  case: fail
+  kind: git_commit_gpg_signed
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: signed-commits
+        kind: git_commit_gpg_signed
+        level: error
+  git:
+    init: true
+    commits:
+      - message: "feat: an unsigned change"
+        date: "2024-01-15T09:00:00+00:00"
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: signed-commits, level: error}

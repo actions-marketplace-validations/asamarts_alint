@@ -570,7 +570,7 @@ declarative). Per-rule violation counts (top 12):
 | 78 | `apache-2-source-has-license-header` | Mostly real (RAT-excluded files — see §6.1) |
 | 71 | `gha-workflow-contents-read` | Real (71 workflows missing explicit permissions — out of 72 total!) |
 | 67 | `spark-workflow-actions-pinned-by-sha` | Real (subset of 122 above, scoped to spark's restated rule) |
-| 21 | `hygiene-no-macos-junk` | Real (`._SUCCESS.crc` macOS Finder metadata files in test fixtures — see §6.1) |
+| 21 | `hygiene-no-macos-junk` | **False positive** (`._SUCCESS.crc` are Hadoop CRC checksum files, not macOS junk — see §6.1) |
 | 10 | `java-sources-no-trailing-whitespace` | Real (warning-level) |
 | 4 | `java-sources-pascal-case` | Real (4 Java files with non-PascalCase names — `Murmur3_x86_32.java`, `typed.java` — see §6.1) |
 | 1 | `spark-r-cran-comments-present` | Real (R/pkg/cran-comments.md missing or misnamed) |
@@ -582,7 +582,7 @@ declarative). Per-rule violation counts (top 12):
 | Finding | Path | Severity | Rule | Triage |
 |---|---|---|---|---|
 | 78 source files flagged as missing the Apache header | `connector/spark-ganglia-lgpl/.../GangliaReporter.java`, `docs/_plugins/build-error-docs.py`, `examples/src/main/resources/people.xml`, `python/docs/source/conf.py`, `python/pyspark/errors/exceptions/tblib.py`, etc. | warning | `apache-2-source-has-license-header` | **Most are RAT-excluded files** (vendored: GangliaReporter copied from dropwizard/metrics; tblib from python-tblib; cloudpickle; py4j; etc.) — listed in `dev/.rat-excludes`. Same headline finding as arrow: with `registry_paths_resolve` (v0.10 ship-target), alint could resolve the exclude-list pointers from header-missing-finding to known-exempt. **Recommended workaround:** add the RAT-exclude paths to the `paths.exclude:` block on the override |
-| 21 macOS Finder metadata files (`._SUCCESS.crc`) | `mllib/src/test/resources/ml-models/{dtc,dtr,gbtc,gbtr}-2.4.7/{data,metadata}/._SUCCESS.crc` | warning | `hygiene-no-macos-junk` | **Real bugs.** macOS `._*` files committed in test fixtures — should be cleaned up. Worth filing an upstream cleanup PR |
+| 21 `._SUCCESS.crc` files (false positive) | `mllib/src/test/resources/ml-models/{dtc,dtr,gbtc,gbtr}-2.4.7/{data,metadata}/._SUCCESS.crc` | warning | `hygiene-no-macos-junk` | **False positive.** These are NOT macOS AppleDouble metadata — they are Hadoop CRC checksum files (raw bytes start `63 72 63 00` = "crc\0"; macOS AppleDouble starts `00 05 16 07`). `._SUCCESS.crc` is the CRC for the `_SUCCESS` output marker; the `._` prefix is Hadoop's hidden-checksum convention, which the rule's `._*` glob mistook for macOS junk. The `._*` glob is too broad — a Hadoop `.crc` file is not macOS junk. No fix version claimed (this rule may still over-fire on `._*.crc`). |
 | 4 Java files with non-PascalCase names | `common/sketch/.../Murmur3_x86_32.java`, `common/unsafe/.../Murmur3_x86_32.java`, `common/unsafe/.../Murmur3_x86_32Suite.java`, `sql/api/.../typed.java` | warning | `java-sources-pascal-case` | **Real findings** — `typed.java` is genuinely lowercase. The `Murmur3_x86_32.java` files have an underscore + lowercase tail, breaking PascalCase. checkstyle would catch this if scoped; java@v1 surfaces it across the workspace |
 | 71 GHA workflows missing explicit `permissions: contents: read` | Most of the 72 workflows | warning | `gha-workflow-contents-read` | **Real findings** — supply-chain hardening gap at scale. Spark has 72 workflows; only 1 has the explicit permissions block. Filing as a single upstream PR could clean all 71 |
 | 122 third-party action invocations not pinned to a SHA | Various | warning | `gha-pin-actions-to-sha` + `spark-workflow-actions-pinned-by-sha` | **Real findings** — supply-chain integrity at scale. OpenSSF Scorecard would catch nightly; alint surfaces at PR time |
@@ -594,11 +594,13 @@ declarative). Per-rule violation counts (top 12):
 
 **Total real findings (alint-surfaced, existing tooling either runs
 less frequently or covers narrower scope): 71 GHA workflow
-permissions gaps, 122 GHA SHA-pin gaps, 21 macOS Finder metadata
-files in test fixtures, 4 Java PascalCase drifts, 1 cran-comments.md
-gap, 1 ruff line-length config drift, 10 java trailing-whitespace
-drifts. Plus 78 Apache-header misses that are RAT-excluded files
-(would resolve cleanly with `registry_paths_resolve`).**
+permissions gaps, 122 GHA SHA-pin gaps, 4 Java PascalCase drifts, 1
+cran-comments.md gap, 1 ruff line-length config drift, 10 java
+trailing-whitespace drifts. Plus 78 Apache-header misses that are
+RAT-excluded files (would resolve cleanly with `registry_paths_resolve`)
+and 21 `._SUCCESS.crc` false positives (Hadoop CRC checksum files, not
+macOS junk — `hygiene-no-macos-junk`'s `._*` glob is too broad; see
+§6.1).**
 
 ### 6.2 Suspected `.alint.yml` bugs flagged for parent triage
 
@@ -698,10 +700,10 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 - **`alint validate-config`:** Config valid: 110 rule(s) loaded
 - **Live-tree recheck:** performed (declarative-only) against
   v0.9.17 — see §6 for the 683-violation breakdown (failing rules
-  25 / passing 57; ~340 real findings + ~294 cosmetic + 78
+  25 / passing 57; ~319 real findings + ~294 cosmetic + 78
   RAT-excluded false positives that `registry_paths_resolve` would
-  resolve cleanly + ~21 macOS Finder metadata files for upstream
-  cleanup). Not re-run against v0.9.20; expectations are unchanged
+  resolve cleanly + 21 `._SUCCESS.crc` false positives that are Hadoop
+  CRC checksum files, not macOS junk). Not re-run against v0.9.20; expectations are unchanged
   because spark had already shipped a per-TLP
   `apache-2-source-has-license-header` pattern override prior to
   v0.9.18, so A2 is a no-op against spark's count
@@ -741,3 +743,13 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   shellouts spawn-fail-fast (tools not on PATH); declarative-only
   timing of 1.35 s is the marketable number until the toolchain is
   installed
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (110 rules). ~74% coverage: xml_path_* gives structural pom.xml assertions (vs fragile regex), apache/governance@v1 collapses ~11 ASF rules, import_gate lifts scalastyle IllegalImports (via generic + import_pattern; no scala preset yet), command_idempotent for proto/dep checks.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 1).

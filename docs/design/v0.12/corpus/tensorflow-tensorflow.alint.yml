@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/config.json
+#
+# alint case-study config — tensorflow/tensorflow @ 803e4ccb979128484a6ef6bbe1fcf72332c28853
+# Shape: C++ + Python · data/ML hyperscale monorepo · Bazel · Google (single-vendor).
+#
+# Honest summary: TF's enforced validation surface is dominated by execution /
+# semantic checks alint does not reimplement (Bazel dep-graph queries for the
+# pip-package license/dep/CUDA invariants, buildifier, clang-format, pylint, the
+# API-compatibility golden test, OSV/scorecards supply-chain scans). Those are D
+# non-goals. The handful of declarative, alint-addressable checks are below; the
+# rest of the rules are alint *value-add* (structure TF does not gate on),
+# recorded separately from the coverage denominator.
+
+version: 1
+
+extends:
+  - alint://bundled/oss-baseline@v1
+  - alint://bundled/python@v1
+
+rules:
+  # ───────────────────────────────────────────────────────────────────
+  # ADDRESSABLE (A) — a native kind expresses the enforced logic.
+  # ───────────────────────────────────────────────────────────────────
+
+  # A1 — Apache 2.0 license header on source files.
+  # Enforced as a documented review convention: CONTRIBUTING.md §License
+  # ("Include a license at the top of new files") + C/C++/Python/Java/Go/Bash
+  # examples; .gemini/styleguide.md echoes it. No CI gate checks it, so it is a
+  # review-enforced convention (counts per protocol R5). Scoped to the C++ core
+  # (reliably headed) as `info`; it correctly surfaces the few un-headed files.
+  - id: tf-cc-apache-header
+    kind: file_header
+    paths: ["tensorflow/core/**/*.cc", "tensorflow/core/**/*.h", "tensorflow/c/**/*.cc", "tensorflow/c/**/*.h", "tensorflow/cc/**/*.cc", "tensorflow/cc/**/*.h"]
+    pattern: '^/\* Copyright \d{4} The TensorFlow Authors\. All Rights Reserved\.'
+    level: info
+    message: >-
+      Every TensorFlow C/C++ source file should start with the Apache-2.0
+      copyright header (CONTRIBUTING.md §License).
+
+  # ───────────────────────────────────────────────────────────────────
+  # TUNING (C) — expressible but awkward; needs a one-knob relaxation.
+  # ───────────────────────────────────────────────────────────────────
+
+  # A2 — "No duplicate files on Windows" (code_check_full.bats:290): no two
+  # tracked paths may collide when lowercased (case-insensitive filesystems).
+  # `unique_by` groups by a path template but has NO case-fold on the key, so
+  # the case-INSENSITIVE collision check can't be expressed today. This rule
+  # (key="{name}") only catches *exact* basename clashes, not the case-only
+  # clashes TF actually guards. Tuning gap: a `normalize: lower` on unique_by.
+  - id: tf-no-case-insensitive-dupes-PARTIAL
+    kind: unique_by
+    select: "tensorflow/**/*"
+    key: "{name}"
+    level: off   # disabled: would flag legitimate same-basename files in
+                 # different dirs; documents the C gap, does not enforce.
+    message: "{{ctx.count}} files share basename {{ctx.key}}: {{ctx.paths}}"
+
+  # ───────────────────────────────────────────────────────────────────
+  # alint VALUE-ADD — structure TF does not gate on (NOT in the coverage
+  # denominator per protocol R3/R5). Recorded for utility only.
+  # ───────────────────────────────────────────────────────────────────
+
+  - id: tf-codeowners-exists
+    kind: file_exists
+    paths: ["CODEOWNERS", ".github/CODEOWNERS"]
+    root_only: false
+    level: info
+    message: "CODEOWNERS present (value-add; TF does not gate on it)."
+
+  - id: tf-citation-exists
+    kind: file_exists
+    paths: CITATION.cff
+    root_only: true
+    level: info
+    message: "CITATION.cff present (cffconvert validates schema in CI — that is D)."
+
+  - id: tf-security-policy-exists
+    kind: file_exists
+    paths: ["SECURITY.md", ".github/SECURITY.md"]
+    root_only: false
+    level: info
+
+  - id: tf-clang-format-config-present
+    kind: file_exists
+    paths: .clang-format
+    root_only: true
+    level: info
+    message: ".clang-format declares the Google C++ style baseline."
+
+  # CI workflows declare least-privilege `permissions: contents: read` — a
+  # config-policy assertion alint can make (value-add); the supply-chain
+  # *enforcement* (scorecards/OSV) is D.
+  - id: tf-workflows-declare-permissions
+    kind: file_content_matches
+    paths: ".github/workflows/*.yml"
+    pattern: '(?m)^permissions:'
+    level: info
+    message: "Every workflow should declare a top-level permissions block."
+
+  - id: tf-bazel-version-pinned
+    kind: file_exists
+    paths: .bazelversion
+    root_only: true
+    level: info
+    message: ".bazelversion pins the Bazel toolchain."

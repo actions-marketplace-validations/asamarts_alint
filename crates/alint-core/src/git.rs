@@ -38,6 +38,24 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// All these cases produce an empty `Option`, never panic — the
 /// caller is responsible for treating `None` as "no tracked-set
 /// available" in whatever way makes sense for the calling rule.
+/// Build a `PathBuf` from a NUL-delimited `git -z` path chunk WITHOUT a UTF-8
+/// round-trip, so a non-UTF-8 tracked/changed path is PRESERVED (M6) rather than
+/// collapsing the whole set to `None` — which made `git_tracked_only`
+/// over-permissive (a non-UTF-8 tracked file wasn't recognized as tracked). On
+/// Unix the raw bytes ARE the path; elsewhere git emits UTF-8, so a lossy decode
+/// keeps a best-effort path instead of dropping the entire set.
+fn path_from_git_chunk(chunk: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        PathBuf::from(std::ffi::OsStr::from_bytes(chunk))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(String::from_utf8_lossy(chunk).into_owned())
+    }
+}
+
 pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
     // `-z` separates entries with NUL so paths with newlines or
     // exotic bytes round-trip correctly. `--full-name` would force
@@ -57,8 +75,7 @@ pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
         if chunk.is_empty() {
             continue;
         }
-        let s = std::str::from_utf8(chunk).ok()?;
-        out.insert(PathBuf::from(s));
+        out.insert(path_from_git_chunk(chunk));
     }
     Some(out)
 }
@@ -91,13 +108,25 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
     // status. Both emit NUL-separated output so paths with
     // newlines / non-UTF-8 bytes round-trip.
     let output = match base {
-        Some(base) => Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(["diff", "--name-only", "--relative", "-z"])
-            .arg(format!("{base}...HEAD"))
-            .output()
-            .ok()?,
+        Some(base) => {
+            // Defense-in-depth, matching `diff_name_only`: reject a `base`
+            // starting with `-` explicitly (treat as "no changed-set"), in
+            // addition to the `--end-of-options` guard below.
+            if base.starts_with('-') {
+                return None;
+            }
+            Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["diff", "--name-only", "--relative", "-z"])
+                // `--end-of-options` so a `base`/`since` starting with `-`
+                // can't be parsed as a git OPTION (e.g. `--output=…`, which
+                // would write/truncate an arbitrary file).
+                .arg("--end-of-options")
+                .arg(format!("{base}...HEAD"))
+                .output()
+                .ok()?
+        }
         None => Command::new("git")
             .arg("-C")
             .arg(root)
@@ -119,10 +148,100 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
         if chunk.is_empty() {
             continue;
         }
-        let s = std::str::from_utf8(chunk).ok()?;
-        out.insert(PathBuf::from(s));
+        out.insert(path_from_git_chunk(chunk));
     }
     Some(out)
+}
+
+/// Like [`collect_changed_paths`] with a `base` ref, but distinguishes
+/// "not a git repo" (silent) from "ref doesn't resolve" (hard error) —
+/// the contract `scope_filter.changed_since:` needs. Returns the set of
+/// paths changed in `<since>...HEAD` (three-dot, merge-base diff —
+/// matching `alint check --changed`), relative to `root`.
+///
+/// - `Ok(Some(set))` — resolved.
+/// - `Ok(None)`       — not a git repo / `git` not on PATH (silent).
+/// - `Err(BadRange)`  — in a repo, but `<since>` didn't resolve (e.g.
+///   a shallow-clone gotcha). The caller surfaces a fetch-depth hint.
+pub fn collect_changed_paths_checked(
+    root: &Path,
+    since: &str,
+) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
+    diff_name_only(root, since, None)
+}
+
+/// Like [`collect_changed_paths_checked`] but restricted to a git
+/// `--diff-filter` (e.g. `"A"` for added paths, `"M"` for modified).
+/// Same posture: `Ok(None)` outside a repo / `git` missing,
+/// `Err(BadRange)` on an unresolvable `since`. Used by
+/// `changeset_requires_path` to find files *added* in `<since>...HEAD`.
+pub fn collect_changed_paths_filtered(
+    root: &Path,
+    since: &str,
+    diff_filter: &str,
+) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
+    diff_name_only(root, since, Some(diff_filter))
+}
+
+/// Shared `git diff --name-only --relative -z <since>...HEAD`
+/// (optionally `--diff-filter=<…>`), with the git-repo probe and NUL
+/// parsing both [`collect_changed_paths_checked`] and
+/// [`collect_changed_paths_filtered`] need.
+fn diff_name_only(
+    root: &Path,
+    since: &str,
+    diff_filter: Option<&str>,
+) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
+    // Probe: are we in a git repo at all? If not, silent None —
+    // matching the advisory posture of the rest of this module.
+    let Ok(probe) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+    else {
+        return Ok(None);
+    };
+    if !probe.status.success() {
+        return Ok(None);
+    }
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(root)
+        .args(["diff", "--name-only", "--relative", "-z"]);
+    if since.starts_with('-') {
+        return Err(CommitRangeError::BadRange {
+            stderr: format!("`since` must not start with '-' (got {since:?})"),
+        });
+    }
+    if let Some(filter) = diff_filter {
+        cmd.arg(format!("--diff-filter={filter}"));
+    }
+    // `--end-of-options`: a config-controlled `since` starting with `-`
+    // (e.g. `--output=…`) must never be parsed as a git OPTION — that
+    // would write/truncate an arbitrary out-of-tree file. Force it into
+    // the revision-range slot.
+    cmd.arg("--end-of-options");
+    cmd.arg(format!("{since}...HEAD"));
+    let Ok(output) = cmd.output() else {
+        return Ok(None);
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(CommitRangeError::BadRange { stderr });
+    }
+    let mut out = HashSet::new();
+    for chunk in output.stdout.split(|&b| b == 0) {
+        if chunk.is_empty() {
+            continue;
+        }
+        // Preserve a non-UTF-8 changed path instead of collapsing the whole set
+        // to `None` (which the caller maps to an empty changed-set, silently
+        // no-opping every `changed_since`-scoped rule — a fail-open lint bypass).
+        // Same decode the top-level `--changed` collector uses (M6).
+        out.insert(path_from_git_chunk(chunk));
+    }
+    Ok(Some(out))
 }
 
 /// HEAD's commit message, as a single string with newlines
@@ -148,11 +267,44 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    let raw = String::from_utf8(output.stdout).ok()?;
+    // Lossily decode a non-UTF-8 HEAD message instead of returning `None` (which
+    // silently no-ops `git_commit_message` — letting a non-UTF-8 commit message
+    // bypass conventional-subject / forbidden-pattern / length checks; the same
+    // fail-open the range-mode `parse_commit_log` was already hardened against, M6).
+    let raw = String::from_utf8_lossy(&output.stdout);
     // `git log --format=%B` appends a trailing newline that's not
     // part of the message body — trim once at the end so length
     // checks against the subject and body don't trip on it.
     Some(raw.trim_end_matches('\n').to_string())
+}
+
+/// HEAD as a full [`CommitRecord`] — abbreviated SHA, author name +
+/// email, and the message. Used by the commit-validation family's
+/// HEAD-only mode (`since:` unset), where rules like
+/// `git_commit_author_allowlist` need the author and the SHA in
+/// addition to the message.
+///
+/// Returns `None` on the same conditions as [`head_commit_message`]
+/// (no `git`, not a repo, unborn HEAD), so the rule silently no-ops.
+/// Uses the same NUL-separated `--format` encoding as
+/// [`commit_messages_in_range`] so a single commit round-trips
+/// through the shared commit-log parser.
+pub fn head_commit_record(root: &Path) -> Option<CommitRecord> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "log",
+            "-1",
+            "--abbrev-commit",
+            "--format=%h%x00%an%x00%ae%x00%B%x1e",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_commit_log(&output.stdout).into_iter().next()
 }
 
 /// One commit in a `<since>..HEAD` range, as returned by
@@ -166,6 +318,11 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
 pub struct CommitRecord {
     pub sha: String,
     pub message: String,
+    /// Author name (`git log %an`). Empty when synthesised for a
+    /// HEAD-only check that didn't capture authorship.
+    pub author_name: String,
+    /// Author email (`git log %ae`).
+    pub author_email: String,
 }
 
 /// Errors that distinguish "git is here but the range is invalid"
@@ -242,17 +399,26 @@ pub fn commit_messages_in_range(
     // Now invoke `git log <since>..HEAD`. If THIS fails, it's a bad
     // ref / shallow-clone case, not a "no git" case — bubble the
     // BadRange error.
+    if since.starts_with('-') {
+        return Err(CommitRangeError::BadRange {
+            stderr: format!("`since` must not start with '-' (got {since:?})"),
+        });
+    }
     let range = format!("{since}..HEAD");
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(root).args([
         "log",
         "--reverse",
         "--abbrev-commit",
-        "--format=%h%x00%B%x1e",
+        "--format=%h%x00%an%x00%ae%x00%B%x1e",
     ]);
     if !include_merges {
         cmd.arg("--no-merges");
     }
+    // `--end-of-options`: a config `since` starting with `-` (e.g.
+    // `--output=…`) must never be parsed as a git OPTION (which would
+    // write/truncate an arbitrary file); force it to the range slot.
+    cmd.arg("--end-of-options");
     cmd.arg(&range);
 
     let Ok(output) = cmd.output() else {
@@ -278,30 +444,62 @@ fn parse_commit_log(stdout: &[u8]) -> Vec<CommitRecord> {
         if record.is_empty() {
             continue;
         }
-        // Each record is sha + NUL + message. Trim the leading
-        // newline that git inserts between records.
+        // Each record is sha + NUL + author-name + NUL +
+        // author-email + NUL + message. Trim the leading newline
+        // that git inserts between records.
         let record = record.strip_prefix(b"\n").unwrap_or(record);
-        let mut parts = record.splitn(2, |&b| b == 0);
-        let Some(sha_bytes) = parts.next() else {
+        let mut parts = record.splitn(4, |&b| b == 0);
+        let (Some(sha_bytes), Some(name_bytes), Some(email_bytes), Some(msg_bytes)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
             continue;
         };
-        let Some(msg_bytes) = parts.next() else {
-            continue;
-        };
-        let Ok(sha) = std::str::from_utf8(sha_bytes) else {
-            continue;
-        };
-        let Ok(msg) = std::str::from_utf8(msg_bytes) else {
-            continue;
-        };
+        // Lossily decode rather than dropping the whole commit on any
+        // non-UTF-8 field: silently skipping a commit lets a contributor
+        // bypass commit linting (conventional-subject / author-allowlist /
+        // forbidden-pattern) just by using a non-UTF-8 author name or message.
+        // With a lossy decode the commit is still linted; the sha is always
+        // hex so it is unaffected.
+        let sha = String::from_utf8_lossy(sha_bytes);
+        let name = String::from_utf8_lossy(name_bytes);
+        let email = String::from_utf8_lossy(email_bytes);
+        let msg = String::from_utf8_lossy(msg_bytes);
         // `--format=%B` ends every body with a trailing newline.
         let message = msg.trim_end_matches('\n').to_string();
         out.push(CommitRecord {
             sha: sha.to_string(),
             message,
+            author_name: name.to_string(),
+            author_email: email.to_string(),
         });
     }
     out
+}
+
+/// Verify a commit's signature via `git verify-commit <sha>`.
+///
+/// Returns:
+/// - `Some(true)`  — `verify-commit` exited 0 (a good signature that
+///   verified against the local keyring).
+/// - `Some(false)` — it exited non-zero: the commit is unsigned, or
+///   the signature didn't verify (e.g. signed with a key not in the
+///   local keyring).
+/// - `None`        — `git` isn't on PATH (the shell-out itself
+///   failed). Callers iterating commits from a valid repo never see
+///   this; it's the advisory-posture escape hatch.
+///
+/// This reflects git's own verdict and deliberately does NOT
+/// distinguish "unsigned" from "signed with an untrusted key" —
+/// trust is the user's GPG config / `.git/allowed_signers`, not this
+/// rule's job.
+pub fn verify_commit(root: &Path, sha: &str) -> Option<bool> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["verify-commit", sha])
+        .output()
+        .ok()?;
+    Some(output.status.success())
 }
 
 /// One line of `git blame --line-porcelain` output: the
@@ -350,8 +548,15 @@ pub fn blame_lines(root: &Path, rel_path: &Path) -> Option<Vec<BlameLine>> {
     if !output.status.success() {
         return None;
     }
-    let text = std::str::from_utf8(&output.stdout).ok()?;
-    Some(parse_porcelain(text))
+    // Lossily decode: `--line-porcelain` embeds source-line content AND author
+    // names, so one non-UTF-8 byte anywhere in the file must NOT collapse the
+    // whole blame to `None` — that silently no-ops `git_blame_age` for the file
+    // (every stale line evades the age check), the M6 fail-open the sibling git
+    // paths were already hardened against. The porcelain framing (SHA/header
+    // keywords, tab-prefixed content lines) is ASCII, so lossy decoding leaves
+    // the structure parseable.
+    let text = String::from_utf8_lossy(&output.stdout);
+    Some(parse_porcelain(&text))
 }
 
 /// Parse the `--line-porcelain` output of `git blame`. Pure
@@ -404,7 +609,12 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
         match key {
             "author-time" => {
                 if let Ok(secs) = value.parse::<u64>() {
-                    author_time = Some(UNIX_EPOCH + Duration::from_secs(secs));
+                    // `checked_add`: a crafted commit can carry a 19-digit
+                    // author-time that parses as u64 but overflows SystemTime
+                    // (which panics on `+`). On overflow, leave the time unset
+                    // — matching the "drop the malformed block" posture
+                    // elsewhere in the parser — instead of aborting the run.
+                    author_time = UNIX_EPOCH.checked_add(Duration::from_secs(secs));
                 }
             }
             // SHA header: 40 hex digits + space + 3 numbers. We
@@ -531,6 +741,18 @@ mod tests {
         // hard-error (CLI's `--changed`) and silent fallback.
         assert!(collect_changed_paths(tmp.path(), None).is_none());
         assert!(collect_changed_paths(tmp.path(), Some("main")).is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn path_from_git_chunk_preserves_non_utf8() {
+        use std::os::unix::ffi::OsStrExt as _;
+        // M6: a non-UTF-8 tracked/changed path must survive as its exact bytes,
+        // not collapse the whole set to None (which made `git_tracked_only`
+        // over-permissive by not recognizing the file as tracked).
+        let raw: &[u8] = b"dir/\xff\xfe_file";
+        let p = path_from_git_chunk(raw);
+        assert_eq!(p.as_os_str().as_bytes(), raw);
     }
 
     #[test]
@@ -687,6 +909,40 @@ filename a.rs
     /// Uses `git commit --allow-empty` so the test doesn't need to
     /// write fixture files. Disables GPG signing and sets a fixed
     /// author so the commits are deterministic.
+    #[test]
+    fn commit_range_rejects_dash_since_and_writes_no_file() {
+        // Security regression (git arg-injection): a config-controlled
+        // `since` starting with `-` (e.g. `--output=…`) must be rejected
+        // before git runs — it must never write/truncate a file. (Affects
+        // the released `git_commit_message` `since:` path.)
+        let outdir = tempfile::tempdir().unwrap();
+        let stem = outdir.path().join("sentinel");
+        let would_write = outdir.path().join("sentinel..HEAD");
+        let evil = format!("--output={}", stem.display());
+        let err = commit_messages_in_range(Path::new("."), &evil, false).unwrap_err();
+        assert!(matches!(err, CommitRangeError::BadRange { .. }), "{err:?}");
+        assert!(
+            !would_write.exists(),
+            "git must not have written {would_write:?}"
+        );
+    }
+
+    #[test]
+    fn collect_changed_paths_dash_base_writes_no_file() {
+        // The `--changed` / `changed_since` diff path: `--end-of-options`
+        // forces a dash-leading base into the revision slot, so git never
+        // parses `--output=…` and writes nothing.
+        let outdir = tempfile::tempdir().unwrap();
+        let stem = outdir.path().join("sentinel");
+        let would_write = outdir.path().join("sentinel...HEAD");
+        let evil = format!("--output={}", stem.display());
+        let _ = collect_changed_paths(Path::new("."), Some(&evil));
+        assert!(
+            !would_write.exists(),
+            "git diff must not have written {would_write:?}"
+        );
+    }
+
     fn make_repo_with_commits(subjects: &[&str]) -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         let init_dir = tmp.path();
@@ -721,17 +977,50 @@ filename a.rs
     }
 
     #[test]
+    fn head_commit_message_lossily_decodes_non_utf8() {
+        // A non-UTF-8 HEAD commit message must NOT make `head_commit_message`
+        // return `None` — that would silently no-op the `git_commit_message`
+        // rule, letting a non-UTF-8 message bypass subject/pattern/length checks
+        // (M6 fail-open, the sibling of the range-mode path already hardened).
+        let tmp = make_repo_with_commits(&[]);
+        let dir = tmp.path();
+        let msg = dir.join("MSG");
+        // Raw non-UTF-8 bytes (0xFF/0xFE are never valid UTF-8) in the subject.
+        std::fs::write(&msg, b"fix: \xff\xfe non-utf8 subject\n").unwrap();
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["commit", "--allow-empty", "-F"])
+            .arg(&msg)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "commit failed");
+        let got = head_commit_message(dir);
+        assert!(
+            got.is_some(),
+            "a non-UTF-8 HEAD message must decode lossily, not collapse to None"
+        );
+        assert!(
+            got.unwrap().contains("non-utf8 subject"),
+            "the (lossily-decoded) message body should survive"
+        );
+    }
+
+    #[test]
     fn parse_commit_log_empty_input() {
         assert!(parse_commit_log(b"").is_empty());
     }
 
     #[test]
     fn parse_commit_log_single_commit() {
-        // sha + NUL + body-with-trailing-newline + RS.
-        let raw = b"abc1234\0subject line\n\nbody line one\nbody line two\n\x1e";
+        // sha NUL name NUL email NUL body-with-trailing-newline RS.
+        let raw =
+            b"abc1234\0Jane Doe\0jane@example.com\0subject line\n\nbody line one\nbody line two\n\x1e";
         let records = parse_commit_log(raw);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].sha, "abc1234");
+        assert_eq!(records[0].author_name, "Jane Doe");
+        assert_eq!(records[0].author_email, "jane@example.com");
         assert_eq!(
             records[0].message,
             "subject line\n\nbody line one\nbody line two"
@@ -743,10 +1032,11 @@ filename a.rs
         // Two commits, oldest first (matches --reverse). Between
         // records, git inserts a newline before the next SHA; the
         // parser strips it.
-        let raw = b"a1\0first\n\x1e\nb2\0second\n\x1e";
+        let raw = b"a1\0A\0a@x.test\0first\n\x1e\nb2\0B\0b@x.test\0second\n\x1e";
         let records = parse_commit_log(raw);
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].sha, "a1");
+        assert_eq!(records[0].author_email, "a@x.test");
         assert_eq!(records[0].message, "first");
         assert_eq!(records[1].sha, "b2");
         assert_eq!(records[1].message, "second");
@@ -754,7 +1044,7 @@ filename a.rs
 
     #[test]
     fn parse_commit_log_subject_only_no_body() {
-        let raw = b"deadbef\0just the subject\n\x1e";
+        let raw = b"deadbef\0N\0n@x.test\0just the subject\n\x1e";
         let records = parse_commit_log(raw);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].message, "just the subject");
@@ -764,7 +1054,7 @@ filename a.rs
     fn parse_commit_log_preserves_blank_lines_in_body() {
         // A real commit body with multiple paragraphs survives the
         // round-trip unchanged.
-        let raw = b"sha7777\0fix: thing\n\nfirst paragraph.\n\nsecond paragraph.\n\nthird.\n\x1e";
+        let raw = b"sha7777\0N\0n@x.test\0fix: thing\n\nfirst paragraph.\n\nsecond paragraph.\n\nthird.\n\x1e";
         let records = parse_commit_log(raw);
         assert_eq!(records.len(), 1);
         assert_eq!(
@@ -774,14 +1064,22 @@ filename a.rs
     }
 
     #[test]
-    fn parse_commit_log_skips_record_with_invalid_utf8() {
-        // A SHA followed by invalid UTF-8 in the message. The
-        // parser drops the malformed record rather than panicking.
-        let mut raw: Vec<u8> = b"abc1234\0".to_vec();
+    fn parse_commit_log_lossily_decodes_invalid_utf8_rather_than_dropping() {
+        // A record whose message field is invalid UTF-8. The parser must NOT
+        // drop it — silently skipping the commit would let a contributor
+        // bypass commit linting (conventional-subject / author-allowlist /
+        // forbidden-pattern) just by using a non-UTF-8 message or author.
+        // It now lossily decodes so the commit is still linted; the sha is
+        // always hex, so it survives intact.
+        let mut raw: Vec<u8> = b"abc1234\0N\0n@x.test\0".to_vec();
         raw.extend_from_slice(&[0xff, 0xfe, 0xfd]); // invalid UTF-8
         raw.push(0x1e);
         let records = parse_commit_log(&raw);
-        assert!(records.is_empty());
+        assert_eq!(records.len(), 1, "the commit must be parsed, not dropped");
+        assert_eq!(records[0].sha, "abc1234");
+        assert_eq!(records[0].author_name, "N");
+        // The invalid bytes become U+FFFD replacement chars (not silently lost).
+        assert!(records[0].message.contains('\u{FFFD}'));
     }
 
     #[test]
@@ -880,6 +1178,42 @@ filename a.rs
             .unwrap();
         assert_eq!(with_merge.len(), 3);
         assert!(with_merge.iter().any(|r| r.message.starts_with("Merge ")));
+    }
+
+    #[test]
+    fn changed_paths_checked_none_outside_git_and_bad_range_inside() {
+        // Outside a git repo: silent None (so changed_since no-ops).
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            collect_changed_paths_checked(tmp.path(), "origin/main"),
+            Ok(None)
+        ));
+        // Inside a repo, an unresolvable ref hard-errors.
+        let repo = make_repo_with_commits(&["init"]);
+        assert!(matches!(
+            collect_changed_paths_checked(repo.path(), "no-such-ref"),
+            Err(CommitRangeError::BadRange { .. })
+        ));
+    }
+
+    #[test]
+    fn verify_commit_returns_false_for_unsigned_commit() {
+        // make_repo_with_commits disables gpg signing, so HEAD is
+        // unsigned; verify-commit exits non-zero → Some(false).
+        let repo = make_repo_with_commits(&["init: unsigned commit"]);
+        let head = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        assert_eq!(verify_commit(repo.path(), &head), Some(false));
     }
 
     #[test]

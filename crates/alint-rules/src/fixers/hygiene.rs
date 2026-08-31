@@ -1,6 +1,8 @@
-use std::io::Write;
+use std::path::Path;
 
-use alint_core::{Error, FixContext, FixOutcome, Fixer, Result, Violation};
+use alint_core::{Error, FixContext, FixEdit, FixOutcome, Fixer, Result, Violation};
+
+use crate::io::{looks_binary, write_atomic};
 
 /// Strips trailing space/tab on every line of each violating
 /// file. Preserves original line endings (LF stays LF, CRLF
@@ -43,7 +45,7 @@ impl Fixer for FileTrimTrailingWhitespaceFixer {
                 path.display()
             )));
         }
-        std::fs::write(&abs, trimmed.as_bytes()).map_err(|source| Error::Io {
+        write_atomic(&abs, trimmed.as_bytes()).map_err(|source| Error::Io {
             path: abs.clone(),
             source,
         })?;
@@ -51,6 +53,19 @@ impl Fixer for FileTrimTrailingWhitespaceFixer {
             "trimmed trailing whitespace in {}",
             path.display()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let text = std::str::from_utf8(bytes).ok()?;
+        let trimmed = strip_trailing_whitespace(text);
+        if trimmed.as_bytes() == bytes {
+            return None;
+        }
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: trimmed.into_bytes(),
+        })
     }
 }
 
@@ -96,17 +111,28 @@ impl Fixer for FileAppendFinalNewlineFixer {
                 path.display()
             )));
         }
-        if let Some(skip) = alint_core::check_fix_size(&abs, path, ctx)? {
-            return Ok(skip);
+        let existing = match alint_core::read_for_fix(&abs, path, ctx)? {
+            alint_core::ReadForFix::Bytes(b) => b,
+            alint_core::ReadForFix::Skipped(outcome) => return Ok(outcome),
+        };
+        // Match `fix_edit`: nothing to do for an empty or already-terminated
+        // file (the rule shouldn't flag these, but stay consistent and
+        // idempotent), and never append to a binary.
+        if existing.is_empty() || existing.ends_with(b"\n") {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} already ends with a newline",
+                path.display()
+            )));
         }
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&abs)
-            .map_err(|source| Error::Io {
-                path: abs.clone(),
-                source,
-            })?;
-        f.write_all(b"\n").map_err(|source| Error::Io {
+        if looks_binary(&existing) {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} looks binary; not appending a newline",
+                path.display()
+            )));
+        }
+        let mut out = existing;
+        out.push(b'\n');
+        write_atomic(&abs, &out).map_err(|source| Error::Io {
             path: abs.clone(),
             source,
         })?;
@@ -114,6 +140,19 @@ impl Fixer for FileAppendFinalNewlineFixer {
             "appended final newline to {}",
             path.display()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        if bytes.is_empty() || bytes.ends_with(b"\n") {
+            return None;
+        }
+        let mut content = bytes.to_vec();
+        content.push(b'\n');
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content,
+        })
     }
 }
 
@@ -175,6 +214,12 @@ impl Fixer for FileNormalizeLineEndingsFixer {
             alint_core::ReadForFix::Bytes(b) => b,
             alint_core::ReadForFix::Skipped(outcome) => return Ok(outcome),
         };
+        if looks_binary(&existing) {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} looks binary; not rewriting line endings",
+                path.display()
+            )));
+        }
         let normalized = normalize_line_endings(&existing, self.target);
         if normalized == existing {
             return Ok(FixOutcome::Skipped(format!(
@@ -183,7 +228,7 @@ impl Fixer for FileNormalizeLineEndingsFixer {
                 self.target.name()
             )));
         }
-        std::fs::write(&abs, &normalized).map_err(|source| Error::Io {
+        write_atomic(&abs, &normalized).map_err(|source| Error::Io {
             path: abs.clone(),
             source,
         })?;
@@ -192,6 +237,18 @@ impl Fixer for FileNormalizeLineEndingsFixer {
             path.display(),
             self.target.name()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let normalized = normalize_line_endings(bytes, self.target);
+        if normalized == bytes {
+            return None;
+        }
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: normalized,
+        })
     }
 }
 
@@ -266,7 +323,7 @@ impl Fixer for FileCollapseBlankLinesFixer {
                 path.display()
             )));
         }
-        std::fs::write(&abs, collapsed.as_bytes()).map_err(|source| Error::Io {
+        write_atomic(&abs, collapsed.as_bytes()).map_err(|source| Error::Io {
             path: abs.clone(),
             source,
         })?;
@@ -275,6 +332,19 @@ impl Fixer for FileCollapseBlankLinesFixer {
             path.display(),
             self.max,
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        let text = std::str::from_utf8(bytes).ok()?;
+        let collapsed = collapse_blank_lines(text, self.max);
+        if collapsed.as_bytes() == bytes {
+            return None;
+        }
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: collapsed.into_bytes(),
+        })
     }
 }
 
@@ -335,6 +405,7 @@ mod tests {
             root: tmp.path(),
             dry_run,
             fix_size_limit: None,
+            allow_out_of_root: false,
         }
     }
 
@@ -370,6 +441,7 @@ mod tests {
             root: tmp.path(),
             dry_run: false,
             fix_size_limit: Some(100),
+            allow_out_of_root: false,
         };
         let outcome = FileTrimTrailingWhitespaceFixer
             .apply(
@@ -403,6 +475,28 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(tmp.path().join("x.txt")).unwrap(),
             "hello\n"
+        );
+    }
+
+    #[test]
+    fn byte_level_fixers_skip_binary_files() {
+        // H3 regression: a byte-level fixer must not corrupt a binary file
+        // caught by a `paths: "**"` glob — a lone \n here would otherwise
+        // gain a \r and the NUL bytes would survive a line-ending rewrite.
+        let tmp = TempDir::new().unwrap();
+        let binary: &[u8] = b"\x00\x01\x02\nPNGish\x00\xff\n\x00";
+        std::fs::write(tmp.path().join("blob.bin"), binary).unwrap();
+        let outcome = FileNormalizeLineEndingsFixer::new(LineEndingTarget::Crlf)
+            .apply(
+                &Violation::new("eol").with_path(std::path::Path::new("blob.bin")),
+                &make_ctx(&tmp, false),
+            )
+            .unwrap();
+        assert!(matches!(outcome, FixOutcome::Skipped(_)));
+        assert_eq!(
+            std::fs::read(tmp.path().join("blob.bin")).unwrap(),
+            binary,
+            "a binary file must be byte-identical after the fixer skips it"
         );
     }
 
@@ -475,5 +569,95 @@ mod tests {
     #[test]
     fn collapse_blank_lines_no_op_on_empty_file() {
         assert_eq!(collapse_blank_lines("", 2), "");
+    }
+
+    #[test]
+    fn trim_fix_edit_returns_set_content_with_trimmed_bytes() {
+        let v = Violation::new("ws").with_path(std::path::Path::new("x.rs"));
+        let edit = FileTrimTrailingWhitespaceFixer
+            .fix_edit(&v, b"let _ = 1;   \n", std::path::Path::new("/repo"))
+            .expect("dirty file yields an edit");
+        match edit {
+            FixEdit::SetContent { path, content } => {
+                assert_eq!(path, std::path::Path::new("x.rs"));
+                assert_eq!(content, b"let _ = 1;\n");
+            }
+            other => panic!("expected SetContent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trim_fix_edit_returns_none_when_already_clean() {
+        let v = Violation::new("ws").with_path(std::path::Path::new("x.rs"));
+        assert!(
+            FileTrimTrailingWhitespaceFixer
+                .fix_edit(&v, b"clean\n", std::path::Path::new("/repo"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn append_final_newline_fix_edit_appends_one_newline() {
+        let v = Violation::new("eof").with_path(std::path::Path::new("x.txt"));
+        let edit = FileAppendFinalNewlineFixer
+            .fix_edit(&v, b"hello", std::path::Path::new("/repo"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("x.txt"),
+                content: b"hello\n".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn append_final_newline_fix_edit_none_when_already_terminated() {
+        let v = Violation::new("eof").with_path(std::path::Path::new("x.txt"));
+        assert!(
+            FileAppendFinalNewlineFixer
+                .fix_edit(&v, b"ends\n", std::path::Path::new("/repo"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn normalize_line_endings_fix_edit_rewrites_to_target() {
+        let v = Violation::new("le").with_path(std::path::Path::new("a.md"));
+        let edit = FileNormalizeLineEndingsFixer::new(LineEndingTarget::Lf)
+            .fix_edit(&v, b"a\r\nb\r\n", std::path::Path::new("/repo"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("a.md"),
+                content: b"a\nb\n".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn normalize_line_endings_fix_edit_none_when_already_target() {
+        let v = Violation::new("le").with_path(std::path::Path::new("a.md"));
+        assert!(
+            FileNormalizeLineEndingsFixer::new(LineEndingTarget::Lf)
+                .fix_edit(&v, b"a\nb\n", std::path::Path::new("/repo"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn collapse_blank_lines_fix_edit_collapses_runs() {
+        let v = Violation::new("blanks").with_path(std::path::Path::new("a.txt"));
+        let edit = FileCollapseBlankLinesFixer::new(1)
+            .fix_edit(&v, b"a\n\n\nb\n", std::path::Path::new("/repo"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("a.txt"),
+                content: b"a\n\nb\n".to_vec(),
+            }
+        );
     }
 }

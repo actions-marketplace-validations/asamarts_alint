@@ -650,3 +650,13 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   remain. The §6.2 Bug 1 (bundled `apache-2-source-has-license-header`
   pattern misalignment) was fixed in v0.9.18 A2 — no per-TLP
   override needed
+
+## v0.11 re-analysis update (2026-05-25)
+
+Re-derived against the current upstream + everything alint shipped since
+this study was written (v0.10 rule kinds + v0.11 commit-validation /
+`changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
+accordingly (90 rules). Coverage 35% -> 52% (+27 surfaces): import_gate firewalls, cross_file_value_equals (literal sync subset), command_idempotent (collapses ~9k codespell / ~7k ruff per-file spawns), git_commit_signed_off/no_fixup, apache/governance@v1. Caveat: apache/governance over-fires twice here (no top-level KEYS; RELEASE_NOTES.rst) and needs per-rule paths overrides.
+
+Full catalogue, coverage math, and cross-cutting findings:
+`docs/development/case-study-v011-reanalysis-log.md` (Batch 1).

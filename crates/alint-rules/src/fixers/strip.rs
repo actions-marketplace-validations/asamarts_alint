@@ -1,4 +1,8 @@
-use alint_core::{Error, FixContext, FixOutcome, Fixer, Result, Violation};
+use std::path::Path;
+
+use alint_core::{Error, FixContext, FixEdit, FixOutcome, Fixer, Result, Violation};
+
+use crate::io::{looks_binary, write_atomic};
 
 /// Strips Unicode bidi control characters (the Trojan Source
 /// codepoints U+202A–202E, U+2066–2069) from the file's content.
@@ -20,17 +24,32 @@ impl Fixer for FileStripBidiFixer {
             /* preserve_leading_feff = */ false,
         )
     }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        char_filter_edit(
+            violation,
+            bytes,
+            crate::no_bidi_controls::is_bidi_control,
+            false,
+        )
+    }
 }
 
-/// Strips zero-width characters (U+200B / U+200C / U+200D, plus
-/// body-internal U+FEFF — a leading BOM is preserved so
+/// Strips zero-width characters (U+200B / U+200C / U+200D / U+2060 /
+/// U+180E, plus body-internal U+FEFF — a leading BOM is preserved so
 /// `no_bom` can own that concern).
+///
+/// The flagged set is not hard-coded here: both fix paths defer to the
+/// detector's [`crate::no_zero_width_chars::is_flagged_zero_width`], so the
+/// fixer can never strip a narrower set than the rule flags — that skew
+/// made `--fix` non-convergent (U+2060 / U+180E were reported every run but
+/// never removed) until the two were unified.
 #[derive(Debug)]
 pub struct FileStripZeroWidthFixer;
 
 impl Fixer for FileStripZeroWidthFixer {
     fn describe(&self) -> String {
-        "strip zero-width characters (U+200B/C/D, body-internal U+FEFF)".to_string()
+        "strip zero-width characters (U+200B/C/D, U+2060, U+180E, body-internal U+FEFF)".to_string()
     }
 
     fn apply(&self, violation: &Violation, ctx: &FixContext<'_>) -> Result<FixOutcome> {
@@ -39,8 +58,20 @@ impl Fixer for FileStripZeroWidthFixer {
             "stripped zero-width chars from",
             violation,
             ctx,
-            |c| matches!(c, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}'),
+            // `is_leading_feff = false`: a leading BOM is already exempted by
+            // `preserve_leading_feff` in `filter_chars`, so the predicate only
+            // needs to flag body-internal U+FEFF.
+            |c| crate::no_zero_width_chars::is_flagged_zero_width(c, false),
             /* preserve_leading_feff = */ true,
+        )
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        char_filter_edit(
+            violation,
+            bytes,
+            |c| crate::no_zero_width_chars::is_flagged_zero_width(c, false),
+            true,
         )
     }
 }
@@ -72,6 +103,12 @@ impl Fixer for FileStripBomFixer {
             alint_core::ReadForFix::Bytes(b) => b,
             alint_core::ReadForFix::Skipped(outcome) => return Ok(outcome),
         };
+        if looks_binary(&existing) {
+            return Ok(FixOutcome::Skipped(format!(
+                "{} looks binary; not stripping a BOM",
+                path.display()
+            )));
+        }
         let Some(bom) = crate::no_bom::detect_bom(&existing) else {
             return Ok(FixOutcome::Skipped(format!(
                 "{} has no BOM",
@@ -79,7 +116,7 @@ impl Fixer for FileStripBomFixer {
             )));
         };
         let stripped = &existing[bom.byte_len()..];
-        std::fs::write(&abs, stripped).map_err(|source| Error::Io {
+        write_atomic(&abs, stripped).map_err(|source| Error::Io {
             path: abs.clone(),
             source,
         })?;
@@ -88,6 +125,21 @@ impl Fixer for FileStripBomFixer {
             bom.name(),
             path.display()
         )))
+    }
+
+    fn fix_edit(&self, violation: &Violation, bytes: &[u8], _root: &Path) -> Option<FixEdit> {
+        let path = violation.path.as_deref()?;
+        // Mirror `apply`'s binary guard so the editor (LSP) fix path and the disk
+        // path behave identically: don't strip a "BOM" prefix from a file that's
+        // actually binary (a leading `EF BB BF` may be data, not an encoding mark).
+        if looks_binary(bytes) {
+            return None;
+        }
+        let bom = crate::no_bom::detect_bom(bytes)?;
+        Some(FixEdit::SetContent {
+            path: path.to_path_buf(),
+            content: bytes[bom.byte_len()..].to_vec(),
+        })
     }
 }
 
@@ -123,6 +175,28 @@ fn apply_char_filter(
             path.display()
         )));
     };
+    let out = filter_chars(text, predicate, preserve_leading_feff);
+    if out.as_bytes() == existing {
+        return Ok(FixOutcome::Skipped(format!(
+            "{} has no {label} chars to strip",
+            path.display()
+        )));
+    }
+    write_atomic(&abs, out.as_bytes()).map_err(|source| Error::Io {
+        path: abs.clone(),
+        source,
+    })?;
+    Ok(FixOutcome::Applied(format!("{verb} {}", path.display())))
+}
+
+/// Pure "drop every char matching `predicate`" transform, shared by the
+/// disk-writing `apply_char_filter` and the editor-edit `char_filter_edit`
+/// so the two paths can't diverge.
+fn filter_chars(
+    text: &str,
+    predicate: impl Fn(char) -> bool,
+    preserve_leading_feff: bool,
+) -> String {
     let mut out = String::with_capacity(text.len());
     let mut first_char = true;
     for c in text.chars() {
@@ -132,15 +206,165 @@ fn apply_char_filter(
         }
         first_char = false;
     }
-    if out.as_bytes() == existing {
-        return Ok(FixOutcome::Skipped(format!(
-            "{} has no {label} chars to strip",
-            path.display()
-        )));
+    out
+}
+
+/// [`FixEdit`] form of the char-filter fixers: returns `None` when the
+/// violation has no path, the content isn't UTF-8, or nothing changes.
+fn char_filter_edit(
+    violation: &Violation,
+    bytes: &[u8],
+    predicate: impl Fn(char) -> bool,
+    preserve_leading_feff: bool,
+) -> Option<FixEdit> {
+    let path = violation.path.as_deref()?;
+    let text = std::str::from_utf8(bytes).ok()?;
+    let out = filter_chars(text, predicate, preserve_leading_feff);
+    if out.as_bytes() == bytes {
+        return None;
     }
-    std::fs::write(&abs, out.as_bytes()).map_err(|source| Error::Io {
-        path: abs.clone(),
-        source,
-    })?;
-    Ok(FixOutcome::Applied(format!("{verb} {}", path.display())))
+    Some(FixEdit::SetContent {
+        path: path.to_path_buf(),
+        content: out.into_bytes(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v() -> Violation {
+        Violation::new("x").with_path(std::path::Path::new("a.txt"))
+    }
+
+    #[test]
+    fn bidi_fix_edit_strips_control_chars() {
+        // U+202E (RLO) embedded in otherwise-ASCII content.
+        let edit = FileStripBidiFixer
+            .fix_edit(&v(), "a\u{202E}b".as_bytes(), std::path::Path::new("/r"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("a.txt"),
+                content: b"ab".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn bidi_fix_edit_none_when_clean() {
+        assert!(
+            FileStripBidiFixer
+                .fix_edit(&v(), b"clean ascii", std::path::Path::new("/r"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn zero_width_fix_edit_strips_but_preserves_leading_bom() {
+        let edit = FileStripZeroWidthFixer
+            .fix_edit(
+                &v(),
+                "\u{FEFF}a\u{200B}b".as_bytes(),
+                std::path::Path::new("/r"),
+            )
+            .unwrap();
+        let FixEdit::SetContent { content, .. } = edit else {
+            panic!("expected SetContent");
+        };
+        assert_eq!(content, "\u{FEFF}ab".as_bytes());
+    }
+
+    #[test]
+    fn zero_width_fix_edit_strips_word_joiner_and_mongolian_vowel_sep() {
+        // Regression (L1): the detector flags U+2060 (WORD JOINER) and U+180E
+        // (MONGOLIAN VOWEL SEPARATOR), but the fixer used to hard-code only
+        // U+200B/C/D/FEFF, so a file containing 2060/180E was reported every
+        // run yet never repaired — `--fix` never converged.
+        let edit = FileStripZeroWidthFixer
+            .fix_edit(
+                &v(),
+                "a\u{2060}b\u{180E}c".as_bytes(),
+                std::path::Path::new("/r"),
+            )
+            .unwrap();
+        let FixEdit::SetContent { content, .. } = edit else {
+            panic!("expected SetContent");
+        };
+        assert_eq!(content, b"abc");
+    }
+
+    #[test]
+    fn zero_width_fix_converges_leaving_nothing_the_detector_flags() {
+        // The fix output must be a fixed point of the detector: run the fixer,
+        // then assert no surviving char is still flagged (a leading BOM aside).
+        // This is the invariant that keeps the fixer and rule from drifting.
+        let input = "\u{FEFF}x\u{200B}y\u{200C}z\u{200D}w\u{2060}v\u{180E}u\u{FEFF}t";
+        let edit = FileStripZeroWidthFixer
+            .fix_edit(&v(), input.as_bytes(), std::path::Path::new("/r"))
+            .unwrap();
+        let FixEdit::SetContent { content, .. } = edit else {
+            panic!("expected SetContent");
+        };
+        let out = std::str::from_utf8(&content).unwrap();
+        assert_eq!(out, "\u{FEFF}xyzwvut");
+        for (i, c) in out.chars().enumerate() {
+            let is_leading_feff = i == 0 && c == '\u{FEFF}';
+            assert!(
+                !crate::no_zero_width_chars::is_flagged_zero_width(c, is_leading_feff),
+                "fixer left a flagged char U+{:04X} at {i}",
+                c as u32
+            );
+        }
+    }
+
+    #[test]
+    fn bom_fix_edit_strips_leading_bom() {
+        let edit = FileStripBomFixer
+            .fix_edit(&v(), "\u{FEFF}hello".as_bytes(), std::path::Path::new("/r"))
+            .unwrap();
+        assert_eq!(
+            edit,
+            FixEdit::SetContent {
+                path: std::path::PathBuf::from("a.txt"),
+                content: b"hello".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn bom_fix_edit_none_when_no_bom() {
+        assert!(
+            FileStripBomFixer
+                .fix_edit(&v(), b"no bom", std::path::Path::new("/r"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn bom_fix_edit_binary_guard_mirrors_apply() {
+        // The editor-side `fix_edit` now carries the same `looks_binary` guard
+        // as `apply`, so the two fix paths can't diverge on a binary file. In
+        // practice the guard is INERT for a real BOM: `content_inspector`
+        // classifies any BOM-prefixed content as a text-with-BOM type (never
+        // binary), so `looks_binary` is false whenever `detect_bom` is Some —
+        // this test pins that invariant. Should content_inspector ever start
+        // classifying a BOM+binary payload as binary, this assert flips and
+        // signals that both fix paths must be re-examined together.
+        let mut bytes = vec![0xEF, 0xBB, 0xBF]; // UTF-8 BOM
+        bytes.extend_from_slice(&[0x00, 0x01, 0x02, 0x00, 0xFF, 0x00, 0x03]);
+        assert!(
+            !looks_binary(&bytes),
+            "a BOM-prefixed payload is classified as text-with-BOM, so the guard is inert"
+        );
+        // With the guard inert, fix_edit strips the BOM exactly as apply would.
+        let edit = FileStripBomFixer
+            .fix_edit(&v(), &bytes, std::path::Path::new("/r"))
+            .expect("a detectable BOM yields an edit");
+        let FixEdit::SetContent { content, .. } = edit else {
+            panic!("expected SetContent");
+        };
+        assert_eq!(content, &bytes[3..], "strips only the 3 BOM bytes");
+    }
 }
