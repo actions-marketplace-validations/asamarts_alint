@@ -134,10 +134,26 @@ impl PerFileRule for NoBidiControlsRule {
 /// `no_zero_width_chars`.
 pub(crate) const BINARY_NOTE: &str = "; the file looks binary, so it is not auto-fixed";
 
+/// The UTF-8 lead bytes of every bidi control: 0xD8 (U+061C) and 0xE2 (the
+/// U+200E..U+2069 ranges). An invalid sequence decodes to U+FFFD, which is
+/// not a control, so a file with neither byte has no finding.
+/// `lead_bytes_cover_every_bidi_control` holds this set to
+/// [`is_bidi_control`].
+const LEAD_BYTES: [u8; 2] = [0xD8, 0xE2];
+
 /// Scan for the first bidi control character and return
 /// (1-based line, 1-based column, codepoint as u32).
 fn first_bidi(bytes: impl AsRef<[u8]>) -> Option<(usize, usize, u32)> {
-    crate::io::first_char_where(bytes.as_ref(), |c, _| is_bidi_control(c))
+    // Skip the per-char decode for the (overwhelmingly common) clean file.
+    let bytes = bytes.as_ref();
+    let [a, b] = LEAD_BYTES;
+    memchr::memchr2(a, b, bytes)?;
+    scan_bidi(bytes)
+}
+
+/// The full per-char scan behind [`first_bidi`]'s prefilter.
+fn scan_bidi(bytes: &[u8]) -> Option<(usize, usize, u32)> {
+    crate::io::first_char_where(bytes, |c, _| is_bidi_control(c))
         .map(|(l, c, ch)| (l, c, ch as u32))
 }
 
@@ -172,6 +188,71 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lead_bytes_cover_every_bidi_control() {
+        let mut buf = [0u8; 4];
+        for c in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
+            if is_bidi_control(c) {
+                let lead = c.encode_utf8(&mut buf).as_bytes()[0];
+                assert!(
+                    LEAD_BYTES.contains(&lead),
+                    "U+{:04X} lead 0x{lead:02X}",
+                    c as u32
+                );
+            }
+        }
+    }
+
+    /// Whole encodings of every flagged char, near-misses sharing their lead
+    /// bytes, truncated sequences, newlines, ASCII and arbitrary bytes.
+    fn atoms() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
+        use proptest::strategy::Strategy as _;
+        let mut fixed: Vec<Vec<u8>> = [
+            "\u{061C}", "\u{200E}", "\u{200F}", "\u{202A}", "\u{202E}", "\u{2066}", "\u{2069}",
+            "\u{0627}", "\u{061B}", "\u{2014}", "\u{2065}", "\u{206A}", "\n", "a",
+        ]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+        // Each flagged char's encoding cut short, so invalid runs border it.
+        for c in [
+            '\u{061C}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202E}', '\u{2066}', '\u{2069}',
+        ] {
+            let mut buf = [0u8; 4];
+            let enc = c.encode_utf8(&mut buf).as_bytes();
+            fixed.push(enc[..enc.len() - 1].to_vec());
+        }
+        proptest::prop_oneof![
+            proptest::sample::select(fixed),
+            proptest::prelude::any::<u8>().prop_map(|b| vec![b]),
+        ]
+    }
+
+    proptest::proptest! {
+        /// The prefilter never changes the answer: on any mix of the atoms,
+        /// the prefiltered scan equals the full scan, finding and line/column
+        /// alike.
+        #[test]
+        fn prefilter_matches_the_full_scan(
+            parts in proptest::collection::vec(atoms(), 0..48)
+        ) {
+            let bytes = parts.concat();
+            proptest::prop_assert_eq!(first_bidi(&bytes), scan_bidi(&bytes));
+        }
+    }
+
+    #[test]
+    fn lead_byte_without_a_bidi_control_is_clean() {
+        // Arabic letters share 0xD8; an em-dash shares 0xE2; invalid bytes decode
+        // to U+FFFD.
+        assert_eq!(first_bidi("\u{0627} \u{2014}\n".as_bytes()), None);
+        assert_eq!(first_bidi(b"\xD8\xE2\xFF x"), None);
+        assert_eq!(
+            first_bidi("\u{0627}\u{2014}\u{202E}".as_bytes()),
+            Some((1, 3, 0x202E))
+        );
+    }
 
     #[test]
     fn flags_first_rlo() {

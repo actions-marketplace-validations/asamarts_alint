@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -201,11 +201,22 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
         // the working-tree/untracked set; otherwise a pre-commit hook can
         // silently check zero files after the framework stashes unstaged
         // changes. `--cached` also works for an unborn HEAD.
+        //
+        // The two reads are independent, so the staged diff runs in the
+        // background while `ls-files` runs: one process's latency instead of
+        // two, on every `--changed` run. A staged list too big for the pipe
+        // buffer (64 KiB on Linux, 4 KiB on Windows) makes the child wait for
+        // `ls-files` to finish, which is no slower than running them in turn.
+        // `wait_with_output` then drains both pipes, so the child can't wedge,
+        // and it is always reaped, even when `ls-files` fails to spawn.
         let staged = Command::new("git")
             .arg("-C")
             .arg(root)
             .args(["diff", "--cached", "--name-only", "--relative", "-z"])
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .ok()?;
         let working = Command::new("git")
             .arg("-C")
@@ -217,9 +228,9 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
                 "--exclude-standard",
                 "-z",
             ])
-            .output()
-            .ok()?;
-        vec![staged, working]
+            .output();
+        let staged = staged.wait_with_output().ok()?;
+        vec![staged, working.ok()?]
     };
     if outputs.iter().any(|output| !output.status.success()) {
         return None;
@@ -862,6 +873,37 @@ mod tests {
                 PathBuf::from("untracked.txt"),
             ])
         );
+    }
+
+    #[test]
+    fn collect_changed_without_base_drains_a_staged_list_larger_than_a_pipe() {
+        // The staged diff runs in the background while `ls-files` runs. Its
+        // output here (1,500 paths of ~86 bytes, ~126 KiB) overflows a 64 KiB
+        // pipe buffer, so the child blocks on write until it's drained: the
+        // result must still be complete, with no hang. (Waiting on the child
+        // before reading its stdout would deadlock here.)
+        let repo = make_repo_with_commits(&["init"]);
+        let root = repo.path();
+        let dir = root.join("a-directory-name-long-enough-to-grow-each-path");
+        std::fs::create_dir(&dir).unwrap();
+        let mut expected = HashSet::new();
+        for i in 0..1_500 {
+            let name = format!("staged-file-with-a-padded-name-{i:05}.txt");
+            std::fs::write(dir.join(&name), "x\n").unwrap();
+            expected.insert(Path::new("a-directory-name-long-enough-to-grow-each-path").join(name));
+        }
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["add", "-A"])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::write(root.join("untracked.txt"), "new\n").unwrap();
+        expected.insert(PathBuf::from("untracked.txt"));
+
+        let changed = collect_changed_paths(root, None).expect("changed paths");
+        assert_eq!(changed, expected);
     }
 
     #[test]
