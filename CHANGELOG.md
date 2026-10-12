@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-12
+
+A performance and installer patch. v0.18.0's correctness fixes to the
+zero-width, bidi and blank-line content rules had made per-file content
+checks about 3% slower and added a git process to every `--changed` run;
+this release makes them faster than v0.17 with identical output. `install.sh`
+also stops failing with a bare 403 on shared CI runners when it resolves the
+latest release.
+
 ### Performance
 
 - **Per-file content checks are back to v0.17 speed, and faster.** v0.18.0's
@@ -6939,8 +6948,8 @@ CLI flags (`--color`, `--ascii`, `--compact`) are new.
   immediately under the relevant violation.
 - **Per-severity summary** — `Summary (N violations): ✗ 2 errors
   ⚠ 1 warning  ℹ 5 info` + `X passing · Y failing · Z
-  auto-fixable` + a call-to-action line `→ run `alint fix` to
-  resolve N fixable violation(s).` when anything's auto-fixable.
+  auto-fixable` + a call-to-action line ``→ run `alint fix` to
+  resolve N fixable violation(s).`` when anything's auto-fixable.
   All-passed gets a concise green `✓ All N rule(s) passed.`.
 - **`--color <auto|always|never>` global flag.** Defaults to
   `auto` — honors `NO_COLOR`, `CLICOLOR_FORCE`, and TTY status
@@ -7450,7 +7459,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/asamarts/alint/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/asamarts/alint/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/asamarts/alint/compare/v0.16.1...v0.17.0
 [0.16.1]: https://github.com/asamarts/alint/compare/v0.16.0...v0.16.1
