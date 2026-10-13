@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-10-13
+
+A security and correctness patch: alint's terminal output now escapes every
+invisible character its own rules flag, `.env` parsing and editing moves to the
+new `adotenv` crate (fixing a `set_value` edit that silently never applied),
+and a leading BOM no longer shifts columns or widths.
+
 ### Security
 
 - **Terminal output no longer prints invisible characters that alint itself
@@ -7504,7 +7511,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.2...HEAD
+[0.18.2]: https://github.com/asamarts/alint/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/asamarts/alint/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/asamarts/alint/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/asamarts/alint/compare/v0.16.1...v0.17.0
