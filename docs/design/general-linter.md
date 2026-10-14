@@ -1271,7 +1271,8 @@ snapshot.
 Decided 2026-10-14 (DEC-10 and DEC-14). Third parties can extend alint with format adapters,
 checkers, and fixers, written as Rust crates (the canonical way) or in any other language, and
 run either as native code or sandboxed. The research behind the choices below is summarized in
-section 9.4.7.
+section 9.4.7; the full design (type mapping, wire identity and evolution, protocol, trust,
+estimates, work breakdown, and open questions) is [`plugin-architecture.md`](plugin-architecture.md).
 
 #### 9.4.1 One contract, three roles
 
@@ -1528,6 +1529,9 @@ does not move, the program stops there. Phases 0 to 2 have standalone value eith
 
 ### 11.3 Phase 1a: fail-loud and finding foundations
 
+The v0.19 work breakdown, with acceptance criteria per item, is
+[`v0.19/README.md`](v0.19/README.md).
+
 - Separate analysis failure from violations, with the exit semantics chosen in decision DEC-2.
   Analysis failures are never baselinable and do not depend on `level`.
 - Render notes in every format (section 8.1).
@@ -1750,7 +1754,7 @@ outcome differs from the review's recommendation, the outcome column says so.
 | Q8 | Which existing kinds compile to generic constraints, and which stay native? | 2 | decided per kind from the shadow-port results; graph, Unicode, and Git kernels stay native |
 | Q9 | Can snapshot views support every pure rule? | 5 | no; the `KindMeta` inventory declares snapshot compatibility and incompatible rules are rejected per view |
 | Q10 | Exact shape of the adapter, analyzer, and fixer worlds in contract 0.x (the roles themselves are decided by DEC-14a) | 2 | separate worlds, even if one artifact implements several; inputs pushed by the host, no host callbacks in 0.x |
-| Q16 | Name and repository of the WIT contract compiler, and its first-release scope | now | a neutral, non-alint name; MVP emits Rust types and traits plus `.proto` with the lockfile; JSON Schema next |
+| Q16 | Name and repository of the WIT contract compiler, and its first-release scope | now | **Decided 2026-10-14:** `witforge` (`asamarts/witforge`), private first, public with 0.1 once alint's contract `0.x` consumes it; MVP emits Rust types and traits plus `.proto` with the lockfile, JSON Schema next |
 | Q17 | The plugin manifest and `alint build` manifest formats, and how plugin kinds are namespaced in `.alint.yml` | 6 | `<plugin>/<kind>` kind names; YAML for `plugins:` in config; TOML for the build manifest |
 | Q11 | How do versions mix across `extends:`, and when does `requires:` land? | 1b | v2 consumers may extend v1 sources, never the reverse; `requires:` lands in v1 before Phase 3 |
 | Q12 | How are named objects namespaced and protected from shadowing? | 3 | provenance on every named object, namespace-qualified references, no shadowing of local names, plan-time capability monotonicity |
