@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-10-15
+
+A performance and correctness patch. `check --changed` and `fix --changed` no longer build
+whole-tree lookups that no rule uses (v0.18.3 paid for them on every changed-mode run, about 16%
+at 1M files), and `.env` fixes now take their edits from adotenv 0.1.1's verified `set` and
+`remove`, which fixes two cases where a fix silently changed a file's meaning.
+
 ### Changed
 
 - **`.env` fixes use adotenv 0.1.1's verified edits.** `set_value`, value `replace`, and
@@ -7602,7 +7609,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.3...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.4...HEAD
+[0.18.4]: https://github.com/asamarts/alint/compare/v0.18.3...v0.18.4
 [0.18.3]: https://github.com/asamarts/alint/compare/v0.18.2...v0.18.3
 [0.18.2]: https://github.com/asamarts/alint/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/asamarts/alint/compare/v0.18.0...v0.18.1
