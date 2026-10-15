@@ -36,7 +36,7 @@ moves.
   typed-selector transition parity, spawn-source parity, and rule-instance conformance gates are
   in place.
 
-### Open release item: the v0.18.4 benchmark record
+### Completed release item: the v0.18.4 benchmark record
 
 The v0.18.3 bench record (#328) was closed without merging: it failed the release regression gate
 on S2 1m `changed` (+16% `min_ms` against the +15% limit), which is the regression #329 fixed. Its
@@ -44,32 +44,19 @@ branch `bench-record/v0.18.3` is kept as the measured record, and
 [`../../benchmarks/investigations/2026-10-v0.18.3-changed-mode/`](../../benchmarks/investigations/2026-10-v0.18.3-changed-mode/README.md)
 holds the analysis. v0.18.3 therefore has no published results directory.
 
-The v0.18.4 bench-record workflow run (`38777159856`) opens a `bench-record/v0.18.4` PR. To
-finish it, follow RELEASING.md "Bench-record review", with one difference: the baseline is
-**v0.18.2**, since v0.18.3 was never published.
+The v0.18.4 record passed the documented gate against v0.18.2 and merged in #331. The machine
+fingerprint matches the canonical host and v0.18.2 baseline exactly. The largest gating-cell CV
+is 3.67%, and the largest gating `min_ms` regression is +2.0%, both inside their 10% and +15%
+limits. S4 10k `changed` is +48.0%; that small changed-mode cell is advisory under the documented
+host-wakeup artifact and does not weaken the 100k/1m gate. The generated benchmark history and
+all 744 Criterion estimate files were reviewed before merge.
 
-```sh
-git fetch origin bench-record/v0.18.4
-git show origin/bench-record/v0.18.4:docs/benchmarks/macro/results/linux-x86_64/v0.18.4/results.json > new.json
-cargo run -q -p xtask -- bench-gate --results new.json \
-  --baseline docs/benchmarks/macro/results/linux-x86_64/v0.18.2/results.json
-```
-
-- Quality: CV at or under 10% on the 100k and 1m cells; regression: `min_ms` at most +15% on
-  `full`/`fix` cells of 10k files or more and every 100k/1m cell. `changed`/1k and
-  `changed`/10k are advisory under the documented host-wakeup artifact. Fingerprint:
-  `alint_version` 0.18.4, the canonical host's CPU, Linux.
-- Expected: S2 `changed` back near v0.18.2. On the gating 100k/1m cells, S1 and S4
-  `changed` may be up by about 5 to 10%, the cost of correct `has_ancestor` evaluation under
-  `--changed` and inside the budget. A failure outside those shapes needs a same-host A/B
-  before anything else (build every binary from source with one toolchain, check the
-  binaries' hashes, and do not compile during timing runs).
-- On a pass: paste the gate output into the PR, review the workflow-generated
-  `docs/benchmarks/HISTORY.md`, merge.
-- Then alint.org (its `OPERATIONS.md` step 4, following alint.org #88): add
-  `src/data/bench-v0.18.4.json` from the results, point both lines of `src/data/bench.ts` at it,
-  update `scripts/head-parity-baseline.json`, build, run the checks, open a PR, merge, and confirm
-  `/benchmarks/` shows v0.18.4.
+The docs bundle was refreshed by workflow run
+[`38805585052`](https://github.com/asamarts/alint/actions/runs/38805585052), so the trajectory
+starts at v0.18.4. The 36-cell website snapshot and head-parity baseline merged in
+[`asamarts/alint.org#94`](https://github.com/asamarts/alint.org/pull/94); the production
+[`/benchmarks/`](https://alint.org/benchmarks/) page now shows the v0.18.4 headline and
+release-by-release row.
 
 ### Next work, in order
 
