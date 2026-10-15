@@ -250,7 +250,9 @@ fn assert_dispatch_and_content(kind: &str, meta: &KindMeta, rule: &dyn Rule) {
                 bounded_read.is_none(),
                 "{kind}: whole-file metadata disagrees with a bounded per-file rule"
             ),
-            _ => {}
+            other => panic!(
+                "{kind}: per-file dispatch cannot declare non-content access metadata {other:?}"
+            ),
         }
     }
 }

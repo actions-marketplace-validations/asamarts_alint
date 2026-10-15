@@ -89,10 +89,11 @@ canonical kind's record. Proposed shape (names indicative):
 Option-dependent behaviour is recorded as conditional capabilities, not as different records:
 for example `file_exists` has `Git(tracked set)` conditional on `git_tracked_only`, and
 `git_commit_message` has `EnvRead` conditional on a legacy `${VAR}` in `since:`. Conditions are
-not only boolean options, so the condition type needs variants: an option being set, an option's
-value matching a predicate (the legacy `${VAR}`), a fix op being configured (`file_absent`'s
-`git_untrack` spawns Git), and a common field (every kind that honours `scope_filter` gains Git
-through `changed_since`; that one is derived engine-wide rather than declared on 66 records).
+not only boolean options, so the condition type needs variants: an option's effective value being
+enabled/present (`git_tracked_only: false` does not count), an option's value matching a predicate
+(the legacy `${VAR}`), a fix op being configured (`file_absent`'s `git_untrack` spawns Git), and a
+common field (every kind that honours `scope_filter` gains Git through `changed_since`; that one
+is derived engine-wide rather than declared on 66 records).
 
 Records are `&'static` for built-in kinds and owned (`Arc<KindMeta>`) for plugin kinds discovered
 at runtime, and serializable for `facts.json` and the plugin handshake. The selector and option

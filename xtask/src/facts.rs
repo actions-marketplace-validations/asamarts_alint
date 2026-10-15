@@ -235,18 +235,25 @@ fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
         .context("register_builtin closing brace not found")?;
     let body = &body[..end];
 
-    // Canonical registrations use `register` / `register_optionless`. The first
-    // module path is the metadata record; decision K3 requires the record and
-    // builder to live beside the kind, so its stem is the source mapping. `\s`
+    // Canonical registrations use `register` / `register_optionless`. Capture
+    // both the metadata and builder module: decision K3 requires the record to
+    // live beside the builder, and the module is also the source mapping. `\s`
     // spans multi-line calls.
-    let re =
-        Regex::new(r#"\.register(?:_optionless)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*&([a-z0-9_]+)::"#)
-            .expect("static regex compiles");
+    let re = Regex::new(
+        r#"\.register(?:_optionless)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*&([a-z0-9_]+)::[A-Z0-9_]+\s*,\s*([a-z0-9_]+)::"#,
+    )
+    .expect("static regex compiles");
     let src_dir = root.join("crates/alint-rules/src");
     let mut map = BTreeMap::new();
     for cap in re.captures_iter(body) {
         let kind = cap[1].to_string();
         let stem = cap[2].to_string();
+        let builder_stem = &cap[3];
+        anyhow::ensure!(
+            stem == builder_stem,
+            "register_builtin maps kind `{kind}` to metadata in `{stem}` but its builder is in \
+             `{builder_stem}`; decision K3 requires them beside each other"
+        );
         // A rule module is either a flat `<stem>.rs` or a directory module
         // `<stem>/mod.rs` (e.g. `cross_file`, split into spec/eval/mod). Resolve to
         // the path stem whose `.rs` exists, so `sourceUrlOf` links the real file

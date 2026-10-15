@@ -132,6 +132,10 @@ pub enum OptionPredicate {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CapabilityCondition {
     Always,
+    /// The option's effective value enables the capability: `true` for a
+    /// boolean, or present/non-empty for an optional value. This does not mean
+    /// merely that the YAML key was written (for example,
+    /// `git_tracked_only: false` does not activate Git).
     OptionSet {
         option: Cow<'static, str>,
     },

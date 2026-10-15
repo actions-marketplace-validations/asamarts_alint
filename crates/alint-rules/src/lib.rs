@@ -820,8 +820,9 @@ mod registry_tests {
                 "alias `{kind}` points at `{canon}`, which is itself an alias (chain)"
             );
         }
-        // The 11 known aliases: the 10 short-name `file_*` forms + is_text, plus
-        // `cross_file_value_equals`. A drift in that count is a deliberate change.
+        // The 11 known aliases: 10 short-name aliases of `file_*` kinds
+        // (including `is_text`), plus `cross_file_value_equals`. A drift in
+        // that count is a deliberate change.
         assert_eq!(alias_count, 11, "unexpected number of registered aliases");
     }
 
@@ -988,15 +989,20 @@ mod registry_tests {
             BTreeSet::from(["json_schema_passes"])
         );
         assert_eq!(
-            kinds_where(&|m| m.formats.as_ref() == alint_core::Format::ALL),
-            BTreeSet::from([
-                "cross_file",
-                "file_graph",
-                "json_schema_passes",
-                "registry_paths_resolve",
-            ])
+            registry.meta("json_schema_passes").unwrap().dependencies[0].field,
+            "schema_path"
         );
-        let mut structured_format_records = 0usize;
+        let all_format_kinds = BTreeSet::from([
+            "cross_file",
+            "file_graph",
+            "json_schema_passes",
+            "registry_paths_resolve",
+        ]);
+        assert_eq!(
+            kinds_where(&|m| m.formats.as_ref() == alint_core::Format::ALL),
+            all_format_kinds
+        );
+        let mut structured_format_kinds = BTreeSet::new();
         for (prefix, format) in [
             ("json_", alint_core::Format::Json),
             ("yaml_", alint_core::Format::Yaml),
@@ -1016,10 +1022,18 @@ mod registry_tests {
                     &[format],
                     "{kind}: structured kind declares the wrong parser format"
                 );
-                structured_format_records += 1;
+                assert!(structured_format_kinds.insert(*kind));
             }
         }
-        assert_eq!(structured_format_records, 24);
+        assert_eq!(structured_format_kinds.len(), 24);
+        for &(kind, meta) in &records {
+            if !all_format_kinds.contains(kind) && !structured_format_kinds.contains(kind) {
+                assert!(
+                    meta.formats.is_empty(),
+                    "{kind}: only structured/extract-capable kinds may declare formats"
+                );
+            }
+        }
 
         let capability_kinds = |predicate: &dyn Fn(&Capability) -> bool| {
             records
@@ -1056,6 +1070,77 @@ mod registry_tests {
                 "shebang_has_executable",
             ])
         );
+        assert_eq!(
+            capability_kinds(&|cap| matches!(cap, Capability::EnvRead)),
+            BTreeSet::from(["git_commit_message"])
+        );
+        assert_eq!(
+            capability_kinds(&|cap| matches!(cap, Capability::EnvExport)),
+            BTreeSet::from(["command", "command_idempotent", "generated_file_fresh"])
+        );
+        assert_eq!(
+            capability_kinds(&|cap| matches!(cap, Capability::WallClock)),
+            BTreeSet::from(["git_blame_age"])
+        );
+
+        let git_operation_kinds = |operation: GitOperation| {
+            records
+                .iter()
+                .filter_map(|(kind, meta)| {
+                    meta.capabilities
+                        .iter()
+                        .any(|entry| {
+                            matches!(
+                                &entry.capability,
+                                Capability::Git { operations } if operations.contains(&operation)
+                            )
+                        })
+                        .then_some(*kind)
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        assert_eq!(
+            git_operation_kinds(GitOperation::TrackedSet),
+            BTreeSet::from([
+                "dir_absent",
+                "dir_exists",
+                "file_absent",
+                "file_exists",
+                "git_blame_age",
+                "git_no_denied_paths",
+            ])
+        );
+        assert_eq!(
+            git_operation_kinds(GitOperation::Blame),
+            BTreeSet::from(["git_blame_age"])
+        );
+        assert_eq!(
+            git_operation_kinds(GitOperation::Diff),
+            BTreeSet::from([
+                "changeset_requires_path",
+                "git_no_denied_paths",
+                "pair_changed_together",
+            ])
+        );
+        assert_eq!(
+            git_operation_kinds(GitOperation::Log),
+            BTreeSet::from([
+                "git_commit_author_allowlist",
+                "git_commit_gpg_signed",
+                "git_commit_message",
+                "git_commit_no_fixup",
+                "git_commit_signed_off",
+                "git_commit_subject_matches",
+            ])
+        );
+        assert_eq!(
+            git_operation_kinds(GitOperation::VerifyCommit),
+            BTreeSet::from(["git_commit_gpg_signed"])
+        );
+        assert_eq!(
+            git_operation_kinds(GitOperation::Untrack),
+            BTreeSet::from(["file_absent"])
+        );
 
         let unconditional_git: BTreeSet<&str> = records
             .iter()
@@ -1084,59 +1169,82 @@ mod registry_tests {
                 "pair_changed_together",
             ])
         );
-        let file_absent_meta = registry.meta("file_absent").unwrap();
-        assert!(file_absent_meta.capabilities.iter().any(|entry| {
-            matches!(
-                (&entry.capability, &entry.condition),
+        let capability_name = |capability: &Capability| match capability {
+            Capability::SpawnUserCommand => "spawn_user_command",
+            Capability::Git { .. } => "git",
+            Capability::HostKeyring => "host_keyring",
+            Capability::EnvRead => "env_read",
+            Capability::EnvExport => "env_export",
+            Capability::WallClock => "wall_clock",
+            Capability::OutOfRootRead => "out_of_root_read",
+            Capability::WritesDuringCheck => "writes_during_check",
+            Capability::UnixOnly => "unix_only",
+        };
+        let conditional_capabilities: BTreeSet<(&str, &str, &str, &str)> = records
+            .iter()
+            .flat_map(|(kind, meta)| {
+                meta.capabilities.iter().filter_map(|entry| {
+                    let (condition, target) = match &entry.condition {
+                        CapabilityCondition::Always => return None,
+                        CapabilityCondition::OptionSet { option } => {
+                            ("option_set", option.as_ref())
+                        }
+                        CapabilityCondition::OptionMatches {
+                            option,
+                            predicate: OptionPredicate::ContainsLegacyEnvReference,
+                        } => ("option_matches_legacy_env", option.as_ref()),
+                        CapabilityCondition::FixOpConfigured { op } => {
+                            ("fix_op_configured", op.as_ref())
+                        }
+                        CapabilityCondition::CommonFieldSet { field } => {
+                            ("common_field_set", field.as_ref())
+                        }
+                    };
+                    Some((*kind, capability_name(&entry.capability), condition, target))
+                })
+            })
+            .collect();
+        assert_eq!(
+            conditional_capabilities,
+            BTreeSet::from([
+                ("dir_absent", "git", "option_set", "git_tracked_only"),
+                ("dir_exists", "git", "option_set", "git_tracked_only"),
+                ("file_absent", "git", "fix_op_configured", "git_untrack"),
+                ("file_absent", "git", "option_set", "git_tracked_only"),
+                ("file_exists", "git", "option_set", "git_tracked_only"),
                 (
-                    Capability::Git { operations },
-                    CapabilityCondition::FixOpConfigured { op }
-                ) if operations.contains(&GitOperation::Untrack) && op == "git_untrack"
-            )
-        }));
-        let generated_meta = registry.meta("generated_file_fresh").unwrap();
-        assert!(generated_meta.capabilities.iter().any(|entry| {
-            matches!(
-                (&entry.capability, &entry.condition),
+                    "generated_file_fresh",
+                    "writes_during_check",
+                    "option_set",
+                    "outputs",
+                ),
                 (
-                    Capability::WritesDuringCheck,
-                    CapabilityCondition::OptionSet { option }
-                ) if option == "outputs"
-            )
-        }));
-        let denied_meta = registry.meta("git_no_denied_paths").unwrap();
-        assert!(denied_meta.capabilities.iter().any(|entry| {
-            matches!(
-                (&entry.capability, &entry.condition),
+                    "git_commit_message",
+                    "env_read",
+                    "option_matches_legacy_env",
+                    "since",
+                ),
+                ("git_no_denied_paths", "git", "option_set", "since"),
                 (
-                    Capability::Git { operations },
-                    CapabilityCondition::OptionSet { option }
-                ) if operations.contains(&GitOperation::Diff) && option == "since"
-            )
-        }));
-        let commit_message_meta = registry.meta("git_commit_message").unwrap();
-        assert!(commit_message_meta.capabilities.iter().any(|entry| {
-            matches!(
-                (&entry.capability, &entry.condition),
+                    "json_schema_passes",
+                    "out_of_root_read",
+                    "common_field_set",
+                    "allow_out_of_root",
+                ),
                 (
-                    Capability::EnvRead,
-                    CapabilityCondition::OptionMatches { option, predicate }
-                ) if option == "since"
-                    && *predicate == OptionPredicate::ContainsLegacyEnvReference
-            )
-        }));
-        for kind in ["json_schema_passes", "pair_hash", "registry_paths_resolve"] {
-            let meta = registry.meta(kind).unwrap();
-            assert!(meta.capabilities.iter().any(|entry| {
-                matches!(
-                    (&entry.capability, &entry.condition),
-                    (
-                        Capability::OutOfRootRead,
-                        CapabilityCondition::CommonFieldSet { field }
-                    ) if field == "allow_out_of_root"
-                )
-            }));
-        }
+                    "pair_hash",
+                    "out_of_root_read",
+                    "common_field_set",
+                    "allow_out_of_root",
+                ),
+                (
+                    "registry_paths_resolve",
+                    "out_of_root_read",
+                    "common_field_set",
+                    "allow_out_of_root",
+                ),
+            ])
+        );
 
         let mut fix_hosts: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for (kind, meta) in &records {
@@ -1160,7 +1268,19 @@ mod registry_tests {
                     selector.name
                 );
             }
-            for capability in meta.capabilities.iter() {
+            for (index, capability) in meta.capabilities.iter().enumerate() {
+                assert!(
+                    !meta.capabilities[..index].contains(capability),
+                    "{kind}: duplicate capability declaration {capability:?}"
+                );
+                if let Capability::Git { operations } = &capability.capability {
+                    for (operation_index, operation) in operations.iter().enumerate() {
+                        assert!(
+                            !operations[..operation_index].contains(operation),
+                            "{kind}: duplicate Git operation {operation:?}"
+                        );
+                    }
+                }
                 if let CapabilityCondition::FixOpConfigured { op } = &capability.condition {
                     assert!(
                         meta.fix_ops.contains(op),
@@ -1168,11 +1288,122 @@ mod registry_tests {
                     );
                 }
             }
+            for (index, format) in meta.formats.iter().enumerate() {
+                assert!(
+                    !meta.formats[..index].contains(format),
+                    "{kind}: duplicate format {format:?}"
+                );
+            }
+            let mut seen_dependencies = BTreeSet::new();
+            for dependency in meta.dependencies.iter() {
+                assert!(
+                    seen_dependencies.insert(dependency.field.as_ref()),
+                    "{kind}: duplicate dependency `{}`",
+                    dependency.field
+                );
+            }
         }
         assert_eq!(
             fix_hosts.keys().copied().collect::<BTreeSet<_>>(),
             FixSpec::ALL_OP_NAMES.iter().copied().collect(),
             "the records must account for all 26 fix operations"
+        );
+        assert_eq!(
+            fix_hosts,
+            BTreeMap::from([
+                (
+                    "chmod",
+                    BTreeSet::from(["executable_bit", "shebang_has_executable"])
+                ),
+                ("command", BTreeSet::from(["command"])),
+                ("create_and_register", BTreeSet::from(["cross_file"])),
+                ("dir_create", BTreeSet::from(["dir_exists"])),
+                (
+                    "file_append",
+                    BTreeSet::from(["file_content_matches", "file_footer"]),
+                ),
+                (
+                    "file_append_final_newline",
+                    BTreeSet::from(["final_newline"]),
+                ),
+                (
+                    "file_collapse_blank_lines",
+                    BTreeSet::from(["max_consecutive_blank_lines"]),
+                ),
+                ("file_create", BTreeSet::from(["file_exists"])),
+                ("file_prepend", BTreeSet::from(["file_header"])),
+                (
+                    "file_remove",
+                    BTreeSet::from([
+                        "file_absent",
+                        "no_empty_files",
+                        "no_submodules",
+                        "no_symlinks",
+                    ]),
+                ),
+                ("file_rename", BTreeSet::from(["filename_case"])),
+                (
+                    "file_normalize_line_endings",
+                    BTreeSet::from(["line_endings"]),
+                ),
+                ("file_strip_bidi", BTreeSet::from(["no_bidi_controls"])),
+                ("file_strip_bom", BTreeSet::from(["no_bom"])),
+                (
+                    "file_strip_zero_width",
+                    BTreeSet::from(["no_zero_width_chars"]),
+                ),
+                (
+                    "file_trim_trailing_whitespace",
+                    BTreeSet::from(["no_trailing_whitespace"]),
+                ),
+                ("git_untrack", BTreeSet::from(["file_absent"])),
+                ("indent_style", BTreeSet::from(["indent_style"])),
+                ("insert_header", BTreeSet::from(["file_header"])),
+                ("insert_line", BTreeSet::from(["ordered_block"])),
+                ("relocate", BTreeSet::from(["file_absent"])),
+                (
+                    "remove_value",
+                    BTreeSet::from([
+                        "dotenv_path_absent",
+                        "hcl_path_absent",
+                        "ini_path_absent",
+                        "json_path_absent",
+                        "properties_path_absent",
+                        "toml_path_absent",
+                        "xml_path_absent",
+                        "yaml_path_absent",
+                    ]),
+                ),
+                (
+                    "replace",
+                    BTreeSet::from([
+                        "dotenv_path_matches",
+                        "file_content_forbidden",
+                        "hcl_path_matches",
+                        "ini_path_matches",
+                        "json_path_matches",
+                        "properties_path_matches",
+                        "toml_path_matches",
+                        "xml_path_matches",
+                        "yaml_path_matches",
+                    ]),
+                ),
+                (
+                    "set_value",
+                    BTreeSet::from([
+                        "dotenv_path_equals",
+                        "hcl_path_equals",
+                        "ini_path_equals",
+                        "json_path_equals",
+                        "properties_path_equals",
+                        "toml_path_equals",
+                        "xml_path_equals",
+                        "yaml_path_equals",
+                    ]),
+                ),
+                ("sort", BTreeSet::from(["ordered_block"])),
+                ("sync_from", BTreeSet::from(["cross_file"])),
+            ])
         );
     }
     #[test]
