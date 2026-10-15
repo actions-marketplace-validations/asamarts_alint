@@ -14,6 +14,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   aliases resolve the exact canonical record. Completeness, transition-list parity, subprocess
   source auditing, and rule-instance conformance are enforced in tests.
 
+### Fixed
+
+- **The benchmark regression report now includes changed-mode 1k cells as advisories, as
+  documented.** Those floor-level cells still never block publication; previously an outer size
+  filter silently omitted their deltas despite the gate classifying them as advisory.
+
 ## [0.18.4] - 2026-10-15
 
 A performance and correctness patch. `check --changed` and `fix --changed` no longer build

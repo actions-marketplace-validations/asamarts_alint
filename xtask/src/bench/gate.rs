@@ -18,15 +18,15 @@
 //!   stable. Advisory lines are reported, never block.
 //!
 //! - **Regression** — did perf regress? Only with `--baseline`.
-//!   For every cell of size ≥ 10k present in both reports, the
-//!   `min_ms` delta vs baseline must not exceed +15 %. `min_ms`
-//!   is the robust cross-version statistic (corpus
-//!   reproducibility ~2.7 % at ≥10k vs ~8.8 % for `mean_ms`).
-//!   Improvements never gate. The small `changed`-mode cells
-//!   (1k/10k) are *advisory* here too, not just for CV: they are
-//!   dominated by the multi-core wakeup cost of a tiny parallel
-//!   burst and drift with the host's C-state / power state
-//!   independent of code (see the 2026-09 v0.16 investigation).
+//!   Full/fix cells at ≥10k and every 100k/1m cell present in both
+//!   reports must keep their `min_ms` delta within +15 %. `min_ms`
+//!   is the robust cross-version statistic (corpus reproducibility
+//!   ~2.7 % at ≥10k vs ~8.8 % for `mean_ms`). Improvements never
+//!   gate. The small `changed`-mode cells (1k/10k) report their
+//!   delta as an advisory instead: they are dominated by the
+//!   multi-core wakeup cost of a tiny parallel burst and drift
+//!   with the host's C-state / power state independent of code
+//!   (see the 2026-09 v0.16 investigation).
 //!
 //! Exit is non-zero iff a *gating* check fails; advisory notices
 //! never affect it.
@@ -46,8 +46,9 @@ const REGRESSION_MAX: f64 = 0.15;
 /// noise per the investigation; chronic across every shipped
 /// release, so not a publish-quality signal).
 const ADVISORY_SIZES: &[&str] = &["1k", "10k"];
-/// Sizes the cross-version regression check applies to (`min_ms`
-/// is reproducible here; 1k is not, at any statistic).
+/// Sizes the cross-version regression gate applies to (`min_ms` is
+/// reproducible here). A changed-mode 1k cell is also evaluated, but only
+/// to report its explicitly advisory delta.
 const REGRESSION_SIZES: &[&str] = &["10k", "100k", "1m"];
 /// `changed`-mode cells at these sizes are advisory for the REGRESSION check,
 /// not just CV. They are dominated by the multi-core wakeup cost of a tiny
@@ -143,7 +144,7 @@ pub fn evaluate(rows: &[Row], baseline: Option<&[Row]>) -> Outcome {
         ));
     }
 
-    // ── Regression: min_ms vs baseline; 10k changed is advisory ──
+    // ── Regression: min_ms vs baseline; changed 1k/10k is advisory ──
     match baseline {
         None => o.lines.push("[regression] skipped (no --baseline)".into()),
         Some(base) => {
@@ -155,7 +156,8 @@ pub fn evaluate(rows: &[Row], baseline: Option<&[Row]>) -> Outcome {
             let mut deltas: Vec<(f64, String, bool)> = Vec::new();
             let mut r_fail = 0usize;
             for r in rows {
-                if !REGRESSION_SIZES.contains(&r.size_label.as_str()) {
+                let advisory = regression_advisory_only(r);
+                if !REGRESSION_SIZES.contains(&r.size_label.as_str()) && !advisory {
                     continue;
                 }
                 let Some(b) = bmap.get(&key(r)) else {
@@ -165,7 +167,6 @@ pub fn evaluate(rows: &[Row], baseline: Option<&[Row]>) -> Outcome {
                     continue;
                 }
                 let d = (r.min_ms - b.min_ms) / b.min_ms;
-                let advisory = regression_advisory_only(r);
                 if d > REGRESSION_MAX {
                     if advisory {
                         o.advisories += 1;
@@ -303,21 +304,21 @@ mod tests {
     }
 
     #[test]
-    fn regression_check_ignores_1k() {
-        // 1k is unreliable at every statistic — excluded from
-        // the regression check (would false-fire on -32% noise).
-        let base = vec![row("S9", "1k", "changed", 22.0, 1.0, 21.0)];
-        let after = vec![row("S9", "1k", "changed", 15.0, 1.0, 14.0)]; // -32%, 1k
+    fn regression_check_ignores_full_1k() {
+        // Full/fix 1k is unreliable at every statistic and excluded from the
+        // regression check; changed 1k is handled separately as an advisory.
+        let base = vec![row("S9", "1k", "full", 22.0, 1.0, 21.0)];
+        let after = vec![row("S9", "1k", "full", 30.0, 1.0, 29.0)]; // +38%, 1k
         let o = evaluate(&after, Some(&base));
         assert_eq!(o.gating_failures, 0);
+        assert_eq!(o.advisories, 0);
     }
 
     #[test]
     fn changed_small_cell_regression_is_advisory_not_gating() {
         // The v0.16.0 finding: small `changed` cells are floor-level and
         // environment-sensitive (multi-core wakeup on a tiny burst), so a large
-        // min_ms delta there is advisory, not a gate failure. 1k is excluded from
-        // the regression check entirely; the 10k changed cell reports as advisory.
+        // min_ms delta there is reported as an advisory, not a gate failure.
         let base = vec![
             row("S1", "10k", "changed", 43.0, 1.0, 43.0),
             row("S1", "1k", "changed", 10.0, 1.0, 10.0),
@@ -332,7 +333,14 @@ mod tests {
             "small changed cells must not gate: {:#?}",
             o.lines
         );
-        assert_eq!(o.advisories, 1, "the 10k changed cell is an advisory");
+        assert_eq!(o.advisories, 2, "both changed small cells are advisories");
+        assert!(
+            o.lines
+                .iter()
+                .any(|line| line.contains("ADV") && line.contains("1k changed")),
+            "the 1k delta must be visible: {:#?}",
+            o.lines
+        );
     }
 
     #[test]

@@ -21,9 +21,9 @@ name: bench-record
 #
 # Output: a PR adding both directories plus a HISTORY.md update for
 # every (scenario, mode, size) cell measured. The PR sits in review
-# until a maintainer eyeballs the CV (anything > 10 % gets a re-run
-# on a quieter system) and merges. No auto-merge — bench numbers
-# enter the published corpus only after human review.
+# until a maintainer runs the programmatic quality/regression gate
+# and checks the history output. No auto-merge — bench numbers enter
+# the published corpus only after human review.
 #
 # Triggers:
 # - tag push (v*): the canonical case. Bench runs on the released
