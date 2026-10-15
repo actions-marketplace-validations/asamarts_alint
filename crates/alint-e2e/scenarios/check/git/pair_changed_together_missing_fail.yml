@@ -20,6 +20,7 @@ given:
         since: HEAD~1
         level: error
   git:
+    init: true
     commits:
       - "chore: base"
       - { message: "change the format struct", add: [src/format.rs] }

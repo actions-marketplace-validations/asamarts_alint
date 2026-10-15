@@ -11,8 +11,8 @@
 use std::fs;
 use std::path::Path;
 
-use alint_core::{Error, Result};
-use serde_yaml_ng::Mapping;
+use alint_core::{Error, KindCatalog, KindMeta, PathsSupport, Result, SelectorType};
+use serde_yaml_ng::{Mapping, Value};
 
 use crate::{DEFAULT_CONFIG_NAMES, RawConfig};
 
@@ -25,17 +25,15 @@ use crate::{DEFAULT_CONFIG_NAMES, RawConfig};
 /// lifted from a nested config into the root's rule list.
 const NESTED_SCOPE_FIELDS: &[&str] = &["paths", "select", "primary"];
 
-/// Kinds whose `select:` is a line-selector REGEX, not a path glob: re-rooting it
-/// would prefix the regex with the directory (`sub/TODO`) so it never matches.
-/// Their file scope is `paths:`, which is still re-rooted.
+/// One-release transition list: runtime detection derives from selector
+/// metadata, while tests require exact equality with this former hand list.
+#[cfg(test)]
 const REGEX_SELECT_KINDS: &[&str] = &["for_each_match", "ordered_block"];
 
-/// Kinds whose real selectors are not `paths` / `select` / `primary` (commit
-/// ranges, diff globs, `source` / `targets`, graph nodes), so re-rooting the
-/// scope fields cannot confine them to the nested directory: a dummy `paths:`
-/// would let them run repo-wide from a subtree config. Refused in nested configs;
-/// declare them in the root config. (v0.19's `KindMeta` derives this from each
-/// kind's typed selectors.)
+/// One-release transition list: runtime confinement derives from path and
+/// selector metadata, while tests require exact equality with this former hand
+/// list.
+#[cfg(test)]
 const UNCONFINABLE_KINDS: &[&str] = &[
     "changeset_requires_path",
     "cross_file",
@@ -52,6 +50,11 @@ const UNCONFINABLE_KINDS: &[&str] = &[
     "pair_hash",
     "registry_paths_resolve",
 ];
+
+/// One-release transition list: runtime recursion derives from
+/// `KindMeta::nested_rules`, while tests require exact equality with this list.
+#[cfg(test)]
+const NESTED_RULE_KINDS: &[&str] = &["for_each_dir", "for_each_file", "every_matching_has"];
 
 /// Walk `root_dir` (respecting the root config's gitignore +
 /// ignore settings), locate every `.alint.yml` / `.alint.yaml` /
@@ -81,6 +84,7 @@ pub(crate) fn discover_nested(
     root_dir: &Path,
     canonical_root_cfg: &Path,
     root: &RawConfig,
+    catalog: Option<KindCatalog<'_>>,
 ) -> Result<Vec<Mapping>> {
     let walk_opts = alint_core::WalkOptions {
         respect_gitignore: root.respect_gitignore.unwrap_or(true),
@@ -125,7 +129,7 @@ pub(crate) fn discover_nested(
             .map(Path::to_path_buf)
             .unwrap_or_default();
 
-        let nested_rules = load_nested_config(&abs, &rel_dir)?;
+        let nested_rules = load_nested_config(&abs, &rel_dir, catalog)?;
         for rule in nested_rules {
             if let Some(id) = rule.get("id").and_then(|v| v.as_str())
                 && !seen_ids.insert(id.to_string())
@@ -150,7 +154,11 @@ pub(crate) fn discover_nested(
 /// Load a nested config and return its rule mappings, each
 /// scoped to `rel_dir` (the path, relative to the root config's
 /// directory, where the nested config lives).
-fn load_nested_config(abs_path: &Path, rel_dir: &Path) -> Result<Vec<Mapping>> {
+fn load_nested_config(
+    abs_path: &Path,
+    rel_dir: &Path,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<Vec<Mapping>> {
     let contents = fs::read_to_string(abs_path).map_err(|source| Error::Io {
         path: abs_path.to_path_buf(),
         source,
@@ -227,12 +235,12 @@ fn load_nested_config(abs_path: &Path, rel_dir: &Path) -> Result<Vec<Mapping>> {
     // (the C2 RCE bypass). Mirrors the `extends:` gate; spawning templates
     // are refused wholesale just above, and `finalize` re-checks the
     // expanded rule set as a backstop.
-    crate::reject_command_rules_in(&config.rules, &source)?;
+    crate::reject_command_rules_in(&config.rules, &source, catalog)?;
     // ...and no *spawning fix op* (`git_untrack`, `git rm --cached`) either: a
     // subtree `.alint.yml` is as untrusted as an `extends:`'d ruleset, so a
     // spawning fixer it declares would shell out on `alint fix`. (Templates are
     // already refused wholesale above, so only `rules:` needs this gate here.)
-    crate::reject_spawning_fix_ops_in(&config.rules, &source)?;
+    crate::reject_spawning_fix_ops_in(&config.rules, &source, catalog)?;
     // ...and no inherited rule may promote a destructive fix to auto-apply.
     crate::reject_fix_promotion_in(&config.rules, &source)?;
     // ...and every CONTENT-INJECTING fixer is demoted to a suggestion, EXACTLY as
@@ -244,7 +252,7 @@ fn load_nested_config(abs_path: &Path, rel_dir: &Path) -> Result<Vec<Mapping>> {
     // job -> code execution once pushed). Demoting to a suggestion closes the
     // SILENT auto-apply, matching this module's stated "as untrusted as an
     // `extends:`'d ruleset" trust model (audit: nested-config HIGH).
-    crate::demote_content_fixers_in(&mut config.rules);
+    crate::demote_content_fixers_in(&mut config.rules, catalog);
     // Preserve that source trust through root-template expansion. Without this
     // marker a nested rule with `extends_template:` could acquire a root template's
     // content fixer only after the source-local demotion above had already run.
@@ -280,8 +288,11 @@ pub(crate) const NESTED_SCOPE_MARKER: &str = "__alint_internal_nested_scope";
 
 /// Confine an expanded rule to the nested subtree it came from, if it came from a
 /// nested config. Called on the EFFECTIVE (template-expanded) rule.
-pub(crate) fn apply_nested_scope(rule: &mut Mapping) -> Result<()> {
-    let Some(serde_yaml_ng::Value::Mapping(marker)) = rule.remove(NESTED_SCOPE_MARKER) else {
+pub(crate) fn apply_nested_scope(
+    rule: &mut Mapping,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<()> {
+    let Some(Value::Mapping(marker)) = rule.remove(NESTED_SCOPE_MARKER) else {
         return Ok(());
     };
     let field = |name: &str| {
@@ -291,24 +302,24 @@ pub(crate) fn apply_nested_scope(rule: &mut Mapping) -> Result<()> {
             .unwrap_or_default()
             .to_string()
     };
-    scope_rule(rule, &field("prefix"), &field("source"))
+    scope_rule(rule, &field("prefix"), &field("source"), catalog)
 }
 
-/// Re-root every path-like scope field of a rule mapping in
-/// place. Returns an error if the rule has no scope field (we
-/// can't confine it to its subtree).
-fn scope_rule(rule: &mut Mapping, prefix: &str, source: &str) -> Result<()> {
+/// Re-root every path-like scope field of a rule mapping in place. Metadata is
+/// mandatory here: unknown kinds and missing catalogs cannot prove confinement
+/// and therefore fail closed.
+fn scope_rule(
+    rule: &mut Mapping,
+    prefix: &str,
+    source: &str,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<()> {
     let id_hint = rule
         .get("id")
         .and_then(|v| v.as_str())
         .map_or_else(|| "<anonymous>".to_string(), str::to_string);
 
-    // Reject obvious antipatterns before touching anything.
-    if rule
-        .get("root_only")
-        .and_then(serde_yaml_ng::Value::as_bool)
-        == Some(true)
-    {
+    if rule.get("root_only").and_then(Value::as_bool) == Some(true) {
         return Err(Error::rule_config(
             &id_hint,
             format!(
@@ -323,24 +334,27 @@ fn scope_rule(rule: &mut Mapping, prefix: &str, source: &str) -> Result<()> {
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
-    let any_scoped = scope_kind_fields(rule, &kind, prefix, &id_hint, source, false)?;
+    let Some(meta) = catalog.and_then(|catalog| catalog.meta(&kind)) else {
+        return Err(Error::rule_config(
+            &id_hint,
+            format!(
+                "rule in nested config {source} uses unknown kind `{kind}` or no kind catalog \
+                 was injected; its selectors cannot be proven confined to the nested directory"
+            ),
+        ));
+    };
+    let any_scoped =
+        scope_kind_fields(rule, &kind, meta, prefix, &id_hint, source, false, catalog)?;
 
-    // A manifest predicate's `source:` is a path relative to this config's
-    // directory (like `paths:`), so rebase it under the nested prefix — else a
-    // nested rule would read the repo-root manifest, not its own package's, and
-    // silently mis-scope. `has_ancestor:` / `changed_since:` need no rebasing (a
-    // bare filename walked up the tree / a git ref). Not counted toward
-    // `any_scoped`: a per-file rule still needs its own `paths:` base glob.
-    if let Some(sf) = rule
-        .get_mut("scope_filter")
-        .and_then(serde_yaml_ng::Value::as_mapping_mut)
-    {
+    // A manifest predicate's `source:` is relative to this config's directory.
+    // These common scope-filter paths are not selector metadata.
+    if let Some(sf) = rule.get_mut("scope_filter").and_then(Value::as_mapping_mut) {
         for key in ["include_manifest_paths", "exclude_manifest_paths"] {
             if let Some(src) = sf
                 .get_mut(key)
-                .and_then(serde_yaml_ng::Value::as_mapping_mut)
+                .and_then(Value::as_mapping_mut)
                 .and_then(|mp| mp.get_mut("source"))
-                && let serde_yaml_ng::Value::String(s) = src
+                && let Value::String(s) = src
             {
                 *s = scope_glob(s, prefix).map_err(|e| {
                     Error::rule_config(
@@ -356,9 +370,9 @@ fn scope_rule(rule: &mut Mapping, prefix: &str, source: &str) -> Result<()> {
         return Err(Error::rule_config(
             &id_hint,
             format!(
-                "rule in nested config {source} has no path-like scope \
-                 field ({}) - nested configs can only contribute rules \
-                 whose scope can be confined to the nested directory",
+                "rule in nested config {source} has no path-like scope field ({}) - \
+                 nested configs can only contribute rules whose scope can be confined \
+                 to the nested directory",
                 NESTED_SCOPE_FIELDS.join(", "),
             ),
         ));
@@ -366,25 +380,57 @@ fn scope_rule(rule: &mut Mapping, prefix: &str, source: &str) -> Result<()> {
     Ok(())
 }
 
-/// Nested `require:` rules of these kinds are themselves rules with scope fields.
-const NESTED_RULE_KINDS: &[&str] = &["for_each_dir", "for_each_file", "every_matching_has"];
+fn repository_path_selector(selector_type: SelectorType) -> bool {
+    matches!(
+        selector_type,
+        SelectorType::Glob
+            | SelectorType::GlobList
+            | SelectorType::LiteralPath
+            | SelectorType::PathTemplate
+            | SelectorType::DiffGlob
+    )
+}
 
-/// Re-root the path-like fields of one rule (or, with `in_require`, of one nested
-/// `require:` entry) of kind `kind`, recursing into nested `require:` blocks.
-/// Returns whether any primary scope field (`paths`, `select`, `primary`) was
-/// present. Inside a `require:` block, a value that starts with a template token
-/// (`{path}/...`) is already anchored to the iterated entry, which is itself
-/// re-rooted, so it is left alone; any other value is relative to the repository
-/// root and is prefixed, or it would escape the subtree (v0.18.3 review).
+fn kind_is_unconfinable(meta: &KindMeta) -> bool {
+    if meta.paths != PathsSupport::Forbidden {
+        return false;
+    }
+    let has_path_selector = meta
+        .selectors
+        .iter()
+        .any(|selector| repository_path_selector(selector.selector_type));
+    let has_rerootable_path_selector = meta
+        .selectors
+        .iter()
+        .any(|selector| repository_path_selector(selector.selector_type) && selector.rerootable);
+    let has_git_scope = meta
+        .capabilities
+        .iter()
+        .any(|entry| matches!(entry.capability, alint_core::Capability::Git { .. }));
+    !has_rerootable_path_selector && (has_path_selector || has_git_scope)
+}
+
+fn field_mut<'a>(mapping: &'a mut Mapping, path: &str) -> Option<&'a mut Value> {
+    let Some((head, tail)) = path.split_once('.') else {
+        return mapping.get_mut(path);
+    };
+    field_mut(mapping.get_mut(head)?.as_mapping_mut()?, tail)
+}
+
+/// Re-root metadata-declared path selectors and recurse into metadata-declared
+/// nested-rule fields.
+#[allow(clippy::too_many_arguments)]
 fn scope_kind_fields(
     rule: &mut Mapping,
     kind: &str,
+    meta: &KindMeta,
     prefix: &str,
     id_hint: &str,
     source: &str,
     in_require: bool,
+    catalog: Option<KindCatalog<'_>>,
 ) -> Result<bool> {
-    if UNCONFINABLE_KINDS.contains(&kind) {
+    if kind_is_unconfinable(meta) {
         return Err(Error::rule_config(
             id_hint,
             format!(
@@ -404,57 +450,36 @@ fn scope_kind_fields(
     };
 
     let mut any_scoped = false;
-    for field in NESTED_SCOPE_FIELDS {
-        if *field == "select" && REGEX_SELECT_KINDS.contains(&kind) {
+    if meta.paths != PathsSupport::Forbidden
+        && let Some(value) = rule.get_mut("paths")
+    {
+        scope_paths_value_in(value, prefix, in_require).map_err(|e| scope_err("paths", e))?;
+        any_scoped = true;
+    }
+
+    for selector in meta
+        .selectors
+        .iter()
+        .filter(|selector| selector.rerootable && repository_path_selector(selector.selector_type))
+    {
+        let name = selector.name.as_ref();
+        let Some(value) = field_mut(rule, name) else {
             continue;
+        };
+        let template_anchored = in_require || selector.selector_type == SelectorType::PathTemplate;
+        if name == "root.dir" && value.as_str() == Some(".") {
+            *value = Value::String(prefix.to_string());
+        } else {
+            scope_paths_value_in(value, prefix, template_anchored)
+                .map_err(|e| scope_err(name, e))?;
         }
-        if let Some(value) = rule.get_mut(*field) {
-            scope_paths_value_in(value, prefix, in_require).map_err(|e| scope_err(field, e))?;
+        if matches!(name, "select" | "primary") {
             any_scoped = true;
         }
     }
 
-    // Kind-specific fields that are repository-relative paths or globs.
-    match kind {
-        "import_gate" => {
-            if let Some(value) = rule.get_mut("allow") {
-                scope_paths_value_in(value, prefix, in_require)
-                    .map_err(|e| scope_err("allow", e))?;
-            }
-        }
-        "json_schema_passes" => {
-            if let Some(serde_yaml_ng::Value::String(s)) = rule.get_mut("schema_path") {
-                *s = scope_value_in(s, prefix, in_require)
-                    .map_err(|e| scope_err("schema_path", e))?;
-            }
-        }
-        "markdown_links_resolve" => {
-            if let Some(serde_yaml_ng::Value::String(s)) = rule
-                .get_mut("root")
-                .and_then(serde_yaml_ng::Value::as_mapping_mut)
-                .and_then(|m| m.get_mut("dir"))
-            {
-                *s = if s == "." {
-                    prefix.to_string()
-                } else {
-                    scope_value_in(s, prefix, in_require).map_err(|e| scope_err("root.dir", e))?
-                };
-            }
-        }
-        "pair" => {
-            if let Some(serde_yaml_ng::Value::String(s)) = rule.get_mut("partner") {
-                // A partner template built from the (re-rooted) primary's tokens
-                // stays in the subtree; a literal partner is prefixed.
-                if !starts_with_token(s) {
-                    *s = scope_glob(s, prefix).map_err(|e| scope_err("partner", e))?;
-                }
-            }
-        }
-        _ => {}
-    }
-
-    if NESTED_RULE_KINDS.contains(&kind)
-        && let Some(serde_yaml_ng::Value::Sequence(items)) = rule.get_mut("require")
+    if meta.nested_rules
+        && let Some(Value::Sequence(items)) = rule.get_mut("require")
     {
         for item in items {
             let Some(child) = item.as_mapping_mut() else {
@@ -465,7 +490,26 @@ fn scope_kind_fields(
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            scope_kind_fields(child, &child_kind, prefix, id_hint, source, true)?;
+            let Some(child_meta) = catalog.and_then(|catalog| catalog.meta(&child_kind)) else {
+                return Err(Error::rule_config(
+                    id_hint,
+                    format!(
+                        "rule in nested config {source} has unknown kind `{child_kind}` in \
+                         `require` or no kind catalog was injected; its selectors cannot be \
+                         proven confined"
+                    ),
+                ));
+            };
+            scope_kind_fields(
+                child,
+                &child_kind,
+                child_meta,
+                prefix,
+                id_hint,
+                source,
+                true,
+                catalog,
+            )?;
         }
     }
     Ok(any_scoped)
@@ -588,4 +632,51 @@ pub(crate) fn scope_glob(glob: &str, prefix: &str) -> Result<String> {
         format!("{prefix}/{rest}")
     };
     Ok(joined)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn transition_nested_lists_equal_catalog_metadata() {
+        let registry = alint_rules::builtin_registry();
+        let catalog = registry.catalog();
+        let kinds = registry.known_kinds().collect::<Vec<_>>();
+
+        let derived_regex_select: BTreeSet<&str> = kinds
+            .iter()
+            .copied()
+            .filter(|kind| {
+                catalog.meta(kind).is_some_and(|meta| {
+                    meta.selectors.iter().any(|selector| {
+                        selector.name == "select" && selector.selector_type == SelectorType::Regex
+                    })
+                })
+            })
+            .collect();
+        assert_eq!(
+            derived_regex_select,
+            REGEX_SELECT_KINDS.iter().copied().collect()
+        );
+
+        let derived_unconfinable: BTreeSet<&str> = kinds
+            .iter()
+            .copied()
+            .filter(|kind| catalog.meta(kind).is_some_and(kind_is_unconfinable))
+            .collect();
+        assert_eq!(
+            derived_unconfinable,
+            UNCONFINABLE_KINDS.iter().copied().collect()
+        );
+
+        let derived_nested: BTreeSet<&str> = kinds
+            .iter()
+            .copied()
+            .filter(|kind| catalog.meta(kind).is_some_and(|meta| meta.nested_rules))
+            .collect();
+        assert_eq!(derived_nested, NESTED_RULE_KINDS.iter().copied().collect());
+    }
 }

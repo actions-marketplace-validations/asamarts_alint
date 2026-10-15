@@ -383,7 +383,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".alint.yml");
         std::fs::write(&path, buf).unwrap();
-        let loaded = alint_dsl::load(&path).expect("suggested YAML must load");
+        let registry = alint_rules::builtin_registry();
+        let loaded = alint_dsl::load_with(
+            &path,
+            &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+        )
+        .expect("suggested YAML must load");
         assert!(
             loaded
                 .rules

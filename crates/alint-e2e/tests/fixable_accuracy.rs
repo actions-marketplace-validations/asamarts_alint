@@ -16,6 +16,8 @@ use std::path::Path;
 use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_testkit::treespec::{TreeSpec, materialize};
 
+mod support;
+
 const CONFIG: &str = "\
 version: 1
 rules:
@@ -37,7 +39,7 @@ fn run_check_with(root: &Path, config_yaml: &str) -> alint_core::Report {
     std::fs::write(&config_path, config_yaml).unwrap();
     let cache = alint_dsl::extends::Cache::at(root.join(".alint-cache"));
     let opts = alint_dsl::LoadOptions::with_cache(cache);
-    let config = alint_dsl::load_with(&config_path, &opts).unwrap();
+    let config = support::load_with(&config_path, &opts).unwrap();
 
     let registry = alint_rules::builtin_registry();
     let mut entries: Vec<RuleEntry> = Vec::new();

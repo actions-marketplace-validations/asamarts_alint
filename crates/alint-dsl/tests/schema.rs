@@ -197,8 +197,12 @@ fn fixture_covers_every_registered_rule_kind() {
 fn every_registered_kind_rejects_an_unknown_option() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/all_kinds.yaml");
-    let config = alint_dsl::load(&path).expect("all_kinds.yaml loads");
     let registry = alint_rules::builtin_registry();
+    let config = alint_dsl::load_with(
+        &path,
+        &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+    )
+    .expect("all_kinds.yaml loads");
 
     let mut swallowers: Vec<String> = Vec::new();
     let mut probed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

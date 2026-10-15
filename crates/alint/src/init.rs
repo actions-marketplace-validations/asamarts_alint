@@ -408,8 +408,12 @@ mod tests {
                 workspace: Some(flavor),
             });
             std::fs::write(&config_path, rendered).unwrap();
-            let loaded = alint_dsl::load(&config_path)
-                .unwrap_or_else(|error| panic!("{flavor:?} scaffold did not load: {error}"));
+            let registry = alint_rules::builtin_registry();
+            let loaded = alint_dsl::load_with(
+                &config_path,
+                &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+            )
+            .unwrap_or_else(|error| panic!("{flavor:?} scaffold did not load: {error}"));
             assert!(
                 loaded
                     .rules

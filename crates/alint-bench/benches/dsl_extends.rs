@@ -57,13 +57,15 @@ fn build_chain(depth: usize) -> tempfile::TempDir {
 }
 
 fn bench_extends_chain_depth(c: &mut Criterion) {
+    let registry = alint_rules::builtin_registry();
+    let load_options = alint_dsl::LoadOptions::with_catalog(registry.catalog());
     let mut group = c.benchmark_group("dsl_extends/chain_depth");
     for &depth in &[1usize, 4, 16] {
         let tmp = build_chain(depth);
         let root = tmp.path().join(".alint.yml");
         group.throughput(Throughput::Elements(depth as u64));
         group.bench_with_input(BenchmarkId::from_parameter(depth), &root, |b, p| {
-            b.iter(|| alint_dsl::load(p).expect("load chain"));
+            b.iter(|| alint_dsl::load_with(p, &load_options).expect("load chain"));
         });
     }
     group.finish();

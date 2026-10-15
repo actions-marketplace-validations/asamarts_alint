@@ -175,7 +175,7 @@ fn env_derived_vars(
 pub(crate) fn load_recursive(
     path: &Path,
     state: &mut LoadState,
-    opts: &LoadOptions,
+    opts: &LoadOptions<'_>,
     confine: Option<&Path>,
     is_top: bool,
     // The top-level `trusted_extends:` allowlist (remote URLs whose content fixers
@@ -292,14 +292,14 @@ pub(crate) fn load_recursive(
             confine_extends_target(&target, url, confine)?;
             load_recursive(&target, state, opts, confine, false, trusted)?
         };
-        gate_extended_source(&parent, url)?;
+        gate_extended_source(&parent, url, opts.kind_catalog)?;
         mark_extended_provenance(&mut parent, url);
         parent.drop_top_level_settings(url);
         parent.rules = apply_rule_filter(parent.rules, entry)?;
         if url.starts_with("https://") {
             let base = url.split('#').next().unwrap_or(url);
             if !trusted.iter().any(|t| t == base || t == url) {
-                cap_untrusted_remote(&mut parent, url)?;
+                cap_untrusted_remote(&mut parent, url, opts.kind_catalog)?;
             }
         }
         merged = merge(merged, parent);
@@ -327,7 +327,11 @@ fn mark_extended_provenance(parent: &mut RawConfig, url: &str) {
 
 /// Apply the restrictions on a remote `extends:` the user has NOT listed in
 /// `trusted_extends:` (the URL matches with or without its `#sha256-` fragment).
-fn cap_untrusted_remote(parent: &mut RawConfig, url: &str) -> Result<()> {
+fn cap_untrusted_remote(
+    parent: &mut RawConfig,
+    url: &str,
+    catalog: Option<alint_core::KindCatalog<'_>>,
+) -> Result<()> {
     // It may not read the consumer's environment through a `when:` (a boolean
     // oracle on each variable), including one an instance it shapes assembles
     // from a template at finalize (hence the provenance mark).
@@ -364,8 +368,8 @@ fn cap_untrusted_remote(parent: &mut RawConfig, url: &str) -> Result<()> {
     // EFFECTIVE fixer. That closes both mixed-source directions: an untrusted
     // rule instantiating a trusted template, and a trusted rule instantiating a
     // template partly defined by an untrusted source.
-    crate::demote_content_fixers_in(&mut parent.rules);
-    crate::demote_content_fixers_in(&mut parent.templates);
+    crate::demote_content_fixers_in(&mut parent.rules, catalog);
+    crate::demote_content_fixers_in(&mut parent.templates, catalog);
     crate::mark_untrusted_fix_sources_in(&mut parent.rules);
     crate::mark_untrusted_fix_sources_in(&mut parent.templates);
     Ok(())
@@ -373,7 +377,7 @@ fn cap_untrusted_remote(parent: &mut RawConfig, url: &str) -> Result<()> {
 
 fn load_remote(
     entry: &str,
-    opts: &LoadOptions,
+    opts: &LoadOptions<'_>,
     visiting: &mut std::collections::HashSet<PathBuf>,
 ) -> Result<RawConfig> {
     let (url, sri) = extends::split_url_and_sri(entry).map_err(|e| Error::Other(e.to_string()))?;
@@ -438,26 +442,20 @@ fn load_remote(
 
 /// Every per-source trust refusal for one `extends:`'d config. Runs before the
 /// config merges, so `url` names the offending source in each error.
-fn gate_extended_source(parent: &RawConfig, url: &str) -> Result<()> {
-    // Extended configs cannot introduce `custom:` facts or
-    // `kind: command` rules — both spawn arbitrary processes
-    // on behalf of a ruleset whose code the user didn't
-    // write. Same trust model on both sides.
+fn gate_extended_source(
+    parent: &RawConfig,
+    url: &str,
+    catalog: Option<alint_core::KindCatalog<'_>>,
+) -> Result<()> {
+    // Extended configs cannot introduce `custom:` facts or process-spawning
+    // rule kinds. Unknown kinds are spawning for this raw-YAML gate: a plugin
+    // catalog omission must deny, never silently bypass the trust boundary.
     alint_core::facts::reject_custom_facts_in(&parent.facts, url)?;
-    reject_command_rules_in(&parent.rules, url)?;
-    // A *spawning* fix op (`git_untrack`) is the RCE analogue of a spawning
-    // rule kind: refuse it from any extended source, at every `require:` depth
-    // (auto-fix.md 5.5). The kind gate above misses it because a spawning
-    // FIXER can hang off a non-spawning kind (`git_untrack` on `file_absent`).
-    crate::reject_spawning_fix_ops_in(&parent.rules, url)?;
+    reject_command_rules_in(&parent.rules, url, catalog)?;
+    crate::reject_spawning_fix_ops_in(&parent.rules, url, catalog)?;
     crate::reject_fix_promotion_in(&parent.rules, url)?;
-    reject_spawning_templates_in(&parent.templates, url)?;
-    // ...and the template analogue: a spawning fix in a `templates:` block
-    // would splice into its referencing rule at finalize, past the gate above.
-    crate::reject_spawning_fix_op_templates_in(&parent.templates, url)?;
-    // ...and the same promotion refusal for a `templates:` block, which a
-    // template instance would otherwise smuggle a `fix.<op>.applicability:
-    // safe` past the rule-level gate above (it expands at finalize time).
+    reject_spawning_templates_in(&parent.templates, url, catalog)?;
+    crate::reject_spawning_fix_op_templates_in(&parent.templates, url, catalog)?;
     crate::reject_fix_promotion_templates_in(&parent.templates, url)?;
     reject_allow_out_of_root_in(&parent.allow_out_of_root, url)?;
     reject_baseline_in(&parent.baseline, url)?;
@@ -664,7 +662,12 @@ mod tests {
             std::fs::write(tmp.path().join(format!("c{i}.yml")), body).unwrap();
         }
         let started = std::time::Instant::now();
-        let cfg = crate::load(&tmp.path().join("c0.yml")).unwrap();
+        let registry = alint_rules::builtin_registry();
+        let cfg = crate::load_with(
+            &tmp.path().join("c0.yml"),
+            &crate::LoadOptions::with_catalog(registry.catalog()),
+        )
+        .unwrap();
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
             "diamond chain took {:?}",

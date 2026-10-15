@@ -19,6 +19,8 @@ use std::path::Path;
 use alint_core::{Engine, Level, Report, RuleEntry, WalkOptions, walk};
 use alint_testkit::treespec::{TreeSpec, materialize};
 
+mod support;
+
 fn chmod(path: &Path, mode: u32) {
     let mut perms = std::fs::metadata(path).unwrap().permissions();
     perms.set_mode(mode);
@@ -30,7 +32,7 @@ fn load_config(root: &Path, config_yaml: &str) -> alint_core::Config {
     std::fs::write(&config_path, config_yaml).unwrap();
     let cache = alint_dsl::extends::Cache::at(root.join(".alint-cache"));
     let opts = alint_dsl::LoadOptions::with_cache(cache);
-    alint_dsl::load_with(&config_path, &opts).unwrap()
+    support::load_with(&config_path, &opts).unwrap()
 }
 
 fn build_engine(

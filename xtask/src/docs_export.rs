@@ -18,12 +18,18 @@ use alint_testkit::DocsCase;
 use crate::rule_options_table::{build_kind_branch_index, load_config_schema, options_section};
 use crate::{build_release_binary, git_sha, now_iso, walkdir_plain, workspace_root};
 
-/// Rule kinds documented with a `fail` example but no `pass` — the explicit
-/// exemption to ADR-0014's "both states, always". `git_commit_gpg_signed`'s
-/// compliant state needs a real GPG signature the fixture sandbox has no key
-/// for, so it ships fail-only by reviewed decision (the pairing gate in
-/// `process_family_h3s` would otherwise red). Add a kind here ONLY with a reason.
+/// One-release transition list for kinds whose compliant docs scenario requires
+/// a host keyring. The operational exemption derives from `KindMeta`; this list
+/// remains an exact cross-check until the v0.19 transition is removed.
 const FAIL_ONLY_KINDS: &[&str] = &["git_commit_gpg_signed"];
+
+fn requires_fail_only_docs(registry: &alint_core::RuleRegistry, kind: &str) -> bool {
+    registry.meta(kind).is_some_and(|meta| {
+        meta.capabilities
+            .iter()
+            .any(|entry| matches!(entry.capability, alint_core::Capability::HostKeyring))
+    })
+}
 
 // ---- docs-export ----------------------------------------------------------
 
@@ -642,19 +648,17 @@ fn process_family_h3s(
         // kinds) must have every kind documented. Canonicalise so an alias-titled
         // token resolves to its documented (canonical) kind. Gaps are surfaced
         // collectively at the end of generate_rules_pages.
-        // ADR-0014 "both states, always": a documented kind must show BOTH a
-        // `fail` and a `pass` example, not merely >=1. `FAIL_ONLY_KINDS` is the
-        // explicit, reasoned exemption for a kind whose compliant state the
-        // fixture harness cannot construct (git_commit_gpg_signed needs a real GPG
-        // signature the sandbox has no key for). Canonicalise so an alias-titled
-        // token resolves to its documented (canonical) kind.
+        // ADR-0014 "both states, always": every documented kind needs fail and
+        // pass examples. A metadata-declared host-keyring dependency is the
+        // explicit exemption because the fixture sandbox cannot construct its
+        // compliant state.
         for k in &group_kinds {
             let canon = registry.canonical_kind(k);
             let cases = documented.get(canon);
             let has = |c: DocsCase| cases.is_some_and(|v| v.iter().any(|e| e.case == c));
             let missing = if !has(DocsCase::Fail) {
                 Some("fail")
-            } else if !has(DocsCase::Pass) && !FAIL_ONLY_KINDS.contains(&canon) {
+            } else if !has(DocsCase::Pass) && !requires_fail_only_docs(registry, canon) {
                 Some("pass")
             } else {
                 None
@@ -1335,24 +1339,39 @@ fn enforce_example_gates(missing: &[String], wrong_kind: &[String]) -> Result<()
     Ok(())
 }
 
-/// Keep the [`FAIL_ONLY_KINDS`] exemption list honest: every entry must be
-/// load-bearing - a canonical kind documented with a `fail` example that
-/// genuinely has NO `pass` example. Without this, a stale entry (a typo, an alias
-/// spelling that `canonical_kind` never matches, or a kind that has since gained
-/// a `pass`) would sit in the allowlist silently suppressing the fail+pass
-/// pairing gate for a name that no longer needs the exemption - the exact "gate
-/// ratifies whatever it emits" trap ADR-0012 warns against, one level up.
+/// Keep the metadata-derived fail-only exemption honest. The former hand list
+/// remains an exact one-release transition check, and every derived entry must
+/// be load-bearing: canonical, documented with `fail`, and without `pass`.
 fn enforce_fail_only_allowlist_live(
     documented: &std::collections::BTreeMap<String, Vec<examples::RenderedExample>>,
     registry: &alint_core::RuleRegistry,
 ) -> Result<()> {
+    let derived: std::collections::BTreeSet<&str> = registry
+        .kind_metadata()
+        .filter(|(_kind, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::HostKeyring))
+        })
+        .map(|(kind, _meta)| kind)
+        .collect();
+    let transition: std::collections::BTreeSet<&str> = FAIL_ONLY_KINDS.iter().copied().collect();
+    anyhow::ensure!(
+        derived == transition,
+        "KindMeta::HostKeyring and the one-release FAIL_ONLY_KINDS transition list disagree: \
+         metadata={derived:?}, transition={transition:?}"
+    );
+
     let mut stale: Vec<String> = Vec::new();
-    for &kind in FAIL_ONLY_KINDS {
+    for kind in derived {
         let canon = registry.canonical_kind(kind);
         let cases = documented.get(canon);
         let has = |c: DocsCase| cases.is_some_and(|v| v.iter().any(|e| e.case == c));
-        let reason = if canon != kind {
-            Some(format!("not a canonical kind (resolves to `{canon}`)"))
+        let reason = if registry.canonical_kind(kind) != kind {
+            Some(format!(
+                "not a canonical kind (resolves to `{}`)",
+                registry.canonical_kind(kind)
+            ))
         } else if !has(DocsCase::Fail) {
             Some("no documented `fail` example".to_string())
         } else if has(DocsCase::Pass) {

@@ -5,7 +5,7 @@
 //! carry each rule's source classes through composition and template
 //! expansion.
 
-use alint_core::{Error, Result};
+use alint_core::{Capability, Error, FixTrustClass, KindCatalog, Result};
 use serde_yaml_ng::Mapping;
 
 use crate::{RawConfig, instance_vars, render_template_vars};
@@ -523,44 +523,35 @@ fn find_assembled_env_ref(
     walk(&serde_yaml_ng::Value::Mapping(m.clone()), vars, key, "")
 }
 
-/// Rule kinds that spawn an arbitrary user-supplied process.
-/// Every one is trust-gated identically by
-/// [`reject_command_rules_in`]: it may only be declared in the
-/// user's own top-level config, never introduced via `extends:`.
-/// Keep in sync with the rule implementations in `alint-rules`
-/// that shell out — `command` (per-file CLI),
-/// `generated_file_fresh` (runs a generator), `command_idempotent`
-/// (runs a checker). Adding a spawn-capable rule kind without
-/// adding it here is a code-execution gap.
+/// One-release transition list for spawning rule kinds.
+///
+/// Runtime trust decisions derive from [`KindCatalog`]. This list remains only
+/// as an equality cross-check until the v0.19 transition is complete.
 pub const SPAWNING_RULE_KINDS: &[&str] = &["command", "generated_file_fresh", "command_idempotent"];
 
-/// Fix ops that shell out, trust-gated identically to
-/// [`SPAWNING_RULE_KINDS`]: a spawning fix may be declared **only** in the
-/// user's own top-level config, never introduced via `extends:` / a nested
-/// `.alint.yml` / a `templates:` block / bundled (auto-fix.md 5.5). Enforced by
-/// [`reject_spawning_fix_ops_in`] (rules, at every `require:` depth),
-/// [`reject_spawning_fix_op_templates_in`] (inherited templates), and a
-/// `finalize` backstop that refuses one in ANY source's templates. Adding a
-/// spawn-capable op without listing it here is a code-execution gap, exactly as
-/// for rule kinds; `spawning_fix_ops_are_gated` asserts every entry is a real op.
-/// `git_untrack` (`git rm --cached`) and `command` (a user-supplied `run:` fix
-/// command on the `command` rule) are the two spawning fix ops.
+/// One-release transition list for spawning fix operations.
+///
+/// Runtime trust decisions derive from [`alint_core::FixOpMeta`]. This list
+/// remains only as an equality cross-check until the v0.19 transition is
+/// complete.
 pub const SPAWNING_FIX_OPS: &[&str] = &["git_untrack", "command"];
 
-/// Reject any process-spawning rule kind (see
-/// [`SPAWNING_RULE_KINDS`]) in the given mapping list. Used by the
-/// `extends:` resolver to enforce that only the user's own
-/// top-level config can declare a rule that shells out. Same trust
-/// model as `alint_core::facts::reject_custom_facts_in` —
-/// extending a ruleset must never gain you arbitrary code
-/// execution. `source` is shown in the error to help the user
-/// identify which extended config introduced the violation.
+/// Reject any rule kind whose catalog metadata declares process spawning, plus
+/// any kind absent from the injected catalog, in the given mapping list. Used
+/// by the `extends:` resolver to enforce that only the user's own top-level
+/// config can declare a rule that shells out. Same trust model as
+/// `alint_core::facts::reject_custom_facts_in`: extending a ruleset must never
+/// gain arbitrary code execution. `source` identifies the extended config.
 ///
 /// (Kept its original name for API stability; it now gates the
 /// whole spawning-kind set, not only `kind: command`.)
-pub fn reject_command_rules_in(rules: &[Mapping], source: &str) -> Result<()> {
+pub fn reject_command_rules_in(
+    rules: &[Mapping],
+    source: &str,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<()> {
     for rule in rules {
-        reject_spawning_in_rule(rule, source)?;
+        reject_spawning_in_rule(rule, source, catalog)?;
     }
     Ok(())
 }
@@ -618,18 +609,11 @@ fn reject_fix_promotion_in_rule(rule: &Mapping, source: &str) -> Result<()> {
     Ok(())
 }
 
-/// The `fix:` ops a remote `extends:` could abuse to mutate YOUR files, so they
-/// demote to `suggestion` from an untrusted (non-`trusted_extends:`) remote
-/// (auto-fix.md 5.5). Two kinds: ops that write ruleset-authored BYTES (a regex
-/// `replace`ment template, the inline `content:` / `content_from:` of a create /
-/// prepend / append, a `set_value`), AND ops the ruleset can AIM at a file to
-/// change its content or meaning even though the bytes are the victim's own
-/// (`sync_from` picks which file overwrites which; `sort` reorders / dedups a
-/// file the rule's `paths:` selects). The genuinely fixed-behavior ops (the
-/// hygiene normalizers, `file_remove`, `file_rename`, `chmod`, `remove_value`,
-/// `dir_create`, `relocate`, `git_untrack`) are honored at their own tier from
-/// any source; a destructive one like `file_remove` is already gated by its
-/// Unsafe tier, independent of source.
+#[cfg(test)]
+/// One-release transition list for content-injecting fix operations.
+///
+/// Runtime demotion derives from [`alint_core::FixOpMeta`]. Keep this exact
+/// list until the v0.19 transition cross-check is removed.
 pub(crate) const CONTENT_INJECTING_FIX_OPS: &[&str] = &[
     "replace",
     "file_create",
@@ -717,9 +701,9 @@ pub(crate) const CONTENT_INJECTING_FIX_OPS: &[&str] = &[
 /// merge, so the built fixer carries the capped tier. Scans nested `require:`
 /// blocks too (a `for_each_dir` etc. can bury a content fixer). Mirrors the
 /// read-only [`reject_fix_promotion_in`] navigation.
-pub(crate) fn demote_content_fixers_in(rules: &mut [Mapping]) {
+pub(crate) fn demote_content_fixers_in(rules: &mut [Mapping], catalog: Option<KindCatalog<'_>>) {
     for rule in rules.iter_mut() {
-        demote_content_fixers_in_rule(rule);
+        demote_content_fixers_in_rule(rule, catalog);
     }
 }
 
@@ -778,15 +762,17 @@ pub(crate) fn merge_mapping_fields(existing: &mut Mapping, incoming: Mapping) {
     }
 }
 
-pub(crate) fn demote_content_fixers_in_rule(rule: &mut Mapping) {
+pub(crate) fn demote_content_fixers_in_rule(rule: &mut Mapping, catalog: Option<KindCatalog<'_>>) {
     if let Some(fix) = rule
         .get_mut("fix")
         .and_then(serde_yaml_ng::Value::as_mapping_mut)
     {
         for (op, args) in fix.iter_mut() {
-            let is_content = op
-                .as_str()
-                .is_some_and(|o| CONTENT_INJECTING_FIX_OPS.contains(&o));
+            let is_content = op.as_str().is_some_and(|op| {
+                catalog
+                    .and_then(|catalog| catalog.fix_op(op))
+                    .is_some_and(|meta| meta.trust == FixTrustClass::ContentInjecting)
+            });
             if !is_content {
                 continue;
             }
@@ -822,7 +808,7 @@ pub(crate) fn demote_content_fixers_in_rule(rule: &mut Mapping) {
     {
         for nested in require {
             if let Some(nested_map) = nested.as_mapping_mut() {
-                demote_content_fixers_in_rule(nested_map);
+                demote_content_fixers_in_rule(nested_map, catalog);
             }
         }
     }
@@ -838,30 +824,46 @@ pub(crate) fn demote_content_fixers_in_rule(rule: &mut Mapping) {
 /// the raw mappings here, before instantiation, at every depth. (If a new
 /// rule kind ever adds another `Vec<NestedRuleSpec>` option field, gate it
 /// here too.)
-fn reject_spawning_in_rule(rule: &Mapping, source: &str) -> Result<()> {
-    if let Some(kind) = find_spawning_kind(rule) {
+fn reject_spawning_in_rule(
+    rule: &Mapping,
+    source: &str,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<()> {
+    if let Some(kind) = find_spawning_kind(rule, catalog) {
         let id = rule
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)");
         return Err(Error::Other(format!(
-            "rule {id:?}: `kind: {kind}` spawns a process and is only allowed in the \
-             user's top-level config; declaring one in an extended config ({source}) - \
-             including inside a `require:` block - is refused because it would let a \
-             ruleset run arbitrary code"
+            "rule {id:?}: `kind: {kind}` spawns a process or is not present in the injected \
+             kind catalog, and is only allowed in the user's top-level config; declaring one \
+             in an extended config ({source}) - including inside a `require:` block - is \
+             refused because it would let a ruleset run arbitrary code"
         )));
     }
     Ok(())
 }
 
-/// The spawning kind (see [`SPAWNING_RULE_KINDS`]) declared by `rule` or by any
-/// nested `require:` spec, recursively. Shared by the per-source rule gate, the
-/// per-source template gate, and the `finalize` template backstop so all three
-/// scan to the SAME depth: a template-nested `require: [{kind: command}]` must
-/// be refused exactly like a rule-nested one.
-pub(crate) fn find_spawning_kind(rule: &Mapping) -> Option<&str> {
+fn kind_spawns(kind: &str, catalog: Option<KindCatalog<'_>>) -> bool {
+    catalog
+        .and_then(|catalog| catalog.meta(kind))
+        .is_none_or(|meta| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, Capability::SpawnUserCommand))
+        })
+}
+
+/// The spawning or unknown kind declared by `rule` or any nested `require:`.
+///
+/// Missing catalogs and unknown kinds return the kind name: raw inherited YAML
+/// must be denied unless its behavior is known.
+pub(crate) fn find_spawning_kind<'a>(
+    rule: &'a Mapping,
+    catalog: Option<KindCatalog<'_>>,
+) -> Option<&'a str> {
     if let Some(kind) = rule.get("kind").and_then(|v| v.as_str())
-        && SPAWNING_RULE_KINDS.contains(&kind)
+        && kind_spawns(kind, catalog)
     {
         return Some(kind);
     }
@@ -870,7 +872,7 @@ pub(crate) fn find_spawning_kind(rule: &Mapping) -> Option<&str> {
         .into_iter()
         .flatten()
         .filter_map(serde_yaml_ng::Value::as_mapping)
-        .find_map(find_spawning_kind)
+        .find_map(|nested| find_spawning_kind(nested, catalog))
 }
 
 /// The first trust-relevant field of a template (a `kind`, or a
@@ -934,48 +936,58 @@ pub(crate) fn strip_fix_promotions_in_rule(rule: &mut Mapping) {
     }
 }
 
-/// Reject any *spawning* fix op (see [`SPAWNING_FIX_OPS`]) declared in the given
-/// mapping list. The fix-op analogue of [`reject_command_rules_in`]: a fixer that
-/// shells out (today `git_untrack`, `git rm --cached`) is a code-execution
-/// surface, so it may be declared ONLY in the user's own top-level config, never
-/// introduced via `extends:` / a nested `.alint.yml` / bundled (auto-fix.md 5.5).
-/// The existing spawn gate keys on the rule *kind*, so a spawning FIXER attached
-/// to a non-spawning kind (a `git_untrack` fix on `file_absent`) slips past it --
-/// this gate closes that gap. `source` names the offending config in the error.
-/// Scans nested `require:` blocks at every depth, exactly like the kind gate.
-pub fn reject_spawning_fix_ops_in(rules: &[Mapping], source: &str) -> Result<()> {
+/// Reject any fix op whose metadata class is spawning, plus any op absent from
+/// the injected catalog. The fix-op analogue of [`reject_command_rules_in`]: a
+/// fixer that shells out is a code-execution surface, so it may be declared only
+/// in the user's own top-level config, never through `extends:`, a nested
+/// `.alint.yml`, or a bundled ruleset. Scans nested `require:` blocks at every
+/// depth.
+pub fn reject_spawning_fix_ops_in(
+    rules: &[Mapping],
+    source: &str,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<()> {
     for rule in rules {
-        reject_spawning_fix_op_in_rule(rule, source)?;
+        reject_spawning_fix_op_in_rule(rule, source, catalog)?;
     }
     Ok(())
 }
 
-fn reject_spawning_fix_op_in_rule(rule: &Mapping, source: &str) -> Result<()> {
-    if let Some(op) = find_spawning_fix_op(rule) {
+fn reject_spawning_fix_op_in_rule(
+    rule: &Mapping,
+    source: &str,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<()> {
+    if let Some(op) = find_spawning_fix_op(rule, catalog) {
         let id = rule
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)");
         return Err(Error::Other(format!(
-            "rule {id:?}: `fix.{op}` spawns a process and is only allowed in the \
-             user's top-level config; declaring one in an extended config ({source}) - \
-             including inside a `require:` block or a `templates:` entry - is refused \
-             because it would let a ruleset run arbitrary code on a bare `alint fix`"
+            "rule {id:?}: `fix.{op}` spawns a process or is not present in the injected fix-op \
+             catalog, and is only allowed in the user's top-level config; declaring one in an \
+             extended config ({source}) - including inside a `require:` block or a `templates:` \
+             entry - is refused because it could let a ruleset run arbitrary code on a bare \
+             `alint fix`"
         )));
     }
     Ok(())
 }
 
-/// The name of a spawning fix op (see [`SPAWNING_FIX_OPS`]) declared in `rule`'s
-/// `fix:` block or any nested `require:` (recursively), if any. Shared by the
-/// per-source refusal ([`reject_spawning_fix_op_in_rule`]) and the `finalize`
-/// template backstop so both scan to the SAME depth: a spawning fix must be
-/// refused whether it sits at a rule/template's top level OR inside its `require:`.
-pub(crate) fn find_spawning_fix_op(rule: &Mapping) -> Option<&str> {
+/// The name of a spawning or unknown fix op declared in `rule`'s `fix:` block or
+/// any nested `require:` recursively. Missing catalogs and unknown operations
+/// fail closed. Shared by per-source refusal and the `finalize` template
+/// backstop so both scan to the same depth.
+pub(crate) fn find_spawning_fix_op<'a>(
+    rule: &'a Mapping,
+    catalog: Option<KindCatalog<'_>>,
+) -> Option<&'a str> {
     if let Some(fix) = rule.get("fix").and_then(|v| v.as_mapping()) {
         for (op, _args) in fix {
             if let Some(op) = op.as_str()
-                && SPAWNING_FIX_OPS.contains(&op)
+                && catalog
+                    .and_then(|catalog| catalog.fix_op(op))
+                    .is_none_or(|meta| meta.trust == FixTrustClass::Spawning)
             {
                 return Some(op);
             }
@@ -984,7 +996,7 @@ pub(crate) fn find_spawning_fix_op(rule: &Mapping) -> Option<&str> {
     if let Some(require) = rule.get("require").and_then(|v| v.as_sequence()) {
         for nested in require {
             if let Some(nested_map) = nested.as_mapping()
-                && let Some(op) = find_spawning_fix_op(nested_map)
+                && let Some(op) = find_spawning_fix_op(nested_map, catalog)
             {
                 return Some(op);
             }
@@ -1001,35 +1013,45 @@ pub(crate) fn find_spawning_fix_op(rule: &Mapping) -> Option<&str> {
 /// template is shaped like a rule (`fix:` + optional `require:`), so the same
 /// per-rule scan applies. `finalize` enforces the same invariant for every
 /// source; this earlier per-source check names the offending ruleset.
-pub fn reject_spawning_fix_op_templates_in(templates: &[Mapping], source: &str) -> Result<()> {
+pub fn reject_spawning_fix_op_templates_in(
+    templates: &[Mapping],
+    source: &str,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<()> {
     for template in templates {
-        reject_spawning_fix_op_in_rule(template, source)?;
+        reject_spawning_fix_op_in_rule(template, source, catalog)?;
     }
     Ok(())
 }
 
-/// Reject any process-spawning rule kind (see [`SPAWNING_RULE_KINDS`])
-/// declared inside a `templates:` block of an inherited ruleset. A
-/// template instance (`extends_template:`) carries no `kind` of its own,
-/// so a spawning template would slip past [`reject_command_rules_in`]
-/// (which inspects `rules[].kind`) and expand into a `command` rule at
-/// `finalize` time — the C1 code-execution bypass. Spawning kinds are
-/// confined to the user's own top-level `rules:`, never a template.
-/// `finalize` enforces the same invariant for every source; this earlier
-/// per-source check names the offending ruleset (`source`) in the error.
-pub fn reject_spawning_templates_in(templates: &[Mapping], source: &str) -> Result<()> {
+/// Reject a process-spawning or unknown rule kind declared inside an inherited
+/// `templates:` block. A template instance carries no `kind` of its own, so the
+/// template must be classified before expansion. Missing catalogs and unknown
+/// kinds fail closed. `finalize` enforces the same invariant for every source;
+/// this earlier check names the offending ruleset.
+pub fn reject_spawning_templates_in(
+    templates: &[Mapping],
+    source: &str,
+    catalog: Option<KindCatalog<'_>>,
+) -> Result<()> {
     for template in templates {
-        if let Some(kind) = find_spawning_kind(template) {
-            let id = template
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("(unknown)");
+        let id = template
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(unknown)");
+        if let Some(field) = find_template_placeholder_in_guarded_field(template) {
             return Err(Error::Other(format!(
-                "template {id:?}: `kind: {kind}` spawns a process and is not allowed in \
-                 an inherited ruleset ({source}); a spawning kind may only appear in a \
-                 top-level `rules:` entry, never in a `templates:` block, because a \
-                 template instance expands after the spawn gate and would let the \
-                 ruleset run arbitrary code"
+                "template {id:?}: `{field}` must be a literal value; `{{{{vars.*}}}}` \
+                 placeholders are not allowed in a rule kind or a fix applicability \
+                 because they are substituted after the trust gates have run"
+            )));
+        }
+        if let Some(kind) = find_spawning_kind(template, catalog) {
+            return Err(Error::Other(format!(
+                "template {id:?}: `kind: {kind}` spawns a process or is not present in the \
+                 injected kind catalog, and is not allowed in an inherited ruleset ({source}); \
+                 such a kind may only appear in a top-level `rules:` entry, never in a \
+                 `templates:` block, because post-gate expansion could execute arbitrary code"
             )));
         }
     }

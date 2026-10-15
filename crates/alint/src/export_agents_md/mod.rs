@@ -85,8 +85,12 @@ pub fn run(config_path: Option<&Path>, opts: &RunOptions) -> Result<ExitCode> {
             anyhow::anyhow!("no .alint.yml found (searched from {})", cwd.display())
         })?,
     };
-    let config = alint_dsl::load(&resolved_config_path)
-        .with_context(|| format!("loading {}", resolved_config_path.display()))?;
+    let registry = alint_rules::builtin_registry();
+    let config = alint_dsl::load_with(
+        &resolved_config_path,
+        &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+    )
+    .with_context(|| format!("loading {}", resolved_config_path.display()))?;
 
     let directives = collect_directives(&config, opts.include_info);
     let body = match opts.format {

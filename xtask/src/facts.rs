@@ -19,6 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
@@ -27,6 +28,16 @@ use serde::Serialize;
 /// Bumped when the `facts.json` shape changes, so a downstream
 /// consumer (alint.org) can pin the schema it understands.
 const FORMAT_VERSION: u32 = 3;
+
+static RULE_REGISTRY: LazyLock<alint_core::RuleRegistry> =
+    LazyLock::new(alint_rules::builtin_registry);
+
+fn load_config(path: &Path) -> Result<alint_core::Config> {
+    Ok(alint_dsl::load_with(
+        path,
+        &alint_dsl::LoadOptions::with_catalog(RULE_REGISTRY.catalog()),
+    )?)
+}
 
 #[derive(Serialize)]
 struct Facts {
@@ -323,7 +334,7 @@ fn example_rule_counts(root: &Path) -> Result<BTreeMap<String, usize>> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        let loaded = alint_dsl::load(&config)
+        let loaded = load_config(&config)
             .with_context(|| format!("load examples/{name}/.alint.yml for its rule count"))?;
         map.insert(name, loaded.rules.len());
     }
@@ -357,7 +368,7 @@ fn bench_scenario_rule_counts(root: &Path) -> Result<BTreeMap<String, usize>> {
             continue;
         };
         let id = format!("S{}", &cap[1]);
-        let loaded = alint_dsl::load(&entry.path())
+        let loaded = load_config(&entry.path())
             .with_context(|| format!("load bench scenario {name} for its rule count"))?;
         map.insert(id, loaded.rules.len());
     }
@@ -697,7 +708,7 @@ mod tests {
                 "example_rule_counts[{study}] is 0 — the config resolved to no rules"
             );
             // The count must equal a fresh load's resolved rule count.
-            let loaded = alint_dsl::load(&examples.join(study).join(".alint.yml"))
+            let loaded = load_config(&examples.join(study).join(".alint.yml"))
                 .unwrap_or_else(|e| panic!("reload {study}: {e}"));
             assert_eq!(
                 *count,

@@ -13,6 +13,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   content access, formats, changed dependencies, fix operations, and nested-rule support; all 11
   aliases resolve the exact canonical record. Completeness, transition-list parity, subprocess
   source auditing, and rule-instance conformance are enforced in tests.
+- **DSL trust and audit decisions now use the rule registry's capability catalog.** Every
+  production loader supplies the same borrowed `KindCatalog` used to build rules, including the
+  CLI, LSP, export, testkit, benchmark, and facts paths. Process-spawning kinds and fix operations,
+  content-injecting fix demotion, nested-config confinement, unconditional-Git coverage, and the
+  docs fail-only exemption now derive from metadata. Loading a template,
+  inherited rule, or nested rule without a catalog, or with a kind absent from
+  that catalog, fails closed; plugin-owned metadata is honored. The former hand
+  lists remain exact one-release transition checks.
 
 ### Fixed
 

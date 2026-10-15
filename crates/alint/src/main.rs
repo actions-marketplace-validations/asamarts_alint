@@ -2028,8 +2028,11 @@ fn cmd_validate_config(path: Option<PathBuf>, format: &str, cli: &Cli) -> Result
 }
 
 fn validate_config_inner(config_path: &Path) -> Result<usize> {
-    let config = alint_dsl::load(config_path)?;
     let registry: alint_core::RuleRegistry = alint_rules::builtin_registry();
+    let config = alint_dsl::load_with(
+        config_path,
+        &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+    )?;
     let mut count = 0usize;
     for spec in &config.rules {
         if matches!(spec.level, alint_core::Level::Off) {
@@ -2127,9 +2130,11 @@ fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
         (config_path, root)
     };
     tracing::debug!(?config_path, "loading config");
-    let config = alint_dsl::load(&config_path)?;
-
     let registry: RuleRegistry = alint_rules::builtin_registry();
+    let config = alint_dsl::load_with(
+        &config_path,
+        &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+    )?;
 
     let mut entries: Vec<alint_core::RuleEntry> = Vec::with_capacity(config.rules.len());
     for spec in &config.rules {

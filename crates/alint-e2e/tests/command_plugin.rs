@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 
 use alint_core::{Engine, Level, RuleEntry, WalkOptions, walk};
 
+mod support;
+
 fn tempdir() -> tempfile::TempDir {
     tempfile::Builder::new()
         .prefix("alint-command-plugin-")
@@ -45,7 +47,7 @@ fn write_config(root: &Path, body: &str) -> alint_core::Config {
     std::fs::write(root.join(".alint.yml"), body).unwrap();
     let cache = alint_dsl::extends::Cache::at(root.join(".alint-cache"));
     let opts = alint_dsl::LoadOptions::with_cache(cache);
-    alint_dsl::load_with(&root.join(".alint.yml"), &opts).unwrap()
+    support::load_with(&root.join(".alint.yml"), &opts).unwrap()
 }
 
 #[test]

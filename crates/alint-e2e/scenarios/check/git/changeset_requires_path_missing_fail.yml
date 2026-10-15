@@ -19,6 +19,7 @@ given:
         since: HEAD~1
         level: error
   git:
+    init: true
     commits:
       - "chore: base"
       - { message: "feat: add feature", add: [src/lib.rs] }

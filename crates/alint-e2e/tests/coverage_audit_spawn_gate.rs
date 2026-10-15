@@ -167,21 +167,27 @@ fn spawning_sources_metadata_and_transition_list_agree() {
 }
 
 #[test]
-fn spawning_allowlist_is_non_empty_and_each_entry_has_a_module() {
-    // Cheap companion: a typo'd or emptied allow-list is itself a security
-    // regression (it would silently stop gating). Pin that every entry names
-    // a real rule module.
+fn spawning_metadata_is_non_empty_and_each_kind_has_a_module() {
+    let registry = alint_rules::builtin_registry();
+    let spawning: Vec<&str> = registry
+        .kind_metadata()
+        .filter(|(_kind, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::SpawnUserCommand))
+        })
+        .map(|(kind, _meta)| kind)
+        .collect();
     assert!(
-        !alint_dsl::SPAWNING_RULE_KINDS.is_empty(),
-        "SPAWNING_RULE_KINDS is empty — the process-spawn trust gate would gate nothing"
+        !spawning.is_empty(),
+        "no kind declares SpawnUserCommand — the source audit would be blind"
     );
     let src = rules_src_dir();
-    for kind in alint_dsl::SPAWNING_RULE_KINDS {
+    for kind in spawning {
         let module = src.join(format!("{kind}.rs"));
         assert!(
             module.exists(),
-            "SPAWNING_RULE_KINDS names {kind:?} but {} does not exist — stale or \
-             mistyped allow-list entry",
+            "SpawnUserCommand kind {kind:?} has no source module at {}",
             module.display()
         );
     }
@@ -225,29 +231,38 @@ fn spawn_detection_is_dynamic_and_precise() {
 }
 
 #[test]
-fn every_registered_spelling_of_a_spawning_kind_is_gated() {
-    // The gate matches `kind:` exactly (the registry has no case folding), so an
-    // ALIAS of a spawning kind would build the spawning rule under a name the
-    // gate never sees. Every registered spelling that resolves to a spawning kind
-    // must itself be on the allow-list.
+fn every_registered_spelling_of_a_spawning_kind_resolves_to_spawning_metadata() {
     let registry = alint_rules::builtin_registry();
-    let mut ungated: Vec<&str> = registry
-        .known_kinds()
-        .filter(|k| alint_dsl::SPAWNING_RULE_KINDS.contains(&registry.canonical_kind(k)))
-        .filter(|k| !alint_dsl::SPAWNING_RULE_KINDS.contains(k))
+    let catalog = registry.catalog();
+    let spawning_canonical: std::collections::BTreeSet<&str> = registry
+        .kind_metadata()
+        .filter(|(_kind, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::SpawnUserCommand))
+        })
+        .map(|(kind, _meta)| kind)
         .collect();
-    ungated.sort_unstable();
-    assert!(
-        ungated.is_empty(),
-        "alias(es) of a spawning kind missing from alint_dsl::SPAWNING_RULE_KINDS: \
-         {ungated:?}"
-    );
-    // ...and a case variant is not a second spelling.
-    for kind in alint_dsl::SPAWNING_RULE_KINDS {
+
+    for spelling in registry
+        .known_kinds()
+        .filter(|kind| spawning_canonical.contains(registry.canonical_kind(kind)))
+    {
+        assert!(
+            catalog.meta(spelling).is_some_and(|meta| {
+                meta.capabilities.iter().any(|entry| {
+                    matches!(entry.capability, alint_core::Capability::SpawnUserCommand)
+                })
+            }),
+            "registered spelling {spelling:?} does not resolve to spawning metadata"
+        );
+    }
+
+    for kind in spawning_canonical {
         let upper = kind.to_ascii_uppercase();
         assert!(
-            !registry.known_kinds().any(|k| k == upper),
-            "{upper} is registered but not gated"
+            !registry.known_kinds().any(|registered| registered == upper),
+            "{upper} is registered as an unreviewed second spelling"
         );
     }
 }

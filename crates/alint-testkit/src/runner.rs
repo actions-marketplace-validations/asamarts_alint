@@ -209,10 +209,10 @@ fn run_step(step: Step, root: &Path) -> Result<StepOutcome> {
     // Scenarios don't share state with the user's real cache:
     // HTTPS `extends:` (if the scenario uses it) resolves into
     // a per-scenario subdirectory of the scenario's tempdir.
-    let cache = alint_dsl::extends::Cache::at(root.join(".alint-cache"));
-    let opts = alint_dsl::LoadOptions::with_cache(cache);
-    let config = alint_dsl::load_with(&root.join(".alint.yml"), &opts)?;
     let registry = alint_rules::builtin_registry();
+    let cache = alint_dsl::extends::Cache::at(root.join(".alint-cache"));
+    let opts = alint_dsl::LoadOptions::with_catalog(registry.catalog()).cache(cache);
+    let config = alint_dsl::load_with(&root.join(".alint.yml"), &opts)?;
 
     let mut entries: Vec<RuleEntry> = Vec::with_capacity(config.rules.len());
     for spec in &config.rules {

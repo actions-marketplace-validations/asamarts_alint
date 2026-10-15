@@ -10,6 +10,8 @@
 
 use std::io::Write;
 
+mod support;
+
 fn write_config(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join(".alint.yml");
@@ -33,7 +35,7 @@ fn interpolated_integer_field_validates_and_builds() {
            subject_max_length: \"{{env.ALINT_TEST_MAX | default('72')}}\"\n    \
            level: error\n",
     );
-    let config = alint_dsl::load(&path).expect("config with interpolated integer should load");
+    let config = support::load(&path).expect("config with interpolated integer should load");
     let registry = alint_rules::builtin_registry();
     for spec in &config.rules {
         registry
@@ -53,7 +55,7 @@ fn interpolated_string_field_flows_into_rule() {
            pattern: \"^// SPDX\"\n    \
            level: warning\n",
     );
-    let config = alint_dsl::load(&path).expect("load");
+    let config = support::load(&path).expect("load");
     // `paths:` is interpolated; `id:` is not.
     assert_eq!(config.rules[0].id, "header");
     let paths = format!("{:?}", config.rules[0].paths);
@@ -75,7 +77,7 @@ fn undefined_env_without_default_fails_load() {
            paths: \"{{env.ALINT_TEST_DEFINITELY_UNSET}}\"\n    \
            level: error\n",
     );
-    let err = alint_dsl::load(&path).expect_err("undefined env without default must fail load");
+    let err = support::load(&path).expect_err("undefined env without default must fail load");
     let msg = err.to_string();
     assert!(msg.contains("interpolation error"), "{msg}");
     assert!(msg.contains("ALINT_TEST_DEFINITELY_UNSET"), "{msg}");
@@ -101,7 +103,7 @@ fn local_extends_target_is_interpolated() {
         "version: 1\nextends: [./base.yml]\n",
     )
     .unwrap();
-    let config = alint_dsl::load(&tmp.path().join(".alint.yml")).expect("load");
+    let config = support::load(&tmp.path().join(".alint.yml")).expect("load");
     let interpolated = config
         .rules
         .iter()
@@ -132,7 +134,7 @@ fn nested_config_is_interpolated() {
            level: error\n",
     )
     .unwrap();
-    let config = alint_dsl::load(&tmp.path().join(".alint.yml")).expect("load");
+    let config = support::load(&tmp.path().join(".alint.yml")).expect("load");
     let interpolated = config
         .rules
         .iter()
@@ -158,7 +160,7 @@ fn drop_in_config_is_interpolated() {
            level: error\n",
     )
     .unwrap();
-    let config = alint_dsl::load(&tmp.path().join(".alint.yml")).expect("load");
+    let config = support::load(&tmp.path().join(".alint.yml")).expect("load");
     let interpolated = config
         .rules
         .iter()
@@ -177,7 +179,7 @@ fn when_env_clause_loads_and_builds() {
            when: env.CI == \"true\"\n    \
            level: warning\n",
     );
-    let config = alint_dsl::load(&path).expect("config with `when: env.X` should load");
+    let config = support::load(&path).expect("config with `when: env.X` should load");
     let registry = alint_rules::builtin_registry();
     registry
         .build(&config.rules[0])
@@ -197,7 +199,7 @@ fn foreign_go_template_in_command_survives_load_and_build() {
            command: [\"true\", \"-format\", \"{{json .}}\"]\n    \
            level: warning\n",
     );
-    let config = alint_dsl::load(&path).expect("config with Go template should load");
+    let config = support::load(&path).expect("config with Go template should load");
     let rendered = format!("{:?}", config.rules[0]);
     assert!(
         rendered.contains("{{json .}}"),

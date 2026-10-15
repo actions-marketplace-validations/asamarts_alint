@@ -38,6 +38,8 @@ use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
 use alint_testkit::{Scenario, StepOutcome, run_scenario};
 
+mod support;
+
 /// One emitted violation, reduced to what the invariants need.
 struct Finding {
     kind: String,
@@ -192,7 +194,7 @@ fn collect_from_multi_fixtures(
         }
         let registry = builtin_registry();
         let config =
-            alint_dsl::load(&cfg).unwrap_or_else(|err| panic!("load {}: {err}", cfg.display()));
+            support::load(&cfg).unwrap_or_else(|err| panic!("load {}: {err}", cfg.display()));
         let id_kind: BTreeMap<String, String> = config
             .rules
             .iter()

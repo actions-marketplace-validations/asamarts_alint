@@ -1,19 +1,10 @@
-//! Fix-op spawn-gate drift audit (R-SPAWNGATE, part 1 of 2) — keep the fix-op
-//! RCE allow-list honest.
+//! Fix-op spawn-gate drift audit (R-SPAWNGATE, part 1 of 2).
 //!
-//! A *fixer* that shells out is the file-writing/RCE analogue of a spawning rule
-//! kind, gated by [`alint_dsl::SPAWNING_FIX_OPS`] + `reject_spawning_fix_ops_in`.
-//! The existing spawn gate keys on the rule KIND, so a spawning FIXER attached to
-//! a non-spawning kind (`git_untrack` on `file_absent`) slips past it. The
-//! rejection logic is unit-tested in `alint-dsl` and the CLI canary in
-//! `alint::tests::fix_spawn_gate`, but — like the rule-level `gff` regression the
-//! sibling `coverage_audit_spawn_gate` guards — none of those would catch a NEW
-//! fixer that shells out yet was never added to the allow-list.
-//!
-//! This audit is the missing cross-check: it scans the FIXER sources for the
-//! primitives that reach a subprocess and asserts the set of spawning fixer
-//! modules is *exactly* the set the allow-list maps to — no more (an ungated
-//! spawner), no less (a stale entry).
+//! A fixer that shells out is the file-writing/RCE analogue of a spawning rule
+//! kind. Runtime trust decisions derive from `FixOpMeta::trust`; the former
+//! [`alint_dsl::SPAWNING_FIX_OPS`] list remains a one-release equality
+//! cross-check. This audit also scans fixer sources for subprocess primitives
+//! and requires the actual modules to match the metadata-derived operation set.
 
 use std::path::{Path, PathBuf};
 
@@ -76,10 +67,8 @@ fn spawning_fixer_modules() -> Vec<String> {
     found
 }
 
-/// The documented `fix op -> fixer module` map for the SPAWNING ops. Unlike rule
-/// kinds (module named for the kind), a fix op's fixer module name is arbitrary,
-/// so the mapping is explicit. Adding a spawning fix op forces a new row here (in
-/// tandem with `SPAWNING_FIX_OPS`) — the tripwire that keeps the two in sync.
+/// The documented `fix op -> fixer module` map for metadata-classified spawning
+/// ops. A fix op's module name is arbitrary, so the mapping remains explicit.
 const SPAWNING_FIX_OP_MODULES: &[(&str, &str)] =
     &[("git_untrack", "git_ops.rs"), ("command", "command_ops.rs")];
 
@@ -87,44 +76,57 @@ const SPAWNING_FIX_OP_MODULES: &[(&str, &str)] =
 fn spawning_fix_op_allowlist_matches_the_fixers_that_actually_spawn() {
     use std::collections::BTreeSet;
 
-    // (1) The mapping's op set must equal `SPAWNING_FIX_OPS` exactly — neither a
-    // listed op without a module row, nor a stale row for a dropped op.
-    let ssot: BTreeSet<&str> = alint_dsl::SPAWNING_FIX_OPS.iter().copied().collect();
+    // (1) Metadata is operational; the old list is only a one-release equality
+    // cross-check. The explicit op-to-module map must equal the derived set.
+    let registry = alint_rules::builtin_registry();
+    let catalog = registry.catalog();
+    let derived: BTreeSet<&str> = alint_core::FixSpec::ALL_OP_NAMES
+        .iter()
+        .copied()
+        .filter(|op| {
+            catalog
+                .fix_op(op)
+                .is_some_and(|meta| meta.trust == alint_core::FixTrustClass::Spawning)
+        })
+        .collect();
+    let transition: BTreeSet<&str> = alint_dsl::SPAWNING_FIX_OPS.iter().copied().collect();
+    assert_eq!(
+        derived, transition,
+        "FixOpMeta spawning classifications and the one-release SPAWNING_FIX_OPS list disagree"
+    );
     let mapped_ops: BTreeSet<&str> = SPAWNING_FIX_OP_MODULES.iter().map(|(op, _)| *op).collect();
     assert_eq!(
-        mapped_ops, ssot,
-        "\n\nFIX-OP SPAWN-GATE DRIFT — the op->module map here does not match \
-         alint_dsl::SPAWNING_FIX_OPS.\n  mapped ops       : {mapped_ops:?}\n  SPAWNING_FIX_OPS : {ssot:?}\n\
-         Add or drop a row in SPAWNING_FIX_OP_MODULES to match the allow-list."
+        mapped_ops, derived,
+        "\n\nFIX-OP SPAWN-GATE DRIFT — the op->module map does not match \
+         FixOpMeta::trust == Spawning.\n  mapped ops : {mapped_ops:?}\n  derived ops: {derived:?}\n\
+         Add or drop a row in SPAWNING_FIX_OP_MODULES to match metadata."
     );
 
-    // (2) The fixer modules that ACTUALLY reach a subprocess must be exactly the
-    // modules the allow-list maps to. A new spawning fixer added without listing
-    // its op (the RCE gap) makes `found` a superset and fails here.
+    // (2) Modules that actually reach a subprocess must exactly match the
+    // metadata-derived operation map. A new spawning fixer without metadata is
+    // a security gap and makes `found` a superset.
     let found: BTreeSet<String> = spawning_fixer_modules().into_iter().collect();
     let expected: BTreeSet<String> = SPAWNING_FIX_OP_MODULES
         .iter()
-        .map(|(_, m)| (*m).to_string())
+        .map(|(_, module)| (*module).to_string())
         .collect();
     assert_eq!(
         found, expected,
-        "\n\nFIX-OP SPAWN-GATE DRIFT — the fixer modules that launch a subprocess do \
-         not match the SPAWNING_FIX_OPS allow-list.\n  modules that actually spawn : {found:?}\n\
-         allow-listed modules        : {expected:?}\n\
-         If you added a fixer that shells out, add its op to SPAWNING_FIX_OPS \
-         (crates/alint-dsl/src/trust.rs) AND a row to SPAWNING_FIX_OP_MODULES here — \
-         without it, an `extends:`'d or nested ruleset can make `alint fix` run \
-         arbitrary code. If a spawning fixer moved modules, update the row."
+        "\n\nFIX-OP SPAWN-GATE DRIFT — fixer modules launching a subprocess do not \
+         match FixOpMeta spawning classifications.\n  modules that actually spawn : {found:?}\n\
+         metadata-mapped modules      : {expected:?}\n\
+         If a fixer now shells out, classify its op as Spawning in FixOpMeta and \
+         add its module here; otherwise untrusted rulesets could execute code."
     );
 }
 
 #[test]
-fn spawning_fix_op_allowlist_is_non_empty_and_each_module_exists() {
-    // A typo'd or emptied allow-list is itself a security regression (it would
-    // silently stop gating). Pin that every mapped module is a real fixer source.
+fn spawning_fix_op_map_is_non_empty_and_each_module_exists() {
+    // A typo'd or emptied map is itself a security regression. Pin every mapped
+    // module to a real fixer source.
     assert!(
-        !alint_dsl::SPAWNING_FIX_OPS.is_empty(),
-        "SPAWNING_FIX_OPS is empty — the fix-op spawn trust gate would gate nothing"
+        !SPAWNING_FIX_OP_MODULES.is_empty(),
+        "SPAWNING_FIX_OP_MODULES is empty — the source audit would be blind"
     );
     let src = fixers_src_dir();
     for (op, module) in SPAWNING_FIX_OP_MODULES {

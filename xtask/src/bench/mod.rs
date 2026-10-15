@@ -631,8 +631,11 @@ mod tests {
             let path = tmp.path().join(format!("{}.alint.yml", s.label()));
             std::fs::write(&path, s.config_yaml())
                 .unwrap_or_else(|e| panic!("writing {}: {e}", s.label()));
-            let config = alint_dsl::load(&path)
-                .unwrap_or_else(|e| panic!("scenario {} failed to load: {e}", s.label()));
+            let config = alint_dsl::load_with(
+                &path,
+                &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+            )
+            .unwrap_or_else(|e| panic!("scenario {} failed to load: {e}", s.label()));
             for spec in &config.rules {
                 registry.build(spec).unwrap_or_else(|e| {
                     panic!(

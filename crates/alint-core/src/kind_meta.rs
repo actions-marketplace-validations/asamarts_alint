@@ -230,3 +230,155 @@ pub struct FixOpMeta {
     pub name: Cow<'static, str>,
     pub trust: FixTrustClass,
 }
+
+/// The complete fix-operation trust inventory. Kept beside [`FixOpMeta`] so
+/// loaders can classify a raw `fix:` block before deserializing it.
+pub(crate) const FIX_OPS: &[FixOpMeta] = &[
+    FixOpMeta {
+        name: Cow::Borrowed("file_create"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_remove"),
+        trust: FixTrustClass::FixedBehaviour,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_prepend"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_append"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_rename"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_trim_trailing_whitespace"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_append_final_newline"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_normalize_line_endings"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_strip_bidi"),
+        trust: FixTrustClass::FixedBehaviour,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_strip_zero_width"),
+        trust: FixTrustClass::FixedBehaviour,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_strip_bom"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("file_collapse_blank_lines"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("replace"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("set_value"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("remove_value"),
+        trust: FixTrustClass::FixedBehaviour,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("chmod"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("git_untrack"),
+        trust: FixTrustClass::Spawning,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("command"),
+        trust: FixTrustClass::Spawning,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("dir_create"),
+        trust: FixTrustClass::FixedBehaviour,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("sync_from"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("relocate"),
+        trust: FixTrustClass::FixedBehaviour,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("create_and_register"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("sort"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("indent_style"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("insert_line"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+    FixOpMeta {
+        name: Cow::Borrowed("insert_header"),
+        trust: FixTrustClass::ContentInjecting,
+    },
+];
+
+pub(crate) fn fix_op_meta(name: &str) -> Option<&'static FixOpMeta> {
+    FIX_OPS.iter().find(|meta| meta.name == name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::FixSpec;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn fix_op_metadata_is_an_exhaustive_unique_partition() {
+        let names: BTreeSet<&str> = FIX_OPS.iter().map(|meta| meta.name.as_ref()).collect();
+        assert_eq!(
+            names.len(),
+            FIX_OPS.len(),
+            "fix-op metadata names must be unique"
+        );
+        assert_eq!(
+            names,
+            FixSpec::ALL_OP_NAMES.iter().copied().collect(),
+            "every fix operation must have trust metadata"
+        );
+        assert_eq!(
+            [
+                FIX_OPS
+                    .iter()
+                    .filter(|meta| meta.trust == FixTrustClass::Spawning)
+                    .count(),
+                FIX_OPS
+                    .iter()
+                    .filter(|meta| meta.trust == FixTrustClass::ContentInjecting)
+                    .count(),
+                FIX_OPS
+                    .iter()
+                    .filter(|meta| meta.trust == FixTrustClass::FixedBehaviour)
+                    .count(),
+            ],
+            [2, 18, 6]
+        );
+    }
+}

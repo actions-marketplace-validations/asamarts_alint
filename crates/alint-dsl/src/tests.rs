@@ -1,32 +1,45 @@
 use super::*;
 
+fn test_registry() -> &'static alint_core::RuleRegistry {
+    static REGISTRY: std::sync::LazyLock<alint_core::RuleRegistry> =
+        std::sync::LazyLock::new(|| {
+            let mut registry = alint_core::RuleRegistry::new();
+            alint_rules::register_builtin(&mut registry);
+            registry
+        });
+    &REGISTRY
+}
+
+fn test_catalog() -> alint_core::KindCatalog<'static> {
+    test_registry().catalog()
+}
+
+fn load(path: &std::path::Path) -> alint_core::Result<Config> {
+    super::load_with(path, &LoadOptions::with_catalog(test_catalog()))
+}
+
+fn load_with(path: &std::path::Path, opts: &LoadOptions<'_>) -> alint_core::Result<Config> {
+    let mut opts = opts.clone();
+    opts.kind_catalog = Some(test_catalog());
+    super::load_with(path, &opts)
+}
+
 #[test]
-fn spawning_fix_ops_are_gated() {
-    // Phase 3 shipped the first spawning fix op. Every entry must be a real fix
-    // op, and `git_untrack` (`git rm --cached`) must be present -- its
-    // top-level-only trust gate is `reject_spawning_fix_ops_in` (+ the template
-    // and `finalize` backstops), exercised by the `load_rejects_git_untrack_*`
-    // tests below and the e2e canary `crates/alint/tests/fix_spawn_gate.rs`.
+fn transition_spawning_rule_list_equals_catalog_metadata() {
     use std::collections::BTreeSet;
-    assert!(
-        !SPAWNING_FIX_OPS.is_empty(),
-        "SPAWNING_FIX_OPS is empty; the first spawning op (git_untrack) should be listed"
-    );
-    let all: BTreeSet<&str> = alint_core::FixSpec::ALL_OP_NAMES.iter().copied().collect();
-    let spawning: BTreeSet<&str> = SPAWNING_FIX_OPS.iter().copied().collect();
-    assert!(
-        spawning.is_subset(&all),
-        "SPAWNING_FIX_OPS names an unknown op: {:?}",
-        &spawning - &all
-    );
-    assert!(
-        spawning.contains("git_untrack"),
-        "git_untrack (the first spawning fix op) must be gated"
-    );
-    assert!(
-        spawning.contains("command"),
-        "the `command` fix op (a user-supplied fix command) must be gated"
-    );
+
+    let catalog = test_catalog();
+    let derived_rule_kinds: BTreeSet<&str> = catalog
+        .kinds()
+        .filter(|(_kind, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::SpawnUserCommand))
+        })
+        .map(|(kind, _meta)| kind)
+        .collect();
+    let hand_rule_kinds: BTreeSet<&str> = SPAWNING_RULE_KINDS.iter().copied().collect();
+    assert_eq!(derived_rule_kinds, hand_rule_kinds);
 }
 
 #[test]
@@ -72,7 +85,7 @@ rules:
       dir: packages
 ";
     let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
-    let final_cfg = cfg.finalize().unwrap();
+    let final_cfg = cfg.finalize(Some(test_catalog())).unwrap();
     assert_eq!(final_cfg.rules.len(), 1);
     let r = &final_cfg.rules[0];
     assert_eq!(r.id, "pkgs-have-readme");
@@ -101,7 +114,7 @@ rules:
     vars: { dir: apps }
 ";
     let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
-    let final_cfg = cfg.finalize().unwrap();
+    let final_cfg = cfg.finalize(Some(test_catalog())).unwrap();
     let ids: Vec<&str> = final_cfg.rules.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(
         ids,
@@ -130,7 +143,7 @@ rules:
     vars: { dir: services }
 ";
     let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
-    let final_cfg = cfg.finalize().unwrap();
+    let final_cfg = cfg.finalize(Some(test_catalog())).unwrap();
     assert_eq!(final_cfg.rules[0].level, alint_core::Level::Error);
 }
 
@@ -147,7 +160,7 @@ rules:
     id: my-rule
 ";
     let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
-    let err = cfg.finalize().unwrap_err();
+    let err = cfg.finalize(Some(test_catalog())).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("typo-template"));
     assert!(msg.contains("unknown template"));
@@ -170,7 +183,7 @@ rules:
     id: my-rule
 ";
     let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
-    let err = cfg.finalize().unwrap_err();
+    let err = cfg.finalize(Some(test_catalog())).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("leaf-only"));
 }
@@ -196,7 +209,7 @@ rules:
     vars: { dir: pkg }
 ";
     let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
-    let final_cfg = cfg.finalize().unwrap();
+    let final_cfg = cfg.finalize(Some(test_catalog())).unwrap();
     let r = &final_cfg.rules[0];
     let paths = r.paths.as_ref().unwrap();
     let paths_str = format!("{paths:?}");
@@ -1390,18 +1403,11 @@ fn w2_untrusted_rule_provenance_survives_a_trusted_field_merge() {
 }
 
 #[test]
-fn w2_content_injecting_ssot_is_exhaustive_and_valid() {
-    // Defense-in-depth for the W2 audit's architectural risk: the trust handling
-    // keys on hand-maintained SSOTs, so a FUTURE fix op could be added to the
-    // engine yet forgotten here -- left un-demoted / un-refused from a remote
-    // `extends:` (the class of the templates bypass this audit found). This gate
-    // forces EVERY fix op into exactly ONE of THREE trust classes, so a new op
-    // fails the build until the call is made (and wired in): content-injecting
-    // (demoted from an untrusted remote), spawning (refused from any non-top-level
-    // source), or fixed-behavior (no ruleset bytes, no spawn -- honored anywhere).
+fn w2_fix_trust_transition_lists_equal_metadata() {
+    // FixOpMeta is operational. Keep the former hand-maintained lists as exact
+    // one-release transition checks so the cutover cannot silently change trust.
     use std::collections::BTreeSet;
-    // Fix ops that carry NO ruleset-authored bytes AND do not spawn: honored from
-    // any source. The exhaustive complement of the content + spawning SSOTs.
+    // Fix ops that carry no ruleset-authored bytes and do not spawn.
     const FIXED_BEHAVIOR_FIX_OPS: &[&str] = &[
         "file_remove",
         // `file_strip_bidi` / `file_strip_zero_width` are security-POSITIVE (they
@@ -1431,52 +1437,27 @@ fn w2_content_injecting_ssot_is_exhaustive_and_valid() {
         // classified via SPAWNING_FIX_OPS (refused from any non-top-level source),
         // a strictly stronger gate than the content demotion.
     ];
-    let content: BTreeSet<&str> = crate::trust::CONTENT_INJECTING_FIX_OPS
-        .iter()
-        .copied()
-        .collect();
-    let fixed: BTreeSet<&str> = FIXED_BEHAVIOR_FIX_OPS.iter().copied().collect();
-    let spawning: BTreeSet<&str> = crate::SPAWNING_FIX_OPS.iter().copied().collect();
-    let all: BTreeSet<&str> = alint_core::FixSpec::ALL_OP_NAMES.iter().copied().collect();
+    let catalog = test_catalog();
+    let derive = |class| {
+        alint_core::FixSpec::ALL_OP_NAMES
+            .iter()
+            .copied()
+            .filter(|op| catalog.fix_op(op).is_some_and(|meta| meta.trust == class))
+            .collect::<BTreeSet<_>>()
+    };
+    let content = derive(alint_core::FixTrustClass::ContentInjecting);
+    let fixed = derive(alint_core::FixTrustClass::FixedBehaviour);
+    let spawning = derive(alint_core::FixTrustClass::Spawning);
 
-    assert!(
-        content.is_subset(&all),
-        "content SSOT names an unknown op: {:?}",
-        &content - &all
-    );
-    assert!(
-        spawning.is_subset(&all),
-        "spawning SSOT names an unknown op: {:?}",
-        &spawning - &all
-    );
-    // The three trust classes must be PAIRWISE disjoint: each op has exactly one
-    // trust posture.
-    assert!(
-        content.is_disjoint(&fixed),
-        "op(s) marked BOTH content-injecting and fixed-behavior: {:?}",
-        &content & &fixed
-    );
-    assert!(
-        content.is_disjoint(&spawning),
-        "op(s) marked BOTH content-injecting and spawning: {:?}",
-        &content & &spawning
-    );
-    assert!(
-        fixed.is_disjoint(&spawning),
-        "op(s) marked BOTH fixed-behavior and spawning: {:?}",
-        &fixed & &spawning
-    );
-    // ...and together they must cover EVERY op (exhaustive partition).
-    let classified: BTreeSet<&str> = content.union(&fixed).copied().collect::<BTreeSet<_>>();
-    let classified: BTreeSet<&str> = classified.union(&spawning).copied().collect();
     assert_eq!(
-        classified,
-        all,
-        "unclassified fix op(s) -- decide content-injecting (add to \
-         CONTENT_INJECTING_FIX_OPS, demoted from a remote `extends:`), spawning (add \
-         to SPAWNING_FIX_OPS, refused from any non-top-level source), or fixed-behavior: {:?}",
-        &all - &classified
+        content,
+        crate::trust::CONTENT_INJECTING_FIX_OPS
+            .iter()
+            .copied()
+            .collect()
     );
+    assert_eq!(fixed, FIXED_BEHAVIOR_FIX_OPS.iter().copied().collect());
+    assert_eq!(spawning, crate::SPAWNING_FIX_OPS.iter().copied().collect());
 }
 
 #[test]
@@ -2786,11 +2767,12 @@ rules: []
     std::fs::create_dir_all(&pkg_dir).unwrap();
     std::fs::write(
         pkg_dir.join(".alint.yml"),
-        // no_submodules has no path field — can't be scoped.
+        // file_exists is path-scoped, but omitting `paths` leaves nothing that
+        // can be confined to the nested subtree.
         r"version: 1
 rules:
-  - id: no-subs
-    kind: no_submodules
+  - id: no-file
+    kind: file_exists
     level: error
 ",
     )
@@ -3882,4 +3864,89 @@ fn untrusted_remote_template_cannot_splice_an_env_derived_instance_var() {
     // A literal instance var stays usable from a remote-shaped template.
     let literal = top.replace(&format!("\"{raw}\""), "plain");
     assert!(try_load_extending(remote, &literal).is_ok());
+}
+
+#[test]
+fn extended_rule_loading_without_a_catalog_fails_closed() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("base.yml"),
+        "version: 1\nrules:\n  - id: inherited\n    kind: file_exists\n    \
+         paths: README.md\n    level: error\n",
+    )
+    .unwrap();
+    let child = tmp.path().join(".alint.yml");
+    std::fs::write(&child, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+
+    let error = super::load(&child).unwrap_err().to_string();
+    assert!(
+        error.contains("not present in the injected kind catalog"),
+        "{error}"
+    );
+    assert_eq!(load(&child).unwrap().rules[0].id, "inherited");
+}
+
+#[test]
+fn extended_unknown_kind_is_denied_by_the_injected_catalog() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("base.yml"),
+        "version: 1\nrules:\n  - id: inherited\n    kind: plugin_kind_missing_from_catalog\n    \
+         paths: README.md\n    level: error\n",
+    )
+    .unwrap();
+    let child = tmp.path().join(".alint.yml");
+    std::fs::write(&child, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+
+    let error = load(&child).unwrap_err().to_string();
+    assert!(
+        error.contains("plugin_kind_missing_from_catalog")
+            && error.contains("not present in the injected kind catalog"),
+        "{error}"
+    );
+}
+
+#[test]
+fn extended_unknown_fix_operation_is_denied_by_the_injected_catalog() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("base.yml"),
+        "version: 1\nrules:\n  - id: inherited\n    kind: file_exists\n    \
+         paths: README.md\n    level: error\n    fix: { plugin_fix_missing_from_catalog: {} }\n",
+    )
+    .unwrap();
+    let child = tmp.path().join(".alint.yml");
+    std::fs::write(&child, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+
+    let error = load(&child).unwrap_err().to_string();
+    assert!(
+        error.contains("plugin_fix_missing_from_catalog")
+            && error.contains("not present in the injected fix-op catalog"),
+        "{error}"
+    );
+}
+
+#[test]
+fn injected_plugin_metadata_allows_an_extended_plugin_kind() {
+    let mut registry = alint_rules::builtin_registry();
+    let metadata = std::sync::Arc::new(registry.meta("file_exists").unwrap().clone());
+    registry.register_owned(
+        "plugin/file_exists",
+        metadata,
+        alint_rules::file_exists::build,
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("base.yml"),
+        "version: 1\nrules:\n  - id: inherited-plugin\n    kind: plugin/file_exists\n    \
+         paths: README.md\n    level: error\n",
+    )
+    .unwrap();
+    let child = tmp.path().join(".alint.yml");
+    std::fs::write(&child, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+
+    let config = super::load_with(&child, &LoadOptions::with_catalog(registry.catalog())).unwrap();
+    assert_eq!(config.rules[0].kind, "plugin/file_exists");
+    registry.build(&config.rules[0]).unwrap();
 }

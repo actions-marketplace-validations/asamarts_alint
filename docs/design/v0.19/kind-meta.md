@@ -191,9 +191,10 @@ declared is decision K3.
    typed-selector parity with the transition table, source/metadata spawn parity, and debug-build
    instance checks now cover dispatch, bounded content, Git-tracked mode, blame, changed
    dependencies, `expect_matches`, nested rules, and configured fixers.
-3. Inject the `KindCatalog` (K3) into every loader call site, then derive the trust lists and audit
-   lists from it (including v0.18.3's two nested-config lists); keep the old hand lists for one
-   release as cross-checks that must equal the derived ones, then delete them.
+3. **Completed 2026-10-15.** Injected the borrowed `KindCatalog` into every DSL loader call site.
+   Runtime trust, nested-config confinement, Git coverage, and docs fail-only lists now derive
+   from kind/fix metadata; the former hand lists remain one-release exact-equality cross-checks.
+   Missing catalogs and unknown inherited kinds fail closed, including plugin-owned metadata.
 4. Fix any bundled ruleset, documented example, or scenario that sets an ignored field (a scan of
    the 22 bundled rulesets found none at top level), then turn on load-time enforcement
    (section 3.3) with the K1 policy, including context-aware nested validation.

@@ -1,30 +1,48 @@
-//! Coverage-rot audit: rules with git-mode affordances must
-//! have scenarios covering both the in-repo and outside-git
-//! paths.
+//! Coverage-rot audit: every rule whose metadata declares unconditional Git
+//! access must have scenarios covering both the in-repo and outside-git paths.
 //!
-//! Three pure-git rules (`git_blame_age`, `git_commit_message`,
-//! `git_no_denied_paths`) need:
+//! Each derived kind needs:
 //!   - at least one scenario with `given.git: { init: true, … }`
 //!     (real repo; the rule's in-repo behaviour is tested)
 //!   - at least one scenario without `given.git:` (the
 //!     "outside a git repo" silent-no-op path is tested)
 //!
-//! The "outside git" path is the one most likely to silently
-//! regress — silent no-op behaviour outside a repo is exactly
-//! what every git-aware rule must guarantee, and nothing else
-//! catches its omission.
-//!
-//! `git_tracked_only:` opt-in on `file_exists` / `file_absent` /
-//! `dir_exists` / `dir_absent` is covered by the existing
-//! `git_tracked_only_*.yml` scenarios under `git/` — those land
-//! through `coverage_audit.rs` already. This audit focuses on
-//! kinds whose entire identity depends on git.
+//! The outside-git path is the one most likely to silently regress. Conditional
+//! Git affordances such as `git_tracked_only:` are excluded here because their
+//! metadata condition is not `Always` and their dedicated scenarios cover the
+//! opt-in behavior.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
-const GIT_REQUIRED_KINDS: &[&str] = &["git_blame_age", "git_commit_message", "git_no_denied_paths"];
+/// One-release transition list. Operational coverage derives from `KindMeta`;
+/// this list must remain exactly equal until the v0.19 transition is removed.
+const GIT_REQUIRED_KINDS: &[&str] = &[
+    "changeset_requires_path",
+    "git_blame_age",
+    "git_commit_author_allowlist",
+    "git_commit_gpg_signed",
+    "git_commit_message",
+    "git_commit_no_fixup",
+    "git_commit_signed_off",
+    "git_commit_subject_matches",
+    "git_no_denied_paths",
+    "pair_changed_together",
+];
+
+fn git_required_kinds() -> BTreeSet<String> {
+    alint_rules::builtin_registry()
+        .kind_metadata()
+        .filter(|(_kind, meta)| {
+            meta.capabilities.iter().any(|entry| {
+                matches!(entry.capability, alint_core::Capability::Git { .. })
+                    && matches!(entry.condition, alint_core::CapabilityCondition::Always)
+            })
+        })
+        .map(|(kind, _meta)| kind.to_string())
+        .collect()
+}
 
 /// Pull every rule kind referenced in this scenario's
 /// `given.config:` rules block.
@@ -99,11 +117,20 @@ fn walkdir(root: &Path) -> Vec<std::path::PathBuf> {
 #[test]
 fn git_required_rules_have_in_repo_and_outside_repo_scenarios() {
     let scenarios_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("scenarios");
+    let git_required = git_required_kinds();
+    let transition: BTreeSet<String> = GIT_REQUIRED_KINDS
+        .iter()
+        .map(|kind| (*kind).to_string())
+        .collect();
+    assert_eq!(
+        git_required, transition,
+        "unconditional Git KindMeta and the one-release GIT_REQUIRED_KINDS list disagree"
+    );
 
     // (kind → (has_in_repo, has_outside_git))
-    let mut coverage: std::collections::HashMap<&'static str, (bool, bool)> = GIT_REQUIRED_KINDS
+    let mut coverage: HashMap<String, (bool, bool)> = git_required
         .iter()
-        .map(|k| (*k, (false, false)))
+        .map(|kind| (kind.clone(), (false, false)))
         .collect();
 
     for path in walkdir(&scenarios_dir) {
@@ -118,7 +145,7 @@ fn git_required_rules_have_in_repo_and_outside_repo_scenarios() {
             continue;
         }
         let in_repo = has_git_init(&scenario);
-        for &git_kind in GIT_REQUIRED_KINDS {
+        for git_kind in &git_required {
             if kinds.contains(git_kind)
                 && let Some(entry) = coverage.get_mut(git_kind)
             {
@@ -132,9 +159,9 @@ fn git_required_rules_have_in_repo_and_outside_repo_scenarios() {
     }
 
     let mut missing = Vec::new();
-    let mut sorted_kinds: Vec<&&str> = coverage.keys().collect();
+    let mut sorted_kinds: Vec<&String> = coverage.keys().collect();
     sorted_kinds.sort();
-    for &kind in &sorted_kinds {
+    for kind in sorted_kinds {
         let (has_in_repo, has_outside) = coverage[kind];
         if !has_in_repo {
             missing.push(format!(
@@ -153,9 +180,9 @@ fn git_required_rules_have_in_repo_and_outside_repo_scenarios() {
     let mut report = String::new();
     let _ = writeln!(
         report,
-        "{} git-mode coverage gap(s) across {} git-required rule kind(s):",
+        "{} git-mode coverage gap(s) across {} metadata-derived git-required rule kind(s):",
         missing.len(),
-        GIT_REQUIRED_KINDS.len(),
+        git_required.len(),
     );
     for line in missing {
         let _ = writeln!(report, "{line}");

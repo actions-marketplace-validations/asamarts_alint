@@ -68,6 +68,8 @@ pub(crate) fn config_for_document(doc: &Path, folders: &[PathBuf]) -> Option<Pat
         .iter()
         .filter(|f| doc.starts_with(f))
         .max_by_key(|f| f.components().count())?;
+    let registry = alint_rules::builtin_registry();
+    let load_options = alint_dsl::LoadOptions::with_catalog(registry.catalog());
     let nearest = alint_dsl::discover(doc.parent()?)?;
     let Some(top) = alint_dsl::discover(folder) else {
         return Some(nearest);
@@ -81,7 +83,7 @@ pub(crate) fn config_for_document(doc: &Path, folders: &[PathBuf]) -> Option<Pat
     let mut governing = nearest.clone();
     let mut current = nearest;
     loop {
-        if alint_dsl::nested_configs_enabled(&current).unwrap_or(false) {
+        if alint_dsl::nested_configs_enabled_with(&current, &load_options).unwrap_or(false) {
             governing.clone_from(&current);
         }
         if current == top {
@@ -208,9 +210,12 @@ fn build_session_for_config(config_path: &Path) -> Result<Session, String> {
     let effective_root = config_path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let config = alint_dsl::load(config_path).map_err(|e| format!("loading config: {e}"))?;
-
     let registry = alint_rules::builtin_registry();
+    let config = alint_dsl::load_with(
+        config_path,
+        &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+    )
+    .map_err(|e| format!("loading config: {e}"))?;
     let mut entries: Vec<RuleEntry> = Vec::with_capacity(config.rules.len());
     let mut kinds: HashMap<String, String> = HashMap::new();
     for spec in &config.rules {

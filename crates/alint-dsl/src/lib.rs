@@ -92,15 +92,18 @@ pub fn discover(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Load without an injected catalog.
+///
+/// This remains available to embedders that only parse a trusted,
+/// self-contained config without templates. Trust-sensitive templates,
+/// inherited rules, and nested rules fail closed when their behavior cannot be
+/// classified without a catalog.
 pub fn load(path: &Path) -> Result<Config> {
     load_with(path, &LoadOptions::default())
 }
 
-/// Load with explicit options. Primarily useful for tests that
-/// want to point HTTPS `extends:` resolution at a scoped cache
-/// directory, and for embeddings that want to plug in a custom
-/// fetcher.
-pub fn load_with(path: &Path, opts: &LoadOptions) -> Result<Config> {
+/// Load with explicit cache, fetcher, and kind-catalog options.
+pub fn load_with(path: &Path, opts: &LoadOptions<'_>) -> Result<Config> {
     let mut raw = load_top_level_raw(path, opts)?;
 
     // Nested `.alint.yml` discovery (opt-in via `nested_configs:
@@ -116,11 +119,12 @@ pub fn load_with(path: &Path, opts: &LoadOptions) -> Result<Config> {
             path: path.to_path_buf(),
             source,
         })?;
-        let discovered = nested::discover_nested(&root_dir, &canonical_root_cfg, &raw)?;
+        let discovered =
+            nested::discover_nested(&root_dir, &canonical_root_cfg, &raw, opts.kind_catalog)?;
         raw.rules.extend(discovered);
     }
 
-    let merged = raw.finalize()?;
+    let merged = raw.finalize(opts.kind_catalog)?;
     validate(&merged)?;
     Ok(merged)
 }
@@ -131,12 +135,17 @@ pub fn load_with(path: &Path, opts: &LoadOptions) -> Result<Config> {
 /// enough for an embedder (the LSP) to ask which ancestor config governs
 /// a file.
 pub fn nested_configs_enabled(path: &Path) -> Result<bool> {
-    Ok(load_top_level_raw(path, &LoadOptions::default())?.nested_configs == Some(true))
+    nested_configs_enabled_with(path, &LoadOptions::default())
+}
+
+/// [`nested_configs_enabled`] with explicit loader options.
+pub fn nested_configs_enabled_with(path: &Path, opts: &LoadOptions<'_>) -> Result<bool> {
+    Ok(load_top_level_raw(path, opts)?.nested_configs == Some(true))
 }
 
 /// The top-level config plus its `extends:` chain and `.alint.d/`
 /// drop-ins, merged but not yet finalised (and without nested configs).
-fn load_top_level_raw(path: &Path, opts: &LoadOptions) -> Result<RawConfig> {
+fn load_top_level_raw(path: &Path, opts: &LoadOptions<'_>) -> Result<RawConfig> {
     let mut state = loader::LoadState::default();
     // Confinement boundary for local `extends:` targets — the top-level
     // config's directory. A local extends chain (e.g. a shared ruleset
@@ -356,7 +365,7 @@ impl RawConfig {
     /// `{{vars.<name>}}` placeholders substituted from the
     /// instance's `vars:` map, and the instance's own
     /// non-template fields field-merge on top.
-    fn finalize(self) -> Result<Config> {
+    fn finalize(self, catalog: Option<alint_core::KindCatalog<'_>>) -> Result<Config> {
         // A process-spawning kind must never hide inside a `templates:`
         // block. Templates are expanded here, *after* the extends/nested
         // spawn gate (`reject_command_rules_in`) has run — and an
@@ -385,29 +394,25 @@ impl RawConfig {
             // Recurse `require:` at every depth: a spawning kind nested inside a
             // template's `require:` block expands into its instance just like a
             // top-level one (audit 2026-10).
-            if let Some(kind) = find_spawning_kind(t) {
+            if let Some(kind) = find_spawning_kind(t, catalog) {
                 return Err(Error::Other(format!(
-                    "template {id:?}: `kind: {kind}` spawns a process and is not allowed \
-                     in a `templates:` block (including inside a `require:` block) - a \
-                     template is expanded after the spawn gate, so this would let a \
-                     ruleset run arbitrary code. Declare the command rule directly in \
-                     your top-level `rules:`."
+                    "template {id:?}: `kind: {kind}` spawns a process or is not present in the \
+                     injected kind catalog, and is not allowed in a `templates:` block \
+                     (including inside a `require:` block). Post-gate template expansion could \
+                     execute arbitrary code; declare a known spawning rule directly in your \
+                     top-level `rules:`."
                 )));
             }
-            // The same backstop for a spawning FIX op (see `SPAWNING_FIX_OPS`), at
-            // EVERY `require:` depth (audit A1): a template's `fix:` -- or one buried
-            // in its `require:` -- splices into its referencing rule at finalize
-            // (below), after the extends/nested fix-op spawn gate, so a spawning
-            // fixer in a template would smuggle code execution past it. `find_spawning
-            // _fix_op` recurses, matching the per-source gate, so a require-nested
-            // spawning fix in a top-level template is refused too. Confined to a
-            // top-level `rules:` entry like a spawning kind, for EVERY source.
-            if let Some(op) = find_spawning_fix_op(t) {
+            // The same metadata-derived backstop for spawning or unknown fix
+            // operations at every `require:` depth. A template's fix is spliced
+            // into its referencing rule after the extends/nested gate, so it
+            // must be classified before expansion.
+            if let Some(op) = find_spawning_fix_op(t, catalog) {
                 return Err(Error::Other(format!(
-                    "template {id:?}: `fix.{op}` spawns a process and is not allowed \
-                     in a `templates:` block - a template is expanded after the spawn \
-                     gate, so this would let a ruleset run arbitrary code. Declare the \
-                     fix directly on a rule in your top-level `rules:`."
+                    "template {id:?}: `fix.{op}` spawns a process or is not present in the \
+                     injected fix-op catalog, and is not allowed in a `templates:` block. \
+                     Post-gate template expansion could execute arbitrary code; declare a \
+                     known spawning fix directly on a rule in your top-level `rules:`."
                 )));
             }
         }
@@ -439,7 +444,7 @@ impl RawConfig {
             // A nested-config rule is confined to its subtree here, on the effective
             // rule, so fields and the kind a root template contributes are re-rooted
             // and kind-checked too (not only the instance's own fields).
-            nested::apply_nested_scope(&mut expanded)?;
+            nested::apply_nested_scope(&mut expanded, catalog)?;
             // A source-local cap is not enough: an untrusted rule can instantiate
             // a fixer-bearing trusted template, and a trusted rule can instantiate
             // a template partly defined by an untrusted source. Carry one bit of
@@ -458,9 +463,11 @@ impl RawConfig {
             // per-source gate. Refuse any such contribution to a rule whose
             // EFFECTIVE kind or fix spawns (audit R2).
             if let Some(source) = &provenance.extended {
-                let spawns = find_spawning_kind(&expanded)
+                let spawns = find_spawning_kind(&expanded, catalog)
                     .map(|k| format!("`kind: {k}`"))
-                    .or_else(|| find_spawning_fix_op(&expanded).map(|op| format!("`fix.{op}`")));
+                    .or_else(|| {
+                        find_spawning_fix_op(&expanded, catalog).map(|op| format!("`fix.{op}`"))
+                    });
                 if let Some(what) = spawns {
                     return Err(Error::rule_config(
                         &id_hint,
@@ -475,7 +482,7 @@ impl RawConfig {
                 }
             }
             if untrusted_fix_source {
-                demote_content_fixers_in_rule(&mut expanded);
+                demote_content_fixers_in_rule(&mut expanded, catalog);
                 // An untrusted rule may instantiate a TRUSTED template that promotes
                 // a destructive fixer (`file_remove: {applicability: safe}`) and aim
                 // it with its own `paths:`. The promotion belongs to the template's
@@ -650,32 +657,48 @@ fn substitute_template_vars_value(
     }
 }
 
-/// Configuration for `load_with`.
+/// Configuration for [`load_with`].
 ///
-/// Defaults enable HTTPS `extends:` resolution against the
-/// platform-default user cache and the default fetcher
-/// (30 s timeout, 16 MiB body cap, `rustls` TLS). Tests pin both
-/// via [`LoadOptions::with_cache`] to avoid touching the user's
-/// real cache dir.
+/// Cache and fetcher defaults retain the normal HTTPS behavior. A kind catalog
+/// is deliberately optional for the public parser surface, but every
+/// trust-sensitive path fails closed when it is absent.
 #[derive(Debug, Default, Clone)]
-pub struct LoadOptions {
-    /// Explicit cache. When `None`, a platform-default cache is
-    /// resolved lazily on first HTTPS entry.
+pub struct LoadOptions<'catalog> {
+    /// Rule-kind and fix-operation capability inventory. Production callers
+    /// should always inject the registry they will use to build the config.
+    pub kind_catalog: Option<alint_core::KindCatalog<'catalog>>,
+    /// Explicit cache. When `None`, a platform-default cache is resolved lazily
+    /// on first HTTPS entry.
     pub cache: Option<extends::Cache>,
     /// Explicit fetcher. When `None`, `Fetcher::default()` is used.
     pub fetcher: Option<extends::Fetcher>,
 }
 
-impl LoadOptions {
-    /// Convenience: pin HTTPS resolution to an explicit cache
-    /// path. Used heavily in tests so scenarios don't share state
-    /// with each other or the user's real cache.
+impl<'catalog> LoadOptions<'catalog> {
+    /// Start a load using `catalog` as the capability source of truth.
+    #[must_use]
+    pub fn with_catalog(catalog: alint_core::KindCatalog<'catalog>) -> Self {
+        Self {
+            kind_catalog: Some(catalog),
+            cache: None,
+            fetcher: None,
+        }
+    }
+
+    /// Pin HTTPS resolution to an explicit cache path.
     #[must_use]
     pub fn with_cache(cache: extends::Cache) -> Self {
         Self {
             cache: Some(cache),
             ..Self::default()
         }
+    }
+
+    /// Add an explicit cache path while retaining the other options.
+    #[must_use]
+    pub fn cache(mut self, cache: extends::Cache) -> Self {
+        self.cache = Some(cache);
+        self
     }
 }
 

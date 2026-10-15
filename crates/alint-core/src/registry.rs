@@ -4,11 +4,11 @@ use std::sync::Arc;
 use crate::config::RuleSpec;
 use crate::did_you_mean;
 use crate::error::{Error, Result};
-use crate::kind_meta::KindMeta;
 #[cfg(debug_assertions)]
 use crate::kind_meta::{
     Capability, CapabilityCondition, ContentAccess, DispatchClass, GitOperation, GitTrackedSupport,
 };
+use crate::kind_meta::{FixOpMeta, KindMeta, fix_op_meta};
 #[cfg(debug_assertions)]
 use crate::rule::GitTrackedMode;
 use crate::rule::Rule;
@@ -61,9 +61,53 @@ impl std::fmt::Debug for RuleRegistry {
     }
 }
 
+/// Read-only capability view over a rule registry.
+///
+/// The catalog borrows the registry: built-in static records and plugin-owned
+/// records stay in place, so passing it through a config load performs no
+/// metadata cloning or allocation.
+#[derive(Debug, Clone, Copy)]
+pub struct KindCatalog<'registry> {
+    registry: &'registry RuleRegistry,
+}
+
+impl<'registry> KindCatalog<'registry> {
+    /// Resolve a canonical kind or alias to its capability record.
+    #[must_use]
+    pub fn meta(self, kind: &str) -> Option<&'registry KindMeta> {
+        self.registry.meta(kind)
+    }
+
+    /// Resolve a registered alias, leaving canonical and unknown names intact.
+    #[must_use]
+    pub fn canonical<'name>(self, name: &'name str) -> &'name str
+    where
+        'registry: 'name,
+    {
+        self.registry.canonical_kind(name)
+    }
+
+    /// Iterate over every canonical kind and its capability record.
+    pub fn kinds(self) -> impl Iterator<Item = (&'registry str, &'registry KindMeta)> {
+        self.registry.kind_metadata()
+    }
+
+    /// Look up one fix operation's trust metadata.
+    #[must_use]
+    pub fn fix_op(self, name: &str) -> Option<&'static FixOpMeta> {
+        fix_op_meta(name)
+    }
+}
+
 impl RuleRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Borrow this registry as the capability catalog consumed by config loaders.
+    #[must_use]
+    pub fn catalog(&self) -> KindCatalog<'_> {
+        KindCatalog { registry: self }
     }
 
     /// Register a built-in kind and its borrowed static capability record.
@@ -440,6 +484,32 @@ mod tests {
         assert_eq!(canonical, &TEST_META);
         assert!(std::ptr::eq(alias, canonical));
         assert_eq!(r.kind_metadata().count(), 1);
+    }
+
+    #[test]
+    fn borrowed_catalog_resolves_aliases_and_fix_operations() {
+        let mut registry = RuleRegistry::new();
+        registry.register("canonical", &TEST_META, ok_builder);
+        registry.register_alias("alias", "canonical");
+        let catalog = registry.catalog();
+
+        assert_eq!(catalog.canonical("alias"), "canonical");
+        assert!(std::ptr::eq(
+            catalog.meta("alias").unwrap(),
+            catalog.meta("canonical").unwrap()
+        ));
+        assert_eq!(
+            catalog
+                .kinds()
+                .map(|(kind, _meta)| kind)
+                .collect::<Vec<_>>(),
+            vec!["canonical"]
+        );
+        assert_eq!(
+            catalog.fix_op("command").unwrap().trust,
+            crate::FixTrustClass::Spawning
+        );
+        assert!(catalog.fix_op("not_a_fix_op").is_none());
     }
 
     #[test]

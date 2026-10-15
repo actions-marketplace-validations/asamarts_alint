@@ -44,6 +44,8 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+mod support;
+
 #[test]
 fn every_examples_alint_yml_parses_and_builds() {
     let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -88,7 +90,7 @@ fn every_examples_alint_yml_parses_and_builds() {
             .unwrap_or("<unknown>");
 
         // Step 1: load the YAML + resolve `extends:`.
-        let config = match alint_dsl::load(config_path) {
+        let config = match support::load(config_path) {
             Ok(c) => c,
             Err(e) => {
                 failures.push(format!(
@@ -213,7 +215,7 @@ fn current_example_readme_validation_counts_match_configs() {
             continue;
         }
 
-        let effective_count = alint_dsl::load(&config_path).unwrap().rules.len();
+        let effective_count = support::load(&config_path).unwrap().rules.len();
         let readme = fs::read_to_string(&readme_path).unwrap();
         for marker in markers {
             let mut remainder = readme.as_str();
@@ -285,7 +287,7 @@ fn example_ordered_block_markers_are_literal_lines() {
         if !config_path.is_file() {
             continue;
         }
-        let config = alint_dsl::load(&config_path).unwrap();
+        let config = support::load(&config_path).unwrap();
         for rule in config
             .rules
             .iter()
@@ -366,7 +368,7 @@ fn known_misfiring_example_rules_stay_retired() {
         if !config_path.is_file() {
             continue;
         }
-        let config = alint_dsl::load(&config_path).unwrap();
+        let config = support::load(&config_path).unwrap();
         for rule in &config.rules {
             if retired.contains(&rule.id.as_str()) {
                 found.push(rule.id.clone());

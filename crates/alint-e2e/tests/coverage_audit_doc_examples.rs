@@ -31,6 +31,8 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+mod support;
+
 /// Docs whose fenced config examples must load. Scoped to the
 /// drift-prone hand-written docs the evaluation flagged; extend as new
 /// config-bearing prose is added.
@@ -317,7 +319,7 @@ fn every_doc_config_example_loads() {
             let dir = tempfile::tempdir().expect("tempdir");
             std::fs::write(dir.path().join(".alint.yml"), &config).unwrap();
 
-            match alint_dsl::load(&dir.path().join(".alint.yml")) {
+            match support::load(&dir.path().join(".alint.yml")) {
                 Ok(cfg) => {
                     for spec in &cfg.rules {
                         if matches!(spec.level, alint_core::Level::Off) {
@@ -350,7 +352,7 @@ fn every_doc_config_example_loads() {
         let config = inject_default_levels(&config);
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join(".alint.yml"), &config).unwrap();
-        match alint_dsl::load(&dir.path().join(".alint.yml")) {
+        match support::load(&dir.path().join(".alint.yml")) {
             Ok(cfg) => {
                 for spec in &cfg.rules {
                     if matches!(spec.level, alint_core::Level::Off) {
@@ -411,7 +413,7 @@ fn top_keys_track_the_loader() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join(".alint.yml");
     std::fs::write(&cfg, "version: 1\n__definitely_not_a_key__: 1\n").unwrap();
-    let err = alint_dsl::load(&cfg)
+    let err = support::load(&cfg)
         .expect_err("an unknown top-level field must be rejected")
         .to_string();
     // "... expected one of `version`, `extends`, `ignore`, ..." → the
@@ -472,7 +474,7 @@ fn every_rule_kind_rejects_an_unknown_option() {
             let config = inject_default_levels(&config);
             let dir = tempfile::tempdir().expect("tempdir");
             std::fs::write(dir.path().join(".alint.yml"), &config).unwrap();
-            let Ok(cfg) = alint_dsl::load(&dir.path().join(".alint.yml")) else {
+            let Ok(cfg) = support::load(&dir.path().join(".alint.yml")) else {
                 continue;
             };
             for spec in &cfg.rules {
@@ -509,7 +511,7 @@ fn every_rule_kind_rejects_an_unknown_option() {
         let config = inject_default_levels(&config);
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join(".alint.yml"), &config).unwrap();
-        let Ok(cfg) = alint_dsl::load(&dir.path().join(".alint.yml")) else {
+        let Ok(cfg) = support::load(&dir.path().join(".alint.yml")) else {
             continue;
         };
         for spec in &cfg.rules {
