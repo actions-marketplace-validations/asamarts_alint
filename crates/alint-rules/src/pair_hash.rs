@@ -294,6 +294,42 @@ fn is_hex_digest(tok: &str, expected_len: usize) -> bool {
     tok.len() == expected_len && tok.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("source"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("target"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::OutOfRootRead,
+        condition: alint_core::CapabilityCondition::CommonFieldSet {
+            field: std::borrow::Cow::Borrowed("allow_out_of_root"),
+        },
+    }]),
+    content: alint_core::ContentAccess::OtherFiles,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "pair_hash")?;
     let opts: Options = spec
@@ -315,7 +351,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "pair_hash has no fix op - regenerating a checksum manifest is the \
-             manifest generator's job, not alint's",
+         manifest generator's job, not alint's",
         ));
     }
     let source_scope = Scope::from_patterns(std::slice::from_ref(&opts.source))?;

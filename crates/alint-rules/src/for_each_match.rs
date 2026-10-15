@@ -191,6 +191,40 @@ fn compile_patterns(id: &str, field: &str, pats: Vec<String>) -> Result<Vec<(Str
         .collect()
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("select"),
+            selector_type: alint_core::SelectorType::Regex,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.matches"),
+            selector_type: alint_core::SelectorType::Regex,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.forbid"),
+            selector_type: alint_core::SelectorType::Regex,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.paths.is_none() {
         return Err(Error::rule_config(
@@ -229,7 +263,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             if !names.contains(n.as_str()) {
                 return Err(cfg(format!(
                     "`require.equal` requires named captures; `{n}` is not a named \
-                     group in `select` (use `(?P<{n}>...)`)"
+                 group in `select` (use `(?P<{n}>...)`)"
                 )));
             }
         }

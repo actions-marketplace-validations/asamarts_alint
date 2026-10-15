@@ -157,6 +157,50 @@ impl FileAbsentRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: true },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::FileOnly,
+    respect_gitignore: false,
+    root_only: true,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::TrackedSet]),
+            },
+            condition: alint_core::CapabilityCondition::OptionSet {
+                option: std::borrow::Cow::Borrowed("git_tracked_only"),
+            },
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::Untrack]),
+            },
+            condition: alint_core::CapabilityCondition::FixOpConfigured {
+                op: std::borrow::Cow::Borrowed("git_untrack"),
+            },
+        },
+    ]),
+    content: alint_core::ContentAccess::Prefix {
+        max_bytes: None,
+        metadata: false,
+    },
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[
+        std::borrow::Cow::Borrowed("file_remove"),
+        std::borrow::Cow::Borrowed("git_untrack"),
+        std::borrow::Cow::Borrowed("relocate"),
+    ]),
+    expect_matches: false,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "file_absent")?;
     let Some(paths) = &spec.paths else {

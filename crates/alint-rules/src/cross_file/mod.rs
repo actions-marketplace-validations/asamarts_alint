@@ -337,6 +337,60 @@ fn build_value_targets(
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("source.file"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("source.files"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("source.extract"),
+            selector_type: alint_core::SelectorType::Extract,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("targets.files"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("targets[].file"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("targets[].extract"),
+            selector_type: alint_core::SelectorType::Extract,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::OtherFiles,
+    formats: std::borrow::Cow::Borrowed(alint_core::Format::ALL),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[
+        std::borrow::Cow::Borrowed("sync_from"),
+        std::borrow::Cow::Borrowed("create_and_register"),
+    ]),
+    expect_matches: false,
+    nested_rules: false,
+};
+
 // A long but linear config parser: source (single / glob-union) x relation shape
 // validation, then the `sync_from` fixer. Splitting it further would scatter the
 // coupled shape checks; the fixer construction is already extracted.
@@ -377,7 +431,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             ) {
                 return Err(cfg(format!(
                     "`source.files` (a glob) requires a set relation \
-                     (subset / superset / set_equals) or `registered`, not `{:?}`",
+                 (subset / superset / set_equals) or `registered`, not `{:?}`",
                     opts.relation
                 )));
             }
@@ -404,8 +458,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if source_glob.is_some() && matches!(source_extract, Some(Extract::WholeFile)) {
         return Err(cfg(
             "`source.files` (glob-union) cannot use a `whole_file` extract \
-             (it would union file contents as set members); use a structured / \
-             regex / lines extract"
+         (it would union file contents as set members); use a structured / \
+         regex / lines extract"
                 .into(),
         ));
     }
@@ -441,8 +495,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     {
         return Err(cfg(format!(
             "`normalize` does not apply to `relation: {:?}` (it compares whole files / \
-             filesystem paths verbatim, not normalized values -- a normalized member \
-             would be REGISTERED as the wrong path)",
+         filesystem paths verbatim, not normalized values -- a normalized member \
+         would be REGISTERED as the wrong path)",
             opts.relation
         )));
     }

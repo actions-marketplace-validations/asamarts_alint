@@ -292,6 +292,35 @@ fn compile_schema(schema_abs: &std::path::Path) -> std::result::Result<Validator
     })
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::RuleMajorScoped,
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("schema_path"),
+        selector_type: alint_core::SelectorType::LiteralPath,
+        rerootable: true,
+    }]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::OutOfRootRead,
+        condition: alint_core::CapabilityCondition::CommonFieldSet {
+            field: std::borrow::Cow::Borrowed("allow_out_of_root"),
+        },
+    }]),
+    content: alint_core::ContentAccess::OtherFiles,
+    formats: std::borrow::Cow::Borrowed(alint_core::Format::ALL),
+    dependencies: std::borrow::Cow::Borrowed(&[alint_core::DependencyMeta {
+        field: std::borrow::Cow::Borrowed("schema_path"),
+    }]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec.paths.as_ref().ok_or_else(|| {
         Error::rule_config(&spec.id, "json_schema_passes requires a `paths` field")

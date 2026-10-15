@@ -103,6 +103,27 @@ impl PerFileRule for FileStartsWithRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::Prefix {
+        max_bytes: None,
+        metadata: false,
+    },
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec
         .paths
@@ -118,16 +139,16 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "file_starts_with.prefix must not be empty.\n  \
-             hint: for non-emptiness checks, use `file_min_lines: 1` or \
-             `file_min_size: <bytes>` instead. file_starts_with is for \
-             literal-prefix assertions like `prefix: \"#!/bin/bash\\n\"`.",
+         hint: for non-emptiness checks, use `file_min_lines: 1` or \
+         `file_min_size: <bytes>` instead. file_starts_with is for \
+         literal-prefix assertions like `prefix: \"#!/bin/bash\\n\"`.",
         ));
     }
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
             "file_starts_with has no fix op - pair with an explicit `file_prepend` rule if you \
-             want auto-prepend (avoids silently duplicating near-matching prefixes).",
+         want auto-prepend (avoids silently duplicating near-matching prefixes).",
         ));
     }
     Ok(Box::new(FileStartsWithRule {

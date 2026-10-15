@@ -937,6 +937,67 @@ fn resolve_edges(edges: EdgesSpec, cfg: &impl Fn(String) -> Error) -> Result<Edg
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("nodes"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("edges.from_content.extract"),
+            selector_type: alint_core::SelectorType::Extract,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("edges.derive_target.from"),
+            selector_type: alint_core::SelectorType::Regex,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("edges.derive_target.to"),
+            selector_type: alint_core::SelectorType::PathTemplate,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.no_orphans.roots"),
+            selector_type: alint_core::SelectorType::GlobList,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.forbidden_edges[].from"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.forbidden_edges[].to"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.fresh.marker"),
+            selector_type: alint_core::SelectorType::Regex,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::OtherFiles,
+    formats: std::borrow::Cow::Borrowed(alint_core::Format::ALL),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "file_graph")?;
     let opts: Options = spec
@@ -971,8 +1032,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         {
             return Err(cfg(
                 "`edges.derive_target` supports `require: fresh` (codegen freshness) \
-                 and `require: no_dangling` (the derived target must exist), not the \
-                 content-graph modes (acyclic / no_orphans / forbidden_edges)"
+             and `require: no_dangling` (the derived target must exist), not the \
+             content-graph modes (acyclic / no_orphans / forbidden_edges)"
                     .into(),
             ));
         }

@@ -392,184 +392,395 @@ pub fn migrated_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
 // the "every kind registered here" invariant the drift audits rely on.
 #[allow(clippy::too_many_lines)]
 pub fn register_builtin(registry: &mut RuleRegistry) {
-    registry.register_without_meta("file_exists", file_exists::build);
-    registry.register_without_meta("file_absent", file_absent::build);
-    registry.register_without_meta("dir_exists", dir_exists::build);
-    registry.register_without_meta("dir_absent", dir_absent::build);
+    registry.register("file_exists", &file_exists::META, file_exists::build);
+    registry.register("file_absent", &file_absent::META, file_absent::build);
+    registry.register("dir_exists", &dir_exists::META, dir_exists::build);
+    registry.register("dir_absent", &dir_absent::META, dir_absent::build);
 
-    registry.register_without_meta("file_content_matches", file_content_matches::build);
+    registry.register(
+        "file_content_matches",
+        &file_content_matches::META,
+        file_content_matches::build,
+    );
     registry.register_alias("content_matches", "file_content_matches");
-    registry.register_without_meta("file_content_forbidden", file_content_forbidden::build);
+    registry.register(
+        "file_content_forbidden",
+        &file_content_forbidden::META,
+        file_content_forbidden::build,
+    );
     registry.register_alias("content_forbidden", "file_content_forbidden");
-    registry.register_without_meta("file_header", file_header::build);
+    registry.register("file_header", &file_header::META, file_header::build);
     registry.register_alias("header", "file_header");
-    registry.register_without_meta("file_max_size", file_max_size::build);
+    registry.register("file_max_size", &file_max_size::META, file_max_size::build);
     registry.register_alias("max_size", "file_max_size");
-    registry.register_without_meta("file_min_size", file_min_size::build);
+    registry.register("file_min_size", &file_min_size::META, file_min_size::build);
     registry.register_alias("min_size", "file_min_size");
-    registry.register_without_meta("file_min_lines", file_min_lines::build);
+    registry.register(
+        "file_min_lines",
+        &file_min_lines::META,
+        file_min_lines::build,
+    );
     registry.register_alias("min_lines", "file_min_lines");
-    registry.register_without_meta("file_max_lines", file_max_lines::build);
+    registry.register(
+        "file_max_lines",
+        &file_max_lines::META,
+        file_max_lines::build,
+    );
     registry.register_alias("max_lines", "file_max_lines");
-    registry.register_without_meta("file_footer", file_footer::build);
+    registry.register("file_footer", &file_footer::META, file_footer::build);
     registry.register_alias("footer", "file_footer");
-    registry.register_without_meta("file_shebang", file_shebang::build);
+    registry.register("file_shebang", &file_shebang::META, file_shebang::build);
     registry.register_alias("shebang", "file_shebang");
 
     // Structured-query family — JSONPath queries over
     // JSON / YAML / TOML documents.
-    registry.register_without_meta("json_path_equals", structured_path::json_path_equals_build);
-    registry.register_without_meta(
+    registry.register(
+        "json_path_equals",
+        &structured_path::JSON_PATH_EQUALS_META,
+        structured_path::json_path_equals_build,
+    );
+    registry.register(
         "json_path_matches",
+        &structured_path::JSON_PATH_MATCHES_META,
         structured_path::json_path_matches_build,
     );
-    registry.register_without_meta("yaml_path_equals", structured_path::yaml_path_equals_build);
-    registry.register_without_meta(
+    registry.register(
+        "yaml_path_equals",
+        &structured_path::YAML_PATH_EQUALS_META,
+        structured_path::yaml_path_equals_build,
+    );
+    registry.register(
         "yaml_path_matches",
+        &structured_path::YAML_PATH_MATCHES_META,
         structured_path::yaml_path_matches_build,
     );
-    registry.register_without_meta("toml_path_equals", structured_path::toml_path_equals_build);
-    registry.register_without_meta(
+    registry.register(
+        "toml_path_equals",
+        &structured_path::TOML_PATH_EQUALS_META,
+        structured_path::toml_path_equals_build,
+    );
+    registry.register(
         "toml_path_matches",
+        &structured_path::TOML_PATH_MATCHES_META,
         structured_path::toml_path_matches_build,
     );
-    registry.register_without_meta("xml_path_equals", structured_path::xml_path_equals_build);
-    registry.register_without_meta("xml_path_matches", structured_path::xml_path_matches_build);
-    registry.register_without_meta(
+    registry.register(
+        "xml_path_equals",
+        &structured_path::XML_PATH_EQUALS_META,
+        structured_path::xml_path_equals_build,
+    );
+    registry.register(
+        "xml_path_matches",
+        &structured_path::XML_PATH_MATCHES_META,
+        structured_path::xml_path_matches_build,
+    );
+    registry.register(
         "dotenv_path_equals",
+        &structured_path::DOTENV_PATH_EQUALS_META,
         structured_path::dotenv_path_equals_build,
     );
-    registry.register_without_meta(
+    registry.register(
         "dotenv_path_matches",
+        &structured_path::DOTENV_PATH_MATCHES_META,
         structured_path::dotenv_path_matches_build,
     );
-    registry.register_without_meta(
+    registry.register(
         "properties_path_equals",
+        &structured_path::PROPERTIES_PATH_EQUALS_META,
         structured_path::properties_path_equals_build,
     );
-    registry.register_without_meta(
+    registry.register(
         "properties_path_matches",
+        &structured_path::PROPERTIES_PATH_MATCHES_META,
         structured_path::properties_path_matches_build,
     );
-    registry.register_without_meta("ini_path_equals", structured_path::ini_path_equals_build);
-    registry.register_without_meta("ini_path_matches", structured_path::ini_path_matches_build);
-    registry.register_without_meta("hcl_path_equals", structured_path::hcl_path_equals_build);
-    registry.register_without_meta("hcl_path_matches", structured_path::hcl_path_matches_build);
+    registry.register(
+        "ini_path_equals",
+        &structured_path::INI_PATH_EQUALS_META,
+        structured_path::ini_path_equals_build,
+    );
+    registry.register(
+        "ini_path_matches",
+        &structured_path::INI_PATH_MATCHES_META,
+        structured_path::ini_path_matches_build,
+    );
+    registry.register(
+        "hcl_path_equals",
+        &structured_path::HCL_PATH_EQUALS_META,
+        structured_path::hcl_path_equals_build,
+    );
+    registry.register(
+        "hcl_path_matches",
+        &structured_path::HCL_PATH_MATCHES_META,
+        structured_path::hcl_path_matches_build,
+    );
     // Existence assertion for the full {json,yaml,toml,xml,dotenv,properties,ini,hcl} family.
     // Symmetry with the equals/matches ops is enforced by `structured_family_is_symmetric`.
-    registry.register_without_meta("json_path_absent", structured_path::json_path_absent_build);
-    registry.register_without_meta("yaml_path_absent", structured_path::yaml_path_absent_build);
-    registry.register_without_meta("toml_path_absent", structured_path::toml_path_absent_build);
-    registry.register_without_meta("xml_path_absent", structured_path::xml_path_absent_build);
-    registry.register_without_meta(
+    registry.register(
+        "json_path_absent",
+        &structured_path::JSON_PATH_ABSENT_META,
+        structured_path::json_path_absent_build,
+    );
+    registry.register(
+        "yaml_path_absent",
+        &structured_path::YAML_PATH_ABSENT_META,
+        structured_path::yaml_path_absent_build,
+    );
+    registry.register(
+        "toml_path_absent",
+        &structured_path::TOML_PATH_ABSENT_META,
+        structured_path::toml_path_absent_build,
+    );
+    registry.register(
+        "xml_path_absent",
+        &structured_path::XML_PATH_ABSENT_META,
+        structured_path::xml_path_absent_build,
+    );
+    registry.register(
         "dotenv_path_absent",
+        &structured_path::DOTENV_PATH_ABSENT_META,
         structured_path::dotenv_path_absent_build,
     );
-    registry.register_without_meta(
+    registry.register(
         "properties_path_absent",
+        &structured_path::PROPERTIES_PATH_ABSENT_META,
         structured_path::properties_path_absent_build,
     );
-    registry.register_without_meta("ini_path_absent", structured_path::ini_path_absent_build);
-    registry.register_without_meta("hcl_path_absent", structured_path::hcl_path_absent_build);
-    registry.register_without_meta("json_schema_passes", json_schema_passes::build);
-    registry.register_without_meta("markdown_links_resolve", markdown_links_resolve::build);
-    registry.register_without_meta("markdown_paths_resolve", markdown_paths_resolve::build);
-    registry.register_without_meta("commented_out_code", commented_out_code::build);
-    registry.register_without_meta("git_no_denied_paths", git_no_denied_paths::build);
-    registry.register_without_meta("git_commit_message", git_commit_message::build);
-    registry.register_without_meta("git_commit_signed_off", git_commit_signed_off::build);
-    registry.register_without_meta(
+    registry.register(
+        "ini_path_absent",
+        &structured_path::INI_PATH_ABSENT_META,
+        structured_path::ini_path_absent_build,
+    );
+    registry.register(
+        "hcl_path_absent",
+        &structured_path::HCL_PATH_ABSENT_META,
+        structured_path::hcl_path_absent_build,
+    );
+    registry.register(
+        "json_schema_passes",
+        &json_schema_passes::META,
+        json_schema_passes::build,
+    );
+    registry.register(
+        "markdown_links_resolve",
+        &markdown_links_resolve::META,
+        markdown_links_resolve::build,
+    );
+    registry.register(
+        "markdown_paths_resolve",
+        &markdown_paths_resolve::META,
+        markdown_paths_resolve::build,
+    );
+    registry.register(
+        "commented_out_code",
+        &commented_out_code::META,
+        commented_out_code::build,
+    );
+    registry.register(
+        "git_no_denied_paths",
+        &git_no_denied_paths::META,
+        git_no_denied_paths::build,
+    );
+    registry.register(
+        "git_commit_message",
+        &git_commit_message::META,
+        git_commit_message::build,
+    );
+    registry.register(
+        "git_commit_signed_off",
+        &git_commit_signed_off::META,
+        git_commit_signed_off::build,
+    );
+    registry.register(
         "git_commit_subject_matches",
+        &git_commit_subject_matches::META,
         git_commit_subject_matches::build,
     );
-    registry.register_without_meta("git_commit_no_fixup", git_commit_no_fixup::build);
-    registry.register_without_meta(
+    registry.register(
+        "git_commit_no_fixup",
+        &git_commit_no_fixup::META,
+        git_commit_no_fixup::build,
+    );
+    registry.register(
         "git_commit_author_allowlist",
+        &git_commit_author_allowlist::META,
         git_commit_author_allowlist::build,
     );
-    registry.register_without_meta("git_commit_gpg_signed", git_commit_gpg_signed::build);
-    registry.register_without_meta("git_blame_age", git_blame_age::build);
-    registry.register_without_meta("changeset_requires_path", changeset_requires_path::build);
-    registry.register_optionless_without_meta("file_is_text", file_is_text::build);
+    registry.register(
+        "git_commit_gpg_signed",
+        &git_commit_gpg_signed::META,
+        git_commit_gpg_signed::build,
+    );
+    registry.register("git_blame_age", &git_blame_age::META, git_blame_age::build);
+    registry.register(
+        "changeset_requires_path",
+        &changeset_requires_path::META,
+        changeset_requires_path::build,
+    );
+    registry.register_optionless("file_is_text", &file_is_text::META, file_is_text::build);
     registry.register_alias("is_text", "file_is_text");
 
-    registry.register_without_meta("filename_case", filename_case::build);
-    registry.register_without_meta("filename_regex", filename_regex::build);
-    registry.register_without_meta("pair", pair::build);
-    registry.register_without_meta("pair_changed_together", pair_changed_together::build);
-    registry.register_without_meta("pair_hash", pair_hash::build);
-    registry.register_without_meta("for_each_dir", for_each_dir::build);
-    registry.register_without_meta("for_each_file", for_each_file::build);
-    registry.register_without_meta("dir_only_contains", dir_only_contains::build);
-    registry.register_without_meta("unique_by", unique_by::build);
-    registry.register_without_meta("dir_contains", dir_contains::build);
-    registry.register_without_meta("every_matching_has", every_matching_has::build);
-    registry.register_without_meta("registry_paths_resolve", registry_paths_resolve::build);
+    registry.register("filename_case", &filename_case::META, filename_case::build);
+    registry.register(
+        "filename_regex",
+        &filename_regex::META,
+        filename_regex::build,
+    );
+    registry.register("pair", &pair::META, pair::build);
+    registry.register(
+        "pair_changed_together",
+        &pair_changed_together::META,
+        pair_changed_together::build,
+    );
+    registry.register("pair_hash", &pair_hash::META, pair_hash::build);
+    registry.register("for_each_dir", &for_each_dir::META, for_each_dir::build);
+    registry.register("for_each_file", &for_each_file::META, for_each_file::build);
+    registry.register(
+        "dir_only_contains",
+        &dir_only_contains::META,
+        dir_only_contains::build,
+    );
+    registry.register("unique_by", &unique_by::META, unique_by::build);
+    registry.register("dir_contains", &dir_contains::META, dir_contains::build);
+    registry.register(
+        "every_matching_has",
+        &every_matching_has::META,
+        every_matching_has::build,
+    );
+    registry.register(
+        "registry_paths_resolve",
+        &registry_paths_resolve::META,
+        registry_paths_resolve::build,
+    );
     // The unified cross-file value-relation kind; `cross_file_value_equals`
     // (v0.10) is a byte-compatible alias with `relation` defaulting to `equals`.
-    registry.register_without_meta("cross_file", cross_file::build);
+    registry.register("cross_file", &cross_file::META, cross_file::build);
     registry.register_alias("cross_file_value_equals", "cross_file");
-    registry.register_without_meta("file_graph", file_graph::build);
-    registry.register_without_meta("ordered_block", ordered_block::build);
-    registry.register_without_meta("for_each_match", for_each_match::build);
-    registry.register_without_meta("generated_file_fresh", generated_file_fresh::build);
-    registry.register_without_meta("import_gate", import_gate::build);
-    registry.register_without_meta("command_idempotent", command_idempotent::build);
+    registry.register("file_graph", &file_graph::META, file_graph::build);
+    registry.register("ordered_block", &ordered_block::META, ordered_block::build);
+    registry.register(
+        "for_each_match",
+        &for_each_match::META,
+        for_each_match::build,
+    );
+    registry.register(
+        "generated_file_fresh",
+        &generated_file_fresh::META,
+        generated_file_fresh::build,
+    );
+    registry.register("import_gate", &import_gate::META, import_gate::build);
+    registry.register(
+        "command_idempotent",
+        &command_idempotent::META,
+        command_idempotent::build,
+    );
 
     // Text-hygiene family (short names — no `file_` prefix).
-    registry
-        .register_optionless_without_meta("no_trailing_whitespace", no_trailing_whitespace::build);
-    registry.register_optionless_without_meta("final_newline", final_newline::build);
-    registry.register_without_meta("line_endings", line_endings::build);
-    registry.register_without_meta("line_max_width", line_max_width::build);
+    registry.register_optionless(
+        "no_trailing_whitespace",
+        &no_trailing_whitespace::META,
+        no_trailing_whitespace::build,
+    );
+    registry.register_optionless("final_newline", &final_newline::META, final_newline::build);
+    registry.register("line_endings", &line_endings::META, line_endings::build);
+    registry.register(
+        "line_max_width",
+        &line_max_width::META,
+        line_max_width::build,
+    );
 
     // Security / Unicode sanity.
-    registry.register_optionless_without_meta(
+    registry.register_optionless(
         "no_merge_conflict_markers",
+        &no_merge_conflict_markers::META,
         no_merge_conflict_markers::build,
     );
-    registry.register_optionless_without_meta("no_bidi_controls", no_bidi_controls::build);
-    registry.register_optionless_without_meta("no_zero_width_chars", no_zero_width_chars::build);
+    registry.register_optionless(
+        "no_bidi_controls",
+        &no_bidi_controls::META,
+        no_bidi_controls::build,
+    );
+    registry.register_optionless(
+        "no_zero_width_chars",
+        &no_zero_width_chars::META,
+        no_zero_width_chars::build,
+    );
 
     // Encoding + content fingerprint.
-    registry.register_without_meta("file_is_ascii", file_is_ascii::build);
-    registry.register_optionless_without_meta("no_bom", no_bom::build);
-    registry.register_without_meta("file_hash", file_hash::build);
+    registry.register("file_is_ascii", &file_is_ascii::META, file_is_ascii::build);
+    registry.register_optionless("no_bom", &no_bom::META, no_bom::build);
+    registry.register("file_hash", &file_hash::META, file_hash::build);
 
     // Structure / layout.
-    registry.register_without_meta("max_directory_depth", max_directory_depth::build);
-    registry.register_without_meta("max_files_per_directory", max_files_per_directory::build);
-    registry.register_optionless_without_meta("no_empty_files", no_empty_files::build);
+    registry.register(
+        "max_directory_depth",
+        &max_directory_depth::META,
+        max_directory_depth::build,
+    );
+    registry.register(
+        "max_files_per_directory",
+        &max_files_per_directory::META,
+        max_files_per_directory::build,
+    );
+    registry.register_optionless(
+        "no_empty_files",
+        &no_empty_files::META,
+        no_empty_files::build,
+    );
 
     // Cross-platform / portable metadata.
-    registry.register_optionless_without_meta("no_case_conflicts", no_case_conflicts::build);
-    registry.register_optionless_without_meta(
+    registry.register_optionless(
+        "no_case_conflicts",
+        &no_case_conflicts::META,
+        no_case_conflicts::build,
+    );
+    registry.register_optionless(
         "no_illegal_windows_names",
+        &no_illegal_windows_names::META,
         no_illegal_windows_names::build,
     );
 
     // Unix metadata + git.
-    registry.register_optionless_without_meta("no_symlinks", no_symlinks::build);
-    registry.register_without_meta("executable_bit", executable_bit::build);
-    registry
-        .register_optionless_without_meta("executable_has_shebang", executable_has_shebang::build);
-    registry
-        .register_optionless_without_meta("shebang_has_executable", shebang_has_executable::build);
-    registry.register_optionless_without_meta("no_submodules", no_submodules::build);
+    registry.register_optionless("no_symlinks", &no_symlinks::META, no_symlinks::build);
+    registry.register(
+        "executable_bit",
+        &executable_bit::META,
+        executable_bit::build,
+    );
+    registry.register_optionless(
+        "executable_has_shebang",
+        &executable_has_shebang::META,
+        executable_has_shebang::build,
+    );
+    registry.register_optionless(
+        "shebang_has_executable",
+        &shebang_has_executable::META,
+        shebang_has_executable::build,
+    );
+    registry.register_optionless("no_submodules", &no_submodules::META, no_submodules::build);
 
     // Hygiene + byte fingerprint.
-    registry.register_without_meta("indent_style", indent_style::build);
-    registry.register_without_meta(
+    registry.register("indent_style", &indent_style::META, indent_style::build);
+    registry.register(
         "max_consecutive_blank_lines",
+        &max_consecutive_blank_lines::META,
         max_consecutive_blank_lines::build,
     );
-    registry.register_without_meta("file_starts_with", file_starts_with::build);
-    registry.register_without_meta("file_ends_with", file_ends_with::build);
+    registry.register(
+        "file_starts_with",
+        &file_starts_with::META,
+        file_starts_with::build,
+    );
+    registry.register(
+        "file_ends_with",
+        &file_ends_with::META,
+        file_ends_with::build,
+    );
 
     // Plugin tier 1 — shell out to an external CLI per matched
     // file. Trust-gated at config-load: only the user's own
     // top-level config can declare these.
-    registry.register_without_meta("command", command::build);
+    registry.register("command", &command::META, command::build);
 }
 
 /// Convenience constructor that returns a fresh registry pre-populated with
@@ -627,6 +838,404 @@ mod registry_tests {
             registered, generated,
             "docs-generated aliases must match registry aliases and canonical targets"
         );
+    }
+
+    #[test]
+    fn every_canonical_kind_has_exactly_one_metadata_record() {
+        let registry = builtin_registry();
+        let canonical: std::collections::BTreeSet<&str> = registry.canonical_kinds().collect();
+        let documented: std::collections::BTreeSet<&str> = crate::categories::KIND_CATEGORIES
+            .iter()
+            .map(|(kind, _)| *kind)
+            .collect();
+        let metadata: std::collections::BTreeSet<&str> =
+            registry.kind_metadata().map(|(kind, _)| kind).collect();
+
+        assert_eq!(canonical, documented, "registry and generated docs drifted");
+        assert_eq!(
+            metadata, canonical,
+            "every canonical builder must share its registration with one metadata record"
+        );
+        assert_eq!(metadata.len(), 95, "the v0.19 migration covers 95 kinds");
+
+        for (alias, canonical) in registry.aliases() {
+            let alias_meta = registry.meta(alias).expect("registered alias has metadata");
+            let canonical_meta = registry
+                .meta(canonical)
+                .expect("registered canonical kind has metadata");
+            assert!(
+                std::ptr::eq(alias_meta, canonical_meta),
+                "alias `{alias}` must resolve the exact `{canonical}` record"
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn metadata_inventory_matches_the_audited_v019_shape() {
+        use alint_core::{
+            Capability, CapabilityCondition, ContentAccess, DispatchClass, FixSpec, GitOperation,
+            GitTrackedSupport, OptionPredicate, PathsSupport, ScopeFilterSupport, SinceSupport,
+        };
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let registry = builtin_registry();
+        let records: Vec<(&str, &alint_core::KindMeta)> = registry.kind_metadata().collect();
+
+        let count = |predicate: &dyn Fn(&alint_core::KindMeta) -> bool| {
+            records.iter().filter(|(_, meta)| predicate(meta)).count()
+        };
+        assert_eq!(
+            [
+                count(&|m| matches!(m.dispatch, DispatchClass::PerFile { .. })),
+                count(&|m| matches!(m.dispatch, DispatchClass::FullIndex { .. })),
+                count(&|m| matches!(m.dispatch, DispatchClass::RuleMajorScoped)),
+                count(&|m| matches!(m.dispatch, DispatchClass::SingleShot)),
+            ],
+            [51, 20, 14, 10],
+            "dispatch-class inventory drifted"
+        );
+        assert_eq!(
+            [
+                count(&|m| m.paths == PathsSupport::Required),
+                count(&|m| m.paths == PathsSupport::Optional),
+                count(&|m| m.paths == PathsSupport::Forbidden),
+            ],
+            [72, 0, 23],
+            "paths support inventory drifted"
+        );
+        assert_eq!(
+            [
+                count(&|m| matches!(m.scope_filter, ScopeFilterSupport::Full)),
+                count(&|m| matches!(m.scope_filter, ScopeFilterSupport::AncestorOnly)),
+                count(&|m| matches!(m.scope_filter, ScopeFilterSupport::Rejected { .. })),
+            ],
+            [67, 1, 27],
+            "scope-filter inventory drifted"
+        );
+        assert_eq!(
+            [
+                count(&|m| m.git_tracked_only == GitTrackedSupport::None),
+                count(&|m| m.git_tracked_only == GitTrackedSupport::FileOnly),
+                count(&|m| m.git_tracked_only == GitTrackedSupport::DirAware),
+            ],
+            [91, 2, 2],
+            "git-tracked support inventory drifted"
+        );
+        assert_eq!(
+            [
+                count(&|m| m.since == SinceSupport::None),
+                count(&|m| m.since == SinceSupport::Optional),
+                count(&|m| m.since == SinceSupport::Required),
+            ],
+            [86, 7, 2],
+            "since support inventory drifted"
+        );
+        assert_eq!(count(&|m| m.expect_matches), 68);
+        assert_eq!(count(&|m| m.nested_rules), 3);
+        assert_eq!(
+            [
+                count(&|m| m.content == ContentAccess::PathOnly),
+                count(&|m| m.content == ContentAccess::Metadata),
+                count(&|m| matches!(m.content, ContentAccess::Prefix { .. })),
+                count(&|m| matches!(m.content, ContentAccess::Suffix { .. })),
+                count(&|m| m.content == ContentAccess::WholeFile),
+                count(&|m| m.content == ContentAccess::OtherFiles),
+                count(&|m| m.content == ContentAccess::Blame),
+                count(&|m| m.content == ContentAccess::Delegated),
+            ],
+            [23, 5, 6, 1, 49, 4, 1, 6],
+            "content-access inventory drifted"
+        );
+
+        let kinds_where = |predicate: &dyn Fn(&alint_core::KindMeta) -> bool| {
+            records
+                .iter()
+                .filter_map(|(kind, meta)| predicate(meta).then_some(*kind))
+                .collect::<BTreeSet<_>>()
+        };
+        assert_eq!(
+            kinds_where(&|m| matches!(m.dispatch, DispatchClass::PerFile { full_index: true })),
+            BTreeSet::from(["markdown_paths_resolve"])
+        );
+        assert_eq!(
+            kinds_where(&|m| matches!(m.dispatch, DispatchClass::FullIndex { path_scope: true })),
+            BTreeSet::from([
+                "file_absent",
+                "file_exists",
+                "max_files_per_directory",
+                "no_case_conflicts",
+            ])
+        );
+        assert_eq!(
+            kinds_where(&|m| matches!(m.scope_filter, ScopeFilterSupport::AncestorOnly)),
+            BTreeSet::from(["dir_absent"])
+        );
+        assert_eq!(
+            kinds_where(&|m| m.respect_gitignore),
+            BTreeSet::from(["file_exists"])
+        );
+        assert_eq!(
+            kinds_where(&|m| m.root_only),
+            BTreeSet::from(["dir_absent", "dir_exists", "file_absent", "file_exists"])
+        );
+        assert_eq!(
+            kinds_where(&|m| m.nested_rules),
+            BTreeSet::from(["every_matching_has", "for_each_dir", "for_each_file"])
+        );
+        assert_eq!(
+            kinds_where(&|m| !m.dependencies.is_empty()),
+            BTreeSet::from(["json_schema_passes"])
+        );
+        assert_eq!(
+            kinds_where(&|m| m.formats.as_ref() == alint_core::Format::ALL),
+            BTreeSet::from([
+                "cross_file",
+                "file_graph",
+                "json_schema_passes",
+                "registry_paths_resolve",
+            ])
+        );
+        let mut structured_format_records = 0usize;
+        for (prefix, format) in [
+            ("json_", alint_core::Format::Json),
+            ("yaml_", alint_core::Format::Yaml),
+            ("toml_", alint_core::Format::Toml),
+            ("xml_", alint_core::Format::Xml),
+            ("dotenv_", alint_core::Format::Dotenv),
+            ("properties_", alint_core::Format::Properties),
+            ("ini_", alint_core::Format::Ini),
+            ("hcl_", alint_core::Format::Hcl),
+        ] {
+            for (kind, meta) in records
+                .iter()
+                .filter(|(kind, _)| kind.starts_with(prefix) && kind.contains("_path_"))
+            {
+                assert_eq!(
+                    meta.formats.as_ref(),
+                    &[format],
+                    "{kind}: structured kind declares the wrong parser format"
+                );
+                structured_format_records += 1;
+            }
+        }
+        assert_eq!(structured_format_records, 24);
+
+        let capability_kinds = |predicate: &dyn Fn(&Capability) -> bool| {
+            records
+                .iter()
+                .filter_map(|(kind, meta)| {
+                    meta.capabilities
+                        .iter()
+                        .any(|entry| predicate(&entry.capability))
+                        .then_some(*kind)
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        assert_eq!(
+            capability_kinds(&|cap| matches!(cap, Capability::SpawnUserCommand)),
+            BTreeSet::from(["command", "command_idempotent", "generated_file_fresh"])
+        );
+        assert_eq!(
+            capability_kinds(&|cap| matches!(cap, Capability::HostKeyring)),
+            BTreeSet::from(["git_commit_gpg_signed"])
+        );
+        assert_eq!(
+            capability_kinds(&|cap| matches!(cap, Capability::OutOfRootRead)),
+            BTreeSet::from(["json_schema_passes", "pair_hash", "registry_paths_resolve"])
+        );
+        assert_eq!(
+            capability_kinds(&|cap| matches!(cap, Capability::WritesDuringCheck)),
+            BTreeSet::from(["generated_file_fresh"])
+        );
+        assert_eq!(
+            capability_kinds(&|cap| matches!(cap, Capability::UnixOnly)),
+            BTreeSet::from([
+                "executable_bit",
+                "executable_has_shebang",
+                "shebang_has_executable",
+            ])
+        );
+
+        let unconditional_git: BTreeSet<&str> = records
+            .iter()
+            .filter_map(|(kind, meta)| {
+                meta.capabilities
+                    .iter()
+                    .any(|entry| {
+                        matches!(entry.capability, Capability::Git { .. })
+                            && entry.condition == CapabilityCondition::Always
+                    })
+                    .then_some(*kind)
+            })
+            .collect();
+        assert_eq!(
+            unconditional_git,
+            BTreeSet::from([
+                "changeset_requires_path",
+                "git_blame_age",
+                "git_commit_author_allowlist",
+                "git_commit_gpg_signed",
+                "git_commit_message",
+                "git_commit_no_fixup",
+                "git_commit_signed_off",
+                "git_commit_subject_matches",
+                "git_no_denied_paths",
+                "pair_changed_together",
+            ])
+        );
+        let file_absent_meta = registry.meta("file_absent").unwrap();
+        assert!(file_absent_meta.capabilities.iter().any(|entry| {
+            matches!(
+                (&entry.capability, &entry.condition),
+                (
+                    Capability::Git { operations },
+                    CapabilityCondition::FixOpConfigured { op }
+                ) if operations.contains(&GitOperation::Untrack) && op == "git_untrack"
+            )
+        }));
+        let generated_meta = registry.meta("generated_file_fresh").unwrap();
+        assert!(generated_meta.capabilities.iter().any(|entry| {
+            matches!(
+                (&entry.capability, &entry.condition),
+                (
+                    Capability::WritesDuringCheck,
+                    CapabilityCondition::OptionSet { option }
+                ) if option == "outputs"
+            )
+        }));
+        let denied_meta = registry.meta("git_no_denied_paths").unwrap();
+        assert!(denied_meta.capabilities.iter().any(|entry| {
+            matches!(
+                (&entry.capability, &entry.condition),
+                (
+                    Capability::Git { operations },
+                    CapabilityCondition::OptionSet { option }
+                ) if operations.contains(&GitOperation::Diff) && option == "since"
+            )
+        }));
+        let commit_message_meta = registry.meta("git_commit_message").unwrap();
+        assert!(commit_message_meta.capabilities.iter().any(|entry| {
+            matches!(
+                (&entry.capability, &entry.condition),
+                (
+                    Capability::EnvRead,
+                    CapabilityCondition::OptionMatches { option, predicate }
+                ) if option == "since"
+                    && *predicate == OptionPredicate::ContainsLegacyEnvReference
+            )
+        }));
+        for kind in ["json_schema_passes", "pair_hash", "registry_paths_resolve"] {
+            let meta = registry.meta(kind).unwrap();
+            assert!(meta.capabilities.iter().any(|entry| {
+                matches!(
+                    (&entry.capability, &entry.condition),
+                    (
+                        Capability::OutOfRootRead,
+                        CapabilityCondition::CommonFieldSet { field }
+                    ) if field == "allow_out_of_root"
+                )
+            }));
+        }
+
+        let mut fix_hosts: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for (kind, meta) in &records {
+            let mut seen_fix_ops = BTreeSet::new();
+            for op in meta.fix_ops.iter() {
+                assert!(
+                    FixSpec::ALL_OP_NAMES.contains(&op.as_ref()),
+                    "{kind}: unknown metadata fix operation `{op}`"
+                );
+                assert!(
+                    seen_fix_ops.insert(op.as_ref()),
+                    "{kind}: duplicate fix operation `{op}`"
+                );
+                fix_hosts.entry(op.as_ref()).or_default().insert(kind);
+            }
+            let mut seen_selectors = BTreeSet::new();
+            for selector in meta.selectors.iter() {
+                assert!(
+                    seen_selectors.insert(selector.name.as_ref()),
+                    "{kind}: duplicate selector `{}`",
+                    selector.name
+                );
+            }
+            for capability in meta.capabilities.iter() {
+                if let CapabilityCondition::FixOpConfigured { op } = &capability.condition {
+                    assert!(
+                        meta.fix_ops.contains(op),
+                        "{kind}: conditional capability references undeclared fix op `{op}`"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            fix_hosts.keys().copied().collect::<BTreeSet<_>>(),
+            FixSpec::ALL_OP_NAMES.iter().copied().collect(),
+            "the records must account for all 26 fix operations"
+        );
+    }
+    #[test]
+    fn glob_selector_metadata_matches_the_transition_table() {
+        use alint_core::SelectorType;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let registry = builtin_registry();
+        let mut declared: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (kind, meta) in registry.kind_metadata() {
+            for selector in meta.selectors.iter().filter(|selector| {
+                matches!(
+                    selector.selector_type,
+                    SelectorType::Glob
+                        | SelectorType::GlobList
+                        | SelectorType::BasenameGlob
+                        | SelectorType::DiffGlob
+                )
+            }) {
+                declared
+                    .entry(kind.to_string())
+                    .or_default()
+                    // The transition table walks sequences implicitly; metadata
+                    // spells that traversal explicitly as `[]`.
+                    .insert(selector.name.replace("[]", ""));
+            }
+        }
+
+        let mut transition: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (spellings, fields) in alint_core::template::NESTED_GLOB_OPTIONS {
+            for spelling in *spellings {
+                let canonical = registry.canonical_kind(spelling);
+                transition
+                    .entry(canonical.to_string())
+                    .or_default()
+                    .extend(fields.iter().map(|field| (*field).to_string()));
+            }
+        }
+
+        assert_eq!(
+            declared, transition,
+            "typed selector records and the one-release transition table must agree"
+        );
+    }
+
+    #[test]
+    fn regex_select_metadata_covers_the_nested_config_exemptions() {
+        use alint_core::SelectorType;
+        use std::collections::BTreeSet;
+
+        let registry = builtin_registry();
+        let kinds: BTreeSet<&str> = registry
+            .kind_metadata()
+            .filter_map(|(kind, meta)| {
+                meta.selectors
+                    .iter()
+                    .any(|selector| {
+                        selector.name == "select" && selector.selector_type == SelectorType::Regex
+                    })
+                    .then_some(kind)
+            })
+            .collect();
+        assert_eq!(kinds, BTreeSet::from(["for_each_match", "ordered_block"]));
     }
 
     #[test]

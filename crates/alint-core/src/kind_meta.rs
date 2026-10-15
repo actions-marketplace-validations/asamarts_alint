@@ -99,6 +99,8 @@ pub enum GitOperation {
     Diff,
     Log,
     VerifyCommit,
+    /// Mutates the repository index without deleting the working-tree file.
+    Untrack,
 }
 
 /// A host capability a kind may exercise.
@@ -158,7 +160,20 @@ pub struct CapabilityMeta {
 pub enum ContentAccess {
     PathOnly,
     Metadata,
-    Prefix { bytes: usize },
+    /// Reads a prefix. `max_bytes: None` means the length comes from a rule
+    /// option and therefore has no kind-wide fixed maximum.
+    Prefix {
+        max_bytes: Option<usize>,
+        /// Whether the same evaluation also reads file metadata.
+        metadata: bool,
+    },
+    /// Reads a suffix. `max_bytes: None` means the length comes from a rule
+    /// option and therefore has no kind-wide fixed maximum.
+    Suffix {
+        max_bytes: Option<usize>,
+        /// Whether the same evaluation also reads file metadata.
+        metadata: bool,
+    },
     WholeFile,
     OtherFiles,
     Blame,

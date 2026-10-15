@@ -29,10 +29,12 @@ moves.
   the shared tree file set is built only when a rule looks ancestors up on the filtered index)
   and adotenv 0.1.1 with verified `.env` fix edits (#330). All release jobs, the post-publish
   smoke channels, the Action pin (`e3c9a85b`), and alint.org (#92) are done.
-- **W1 is in progress.** Slice 1 is complete: the serializable `KindMeta` / `FixOpMeta` types and
-  record-taking registry APIs are in `alint-core`; aliases resolve the canonical record; and the
-  docs-generated alias map is checked exactly against the registry. No per-kind records are
-  declared yet; the 95-record migration is next.
+- **W1 is in progress; slices 1 and 2 are complete.** The serializable `KindMeta` / `FixOpMeta`
+  types and metadata-taking registry APIs are in `alint-core`; metadata is mandatory for every
+  canonical registration; all 95 corrected per-kind records are declared beside their builders;
+  and all 11 aliases resolve the exact canonical record. Completeness, audited-distribution,
+  typed-selector transition parity, spawn-source parity, and rule-instance conformance gates are
+  in place.
 
 ### Open release item: the v0.18.4 benchmark record
 
@@ -67,15 +69,13 @@ cargo run -q -p xtask -- bench-gate --results new.json \
 
 ### Next work, in order
 
-1. **W1, `KindMeta`.** Slice 1 of [`kind-meta.md`](kind-meta.md) section 5.2 is complete. Next,
-   declare the 95 records, corrected for the v0.18.3 changes and checked by the section 5.3
-   instance-conformance audit rather than the inventory snapshot. Then inject the `KindCatalog`
-   into the DSL loader and derive the trust and audit lists from it (including the v0.18.3
-   nested-config lists `UNCONFINABLE_KINDS`, `REGEX_SELECT_KINDS`, `NESTED_RULE_KINDS` in
-   `crates/alint-dsl/src/nested.rs`, and `SPAWNING_RULE_KINDS`), keeping the old hand lists for
-   one release as equality cross-checks; fix any config that sets an ignored field and enable K1
-   enforcement; migrate the schema and add K4 restrictions plus the `facts.json` section; then
-   add K5's capabilities line.
+1. **W1, `KindMeta`.** Slices 1 and 2 of [`kind-meta.md`](kind-meta.md) section 5.2 are complete.
+   Next, inject the `KindCatalog` into every DSL loader call site and derive the trust and audit
+   lists from it (including the v0.18.3 nested-config lists `UNCONFINABLE_KINDS`,
+   `REGEX_SELECT_KINDS`, `NESTED_RULE_KINDS` in `crates/alint-dsl/src/nested.rs`, and
+   `SPAWNING_RULE_KINDS`), keeping the old hand lists for one release as equality cross-checks.
+   Then fix any config that sets an ignored field and enable K1 enforcement; migrate the schema
+   and add K4 restrictions plus the `facts.json` section; then add K5's capabilities line.
 2. **W4** (notes in every format) and **W7** (`--as-of`): small and independent of W1's tail.
 3. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half needs W1).
 4. **W5** (redaction and the leak gate), **W6** (related locations, the JSON schema relaxation,

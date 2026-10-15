@@ -114,6 +114,29 @@ impl PerFileRule for MarkdownPathsResolveRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: true },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("prefixes"),
+        selector_type: alint_core::SelectorType::LiteralPath,
+        // Prefixing this value would stop it matching the document's token.
+        rerootable: false,
+    }]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(_paths) = &spec.paths else {
         return Err(Error::rule_config(
@@ -128,8 +151,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "markdown_paths_resolve requires a non-empty `prefixes` list - \
-             declare which path shapes (e.g. [\"src/\", \"crates/\", \"docs/\"]) \
-             count as path candidates in your codebase",
+         declare which path shapes (e.g. [\"src/\", \"crates/\", \"docs/\"]) \
+         count as path candidates in your codebase",
         ));
     }
     Ok(Box::new(MarkdownPathsResolveRule {

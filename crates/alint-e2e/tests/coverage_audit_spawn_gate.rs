@@ -1,21 +1,20 @@
 //! Spawn-gate drift audit — keep the RCE allow-list honest.
 //!
 //! alint refuses a process-spawning rule kind from any untrusted source
-//! (`extends:`, nested config, template, `require:` sub-rule). The set of
-//! spawning kinds is a hand-maintained allow-list,
-//! [`alint_dsl::SPAWNING_RULE_KINDS`]. The rejection logic is thoroughly
-//! tested elsewhere (`alint-dsl` unit tests; the CLI canary in
-//! `alint::tests::spawn_gate`) — but every one of those tests names the
-//! kinds it checks. None of them would catch the failure that actually
-//! shipped once (`gff`): a rule that *spawns a process* but was never added
-//! to the allow-list, so the gate waved it through and adopting a ruleset
-//! became arbitrary code execution.
+//! (`extends:`, nested config, template, `require:` sub-rule). W1 records that
+//! capability in each kind's `KindMeta`; during the one-release transition it
+//! must also equal the hand-maintained [`alint_dsl::SPAWNING_RULE_KINDS`] gate.
+//! The rejection logic is thoroughly tested elsewhere (`alint-dsl` unit tests;
+//! the CLI canary in `alint::tests::spawn_gate`) — but every one of those tests
+//! names the kinds it checks. None of them would catch the failure that actually
+//! shipped once (`gff`): a rule that *spawns a process* but was never added to
+//! the gate, so adopting a ruleset became arbitrary code execution.
 //!
-//! This audit is the missing cross-check. It scans the rule sources for the
-//! primitives that actually launch a subprocess and asserts that set of
-//! modules is *exactly* the allow-list — no more (an ungated spawner), no
-//! less (a stale allow-list entry). A new rule that shells out fails here
-//! until its kind is gated.
+//! This audit scans the rule sources for the primitives that actually launch a
+//! subprocess and asserts that set is exactly both metadata and the transition
+//! list — no more (an undeclared/ungated spawner), no less (a stale declaration).
+//! A new rule that shells out fails here until its kind declares
+//! `SpawnUserCommand` and is gated.
 
 use std::path::{Path, PathBuf};
 
@@ -130,30 +129,40 @@ fn spawning_module_paths() -> Vec<String> {
 }
 
 #[test]
-fn spawning_allowlist_matches_the_rules_that_actually_spawn() {
+fn spawning_sources_metadata_and_transition_list_agree() {
     let found = spawning_module_paths();
+    let registry = alint_rules::builtin_registry();
 
-    // The allow-list as `src`-relative module paths. Each spawning kind lives in
-    // a top-level module named for the kind (`command` → command.rs, etc.); the
-    // audit relies on that convention and calls it out if it ever breaks.
-    let mut expected: Vec<String> = alint_dsl::SPAWNING_RULE_KINDS
-        .iter()
-        .map(|k| format!("{k}.rs"))
+    let mut declared: Vec<String> = registry
+        .kind_metadata()
+        .filter(|(_, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::SpawnUserCommand))
+        })
+        .map(|(kind, _)| format!("{kind}.rs"))
         .collect();
-    expected.sort();
+    declared.sort();
+
+    // Keep the old trust list as an equality cross-check for one release. Each
+    // spawning kind lives in a top-level module named for the kind.
+    let mut transition: Vec<String> = alint_dsl::SPAWNING_RULE_KINDS
+        .iter()
+        .map(|kind| format!("{kind}.rs"))
+        .collect();
+    transition.sort();
 
     assert_eq!(
-        found, expected,
-        "\n\nSPAWN-GATE DRIFT — the rule modules that launch a subprocess do not \
-         match alint_dsl::SPAWNING_RULE_KINDS.\n\
+        found, declared,
+        "\n\nSPAWN CAPABILITY DRIFT — source modules that launch a subprocess \
+         must exactly match KindMeta::SpawnUserCommand.\n\
          \n  modules that actually spawn : {found:?}\
-         \n  SPAWNING_RULE_KINDS (as .rs) : {expected:?}\n\
-         \nIf you added a rule that shells out, add its kind to SPAWNING_RULE_KINDS \
-         (crates/alint-dsl/src/trust.rs) — without it, an `extends:`'d or nested \
-         ruleset can run the rule as arbitrary code (the `gff` regression class). \
-         If you removed a spawner, drop its stale allow-list entry. If a spawning \
-         module is not named `<kind>.rs` at the top level, teach this audit the \
-         mapping."
+         \n  modules declared to spawn : {declared:?}"
+    );
+    assert_eq!(
+        declared, transition,
+        "KindMeta::SpawnUserCommand and the one-release \
+         alint_dsl::SPAWNING_RULE_KINDS transition list disagree"
     );
 }
 

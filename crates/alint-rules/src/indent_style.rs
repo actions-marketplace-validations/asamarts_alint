@@ -227,6 +227,24 @@ fn first_bad_line(
     None
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("indent_style")]),
+    expect_matches: true,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec
         .paths
@@ -257,8 +275,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                     return Err(Error::rule_config(
                         &spec.id,
                         "indent_style fix requires `style: spaces` and a positive `width:` \
-                         (the spaces-per-tab for conversion); a `tabs`-style or width-less rule \
-                         has no unambiguous tab/space conversion",
+                     (the spaces-per-tab for conversion); a `tabs`-style or width-less rule \
+                     has no unambiguous tab/space conversion",
                     ));
                 }
             };
@@ -271,7 +289,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                     &spec.id,
                     format!(
                         "indent_style fix `width` is too large for reindentation \
-                         (got {width}, max {MAX_REINDENT_WIDTH})"
+                     (got {width}, max {MAX_REINDENT_WIDTH})"
                     ),
                 ));
             }

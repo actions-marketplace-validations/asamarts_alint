@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **All 95 canonical rule kinds now declare serializable capability metadata.** Each built-in
+  registration carries its dispatch class, accepted selectors, conditional host capabilities,
+  content access, formats, changed dependencies, fix operations, and nested-rule support; all 11
+  aliases resolve the exact canonical record. Completeness, transition-list parity, subprocess
+  source auditing, and rule-instance conformance are enforced in tests.
+
 ## [0.18.4] - 2026-10-15
 
 A performance and correctness patch. `check --changed` and `fix --changed` no longer build

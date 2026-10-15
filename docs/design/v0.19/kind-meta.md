@@ -1,7 +1,7 @@
 # Design doc: `KindMeta`, the per-kind capability inventory (W1)
 
-Status: Accepted design (2026-10-14); implementation in progress. Migration step 1 completed
-2026-10-15; all five questions in section 7 are decided.
+Status: Accepted design (2026-10-14); implementation in progress. Migration steps 1 and 2
+completed 2026-10-15; all five questions in section 7 are decided.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md) (Phase 0)
 and K1 to K5 in section 7; no new ADR (the trust gates' source of truth changes, not their policy).
 Demand evidence: the inventory of all 95 kinds in [`kind-inventory.md`](kind-inventory.md), which
@@ -78,8 +78,8 @@ canonical kind's record. Proposed shape (names indicative):
 | `git_tracked_only` | `None`, `FileOnly`, `DirAware`; plus `respect_gitignore` and `root_only` flags |
 | `selectors` | named fields with a type: `Glob`, `GlobList` (with `!` excludes), `BasenameGlob`, `LiteralPath`, `PathTemplate`, `Regex`, `DiffGlob`, `Extract` |
 | `since` | `None`, `Optional` (falls back to HEAD), `Required` |
-| `capabilities` | `SpawnUserCommand`, `Git(ops)` (tracked set, blame, diff, log, verify-commit), `HostKeyring`, `EnvRead`, `EnvExport`, `WallClock`, `OutOfRootRead`, `WritesDuringCheck`, `UnixOnly`; each either unconditional or conditional on a named option |
-| `content` | `PathOnly`, `Metadata`, `Prefix(n)`, `WholeFile`, `OtherFiles`, `Blame`, `Delegated` |
+| `capabilities` | `SpawnUserCommand`, `Git(ops)` (tracked set, blame, diff, log, verify-commit, untrack), `HostKeyring`, `EnvRead`, `EnvExport`, `WallClock`, `OutOfRootRead`, `WritesDuringCheck`, `UnixOnly`; each either unconditional or conditional on a named option |
+| `content` | `PathOnly`, `Metadata`, `Prefix { max_bytes, metadata }`, `Suffix { max_bytes, metadata }`, `WholeFile`, `OtherFiles`, `Blame`, `Delegated`; `max_bytes: None` means an option-configured bound |
 | `formats` | the `Format`s the kind parses (structured kinds, `json_schema_passes`, extract-based kinds) |
 | `dependencies` | repository files outside the kind's scope whose change alters its verdict, as `Rule::changed_dependencies` (v0.18.3) exposes per instance (today `json_schema_passes`'s `schema_path`) |
 | `fix_ops` | the accepted fix operation names; empty means a `fix:` is rejected |
@@ -185,8 +185,11 @@ declared is decision K3.
 1. **Completed 2026-10-15.** Added the serializable `KindMeta`, `FixOpMeta`, and supporting enums
    in `alint-core`; `RuleRegistry::register` takes a record, aliases resolve the canonical
    record, and the docs-generated alias table is checked exactly against the registry.
-2. Declare the 95 records from the inventory, corrected for the v0.18.3 changes; the
-   instance-conformance audit (section 5.3), not the markdown snapshot, checks them.
+2. **Completed 2026-10-15.** Declared all 95 corrected records beside their builders and made
+   metadata mandatory for canonical registrations. Completeness and audited-distribution gates,
+   typed-selector parity with the transition table, source/metadata spawn parity, and debug-build
+   instance checks now cover dispatch, bounded content, Git-tracked mode, blame, changed
+   dependencies, `expect_matches`, nested rules, and configured fixers.
 3. Inject the `KindCatalog` (K3) into every loader call site, then derive the trust lists and audit
    lists from it (including v0.18.3's two nested-config lists); keep the old hand lists for one
    release as cross-checks that must equal the derived ones, then delete them.

@@ -108,6 +108,42 @@ impl ChangesetRequiresPathRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::SingleShot,
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("add_glob"),
+            selector_type: alint_core::SelectorType::DiffGlob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("when_changed"),
+            selector_type: alint_core::SelectorType::DiffGlob,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::Required,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::Git {
+            operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::Diff]),
+        },
+        condition: alint_core::CapabilityCondition::Always,
+    }]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -125,7 +161,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "`since` must not be empty - `changeset_requires_path` is diff-scoped and needs a \
-             base ref (typically `since: \"{{env.ALINT_BASE_SHA | default('origin/main')}}\"`)",
+         base ref (typically `since: \"{{env.ALINT_BASE_SHA | default('origin/main')}}\"`)",
         ));
     }
     let add_scope = Scope::from_patterns(slice::from_ref(&opts.add_glob))

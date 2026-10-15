@@ -341,6 +341,40 @@ fn posix_to_env_template(input: &str) -> String {
     out
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::SingleShot,
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::Optional,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::Log]),
+            },
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::EnvRead,
+            condition: alint_core::CapabilityCondition::OptionMatches {
+                option: std::borrow::Cow::Borrowed("since"),
+                predicate: alint_core::OptionPredicate::ContainsLegacyEnvReference,
+            },
+        },
+    ]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -350,7 +384,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "git_commit_message needs at least one of `pattern:`, `subject_max_length:`, \
-             or `requires_body: true`",
+         or `requires_body: true`",
         ));
     }
     // `subject_max_length: 0` would fail every commit (a 0-char subject is
@@ -371,7 +405,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "`include_merges: true` has no effect without `since:`. Either remove it \
-             or set `since:` to enable range mode.",
+         or set `since:` to enable range mode.",
         ));
     }
 
@@ -388,9 +422,9 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     {
         eprintln!(
             "alint: warning: rule {:?}: `since: {raw}` uses the deprecated v0.9.21 \
-                 `${{VAR}}` interpolation syntax. The canonical v0.11+ form is `{}`; \
-                 the `${{VAR}}` form will be removed in v1.0. \
-                 See https://alint.org/docs/configuration/variable-interpolation/.",
+             `${{VAR}}` interpolation syntax. The canonical v0.11+ form is `{}`; \
+             the `${{VAR}}` form will be removed in v1.0. \
+             See https://alint.org/docs/configuration/variable-interpolation/.",
             spec.id,
             posix_to_env_template(raw),
         );

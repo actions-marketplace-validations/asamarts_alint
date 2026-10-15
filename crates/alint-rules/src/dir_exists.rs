@@ -109,6 +109,33 @@ impl Rule for DirExistsRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::DirAware,
+    respect_gitignore: false,
+    root_only: true,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::Git {
+            operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::TrackedSet]),
+        },
+        condition: alint_core::CapabilityCondition::OptionSet {
+            option: std::borrow::Cow::Borrowed("git_tracked_only"),
+        },
+    }]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("dir_create")]),
+    expect_matches: false,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "dir_exists")?;
     let Some(paths) = &spec.paths else {
@@ -128,7 +155,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 Error::rule_config(
                     &spec.id,
                     "dir_create requires `paths` to be a single literal directory \
-                     (no glob metacharacters, no `..`)",
+                 (no glob metacharacters, no `..`)",
                 )
             })?;
             // Reject combos an EMPTY directory can never satisfy, else `check` tags
@@ -138,8 +165,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 return Err(Error::rule_config(
                     &spec.id,
                     "dir_create cannot satisfy `git_tracked_only`: git does not track an \
-                     empty directory, so a created directory has no tracked content. Commit \
-                     a `.gitkeep` (via a `file_create` fix) instead.",
+                 empty directory, so a created directory has no tracked content. Commit \
+                 a `.gitkeep` (via a `file_create` fix) instead.",
                 ));
             }
             if opts.root_only && crate::is_nested(&dir) {
@@ -147,7 +174,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                     &spec.id,
                     format!(
                         "dir_create with `root_only` requires a root-level (single-component) \
-                         directory; {} is nested and could never satisfy the rule",
+                     directory; {} is nested and could never satisfy the rule",
                         dir.display()
                     ),
                 ));

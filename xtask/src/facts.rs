@@ -235,15 +235,13 @@ fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
         .context("register_builtin closing brace not found")?;
     let body = &body[..end];
 
-    // Canonical registrations use `register` / `register_optionless` once their
-    // metadata lands, and the explicit `*_without_meta` variants during the W1
-    // migration. The first module path is either the metadata record or the
-    // builder; decision K3 requires both to live beside the kind, so its stem is
-    // the source mapping. `\s` spans multi-line calls.
-    let re = Regex::new(
-        r#"\.register(?:_optionless_without_meta|_without_meta|_optionless)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*&?([a-z0-9_]+)::"#,
-    )
-    .expect("static regex compiles");
+    // Canonical registrations use `register` / `register_optionless`. The first
+    // module path is the metadata record; decision K3 requires the record and
+    // builder to live beside the kind, so its stem is the source mapping. `\s`
+    // spans multi-line calls.
+    let re =
+        Regex::new(r#"\.register(?:_optionless)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*&([a-z0-9_]+)::"#)
+            .expect("static regex compiles");
     let src_dir = root.join("crates/alint-rules/src");
     let mut map = BTreeMap::new();
     for cap in re.captures_iter(body) {

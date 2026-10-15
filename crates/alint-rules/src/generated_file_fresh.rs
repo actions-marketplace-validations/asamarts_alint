@@ -492,6 +492,57 @@ fn first_diff_hint(produced: &[u8], committed: &[u8]) -> String {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("file"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: true,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("outputs"),
+            selector_type: alint_core::SelectorType::GlobList,
+            rerootable: true,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("workdir"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: true,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::SpawnUserCommand,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::EnvExport,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::WritesDuringCheck,
+            condition: alint_core::CapabilityCondition::OptionSet {
+                option: std::borrow::Cow::Borrowed("outputs"),
+            },
+        },
+    ]),
+    content: alint_core::ContentAccess::Delegated,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -528,14 +579,14 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             return Err(Error::rule_config(
                 &spec.id,
                 "generated_file_fresh: set exactly one of `file` (stdout mode) or `outputs` \
-                 (mutating/in-place mode), not both",
+             (mutating/in-place mode), not both",
             ));
         }
         (None, None) => {
             return Err(Error::rule_config(
                 &spec.id,
                 "generated_file_fresh requires `file` (compare the generator's stdout to one \
-                 committed file) or `outputs` (the in-place generator's regenerated globs)",
+             committed file) or `outputs` (the in-place generator's regenerated globs)",
             ));
         }
     };

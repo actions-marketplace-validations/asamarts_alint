@@ -5,6 +5,12 @@ use crate::config::RuleSpec;
 use crate::did_you_mean;
 use crate::error::{Error, Result};
 use crate::kind_meta::KindMeta;
+#[cfg(debug_assertions)]
+use crate::kind_meta::{
+    Capability, CapabilityCondition, ContentAccess, DispatchClass, GitOperation, GitTrackedSupport,
+};
+#[cfg(debug_assertions)]
+use crate::rule::GitTrackedMode;
 use crate::rule::Rule;
 
 pub type RuleBuilder = fn(&RuleSpec) -> Result<Box<dyn Rule>>;
@@ -31,7 +37,7 @@ impl StoredKindMeta {
 
 struct RegisteredKind {
     builder: BoxedBuilder,
-    metadata: Option<StoredKindMeta>,
+    metadata: StoredKindMeta,
 }
 
 /// Canonical rule-kind registrations plus alias-to-canonical mappings.
@@ -51,14 +57,6 @@ impl std::fmt::Debug for RuleRegistry {
         f.debug_struct("RuleRegistry")
             .field("kinds", &self.kinds.keys().collect::<Vec<_>>())
             .field("aliases", &self.aliases)
-            .field(
-                "metadata",
-                &self
-                    .kinds
-                    .iter()
-                    .filter_map(|(kind, registration)| registration.metadata.as_ref().map(|_| kind))
-                    .collect::<Vec<_>>(),
-            )
             .finish()
     }
 }
@@ -74,7 +72,7 @@ impl RuleRegistry {
             kind,
             RegisteredKind {
                 builder: Box::new(builder),
-                metadata: Some(StoredKindMeta::Static(meta)),
+                metadata: StoredKindMeta::Static(meta),
             },
         );
     }
@@ -85,19 +83,7 @@ impl RuleRegistry {
             kind,
             RegisteredKind {
                 builder: Box::new(builder),
-                metadata: Some(StoredKindMeta::Owned(meta)),
-            },
-        );
-    }
-
-    /// Register a builder before its catalogue record has migrated to
-    /// [`KindMeta`]. W1 removes this path after all built-in records land.
-    pub fn register_without_meta(&mut self, kind: &str, builder: RuleBuilder) {
-        self.insert_kind(
-            kind,
-            RegisteredKind {
-                builder: Box::new(builder),
-                metadata: None,
+                metadata: StoredKindMeta::Owned(meta),
             },
         );
     }
@@ -113,18 +99,7 @@ impl RuleRegistry {
             kind,
             RegisteredKind {
                 builder: Self::optionless_builder(builder),
-                metadata: Some(StoredKindMeta::Static(meta)),
-            },
-        );
-    }
-
-    /// Option-less counterpart to [`register_without_meta`](Self::register_without_meta).
-    pub fn register_optionless_without_meta(&mut self, kind: &str, builder: RuleBuilder) {
-        self.insert_kind(
-            kind,
-            RegisteredKind {
-                builder: Self::optionless_builder(builder),
-                metadata: None,
+                metadata: StoredKindMeta::Static(meta),
             },
         );
     }
@@ -171,18 +146,14 @@ impl RuleRegistry {
         let canonical = self.canonical_kind(kind);
         self.kinds
             .get(canonical)
-            .and_then(|registration| registration.metadata.as_ref())
-            .map(StoredKindMeta::as_ref)
+            .map(|registration| registration.metadata.as_ref())
     }
 
-    /// Canonical kinds that have declared capability metadata.
-    pub fn kinds_with_meta(&self) -> impl Iterator<Item = (&str, &KindMeta)> {
-        self.kinds.iter().filter_map(|(kind, registration)| {
-            registration
-                .metadata
-                .as_ref()
-                .map(|meta| (kind.as_str(), meta.as_ref()))
-        })
+    /// Canonical kinds and their capability metadata.
+    pub fn kind_metadata(&self) -> impl Iterator<Item = (&str, &KindMeta)> {
+        self.kinds
+            .iter()
+            .map(|(kind, registration)| (kind.as_str(), registration.metadata.as_ref()))
     }
 
     /// Registered alias-to-canonical mappings, in arbitrary order.
@@ -206,12 +177,11 @@ impl RuleRegistry {
 
     pub fn build(&self, spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         let canonical = self.canonical_kind(&spec.kind);
-        let builder = &self
+        let registration = self
             .kinds
             .get(canonical)
-            .ok_or_else(|| Error::UnknownRuleKind(spec.kind.clone()))?
-            .builder;
-        let rule = builder(spec).map_err(|e| enrich_error(e, &spec.kind))?;
+            .ok_or_else(|| Error::UnknownRuleKind(spec.kind.clone()))?;
+        let rule = (registration.builder)(spec).map_err(|e| enrich_error(e, &spec.kind))?;
         if spec.expect_matches && !rule.supports_expect_matches() {
             return Err(Error::rule_config(
                 &spec.id,
@@ -221,6 +191,13 @@ impl RuleRegistry {
                 ),
             ));
         }
+        #[cfg(debug_assertions)]
+        assert_instance_conformance(
+            canonical,
+            registration.metadata.as_ref(),
+            spec,
+            rule.as_ref(),
+        );
         Ok(rule)
     }
 
@@ -229,6 +206,120 @@ impl RuleRegistry {
             .keys()
             .map(String::as_str)
             .chain(self.aliases.keys().map(String::as_str))
+    }
+}
+
+#[cfg(debug_assertions)]
+fn assert_dispatch_and_content(kind: &str, meta: &KindMeta, rule: &dyn Rule) {
+    let per_file = rule.as_per_file().is_some();
+    let full_index = rule.requires_full_index();
+    let path_scope = rule.path_scope().is_some();
+    let dispatch_matches = match meta.dispatch {
+        DispatchClass::PerFile {
+            full_index: expected_full_index,
+        } => per_file && full_index == expected_full_index,
+        DispatchClass::FullIndex {
+            path_scope: expected_path_scope,
+        } => !per_file && full_index && path_scope == expected_path_scope,
+        DispatchClass::RuleMajorScoped => !per_file && !full_index && path_scope,
+        DispatchClass::SingleShot => !per_file && !full_index && !path_scope,
+    };
+    assert!(
+        dispatch_matches,
+        "{kind}: instance dispatch (per_file={per_file}, full_index={full_index}, \
+         path_scope={path_scope}) disagrees with metadata {:?}",
+        meta.dispatch
+    );
+    if let Some(per_file_rule) = rule.as_per_file() {
+        let bounded_read = per_file_rule.max_bytes_needed();
+        match meta.content {
+            ContentAccess::Prefix { max_bytes, .. } | ContentAccess::Suffix { max_bytes, .. } => {
+                assert!(
+                    bounded_read.is_some(),
+                    "{kind}: bounded content metadata disagrees with an unbounded per-file rule"
+                );
+                if let Some(expected) = max_bytes {
+                    assert_eq!(
+                        bounded_read,
+                        Some(expected),
+                        "{kind}: fixed content bound disagrees with metadata"
+                    );
+                }
+            }
+            ContentAccess::WholeFile => assert!(
+                bounded_read.is_none(),
+                "{kind}: whole-file metadata disagrees with a bounded per-file rule"
+            ),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn assert_instance_conformance(kind: &str, meta: &KindMeta, spec: &RuleSpec, rule: &dyn Rule) {
+    assert_dispatch_and_content(kind, meta, rule);
+
+    let git_tracked_only = spec
+        .extra
+        .get("git_tracked_only")
+        .and_then(serde_yaml_ng::Value::as_bool)
+        .unwrap_or(false);
+    let expected_git_mode = match (meta.git_tracked_only, git_tracked_only) {
+        (GitTrackedSupport::FileOnly, true) => GitTrackedMode::FileOnly,
+        (GitTrackedSupport::DirAware, true) => GitTrackedMode::DirAware,
+        _ => GitTrackedMode::Off,
+    };
+    assert_eq!(
+        rule.git_tracked_mode(),
+        expected_git_mode,
+        "{kind}: instance git-tracked mode disagrees with metadata"
+    );
+
+    let declares_blame = meta.capabilities.iter().any(|capability| {
+        matches!(capability.condition, CapabilityCondition::Always)
+            && matches!(
+                &capability.capability,
+                Capability::Git { operations }
+                    if operations.contains(&GitOperation::Blame)
+            )
+    });
+    assert_eq!(
+        rule.wants_git_blame(),
+        declares_blame,
+        "{kind}: instance blame requirement disagrees with metadata"
+    );
+    assert_eq!(
+        rule.supports_expect_matches(),
+        meta.expect_matches,
+        "{kind}: instance expect_matches support disagrees with metadata"
+    );
+    assert_eq!(
+        rule.changed_dependencies().len(),
+        meta.dependencies.len(),
+        "{kind}: instance changed dependencies disagree with metadata"
+    );
+    assert_eq!(
+        !rule.nested_rule_specs().is_empty(),
+        meta.nested_rules,
+        "{kind}: instance nested-rule support disagrees with metadata"
+    );
+
+    if meta.fix_ops.is_empty() {
+        assert!(
+            rule.fixer().is_none(),
+            "{kind}: instance exposes a fixer but metadata declares no fix operations"
+        );
+    }
+    if let Some(fix) = &spec.fix {
+        let op = fix.op_name();
+        assert!(
+            meta.fix_ops.iter().any(|declared| declared == op),
+            "{kind}: configured fix operation `{op}` is absent from metadata"
+        );
+        assert!(
+            rule.fixer().is_some(),
+            "{kind}: configured fix operation `{op}` produced no fixer"
+        );
     }
 }
 
@@ -328,10 +419,10 @@ mod tests {
     }
 
     #[test]
-    fn register_without_meta_inserts_and_overwrites_a_kind() {
+    fn register_inserts_and_overwrites_a_kind() {
         let mut r = RuleRegistry::new();
-        r.register_without_meta("my_kind", ok_builder);
-        r.register_without_meta("my_kind", ok_builder);
+        r.register("my_kind", &TEST_META, ok_builder);
+        r.register("my_kind", &TEST_META, ok_builder);
         let kinds: Vec<&str> = r.known_kinds().collect();
         assert_eq!(kinds, vec!["my_kind"]);
     }
@@ -346,7 +437,7 @@ mod tests {
         let alias = r.meta("content_matches").unwrap();
         assert_eq!(canonical, &TEST_META);
         assert!(std::ptr::eq(alias, canonical));
-        assert_eq!(r.kinds_with_meta().count(), 1);
+        assert_eq!(r.kind_metadata().count(), 1);
     }
 
     #[test]
@@ -366,14 +457,6 @@ mod tests {
     }
 
     #[test]
-    fn metadata_is_removed_when_a_kind_is_replaced_without_a_record() {
-        let mut r = RuleRegistry::new();
-        r.register("my_kind", &TEST_META, ok_builder);
-        r.register_without_meta("my_kind", ok_builder);
-        assert!(r.meta("my_kind").is_none());
-    }
-
-    #[test]
     fn build_rejects_unknown_kind_with_clear_error() {
         let r = RuleRegistry::new();
         let err = r.build(&fake_spec("not_real")).unwrap_err();
@@ -386,7 +469,7 @@ mod tests {
     #[test]
     fn alias_builds_with_the_canonical_builder_and_original_spec() {
         let mut r = RuleRegistry::new();
-        r.register_without_meta("file_content_matches", ok_builder);
+        r.register("file_content_matches", &TEST_META, ok_builder);
         r.register_alias("content_matches", "file_content_matches");
 
         assert_eq!(r.known_kinds().count(), 2);
@@ -417,7 +500,7 @@ mod tests {
     #[should_panic(expected = "alias chains are not supported")]
     fn alias_registration_rejects_an_alias_target() {
         let mut r = RuleRegistry::new();
-        r.register_without_meta("canonical", ok_builder);
+        r.register("canonical", &TEST_META, ok_builder);
         r.register_alias("first", "canonical");
         r.register_alias("second", "first");
     }
@@ -425,9 +508,9 @@ mod tests {
     #[test]
     fn known_kinds_iterator_lists_all_registered() {
         let mut r = RuleRegistry::new();
-        r.register_without_meta("a", ok_builder);
-        r.register_without_meta("b", ok_builder);
-        r.register_without_meta("c", ok_builder);
+        r.register("a", &TEST_META, ok_builder);
+        r.register("b", &TEST_META, ok_builder);
+        r.register("c", &TEST_META, ok_builder);
         let mut kinds: Vec<&str> = r.known_kinds().collect();
         kinds.sort_unstable();
         assert_eq!(kinds, vec!["a", "b", "c"]);

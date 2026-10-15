@@ -1003,6 +1003,31 @@ fn parse_require(
     Ok(trimmed)
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("select"),
+        selector_type: alint_core::SelectorType::Regex,
+        rerootable: false,
+    }]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[
+        std::borrow::Cow::Borrowed("sort"),
+        std::borrow::Cow::Borrowed("insert_line"),
+    ]),
+    expect_matches: true,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.paths.is_none() {
         return Err(Error::rule_config(
@@ -1087,7 +1112,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 return Err(Error::rule_config(
                     &spec.id,
                     "the `insert_line` fix requires a `require:` list (the exact lines to ensure \
-                     present); without it there is nothing to insert",
+                 present); without it there is nothing to insert",
                 ));
             }
             Some(Box::new(OrderedBlockInsertLineFixer {
@@ -1101,7 +1126,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 &spec.id,
                 format!(
                     "fix.{} is not compatible with ordered_block (only `sort` and `insert_line` \
-                     are)",
+                 are)",
                     other.op_name()
                 ),
             ));
