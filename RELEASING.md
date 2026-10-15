@@ -274,6 +274,20 @@ never re-tag** (crates.io / npm / ghcr are permanent, and a new tag would collid
   flaky windows or aarch64 leg can block it. Re-run once the leg heals with
   `gh run rerun <id> --failed`; the publish script is idempotent, so already-published
   crates are skipped.
+- **A crates.io CDN outage mid-publish.** `cargo publish` verifies each crate by
+  downloading its freshly published dependencies from `static.crates.io`; a CDN outage
+  (HTTP 500, `Connection timeout to backend`, HTTP/2 stream resets) fails
+  `publish-crates` after some crates are already up (v0.18.3: four of six). Confirm
+  which versions exist (`https://crates.io/api/v1/crates/<name>`), wait until a
+  download URL returns 200 again, then `gh run rerun <id> --failed`; the published
+  crates are skipped.
+- **A post-publish smoke failure right after the release.** The smoke workflow is
+  dispatched as soon as the publishers finish, and a registry can lag: v0.18.3's first
+  run failed cargo / cargo-binstall / npm because the last crates were still
+  publishing, and v0.18.4's failed PyPI because the simple index did not yet list the
+  version although its files were uploaded. Check the registry directly (for PyPI,
+  `https://pypi.org/pypi/alint/json`), then re-run the failed smoke jobs; they are
+  read-only.
 
 ## Release toolchain
 

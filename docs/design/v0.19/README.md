@@ -1,6 +1,6 @@
 # v0.19: Fail-loud findings and the capability inventory
 
-Status: Planned (2026-10-14). This is the first release of the general-linter program: Phase 0
+Status: Planned (2026-10-14); see [Status and next steps](#status-and-next-steps-as-of-2026-10-15). This is the first release of the general-linter program: Phase 0
 and Phase 1a of [`../general-linter.md`](../general-linter.md) section 11, decided in
 [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md). Each work item
 below gets its own design document in this directory (in the [`../TEMPLATE.md`](../TEMPLATE.md)
@@ -10,6 +10,89 @@ questions are decided there, one at a time.
 v0.19 is a minor release with deliberate behaviour changes (W1 turns silently ignored fields into
 load errors, W2 and W3 turn some false passes into failures, and W4 changes report text). Every
 behaviour change is listed in the changelog with its migration note.
+
+## Status and next steps (as of 2026-10-15)
+
+This section is the hand-off point for whoever picks the program up next. Update it when an item
+moves.
+
+### Where things stand
+
+- **Planning is done.** The general-linter program is adopted (ADR-0019); every DEC-1 to DEC-14
+  outcome is recorded in [`../general-linter.md`](../general-linter.md) section 13.1, the open
+  questions in section 13.2, and the plugin design in
+  [`../plugin-architecture.md`](../plugin-architecture.md). W1's design
+  ([`kind-meta.md`](kind-meta.md)) is accepted with K1 to K5 decided (its section 7).
+- **v0.18.3 shipped** (tag `v0.18.3`, commit `b02109b8`): the four K2 bugs plus the ten review
+  findings described below (#327).
+- **v0.18.4 shipped** (tag `v0.18.4`, commit `18e1a66d`): the `--changed` performance fix (#329;
+  the shared tree file set is built only when a rule looks ancestors up on the filtered index)
+  and adotenv 0.1.1 with verified `.env` fix edits (#330). All release jobs, the post-publish
+  smoke channels, the Action pin (`e3c9a85b`), and alint.org (#92) are done.
+- **No v0.19 code has landed.** W1 is the next implementation item.
+
+### Open release item: the v0.18.4 benchmark record
+
+The v0.18.3 bench record (#328) was closed without merging: it failed the release regression gate
+on S2 1m `changed` (+16% `min_ms` against the +15% limit), which is the regression #329 fixed. Its
+branch `bench-record/v0.18.3` is kept as the measured record, and
+[`../../benchmarks/investigations/2026-10-v0.18.3-changed-mode/`](../../benchmarks/investigations/2026-10-v0.18.3-changed-mode/README.md)
+holds the analysis. v0.18.3 therefore has no published results directory.
+
+The v0.18.4 bench-record workflow run (`38777159856`) opens a `bench-record/v0.18.4` PR. To
+finish it, follow RELEASING.md "Bench-record review", with one difference: the baseline is
+**v0.18.2**, since v0.18.3 was never published.
+
+```sh
+git fetch origin bench-record/v0.18.4
+git show origin/bench-record/v0.18.4:docs/benchmarks/macro/results/linux-x86_64/v0.18.4/results.json > new.json
+cargo run -q -p xtask -- bench-gate --results new.json \
+  --baseline docs/benchmarks/macro/results/linux-x86_64/v0.18.2/results.json
+```
+
+- Quality: CV at or under 10% on the 100k and 1m cells; regression: `min_ms` at most +15% on every
+  cell of 10k files or more; fingerprint: `alint_version` 0.18.4, the canonical host's CPU, Linux.
+- Expected: S2 `changed` back near v0.18.2; S1 and S4 `changed` up by about 5 to 10%, which is the
+  cost of correct `has_ancestor` evaluation under `--changed` and inside the budget. A failure
+  outside those shapes needs a same-host A/B before anything else (build every binary from source
+  with one toolchain, check the binaries' hashes, and do not compile during timing runs).
+- On a pass: paste the gate output into the PR, update `docs/benchmarks/HISTORY.md`, merge.
+- Then alint.org (its `OPERATIONS.md` step 4, following alint.org #88): add
+  `src/data/bench-v0.18.4.json` from the results, point both lines of `src/data/bench.ts` at it,
+  update `scripts/head-parity-baseline.json`, build, run the checks, open a PR, merge, and confirm
+  `/benchmarks/` shows v0.18.4.
+
+### Next work, in order
+
+1. **W1, `KindMeta`.** Implement [`kind-meta.md`](kind-meta.md) section 5.2 in its order, one
+   commit or PR per step: the types and record-taking `register`; the 95 records (corrected for
+   the v0.18.3 changes, checked by the section 5.3 instance-conformance audit, not by the
+   inventory snapshot); the `KindCatalog` injected into the DSL loader, with the trust and audit
+   lists derived from it (including the v0.18.3 nested-config lists `UNCONFINABLE_KINDS`,
+   `REGEX_SELECT_KINDS`, `NESTED_RULE_KINDS` in `crates/alint-dsl/src/nested.rs`, and
+   `SPAWNING_RULE_KINDS`), the old hand lists kept for one release as equality cross-checks;
+   fixing any config that sets an ignored field, then K1 enforcement; schema migration plus K4
+   restrictions and the `facts.json` section; K5's capabilities line.
+2. **W4** (notes in every format) and **W7** (`--as-of`): small and independent of W1's tail.
+3. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half needs W1).
+4. **W5** (redaction and the leak gate), **W6** (related locations, the JSON schema relaxation,
+   the frozen-fingerprint gate), **W8** (duplicate-aware spanned extraction).
+5. **W9** as capacity allows, then **W10** (documentation, recipes, roadmap, the stale
+   `register_as` doc comment).
+
+Each item gets its design document in this directory before code, per the rule at the top. The
+release gates are listed at the end of this file.
+
+### Parallel tracks
+
+- **witforge** (`asamarts/witforge`, private): the plugin contract compiler. The skeleton
+  (WIT loading, the subset checker, the wire lock, a `check` / `lock` CLI) is in place with CI
+  green; next are the Rust and protobuf emitters. Nothing is published to crates.io until it has
+  real functionality (crates.io does not allow name-only placeholder releases).
+- **Phase 1b design**: `alint test` (DEC-6) and `explain --trace` (Q14), for v0.20.
+- **adotenv 0.2** is developed in its own repository. alint pins 0.1.1; 0.2's breaking model
+  will need a single migration PR here (the verified-edit helpers in
+  `crates/alint-core/src/structured_fix/mod.rs` are the integration point).
 
 ## Before v0.19: the v0.18.3 patch
 
