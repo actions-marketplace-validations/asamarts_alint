@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-10-15
+
+A correctness and security patch. `check --changed` and `fix --changed` now judge changed files
+against the whole repository (a `scope_filter.has_ancestor` marker outside the diff counts, and
+references to unchanged or deleted files resolve correctly), `alint fix` no longer edits files
+that `scope_filter` excludes, nested `.alint.yml` configs confine every repository-relative field
+(including through root templates and `require:` blocks), and rustls is updated for four new
+RustSec advisories. Some nested configurations that never did what they said now fail to load;
+see Changed.
+
 ### Security
 
 - **rustls updated to 0.23.46** (RUSTSEC-2026-0346, -0347, -0348, -0349). alint uses rustls,
@@ -7567,7 +7577,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.2...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.3...HEAD
+[0.18.3]: https://github.com/asamarts/alint/compare/v0.18.2...v0.18.3
 [0.18.2]: https://github.com/asamarts/alint/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/asamarts/alint/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/asamarts/alint/compare/v0.17.0...v0.18.0
