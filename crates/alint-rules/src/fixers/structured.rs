@@ -425,10 +425,30 @@ impl Fixer for StructuredFixer {
                 if !self.set_value_is_statically_applicable(want) {
                     return Vec::new();
                 }
+                let segs = to_segs(node.location());
+                // A verified-edit format (dotenv, through `adotenv::set`, which picks
+                // quoting that reads back in context) splices its editor's own result
+                // over the value span instead of one fixed encoding.
+                if structured_fix::uses_verified_edits(self.format) {
+                    let Some((range, content)) =
+                        structured_fix::verified_set_edit(self.format, bytes, &segs, want)
+                    else {
+                        return Vec::new();
+                    };
+                    return vec![CollectedEdit {
+                        edit: FixEdit::ReplaceRange {
+                            path: file.to_path_buf(),
+                            range,
+                            content,
+                        },
+                        applicability: self.applicability,
+                        verify: self.verifier(ExpectedValue::Scalar(want.clone())),
+                        isolation_group: None,
+                    }];
+                }
                 let Some(content) = structured_fix::serialize_scalar(self.format, want) else {
                     return Vec::new(); // unreachable: the predicate proved serialization succeeds
                 };
-                let segs = to_segs(node.location());
                 let Some(range) = structured_fix::resolve_value_span(self.format, bytes, &segs)
                 else {
                     return Vec::new();
@@ -443,6 +463,27 @@ impl Fixer for StructuredFixer {
                     verify: self.verifier(ExpectedValue::Scalar(want.clone())),
                     isolation_group: None,
                 }]
+            }
+            StructuredOp::Remove if structured_fix::uses_verified_edits(self.format) => {
+                // Verified removal (dotenv): one whole-line edit per key, with the keys
+                // checked TOGETHER by the format's editor so removing several never
+                // changes how the remaining text reads. A refused key gets no edit,
+                // and the `Absent` verifier demotes the partial removal.
+                let paths: Vec<Vec<PathSeg>> =
+                    located.iter().map(|n| to_segs(n.location())).collect();
+                structured_fix::verified_removal_spans(self.format, bytes, &paths)
+                    .into_iter()
+                    .map(|range| CollectedEdit {
+                        edit: FixEdit::ReplaceRange {
+                            path: file.to_path_buf(),
+                            range,
+                            content: Vec::new(),
+                        },
+                        applicability: self.applicability,
+                        verify: self.verifier(ExpectedValue::Absent),
+                        isolation_group: None,
+                    })
+                    .collect()
             }
             StructuredOp::Remove => {
                 // One removal edit per matched node. The batch's disjointness is
@@ -539,12 +580,24 @@ impl Fixer for StructuredFixer {
                                 _ => return None,
                             }
                         }
-                        let content = structured_fix::serialize_scalar(
-                            self.format,
-                            &Value::String(rewritten.into_owned()),
-                        )?;
+                        let rewritten = Value::String(rewritten.into_owned());
                         let segs = to_segs(node.location());
-                        let range = structured_fix::resolve_value_span(self.format, bytes, &segs)?;
+                        let (range, content) = if structured_fix::uses_verified_edits(self.format) {
+                            // Verified span edit (dotenv): the editor's own result over
+                            // the value span.
+                            structured_fix::verified_set_edit(
+                                self.format,
+                                bytes,
+                                &segs,
+                                &rewritten,
+                            )?
+                        } else {
+                            let content =
+                                structured_fix::serialize_scalar(self.format, &rewritten)?;
+                            let range =
+                                structured_fix::resolve_value_span(self.format, bytes, &segs)?;
+                            (range, content)
+                        };
                         Some(CollectedEdit {
                             edit: FixEdit::ReplaceRange {
                                 path: file.to_path_buf(),

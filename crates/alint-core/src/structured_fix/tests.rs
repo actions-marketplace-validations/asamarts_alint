@@ -269,18 +269,19 @@ fn every_format_is_classified_for_structured_fix() {
     enum Regime {
         Span,
         SpanSetDocRemove,
+        // Dotenv: SET and REMOVE are VERIFIED span edits, anchored to the entry but
+        // computed and checked by `adotenv::set` / `adotenv::remove`.
+        VerifiedSpan,
         Document,
     }
     for &f in Format::ALL {
         let regime = match f {
             // Span SET + span REMOVE. YAML joined here once its (conservative
             // line-scan) removal landed; its SET is a span splice via saphyr.
-            Format::Hcl
-            | Format::Xml
-            | Format::Dotenv
-            | Format::Ini
-            | Format::Properties
-            | Format::Yaml => Regime::Span,
+            Format::Hcl | Format::Xml | Format::Ini | Format::Properties | Format::Yaml => {
+                Regime::Span
+            }
+            Format::Dotenv => Regime::VerifiedSpan,
             // JSON: span SET (jsonc-parser AST) + WHOLE-DOCUMENT remove (jsonc-parser
             // editable CST -- correct comma surgery), a per-op split.
             Format::Json => Regime::SpanSetDocRemove,
@@ -292,6 +293,11 @@ fn every_format_is_classified_for_structured_fix() {
             removal_uses_document(f),
             matches!(regime, Regime::SpanSetDocRemove),
             "{f:?} removal_uses_document must match the SpanSetDocRemove regime"
+        );
+        assert_eq!(
+            uses_verified_edits(f),
+            matches!(regime, Regime::VerifiedSpan),
+            "{f:?} uses_verified_edits must match the VerifiedSpan regime"
         );
         match regime {
             Regime::Span => {
@@ -331,6 +337,20 @@ fn every_format_is_classified_for_structured_fix() {
                     "{f:?} must serialize a representable scalar"
                 );
             }
+            Regime::VerifiedSpan => {
+                assert!(
+                    !uses_document_rewrite(f),
+                    "{f:?} edits spans, not documents"
+                );
+                assert!(
+                    format_supports_removal(f),
+                    "{f:?} must support remove_value"
+                );
+                assert!(
+                    serialize_scalar(f, &json!("x")).is_some(),
+                    "{f:?} must serialize a representable scalar (the can_fix predicate)"
+                );
+            }
             Regime::Document => {
                 assert!(uses_document_rewrite(f), "{f:?} must be document-rewrite");
                 // A document-rewrite format does NOT splice a span.
@@ -361,6 +381,7 @@ fn every_format_is_classified_for_structured_fix() {
     assert!(resolve_removal_span(Format::Yaml, b"a: 1\nb: 2\n", &[key("a")]).is_some());
     assert!(document_set(Format::Toml, b"a = 1\n", &[key("a")], &json!(2)).is_some());
     assert!(document_remove(Format::Toml, b"a = 1\n", &[vec![key("a")]]).is_some());
+    // Dotenv's verified span edits are exercised by the `dotenv_verified_*` tests.
     // JSON removal actually rewrites the document (via the editable CST).
     assert!(document_remove(Format::Json, b"{\"a\": 1, \"b\": 2}", &[vec![key("a")]]).is_some());
 }
@@ -1575,4 +1596,68 @@ fn finalize_preserves_uniform_crlf_with_a_multiline_string() {
         Format::Toml.parse(&set).is_ok(),
         "set_value output must be valid TOML: {set:?}"
     );
+}
+
+// ---- dotenv: verified span edits through adotenv 0.1.1 ----
+
+#[test]
+fn dotenv_verified_removal_refuses_a_removal_that_would_rename_another_key() {
+    // Deleting the first line alone would expose the embedded BOM as the file's BOM,
+    // silently renaming `\u{feff}B` to `B`; adotenv refuses, so no span is emitted.
+    let src = "A=1\n\u{feff}B=2\n".as_bytes();
+    assert_eq!(
+        verified_removal_spans(Format::Dotenv, src, &[vec![key("A")]]),
+        Vec::<std::ops::Range<usize>>::new()
+    );
+}
+
+#[test]
+fn dotenv_verified_removal_checks_keys_together() {
+    // Removing BOTH keys leaves an empty file, which changes nothing else, so the pair
+    // is accepted even though removing `A` alone is not (review: order dependence).
+    let src = "A=1\n\u{feff}B=2\n".as_bytes();
+    let spans = verified_removal_spans(
+        Format::Dotenv,
+        src,
+        &[vec![key("A")], vec![key("\u{feff}B")]],
+    );
+    assert_eq!(spans, vec![0..4, 4..src.len()]);
+}
+
+#[test]
+fn dotenv_verified_removal_spans_are_whole_lines_per_key() {
+    // Adjacent keys sharing a prefix (`X`, `XY`) get their own line spans, so the
+    // edits never drift across a line boundary and co-apply in one pass.
+    let src = b"X=1\nXY=1\nQ=1\n";
+    let spans = verified_removal_spans(Format::Dotenv, src, &[vec![key("X")], vec![key("XY")]]);
+    assert_eq!(spans, vec![0..4, 4..9]);
+    // A missing or nested path gets no span.
+    assert_eq!(
+        verified_removal_spans(Format::Dotenv, src, &[vec![key("Z")]]),
+        Vec::<std::ops::Range<usize>>::new()
+    );
+    assert_eq!(
+        verified_removal_spans(Format::Dotenv, src, &[vec![key("X"), key("y")]]),
+        Vec::<std::ops::Range<usize>>::new()
+    );
+}
+
+#[test]
+fn dotenv_verified_set_keeps_quotes_that_a_trailing_tail_needs() {
+    // Text after a closing quote is ignored by the parser but would join a bare
+    // value, so a fixed bare splice (`B=ztail`) would read back wrong; adotenv
+    // chooses quoting that reads back exactly. The edit is anchored to the value span.
+    let src = b"B=\"y\"tail\n";
+    let (range, content) =
+        verified_set_edit(Format::Dotenv, src, &[key("B")], &json!("z")).unwrap();
+    assert_eq!(range, 2..5);
+    assert_eq!(content, b"\"z\"");
+    // Numbers and booleans are written as their text; null and non-scalars decline.
+    let (_, content) =
+        verified_set_edit(Format::Dotenv, b"PORT=1\n", &[key("PORT")], &json!(8080)).unwrap();
+    assert_eq!(content, b"8080");
+    assert!(verified_set_edit(Format::Dotenv, b"A=1\n", &[key("A")], &json!(null)).is_none());
+    // A duplicated or missing key declines.
+    assert!(verified_set_edit(Format::Dotenv, b"K=1\nK=2\n", &[key("K")], &json!("x")).is_none());
+    assert!(verified_set_edit(Format::Dotenv, b"A=1\n", &[key("B")], &json!("x")).is_none());
 }

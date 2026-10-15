@@ -6,9 +6,11 @@
 //! range with our bytes; the engine then re-parses and re-runs the query
 //! ([`EditVerifier::Structured`](crate::rule::EditVerifier)) before committing.
 //!
-//! HCL (`hcl::edit`), XML (`roxmltree` node/attribute ranges), dotenv (`adotenv`
-//! entry spans), and INI + properties (a hand-rolled re-scan of the raw text,
-//! since those parsers keep no spans) are span-capable today; TOML is document-rewrite (`toml_edit`). Every
+//! HCL (`hcl::edit`), XML (`roxmltree` node/attribute ranges), and INI +
+//! properties (a hand-rolled re-scan of the raw text, since those parsers keep no
+//! spans) are span-capable today; TOML is document-rewrite (`toml_edit`); dotenv
+//! edits are VERIFIED span edits computed and checked by `adotenv`'s `set` /
+//! `remove` (see [`uses_verified_edits`]). Every
 //! other [`Format`] returns `None`, so its
 //! `set_value` / `remove_value` declines cleanly (the violation is reported
 //! unfixed) until that format's resolver lands. This is a SAFE degradation: a
@@ -231,6 +233,58 @@ pub fn format_supports_removal(format: Format) -> bool {
 #[must_use]
 pub fn removal_uses_document(format: Format) -> bool {
     matches!(format, Format::Json)
+}
+
+/// Whether `format`'s `set_value`, value `replace`, and `remove_value` are VERIFIED
+/// span edits: anchored to the entry (its value span, or its whole line) like an
+/// ordinary span splice, but computed and checked by the format's own editor
+/// ([`verified_set_edit`], [`verified_removal_spans`]). Dotenv, through `adotenv`:
+/// a set keeps the quoting its context needs, and a removal never changes how the
+/// remaining text reads.
+#[must_use]
+pub fn uses_verified_edits(format: Format) -> bool {
+    matches!(format, Format::Dotenv)
+}
+
+/// The `(value span, new bytes)` that set the scalar at `path` to `want`, for a
+/// [`uses_verified_edits`] format: the edit is the format editor's own (verified)
+/// result, expressed as a splice over the value span so it composes with other
+/// edits in the file. `None` (the fix declines) when the format has no verified
+/// editor, the path is not a single assignment, the value is not a scalar, or the
+/// editor refuses.
+#[must_use]
+pub fn verified_set_edit(
+    format: Format,
+    bytes: &[u8],
+    path: &[PathSeg],
+    want: &serde_json::Value,
+) -> Option<(Range<usize>, Vec<u8>)> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    match format {
+        Format::Dotenv => dotenv::dotenv_verified_set(text, path, want),
+        _ => None,
+    }
+}
+
+/// The whole-line spans that remove every node at `paths`, for a
+/// [`uses_verified_edits`] format. The removals are verified TOGETHER first (so
+/// removing several keys at once is accepted when the combined result keeps every
+/// other entry and the BOM state intact), then, if that is refused, one key at a
+/// time; a key the editor refuses either way gets no span, so the `Absent`
+/// verifier demotes a partial removal. Empty when nothing can be removed.
+#[must_use]
+pub fn verified_removal_spans(
+    format: Format,
+    bytes: &[u8],
+    paths: &[Vec<PathSeg>],
+) -> Vec<Range<usize>> {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Vec::new();
+    };
+    match format {
+        Format::Dotenv => dotenv::dotenv_verified_removal_spans(text, paths),
+        _ => Vec::new(),
+    }
 }
 
 /// The MINIMAL `(range, content)` edit that turns `original` into `new`: the span
@@ -746,14 +800,16 @@ mod xml {
     }
 }
 
-/// dotenv span resolution + value serialization, delegated to `adotenv`, which
-/// keeps the byte span of every assignment. Every assignment occupies one
-/// physical line, so `remove_value` is a whole-line delete with NONE of the
-/// nested-structure over-deletion risk the HCL/XML resolvers must guard. A key
-/// that appears MORE THAN ONCE (the parser's last-wins duplicate) collapses to
-/// one JSON key but many lines, which a single contiguous range cannot express,
-/// so the resolver DECLINES it (degrade to a Suggestion) rather than edit an
-/// ambiguous occurrence.
+/// dotenv edits, delegated to `adotenv`, which keeps the byte span of every
+/// assignment. The fixer uses the VERIFIED edits (`dotenv_verified_set`,
+/// `dotenv_verified_removal_spans`): anchored to the entry's value span or whole
+/// line, but computed and checked by `adotenv::set` / `adotenv::remove`, so a set
+/// keeps the quoting its context needs and a removal never changes how the rest of
+/// the file reads. The plain span resolvers below answer [`resolve_value_span`] /
+/// [`resolve_removal_span`] for other callers. A key that appears MORE THAN ONCE
+/// (the parser's last-wins duplicate) collapses to one JSON key but many lines, so
+/// every path DECLINES it (the fix is skipped) rather than edit an ambiguous
+/// occurrence.
 mod dotenv {
     use super::PathSeg;
     use std::ops::Range;
@@ -777,6 +833,105 @@ mod dotenv {
         adotenv::parse(text).ok()?.unique(key).ok().cloned()
     }
 
+    /// `set_value` through `adotenv::set`, expressed as a splice over the entry's
+    /// value span. adotenv's `set` is exactly that splice (with a verified, possibly
+    /// re-quoted value), so its output differs from `text` only inside the span; the
+    /// prefix and suffix are checked before the middle is taken.
+    pub(super) fn dotenv_verified_set(
+        text: &str,
+        path: &[PathSeg],
+        want: &serde_json::Value,
+    ) -> Option<(Range<usize>, Vec<u8>)> {
+        let [PathSeg::Key(key)] = path else {
+            return None;
+        };
+        let span = adotenv::parse(text).ok()?.unique(key).ok()?.value_span();
+        let new = adotenv::set(text, key, &scalar_text(want)?).ok()?;
+        let tail = text.len() - span.end;
+        if new.len() < span.start + tail
+            || new.as_bytes()[..span.start] != text.as_bytes()[..span.start]
+            || new.as_bytes()[new.len() - tail..] != text.as_bytes()[span.end..]
+        {
+            return None;
+        }
+        Some((
+            span.clone(),
+            new.as_bytes()[span.start..new.len() - tail].to_vec(),
+        ))
+    }
+
+    /// The line spans removing every key at `paths` (flat paths assigned exactly
+    /// once). All together first: accepted when the combined removal re-parses with
+    /// the same BOM state and the same remaining entries in order (keys, values,
+    /// quoting, export status), the check `adotenv::remove` makes for one key.
+    /// Otherwise each key alone, through `adotenv::remove` itself.
+    pub(super) fn dotenv_verified_removal_spans(
+        text: &str,
+        paths: &[Vec<PathSeg>],
+    ) -> Vec<Range<usize>> {
+        let Ok(doc) = adotenv::parse(text) else {
+            return Vec::new();
+        };
+        let mut targets: Vec<(&str, Range<usize>)> = Vec::new();
+        for path in paths {
+            let [PathSeg::Key(key)] = path.as_slice() else {
+                continue;
+            };
+            if let Ok(entry) = doc.unique(key)
+                && !targets.iter().any(|(k, _)| *k == key.as_str())
+            {
+                targets.push((key.as_str(), entry.line_span()));
+            }
+        }
+        if targets.is_empty() {
+            return Vec::new();
+        }
+        let mut spans: Vec<Range<usize>> = targets.iter().map(|(_, s)| s.clone()).collect();
+        spans.sort_by_key(|s| s.start);
+        let mut out = String::with_capacity(text.len());
+        let mut at = 0;
+        for span in &spans {
+            out.push_str(&text[at..span.start]);
+            at = span.end;
+        }
+        out.push_str(&text[at..]);
+        let semantics = |e: &adotenv::Entry| {
+            (
+                e.key().to_string(),
+                e.value().to_string(),
+                e.quote(),
+                e.exported(),
+            )
+        };
+        let together = adotenv::parse(&out).is_ok_and(|after| {
+            let remaining = doc
+                .entries()
+                .iter()
+                .filter(|e| !targets.iter().any(|(k, _)| *k == e.key()))
+                .map(semantics);
+            doc.has_bom() == after.has_bom() && remaining.eq(after.entries().iter().map(semantics))
+        });
+        if together {
+            return spans;
+        }
+        targets
+            .into_iter()
+            .filter(|(key, _)| adotenv::remove(text, key).is_ok())
+            .map(|(_, span)| span)
+            .collect()
+    }
+
+    /// The text of a scalar (`null` and non-scalars have none in dotenv).
+    fn scalar_text(value: &serde_json::Value) -> Option<String> {
+        use serde_json::Value;
+        match value {
+            Value::String(s) => Some(s.clone()),
+            Value::Number(n) => Some(n.to_string()),
+            Value::Bool(b) => Some(b.to_string()),
+            Value::Null | Value::Array(_) | Value::Object(_) => None,
+        }
+    }
+
     /// Serialize a scalar as a dotenv value (`adotenv::encode_value`): bare
     /// when that reads back unchanged wherever it lands after `=`, else
     /// double-quoted with the `\n \r \t \\ \"` escapes. Declines a value
@@ -784,14 +939,7 @@ mod dotenv {
     /// so `set_value` degrades to a Suggestion rather than emit a raw control
     /// byte.
     pub(super) fn dotenv_serialize_scalar(value: &serde_json::Value) -> Option<Vec<u8>> {
-        use serde_json::Value;
-        let s = match value {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            Value::Bool(b) => b.to_string(),
-            Value::Null | Value::Array(_) | Value::Object(_) => return None,
-        };
-        adotenv::encode_value(&s).map(String::into_bytes)
+        adotenv::encode_value(&scalar_text(value)?).map(String::into_bytes)
     }
 }
 
