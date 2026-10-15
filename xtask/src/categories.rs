@@ -7,7 +7,7 @@
 //! rules.md is a docs-tree file the binary never ships, so the associations are
 //! generated into `crates/alint-rules/src/categories_gen.rs` and committed.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 
@@ -254,16 +254,23 @@ fn validate_against_registry(
     alias_to_canonical: &[(String, String)],
 ) -> Result<()> {
     let registry = alint_rules::builtin_registry();
-    let known: BTreeSet<String> = registry.known_kinds().map(str::to_string).collect();
-    let alias_set: BTreeSet<&str> = alias_to_canonical.iter().map(|(a, _)| a.as_str()).collect();
-    let canonical_registry: BTreeSet<&String> = known
-        .iter()
-        .filter(|k| !alias_set.contains(k.as_str()))
+    let canonical_registry: BTreeSet<String> =
+        registry.canonical_kinds().map(str::to_string).collect();
+    let registry_aliases: BTreeMap<String, String> = registry
+        .aliases()
+        .map(|(alias, canonical)| (alias.to_string(), canonical.to_string()))
         .collect();
-    let documented: BTreeSet<&String> = kind_cats.iter().map(|kc| &kc.kind).collect();
+    let documented_aliases: BTreeMap<String, String> = alias_to_canonical.iter().cloned().collect();
+    if registry_aliases != documented_aliases {
+        bail!(
+            "alias mapping mismatch between {RULES_MD} and the registry.\n  registry: \
+             {registry_aliases:?}\n  documented: {documented_aliases:?}"
+        );
+    }
+    let documented: BTreeSet<String> = kind_cats.iter().map(|kc| kc.kind.clone()).collect();
 
-    let missing: Vec<&&String> = canonical_registry.difference(&documented).collect();
-    let extra: Vec<&&String> = documented.difference(&canonical_registry).collect();
+    let missing: Vec<&String> = canonical_registry.difference(&documented).collect();
+    let extra: Vec<&String> = documented.difference(&canonical_registry).collect();
     if !missing.is_empty() || !extra.is_empty() {
         bail!(
             "category coverage mismatch vs the registry.\n  canonical kinds with no \
@@ -272,14 +279,6 @@ fn validate_against_registry(
         );
     }
 
-    for (a, canon) in alias_to_canonical {
-        if !known.contains(a.as_str()) {
-            bail!("alias {a:?} in {RULES_MD} is not a registered rule kind");
-        }
-        if !documented.contains(canon) {
-            bail!("alias {a:?} maps to {canon:?}, which has no categories entry");
-        }
-    }
     Ok(())
 }
 

@@ -16,6 +16,7 @@
 //! engine only ever has to reason about one tree shape. XML design +
 //! open-question resolutions: `docs/design/v0.10/xml_path.md`.
 
+use serde::Serialize;
 use serde_json::Value;
 
 mod xml_scan;
@@ -46,7 +47,8 @@ pub const MAX_STRUCTURED_BYTES: usize = 32 * 1024 * 1024;
 const _: () = assert!((MAX_STRUCTURED_BYTES as u64) < crate::walker::MAX_ANALYZE_BYTES / 2);
 
 /// Which config format the target file is parsed as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     Json,
     Yaml,

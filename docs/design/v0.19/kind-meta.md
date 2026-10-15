@@ -1,6 +1,7 @@
 # Design doc: `KindMeta`, the per-kind capability inventory (W1)
 
-Status: Accepted design (2026-10-14); all five questions in section 7 are decided. Not yet implemented.
+Status: Accepted design (2026-10-14); implementation in progress. Migration step 1 completed
+2026-10-15; all five questions in section 7 are decided.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md) (Phase 0)
 and K1 to K5 in section 7; no new ADR (the trust gates' source of truth changes, not their policy).
 Demand evidence: the inventory of all 95 kinds in [`kind-inventory.md`](kind-inventory.md), which
@@ -181,8 +182,9 @@ declared is decision K3.
 
 ### 5.2 Migration order
 
-1. Add the types and `RuleRegistry::register` taking a record (aliases inherit; the second alias
-   table generated from the docs is reconciled against the registry).
+1. **Completed 2026-10-15.** Added the serializable `KindMeta`, `FixOpMeta`, and supporting enums
+   in `alint-core`; `RuleRegistry::register` takes a record, aliases resolve the canonical
+   record, and the docs-generated alias table is checked exactly against the registry.
 2. Declare the 95 records from the inventory, corrected for the v0.18.3 changes; the
    instance-conformance audit (section 5.3), not the markdown snapshot, checks them.
 3. Inject the `KindCatalog` (K3) into every loader call site, then derive the trust lists and audit

@@ -206,20 +206,21 @@ fn rule_kinds(root: &Path) -> Result<Vec<String>> {
 }
 
 /// Map every registered rule kind (canonical **and** alias) to the stem of the
-/// Rust source file it lives in — the module before `::` in each
-/// `registry.register("<kind>", <module>::<builder>)` line of `register_builtin`.
+/// Rust source file it lives in — the module before `::` in each canonical
+/// registration call in `register_builtin`.
 ///
 /// This is the authoritative, drift-proof input for alint.org's `sourceUrlOf`:
-/// a kind whose source is NOT `<kind>.rs` (the 8 structured-query kinds share
-/// `structured_path`, `cross_file_value_equals` aliases `cross_file`, the legacy
-/// short-name aliases reuse their `file_*` file) resolves deterministically with
-/// no network probe. The site gate asserts its resolution equals this map, so a
-/// new shared-source or aliased kind can never silently 404 (audit P4.2 /
-/// documentation-drift.md W3/W4).
+/// a kind whose source is NOT `<kind>.rs` (the 24 structured-query kinds share
+/// `structured_path`, aliases reuse their canonical kind's file) resolves
+/// deterministically with no network probe. The site gate asserts its resolution
+/// equals this map, so a new shared-source or aliased kind can never silently 404
+/// (audit P4.2 / documentation-drift.md W3/W4).
 ///
-/// Parsed from `register_builtin` — the single kind→builder table — rather than
-/// a hand-kept list, and each stem is verified to exist on disk so a rename that
-/// desyncs the table from the tree fails `gen-facts` here, not on the live site.
+/// Parsed from `register_builtin` — the single canonical kind→builder table —
+/// rather than a hand-kept list, and each stem is verified to exist on disk so a
+/// rename that desyncs the table from the tree fails `gen-facts` here, not on the
+/// live site. Alias sources are derived from the registry mapping, not duplicated
+/// in each `register_alias` call.
 fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
     let path = root.join("crates/alint-rules/src/lib.rs");
     let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
@@ -234,16 +235,13 @@ fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
         .context("register_builtin closing brace not found")?;
     let body = &body[..end];
 
-    // `registry.register("<kind>", <module>::<builder>)`, its
-    // `.register_optionless(…)` variant, OR the alias forms
-    // `.register_alias("<alias>", "<canonical>", <module>::<builder>)` /
-    // `.register_alias_optionless(…)`. The captured kind is the FIRST string
-    // literal (the alias name, for the alias forms); the optional second string
-    // literal (the canonical) is skipped; the source stem is the builder's module
-    // segment before `::` (so an alias maps to its canonical rule's file). `\s`
-    // spans the newline in the multi-line register calls.
+    // Canonical registrations use `register` / `register_optionless` once their
+    // metadata lands, and the explicit `*_without_meta` variants during the W1
+    // migration. The first module path is either the metadata record or the
+    // builder; decision K3 requires both to live beside the kind, so its stem is
+    // the source mapping. `\s` spans multi-line calls.
     let re = Regex::new(
-        r#"\.register(?:_alias_optionless|_optionless|_alias)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*(?:"[A-Za-z0-9_]+"\s*,\s*)?([a-z0-9_]+)::"#,
+        r#"\.register(?:_optionless_without_meta|_without_meta|_optionless)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*&?([a-z0-9_]+)::"#,
     )
     .expect("static regex compiles");
     let src_dir = root.join("crates/alint-rules/src");
@@ -256,7 +254,7 @@ fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
         // the path stem whose `.rs` exists, so `sourceUrlOf` links the real file
         // (`cross_file/mod.rs`, not a phantom `cross_file.rs`).
         let resolved = if src_dir.join(format!("{stem}.rs")).exists() {
-            stem.clone()
+            stem
         } else if src_dir.join(&stem).join("mod.rs").exists() {
             format!("{stem}/mod")
         } else {
@@ -268,9 +266,27 @@ fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
         };
         map.insert(kind, resolved);
     }
+
+    let registry = alint_rules::builtin_registry();
+    for (alias, canonical) in registry.aliases() {
+        let resolved = map
+            .get(canonical)
+            .with_context(|| {
+                format!(
+                    "registry alias `{alias}` targets `{canonical}`, which has no parsed source"
+                )
+            })?
+            .clone();
+        map.insert(alias.to_string(), resolved);
+    }
+
+    let registered: BTreeSet<String> = registry.known_kinds().map(str::to_string).collect();
+    let mapped: BTreeSet<String> = map.keys().cloned().collect();
     anyhow::ensure!(
-        !map.is_empty(),
-        "parsed zero register() entries from register_builtin"
+        mapped == registered,
+        "source-map coverage mismatch vs registry.\n  missing: {:?}\n  extra: {:?}",
+        registered.difference(&mapped).collect::<Vec<_>>(),
+        mapped.difference(&registered).collect::<Vec<_>>()
     );
     Ok(map)
 }

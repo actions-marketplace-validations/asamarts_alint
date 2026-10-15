@@ -1,6 +1,6 @@
 # v0.19: Fail-loud findings and the capability inventory
 
-Status: Planned (2026-10-14); see [Status and next steps](#status-and-next-steps-as-of-2026-10-15). This is the first release of the general-linter program: Phase 0
+Status: In progress (2026-10-15); see [Status and next steps](#status-and-next-steps-as-of-2026-10-15). This is the first release of the general-linter program: Phase 0
 and Phase 1a of [`../general-linter.md`](../general-linter.md) section 11, decided in
 [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md). Each work item
 below gets its own design document in this directory (in the [`../TEMPLATE.md`](../TEMPLATE.md)
@@ -29,7 +29,10 @@ moves.
   the shared tree file set is built only when a rule looks ancestors up on the filtered index)
   and adotenv 0.1.1 with verified `.env` fix edits (#330). All release jobs, the post-publish
   smoke channels, the Action pin (`e3c9a85b`), and alint.org (#92) are done.
-- **No v0.19 code has landed.** W1 is the next implementation item.
+- **W1 is in progress.** Slice 1 is complete: the serializable `KindMeta` / `FixOpMeta` types and
+  record-taking registry APIs are in `alint-core`; aliases resolve the canonical record; and the
+  docs-generated alias map is checked exactly against the registry. No per-kind records are
+  declared yet; the 95-record migration is next.
 
 ### Open release item: the v0.18.4 benchmark record
 
@@ -64,15 +67,15 @@ cargo run -q -p xtask -- bench-gate --results new.json \
 
 ### Next work, in order
 
-1. **W1, `KindMeta`.** Implement [`kind-meta.md`](kind-meta.md) section 5.2 in its order, one
-   commit or PR per step: the types and record-taking `register`; the 95 records (corrected for
-   the v0.18.3 changes, checked by the section 5.3 instance-conformance audit, not by the
-   inventory snapshot); the `KindCatalog` injected into the DSL loader, with the trust and audit
-   lists derived from it (including the v0.18.3 nested-config lists `UNCONFINABLE_KINDS`,
-   `REGEX_SELECT_KINDS`, `NESTED_RULE_KINDS` in `crates/alint-dsl/src/nested.rs`, and
-   `SPAWNING_RULE_KINDS`), the old hand lists kept for one release as equality cross-checks;
-   fixing any config that sets an ignored field, then K1 enforcement; schema migration plus K4
-   restrictions and the `facts.json` section; K5's capabilities line.
+1. **W1, `KindMeta`.** Slice 1 of [`kind-meta.md`](kind-meta.md) section 5.2 is complete. Next,
+   declare the 95 records, corrected for the v0.18.3 changes and checked by the section 5.3
+   instance-conformance audit rather than the inventory snapshot. Then inject the `KindCatalog`
+   into the DSL loader and derive the trust and audit lists from it (including the v0.18.3
+   nested-config lists `UNCONFINABLE_KINDS`, `REGEX_SELECT_KINDS`, `NESTED_RULE_KINDS` in
+   `crates/alint-dsl/src/nested.rs`, and `SPAWNING_RULE_KINDS`), keeping the old hand lists for
+   one release as equality cross-checks; fix any config that sets an ignored field and enable K1
+   enforcement; migrate the schema and add K4 restrictions plus the `facts.json` section; then
+   add K5's capabilities line.
 2. **W4** (notes in every format) and **W7** (`--as-of`): small and independent of W1's tail.
 3. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half needs W1).
 4. **W5** (redaction and the leak gate), **W6** (related locations, the JSON schema relaxation,

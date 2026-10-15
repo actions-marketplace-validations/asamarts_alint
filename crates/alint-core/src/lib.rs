@@ -16,6 +16,7 @@ pub mod git;
 mod ini;
 pub mod invisible;
 pub mod jsonpath_diagnostics;
+mod kind_meta;
 mod level;
 pub mod located_fix;
 mod pathsafe;
@@ -46,6 +47,11 @@ pub use engine::{Engine, RuleEntry, StagedFix, StagedKind};
 pub use error::{Error, Result};
 pub use extract::{Extract, ExtractSpec, LinesOpts, WholeFileOpts, extract_values, is_non_literal};
 pub use facts::{FactKind, FactSpec, FactValue, FactValues, evaluate_facts};
+pub use kind_meta::{
+    Capability, CapabilityCondition, CapabilityMeta, ContentAccess, DependencyMeta, DispatchClass,
+    FixOpMeta, FixTrustClass, GitOperation, GitTrackedSupport, KindMeta, OptionPredicate,
+    PathsSupport, ScopeFilterSupport, SelectorMeta, SelectorType, SinceSupport,
+};
 pub use level::Level;
 pub use pathsafe::{derive_target, normalize_confined};
 pub use proposed_fix::{EditRegion, ProposedEdit, attach_proposed_edits, byte_to_line_col};
