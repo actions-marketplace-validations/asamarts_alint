@@ -7,13 +7,22 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TMP_ROOT=$(mktemp -d)
-trap 'rm -rf "$TMP_ROOT"' EXIT
+# The fixture commits below can trigger git's background auto-gc, which may still
+# be writing into .git/objects/pack when the trap runs; a racing `rm -rf` then
+# fails with "Directory not empty" and the harness reports a failure although
+# every case passed. Auto-gc is disabled in the clone, and cleanup retries once.
+cleanup() {
+  rm -rf "$TMP_ROOT" 2>/dev/null || { sleep 1; rm -rf "$TMP_ROOT"; }
+}
+trap cleanup EXIT
 
 git clone -q --no-local "$REPO_ROOT" "$TMP_ROOT/repo"
 cp "$REPO_ROOT/ci/scripts/detect-changes.sh" "$TMP_ROOT/repo/ci/scripts/detect-changes.sh"
 cd "$TMP_ROOT/repo"
 git config user.name 'alint tests'
 git config user.email 'tests@alint.invalid'
+git config gc.auto 0
+git config maintenance.auto false
 
 pass=0
 fail=0
