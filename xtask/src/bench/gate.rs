@@ -40,7 +40,7 @@ use super::{Report, Row};
 
 /// Within-run CV ceiling for gated (100k/1m) cells.
 const QUALITY_CV_MAX: f64 = 0.10;
-/// `min_ms` regression ceiling vs baseline for ≥10k cells.
+/// `min_ms` regression ceiling vs baseline for gating cells.
 const REGRESSION_MAX: f64 = 0.15;
 /// Sizes whose within-run CV is advisory-only (measurement-floor
 /// noise per the investigation; chronic across every shipped
@@ -57,7 +57,7 @@ const REGRESSION_SIZES: &[&str] = &["10k", "100k", "1m"];
 /// docs/benchmarks/investigations/2026-09-v0.16-changed-mode-bench-artifact/.
 const CHANGED_REGRESSION_ADVISORY_SIZES: &[&str] = &["1k", "10k"];
 
-/// A `changed`-mode small cell reports its regression delta but does not gate.
+/// A `changed`-mode 1k/10k cell reports its regression delta but does not gate.
 fn regression_advisory_only(r: &Row) -> bool {
     r.mode == "changed" && CHANGED_REGRESSION_ADVISORY_SIZES.contains(&r.size_label.as_str())
 }
@@ -143,13 +143,13 @@ pub fn evaluate(rows: &[Row], baseline: Option<&[Row]>) -> Outcome {
         ));
     }
 
-    // ── Regression: min_ms vs baseline, ≥10k ──
+    // ── Regression: min_ms vs baseline; 10k changed is advisory ──
     match baseline {
         None => o.lines.push("[regression] skipped (no --baseline)".into()),
         Some(base) => {
             let bmap: HashMap<_, _> = base.iter().map(|r| (key(r), r)).collect();
             o.lines.push(format!(
-                "[regression] min_ms vs baseline (gate: ≥10k, +{:.0}%; small changed cells advisory)",
+                "[regression] min_ms vs baseline (gate: full/fix ≥10k and all 100k/1m, +{:.0}%; changed 1k/10k advisory)",
                 REGRESSION_MAX * 100.0
             ));
             let mut deltas: Vec<(f64, String, bool)> = Vec::new();

@@ -199,8 +199,9 @@ enum Commands {
     /// Gate a macro `results.json` for publish. Quality: per-cell
     /// within-run CV ≤ 10 % on 100k/1m only (1k/10k advisory).
     /// Regression (with `--baseline`): `min_ms` delta vs the prior
-    /// release ≤ +15 % on ≥10k cells. Exits non-zero on a gating
-    /// failure. Replaces the unenforced human CV eyeball in
+    /// release ≤ +15 % on full/fix cells at 10k or larger and every
+    /// 100k/1m cell; changed-mode 1k/10k cells are advisory. Exits
+    /// non-zero on a gating failure. Replaces the unenforced human CV eyeball in
     /// `RELEASING.md`; thresholds validated against the full
     /// corpus — see
     /// `docs/benchmarks/investigations/2026-05-bench-runner-instability/`.
