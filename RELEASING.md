@@ -489,10 +489,12 @@ when its run completes. Review checklist:
      re-run via `workflow_dispatch` (`-f ref=v<x.y.z> -f
      label=v<x.y.z>`) on an idle runner.
    - **Regression**: `min_ms` delta vs the previous release's
-     `results.json` `<= +15%` on cells of size `>= 10k` (`min_ms`
-     is the reproducible cross-version statistic; `1k` excluded).
-     A failure here is a real perf regression: open an
-     investigation (step 4) before merging.
+     `results.json` `<= +15%` on `full`/`fix` cells of size `>= 10k`
+     and every 100k/1m cell. `changed`/1k and `changed`/10k are
+     regression-advisory because their brief parallel burst is dominated
+     by host C-state/frequency behavior (see `docs/benchmarks/METHODOLOGY.md`).
+     A gating failure is a real perf regression: open an investigation
+     (step 4) before merging.
 
    Non-zero exit means do not merge. Advisory lines never block.
    The published `HISTORY.md` table still shows `mean +/- stddev`
@@ -506,23 +508,24 @@ when its run completes. Review checklist:
    `fingerprint.os` is `linux`. A bench run on the wrong machine voids
    cross-version comparability.
 
-3. **HISTORY.md update.** The PR body includes a `Per-cell numbers`
-   block formatted as `- SX <size> <mode>: <mean> ms ± <stddev>`.
-   Paste the relevant cells into `docs/benchmarks/HISTORY.md`:
-   - The cross-version trajectory table at the top: a new headline row
-     for the released version (S3 columns).
-   - Each per-scenario section's `full` and `changed` table: new row at
-     the top for the released version.
-   The bench-record PR currently does NOT auto-edit HISTORY.md
-   (positional markdown table edits are too fragile to autocomment-into);
-   the maintainer is the canonical paste channel.
+3. **HISTORY.md review.** The workflow rebases the result branch onto current
+   `main`, runs `xtask/scripts/render-history.py`, and includes the refreshed
+   `docs/benchmarks/HISTORY.md` in the PR. Verify:
+   - The cross-version trajectory table has a new headline row for the
+     released version.
+   - Each per-scenario `full`/`changed` table, plus the SFIX `fix` table, has
+     the released version at the top.
+   - The date and headline sentence extracted from `CHANGELOG.md` are suitable.
+     If the sentence needs work, edit the changelog and re-render the history.
 
-4. **Investigation hand-off.** If a cell drifts > 20 % vs the previous
-   release (and the CV is below 10 % so it's a real signal), open
+4. **Investigation hand-off.** If a non-advisory cell drifts > 20 % vs the
+   previous release (and the CV is below 10 % so it is a real signal), open
    `docs/benchmarks/investigations/<YYYY-MM-topic>/README.md` capturing
    the diagnostic data (traces, flamegraphs, bisect notes) before
    merging the bench-record PR. The HISTORY.md entry then links to the
-   investigation.
+   investigation. Small `changed` cells remain covered by the standing
+   investigation linked from `METHODOLOGY.md` unless a gated 100k/1m cell
+   corroborates their drift.
 
 5. **Merge.** Once the above are done, merge the PR. The bench numbers
    enter the published corpus.

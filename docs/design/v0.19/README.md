@@ -55,13 +55,17 @@ cargo run -q -p xtask -- bench-gate --results new.json \
   --baseline docs/benchmarks/macro/results/linux-x86_64/v0.18.2/results.json
 ```
 
-- Quality: CV at or under 10% on the 100k and 1m cells; regression: `min_ms` at most +15% on every
-  cell of 10k files or more; fingerprint: `alint_version` 0.18.4, the canonical host's CPU, Linux.
-- Expected: S2 `changed` back near v0.18.2; S1 and S4 `changed` up by about 5 to 10%, which is the
-  cost of correct `has_ancestor` evaluation under `--changed` and inside the budget. A failure
-  outside those shapes needs a same-host A/B before anything else (build every binary from source
-  with one toolchain, check the binaries' hashes, and do not compile during timing runs).
-- On a pass: paste the gate output into the PR, update `docs/benchmarks/HISTORY.md`, merge.
+- Quality: CV at or under 10% on the 100k and 1m cells; regression: `min_ms` at most +15% on
+  `full`/`fix` cells of 10k files or more and every 100k/1m cell. `changed`/1k and
+  `changed`/10k are advisory under the documented host-wakeup artifact. Fingerprint:
+  `alint_version` 0.18.4, the canonical host's CPU, Linux.
+- Expected: S2 `changed` back near v0.18.2. On the gating 100k/1m cells, S1 and S4
+  `changed` may be up by about 5 to 10%, the cost of correct `has_ancestor` evaluation under
+  `--changed` and inside the budget. A failure outside those shapes needs a same-host A/B
+  before anything else (build every binary from source with one toolchain, check the
+  binaries' hashes, and do not compile during timing runs).
+- On a pass: paste the gate output into the PR, review the workflow-generated
+  `docs/benchmarks/HISTORY.md`, merge.
 - Then alint.org (its `OPERATIONS.md` step 4, following alint.org #88): add
   `src/data/bench-v0.18.4.json` from the results, point both lines of `src/data/bench.ts` at it,
   update `scripts/head-parity-baseline.json`, build, run the checks, open a PR, merge, and confirm

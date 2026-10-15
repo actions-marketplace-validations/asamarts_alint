@@ -403,18 +403,9 @@ jobs:
           # shellcheck disable=SC2012
           ls -la "$out_dir" | sed -n '1,20p'
 
-      # ── HISTORY.md update is intentionally manual ────────────────
-      # Auto-rewriting markdown tables is fragile (positional cells,
-      # version ordering, scenario sections). The PR body links to
-      # the new results.json so the maintainer pastes the new row
-      # into HISTORY.md as part of the merge. The new row fields
-      # come from the per-cell JSON via:
-      #
-      #   jq -r '.rows[] | "\(.scenario) \(.size_label) \(.mode): mean=\(.mean_ms)ms ± \(.stddev_ms)"' \
-      #     docs/benchmarks/macro/results/linux-x86_64/<tag>/results.json
-      #
-      # … which the PR body shells out for and inlines verbatim, so
-      # the maintainer copy-pastes pre-formatted values.
+      # HISTORY.md is rendered after the result branch is rebased onto current
+      # main in the PR-creation step below. Keeping that render there avoids
+      # tracked changes before the branch switch and makes the PR self-contained.
 
       - name: open PR with bench results
         env:
@@ -497,7 +488,7 @@ jobs:
           git commit -m "docs(bench): publish ${OUT_LABEL} matrix (S1-S4 × {full,changed} + SFIX × fix, 1k/10k/100k/1m) + HISTORY.md refresh"
           git push origin "$branch" --force
 
-          # Render a per-cell summary the maintainer pastes into HISTORY.md.
+          # Render a per-cell summary for reviewer cross-checking.
           json=docs/benchmarks/macro/results/linux-x86_64/"${OUT_LABEL}"/results.json
           summary=$(jq -r '.rows[] | "- \(.scenario) \(.size_label) \(.mode): \(.mean_ms | tostring | .[0:6]) ms ± \(.stddev_ms | tostring | .[0:5])"' "$json")
 
@@ -510,7 +501,8 @@ jobs:
 
           - \`docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}/\` — the
             consolidated publish-grade hyperfine matrix (S1-S4 × {1k, 10k, 100k,
-            1m} × {full, changed}, plus SFIX × fix) at \`--warmup 3 --runs 10\`.
+            1m} × {full, changed}, plus SFIX × fix) requested at \`--warmup 3
+            --runs 10\` (the 1m tier is capped at 1 warmup + 3 measured runs).
           - \`docs/benchmarks/micro/results/linux-x86_64/${OUT_LABEL}/criterion/\`
             — trimmed criterion snapshot from \`cargo bench -p alint-bench\`.
           - \`docs/benchmarks/HISTORY.md\` — auto-refreshed via
@@ -536,9 +528,10 @@ jobs:
               --baseline docs/benchmarks/macro/results/linux-x86_64/v<prev>/results.json
             \`\`\`
             Gating: per-cell within-run CV ≤ 10 % on 100k/1m cells
-            (1k/10k advisory); \`min_ms\` regression ≤ +15 % vs the
-            prior release on ≥10k cells. New cells with no baseline
-            mate are skipped from the regression check.
+            (1k/10k advisory); \`min_ms\` regression ≤ +15 % on
+            full/fix cells at ≥10k and every 100k/1m cell. Small
+            changed cells are advisory per METHODOLOGY.md. New cells
+            with no baseline mate are skipped from the regression check.
           - [ ] Eyeball the HISTORY.md headline row for
             \`${OUT_LABEL}\` — if the auto-extracted first sentence
             from CHANGELOG.md isn't a good one-row blurb, edit

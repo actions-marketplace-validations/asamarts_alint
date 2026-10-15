@@ -76,9 +76,11 @@ the published `results.json`. The harness:
    by default — `3` warmup runs to fill the page cache and
    amortise JIT/CPU-frequency-scaling settling, `10`
    measured runs for a stddev that's small enough to detect
-   10% deltas with high confidence. It ignores only the exit
-   codes explicitly associated with findings for that tool; setup
-   and internal failures remain fatal.
+   10% deltas with high confidence. The 1m tier caps this at
+   1 warmup and 3 measured runs so the full matrix remains tractable;
+   each result row records its actual sample count. The harness ignores
+   only the exit codes explicitly associated with findings for that tool;
+   setup and internal failures remain fatal.
 7. **Checks scaling** when a run contains both 1k and 100k
    full-tree rows. A 100k/1k mean below 2× produces a warning,
    since that shape usually means the tool never walked the tree.
@@ -106,8 +108,10 @@ Cross-version reproducibility tells the real story:
 So `xtask bench-gate` (the publish criterion; `RELEASING.md`
 step 1) gates within-run CV only on 100k/1m (1k/10k are advisory
 measurement-floor noise) and gates cross-version regression on
-`min_ms` for `>= 10k` at a **+15 % ceiling vs the prior release**
-(`1k` is unreliable at every statistic).
+`min_ms` at a **+15 % ceiling vs the prior release** for `full`/`fix`
+cells at `>= 10k` and every 100k/1m cell. `changed`/1k and
+`changed`/10k are the documented exception below; `1k` is otherwise
+unreliable at every statistic.
 The published `HISTORY.md` tables and the alint.org trajectory
 deliberately stay `mean +/- stddev`: every historical row and the
 hardcoded v0.5.6 baseline are mean-based, and restating the
@@ -272,10 +276,12 @@ not wired into any workflow. Wall-clock regression is gated
 (cross-version `min_ms`; the publish criterion in `RELEASING.md`),
 trustworthy only on a verified-quiet box — `bench-record.yml`'s
 `xtask bench-scale` matrix (S1-S4 full/changed plus SFIX fix, each at
-1k/10k/100k/1m) is otherwise characterization. A gate failure — or any > 20 % drift even
-when the gate passes — gets an investigation under
-[`investigations/`](investigations/) (v0.14.0's S2 read regression failed
-the gate at +15 % and got one, below).
+1k/10k/100k/1m) is otherwise characterization. A gate failure — or any
+> 20 % drift in a non-advisory cell even when the gate passes — gets an
+investigation under [`investigations/`](investigations/) (v0.14.0's S2
+read regression failed the gate at +15 % and got one, below). Small
+`changed` cells follow the standing artifact investigation above unless
+a gated 100k/1m cell corroborates the drift.
 
 **The deterministic `perf-gate` is load-immune but I/O-blind — this is the concrete
 case for keeping BOTH layers.** It counts *guest instructions*, so a regression that
