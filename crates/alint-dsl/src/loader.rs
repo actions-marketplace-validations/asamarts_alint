@@ -112,6 +112,7 @@ fn parse_config_interpolated_inner(contents: &str, source: &Path) -> Result<RawC
             source.display(),
         )));
     }
+    let source = display_path(source);
     let config: RawConfig = if contents.contains("{{") {
         let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)?;
         // Which vars take their value from the environment, read off the RAW
@@ -133,8 +134,11 @@ fn parse_config_interpolated_inner(contents: &str, source: &Path) -> Result<RawC
             })
             .unwrap_or_default();
         crate::interp::interpolate_value(&mut value, &|n| std::env::var(n).ok())
-            .map_err(|e| Error::Other(format!("{}: interpolation error: {e}", source.display())))?;
+            .map_err(|e| Error::Other(format!("{source}: interpolation error: {e}")))?;
         let mut config: RawConfig = serde_yaml_ng::from_value(value)?;
+        // Reject user-authored private markers before adding the loader's own
+        // env-provenance marker below.
+        crate::reject_ambiguous_yaml_in(&config, &source)?;
         config.env_vars = env_vars;
         for (rule, marks) in config.rules.iter_mut().zip(rule_env_vars) {
             if !marks.is_empty() {
@@ -143,9 +147,10 @@ fn parse_config_interpolated_inner(contents: &str, source: &Path) -> Result<RawC
         }
         config
     } else {
-        serde_yaml_ng::from_str(contents)?
+        let config = serde_yaml_ng::from_str(contents)?;
+        crate::reject_ambiguous_yaml_in(&config, &source)?;
+        config
     };
-    crate::reject_ambiguous_yaml_in(&config, &display_path(source))?;
     Ok(config)
 }
 

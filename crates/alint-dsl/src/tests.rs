@@ -3501,6 +3501,11 @@ fn remote_yaml_tags_cannot_hide_fields_from_the_trust_gates() {
             "kind: file_exists\n    paths: README.md\n    1: x",
             "non-string key",
         ),
+        (
+            "kind: file_exists\n    paths: README.md\n    \
+             __alint_internal_field_sources: {paths: forged}",
+            "reserved internal field",
+        ),
     ];
     for (fields, needle) in cases {
         let remote = format!("version: 1\nrules:\n  - id: r\n    level: error\n    {fields}\n");
@@ -3553,6 +3558,18 @@ fn yaml_tags_are_refused_in_local_and_nested_configs() {
     .unwrap();
     let err = load(&cfg).unwrap_err().to_string();
     assert!(err.contains("YAML tag `!x`"), "{err}");
+
+    // Raw-composition markers are implementation state, not user-facing DSL
+    // fields. Accepting one would let authored YAML spoof or erase provenance.
+    std::fs::write(
+        &cfg,
+        "version: 1\nrules:\n  - id: r\n    kind: file_exists\n    \
+         paths: README.md\n    __alint_internal_field_sources: {paths: forged}\n    \
+         level: error\n",
+    )
+    .unwrap();
+    let err = load(&cfg).unwrap_err().to_string();
+    assert!(err.contains("reserved internal field"), "{err}");
 
     // The core `!!str` tag is resolved by the parser and stays accepted.
     std::fs::write(

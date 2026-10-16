@@ -46,6 +46,8 @@ pub(crate) const ENV_VARS_MARKER: &str = "__alint_internal_env_vars";
 /// configured-field error, then removes it before typed deserialization.
 pub(crate) const FIELD_SOURCES_MARKER: &str = "__alint_internal_field_sources";
 
+const INTERNAL_FIELD_PREFIX: &str = "__alint_internal_";
+
 /// A class of `extends:` source recorded in [`PROVENANCE_MARKER`].
 #[derive(Clone, Copy)]
 pub(crate) enum SourceClass {
@@ -133,7 +135,7 @@ pub(crate) fn union_provenance(existing: &mut Mapping, incoming: &Mapping) {
 
 fn is_internal_field(key: &serde_yaml_ng::Value) -> bool {
     key.as_str()
-        .is_some_and(|name| name.starts_with("__alint_internal_"))
+        .is_some_and(|name| name.starts_with(INTERNAL_FIELD_PREFIX))
 }
 
 fn field_sources(mapping: &Mapping) -> Option<&Mapping> {
@@ -1303,8 +1305,9 @@ pub(crate) fn reject_ambiguous_yaml_in(raw: &RawConfig, source: &str) -> Result<
             let mut path = format!("{section}[{i}]");
             if let Some(problem) = find_ambiguous_yaml_in_mapping(m, &mut path) {
                 return Err(Error::Other(format!(
-                    "{source}: {problem}; YAML tags, non-string keys and `<<` merge \
-                     keys are not supported in alint rules or templates"
+                    "{source}: {problem}; YAML tags, non-string keys, `<<` merge keys, and \
+                     `{INTERNAL_FIELD_PREFIX}*` fields are not supported in alint rules or \
+                     templates"
                 )));
             }
         }
@@ -1318,6 +1321,9 @@ fn find_ambiguous_yaml_in_mapping(m: &Mapping, path: &mut String) -> Option<Stri
         let key = match k {
             Value::String(s) if s == "<<" => {
                 return Some(format!("`{path}` uses a `<<` merge key"));
+            }
+            Value::String(s) if s.starts_with(INTERNAL_FIELD_PREFIX) => {
+                return Some(format!("`{path}.{s}` uses a reserved internal field name"));
             }
             Value::String(s) => s.as_str(),
             Value::Tagged(t) => {
