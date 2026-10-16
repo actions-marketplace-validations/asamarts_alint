@@ -33,9 +33,9 @@ ignored.
 
 `alint-core` gains an immutable `AnalysisTime` value. `Engine::with_analysis_time` injects an
 explicit value; otherwise the engine resolves the current repository's HEAD committer timestamp
-once, and only when a rule declares the analysis-time capability. `Context` borrows that value.
-The capability inventory renames `wall_clock` to `analysis_time`: time-dependent kinds are not
-permitted to read the process clock.
+once for that engine's repository root, and only when a rule declares the analysis-time capability.
+`Context` borrows that value. The capability inventory renames `wall_clock` to `analysis_time`:
+time-dependent kinds are not permitted to read the process clock.
 
 ## 3. Semantics
 
@@ -47,7 +47,8 @@ Precedence is:
 
 The HEAD fallback uses the commit's committer timestamp, including its time of day, as a Unix
 instant. The displayed reference is its UTC calendar date. The fallback ignores dirty working-tree
-mtime and the host wall clock. Outside a Git repository, with Git unavailable, or with unborn HEAD,
+mtime, the host wall clock, inherited repository-redirecting Git environment variables, and
+clone-local replacement refs. Outside a Git repository, with Git unavailable, or with unborn HEAD,
 a time-dependent rule has no reference time and reports an evaluation error. W2 classifies that
 error as an always-error analysis failure; W7 supplies the deterministic failure and message
 without changing unrelated error classification ahead of W2.
@@ -55,6 +56,13 @@ without changing unrelated error classification ahead of W2.
 `git_blame_age` computes each line's age from the single context value, never by calling
 `SystemTime::now()`. A future-dated blame timestamp has age zero. The threshold remains strict:
 a line fires only when `age > max_age_days * 86,400 seconds`.
+
+Blame attribution also excludes ambient clone configuration: the command pins the Myers diff
+algorithm, clears configured ignore revisions, and then applies `.git-blame-ignore-revs` only when
+that path is tracked and is a regular working-tree file. It never follows that convention through
+a symlink. The porcelain parser accepts full SHA-1 and SHA-256 object IDs. These controls leave the
+repository's tracked ignore list available while preventing global or clone-local settings,
+replacement refs, and external symlink targets from changing line ages.
 
 Every `git_blame_age` finding ends with `(as of YYYY-MM-DD)`, including findings whose main message
 comes from a user template. `alint explain <id>` shows the same date and whether its source is
@@ -76,17 +84,18 @@ A dirty tree analyzed against HEAD intentionally uses HEAD's time, not file mtim
 That trades real-time debt aging for reproducibility. CI can set `--as-of` when policy requires a
 calendar release date instead.
 
-Malformed input fails before repository walking. Git lookup is argument-constant (`HEAD`) and does
-not accept configuration-controlled revisions, avoiding option injection. Missing Git is visible to
-the rule rather than a silent pass.
+Malformed input fails before repository walking. Git lookup is argument-constant (`HEAD`) and
+does not accept configuration-controlled revisions, avoiding option injection. Missing Git is
+visible to the rule rather than a silent pass. Blame keeps its pre-W2 advisory behavior for an
+individual unblameable file.
 
 ## 5. Implementation notes
 
 `crates/alint-core/src/analysis_time.rs` owns strict parsing, UTC civil-date conversion, source
-metadata, and display. `crates/alint-core/src/git.rs` owns the HEAD committer-time query.
-`crates/alint-core/src/engine.rs` resolves at most once per run, guarded by a runtime
-`wants_analysis_time()` audit that must agree with `KindMeta`. `git_blame_age` is the first user.
-No date/time dependency is added.
+metadata, and display. `crates/alint-core/src/git.rs` owns the HEAD committer-time query and
+deterministic blame setup. `crates/alint-core/src/engine.rs` resolves at most once per engine
+repository root, guarded by a runtime `wants_analysis_time()` audit that must agree with `KindMeta`.
+`git_blame_age` is the first user. No date/time dependency is added.
 
 Constitution invariant 1 is amended by ADR-0020: deterministic inputs include explicit CLI and
 environment values plus immutable repository state; ambient wall time is forbidden in analysis.
@@ -97,8 +106,10 @@ reads outside the central model.
 
 - Strict date-parser tests cover leap years, invalid widths/ranges, the Unix epoch, and the upper
   supported date.
-- Git helper tests cover a fixed commit timestamp, non-repository, unborn HEAD, and malformed
-  command output through the parser seam.
+- Git helper tests cover a fixed commit timestamp, non-repository, unborn HEAD, malformed command
+  output through the parser seam, SHA-1 and SHA-256 blame records, inherited repository redirects,
+  replacement refs, configured ignore-revs lists, the tracked regular
+  `.git-blame-ignore-revs` convention, symlink exclusion, and a clone-local diff algorithm.
 - Engine tests prove lazy resolution: no time-capable rule means no Git time lookup contract is
   required; explicit time works outside Git.
 - `git_blame_age` tests create commits with fixed author/committer dates and prove old, boundary,

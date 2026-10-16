@@ -24,9 +24,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::{AnalysisTime, AnalysisTimeUnavailable};
 
 /// Environment variables that can redirect a Git command away from the
-/// repository selected by `-C`, replace its object/ref view, or alter repository
-/// discovery. This includes Git's `rev-parse --local-env-vars` set; clearing it
-/// keeps repository identity an explicit function input.
+/// repository selected by `-C`, replace its object/ref view, alter repository
+/// discovery, or change literal path interpretation. This includes Git's
+/// `rev-parse --local-env-vars` set plus the pathspec-mode controls; clearing it
+/// keeps repository identity and path inputs explicit.
 const GIT_LOCAL_ENV_VARS: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",
@@ -47,13 +48,17 @@ const GIT_LOCAL_ENV_VARS: &[&str] = &[
     "GIT_CEILING_DIRECTORIES",
     "GIT_DISCOVERY_ACROSS_FILESYSTEM",
     "GIT_COMMON_DIR",
+    "GIT_LITERAL_PATHSPECS",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
 ];
 
 fn clear_git_repository_env(command: &mut Command) {
     for name in GIT_LOCAL_ENV_VARS {
         // `Command::env_remove` records an owned override even when the parent
-        // has no such variable. Avoid building twenty dead map entries on every
-        // Git query; present redirectors are still removed deterministically.
+        // has no such variable. Avoid building two dozen dead map entries on
+        // every Git query; present redirectors are still removed deterministically.
         if std::env::var_os(name).is_some() {
             command.env_remove(name);
         }
@@ -63,6 +68,15 @@ fn clear_git_repository_env(command: &mut Command) {
 fn git_command() -> Command {
     let mut command = Command::new("git");
     clear_git_repository_env(&mut command);
+    // Repository paths are byte-exact inputs, never user-authored pathspecs;
+    // replacement refs are clone-local state, never repository history; log
+    // display preferences must not invoke signature verifiers or alter stdout.
+    command.args([
+        "--literal-pathspecs",
+        "--no-replace-objects",
+        "-c",
+        "log.showSignature=false",
+    ]);
     command
 }
 /// Resolve the current HEAD commit's committer timestamp.
@@ -72,9 +86,6 @@ fn git_command() -> Command {
 pub fn head_commit_time(root: &Path) -> Result<AnalysisTime, AnalysisTimeUnavailable> {
     let mut command = git_command();
     let output = command
-        // Repository/global configuration must not turn this timestamp-only
-        // query into signature verification or add verification text to stdout.
-        .args(["-c", "log.showSignature=false"])
         .arg("-C")
         .arg(root)
         .args(["log", "-1", "--format=%ct", "--end-of-options", "HEAD"])
@@ -191,14 +202,15 @@ pub enum UntrackOutcome {
 /// rather than via a separately-maintained prediction that could drift.
 ///
 /// Safety and idempotence:
-/// - `GIT_LITERAL_PATHSPECS=1` disables git's pathspec globbing/magic, so a path
-///   containing `*` / `?` / `[` / `]` (a Next.js `[id].tsx` route, or a file
-///   literally named `*`) is matched LITERALLY. `--` only ends OPTION parsing, NOT
-///   globbing, so without this a single flagged path would collaterally untrack
-///   every sibling git globs it against -- up to the WHOLE index for a `*` -- all
-///   hidden behind a "1 applied" report. Preferred over a `:(literal)` prefix: it
-///   needs no UTF-8 round-trip, so a non-UTF-8 path (which this module preserves)
-///   stays intact. `collect_tracked_paths` takes no pathspec, so it is unaffected.
+/// - the shared `git_command` passes `--literal-pathspecs`, disabling git's
+///   pathspec globbing/magic so a path containing `*` / `?` / `[` / `]` (a
+///   Next.js `[id].tsx` route, or a file literally named `*`) is matched
+///   LITERALLY. `--` only ends OPTION parsing, NOT globbing, so without this a
+///   single flagged path would collaterally untrack every sibling git globs it
+///   against -- up to the WHOLE index for a `*` -- all hidden behind a "1
+///   applied" report. Preferred over a `:(literal)` prefix: it needs no UTF-8
+///   round-trip, so a non-UTF-8 path (which this module preserves) stays intact.
+///   `collect_tracked_paths` takes no pathspec, so it is unaffected.
 /// - the path is passed after `--`, never as an option, so a path beginning with
 ///   `-` can never be read as a git flag (option-injection guard);
 /// - outside a repo it returns `NotAGitRepo` and an already-untracked path returns
@@ -215,10 +227,7 @@ pub fn untrack_path(root: &Path, rel_path: &Path, dry_run: bool) -> UntrackOutco
         Some(_) => {}
     }
     let mut cmd = git_command();
-    cmd.arg("-C")
-        .arg(root)
-        .env("GIT_LITERAL_PATHSPECS", "1")
-        .args(["rm", "--cached", "--quiet"]);
+    cmd.arg("-C").arg(root).args(["rm", "--cached", "--quiet"]);
     if dry_run {
         cmd.arg("--dry-run");
     }
@@ -471,7 +480,7 @@ pub fn head_commit_record(root: &Path) -> Option<CommitRecord> {
         .args([
             "log",
             "-1",
-            "--abbrev-commit",
+            "--abbrev=7",
             "--format=%h%x00%an%x00%ae%x00%B%x1e",
         ])
         .output()
@@ -483,12 +492,10 @@ pub fn head_commit_record(root: &Path) -> Option<CommitRecord> {
 }
 
 /// One commit in a `<since>..HEAD` range, as returned by
-/// [`commit_messages_in_range`]. `sha` is the abbreviated SHA from
-/// `git log --abbrev-commit` (typically 7 chars; git auto-extends if
-/// the prefix is ambiguous in the local repo). `message` is the full
-/// commit message (subject + body, separated by a blank line) with
-/// the trailing newline that `git log --format=%B` appends already
-/// trimmed.
+/// [`commit_messages_in_range`]. `sha` uses a requested seven-hex abbreviation;
+/// Git extends it only when that prefix is ambiguous in the repository. `message`
+/// is the full commit message (subject + body, separated by a blank line) with the
+/// trailing newline that `git log --format=%B` appends already trimmed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitRecord {
     pub sha: String,
@@ -584,7 +591,7 @@ pub fn commit_messages_in_range(
     cmd.arg("-C").arg(root).args([
         "log",
         "--reverse",
-        "--abbrev-commit",
+        "--abbrev=7",
         "--format=%h%x00%an%x00%ae%x00%B%x1e",
     ]);
     if !include_merges {
@@ -694,14 +701,17 @@ pub struct BlameLine {
     pub content: String,
 }
 
+const DEFAULT_BLAME_IGNORE_REVS_FILE: &str = ".git-blame-ignore-revs";
+
 /// Run `git blame --line-porcelain` for `rel_path` (relative to
 /// `root`) and return one [`BlameLine`] per source line.
 ///
 /// `--line-porcelain` repeats the full per-commit metadata block
 /// for every line so we don't have to track the most-recent
 /// commit across runs — every line carries its own
-/// `author-time`. Honors `.git-blame-ignore-revs` automatically
-/// (git applies it before producing porcelain output).
+/// `author-time`. When the repository contains a regular
+/// `.git-blame-ignore-revs` file, alint passes it explicitly rather than
+/// depending on clone-local Git configuration.
 ///
 /// Returns `None` when:
 /// - `git` isn't on PATH
@@ -713,13 +723,32 @@ pub struct BlameLine {
 /// non-blameable file silently no-ops the rule rather than
 /// raising a hard error.
 pub fn blame_lines(root: &Path, rel_path: &Path) -> Option<Vec<BlameLine>> {
-    let output = git_command()
+    blame_lines_with_ignore_revs(root, rel_path, default_ignore_revs_is_tracked_regular(root))
+}
+
+fn blame_lines_with_ignore_revs(
+    root: &Path,
+    rel_path: &Path,
+    use_default_ignore_revs: bool,
+) -> Option<Vec<BlameLine>> {
+    let mut command = git_command();
+    command
+        // Clone-local/global ignore lists are ambient machine state. A command-line
+        // empty file name clears their revisions before the repository convention
+        // is added below. A malformed configured file can still make Git fail while
+        // loading its config; W2 will promote that existing advisory failure path.
+        // The documented `diff.algorithm` setting changes blame attribution, so pin
+        // Myers rather than inheriting user/global configuration.
+        .args(["-c", "diff.algorithm=myers"])
         .arg("-C")
         .arg(root)
-        .args(["blame", "--line-porcelain", "--"])
-        .arg(rel_path)
-        .output()
-        .ok()?;
+        .args(["blame", "--ignore-revs-file", "", "--line-porcelain"]);
+    if use_default_ignore_revs {
+        // Apply only the repository-tracked regular-file convention, independent
+        // of each clone's `blame.ignoreRevsFile`.
+        command.args(["--ignore-revs-file", DEFAULT_BLAME_IGNORE_REVS_FILE]);
+    }
+    let output = command.arg("--").arg(rel_path).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -777,8 +806,8 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
             }
             continue;
         }
-        // Header lines start with the 40-hex sha; subsequent
-        // lines are `key value` pairs we may care about.
+        // Header lines start with a full SHA-1 (40 hex digits) or SHA-256
+        // object ID (64 hex digits); subsequent lines are `key value` pairs.
         let mut parts = line.splitn(2, ' ');
         let key = parts.next().unwrap_or("");
         let value = parts.next().unwrap_or("");
@@ -793,9 +822,10 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
                     author_time = UNIX_EPOCH.checked_add(Duration::from_secs(secs));
                 }
             }
-            // SHA header: 40 hex digits + space + 3 numbers. We
-            // detect by length and hex-ness; cheap heuristic.
-            sha if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) => {
+            // Full object-id header + 3 numbers. Accept both repository object
+            // formats; hard-coding SHA-1 silently drops every line in a SHA-256
+            // repository.
+            sha if matches!(sha.len(), 40 | 64) && sha.chars().all(|c| c.is_ascii_hexdigit()) => {
                 // Git assigns working-tree-only lines the all-zero pseudo SHA and
                 // may synthesize their author time from the wall clock. They are
                 // not ageable committed history, so omit them deterministically.
@@ -826,6 +856,7 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
 #[derive(Debug)]
 pub struct BlameCache {
     root: PathBuf,
+    use_default_ignore_revs: bool,
     inner: Mutex<HashMap<PathBuf, CacheEntry>>,
 }
 
@@ -835,10 +866,48 @@ enum CacheEntry {
     Failed,
 }
 
+fn default_ignore_revs_is_tracked_regular(root: &Path) -> bool {
+    let ignore_revs = root.join(DEFAULT_BLAME_IGNORE_REVS_FILE);
+    if !ignore_revs
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_file())
+    {
+        return false;
+    }
+    git_command()
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            DEFAULT_BLAME_IGNORE_REVS_FILE,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 impl BlameCache {
     pub fn new(root: PathBuf) -> Self {
+        let use_default_ignore_revs = default_ignore_revs_is_tracked_regular(&root);
+        Self::with_default_ignore_revs(root, use_default_ignore_revs)
+    }
+
+    pub(crate) fn new_with_tracked_paths(root: PathBuf, tracked: &HashSet<PathBuf>) -> Self {
+        let ignore_revs = root.join(DEFAULT_BLAME_IGNORE_REVS_FILE);
+        let use_default_ignore_revs = tracked.contains(Path::new(DEFAULT_BLAME_IGNORE_REVS_FILE))
+            && ignore_revs
+                .symlink_metadata()
+                .is_ok_and(|metadata| metadata.file_type().is_file());
+        Self::with_default_ignore_revs(root, use_default_ignore_revs)
+    }
+
+    fn with_default_ignore_revs(root: PathBuf, use_default_ignore_revs: bool) -> Self {
         Self {
             root,
+            use_default_ignore_revs,
             inner: Mutex::new(HashMap::new()),
         }
     }
@@ -861,7 +930,8 @@ impl BlameCache {
                 CacheEntry::Failed => None,
             };
         }
-        let computed = blame_lines(&self.root, rel_path);
+        let computed =
+            blame_lines_with_ignore_revs(&self.root, rel_path, self.use_default_ignore_revs);
         if let Some(v) = computed {
             let arc = Arc::new(v);
             guard.insert(rel_path.to_path_buf(), CacheEntry::Ok(Arc::clone(&arc)));
@@ -1147,7 +1217,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn head_commit_time_disables_configured_signature_verification() {
+    fn git_log_queries_disable_configured_signature_verification() {
         use std::io::Write as _;
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -1182,7 +1252,7 @@ mod tests {
 
         // Install a commit carrying a signature header without depending on a
         // real key. With log.showSignature enabled, Git would invoke the
-        // configured verifier even though this query only needs `%ct`.
+        // configured verifier for otherwise read-only history queries.
         let tree = String::from_utf8(run(&["rev-parse", "HEAD^{tree}"]))
             .unwrap()
             .trim()
@@ -1237,9 +1307,117 @@ mod tests {
             head_commit_time(root).unwrap().unix_seconds(),
             1_704_164_645
         );
+        assert_eq!(head_commit_message(root).as_deref(), Some("signed"));
+        assert_eq!(
+            head_commit_record(root).map(|record| record.message),
+            Some("signed".to_string())
+        );
         assert!(
             !root.join("gpg-invoked").exists(),
-            "timestamp lookup must not invoke a signature verifier"
+            "read-only log queries must not invoke a signature verifier"
+        );
+    }
+
+    #[test]
+    fn git_history_queries_ignore_local_replace_refs() {
+        use std::io::Write as _;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output.stdout
+        };
+        run(&["init", "-q"]);
+        std::fs::write(root.join("tracked"), "x\n").unwrap();
+        run(&["add", "tracked"]);
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "base",
+            ])
+            .env("GIT_AUTHOR_DATE", "2024-01-02T03:04:05Z")
+            .env("GIT_COMMITTER_DATE", "2024-01-02T03:04:05Z")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let tree = String::from_utf8(run(&["rev-parse", "HEAD^{tree}"]))
+            .unwrap()
+            .trim()
+            .to_string();
+        let replacement = format!(
+            "tree {tree}\n\
+             author Test <test@example.com> 1749283750 +0000\n\
+             committer Test <test@example.com> 1749283750 +0000\n\
+             \n\
+             replacement\n"
+        );
+        let mut hash_object = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        hash_object
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(replacement.as_bytes())
+            .unwrap();
+        let replacement_output = hash_object.wait_with_output().unwrap();
+        assert!(replacement_output.status.success());
+        let replacement_hash = String::from_utf8(replacement_output.stdout).unwrap();
+        run(&["replace", "HEAD", replacement_hash.trim()]);
+
+        assert_eq!(
+            head_commit_time(root).unwrap().unix_seconds(),
+            1_704_164_645,
+            "local replace refs must not change HEAD's deterministic timestamp"
+        );
+        assert_eq!(
+            head_commit_message(root).as_deref(),
+            Some("base"),
+            "local replace refs must not change HEAD's linted message"
+        );
+        assert_eq!(
+            head_commit_record(root).map(|record| record.message),
+            Some("base".to_string()),
+            "local replace refs must not change HEAD's commit record"
+        );
+        let blame = blame_lines(root, Path::new("tracked")).expect("tracked file has blame");
+        assert_eq!(blame.len(), 1);
+        assert_eq!(
+            blame[0]
+                .author_time
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            1_704_164_645,
+            "local replace refs must not change blame's deterministic author time"
         );
     }
 
@@ -1389,6 +1567,242 @@ filename a.rs
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].line_number, 2);
         assert_eq!(lines[0].content, "committed line");
+    }
+
+    #[test]
+    fn parse_porcelain_supports_sha256_headers_and_zero_ids() {
+        let porcelain = "\
+0000000000000000000000000000000000000000000000000000000000000000 1 1 1
+author Not Committed Yet
+author-time 1999999999
+filename a.rs
+\tworking tree line
+abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234 2 2 1
+author Committed
+author-time 1700000000
+filename a.rs
+\tcommitted line
+";
+        let lines = parse_porcelain(porcelain);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].line_number, 2);
+        assert_eq!(lines[0].content, "committed line");
+    }
+
+    // One repository fixture exercises every trust boundary in sequence; keeping
+    // its commits together makes attribution failures diagnosable.
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn blame_cache_uses_only_tracked_regular_default_ignore_revs_file() {
+        const LOCAL_IGNORE_REVS_FILE: &str = ".local-blame-ignore-revs";
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        let commit_at = |message: &str, date: &str| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-qm",
+                    message,
+                ])
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git commit: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        let author_time = || {
+            run(&["show", "-s", "--format=%ct", "HEAD"])
+                .parse::<u64>()
+                .unwrap()
+        };
+
+        run(&["init", "-q"]);
+        std::fs::write(root.join("tracked"), "original line here\n").unwrap();
+        run(&["add", "tracked"]);
+        commit_at("original", "2020-01-02T03:04:05Z");
+
+        std::fs::write(root.join("tracked"), "formatted line here\n").unwrap();
+        run(&["add", "tracked"]);
+        commit_at("format-only", "2021-02-03T04:05:06Z");
+        let locally_ignored = run(&["rev-parse", "HEAD"]);
+        let expected_ignored_author_time = author_time();
+
+        std::fs::write(root.join("tracked"), "substantive line here\n").unwrap();
+        run(&["add", "tracked"]);
+        commit_at("substantive change", "2024-06-07T08:09:10Z");
+        let repository_ignored = run(&["rev-parse", "HEAD"]);
+        let substantive_author_time = author_time();
+
+        std::fs::write(
+            root.join(DEFAULT_BLAME_IGNORE_REVS_FILE),
+            format!("{repository_ignored}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(LOCAL_IGNORE_REVS_FILE),
+            format!("{locally_ignored}\n"),
+        )
+        .unwrap();
+        run(&["config", "blame.ignoreRevsFile", LOCAL_IGNORE_REVS_FILE]);
+
+        let untracked_cache = BlameCache::new(root.to_path_buf());
+        let untracked_blame = untracked_cache
+            .get(Path::new("tracked"))
+            .expect("tracked file has blame");
+        assert_eq!(
+            untracked_blame[0]
+                .author_time
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            substantive_author_time,
+            "neither an untracked default file nor clone-local config may alter blame"
+        );
+
+        run(&["add", DEFAULT_BLAME_IGNORE_REVS_FILE]);
+        commit_at("record ignored revision", "2025-01-01T00:00:00Z");
+        // A clone-local algorithm must not affect attribution.
+        run(&["config", "diff.algorithm", "histogram"]);
+
+        let cache = BlameCache::new(root.to_path_buf());
+        let blame = cache
+            .get(Path::new("tracked"))
+            .expect("tracked file has blame");
+        assert_eq!(blame.len(), 1);
+        assert_eq!(
+            blame[0]
+                .author_time
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            expected_ignored_author_time,
+            "the tracked repository file must apply, but clone-local config must not"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let target = root.join("ignore-target");
+            std::fs::write(&target, format!("{repository_ignored}\n")).unwrap();
+            std::fs::remove_file(root.join(DEFAULT_BLAME_IGNORE_REVS_FILE)).unwrap();
+            symlink(&target, root.join(DEFAULT_BLAME_IGNORE_REVS_FILE)).unwrap();
+            let symlink_cache = BlameCache::new(root.to_path_buf());
+            let symlink_blame = symlink_cache
+                .get(Path::new("tracked"))
+                .expect("tracked file has blame");
+            assert_eq!(
+                symlink_blame[0]
+                    .author_time
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                substantive_author_time,
+                "a tracked path replaced by a worktree symlink must not read external ignore data"
+            );
+        }
+    }
+
+    #[test]
+    fn blame_cache_pins_diff_algorithm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        let commit_at = |message: &str, date: &str| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-qam",
+                    message,
+                ])
+                .env("GIT_AUTHOR_DATE", date)
+                .env("GIT_COMMITTER_DATE", date)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git commit: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+
+        run(&["init", "-q"]);
+        std::fs::write(root.join("tracked"), "A\nA\nA\nD\nC\nF\nC\nC\n").unwrap();
+        run(&["add", "tracked"]);
+        commit_at("base", "2020-01-01T00:00:00Z");
+        std::fs::write(root.join("tracked"), "A\nA\nC\nA\nC\nB\nA\nC\nD\n").unwrap();
+        commit_at("ambiguous edit", "2024-01-01T00:00:00Z");
+        run(&["config", "diff.algorithm", "histogram"]);
+
+        let blame = BlameCache::new(root.to_path_buf())
+            .get(Path::new("tracked"))
+            .expect("tracked file has blame");
+        let author_times: Vec<_> = blame
+            .iter()
+            .map(|line| {
+                line.author_time
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            })
+            .collect();
+        assert_eq!(
+            author_times,
+            vec![
+                1_577_836_800,
+                1_577_836_800,
+                1_577_836_800,
+                1_704_067_200,
+                1_577_836_800,
+                1_704_067_200,
+                1_704_067_200,
+                1_577_836_800,
+                1_704_067_200,
+            ],
+            "clone-local diff.algorithm must not change line ages"
+        );
     }
 
     #[test]
@@ -1638,6 +2052,13 @@ filename a.rs
         // commits, oldest first.
         let repo =
             make_repo_with_commits(&["root: zero", "feat: alpha", "fix: beta", "chore: gamma"]);
+        let config = Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["config", "core.abbrev", "20"])
+            .output()
+            .unwrap();
+        assert!(config.status.success());
         let root_sha = String::from_utf8(
             Command::new("git")
                 .arg("-C")
@@ -1657,9 +2078,10 @@ filename a.rs
         assert_eq!(records[0].message, "feat: alpha");
         assert_eq!(records[1].message, "fix: beta");
         assert_eq!(records[2].message, "chore: gamma");
-        // SHAs are abbreviated (7+ chars, hex).
+        // The command pins seven characters instead of inheriting core.abbrev;
+        // Git may extend only if a prefix is ambiguous.
         for r in &records {
-            assert!(r.sha.len() >= 7);
+            assert_eq!(r.sha.len(), 7);
             assert!(r.sha.chars().all(|c| c.is_ascii_hexdigit()));
         }
     }

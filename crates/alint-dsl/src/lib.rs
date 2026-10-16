@@ -692,6 +692,16 @@ fn configured_fields(mapping: &Mapping) -> alint_core::ConfiguredFields<'_> {
                 .find_map(|(op, options)| options.as_mapping().and_then(|_| op.as_str()))
         });
     alint_core::ConfiguredFields::new(fix_op)
+        .with_null_fix(
+            mapping
+                .get("fix")
+                .is_some_and(serde_yaml_ng::Value::is_null),
+        )
+        .with_null_scope_filter(
+            mapping
+                .get("scope_filter")
+                .is_some_and(serde_yaml_ng::Value::is_null),
+        )
         .with(
             alint_core::ConfiguredField::Paths,
             mapping.contains_key("paths"),

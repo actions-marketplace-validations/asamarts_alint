@@ -298,6 +298,66 @@ rules:
 }
 
 #[test]
+fn configured_null_fix_is_rejected_when_the_kind_supports_fixes() {
+    let yaml = r"
+version: 1
+rules:
+  - id: readme
+    kind: file_exists
+    paths: README.md
+    fix: null
+    level: error
+";
+    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
+    assert!(
+        error.contains("`fix` for `file_exists` must select exactly one operation"),
+        "{error}"
+    );
+}
+
+#[test]
+fn configured_null_scope_filter_is_rejected_for_supported_kinds() {
+    for (kind, options) in [("file_content_matches", "pattern: x"), ("dir_absent", "")] {
+        let yaml = format!(
+            "version: 1\n\
+             rules:\n\
+             \x20 - id: scoped\n\
+             \x20   kind: {kind}\n\
+             \x20   paths: x\n\
+             \x20   scope_filter: null\n\
+             \x20   level: error\n\
+             \x20   {options}\n"
+        );
+        let raw: RawConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+        let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
+        assert!(
+            error.contains("`scope_filter` must be a mapping with at least one predicate"),
+            "{kind}: {error}"
+        );
+    }
+}
+
+#[test]
+fn configured_null_scope_filter_names_unsupported_kind() {
+    let yaml = r"
+version: 1
+rules:
+  - id: readme
+    kind: file_exists
+    paths: README.md
+    scope_filter: null
+    level: error
+";
+    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
+    assert!(
+        error.contains("`scope_filter` is not supported by `file_exists`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn template_unknown_id_errors_clearly() {
     let yaml = r"
 version: 1

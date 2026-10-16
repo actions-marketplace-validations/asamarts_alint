@@ -55,9 +55,12 @@ moves.
 - **W7, deterministic analysis time, is complete.** `--as-of YYYY-MM-DD` overrides
   `ALINT_AS_OF`, with the HEAD committer timestamp as the fallback resolved once per engine.
   `git_blame_age` no longer reads wall time; findings and human/JSON `explain` expose the
-  reference date and source. Non-Git evaluation without explicit input reports the stable error
-  W2 will promote, capability metadata now says `analysis_time`, and ADR-0020 supersedes the
-  affected part of constitution invariant 1.
+  reference date and source. HEAD and blame ignore repository redirects and clone-local
+  replacement refs; blame pins its diff algorithm, accepts SHA-1 and SHA-256 repositories, and
+  uses only a tracked, regular `.git-blame-ignore-revs` instead of configured ignore lists.
+  Non-Git evaluation without explicit input reports the stable error W2 will promote, capability
+  metadata now says `analysis_time`, and ADR-0020 supersedes the affected part of constitution
+  invariant 1.
 
 ### Completed release item: the v0.18.4 benchmark record
 

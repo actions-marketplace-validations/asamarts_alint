@@ -65,8 +65,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parent and were previously ignored. Migration: remove `id` and `level` from nested `require:`
   entries; remove `paths` and `scope_filter` from single-shot `command_idempotent` rules (or use
   per-file `command` when the command genuinely consumes `{path}`); replace
-  `scope_filter.changed_since` with top-level `since` on Git commit kinds. Bundled rulesets,
-  shipped examples, documentation examples, and scenario configs have been migrated.
+  `scope_filter.changed_since` with top-level `since` on Git commit kinds. A present `fix` must
+  select one operation; `fix: null` is now a load error instead of silently disabling the fix.
+  Likewise, `scope_filter: null` is an error instead of silently disabling every predicate.
+  Remove either key when it is not intended. Bundled rulesets, shipped examples, documentation
+  examples, and scenario configs have been migrated.
 
   The complete W1 migration matrix below covers all 58 newly rejected canonical
   kind/field-or-predicate pairs: 57 were silently ignored before this release, while
@@ -114,8 +117,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   percent-encode original Unix filename bytes, while JSON and agent reports omit the optional
   `proposed_edit` field when an edit path has no exact JSON string representation. The agent's
   safe `fix_command` remains available. Git subprocesses also ignore inherited repository-
-  redirecting environment variables, so HEAD time, tracked-path selection, and blame always use
-  the requested repository.
+  redirecting and pathspec-mode environment variables, disable clone-local replacement refs, and
+  force literal internal paths, so HEAD time, tracked-path selection, history, blame, and
+  Git-backed fixes use the requested repository and exact path.
+
+- **`git_blame_age` no longer inherits clone-local history and blame choices.** HEAD and blame
+  disable replacement refs; blame pins the Myers diff algorithm, clears valid global and local
+  `blame.ignoreRevsFile` lists, and applies only a tracked, regular
+  `.git-blame-ignore-revs`. A worktree symlink at that path is not followed, and full SHA-256
+  object IDs are parsed alongside SHA-1 instead of silently dropping every blamed line. These
+  controls prevent clones of the same repository input from assigning different line ages
+  because of local Git configuration or external ignore-list content.
+
+- **Commit-validation findings no longer inherit Git's `core.abbrev` setting.** HEAD and range
+  queries request a seven-hex short object ID, extended only by Git when that prefix is ambiguous,
+  so messages and baseline keys do not vary with clone-local abbreviation preferences.
 
 - **The benchmark regression report now includes changed-mode 1k cells as advisories, as
   documented.** Those floor-level cells still never block publication; previously an outer size

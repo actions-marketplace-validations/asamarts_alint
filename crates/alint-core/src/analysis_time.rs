@@ -208,7 +208,7 @@ pub enum AnalysisTimeUnavailable {
     EngineRootChanged,
 }
 
-/// One successful or failed resolution, cached and shared by an engine run.
+/// One successful or failed resolution, cached and shared for an engine's repository root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisTimeResolution {
     Available {

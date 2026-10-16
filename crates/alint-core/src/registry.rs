@@ -291,6 +291,8 @@ pub struct ConfiguredFields<'a> {
     fields: u16,
     scope_filter_fields: u8,
     fix_op: Option<&'a str>,
+    fix_is_null: bool,
+    scope_filter_is_null: bool,
 }
 
 impl<'a> ConfiguredFields<'a> {
@@ -299,6 +301,8 @@ impl<'a> ConfiguredFields<'a> {
             fields: 0,
             scope_filter_fields: 0,
             fix_op,
+            fix_is_null: false,
+            scope_filter_is_null: false,
         }
     }
 
@@ -310,6 +314,23 @@ impl<'a> ConfiguredFields<'a> {
         } else {
             self.fields & !bit
         };
+        self
+    }
+
+    /// Record that the configured `fix` value is explicitly null. Other
+    /// operation-less shapes are left to `FixSpec`'s type/shape diagnostics.
+    #[must_use]
+    pub fn with_null_fix(mut self, is_null: bool) -> Self {
+        self.fix_is_null = is_null;
+        self
+    }
+
+    /// Record that the configured `scope_filter` value is explicitly null.
+    /// A null value would otherwise deserialize to `None` and silently disable
+    /// the configured field despite the public schema requiring a mapping.
+    #[must_use]
+    pub fn with_null_scope_filter(mut self, is_null: bool) -> Self {
+        self.scope_filter_is_null = is_null;
         self
     }
 
@@ -435,29 +456,6 @@ fn validate_scope_filter_field(
         return Ok(());
     }
     match &meta.scope_filter {
-        ScopeFilterSupport::Full => Ok(()),
-        ScopeFilterSupport::AncestorOnly => {
-            let unsupported = if fields.has_scope_filter(ConfiguredScopeFilterField::ChangedSince) {
-                Some("changed_since")
-            } else if fields.has_scope_filter(ConfiguredScopeFilterField::IncludeManifestPaths) {
-                Some("include_manifest_paths")
-            } else if fields.has_scope_filter(ConfiguredScopeFilterField::ExcludeManifestPaths) {
-                Some("exclude_manifest_paths")
-            } else {
-                None
-            };
-            let Some(field) = unsupported else {
-                return Ok(());
-            };
-            let field = format!("scope_filter.{field}");
-            Err(violation(
-                field.clone(),
-                format!(
-                    "`{field}` is not supported by `{kind}`; only \
-                     `scope_filter.has_ancestor` is supported"
-                ),
-            ))
-        }
         ScopeFilterSupport::Rejected { reason } => {
             let only_changed_since = fields
                 .has_scope_filter(ConfiguredScopeFilterField::ChangedSince)
@@ -481,6 +479,33 @@ fn validate_scope_filter_field(
                 ))
             }
         }
+        _ if fields.scope_filter_is_null => Err(violation(
+            "scope_filter",
+            "`scope_filter` must be a mapping with at least one predicate".to_string(),
+        )),
+        ScopeFilterSupport::Full => Ok(()),
+        ScopeFilterSupport::AncestorOnly => {
+            let unsupported = if fields.has_scope_filter(ConfiguredScopeFilterField::ChangedSince) {
+                Some("changed_since")
+            } else if fields.has_scope_filter(ConfiguredScopeFilterField::IncludeManifestPaths) {
+                Some("include_manifest_paths")
+            } else if fields.has_scope_filter(ConfiguredScopeFilterField::ExcludeManifestPaths) {
+                Some("exclude_manifest_paths")
+            } else {
+                None
+            };
+            let Some(field) = unsupported else {
+                return Ok(());
+            };
+            let field = format!("scope_filter.{field}");
+            Err(violation(
+                field.clone(),
+                format!(
+                    "`{field}` is not supported by `{kind}`; only \
+                     `scope_filter.has_ancestor` is supported"
+                ),
+            ))
+        }
     }
 }
 
@@ -492,16 +517,29 @@ fn validate_fix_field(
     if !fields.has(ConfiguredField::Fix) {
         return Ok(());
     }
+    // A malformed non-null shape must reach `FixSpec` deserialization, which
+    // names the actual type/shape error. Null is the one operation-less shape
+    // serde otherwise turns into `None`, so reject it here rather than silently
+    // treating a present `fix` key as absent.
+    if fields.fix_op.is_none() && !fields.fix_is_null {
+        return Ok(());
+    }
     let Some(op) = fields.fix_op else {
-        return if meta.fix_ops.is_empty() {
-            Err(violation(
-                "fix",
-                format!("`fix` is not supported by `{kind}`; this kind has no fix operations"),
-            ))
+        let message = if meta.fix_ops.is_empty() {
+            format!("`fix` is not supported by `{kind}`; this kind has no fix operations")
         } else {
-            // A malformed or null fix is diagnosed by typed deserialization.
-            Ok(())
+            let supported = meta
+                .fix_ops
+                .iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<&str>>()
+                .join(", ");
+            format!(
+                "`fix` for `{kind}` must select exactly one operation; supported fix operations: \
+                 {supported}"
+            )
         };
+        return Err(violation("fix", message));
     };
     if meta
         .fix_ops

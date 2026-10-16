@@ -1,6 +1,6 @@
 # `git_blame_age` rule kind
 
-Status: Implemented for v0.7. Its wall-clock and non-Git semantics are superseded
+Status: Implemented for v0.7. Its wall-clock, non-Git, and ignore-revs semantics are superseded
 by [v0.19 deterministic analysis time](../v0.19/analysis-time.md) and
 [ADR-0020](../../adr/0020-explicit-analysis-time.md). See
 `crates/alint-rules/src/git_blame_age.rs` + `BlameCache` in

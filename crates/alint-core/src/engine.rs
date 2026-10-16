@@ -2474,13 +2474,13 @@ impl Engine {
     /// pays nothing. The cache itself is empty at construction;
     /// rules trigger blame on first access per file.
     ///
-    /// We use [`crate::git::collect_tracked_paths`] as the
-    /// is-this-a-git-repo probe so the rule no-ops cleanly
-    /// outside a repo without per-file blame failures littering
-    /// the cache. When the user opts into BOTH `git_tracked_only`
-    /// and `git_blame_age`, the probe runs once via
-    /// [`Engine::collect_git_tracked_if_needed`] and once here —
-    /// negligible cost (sub-ms) compared to the blame work.
+    /// We use [`crate::git::collect_tracked_paths`] both as the
+    /// is-this-a-git-repo probe and to decide whether the repository's
+    /// `.git-blame-ignore-revs` is tracked. The rule therefore no-ops cleanly
+    /// outside a repo without per-file blame failures littering the cache. When
+    /// a rule also opts into `git_tracked_only`, that independent setup path
+    /// collects the set once more; the sub-millisecond probe is negligible
+    /// beside blame itself.
     fn build_blame_cache_if_needed(&self, root: &Path) -> Option<crate::git::BlameCache> {
         // Nested `require:` rules count too: a `git_blame_age` under `for_each_dir`
         // reads the same cache, and deciding from top-level rules alone made it
@@ -2497,11 +2497,15 @@ impl Engine {
         if !any_wants {
             return None;
         }
-        // Probe: a non-git workspace short-circuits to `None` so
-        // the rule's "silent no-op outside git" path is exercised
-        // at the engine level rather than per-file.
-        crate::git::collect_tracked_paths(root)?;
-        Some(crate::git::BlameCache::new(root.to_path_buf()))
+        // Probe: a non-git workspace short-circuits to `None` so the rule's
+        // "silent no-op outside git" path is exercised at the engine level
+        // rather than per file. Reuse this set when deciding whether the
+        // conventional ignore-revs file is repository input.
+        let tracked = crate::git::collect_tracked_paths(root)?;
+        Some(crate::git::BlameCache::new_with_tracked_paths(
+            root.to_path_buf(),
+            &tracked,
+        ))
     }
 
     fn resolve_analysis_time_if_needed(
