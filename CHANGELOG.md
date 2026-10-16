@@ -85,7 +85,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   | `paths` | `cross_file`; `pair_hash` | Remove `paths`; use `source` and the kind's target/partner fields. |
   | `fix` | `commented_out_code`; `dir_absent`; `file_is_text`; `file_max_lines`; `file_max_size`; `file_min_lines`; `file_min_size`; `file_shebang`; `filename_regex`; `for_each_match`; `import_gate`; `markdown_links_resolve`; `markdown_paths_resolve` | Remove the unsupported fix or move remediation to a kind that advertises the required fix operation. |
 
-- **The dotenv engine is now adotenv 0.2.0, with a lossless document model and native verified
+- **The dotenv engine is now adotenv 0.2.1, with a lossless document model and native verified
   edits.** Parsing accepts bare declarations and maps them to JSON `null` (distinct from `KEY=`,
   which remains `""`). Compared with 0.1.1, it accepts multiline quotes and portability-warning
   key forms, recognizes `export` followed by spaces or tabs, treats lone CR as a line ending,
@@ -102,11 +102,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **Lossless dotenv parsing is bounded before allocating items and diagnostics.**
-  Nonempty parsed documents are limited to 100,000 physical lines as well as the
-  existing 32 MiB byte cap; CRLF counts once, and a terminal ending adds no empty
-  line. This also covers native fix entry points. Short repeated bare declarations
-  now produce a normal parse error instead of exhausting memory within the byte cap.
+- **Lossless dotenv parsing is bounded before allocating its document.**
+  Nonempty parsed documents are limited to 4 MiB and 100,000 physical lines;
+  CRLF counts once, and a terminal ending adds no empty line. Native span and
+  fix entry points share these limits. Oversized single-line inputs and short
+  repeated bare declarations produce normal parse errors instead of process
+  aborts. adotenv 0.2.1 also omits discarded warning diagnostics, duplicate-only
+  key tries and CR merge buffers during strict parsing and native verification,
+  fixing the below-cap CR warning-density allocation spike while retaining the
+  documented multi-megabyte / 100,000-entry workload.
 
 - **Machine-readable edit proposals recognize lone carriage returns as line endings.**
   Dotenv files accepted by adotenv 0.2 now receive correct JSON, agent and SARIF fix

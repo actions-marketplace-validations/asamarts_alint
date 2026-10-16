@@ -28,7 +28,11 @@
 
 use serde_json::{Map, Value};
 
-/// Bound lossless items and diagnostics independently of the input-byte cap.
+/// Bound retained source, decoded escape maps and large keys within a line.
+/// The generic structured cap is too loose for this lossless representation.
+pub(crate) const MAX_DOTENV_BYTES: usize = 4 * 1024 * 1024;
+
+/// Bound lossless items and per-item metadata independently of the input-byte cap.
 /// Short repeated declarations can otherwise retain hundreds of bytes per line.
 pub(crate) const MAX_PHYSICAL_LINES: usize = 100_000;
 
@@ -36,10 +40,10 @@ pub(crate) const MAX_PHYSICAL_LINES: usize = 100_000;
 /// Count CRLF once, accept a terminal line ending without a phantom empty line,
 /// and include comments and multiline value lines in the conservative budget.
 pub(crate) fn parse_document(text: &str) -> Result<adotenv::Document<'_>, String> {
-    let max_bytes = crate::structured_format::MAX_STRUCTURED_BYTES;
+    let max_bytes = MAX_DOTENV_BYTES;
     if text.len() > max_bytes {
         return Err(format!(
-            "input exceeds the maximum supported size for a structured document ({max_bytes} bytes)"
+            "dotenv input exceeds the maximum supported size ({max_bytes} bytes)"
         ));
     }
     let mut lines = usize::from(!text.is_empty());
@@ -81,6 +85,15 @@ mod tests {
 
     fn obj(text: &str) -> Value {
         parse(text).expect("parse dotenv")
+    }
+
+    #[test]
+    fn byte_budget_includes_a_single_physical_line() {
+        let value = "x".repeat(MAX_DOTENV_BYTES - 2);
+        let mut source = format!("A={value}");
+        assert_eq!(obj(&source)["A"], json!(value));
+        source.push('#');
+        assert!(parse(&source).is_err());
     }
 
     #[test]

@@ -162,7 +162,34 @@ All four resolved with the maintainer (2026-08-31):
 
 Surfaced by the pre-v0.16 adversarial audit (rounds 3-4) and closed in it. Every crafted-SMALL-file DoS is fixed: the HCL/YAML/XML depth guards, the HCL byte cap, the per-element XML attribute cap, and the YAML alias-EXPANSION guard (`yaml_depth::expansion_within_limit`; a single anchor referenced many times, or a `<<: *a` merge, which `serde_yaml_ng`'s own recursion/deref limits miss, ballooned a ~150 KB file into tens of millions of nodes). Round 4 also folded in the two general-engine resource-pressure fixes:
 
-- **Parse-tree memory amplification (per-file caps: FIXED).** `MAX_ANALYZE_BYTES` (256 MiB, `walker.rs`) bounds input bytes, but a parsed tree costs far more RSS: measured up to ~30x for attribute-heavy XML and ~6-10x for JSON. `Format::parse` caps structured input at `MAX_STRUCTURED_BYTES` (32 MiB, `structured_format.rs`; HCL keeps its tighter 64 KiB cap). Lossless dotenv additionally caps parsed documents at **100,000 physical lines before parsing**, including comments and multiline value lines. CRLF counts once, and a terminal ending adds no phantom line. All-whitespace structured input retains the existing empty-object fast path. Native dotenv span and verified-edit entry points share both limits. This closes the adotenv 0.2 amplification regression: a synthetic 2 MiB file of repeated bare declarations aborted under a 512 MiB child-process address-space limit despite passing the byte cap. Over-budget input is now an ordinary per-file parse error, not a process abort. **Accepted parser tradeoff (2026-10-16):** on the synthetic ceiling case (100,000 entries / 2.88 MiB), adotenv 0.2 measured 62 ms per parse versus 19 ms for 0.1.1 (3.23x); the release CLI still completed the full check in about 143 ms. Typical repository benchmarks stayed green; add a dedicated dotenv benchmark if giant generated `.env` files become a real workload.
+- **Parse-tree memory amplification (per-file caps: FIXED).**
+  `MAX_ANALYZE_BYTES` (256 MiB, `walker.rs`) bounds input bytes, but a parsed
+  tree costs far more RSS: measured up to ~30x for attribute-heavy XML and
+  ~6-10x for JSON. `Format::parse` caps structured input at
+  `MAX_STRUCTURED_BYTES` (32 MiB, `structured_format.rs`; HCL keeps its
+  tighter 64 KiB cap). Lossless dotenv additionally caps parsed documents at
+  **4 MiB and 100,000 physical lines before parsing**, including comments
+  and multiline value lines. CRLF counts once, and a terminal ending adds no
+  phantom line. All-whitespace structured input retains the existing
+  empty-object fast path. Native dotenv span and verified-edit entry points
+  share both limits.
+  A synthetic 2 MiB file of repeated bare declarations aborted under a
+  512 MiB child-process address-space limit despite passing the generic byte
+  cap. The line budget rejects that input. A single 16 MiB warning-dense line
+  bypassed the line-only guard; the dotenv byte budget rejects it.
+  A further 4,000,000-byte / 100,000-line CR warning-density probe still
+  aborted below both budgets in adotenv 0.2.0. adotenv 0.2.1 removes discarded
+  warning lists, duplicate-only key tries and CR merge buffers from strict
+  parsing and native verification, addressing that root cause. The limits
+  remain necessary for retained lossless items, decoded escape maps and
+  value trees; they are not a general process-wide memory ceiling.
+  **Historical parser comparison (0.2.0, 2026-10-16):** on the synthetic
+  ceiling case (100,000 entries / 2.88 MiB), adotenv 0.2.0 measured 62 ms per
+  parse versus 19 ms for 0.1.1 (3.23x); the release CLI completed the full
+  check in about 143 ms. The selected byte budget retains that workload.
+  These timings predate the 0.2.1 allocation fix. Typical repository
+  benchmarks stayed green; add a dedicated dotenv benchmark if giant
+  generated `.env` files become a real workload.
 - **rayon global-pool init panic (FIXED).** Both engine dispatch loops (`engine.rs`) now run `par_iter` inside an explicitly-built pool via `with_worker_pool`: one pool built once and cached, via a three-tier fallback chain -- the default (`num_cpus`) pool, else a single spawned worker (`num_threads(1)`), else a `use_current_thread` pool that spawns zero new threads and runs on the calling thread -- under `RLIMIT_NPROC` / pids.max pressure (common in hardened CI / containers -- the self-hosted runner has hit pids limits). A constrained host degrades through one worker to on-caller execution instead of the lazy-global-pool `.expect` panic + "alint crashed" banner; `install` preserves `par_iter`'s ordering, so results are identical. Caching is required (a second `use_current_thread` build on one thread fails), and the cached pool is process-global; the third tier is thread-affine to its initializing thread, an accepted residual since the CLI runs on one main thread.
 
 Remaining follow-ups (each needs an extreme input AND a constrained host, and each is invasive relative to its payoff, so deferred to a dedicated robustness pass):

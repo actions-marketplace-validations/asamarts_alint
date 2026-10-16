@@ -32,15 +32,16 @@ use xml_scan::xml_within_parse_limits;
 /// cap [`crate::walker::MAX_ANALYZE_BYTES`] (256 MiB) bounds bytes, but a parsed tree
 /// costs far more RSS: measured up to ~30x the input for attribute-heavy XML
 /// (roxmltree builds its own arena alongside the `serde_json::Value` tree), ~6-10x
-/// for JSON. Lossless dotenv also needs a physical-line budget because very short
-/// declarations retain items and diagnostics far larger than their input. A
+/// for JSON. Lossless dotenv keeps tighter byte and physical-line budgets because
+/// retained items and decoded escape maps amplify input. A
 /// near-read-cap structured file would peak at multiple GB --
 /// and the per-file rule dispatch is parallel, so several parse at once. Capping the
 /// structured-parse INPUT at 32 MiB bounds a single file's tree to ~1 GB worst case
 /// (XML), far above any real config / manifest (they are KB-MB; even a large
 /// `OpenAPI` spec or SBOM is well under 32 MiB) yet 8x tighter than the read cap. An
 /// oversize structured file is one per-file parse-error violation. HCL keeps its own
-/// tighter [`MAX_HCL_BYTES`] (64 KiB); this is the ceiling for the rest. (Aggregate
+/// tighter [`MAX_HCL_BYTES`] (64 KiB), and dotenv has a 4 MiB cap plus a physical-line
+/// budget; this is the ceiling for the rest. (Aggregate
 /// concurrent parse memory -- this cap times the `par_iter` fan-out -- is a separate,
 /// coarser bound tracked in `docs/design/format-coverage.md`.)
 pub const MAX_STRUCTURED_BYTES: usize = 32 * 1024 * 1024;
