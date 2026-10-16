@@ -41,6 +41,14 @@ pub fn write_github(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
             writeln!(w, "::{keyword} {}::{body}", props.join(","))?;
         }
     }
+    let note_count = report.total_notes();
+    if note_count > 0 {
+        writeln!(
+            w,
+            "::notice title=alint notes::{}",
+            escape_body(&crate::note_summary(note_count))
+        )?;
+    }
     Ok(())
 }
 
@@ -142,7 +150,7 @@ mod tests {
                     message: "bad".into(),
                     line: Some(12),
                     column: Some(4),
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,

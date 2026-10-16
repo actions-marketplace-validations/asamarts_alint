@@ -18,6 +18,7 @@ use crate::{ConfigRun, Finding, Session, WorkspaceCheck};
 pub(crate) fn check_workspace(
     folders: &[PathBuf],
     docs: &[(Url, Option<String>)],
+    analysis_time: Option<alint_core::AnalysisTime>,
 ) -> WorkspaceCheck {
     let mut check = WorkspaceCheck::default();
     let mut configs: Vec<PathBuf> = Vec::new();
@@ -44,7 +45,7 @@ pub(crate) fn check_workspace(
             .filter(|(uri, _)| check.doc_config.get(uri) == Some(&config))
             .filter_map(|(uri, text)| Some((uri.to_file_path().ok()?, text.clone()?)))
             .collect();
-        let run = run_config(&config, &overlays);
+        let run = run_config(&config, &overlays, analysis_time);
         check.runs.push((config, run));
     }
     check
@@ -108,8 +109,12 @@ pub(crate) fn config_for_document(doc: &Path, folders: &[PathBuf]) -> Option<Pat
 /// Build one config's session, run it over the tree, apply the
 /// baseline, and overlay unsaved buffers. `overlays` are the open
 /// documents this config governs, with their editor text.
-fn run_config(config_path: &Path, overlays: &[(PathBuf, String)]) -> Result<ConfigRun, String> {
-    let session = build_session_for_config(config_path)?;
+fn run_config(
+    config_path: &Path,
+    overlays: &[(PathBuf, String)],
+    analysis_time: Option<alint_core::AnalysisTime>,
+) -> Result<ConfigRun, String> {
+    let session = build_session_for_config(config_path, analysis_time)?;
     let report = session
         .engine
         .run(&session.root, &session.index)
@@ -196,7 +201,7 @@ pub(crate) fn workspace_folders(params: &InitializeParams) -> Vec<PathBuf> {
 #[cfg(test)]
 pub(crate) fn build_session(start: &Path) -> Result<Option<Session>, String> {
     match alint_dsl::discover(start) {
-        Some(config_path) => build_session_for_config(&config_path).map(Some),
+        Some(config_path) => build_session_for_config(&config_path, None).map(Some),
         None => Ok(None),
     }
 }
@@ -204,7 +209,10 @@ pub(crate) fn build_session(start: &Path) -> Result<Option<Session>, String> {
 /// Load `config_path` and build the engine + index, honoring the same
 /// top-level settings `alint check` does (`fix_size_limit`, `baseline:`,
 /// `ignore:`, `respect_gitignore:`).
-fn build_session_for_config(config_path: &Path) -> Result<Session, String> {
+fn build_session_for_config(
+    config_path: &Path,
+    analysis_time: Option<alint_core::AnalysisTime>,
+) -> Result<Session, String> {
     // The config's directory is the effective repo root, so relative
     // paths in rules resolve from there, matching the CLI.
     let effective_root = config_path
@@ -247,10 +255,13 @@ fn build_session_for_config(config_path: &Path) -> Result<Session, String> {
         entries.push(entry);
     }
 
-    let engine = Engine::from_entries(entries, registry)
+    let mut engine = Engine::from_entries(entries, registry)
         .with_facts(config.facts)
         .with_vars(config.vars)
         .with_fix_size_limit(config.fix_size_limit);
+    if let Some(analysis_time) = analysis_time {
+        engine = engine.with_analysis_time(analysis_time);
+    }
 
     // `baseline:` resolves against the repo root, exactly like `check`;
     // a missing / malformed baseline is a config error, never a silent

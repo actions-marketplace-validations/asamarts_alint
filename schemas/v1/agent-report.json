@@ -49,9 +49,29 @@
     "violations": {
       "type": "array",
       "items": { "$ref": "#/$defs/violation" }
+    },
+    "notes": {
+      "$ref": "#/$defs/notes_summary",
+      "description": "Present when the report contains non-violation notes. Notes never enter the violations array or affect summary failure counts."
     }
   },
   "$defs": {
+    "notes_summary": {
+      "type": "object",
+      "required": ["count", "details_format"],
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total non-violation notes in this report."
+        },
+        "details_format": {
+          "const": "json",
+          "description": "Rerun the same check with this output format to retrieve the full per-rule note list."
+        }
+      }
+    },
     "severity": {
       "type": "string",
       "enum": ["error", "warning", "info"],
@@ -92,7 +112,7 @@
         },
         "proposed_edit": {
           "type": "array",
-          "description": "The concrete Safe edit(s) `alint fix` would apply to resolve this violation. Present only for a fix-available finding.",
+          "description": "The concrete Safe edit(s) `alint fix` would apply to resolve this violation. Present only for a fix-available finding when every target path has an exact JSON string representation; use `fix_command` otherwise.",
           "items": { "$ref": "#/$defs/proposed_edit" }
         },
         "policy_url": {

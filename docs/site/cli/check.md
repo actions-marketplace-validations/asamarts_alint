@@ -97,6 +97,11 @@ block.
 - **`--only <rule-id>`** runs one rule (repeatable), handy while writing or
   debugging a rule.
 - **`--fail-on-warning`** turns warnings into a failing exit code.
+- **`--as-of YYYY-MM-DD`** sets the UTC reference date for time-dependent
+  rules; `ALINT_AS_OF` is the environment equivalent. Without either, alint
+  uses the HEAD commit's committer timestamp, so repeated checks of one commit
+  are byte-identical. Outside Git, time-dependent rules require an explicit
+  date.
 
 ## Examples
 

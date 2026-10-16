@@ -252,9 +252,9 @@ per violation, in order:
 
 `column` is never in the hash (line-granular is the right churn/precision balance).
 `level` is never in the hash (§4 — a baseline accepts the *finding*, not its
-severity). `is_note` violations are notes, not violations, and are never
-fingerprinted (the transform runs on `RuleResult.violations` only, after the
-existing notes partition).
+severity). Findings with `note_kind.is_some()` are notes, not violations, and are
+never fingerprinted (the transform runs on `RuleResult.violations` only, after
+the notes partition).
 
 Self-referential rules (`line_endings`, `no_trailing_whitespace`) take branch 1
 via a path key, so the terminator-stripping in branch 2 never erases the bytes
@@ -496,8 +496,8 @@ line-number independence (insert above → same hash); trailing-`\r?\n` strippin
 (CRLF↔LF → same hash); edited offending line → different hash; `baseline_key`
 takes precedence over content; identical-content count collapse; length-prefix
 domain separation (no `a‖bc` vs `ab‖c` collision; `baseline_key` path-sets with
-spaces don't collide); `is_note` never fingerprinted; full-hash (no truncation);
-JSON-Lines round-trip + `schema_version` gate + malformed/empty handling;
+spaces don't collide); notes (`note_kind.is_some()`) never fingerprinted;
+full-hash (no truncation); JSON-Lines round-trip + `schema_version` gate +
 deterministic sort/serialization.
 
 **Coverage-audit test — the structural collision-invariant (anti-drift floor):**

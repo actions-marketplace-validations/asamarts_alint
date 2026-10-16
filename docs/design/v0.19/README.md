@@ -46,6 +46,18 @@ moves.
   The Unreleased changelog contains the exhaustive migration matrix for all 57 formerly
   ignored canonical kind/field pairs. All bundled rulesets, shipped examples, documentation
   examples, and scenarios pass under enforcement.
+- **W4, notes in every output format, is complete.** `RuleResult` partitions ordinary
+  informational notes from bounded-analysis truncation; all eight check formats preserve them
+  through either full structured detail or the accepted count-and-pointer projection. SARIF maps
+  informational notes to `note` results and truncation to execution notifications. The JSON and
+  agent schemas, CLI `--show-notes` behavior, baseline/fix exclusion, and ADR-0012 cross-format
+  completeness gate are covered.
+- **W7, deterministic analysis time, is complete.** `--as-of YYYY-MM-DD` overrides
+  `ALINT_AS_OF`, with the HEAD committer timestamp as the fallback resolved once per engine.
+  `git_blame_age` no longer reads wall time; findings and human/JSON `explain` expose the
+  reference date and source. Non-Git evaluation without explicit input reports the stable error
+  W2 will promote, capability metadata now says `analysis_time`, and ADR-0020 supersedes the
+  affected part of constitution invariant 1.
 
 ### Completed release item: the v0.18.4 benchmark record
 
@@ -71,12 +83,10 @@ release-by-release row.
 
 ### Next work, in order
 
-1. **W4** (notes in every output format) and **W7** (`--as-of`): small, independent, and the next
-   work now that W1 is complete.
-2. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half is already complete in W1).
-3. **W5** (redaction and the leak gate), **W6** (related locations, the JSON schema relaxation,
+1. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half is already complete in W1).
+2. **W5** (redaction and the leak gate), **W6** (related locations, the JSON schema relaxation,
    the frozen-fingerprint gate), **W8** (duplicate-aware spanned extraction).
-4. **W9** as capacity allows, then **W10** (documentation, recipes, roadmap, and stale-comment
+3. **W9** as capacity allows, then **W10** (documentation, recipes, roadmap, and stale-comment
    cleanup).
 
 Each item gets its design document in this directory before code, per the rule at the top. The
@@ -189,6 +199,8 @@ invariant; changelog entries under "Changed".
 
 ### W4. Notes in every output format
 
+**Completed 2026-10-16.**
+
 - SARIF: notes become `level: note` results; truncated analysis becomes
   `toolExecutionNotifications`.
 - GitHub, GitLab, and Markdown outputs: a summary line with the note count and a pointer to the
@@ -196,6 +208,9 @@ invariant; changelog entries under "Changed".
 - Human output keeps `--show-notes`.
 
 Acceptance: an ADR-0012 positive-completeness gate proves a note reaches every format.
+
+Design: [`notes-output-completeness.md`](notes-output-completeness.md) (accepted; all format
+projections and truncation semantics decided).
 
 ### W5. Evidence redaction and the leak gate (DEC-3)
 
@@ -233,6 +248,8 @@ related locations reach both; the JSON schema relaxation ships with its changelo
 
 ### W7. `--as-of` input (DEC-11)
 
+**Completed 2026-10-16.**
+
 - A global `--as-of <date>` flag and an `ALINT_AS_OF` environment variable.
 - Without either, time-dependent kinds use the HEAD commit time; outside a Git repository they
   report an analysis failure (W2) unless `--as-of` is given.
@@ -241,6 +258,9 @@ related locations reach both; the JSON schema relaxation ships with its changelo
 
 Acceptance: the same commit yields byte-identical `git_blame_age` output on different days; the
 ADR is accepted; changelog entry under "Changed".
+
+Design: [`analysis-time.md`](analysis-time.md) (accepted; input, fallback, display, and failure
+semantics decided). Decision: [ADR-0020](../../adr/0020-explicit-analysis-time.md).
 
 ### W8. Duplicate-aware spanned extraction (substrate)
 

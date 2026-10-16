@@ -953,6 +953,39 @@ mod tests {
     }
 
     #[test]
+    fn apply_preserves_notes_without_fingerprinting_or_suppressing_them() {
+        let rep = Report {
+            results: vec![RuleResult::new(
+                "r".into(),
+                Level::Error,
+                None,
+                vec![
+                    Violation::new("X"),
+                    Violation::new("bounded detail").as_analysis_truncated_note(),
+                ],
+                false,
+            )],
+        };
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("X", 1)],
+        };
+        let mut fingerprint_calls = 0;
+        let out = apply(&rep, &base, |rule, violation| {
+            fingerprint_calls += 1;
+            by_message(rule, violation)
+        });
+
+        assert_eq!(fingerprint_calls, 1, "notes are not baseline candidates");
+        assert!(out.live.results[0].violations.is_empty());
+        assert_eq!(out.live.total_notes(), 1);
+        assert_eq!(
+            out.live.results[0].notes[0].note_kind,
+            Some(crate::NoteKind::AnalysisTruncated)
+        );
+    }
+
+    #[test]
     fn apply_suppressing_all_errors_clears_the_exit_signal() {
         let rep = report("r", Level::Error, &[("X", Some(1))]);
         assert!(rep.has_errors());

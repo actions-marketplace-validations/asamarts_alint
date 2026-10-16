@@ -1,11 +1,9 @@
 name: sync_from on equals declines a non-literal (interpolated) target, no crash
-# Regression gate (audit CRITICAL + HIGH): a target whose captured value is an
-# interpolated `${VERSION}` template. The check skips it as a note and fires a
-# keyless "no literal value" violation; making cross_file fixable once collided
-# those keyless findings on `violation_key` (a debug panic / a silent release
-# drop). The notes are now uniquely keyed, so `fix` runs cleanly, and the fixer
-# must NOT clobber the template (it declines). This scenario runs in a debug
-# harness, so a regression of the note-keying would PANIC here.
+# Regression gate: a target whose captured value is an interpolated
+# `${VERSION}` template. The check skips it as a note and fires a keyless
+# "no literal value" violation. Notes are partitioned before fixpoint identity
+# merging, so `fix` runs cleanly, and the fixer must not clobber the template
+# (it declines).
 tags: [fix, cross_file, sync_from, applicability]
 
 given:

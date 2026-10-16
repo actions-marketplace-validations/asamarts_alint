@@ -18,6 +18,14 @@ after each check instead of a one-line count. Following the LSP
 specification, the server exits with code 0 after a `shutdown` request and
 `exit` notification, and with code 1 when `exit` arrives without `shutdown`.
 
+## Reference date for time-dependent rules
+
+Start the server as `alint lsp --as-of YYYY-MM-DD` to pin one strict UTC date
+for the session. The flag overrides the editor process's `ALINT_AS_OF`;
+without either, each workspace config uses its repository HEAD commit's
+committer timestamp, resolved once for that session. Outside Git, a
+time-dependent rule reports an analysis error unless a date is provided.
+
 ## See also
 
 - [Editors](/docs/integrations/editors/): setup for VS Code, Zed, Neovim and others

@@ -162,6 +162,13 @@ rules:
     level: warning
     message: "`dbg!` macros should not land in committed Rust sources."
 
+  - id: rules-do-not-read-wall-clock
+    kind: file_content_forbidden
+    paths: "crates/alint-rules/src/**/*.rs"
+    pattern: 'SystemTime\s*::\s*now\s*\('
+    level: error
+    message: "Rule evaluation must use Context::analysis_time(), never the process wall clock."
+
   - id: readme-has-word-alint
     # Only runs once a README exists; harmless no-op until then.
     kind: file_content_matches

@@ -156,12 +156,10 @@ fn non_utf8_filename_does_not_break_json_or_agent() {
     }
 }
 
-// Audit D-H1: the case above uses a FIXER-LESS rule, so it never serializes a
-// `proposed_edit`. The `agent` format ALWAYS attaches proposed edits, and
-// `json --include-fixes` attaches them on request; `ProposedEdit.path` serialized
-// with serde's STRICT `PathBuf` impl, which ERRORS on a non-UTF-8 path -> the JSON
-// was truncated mid-document and exit 2. This variant uses a FIXABLE rule so the
-// proposed_edit is present, and asserts both fix-carrying formats stay valid.
+// A concrete edit path must never be serialized lossily: two distinct
+// non-UTF-8 filenames could otherwise advertise the same target. The optional
+// JSON/agent field is omitted when its path has no exact JSON string
+// representation; SARIF percent-encodes the original Unix filename bytes.
 #[cfg(target_os = "linux")]
 #[test]
 fn non_utf8_filename_does_not_break_fix_carrying_formats() {
@@ -199,12 +197,29 @@ fn non_utf8_filename_does_not_break_fix_carrying_formats() {
                 String::from_utf8_lossy(&out.stdout)
             )
         });
-        // The rendered blob must carry the lossy proposed-edit path (U+FFFD), proving
-        // the nested `ProposedEdit.path` serialized without aborting.
         let blob = v.to_string();
         assert!(
             blob.contains("name.txt") && blob.contains('\u{fffd}'),
-            "{args:?} expected a lossy proposed_edit path; got {blob}"
+            "{args:?} expected the ordinary display path to remain visible; got {blob}"
+        );
+        assert!(
+            !blob.contains("\"proposed_edit\""),
+            "{args:?} must not advertise an edit through a lossy path; got {blob}"
         );
     }
+
+    let out = run(dir.path(), &["check", ".", "--format", "sarif"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "SARIF must not abort on a non-UTF-8 fix path; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("SARIF output must be valid JSON");
+    let blob = value.to_string();
+    assert!(
+        blob.contains("bad%FFname.txt") && !blob.contains('\u{fffd}'),
+        "SARIF must preserve the exact filename bytes in its URI; got {blob}"
+    );
 }

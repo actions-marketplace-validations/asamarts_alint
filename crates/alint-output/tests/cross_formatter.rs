@@ -232,6 +232,123 @@ fn agent_format_carries_agent_instruction_field() {
     );
 }
 
+fn note_report() -> Report {
+    Report {
+        results: vec![RuleResult::new(
+            "bounded-scan".into(),
+            Level::Error,
+            None,
+            vec![
+                Violation::new("skipped a dynamic entry").as_note(),
+                Violation::new("analysis stopped at the configured byte limit")
+                    .as_analysis_truncated_note(),
+            ],
+            false,
+        )],
+    }
+}
+
+fn render_report(format: Format, report: &Report) -> String {
+    let mut buf = Vec::new();
+    format.write(report, &mut buf).unwrap();
+    String::from_utf8(buf).unwrap()
+}
+
+#[test]
+fn notes_reach_every_non_human_format_without_becoming_violations() {
+    let report = note_report();
+    assert_eq!(report.total_notes(), 2);
+    assert_eq!(report.total_violations(), 0);
+    assert_eq!(report.passing_rules(), 1);
+    assert!(!report.has_errors());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&render_report(Format::Json, &report)).unwrap();
+    assert_eq!(json["summary"]["total_violations"], 0);
+    assert_eq!(json["results"][0]["notes"][0]["kind"], "informational");
+    assert_eq!(json["results"][0]["notes"][1]["kind"], "analysis_truncated");
+    assert!(
+        schema_errors(&json, CHECK_REPORT_SCHEMA).is_empty(),
+        "JSON notes must satisfy the published schema"
+    );
+
+    let github = render_report(Format::Github, &report);
+    assert!(github.contains(
+        "::notice title=alint notes::2 notes; rerun the same check with --format json for the full list."
+    ));
+    assert!(!github.contains("skipped a dynamic entry"));
+
+    let markdown = render_report(Format::Markdown, &report);
+    assert!(
+        markdown.contains("> 2 notes; rerun the same check with --format json for the full list.")
+    );
+    assert!(!markdown.contains("skipped a dynamic entry"));
+
+    let junit = render_report(Format::Junit, &report);
+    assert!(junit.contains("tests=\"1\" failures=\"0\""));
+    assert!(junit.contains(
+        "<system-out>2 notes; rerun the same check with --format json for the full list.</system-out>"
+    ));
+    assert!(!junit.contains("skipped a dynamic entry"));
+
+    let gitlab: serde_json::Value =
+        serde_json::from_str(&render_report(Format::Gitlab, &report)).unwrap();
+    assert_eq!(gitlab.as_array().unwrap().len(), 1);
+    assert_eq!(gitlab[0]["check_name"], "alint-informational-notes");
+    assert_eq!(gitlab[0]["severity"], "info");
+    assert_eq!(gitlab[0]["location"]["path"], ".");
+    assert!(
+        gitlab[0]["description"]
+            .as_str()
+            .unwrap()
+            .contains("2 notes; rerun the same check")
+    );
+
+    let agent: serde_json::Value =
+        serde_json::from_str(&render_report(Format::Agent, &report)).unwrap();
+    assert_eq!(agent["summary"]["total_violations"], 0);
+    assert_eq!(agent["notes"]["count"], 2);
+    assert_eq!(agent["notes"]["details_format"], "json");
+    assert_eq!(agent["violations"].as_array().unwrap().len(), 0);
+    assert!(
+        schema_errors(&agent, AGENT_REPORT_SCHEMA).is_empty(),
+        "agent note summary must satisfy the published schema"
+    );
+
+    let sarif: serde_json::Value =
+        serde_json::from_str(&render_report(Format::Sarif, &report)).unwrap();
+    assert_eq!(sarif["runs"][0]["results"].as_array().unwrap().len(), 1);
+    assert_eq!(sarif["runs"][0]["results"][0]["level"], "note");
+    assert_eq!(
+        sarif["runs"][0]["results"][0]["message"]["text"],
+        "skipped a dynamic entry"
+    );
+    assert_eq!(
+        sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"][0]["level"],
+        "note"
+    );
+    assert_eq!(
+        sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"][0]["message"]["text"],
+        "analysis stopped at the configured byte limit"
+    );
+}
+
+#[test]
+fn check_report_schema_accepts_a_legacy_note_without_kind() {
+    let mut json: serde_json::Value =
+        serde_json::from_str(&render_report(Format::Json, &note_report())).unwrap();
+    let notes = json["results"][0]["notes"].as_array_mut().unwrap();
+    notes.truncate(1);
+    notes[0].as_object_mut().unwrap().remove("kind");
+
+    let errors = schema_errors(&json, CHECK_REPORT_SCHEMA);
+    assert!(
+        errors.is_empty(),
+        "the v1 schema must continue accepting pre-W4 informational notes:\n{}",
+        errors.join("\n")
+    );
+}
+
 #[test]
 fn empty_report_renders_cleanly_in_every_format() {
     // The other regression vector: empty reports should not

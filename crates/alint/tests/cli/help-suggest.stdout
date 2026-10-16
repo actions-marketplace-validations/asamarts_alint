@@ -22,6 +22,10 @@ Options:
           [default: human]
           [possible values: human, yaml, json]
 
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
+
       --confidence <LEVEL>
           Lower bound on signal strength for proposals. `low` is broadest (helpful when
           prospecting); `high` is strict (only ecosystem-marker hits and equivalents)
@@ -32,11 +36,11 @@ Options:
       --include-bundled
           Include bundled-ruleset suggestions even if the existing `.alint.yml` already extends them
 
-      --no-gitignore
-          Disable .gitignore handling (overrides config)
-
       --explain
           Print one-line file-level evidence under each proposal so reviewers can decide quickly
+
+      --no-gitignore
+          Disable .gitignore handling (overrides config)
 
       --fail-on-warning
           Treat warnings as errors for exit-code purposes

@@ -27,13 +27,18 @@ pub fn write_markdown(report: &Report, w: &mut dyn Write) -> std::io::Result<()>
     writeln!(w)?;
 
     let total = report.total_violations();
+    let note_count = report.total_notes();
     if total == 0 {
         writeln!(w, "No violations found.")?;
+        write_note_summary(w, note_count)?;
         return Ok(());
     }
 
     write_summary_line(w, report)?;
-    writeln!(w)?;
+    write_note_summary(w, note_count)?;
+    if note_count == 0 {
+        writeln!(w)?;
+    }
 
     let (by_file, cross_file) = bucket_violations(report);
 
@@ -133,6 +138,15 @@ pub fn write_fix_markdown(report: &FixReport, w: &mut dyn Write) -> std::io::Res
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────
+
+fn write_note_summary(w: &mut dyn Write, count: usize) -> std::io::Result<()> {
+    if count > 0 {
+        writeln!(w)?;
+        writeln!(w, "> {}", crate::note_summary(count))?;
+        writeln!(w)?;
+    }
+    Ok(())
+}
 
 fn write_summary_line(w: &mut dyn Write, report: &Report) -> std::io::Result<()> {
     let total = report.total_violations();
@@ -432,7 +446,7 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -458,7 +472,7 @@ mod tests {
                         message: "z".into(),
                         line: None,
                         column: None,
-                        is_note: false,
+                        note_kind: None,
                         baseline_key: None,
                         is_fixable: false,
                         not_fixable: false,
@@ -473,7 +487,7 @@ mod tests {
                         message: "a".into(),
                         line: None,
                         column: None,
-                        is_note: false,
+                        note_kind: None,
                         baseline_key: None,
                         is_fixable: false,
                         not_fixable: false,
@@ -604,7 +618,7 @@ mod tests {
                     message: "x".into(),
                     line: Some(7),
                     column: None,
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -624,7 +638,7 @@ mod tests {
             message: "a".into(),
             line: Some(1),
             column: Some(1),
-            is_note: false,
+            note_kind: None,
             baseline_key: None,
             is_fixable: false,
             not_fixable: false,
@@ -635,7 +649,7 @@ mod tests {
             message: "b".into(),
             line: Some(2),
             column: Some(1),
-            is_note: false,
+            note_kind: None,
             baseline_key: None,
             is_fixable: false,
             not_fixable: false,
@@ -683,7 +697,7 @@ mod tests {
                         message: "value mismatch".into(),
                         line: None,
                         column: None,
-                        is_note: false,
+                        note_kind: None,
                         baseline_key: None,
                         is_fixable: false,
                         not_fixable: false,
@@ -726,7 +740,7 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: Some(1),
                             column: None,
-                            is_note: false,
+                            note_kind: None,
                             baseline_key: None,
                             is_fixable: false,
                             not_fixable: false,
@@ -740,7 +754,7 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: None,
                             column: None,
-                            is_note: false,
+                            note_kind: None,
                             baseline_key: None,
                             is_fixable: false,
                             not_fixable: false,

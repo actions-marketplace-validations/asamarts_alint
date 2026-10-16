@@ -210,6 +210,18 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
     if !cli.only.is_empty() && !matches!(command, Command::Check { .. } | Command::Fix { .. }) {
         bail!("`--only` only applies to `check` and `fix`");
     }
+    if cli.as_of.is_some()
+        && !matches!(
+            command,
+            Command::Check { .. }
+                | Command::Fix { .. }
+                | Command::Baseline { .. }
+                | Command::Explain { .. }
+                | Command::Lsp
+        )
+    {
+        bail!("`--as-of` applies only to `check`, `fix`, `baseline`, `explain`, and `lsp`");
+    }
     // `--config` is single-valued in effect: every consumer reads the first
     // entry, so a second `-c` was silently dropped while the help text wrongly
     // promised "later overrides earlier". Reject multiple rather than silently
@@ -325,7 +337,7 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
         Command::ValidateConfig { path, format } => cmd_validate_config(path, &format, &cli),
         Command::Lsp => {
             reject_non_human_format(&cli, "lsp")?;
-            cmd_lsp(cli.show_notes)
+            cmd_lsp(cli.show_notes, cli.as_of)
         }
         Command::Rules { command } => rules::run(&command, &cli),
     }
@@ -345,14 +357,28 @@ fn reject_non_human_format(cli: &Cli, cmd: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn reject_non_human_baseline_format(cli: &Cli) -> anyhow::Result<()> {
+    if cli.format != "human" {
+        anyhow::bail!(
+            "`baseline` does not support `--format {}` - it writes the baseline file and a \
+             human summary; drop `--format` (use `--quiet` to silence the summary)",
+            cli.format
+        );
+    }
+    Ok(())
+}
+
 /// Start the LSP server over stdio. Blocks (running its own async
 /// runtime inside `alint-lsp`) until the client sends `exit` or
 /// disconnects; exits `0` after a clean `shutdown` + `exit`, `1` for an
 /// `exit` without `shutdown` (per the LSP specification).
 /// `--show-notes` lists informational notes on stderr after each check.
-fn cmd_lsp(show_notes: bool) -> Result<ExitCode> {
-    let code = alint_lsp::run_stdio(alint_lsp::LspOptions { show_notes })
-        .context("running language server")?;
+fn cmd_lsp(show_notes: bool, analysis_time: Option<alint_core::AnalysisTime>) -> Result<ExitCode> {
+    let code = alint_lsp::run_stdio(alint_lsp::LspOptions {
+        show_notes,
+        analysis_time,
+    })
+    .context("running language server")?;
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
 }
 
@@ -637,6 +663,9 @@ fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> 
         // default and advertised (or omitted) fixes `fix` would not (audit HIGH,
         // 2026-09-20). Inert for a plain `check` (no fix derivation runs).
         .with_fix_size_limit(loaded.fix_size_limit);
+    if let Some(analysis_time) = cli.as_of {
+        engine = engine.with_analysis_time(analysis_time);
+    }
     // When a baseline is active, make the engine baseline-aware so the
     // `stage_fixes`-based proposed-edit derivation (for a fix-carrying format)
     // advertises fixes ONLY for the live (new) findings, never grandfathered ones.
@@ -748,10 +777,9 @@ fn cmd_check(path: &Path, changed: &ChangedMode, only: &[String], cli: &Cli) -> 
     tolerate_broken_pipe(written).context("writing output")?;
     out.flush().ok();
 
-    // Informational notes (non-violation findings) — surfaced on
-    // stderr for the human format so stdout stays clean. JSON carries
-    // them in its `notes` array instead. A one-line count by default;
-    // the full list with `--show-notes`.
+    // Human output keeps non-violation notes on stderr so stdout stays
+    // byte-clean. Machine formats carry their own lossless or summary
+    // projection.
     if format == Format::Human {
         report_notes_to_stderr(&report, cli.show_notes);
     }
@@ -936,17 +964,7 @@ fn cmd_baseline(
     use alint_core::baseline::{Baseline, FingerprintedViolation};
 
     require_directory(path)?;
-    // `baseline` writes the baseline file plus a human summary; it has no
-    // machine-readable report output, so a non-default `--format` would be
-    // silently ignored. Reject it rather than no-op (the same fail-loudly
-    // contract `--only` follows on subcommands that don't honor it).
-    if cli.format != "human" {
-        anyhow::bail!(
-            "`baseline` does not support `--format {}` - it writes the baseline file and a \
-             human summary; drop `--format` (use `--quiet` to silence the summary)",
-            cli.format
-        );
-    }
+    reject_non_human_baseline_format(cli)?;
     let loaded = load_rules(path, cli)?;
     let root = loaded.root.clone();
 
@@ -974,9 +992,12 @@ fn cmd_baseline(
     // be a symlink. Checked up front so a bad target fails before the run.
     safe_write::check_output(&root, &out_path, output.is_some(), "baseline")?;
 
-    let engine = Engine::from_entries(loaded.entries, loaded.registry)
+    let mut engine = Engine::from_entries(loaded.entries, loaded.registry)
         .with_facts(loaded.facts)
         .with_vars(loaded.vars);
+    if let Some(analysis_time) = cli.as_of {
+        engine = engine.with_analysis_time(analysis_time);
+    }
     let mut extra_ignores = loaded.extra_ignores;
     exclude_baseline_from_walk(&mut extra_ignores, &root, Some(&out_path));
     let walk_opts = WalkOptions {
@@ -1064,32 +1085,50 @@ fn cmd_baseline(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Surface informational notes (non-violation findings) on stderr so
-/// stdout stays clean. A one-line count by default; the full
-/// `path: message` list when `show_notes` is set. No output when there
-/// are no notes.
+/// Surface non-violation notes on stderr so human stdout stays clean.
 fn report_notes_to_stderr(report: &alint_core::Report, show_notes: bool) {
-    let total: usize = report.results.iter().map(|r| r.notes.len()).sum();
+    let stderr = io::stderr();
+    let mut stderr = stderr.lock();
+    let _ = write_report_notes(report, show_notes, &mut stderr);
+}
+
+fn write_report_notes(
+    report: &alint_core::Report,
+    show_notes: bool,
+    w: &mut dyn Write,
+) -> io::Result<()> {
+    let total = report.total_notes();
     if total == 0 {
-        return;
+        return Ok(());
     }
-    if show_notes {
-        eprintln!("alint: {total} informational note(s):");
-        for result in &report.results {
-            for note in &result.notes {
-                match &note.path {
-                    Some(p) => eprintln!(
-                        "  note: {}: {}",
-                        term(&p.display().to_string()),
-                        term(&note.message)
-                    ),
-                    None => eprintln!("  note: {}", term(&note.message)),
-                }
+    if !show_notes {
+        return writeln!(
+            w,
+            "alint: {total} informational note(s); run with --show-notes to list."
+        );
+    }
+    writeln!(w, "alint: {total} informational note(s):")?;
+    for result in &report.results {
+        for note in &result.notes {
+            let label = match note
+                .note_kind
+                .unwrap_or(alint_core::NoteKind::Informational)
+            {
+                alint_core::NoteKind::Informational => "note",
+                alint_core::NoteKind::AnalysisTruncated => "analysis truncated",
+            };
+            match &note.path {
+                Some(p) => writeln!(
+                    w,
+                    "  {label}: {}: {}",
+                    term(&p.display().to_string()),
+                    term(&note.message)
+                )?,
+                None => writeln!(w, "  {label}: {}", term(&note.message))?,
             }
         }
-    } else {
-        eprintln!("alint: {total} informational note(s); run with --show-notes to list.");
     }
+    Ok(())
 }
 
 /// The boolean flags of `alint fix`, grouped so the command signature stays
@@ -1155,6 +1194,9 @@ fn cmd_fix(
         .with_facts(loaded.facts)
         .with_vars(loaded.vars)
         .with_fix_size_limit(loaded.fix_size_limit);
+    if let Some(analysis_time) = cli.as_of {
+        engine = engine.with_analysis_time(analysis_time);
+    }
     if let Some(set) = changed.resolve(&root)? {
         engine = engine.with_changed_paths(set);
     }
@@ -1682,6 +1724,60 @@ fn write_kind_explain(
     Ok(())
 }
 
+fn analysis_time_for_explain(
+    root: &Path,
+    entry: &alint_core::RuleEntry,
+    registry: &alint_core::RuleRegistry,
+    explicit: Option<alint_core::AnalysisTime>,
+) -> Result<Option<alint_core::AnalysisTimeResolution>> {
+    Ok(entry
+        .wants_analysis_time(registry)?
+        .then(|| alint_core::resolve_analysis_time(root, explicit)))
+}
+
+fn write_analysis_time_explain(
+    out: &mut impl std::io::Write,
+    resolution: Option<&alint_core::AnalysisTimeResolution>,
+) -> Result<()> {
+    use alint_core::AnalysisTimeResolution;
+    use alint_output::style;
+
+    let dim = style::DIM;
+    match resolution {
+        Some(AnalysisTimeResolution::Available { time, source }) => {
+            writeln!(
+                out,
+                "{dim}analysis_time:{dim:#} {} ({source})",
+                term(&time.to_string()),
+            )?;
+        }
+        Some(AnalysisTimeResolution::Unavailable(error)) => {
+            writeln!(out, "{dim}analysis_time:{dim:#} unavailable ({error})")?;
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn analysis_time_json(
+    resolution: Option<&alint_core::AnalysisTimeResolution>,
+) -> Option<serde_json::Value> {
+    match resolution {
+        Some(alint_core::AnalysisTimeResolution::Available { time, source }) => {
+            Some(serde_json::json!({
+                "date": time.to_string(),
+                "source": source.as_str(),
+            }))
+        }
+        Some(alint_core::AnalysisTimeResolution::Unavailable(error)) => Some(serde_json::json!({
+            "date": null,
+            "source": "unavailable",
+            "error": error.to_string(),
+        })),
+        None => None,
+    }
+}
+
 fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     use alint_core::Level;
     use alint_output::style;
@@ -1695,6 +1791,8 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
         .registry
         .meta(entry.kind())
         .expect("loaded rule must have capability metadata");
+    let analysis_time =
+        analysis_time_for_explain(&loaded.root, entry, &loaded.registry, cli.as_of)?;
 
     // `explain` honours --format for machine consumers, matching `list`:
     // `json` emits the rule's wire-shape; any other machine format is an
@@ -1702,7 +1800,7 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     let format: Format = cli.format.parse().map_err(|e: String| anyhow::anyhow!(e))?;
     match format {
         Format::Human => {}
-        Format::Json => return explain_json(entry, kind_meta),
+        Format::Json => return explain_json(entry, kind_meta, analysis_time.as_ref()),
         _ => bail!(
             "`alint explain` supports only `--format human` or `--format json` (got {:?})",
             cli.format
@@ -1720,6 +1818,7 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     };
     writeln!(out, "{dim}id:        {dim:#} {}", term(rule.id()))?;
     write_kind_explain(&mut out, entry, kind_meta, opts.show_docs)?;
+    write_analysis_time_explain(&mut out, analysis_time.as_ref())?;
     writeln!(
         out,
         "{dim}level:     {dim:#} {level_style}{}{level_style:#}",
@@ -1800,6 +1899,7 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
 fn explain_json(
     entry: &alint_core::RuleEntry,
     kind_meta: &alint_core::KindMeta,
+    analysis_time: Option<&alint_core::AnalysisTimeResolution>,
 ) -> Result<ExitCode> {
     // `paths` normalises to `{ include, exclude }` glob lists. `rule_kind`
     // carries the rule's own kind (the envelope's `kind` is the fixed `"rule"`
@@ -1845,7 +1945,7 @@ fn explain_json(
             "manifest_scopes": manifest_scopes,
         })
     });
-    let doc = serde_json::json!({
+    let mut doc = serde_json::json!({
         "schema_version": 1,
         "kind": "rule",
         "id": entry.rule.id(),
@@ -1879,6 +1979,11 @@ fn explain_json(
         "fixable": entry.rule.fixer().is_some(),
         "fix": entry.rule.fixer().map(alint_core::Fixer::describe),
     });
+    if let Some(analysis_time) = analysis_time_json(analysis_time) {
+        doc.as_object_mut()
+            .expect("explain document is an object")
+            .insert("analysis_time".to_string(), analysis_time);
+    }
     let mut out = std::io::stdout().lock();
     writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     out.flush().ok();

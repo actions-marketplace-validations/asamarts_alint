@@ -73,7 +73,7 @@ impl fmt::Display for CapabilitySummary<'_> {
                 Capability::HostKeyring => f.write_str("host_keyring")?,
                 Capability::EnvRead => f.write_str("env_read")?,
                 Capability::EnvExport => f.write_str("env_export")?,
-                Capability::WallClock => f.write_str("wall_clock")?,
+                Capability::AnalysisTime => f.write_str("analysis_time")?,
                 Capability::OutOfRootRead => f.write_str("out_of_root_read")?,
                 Capability::WritesDuringCheck => f.write_str("writes_during_check")?,
                 Capability::UnixOnly => f.write_str("unix_only")?,

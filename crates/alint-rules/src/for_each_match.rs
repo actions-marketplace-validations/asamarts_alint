@@ -327,6 +327,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         r.evaluate_file(&ctx, Path::new("CHANGELOG.md"), text.as_bytes())
             .unwrap()

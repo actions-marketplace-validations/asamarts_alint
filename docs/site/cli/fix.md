@@ -46,6 +46,14 @@ reported as a suggestion instead of being applied:
 alint fix --changed --base origin/main
 ```
 
+## Reference date for time-dependent rules
+
+`alint fix --as-of YYYY-MM-DD` pins one strict UTC reference date for every
+pass, including the final re-check. The flag overrides `ALINT_AS_OF`; without
+either, alint uses the current HEAD commit's committer timestamp. Outside a Git
+repository, a time-dependent rule reports an analysis error unless a date is
+provided.
+
 ## See also
 
 - [Fixing](/docs/concepts/adoption/fixing/): how fixes are chosen and applied

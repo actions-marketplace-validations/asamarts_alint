@@ -79,7 +79,7 @@
         "notes": {
           "type": "array",
           "description": "Informational notes (non-violation findings, e.g. entries a rule skipped rather than failed on). Omitted when empty; never affects `passed`.",
-          "items": { "$ref": "#/$defs/violation" }
+          "items": { "$ref": "#/$defs/note" }
         }
       }
     },
@@ -101,8 +101,31 @@
         },
         "proposed_edit": {
           "type": "array",
-          "description": "The concrete Safe edit(s) `alint fix` would apply to resolve this violation. Present only under `--include-fixes`, only for a Safe-fixable finding.",
+          "description": "The concrete Safe edit(s) `alint fix` would apply to resolve this violation. Present only under `--include-fixes`, only for a Safe-fixable finding, and only when every target path has an exact JSON string representation.",
           "items": { "$ref": "#/$defs/proposed_edit" }
+        }
+      }
+    },
+    "note": {
+      "type": "object",
+      "required": ["message", "fixable"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Repo-relative path; absent for tree-wide notes."
+        },
+        "message": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "kind": {
+          "type": "string",
+          "enum": ["informational", "analysis_truncated"],
+          "description": "Structural note kind. Current emitters always include it; absence denotes a legacy informational note. Consumers must not infer the kind from message text."
+        },
+        "fixable": {
+          "const": false,
+          "description": "Notes are non-violations and are never auto-fixable."
         }
       }
     },

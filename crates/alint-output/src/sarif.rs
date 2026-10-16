@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
-use alint_core::{Level, Report, Violation};
+use alint_core::{Level, NoteKind, Report, Violation};
 use serde::Serialize;
 
 use crate::{BaselineMarks, ResultMarks};
@@ -102,6 +102,7 @@ fn build_sarif(
 ) -> Sarif {
     let mut rules = Vec::with_capacity(report.results.len());
     let mut results = Vec::new();
+    let mut notifications = Vec::new();
 
     for (idx, rr) in report.results.iter().enumerate() {
         rules.push(SarifRule {
@@ -138,6 +139,26 @@ fn build_sarif(
             results.push(res);
         }
 
+        for note in &rr.notes {
+            match note.note_kind.unwrap_or(NoteKind::Informational) {
+                NoteKind::Informational => {
+                    let mut result = base_result(rr.rule_id.as_ref(), rr.level, note, config_uri);
+                    result.level = "note";
+                    result.fixes.clear();
+                    results.push(result);
+                }
+                NoteKind::AnalysisTruncated => {
+                    notifications.push(SarifNotification {
+                        level: "note",
+                        message: SarifText {
+                            text: note.message.to_string(),
+                        },
+                        locations: finding_locations(note, config_uri),
+                    });
+                }
+            }
+        }
+
         // Baselined findings — marked, not removed, so Code Scanning dismisses
         // (rather than closes-then-reopens) the alert.
         if let Some(m) = marks {
@@ -166,6 +187,12 @@ fn build_sarif(
             // alint's columns (and fix regions) count Unicode scalar values,
             // not UTF-16 code units (the SARIF default when absent).
             column_kind: "unicodeCodePoints",
+            invocations: (!notifications.is_empty()).then(|| {
+                vec![SarifInvocation {
+                    execution_successful: true,
+                    tool_execution_notifications: notifications,
+                }]
+            }),
             results,
         }],
     }
@@ -187,81 +214,89 @@ fn level_to_sarif(l: Level) -> &'static str {
 /// like `src/a b#c.rs` neither mis-parses nor fails a format-asserting
 /// SARIF validator. `:` is encoded too: in a relative reference a colon in
 /// the first segment (`a:b.txt`) would otherwise parse as a URI scheme.
+/// A backslash is a separator only on Windows; on Unix it is a filename byte
+/// and must encode as `%5C` rather than aliasing a distinct slash path.
+#[cfg(unix)]
+fn path_to_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let bytes = path.as_os_str().as_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    for &byte in bytes {
+        if is_uri_path_byte(byte) {
+            out.push(char::from(byte));
+        } else {
+            push_percent_encoded_byte(&mut out, byte);
+        }
+    }
+    out
+}
+
+#[cfg(not(unix))]
 fn path_to_uri(path: &std::path::Path) -> String {
     let s = path.to_string_lossy();
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
-        match ch {
-            '\\' | '/' => out.push('/'),
-            'A'..='Z'
-            | 'a'..='z'
-            | '0'..='9'
-            | '-'
-            | '.'
-            | '_'
-            | '~'
-            | '!'
-            | '$'
-            | '&'
-            | '\''
-            | '('
-            | ')'
-            | '*'
-            | '+'
-            | ','
-            | ';'
-            | '='
-            | '@' => out.push(ch),
-            other => {
-                use std::fmt::Write as _;
-                let mut buf = [0u8; 4];
-                for b in other.encode_utf8(&mut buf).bytes() {
-                    let _ = write!(out, "%{b:02X}");
-                }
+        if ch == '\\' && std::path::MAIN_SEPARATOR == '\\' {
+            out.push('/');
+        } else if ch.is_ascii() && is_uri_path_byte(ch as u8) {
+            out.push(ch);
+        } else {
+            let mut buf = [0u8; 4];
+            for byte in ch.encode_utf8(&mut buf).bytes() {
+                push_percent_encoded_byte(&mut out, byte);
             }
         }
     }
     out
 }
 
+#[cfg(unix)]
+fn path_has_lossless_uri(_path: &std::path::Path) -> bool {
+    true
+}
+
+#[cfg(not(unix))]
+fn path_has_lossless_uri(path: &std::path::Path) -> bool {
+    path.to_str().is_some()
+}
+
+fn is_uri_path_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'/'
+            | b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~'
+            | b'!'
+            | b'$'
+            | b'&'
+            | b'\''
+            | b'('
+            | b')'
+            | b'*'
+            | b'+'
+            | b','
+            | b';'
+            | b'='
+            | b'@'
+    )
+}
+
+fn push_percent_encoded_byte(out: &mut String, byte: u8) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    out.push('%');
+    out.push(char::from(HEX[usize::from(byte >> 4)]));
+    out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+}
+
 /// A SARIF result with the shared fields filled in (no baseline annotations).
 fn base_result(rule_id: &str, level: Level, v: &Violation, config_uri: &str) -> SarifResult {
-    let region = if v.line.is_some() || v.column.is_some() {
-        Some(SarifRegion {
-            start_line: v.line,
-            start_column: v.column,
-            end_line: None,
-            end_column: None,
-        })
-    } else {
-        None
-    };
-    let locations = if let Some(path) = &v.path {
-        vec![SarifLocation {
-            physical_location: SarifPhysicalLocation {
-                artifact_location: SarifArtifactLocation {
-                    uri: path_to_uri(path),
-                },
-                region,
-            },
-        }]
-    } else {
-        // A path-less finding is anchored on the config file (line 1), so
-        // Code Scanning keeps it (a result with no location is dropped).
-        vec![SarifLocation {
-            physical_location: SarifPhysicalLocation {
-                artifact_location: SarifArtifactLocation {
-                    uri: config_uri.to_string(),
-                },
-                region: Some(SarifRegion {
-                    start_line: Some(v.line.unwrap_or(1)),
-                    start_column: v.column,
-                    end_line: None,
-                    end_column: None,
-                }),
-            },
-        }]
-    };
+    let locations = finding_locations(v, config_uri);
     SarifResult {
         rule_id: rule_id.to_string(),
         level: level_to_sarif(level),
@@ -276,6 +311,44 @@ fn base_result(rule_id: &str, level: Level, v: &Violation, config_uri: &str) -> 
     }
 }
 
+fn finding_locations(v: &Violation, config_uri: &str) -> Vec<SarifLocation> {
+    let region = if v.line.is_some() || v.column.is_some() {
+        Some(SarifRegion {
+            start_line: v.line,
+            start_column: v.column,
+            end_line: None,
+            end_column: None,
+        })
+    } else {
+        None
+    };
+    if let Some(path) = &v.path {
+        vec![SarifLocation {
+            physical_location: SarifPhysicalLocation {
+                artifact_location: SarifArtifactLocation {
+                    uri: path_to_uri(path),
+                },
+                region,
+            },
+        }]
+    } else {
+        // GitHub Code Scanning drops a location-less result/notification.
+        vec![SarifLocation {
+            physical_location: SarifPhysicalLocation {
+                artifact_location: SarifArtifactLocation {
+                    uri: config_uri.to_string(),
+                },
+                region: Some(SarifRegion {
+                    start_line: Some(v.line.unwrap_or(1)),
+                    start_column: v.column,
+                    end_line: None,
+                    end_column: None,
+                }),
+            },
+        }]
+    }
+}
+
 /// Build the SARIF `result.fixes` for a violation from its check-computed
 /// [`proposed_edits`](alint_core::Violation). Empty (the common case, and every
 /// non-fixable finding) yields no `fixes` key.
@@ -286,7 +359,13 @@ fn base_result(rule_id: &str, level: Level, v: &Violation, config_uri: &str) -> 
 /// insertion is an empty region at its point). An empty replacement string is a
 /// pure deletion (no `insertedContent`).
 fn build_fixes(rule_id: &str, v: &Violation) -> Vec<SarifFix> {
-    if v.proposed_edits.is_empty() {
+    if v.proposed_edits.is_empty()
+        || v.proposed_edits
+            .iter()
+            .any(|edit| !path_has_lossless_uri(&edit.path))
+    {
+        // A missing fix is safer than a URI that can alias another file. Unix
+        // paths are encoded from raw bytes; other hosts require exact Unicode.
         return Vec::new();
     }
     let mut by_path: BTreeMap<String, Vec<SarifReplacement>> = BTreeMap::new();
@@ -345,7 +424,24 @@ struct SarifRun {
     tool: SarifTool,
     #[serde(rename = "columnKind")]
     column_kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invocations: Option<Vec<SarifInvocation>>,
     results: Vec<SarifResult>,
+}
+
+#[derive(Serialize)]
+struct SarifInvocation {
+    #[serde(rename = "executionSuccessful")]
+    execution_successful: bool,
+    #[serde(rename = "toolExecutionNotifications")]
+    tool_execution_notifications: Vec<SarifNotification>,
+}
+
+#[derive(Serialize)]
+struct SarifNotification {
+    level: &'static str,
+    message: SarifText,
+    locations: Vec<SarifLocation>,
 }
 
 #[derive(Serialize)]
@@ -478,8 +574,14 @@ mod tests {
     fn path_to_uri_slashes_and_percent_encodes() {
         // Plain ASCII paths are unchanged (keeps existing snapshots stable).
         assert_eq!(path_to_uri(Path::new("src/lib.rs")), "src/lib.rs");
-        // Windows-style separators become `/` (GitHub Code Scanning mapping).
-        assert_eq!(path_to_uri(Path::new("src\\a\\b.rs")), "src/a/b.rs");
+        // Only the host platform's separator becomes `/`; a Unix filename byte
+        // must remain distinct from a path boundary.
+        let expected_backslash = if cfg!(windows) {
+            "src/a/b.rs"
+        } else {
+            "src%5Ca%5Cb.rs"
+        };
+        assert_eq!(path_to_uri(Path::new("src\\a\\b.rs")), expected_backslash);
         // Space / `#` / `%` are percent-encoded per RFC 3986 uri-reference.
         assert_eq!(path_to_uri(Path::new("a b#c%d.rs")), "a%20b%23c%25d.rs");
         // A `:` would make `a:b.txt` parse as scheme `a` -- encode it.
@@ -546,6 +648,70 @@ mod tests {
         };
         let out = render(&report);
         assert!(out["runs"][0]["results"][0]["fixes"].is_null());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fixes_keep_literal_backslash_and_slash_paths_distinct() {
+        let region = EditRegion {
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 1,
+        };
+        let mut violation = Violation::new("two files");
+        violation.proposed_edits = vec![
+            ProposedEdit {
+                path: PathBuf::from(r"src\policy.yml"),
+                region: region.clone(),
+                inserted: "a".to_string(),
+            },
+            ProposedEdit {
+                path: PathBuf::from("src/policy.yml"),
+                region,
+                inserted: "b".to_string(),
+            },
+        ];
+
+        let fixes = build_fixes("r", &violation);
+        let changes = &fixes[0].artifact_changes;
+        assert_eq!(changes.len(), 2);
+        let uris: Vec<_> = changes
+            .iter()
+            .map(|change| change.artifact_location.uri.as_str())
+            .collect();
+        assert_eq!(uris, vec!["src%5Cpolicy.yml", "src/policy.yml"]);
+    }
+    #[test]
+    #[cfg(unix)]
+    fn fixes_keep_distinct_non_utf8_paths_distinct() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let region = EditRegion {
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 1,
+        };
+        let mut violation = Violation::new("two files");
+        violation.proposed_edits = [0xff, 0xfe]
+            .into_iter()
+            .map(|byte| ProposedEdit {
+                path: PathBuf::from(std::ffi::OsString::from_vec(vec![
+                    b'b', b'a', b'd', byte, b'.', b't', b'x', b't',
+                ])),
+                region: region.clone(),
+                inserted: "x".to_string(),
+            })
+            .collect();
+
+        let fixes = build_fixes("r", &violation);
+        let uris: Vec<_> = fixes[0]
+            .artifact_changes
+            .iter()
+            .map(|change| change.artifact_location.uri.as_str())
+            .collect();
+        assert_eq!(uris, vec!["bad%FE.txt", "bad%FF.txt"]);
     }
 
     #[test]
@@ -681,7 +847,7 @@ mod tests {
                     message: "m".into(),
                     line: Some(7),
                     column: Some(3),
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,

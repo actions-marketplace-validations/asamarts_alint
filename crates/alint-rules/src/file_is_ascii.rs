@@ -242,6 +242,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         r.evaluate_file(&ctx, Path::new("f.txt"), bytes).unwrap()
     }

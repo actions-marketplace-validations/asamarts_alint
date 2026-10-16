@@ -21,6 +21,10 @@ Options:
           overlays. `nested_configs: true` is set on the generated config so each subdirectory can
           layer its own `.alint.yml` on top
 
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
+
   -f, --format <FORMAT>
           Output format
           

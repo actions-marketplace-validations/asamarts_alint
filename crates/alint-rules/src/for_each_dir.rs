@@ -318,6 +318,26 @@ impl<'a> ForEachParent<'a> {
 /// spec through 5 args, and the bypass and the fallback path
 /// share the violation-attribution loop. Reads better
 /// top-to-bottom as one phased dispatcher.
+fn apply_parent_message(
+    violation: &mut Violation,
+    parent_message: &str,
+    analysis_time: Option<&alint_core::AnalysisTimeResolution>,
+) {
+    // A nested time-dependent rule has already attached this exact,
+    // engine-supplied suffix. Preserve it when the wrapper replaces the body
+    // with its own message; do not recognize arbitrary date-looking text.
+    let Some(time) = analysis_time.and_then(|resolution| resolution.time()) else {
+        violation.message = parent_message.to_string().into();
+        return;
+    };
+    let suffix = format!(" (as of {time})");
+    if violation.message.ends_with(&suffix) {
+        violation.message = format!("{parent_message}{suffix}").into();
+    } else {
+        violation.message = parent_message.to_string().into();
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn evaluate_for_each(
     parent: ForEachParent<'_>,
@@ -431,14 +451,17 @@ pub(crate) fn evaluate_for_each(
                     continue;
                 }
             };
-            if let Some(mut violation) =
-                alint_core::expect_matches_violation(nested_rule.as_ref(), &nested_spec, ctx.index)
-            {
+            if let Some(mut violation) = alint_core::expect_matches_violation(
+                nested_rule.as_ref(),
+                &nested_spec,
+                ctx.index,
+                ctx,
+            )? {
                 // Attribute a pathless scope-assertion failure to the selected
                 // parent entry, like other nested pathless findings.
                 violation.path = Some(entry.path.clone());
                 if let Some(message) = parent_message {
-                    violation.message = message.to_string().into();
+                    apply_parent_message(&mut violation, message, ctx.analysis_time);
                 }
                 violations.push(violation);
                 continue;
@@ -478,7 +501,7 @@ pub(crate) fn evaluate_for_each(
                         v.path = Some(entry.path.clone());
                     }
                     if let Some(message) = parent_message {
-                        v.message = message.to_string().into();
+                        apply_parent_message(&mut v, message, ctx.analysis_time);
                     }
                     violations.push(v);
                 }
@@ -490,7 +513,7 @@ pub(crate) fn evaluate_for_each(
                     v.path = Some(entry.path.clone());
                 }
                 if let Some(message) = parent_message {
-                    v.message = message.to_string().into();
+                    apply_parent_message(&mut v, message, ctx.analysis_time);
                 }
                 violations.push(v);
             }
@@ -634,6 +657,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         rule.evaluate(&ctx).unwrap()
     }
@@ -725,6 +749,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert_eq!(v.len(), 1, "the wrong value must be reported: {v:?}");

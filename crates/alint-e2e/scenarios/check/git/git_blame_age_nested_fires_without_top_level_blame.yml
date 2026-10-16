@@ -10,6 +10,7 @@ given:
     pkg:
       src:
         main.rs: "fn main() {\n    // TODO: refactor this\n}\n"
+    reference.txt: "advance HEAD's deterministic analysis time\n"
   config: |
     version: 1
     rules:
@@ -25,6 +26,7 @@ given:
   git:
     commits:
       - { message: "add a todo", add: [pkg/src/main.rs], date: "2000-01-01T00:00:00" }
+      - { message: "advance head", add: [reference.txt], date: "2026-10-16T00:00:00" }
 
 when: [check]
 

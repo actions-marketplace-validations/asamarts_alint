@@ -34,6 +34,17 @@ pub(crate) struct Cli {
     #[arg(long, short = 'c', global = true)]
     pub(crate) config: Vec<PathBuf>,
 
+    /// Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides
+    /// `ALINT_AS_OF`; without either, time-dependent rules use the current HEAD commit time.
+    #[arg(
+        long,
+        global = true,
+        env = "ALINT_AS_OF",
+        hide_env = true,
+        value_name = "YYYY-MM-DD"
+    )]
+    pub(crate) as_of: Option<alint_core::AnalysisTime>,
+
     /// Output format.
     #[arg(long, short = 'f', global = true, default_value = "human")]
     pub(crate) format: String,

@@ -107,9 +107,10 @@ The IN band is therefore: predicates that are a decidable, deterministic functio
 bytes alone, **including the local `.git` object store**. That last clause is exactly why local
 git-tag and commit-history checks are IN while the GitHub API is OUT, and why a date rule must take
 a pinned `--as-of` clock rather than reading the wall clock (a wall-clock read is not a function of
-the local bytes, violating clause 2 and the determinism invariant). The shipped `git_blame_age`
-does read the wall clock today, so it is a known exception to this rule, scheduled for the
-`--as-of` input ([`general-linter.md`](general-linter.md) decision DEC-11). This grounds the
+the local bytes, violating clause 2 and the determinism invariant). At the v0.18.2 review point,
+`git_blame_age` was a known exception because it read the wall clock; W7 moved it to the
+deterministic `--as-of`/HEAD input
+([`general-linter.md`](general-linter.md) decision DEC-11). This grounds the
 intuitive "between file-exists and resolve-the-dep-graph" band of section 1 as a precise
 statement about the declarative core.
 

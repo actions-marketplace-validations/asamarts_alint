@@ -422,14 +422,14 @@ has several other dependency classes:
   launch processes;
 - Git-aware rules inspect repository metadata beyond walked files;
 - `git_commit_gpg_signed` depends on the host's GPG keyring through `git verify-commit`;
-- `git_blame_age` currently compares commit timestamps with `SystemTime::now()`;
+- at the v0.18.2 review point, `git_blame_age` compared commit timestamps with `SystemTime::now()`;
 - HTTPS `extends` resolves remote content before evaluation, with mandatory SRI pinning
   (`#sha256-...`), an SRI-keyed cache, fetch timeouts, and a body-size cap.
 
-The trust gates cover the most dangerous operations, but the evaluation plan and report do
-not describe the resulting reproducibility class. In particular, the implicit wall-clock read
-means the strict snapshot-determinism definition in section 2.3 is a target invariant, not an
-accurate description of every current kind.
+The trust gates cover the most dangerous operations, but at that review point the evaluation plan
+and report did not describe the resulting reproducibility class. In particular, the
+implicit wall-clock read meant the strict snapshot-determinism definition in section 2.3 was a
+target invariant rather than an accurate description of every kind; W7 in v0.19 removes that read.
 
 Failure is also not typed uniformly at these boundaries. A failed, timed-out, non-zero, or
 non-UTF-8 `custom` fact becomes an empty string; an unavailable or detached `git_branch` does the
@@ -443,9 +443,10 @@ declared host input, or privileged effect. Environment variables must be enumera
 plan; time-sensitive policy should receive an explicit `--as-of` value (with a documented
 CLI/CI source, decision DEC-11); process and future network nodes remain
 top-level-capability-gated. Constitution invariant 1 (byte-identical output for the same input)
-is already broken by `git_blame_age`'s wall-clock read and the GPG keyring dependency, so this
-is a correction to make, not only a target: either the invariant gains a declared-host-input
-exception or those kinds take explicit inputs, and either way through a superseding ADR. Caches, policy
+was already broken at the review point by `git_blame_age`'s wall-clock read and the GPG keyring
+dependency, so this was a correction to make, not only a target: either the invariant gained a
+declared-host-input exception or those kinds took explicit inputs, and either way through a
+superseding ADR. W7 chose explicit analysis time in ADR-0020. Caches, policy
 tests, snapshot compatibility, and `explain --trace` can then use the real dependency set
 instead of assuming all rules are equivalent.
 

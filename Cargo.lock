@@ -101,6 +101,7 @@ dependencies = [
  "ignore",
  "java-properties",
  "jsonc-parser",
+ "parking_lot",
  "proptest",
  "rayon",
  "regex",

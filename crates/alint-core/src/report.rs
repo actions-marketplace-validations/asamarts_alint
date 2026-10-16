@@ -38,6 +38,12 @@ impl Report {
         self.results.iter().map(|r| r.violations.len()).sum()
     }
 
+    /// Total non-violation notes across all rule results.
+    #[must_use]
+    pub fn total_notes(&self) -> usize {
+        self.results.iter().map(|r| r.notes.len()).sum()
+    }
+
     pub fn failing_rules(&self) -> usize {
         self.results.iter().filter(|r| !r.passed()).count()
     }

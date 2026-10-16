@@ -4,13 +4,34 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::facts::FactValues;
 use crate::level::Level;
 use crate::registry::RuleRegistry;
 use crate::walker::FileIndex;
 
-/// A single linting violation produced by a rule.
+/// Classification for a non-violation finding.
+///
+/// Formatters use the structural kind rather than matching message text:
+/// ordinary notes are informational findings, while truncated analysis is an
+/// execution condition (SARIF projects it as a tool notification).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteKind {
+    Informational,
+    AnalysisTruncated,
+}
+
+impl NoteKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Informational => "informational",
+            Self::AnalysisTruncated => "analysis_truncated",
+        }
+    }
+}
+
+/// A single linting violation or non-violation note produced by a rule.
 ///
 /// `path` holds an [`Arc<Path>`]; rules clone the [`Arc`] from
 /// [`FileEntry::path`](crate::walker::FileEntry::path) (a cheap
@@ -20,22 +41,19 @@ use crate::walker::FileIndex;
 /// `message` is a [`Cow<'static, str>`]; per-match templated
 /// messages live as `Cow::Owned(String)` (no change in cost),
 /// while fixed messages can live as `Cow::Borrowed("…")` if a
-/// rule chooses to construct them that way. Public API on the
-/// struct is unchanged at the byte level — `Display` and serde
-/// `Serialize` impls go through the inner `&str` / `&Path`.
+/// rule chooses to construct them that way. Renderers consume the inner
+/// `&str`, so the ownership choice does not alter report bytes.
 #[derive(Debug, Clone)]
 pub struct Violation {
     pub path: Option<Arc<Path>>,
     pub message: Cow<'static, str>,
     pub line: Option<usize>,
     pub column: Option<usize>,
-    /// Transient flag: when `true`, this is an informational *note*
-    /// (a non-violation finding — e.g. an entry a rule skipped rather
-    /// than failed on), not a real violation. Defaults to `false`.
-    /// The engine partitions notes out of [`RuleResult::violations`]
-    /// into [`RuleResult::notes`] at result-assembly time, so the flag
-    /// never reaches a formatter and pass/fail logic is unaffected.
-    pub is_note: bool,
+    /// `Some` marks this as a non-violation note. The engine partitions notes
+    /// out of [`RuleResult::violations`] into [`RuleResult::notes`] at result
+    /// assembly, so notes never affect pass/fail. The kind remains on the
+    /// note for format-specific projection.
+    pub note_kind: Option<NoteKind>,
     /// Optional stable structural identity for baseline fingerprinting
     /// ([`crate::baseline`]). A rule sets this when its violation is not
     /// uniquely identified by `(path, offending-line content)` — e.g. a
@@ -82,7 +100,7 @@ impl Violation {
             message: message.into(),
             line: None,
             column: None,
-            is_note: false,
+            note_kind: None,
             baseline_key: None,
             is_fixable: false,
             not_fixable: false,
@@ -103,11 +121,17 @@ impl Violation {
         if cond { self.with_not_fixable() } else { self }
     }
 
-    /// Mark this finding as an informational note rather than a
-    /// violation. See [`Violation::is_note`].
+    /// Mark this finding as an informational note rather than a violation.
     #[must_use]
     pub fn as_note(mut self) -> Self {
-        self.is_note = true;
+        self.note_kind = Some(NoteKind::Informational);
+        self
+    }
+
+    /// Mark this finding as a bounded-analysis truncation note.
+    #[must_use]
+    pub fn as_analysis_truncated_note(mut self) -> Self {
+        self.note_kind = Some(NoteKind::AnalysisTruncated);
         self
     }
 
@@ -167,20 +191,24 @@ pub struct RuleResult {
 }
 
 impl RuleResult {
-    /// Build a result from a rule's raw output, partitioning
-    /// note-flagged [`Violation`]s (`is_note`) into [`notes`](Self::notes)
-    /// and the rest into [`violations`](Self::violations). Centralises
-    /// the note/violation split so pass/fail and formatters only ever
-    /// see real violations in `violations`.
+    /// Build a result from a rule's raw output, partitioning note-kind
+    /// [`Violation`]s into [`notes`](Self::notes) and the rest into
+    /// [`violations`](Self::violations). Centralises the split so pass/fail and
+    /// violation formatters never mistake notes for policy failures.
     #[must_use]
     pub fn new(
         rule_id: Arc<str>,
         level: Level,
         policy_url: Option<Arc<str>>,
-        raw: Vec<Violation>,
+        mut raw: Vec<Violation>,
         is_fixable: bool,
     ) -> Self {
-        let (notes, violations): (Vec<_>, Vec<_>) = raw.into_iter().partition(|v| v.is_note);
+        // Reuse the producer's allocation for the overwhelmingly common
+        // violation-only path; `partition` would allocate and move every item.
+        let notes: Vec<_> = raw
+            .extract_if(.., |violation| violation.note_kind.is_some())
+            .collect();
+        let violations = raw;
         Self {
             rule_id,
             level,
@@ -214,6 +242,9 @@ impl RuleResult {
 ///   [`crate::git::BlameCache::get`]; both "outside a git repo"
 ///   and "blame failed for this file" surface as a `None`
 ///   lookup, which the rule treats as "silent no-op."
+/// - `analysis_time` — one explicit or HEAD-derived reference instant for
+///   time-dependent rules. Resolution failures stay structural until a rule
+///   actually asks for the value.
 #[derive(Debug)]
 pub struct Context<'a> {
     pub root: &'a Path,
@@ -223,6 +254,7 @@ pub struct Context<'a> {
     pub vars: Option<&'a HashMap<String, String>>,
     pub git_tracked: Option<&'a std::collections::HashSet<std::path::PathBuf>>,
     pub git_blame: Option<&'a crate::git::BlameCache>,
+    pub analysis_time: Option<&'a crate::AnalysisTimeResolution>,
 }
 
 impl Context<'_> {
@@ -247,6 +279,23 @@ impl Context<'_> {
         match self.git_tracked {
             Some(set) => crate::git::dir_has_tracked_files(rel_path, set),
             None => false,
+        }
+    }
+
+    /// Return the deterministic reference instant requested by this rule.
+    ///
+    /// An unavailable HEAD fallback is an evaluation error, which the engine
+    /// surfaces through its ordinary rule-error path until W2 promotes all such
+    /// errors to structural analysis failures.
+    pub fn analysis_time(&self) -> Result<crate::AnalysisTime> {
+        let resolution = self.analysis_time.ok_or_else(|| {
+            Error::internal("rule requested analysis time without declaring the capability")
+        })?;
+        match *resolution {
+            crate::AnalysisTimeResolution::Available { time, .. } => Ok(time),
+            crate::AnalysisTimeResolution::Unavailable(error) => {
+                Err(Error::Other(format!("analysis time unavailable: {error}")))
+            }
         }
     }
 }
@@ -362,6 +411,26 @@ pub trait Rule: Send + Sync + std::fmt::Debug {
     /// overlapping `paths:` re-use the parsed result.
     fn wants_git_blame(&self) -> bool {
         false
+    }
+
+    /// Whether this rule consumes the deterministic analysis reference time.
+    /// The engine resolves an explicit value or HEAD committer time once and
+    /// shares it across every context and fix pass.
+    fn wants_analysis_time(&self) -> bool {
+        false
+    }
+
+    /// Decorate the configuration-integrity finding produced when
+    /// `expect_matches: true` sees an empty effective scope. Most rules leave
+    /// it unchanged. A rule whose findings carry required contextual data can
+    /// attach that data here so framework-generated and evaluator-generated
+    /// findings obey the same reporting contract.
+    fn decorate_expect_matches_violation(
+        &self,
+        _violation: &mut Violation,
+        _ctx: &Context<'_>,
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// Permit this rule's *read* sites to read a config-declared path
@@ -496,14 +565,14 @@ pub trait Rule: Send + Sync + std::fmt::Debug {
 /// effective scope contains no files. The caller is responsible for applying
 /// the rule's `when:` gate first. Keeping this check shared gives top-level and
 /// nested rules identical semantics and output.
-#[must_use]
 pub fn expect_matches_violation(
     rule: &dyn Rule,
     spec: &crate::RuleSpec,
     index: &crate::FileIndex,
-) -> Option<Violation> {
+    ctx: &Context<'_>,
+) -> Result<Option<Violation>> {
     if !spec.expect_matches || rule.scope_matches_any(index) {
-        return None;
+        return Ok(None);
     }
     let rendered_scope = spec
         .paths
@@ -519,7 +588,9 @@ pub fn expect_matches_violation(
             "expected rule scope to match at least one file, but `{rendered_scope}` matched none{qualifier}"
         )
     });
-    Some(Violation::new(message).with_baseline_key("expect_matches"))
+    let mut violation = Violation::new(message).with_baseline_key("expect_matches");
+    rule.decorate_expect_matches_violation(&mut violation, ctx)?;
+    Ok(Some(violation))
 }
 
 /// File-major dispatch entry-point for a per-file rule.
@@ -1399,12 +1470,15 @@ mod tests {
         let raw = vec![
             Violation::new("real one"),
             Violation::new("a skipped entry").as_note(),
+            Violation::new("analysis stopped at the byte limit").as_analysis_truncated_note(),
             Violation::new("real two"),
         ];
         let r = RuleResult::new("x".into(), Level::Error, None, raw, false);
         assert_eq!(r.violations.len(), 2, "notes excluded from violations");
-        assert_eq!(r.notes.len(), 1);
+        assert_eq!(r.notes.len(), 2);
         assert_eq!(r.notes[0].message, "a skipped entry");
+        assert_eq!(r.notes[0].note_kind, Some(NoteKind::Informational));
+        assert_eq!(r.notes[1].note_kind, Some(NoteKind::AnalysisTruncated));
         assert!(!r.passed(), "real violations present → not passed");
 
         // A result whose only finding is a note passes (notes never
@@ -1447,6 +1521,7 @@ mod tests {
             vars: None,
             git_tracked: None, // outside-a-repo / no rule opted in
             git_blame: None,
+            analysis_time: None,
         };
         assert!(!ctx.is_git_tracked(Path::new("anything.rs")));
         assert!(!ctx.dir_has_tracked_files(Path::new("src")));
@@ -1466,6 +1541,7 @@ mod tests {
             vars: None,
             git_tracked: Some(&tracked),
             git_blame: None,
+            analysis_time: None,
         };
         assert!(ctx.is_git_tracked(Path::new("src/main.rs")));
         assert!(!ctx.is_git_tracked(Path::new("README.md")));
@@ -1495,6 +1571,7 @@ mod tests {
         assert_eq!(r.policy_url(), None);
         assert_eq!(r.git_tracked_mode(), GitTrackedMode::Off);
         assert!(!r.wants_git_blame());
+        assert!(!r.wants_analysis_time());
         assert!(!r.requires_full_index());
         assert!(r.path_scope().is_none());
         assert!(r.fixer().is_none());

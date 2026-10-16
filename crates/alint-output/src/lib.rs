@@ -16,7 +16,7 @@ pub mod style;
 use std::io::Write;
 use std::str::FromStr;
 
-use alint_core::{FixReport, Report};
+use alint_core::{FixReport, ProposedEdit, Report, Violation};
 
 /// A repo-relative path rendered with `/` separators, for the CI-consumed
 /// machine formats (GitHub annotations, GitLab Code Quality, `JUnit`): a
@@ -33,6 +33,25 @@ fn normalize_separators(s: &str, separator: char) -> String {
     } else {
         s.replace(separator, "/")
     }
+}
+/// Return edits only when every target path has an exact JSON string
+/// representation. Omitting the optional field is safer than advertising a
+/// lossy path that could alias a different file.
+pub(crate) fn utf8_proposed_edits(v: &Violation) -> Option<&[ProposedEdit]> {
+    (!v.proposed_edits.is_empty()
+        && v.proposed_edits
+            .iter()
+            .all(|edit| edit.path.to_str().is_some()))
+    .then_some(v.proposed_edits.as_slice())
+}
+
+/// Shared count-and-pointer text for formats that intentionally summarize
+/// notes instead of embedding their full repository-controlled bodies.
+pub(crate) fn note_summary(count: usize) -> String {
+    format!(
+        "{count} note{}; rerun the same check with --format json for the full list.",
+        if count == 1 { "" } else { "s" }
+    )
 }
 
 #[cfg(test)]

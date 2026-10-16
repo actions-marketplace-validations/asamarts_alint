@@ -47,6 +47,7 @@ fn eval(r: &OrderedBlockRule, text: &str) -> Vec<Violation> {
         vars: None,
         git_tracked: None,
         git_blame: None,
+        analysis_time: None,
     };
     r.evaluate_file(&ctx, Path::new("f.txt"), text.as_bytes())
         .unwrap()

@@ -115,7 +115,7 @@ pub enum Capability {
     HostKeyring,
     EnvRead,
     EnvExport,
-    WallClock,
+    AnalysisTime,
     OutOfRootRead,
     WritesDuringCheck,
     UnixOnly,

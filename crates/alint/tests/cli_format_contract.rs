@@ -27,6 +27,7 @@
 //! All gates drive the actual binary (`CARGO_BIN_EXE_alint`) so they
 //! exercise the same clap surface and renderers users hit.
 
+use alint_output::Format;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -887,6 +888,130 @@ fn agent_format_only_emits_runnable_commands() {
         checked_prose,
         "fixture produced no agent_instruction with an `alint …` command"
     );
+}
+
+fn note_only_fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("crates/core")).unwrap();
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/core\", \"${DYNAMIC}/generated\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("crates/core/Cargo.toml"),
+        "[package]\nname = \"core\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        "version: 1\n\
+         rules:\n\
+        \x20 - id: note-sentinel\n\
+        \x20   kind: registry_paths_resolve\n\
+        \x20   source: Cargo.toml\n\
+        \x20   extract: { toml: \"$.workspace.members[*]\" }\n\
+        \x20   expect: dir\n\
+        \x20   level: error\n",
+    )
+    .unwrap();
+    dir
+}
+
+// ─── ADR-0012 / W4 — notes reach every check format ────────────────
+
+#[test]
+fn note_only_run_is_successful_and_visible_in_every_check_format() {
+    let dir = note_only_fixture();
+
+    for (format, name) in [
+        (Format::Human, "human"),
+        (Format::Json, "json"),
+        (Format::Sarif, "sarif"),
+        (Format::Github, "github"),
+        (Format::Markdown, "markdown"),
+        (Format::Junit, "junit"),
+        (Format::Gitlab, "gitlab"),
+        (Format::Agent, "agent"),
+    ] {
+        let mut args = vec!["check", "--format", name];
+        if format == Format::Human {
+            args.push("--show-notes");
+        }
+        let out = run(dir.path(), &args);
+        assert!(
+            out.status.success(),
+            "{name} escalated a note-only report: stdout={}\nstderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        match format {
+            Format::Human => {
+                assert!(stdout.contains("All 1 rule(s) passed"));
+                assert!(stderr.contains("skipped non-literal entry"));
+                assert!(stderr.contains("${DYNAMIC}/generated"));
+            }
+            Format::Json => {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                assert_eq!(value["summary"]["total_violations"], 0);
+                assert_eq!(value["summary"]["passing_rules"], 1);
+                assert_eq!(value["results"][0]["notes"][0]["kind"], "informational");
+                assert!(
+                    value["results"][0]["notes"][0]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("${DYNAMIC}/generated")
+                );
+            }
+            Format::Sarif => {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                let results = value["runs"][0]["results"].as_array().unwrap();
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0]["level"], "note");
+                assert!(
+                    results[0]["message"]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("${DYNAMIC}/generated")
+                );
+            }
+            Format::Github => {
+                assert!(stdout.contains("::notice title=alint notes::1 note;"));
+                assert!(stdout.contains("--format json"));
+                assert!(!stdout.contains("${DYNAMIC}/generated"));
+            }
+            Format::Markdown => {
+                assert!(stdout.contains("No violations found."));
+                assert!(stdout.contains("> 1 note;"));
+                assert!(stdout.contains("--format json"));
+                assert!(!stdout.contains("${DYNAMIC}/generated"));
+            }
+            Format::Junit => {
+                assert!(stdout.contains("tests=\"1\" failures=\"0\""));
+                assert!(stdout.contains("<system-out>1 note;"));
+                assert!(!stdout.contains("${DYNAMIC}/generated"));
+            }
+            Format::Gitlab => {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                assert_eq!(value.as_array().unwrap().len(), 1);
+                assert_eq!(value[0]["check_name"], "alint-informational-notes");
+                assert_eq!(value[0]["severity"], "info");
+            }
+            Format::Agent => {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                assert_eq!(value["summary"]["total_violations"], 0);
+                assert_eq!(value["notes"]["count"], 1);
+                assert_eq!(value["notes"]["details_format"], "json");
+                assert_eq!(
+                    value["violations"].as_array().unwrap().as_slice(),
+                    &[] as &[serde_json::Value]
+                );
+            }
+        }
+    }
 }
 
 // ─── G1c — `fix` rejects formats it can't render, before mutating ───

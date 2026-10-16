@@ -27,7 +27,7 @@ fn violation(line: Option<usize>, column: Option<usize>) -> Violation {
         message: Cow::Borrowed("boom"),
         line,
         column,
-        is_note: false,
+        note_kind: None,
         baseline_key: None,
         is_fixable: false,
         not_fixable: false,

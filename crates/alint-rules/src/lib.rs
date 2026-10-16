@@ -1107,7 +1107,7 @@ mod registry_tests {
             BTreeSet::from(["command", "command_idempotent", "generated_file_fresh"])
         );
         assert_eq!(
-            capability_kinds(&|cap| matches!(cap, Capability::WallClock)),
+            capability_kinds(&|cap| matches!(cap, Capability::AnalysisTime)),
             BTreeSet::from(["git_blame_age"])
         );
 
@@ -1203,7 +1203,7 @@ mod registry_tests {
             Capability::HostKeyring => "host_keyring",
             Capability::EnvRead => "env_read",
             Capability::EnvExport => "env_export",
-            Capability::WallClock => "wall_clock",
+            Capability::AnalysisTime => "analysis_time",
             Capability::OutOfRootRead => "out_of_root_read",
             Capability::WritesDuringCheck => "writes_during_check",
             Capability::UnixOnly => "unix_only",

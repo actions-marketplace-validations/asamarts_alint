@@ -3,6 +3,7 @@
 //! See `docs/design/ARCHITECTURE.md` in the alint repository for the
 //! rule model, execution order, and crate layout rationale.
 
+pub mod analysis_time;
 pub mod baseline;
 mod category;
 mod config;
@@ -34,6 +35,10 @@ mod walker;
 pub mod when;
 pub mod yaml_depth;
 
+pub use analysis_time::{
+    AnalysisTime, AnalysisTimeResolution, AnalysisTimeSource, AnalysisTimeUnavailable,
+    ParseAnalysisTimeError, resolve_analysis_time,
+};
 pub use category::Category;
 pub use config::{
     AllowOutOfRoot, CompiledNestedSpec, Config, ContentSourceSpec, ExtendsEntry,
@@ -64,8 +69,8 @@ pub use report::{
 };
 pub use rule::{
     Applicability, CollectedEdit, Context, EditVerifier, ExpectedValue, FixContext, FixEdit,
-    FixOutcome, Fixer, GitTrackedMode, GroupId, PerFileRule, ReadForFix, Rule, RuleResult,
-    Violation, check_fix_size, eval_per_file, expect_matches_violation, read_for_fix,
+    FixOutcome, Fixer, GitTrackedMode, GroupId, NoteKind, PerFileRule, ReadForFix, Rule,
+    RuleResult, Violation, check_fix_size, eval_per_file, expect_matches_violation, read_for_fix,
     unreadable_file_violation, write_atomic,
 };
 pub use scope::Scope;

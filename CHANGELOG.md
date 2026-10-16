@@ -30,6 +30,31 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and nested rules; generation fails on registry, metadata, or schema drift.
 
 ### Changed
+- **Informational and bounded-analysis notes now survive every check output format.** Human and
+  text output keep the existing stderr count and `--show-notes` detail; JSON carries typed
+  per-result notes; SARIF emits informational results or execution notifications; and GitHub,
+  GitLab, Markdown, JUnit, and agent output carry an accepted count-and-pointer projection where
+  their envelopes cannot preserve full detail. Note-only runs still pass, and notes remain
+  excluded from baselines, fixes, fingerprints, and failure counts. Migration: machine-output
+  consumers should tolerate the additive JSON/agent summary fields, SARIF notifications, and
+  synthetic note summaries documented in the output-format reference. Rust callers constructing
+  `alint_core::Violation` must replace `is_note: bool` with
+  `note_kind: Option<alint_core::NoteKind>`; use `Violation::as_note()` for informational notes
+  and `Violation::as_analysis_truncated_note()` for bounded-analysis truncation.
+
+- **Time-dependent analysis now has an explicit, reproducible reference date.** The global
+  `--as-of YYYY-MM-DD` option overrides `ALINT_AS_OF`; without either, affected rules use the
+  current HEAD commit's committer timestamp instead of the workstation clock. `git_blame_age`
+  findings and `alint explain` show the UTC reference date, and explain JSON records its source
+  as `explicit`, `head`, or `unavailable`. Outside Git, pass `--as-of`; without it,
+  `git_blame_age` reports an evaluation failure rather than silently passing. Migration: CI jobs
+  that intentionally age findings against a release date should set `--as-of` or
+  `ALINT_AS_OF`; repeated checks of the same commit otherwise remain byte-identical. The public
+  capability variant and serialized metadata value are now `Capability::AnalysisTime` and
+  `analysis_time`; Rust consumers with exhaustive `Capability` matches must replace
+  `Capability::WallClock`, and metadata consumers must replace `wall_clock`. Rust callers
+  constructing `alint_core::Context` must add `analysis_time: None`, or provide an
+  `AnalysisTimeResolution` when evaluating a time-capable rule.
 
 - **Rule fields that their selected kind does not support now fail configuration loading.** Both
   `check` and `validate-config` validate `paths`, every `scope_filter` predicate, `fix` operation,
@@ -84,6 +109,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Dotenv files accepted by adotenv 0.2 now receive correct JSON, agent and SARIF fix
   coordinates instead of an insertion on the preceding physical line. SARIF
   exclusive ends retain the last character's line for both CRLF and lone CR.
+
+- **Machine fix payloads cannot alias distinct non-UTF-8 paths.** SARIF artifact URIs
+  percent-encode original Unix filename bytes, while JSON and agent reports omit the optional
+  `proposed_edit` field when an edit path has no exact JSON string representation. The agent's
+  safe `fix_command` remains available. Git subprocesses also ignore inherited repository-
+  redirecting environment variables, so HEAD time, tracked-path selection, and blame always use
+  the requested repository.
 
 - **The benchmark regression report now includes changed-mode 1k cells as advisories, as
   documented.** Those floor-level cells still never block publication; previously an outer size

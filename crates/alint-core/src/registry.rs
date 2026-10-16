@@ -662,6 +662,15 @@ fn assert_instance_conformance(kind: &str, meta: &KindMeta, spec: &RuleSpec, rul
         declares_blame,
         "{kind}: instance blame requirement disagrees with metadata"
     );
+    let declares_analysis_time = meta.capabilities.iter().any(|capability| {
+        matches!(capability.condition, CapabilityCondition::Always)
+            && matches!(capability.capability, Capability::AnalysisTime)
+    });
+    assert_eq!(
+        rule.wants_analysis_time(),
+        declares_analysis_time,
+        "{kind}: instance analysis-time requirement disagrees with metadata"
+    );
     assert_eq!(
         rule.supports_expect_matches(),
         meta.expect_matches,

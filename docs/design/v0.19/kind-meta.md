@@ -78,7 +78,7 @@ canonical kind's record. Proposed shape (names indicative):
 | `git_tracked_only` | `None`, `FileOnly`, `DirAware`; plus `respect_gitignore` and `root_only` flags |
 | `selectors` | named fields with a type: `Glob`, `GlobList` (with `!` excludes), `BasenameGlob`, `LiteralPath`, `PathTemplate`, `Regex`, `DiffGlob`, `Extract` |
 | `since` | `None`, `Optional` (falls back to HEAD), `Required` |
-| `capabilities` | `SpawnUserCommand`, `Git(ops)` (tracked set, blame, diff, log, verify-commit, untrack), `HostKeyring`, `EnvRead`, `EnvExport`, `WallClock`, `OutOfRootRead`, `WritesDuringCheck`, `UnixOnly`; each either unconditional or conditional on a named option |
+| `capabilities` | `SpawnUserCommand`, `Git(ops)` (tracked set, blame, diff, log, verify-commit, untrack), `HostKeyring`, `EnvRead`, `EnvExport`, `AnalysisTime`, `OutOfRootRead`, `WritesDuringCheck`, `UnixOnly`; each either unconditional or conditional on a named option |
 | `content` | `PathOnly`, `Metadata`, `Prefix { max_bytes, metadata }`, `Suffix { max_bytes, metadata }`, `WholeFile`, `OtherFiles`, `Blame`, `Delegated`; `max_bytes: None` means an option-configured bound |
 | `formats` | the `Format`s the kind parses (structured kinds, `json_schema_passes`, extract-based kinds) |
 | `dependencies` | repository files outside the kind's scope whose change alters its verdict, as `Rule::changed_dependencies` (v0.18.3) exposes per instance (today `json_schema_passes`'s `schema_path`) |
@@ -216,9 +216,9 @@ declared is decision K3.
 
 - **Instance conformance.** For every rule instance built from the scenario corpus, the instance's
   trait answers (`as_per_file`, `requires_full_index`, `path_scope`, `git_tracked_mode`,
-  `wants_git_blame`, `supports_expect_matches`, `fixer`) agree with its record, with each
-  conditional capability exercised in both states. Capabilities the trait cannot reveal
-  (`SpawnUserCommand`, `EnvRead`, `WallClock`, `OutOfRootRead`, `HostKeyring`) are checked through
+  `wants_git_blame`, `wants_analysis_time`, `supports_expect_matches`, `fixer`) agree with its
+  record, with each conditional capability exercised in both states. Capabilities the trait cannot
+  reveal (`SpawnUserCommand`, `EnvRead`, `OutOfRootRead`, `HostKeyring`) are checked through
   instrumented chokepoints in `alint_core::process` and `alint_core::git`; the direct
   `Command::new` calls in `command.rs` and `fixers/git_ops.rs` are routed through them first.
   "Honours `paths` / `scope_filter`" is checked behaviourally, by per-kind probes generated from

@@ -15,23 +15,24 @@ Options:
       --dry-run
           Print what would be done without writing anything
 
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
+
       --changed
           Restrict the fix pass to files in the working-tree diff (see `alint check --changed`).
           Cross-file + existence rules still see the full tree
+
+      --base <REF>
+          Base ref for `--changed`. Implies `--changed`
 
   -f, --format <FORMAT>
           Output format
           
           [default: human]
 
-      --base <REF>
-          Base ref for `--changed`. Implies `--changed`
-
       --no-gitignore
           Disable .gitignore handling (overrides config)
-
-      --fail-on-warning
-          Treat warnings as errors for exit-code purposes
 
       --unsafe-fixes
           Also apply Unsafe-tier fixes, not just Safe ones. Unsafe fixes may be destructive or
@@ -39,9 +40,17 @@ Options:
           instead of applied. `file_remove` (the fix for `file_absent` / `no_empty_files` /
           `no_submodules` / `no_symlinks`) is Unsafe, so this flag is what applies it
 
+      --fail-on-warning
+          Treat warnings as errors for exit-code purposes
+
       --fix-only
           Report only the fixes that were applied: suppress the residual (skipped / unfixable)
           findings and exit 0 unless a fix errored. For "apply what you can and move on" workflows
+
+      --diff
+          Show a unified diff of the fixes that would be applied, writing nothing. Reflects the
+          composed result at the chosen tier; the exit code matches a real `fix`. Output is a
+          unified diff regardless of `--format`
 
       --show-notes
           List informational notes in full on stderr.
@@ -58,11 +67,6 @@ Options:
           
           [default: auto]
           [possible values: auto, always, never]
-
-      --diff
-          Show a unified diff of the fixes that would be applied, writing nothing. Reflects the
-          composed result at the chosen tier; the exit code matches a real `fix`. Output is a
-          unified diff regardless of `--format`
 
       --ascii
           Force ASCII glyphs in human output.

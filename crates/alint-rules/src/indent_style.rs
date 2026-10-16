@@ -686,6 +686,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         rule.as_per_file()
             .unwrap()
@@ -862,6 +863,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         let after = rule
             .as_per_file()

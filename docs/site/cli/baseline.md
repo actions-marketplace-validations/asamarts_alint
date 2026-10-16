@@ -38,6 +38,14 @@ the default `.alint-baseline.json`) must stay inside the repository, and alint
 refuses to write through a symlink; either case exits 2. Pass `--output` to
 write the file somewhere else on purpose.
 
+## Reference date for time-dependent rules
+
+`alint baseline --as-of YYYY-MM-DD` pins the strict UTC date used to evaluate
+time-dependent findings before they are fingerprinted. The flag overrides
+`ALINT_AS_OF`; without either, alint uses the current HEAD commit's committer
+timestamp. Outside a Git repository, supply a date or the affected rule reports
+an analysis error.
+
 ## See also
 
 - [Baseline](/docs/concepts/adoption/baseline/): the full adoption workflow

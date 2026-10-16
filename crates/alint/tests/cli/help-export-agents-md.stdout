@@ -13,23 +13,24 @@ Options:
       --output <PATH>
           Output destination. Without `--inline`, the file is overwritten. Omit for stdout
 
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
+
       --inline
           Splice the generated section between `<!-- alint:start -->` and `<!-- alint:end -->`
           markers in `--output PATH`. Markers are auto-created (with a stderr warning) when the
           target file lacks them
 
-      --no-gitignore
-          Disable .gitignore handling (overrides config)
-
       --section-title <TEXT>
           Heading text for the generated section. Default: "Lint rules enforced by alint"
-
-      --fail-on-warning
-          Treat warnings as errors for exit-code purposes
 
       --include-info
           Include `level: info` rules. Default omits them - info-level rules are nudges, not
           directives
+
+      --no-gitignore
+          Disable .gitignore handling (overrides config)
 
   -f, --format <FORMAT>
           Output format. `markdown` (default) is the canonical `AGENTS.md` shape; `json` is parallel
@@ -37,6 +38,9 @@ Options:
           
           [default: markdown]
           [possible values: markdown, json]
+
+      --fail-on-warning
+          Treat warnings as errors for exit-code purposes
 
       --show-notes
           List informational notes in full on stderr.

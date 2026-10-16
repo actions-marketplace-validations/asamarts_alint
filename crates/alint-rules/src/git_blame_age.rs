@@ -7,18 +7,18 @@
 //! gap between `level: warning` on every TODO (too noisy) and
 //! `level: off` (accepts unbounded debt accumulation).
 //!
-//! Outside a git repo, on untracked files, or when the blame
-//! invocation otherwise fails, the rule silently no-ops per
-//! file — same advisory posture as `git_no_denied_paths` and
-//! `git_commit_message`. Heuristic notes (formatting passes
-//! reset blame age, vendored code carries the import commit's
-//! timestamp, squash merges collapse to one date) are
-//! documented in `docs/rules.md` and `docs/design/v0.7/git_blame_age.md`.
+//! Outside a git repo, an unavailable deterministic analysis time is a
+//! rule-evaluation error unless the caller supplies one explicitly. Untracked
+//! files and individual blame failures still no-op. Heuristic notes (formatting
+//! passes reset blame age, vendored code carries the import commit's timestamp,
+//! squash merges collapse to one date) are documented in `docs/rules.md` and
+//! `docs/design/v0.7/git_blame_age.md`.
 //!
 //! Check-only — auto-removing TODO markers is destructive and
 //! pinning a line's content as "do nothing" doesn't help.
 
-use std::time::{Duration, SystemTime};
+use std::fmt::Write as _;
+use std::time::Duration;
 
 use alint_core::template::render_message;
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
@@ -57,18 +57,28 @@ impl Rule for GitBlameAgeRule {
     fn wants_git_blame(&self) -> bool {
         true
     }
+    fn wants_analysis_time(&self) -> bool {
+        true
+    }
+    fn decorate_expect_matches_violation(
+        &self,
+        violation: &mut Violation,
+        ctx: &Context<'_>,
+    ) -> Result<()> {
+        let analysis_time = ctx.analysis_time()?;
+        write!(violation.message.to_mut(), " (as of {analysis_time})")
+            .expect("writing to a String cannot fail");
+        Ok(())
+    }
     fn path_scope(&self) -> Option<&Scope> {
         Some(&self.scope)
     }
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        let analysis_time = ctx.analysis_time()?;
         let mut violations = Vec::new();
         let Some(blame_cache) = ctx.git_blame else {
-            // Non-git workspace, or no rule asked for the cache
-            // — silent no-op, by design. Same posture as the
-            // rest of the git module.
             return Ok(violations);
         };
-        let now = SystemTime::now();
         for entry in ctx.index.files() {
             if !self.scope.matches(&entry.path, ctx.index) {
                 continue;
@@ -85,9 +95,7 @@ impl Rule for GitBlameAgeRule {
                 let Some(captures) = self.pattern.captures(&line.content) else {
                     continue;
                 };
-                let age = now
-                    .duration_since(line.author_time)
-                    .unwrap_or(Duration::ZERO);
+                let age = analysis_time.elapsed_since(line.author_time);
                 if age <= self.max_age {
                     continue;
                 }
@@ -109,7 +117,7 @@ impl Rule for GitBlameAgeRule {
                     _ => None,
                 });
                 violations.push(
-                    Violation::new(rendered)
+                    Violation::new(format!("{rendered} (as of {analysis_time})"))
                         .with_path(entry.path.clone())
                         .with_location(line.line_number, 1),
                 );
@@ -139,7 +147,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
             condition: alint_core::CapabilityCondition::Always,
         },
         alint_core::CapabilityMeta {
-            capability: alint_core::Capability::WallClock,
+            capability: alint_core::Capability::AnalysisTime,
             condition: alint_core::CapabilityCondition::Always,
         },
     ]),
@@ -218,6 +226,13 @@ mod tests {
         )
     }
 
+    fn analysis_time() -> alint_core::AnalysisTimeResolution {
+        alint_core::AnalysisTimeResolution::Available {
+            time: "2026-10-16".parse().unwrap(),
+            source: alint_core::AnalysisTimeSource::Explicit,
+        }
+    }
+
     #[test]
     fn no_op_when_blame_cache_absent() {
         // Outside a git repo (or no rule wants blame), the
@@ -225,6 +240,7 @@ mod tests {
         // silently produce no violations.
         let r = rule(r"\bTODO\b", 30, None);
         let idx = index(&["src/main.rs"]);
+        let analysis_time = analysis_time();
         let ctx = Context {
             root: Path::new("/"),
             index: &idx,
@@ -233,6 +249,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: Some(&analysis_time),
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "expected silent no-op, got {v:?}");
@@ -246,6 +263,7 @@ mod tests {
         let idx = index(&["src/main.rs"]);
         let tmp = tempfile::tempdir().unwrap();
         let cache = BlameCache::new(tmp.path().to_path_buf());
+        let analysis_time = analysis_time();
         let ctx = Context {
             root: tmp.path(),
             index: &idx,
@@ -254,6 +272,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: Some(&cache),
+            analysis_time: Some(&analysis_time),
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty());
@@ -355,6 +374,7 @@ level: warning
         let idx = index(&["pkg/marker.lock", "pkg/a.rs", "other/b.rs"]);
         let tmp = tempfile::tempdir().unwrap();
         let cache = BlameCache::new(tmp.path().to_path_buf());
+        let analysis_time = analysis_time();
         let ctx = Context {
             root: tmp.path(),
             index: &idx,
@@ -363,6 +383,7 @@ level: warning
             vars: None,
             git_tracked: None,
             git_blame: Some(&cache),
+            analysis_time: Some(&analysis_time),
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "no blame data → no violations: {v:?}");

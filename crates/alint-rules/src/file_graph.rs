@@ -1228,6 +1228,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         r.evaluate(&ctx).expect("evaluate ok")
     }

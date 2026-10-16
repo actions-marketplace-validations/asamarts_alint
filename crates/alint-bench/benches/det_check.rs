@@ -61,6 +61,17 @@ const SFIX_ALL: &str = include_str!(concat!(
     "/../../xtask/src/bench/scenarios/sfix_all.yml"
 ));
 
+const ANALYSIS_TIME: &str = r#"
+version: 1
+rules:
+  - id: stale-todos
+    kind: git_blame_age
+    paths: "**/*.rs"
+    pattern: TODO
+    max_age_days: 30
+    level: warning
+"#;
+
 fn workspace_target() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target")
 }
@@ -110,6 +121,38 @@ fn materialize(scenario: &str, config: &str, n: usize) {
     let _ = std::fs::remove_dir_all(&dest);
     copy_dir(tree.root(), &dest);
     std::fs::write(dest.join(".alint.yml"), config).unwrap();
+}
+
+fn analysis_time_tree_path() -> PathBuf {
+    workspace_target().join("det-trees/analysis-time-cli")
+}
+
+fn materialize_analysis_time() {
+    let root = analysis_time_tree_path();
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".alint.yml"), ANALYSIS_TIME).unwrap();
+    let run_git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", "2024-01-02T03:04:05Z")
+            .env("GIT_COMMITTER_DATE", "2024-01-02T03:04:05Z")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run_git(&["init", "-q", "-b", "main"]);
+    run_git(&["config", "user.name", "Test"]);
+    run_git(&["config", "user.email", "test@example.com"]);
+    run_git(&["config", "commit.gpgsign", "false"]);
+    run_git(&["add", ".alint.yml"]);
+    run_git(&["commit", "-qm", "fixed"]);
 }
 
 /// setup for the `fix` cell: like [`materialize`], then inject a trailing space
@@ -204,6 +247,25 @@ fn fix(scenario: &str, config: &str, n: usize) -> Command {
 
 binary_benchmark_group!(name = fix_grp, benchmarks = fix);
 
+// One fixed repository and one time-capable configured rule. `explain` executes
+// exactly the HEAD-time fallback command without also invoking `git blame`, so
+// Callgrind's child-process tracing includes the deterministic process cost.
+#[binary_benchmark(setup = materialize_analysis_time)]
+#[bench::head_commit()]
+fn explain_analysis_time() -> Command {
+    Command::new(alint_bin())
+        .current_dir(analysis_time_tree_path())
+        .arg("explain")
+        .arg("stale-todos")
+        .arg("--config")
+        .arg(analysis_time_tree_path().join(".alint.yml"))
+        .arg("--format")
+        .arg("json")
+        .build()
+}
+
+binary_benchmark_group!(name = analysis_time_grp, benchmarks = explain_analysis_time);
+
 main!(
     config = BinaryBenchmarkConfig::default().tool(
         Callgrind::default()
@@ -216,5 +278,5 @@ main!(
             // moving net cycles <1%, so gating them only false-positives.
             .soft_limits([(EventKind::Ir, 2.0), (EventKind::EstimatedCycles, 5.0)]),
     ),
-    binary_benchmark_groups = [check_grp, fix_grp]
+    binary_benchmark_groups = [check_grp, fix_grp, analysis_time_grp]
 );

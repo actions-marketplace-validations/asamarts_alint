@@ -668,6 +668,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         r.evaluate(&ctx).unwrap()
     }
@@ -730,7 +731,7 @@ mod tests {
         r.set_allow_out_of_root(true);
         let v = eval(&r, root, &index(&["src/a.rs"], &[]));
         assert!(
-            v.iter().all(|x| x.is_note),
+            v.iter().all(|x| x.note_kind.is_some()),
             "only an out-of-root note: {v:?}"
         );
         assert!(
@@ -796,8 +797,8 @@ mod tests {
         let v = eval(&r, dir.path(), &idx);
         // The non-literal entry is skipped (not a violation) but
         // surfaces as an informational note (v0.11).
-        let real: Vec<_> = v.iter().filter(|x| !x.is_note).collect();
-        let notes: Vec<_> = v.iter().filter(|x| x.is_note).collect();
+        let real: Vec<_> = v.iter().filter(|x| x.note_kind.is_none()).collect();
+        let notes: Vec<_> = v.iter().filter(|x| x.note_kind.is_some()).collect();
         assert!(
             real.is_empty(),
             "non-literal must not be a violation, got {real:?}"

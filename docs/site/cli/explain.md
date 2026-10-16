@@ -53,6 +53,19 @@ The fields, top to bottom:
   `when: facts.has_rust`. A gated rule that never reports anything is usually
   gated off; [`alint facts`](/docs/cli/facts/) shows what the fact resolved to.
 - **`message`** and **`policy_url`** are what a finding prints and links to.
+- **`analysis_time`** appears when the configured rule—or a rule nested under
+  its `require:` tree—uses deterministic time. It shows the UTC date and whether
+  it came from an `explicit` input or `head`; an unavailable fallback includes
+  the stable failure reason.
+
+## Reference date
+
+`alint explain <id> --as-of YYYY-MM-DD` shows the exact strict UTC date a
+subsequent check would use. The flag overrides `ALINT_AS_OF`; without either,
+alint reads the current HEAD commit's committer timestamp. Human output renders
+`analysis_time: YYYY-MM-DD (explicit|head)`. With `--format json`, the
+`analysis_time` object contains `date` and `source`; an unavailable fallback has
+`date: null`, `source: "unavailable"`, and `error`.
 
 ## Examples
 

@@ -2215,7 +2215,7 @@
         },
         {
           "capability": {
-            "kind": "wall_clock"
+            "kind": "analysis_time"
           },
           "condition": {
             "kind": "always"

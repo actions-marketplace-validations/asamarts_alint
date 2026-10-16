@@ -1,9 +1,11 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
+
+use parking_lot::Mutex;
 
 use rayon::prelude::*;
 
@@ -118,6 +120,32 @@ struct GitTrackedIndexes {
     /// &git_tracked)` plus tracked files. Handed to rules with
     /// [`GitTrackedMode::DirAware`].
     dir_aware: Option<FileIndex>,
+}
+
+#[derive(Debug)]
+struct AnalysisTimeCache {
+    normalized_root: PathBuf,
+    resolution: crate::AnalysisTimeResolution,
+}
+
+fn normalize_analysis_root(root: &Path) -> PathBuf {
+    std::fs::canonicalize(root).unwrap_or_else(|_| {
+        if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            std::env::current_dir().map_or_else(|_| root.to_path_buf(), |cwd| cwd.join(root))
+        }
+    })
+}
+
+fn cached_analysis_time(cache: &AnalysisTimeCache, root: &Path) -> crate::AnalysisTimeResolution {
+    if normalize_analysis_root(root) == cache.normalized_root {
+        cache.resolution
+    } else {
+        crate::AnalysisTimeResolution::Unavailable(
+            crate::AnalysisTimeUnavailable::EngineRootChanged,
+        )
+    }
 }
 
 /// Return of [`Engine::collect_live_per_file_entries`]: the per-file
@@ -237,6 +265,54 @@ impl RuleEntry {
     pub fn extra(&self) -> Option<&serde_yaml_ng::Mapping> {
         self.spec.as_ref().map(|s| &s.extra)
     }
+
+    /// Whether this configured rule tree consumes deterministic analysis time.
+    ///
+    /// Nested iterator rules are instantiated with stable placeholder path
+    /// tokens, matching the engine's preparation traversal.
+    pub fn wants_analysis_time(&self, registry: &RuleRegistry) -> Result<bool> {
+        let mut wants = false;
+        visit_rule_tree_with_registry(
+            registry,
+            self.rule.as_ref(),
+            self.spec.as_deref(),
+            &mut |rule, _spec| {
+                wants |= rule.wants_analysis_time();
+                Ok(())
+            },
+        )?;
+        Ok(wants)
+    }
+}
+
+fn visit_rule_tree_with_registry(
+    registry: &RuleRegistry,
+    rule: &dyn Rule,
+    spec: Option<&crate::RuleSpec>,
+    visit: &mut RuleTreeVisitor<'_>,
+) -> Result<()> {
+    visit(rule, spec)?;
+    if rule.nested_rule_specs().is_empty() {
+        return Ok(());
+    }
+
+    let tokens = crate::template::PathTokens::from_path(Path::new("_"));
+    for (idx, compiled) in rule.nested_rule_specs().iter().enumerate() {
+        let nested_spec = compiled
+            .spec
+            .instantiate(rule.id(), idx, rule.level(), &tokens);
+        let nested_rule = registry.build(&nested_spec).map_err(|error| {
+            Error::rule_config(
+                rule.id(),
+                format!(
+                    "nested rule #{idx} (`{}`) could not be prepared: {error}",
+                    compiled.spec.kind
+                ),
+            )
+        })?;
+        visit_rule_tree_with_registry(registry, nested_rule.as_ref(), Some(&nested_spec), visit)?;
+    }
+    Ok(())
 }
 
 /// Executes a set of rules against a pre-built [`FileIndex`].
@@ -253,6 +329,9 @@ pub struct Engine {
     facts: Vec<FactSpec>,
     vars: HashMap<String, String>,
     fix_size_limit: Option<u64>,
+    analysis_time: Option<crate::AnalysisTime>,
+    analysis_time_required: OnceLock<bool>,
+    analysis_time_cache: Mutex<Option<AnalysisTimeCache>>,
     /// In `--changed` mode, the set of paths (relative to root)
     /// that the user wants linted. `None` means "full check"; the
     /// engine bypasses every changed-set short-circuit. See
@@ -275,6 +354,9 @@ impl Engine {
             facts: Vec::new(),
             vars: HashMap::new(),
             fix_size_limit: Some(1 << 20),
+            analysis_time: None,
+            analysis_time_required: OnceLock::new(),
+            analysis_time_cache: Mutex::new(None),
             changed_paths: None,
             fix_baseline: None,
         }
@@ -288,6 +370,9 @@ impl Engine {
             facts: Vec::new(),
             vars: HashMap::new(),
             fix_size_limit: Some(1 << 20),
+            analysis_time: None,
+            analysis_time_required: OnceLock::new(),
+            analysis_time_cache: Mutex::new(None),
             changed_paths: None,
             fix_baseline: None,
         }
@@ -330,6 +415,14 @@ impl Engine {
     #[must_use]
     pub fn with_vars(mut self, vars: HashMap<String, String>) -> Self {
         self.vars = vars;
+        self
+    }
+
+    /// Override the reference instant used by every time-dependent rule.
+    /// Without this, the run resolves the current HEAD committer time.
+    #[must_use]
+    pub fn with_analysis_time(mut self, analysis_time: crate::AnalysisTime) -> Self {
+        self.analysis_time = Some(analysis_time);
         self
     }
 
@@ -404,6 +497,7 @@ impl Engine {
         let t_git = Instant::now();
         let git_tracked = self.collect_git_tracked_if_needed(root);
         let git_blame = self.build_blame_cache_if_needed(root);
+        let analysis_time = self.resolve_analysis_time_if_needed(root);
         phase!(t_git, "git_setup");
 
         let t_filter = Instant::now();
@@ -430,6 +524,7 @@ impl Engine {
             vars: Some(&self.vars),
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
+            analysis_time: analysis_time.as_ref(),
         };
         let filtered_ctx = filtered_index.as_ref().map(|fi| Context {
             root,
@@ -439,6 +534,7 @@ impl Engine {
             vars: Some(&self.vars),
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
+            analysis_time: analysis_time.as_ref(),
         });
         let git_file_only_ctx = git_tracked_indexes
             .as_ref()
@@ -451,6 +547,7 @@ impl Engine {
                 vars: Some(&self.vars),
                 git_tracked: git_tracked.as_ref(),
                 git_blame: git_blame.as_ref(),
+                analysis_time: analysis_time.as_ref(),
             });
         let git_dir_aware_ctx = git_tracked_indexes
             .as_ref()
@@ -463,6 +560,7 @@ impl Engine {
                 vars: Some(&self.vars),
                 git_tracked: git_tracked.as_ref(),
                 git_blame: git_blame.as_ref(),
+                analysis_time: analysis_time.as_ref(),
             });
         let when_env = WhenEnv {
             facts: &fact_values,
@@ -668,7 +766,7 @@ impl Engine {
         filtered_ctx: Option<&'a Context<'a>>,
         when_env: &'a WhenEnv<'a>,
     ) -> Vec<(usize, RuleResult)> {
-        let (live, gate_results) = self.collect_live_per_file_entries(full_ctx.index, when_env);
+        let (live, gate_results) = self.collect_live_per_file_entries(full_ctx, when_env);
         if live.is_empty() {
             return gate_results;
         }
@@ -853,9 +951,10 @@ impl Engine {
     /// [`Engine::run`]'s file-major loop and [`Engine::run_for_file`].
     fn collect_live_per_file_entries<'a>(
         &'a self,
-        index: &FileIndex,
+        ctx: &Context<'_>,
         when_env: &WhenEnv<'_>,
     ) -> LivePerFileEntries<'a> {
+        let index = ctx.index;
         let mut live: Vec<(usize, &RuleEntry)> = Vec::new();
         let mut gate_results: Vec<(usize, RuleResult)> = Vec::new();
         for (idx, entry) in self.entries.iter().enumerate() {
@@ -892,11 +991,28 @@ impl Engine {
                     }
                 }
             }
-            if let Some(violation) = entry
-                .spec
-                .as_deref()
-                .and_then(|spec| crate::expect_matches_violation(entry.rule.as_ref(), spec, index))
-            {
+            let scope_violation = match entry.spec.as_deref() {
+                Some(spec) => {
+                    match crate::expect_matches_violation(entry.rule.as_ref(), spec, index, ctx) {
+                        Ok(violation) => violation,
+                        Err(e) => {
+                            gate_results.push((
+                                idx,
+                                RuleResult::new(
+                                    Arc::from(entry.rule.id()),
+                                    entry.rule.level(),
+                                    entry.rule.policy_url().map(Arc::from),
+                                    vec![Violation::new(format!("rule error: {e}"))],
+                                    false,
+                                ),
+                            ));
+                            continue;
+                        }
+                    }
+                }
+                None => None,
+            };
+            if let Some(violation) = scope_violation {
                 // This is a configuration-integrity finding, not a finding the
                 // host rule's fixer can repair (there is no target file).
                 let (violations, is_fixable) = mark_fixability(vec![violation], None);
@@ -961,6 +1077,7 @@ impl Engine {
         };
         let git_tracked = self.collect_git_tracked_if_needed(root);
         let git_blame = self.build_blame_cache_if_needed(root);
+        let analysis_time = self.resolve_analysis_time_if_needed(root);
         // Per-file rules may carry `scope_filter.changed_since:`; resolve
         // (and cache) the diff before any `Scope::matches` reads it.
         self.resolve_changed_paths(root, index)?;
@@ -974,6 +1091,7 @@ impl Engine {
             vars: Some(&self.vars),
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
+            analysis_time: analysis_time.as_ref(),
         };
         let when_env = WhenEnv {
             facts: fact_values,
@@ -982,7 +1100,7 @@ impl Engine {
             env: None,
         };
 
-        let (live, gate_results) = self.collect_live_per_file_entries(index, &when_env);
+        let (live, gate_results) = self.collect_live_per_file_entries(&ctx, &when_env);
 
         // Dispatch each in-scope rule against the supplied bytes. The
         // raw violations (notes included) are bucketed by entry index;
@@ -1062,6 +1180,16 @@ impl Engine {
         // this many re-walk passes and report exit 2. Declared first so the
         // `items_after_statements` lint stays quiet.
         const MAX_PASSES: usize = 10;
+        self.ensure_manifest_scope_resolvable()?;
+        if self.changed_paths.as_ref().is_some_and(HashSet::is_empty)
+            && !self.any_expect_matches()?
+        {
+            return Ok(FixReport {
+                results: Vec::new(),
+                non_convergent: false,
+            });
+        }
+        let analysis_time = self.resolve_analysis_time_if_needed(root);
         if dry_run {
             // Single-pass preview: a dry run writes nothing, so there is no
             // changed tree to re-walk. It shows the first pass; a real `fix` may
@@ -1072,6 +1200,7 @@ impl Engine {
                 &std::collections::HashSet::new(),
                 true,
                 threshold,
+                analysis_time.as_ref(),
                 None,
                 None,
             )?;
@@ -1131,6 +1260,7 @@ impl Engine {
                 &created,
                 false,
                 threshold,
+                analysis_time.as_ref(),
                 Some(&write_failures_reported),
                 None,
             )?;
@@ -1258,7 +1388,16 @@ impl Engine {
         // and stays non-convergent.
         if !converged {
             let cur = owned_index.as_ref().unwrap_or(index);
-            let (confirm, _) = self.fix_run(root, cur, &created, true, threshold, None, None)?;
+            let (confirm, _) = self.fix_run(
+                root,
+                cur,
+                &created,
+                true,
+                threshold,
+                analysis_time.as_ref(),
+                None,
+                None,
+            )?;
             if confirm.applied() == 0 {
                 converged = true;
                 final_keys = confirm
@@ -1370,7 +1509,20 @@ impl Engine {
         // `Some(&sink)` puts every direct-write fixer into that record-not-write
         // mode (see `FixContext::stage_ops`), which is what keeps `--diff` from
         // touching disk.
+        self.ensure_manifest_scope_resolvable()?;
+        if self.changed_paths.as_ref().is_some_and(HashSet::is_empty)
+            && !self.any_expect_matches()?
+        {
+            return Ok((
+                FixReport {
+                    results: Vec::new(),
+                    non_convergent: false,
+                },
+                Vec::new(),
+            ));
+        }
         let stage_ops = RefCell::new(Vec::new());
+        let analysis_time = self.resolve_analysis_time_if_needed(root);
         // Single pass: a `--diff` preview shows what one fix pass would compose;
         // it does not re-walk (there is no changed tree to walk), so it cannot
         // preview a multi-pass cascade -- documented in `stage_fixes`' caveat.
@@ -1380,6 +1532,7 @@ impl Engine {
             /* created */ &std::collections::HashSet::new(),
             /* dry_run */ false,
             threshold,
+            analysis_time.as_ref(),
             /* flush */ None,
             Some(&stage_ops),
         )?;
@@ -1563,25 +1716,13 @@ impl Engine {
         created: &HashSet<PathBuf>,
         dry_run: bool,
         threshold: Applicability,
+        analysis_time: Option<&crate::AnalysisTimeResolution>,
         // `Some` = write the compose buffer; the set holds the targets whose
         // write failure this `fix` run already printed (reported once, not once
         // per fixpoint pass). `None` for a preview (`--dry-run` / `--diff`).
         flush: Option<&RefCell<HashSet<PathBuf>>>,
         stage_ops: Option<&RefCell<Vec<FixEdit>>>,
     ) -> Result<(FixReport, BTreeMap<PathBuf, Vec<u8>>)> {
-        self.ensure_manifest_scope_resolvable()?;
-        if self.changed_paths.as_ref().is_some_and(HashSet::is_empty)
-            && !self.any_expect_matches()?
-        {
-            return Ok((
-                FixReport {
-                    results: Vec::new(),
-                    non_convergent: false,
-                },
-                BTreeMap::new(),
-            ));
-        }
-
         let fact_values = evaluate_facts(&self.facts, root, index)?;
         let git_tracked = self.collect_git_tracked_if_needed(root);
         let git_blame = self.build_blame_cache_if_needed(root);
@@ -1595,6 +1736,7 @@ impl Engine {
             vars: Some(&self.vars),
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
+            analysis_time,
         };
         let filtered_ctx = filtered_index.as_ref().map(|fi| Context {
             root,
@@ -1604,6 +1746,7 @@ impl Engine {
             vars: Some(&self.vars),
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
+            analysis_time,
         });
         let git_file_only_ctx = git_tracked_indexes
             .as_ref()
@@ -1616,6 +1759,7 @@ impl Engine {
                 vars: Some(&self.vars),
                 git_tracked: git_tracked.as_ref(),
                 git_blame: git_blame.as_ref(),
+                analysis_time,
             });
         let git_dir_aware_ctx = git_tracked_indexes
             .as_ref()
@@ -1628,6 +1772,7 @@ impl Engine {
                 vars: Some(&self.vars),
                 git_tracked: git_tracked.as_ref(),
                 git_blame: git_blame.as_ref(),
+                analysis_time,
             });
         let when_env = WhenEnv {
             facts: &fact_values,
@@ -1742,9 +1887,16 @@ impl Engine {
                     }
                 }
             }
-            let scope_violation = entry.spec.as_deref().and_then(|spec| {
-                crate::expect_matches_violation(entry.rule.as_ref(), spec, full_ctx.index)
-            });
+            let scope_violation = match entry.spec.as_deref() {
+                Some(spec) => crate::expect_matches_violation(
+                    entry.rule.as_ref(),
+                    spec,
+                    full_ctx.index,
+                    &full_ctx,
+                )
+                .unwrap_or_else(|e| Some(Violation::new(format!("rule error: {e}")))),
+                None => None,
+            };
             if scope_violation.is_none() && skipped_for_changed {
                 continue;
             }
@@ -1753,7 +1905,7 @@ impl Engine {
             // through baseline classification below so `check --baseline` and
             // `fix --baseline` agree; only the fixer selection is suppressed.
             let scope_assertion_failed = scope_violation.is_some();
-            let violations = if let Some(violation) = scope_violation {
+            let mut violations = if let Some(violation) = scope_violation {
                 vec![violation]
             } else {
                 let ctx = pick_ctx(
@@ -1769,6 +1921,9 @@ impl Engine {
                     Err(e) => vec![Violation::new(format!("rule error: {e}"))],
                 }
             };
+            // Notes are check-report detail, never remediation targets. Drop them
+            // before baseline classification and before either fixer regime.
+            violations.retain(|violation| violation.note_kind.is_none());
             // W4 (`fix --baseline`): SKIP -- surface, never apply -- any violation
             // the baseline grandfathers, so `fix` resolves only NEW findings. Reuse
             // `baseline::apply` on THIS rule's violations: the fingerprint includes
@@ -2349,6 +2504,37 @@ impl Engine {
         Some(crate::git::BlameCache::new(root.to_path_buf()))
     }
 
+    fn resolve_analysis_time_if_needed(
+        &self,
+        root: &Path,
+    ) -> Option<crate::AnalysisTimeResolution> {
+        let any_wants = *self.analysis_time_required.get_or_init(|| {
+            self.entries
+                .iter()
+                .any(|entry| entry.wants_analysis_time(&self.registry).unwrap_or(false))
+        });
+        if !any_wants {
+            return None;
+        }
+        if let Some(time) = self.analysis_time {
+            return Some(crate::AnalysisTimeResolution::available(
+                time,
+                crate::AnalysisTimeSource::Explicit,
+            ));
+        }
+        let mut cache = self.analysis_time_cache.lock();
+        if let Some(cached) = cache.as_ref() {
+            return Some(cached_analysis_time(cached, root));
+        }
+        let entry = AnalysisTimeCache {
+            normalized_root: normalize_analysis_root(root),
+            resolution: crate::resolve_analysis_time(root, None),
+        };
+        let resolution = cached_analysis_time(&entry, root);
+        *cache = Some(entry);
+        Some(resolution)
+    }
+
     /// Build a [`FileIndex`] containing only the entries the user
     /// said they care about (the `--changed` set). Returns `None`
     /// when no changed-set is configured — callers fall back to
@@ -2602,39 +2788,14 @@ impl Engine {
     /// must be populated before any rule evaluates; exposing the nested specs
     /// through [`Rule::nested_rule_specs`] lets this preparation pass discover
     /// the same effective runtime scopes ahead of dispatch.
-    fn visit_rule_tree(
-        &self,
-        rule: &dyn Rule,
-        spec: Option<&crate::RuleSpec>,
-        visit: &mut RuleTreeVisitor<'_>,
-    ) -> Result<()> {
-        visit(rule, spec)?;
-        if rule.nested_rule_specs().is_empty() {
-            return Ok(());
-        }
-
-        let tokens = crate::template::PathTokens::from_path(Path::new("_"));
-        for (idx, compiled) in rule.nested_rule_specs().iter().enumerate() {
-            let nested_spec = compiled
-                .spec
-                .instantiate(rule.id(), idx, rule.level(), &tokens);
-            let nested_rule = self.registry.build(&nested_spec).map_err(|e| {
-                Error::rule_config(
-                    rule.id(),
-                    format!(
-                        "nested rule #{idx} (`{}`) could not be prepared: {e}",
-                        compiled.spec.kind
-                    ),
-                )
-            })?;
-            self.visit_rule_tree(nested_rule.as_ref(), Some(&nested_spec), visit)?;
-        }
-        Ok(())
-    }
-
     fn visit_all_rules(&self, visit: &mut RuleTreeVisitor<'_>) -> Result<()> {
         for entry in &self.entries {
-            self.visit_rule_tree(entry.rule.as_ref(), entry.spec.as_deref(), visit)?;
+            visit_rule_tree_with_registry(
+                &self.registry,
+                entry.rule.as_ref(),
+                entry.spec.as_deref(),
+                visit,
+            )?;
         }
         Ok(())
     }
@@ -2983,11 +3144,24 @@ fn run_entry(
             }
         }
     }
-    if let Some(violation) = entry
-        .spec
-        .as_deref()
-        .and_then(|spec| crate::expect_matches_violation(entry.rule.as_ref(), spec, full_index))
-    {
+    let scope_violation = match entry.spec.as_deref() {
+        Some(spec) => {
+            match crate::expect_matches_violation(entry.rule.as_ref(), spec, full_index, ctx) {
+                Ok(violation) => violation,
+                Err(e) => {
+                    return Some(RuleResult::new(
+                        Arc::from(entry.rule.id()),
+                        entry.rule.level(),
+                        entry.rule.policy_url().map(Arc::from),
+                        vec![Violation::new(format!("rule error: {e}"))],
+                        false,
+                    ));
+                }
+            }
+        }
+        None => None,
+    };
+    if let Some(violation) = scope_violation {
         // This is a configuration-integrity finding, not a finding the host
         // rule's fixer can repair (there is no target file).
         let (violations, is_fixable) = mark_fixability(vec![violation], None);
@@ -3050,9 +3224,10 @@ fn mark_fixability(
             // does not apply here, so those violations are not "auto-fixable".
             let applies_by_default = f.applicability().applies_at(Applicability::Safe);
             for v in &mut violations {
-                // An unreadable-file finding is never auto-fixable: the fixer would
-                // hit the same read error, so `check` must not promise a fix.
-                v.is_fixable = applies_by_default
+                // Notes are never remediation targets even when their owning
+                // rule declares a fixer.
+                v.is_fixable = v.note_kind.is_none()
+                    && applies_by_default
                     && !is_unfixable_finding(f, v)
                     && v.baseline_key.as_deref() != Some(crate::rule::UNREADABLE_FILE_KEY);
             }
@@ -3163,6 +3338,156 @@ mod tests {
             full_index: true,
             expose_scope: false,
         })
+    }
+
+    #[derive(Debug)]
+    struct TimeRule;
+
+    impl Rule for TimeRule {
+        fn id(&self) -> &'static str {
+            "time"
+        }
+
+        fn level(&self) -> Level {
+            Level::Error
+        }
+
+        fn wants_analysis_time(&self) -> bool {
+            true
+        }
+
+        fn evaluate(&self, ctx: &Context<'_>) -> crate::error::Result<Vec<Violation>> {
+            Ok(vec![Violation::new(format!(
+                "reference {}",
+                ctx.analysis_time()?
+            ))])
+        }
+    }
+
+    #[test]
+    fn analysis_time_resolution_is_lazy_and_explicit_time_works_outside_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ordinary = Engine::new(Vec::new(), RuleRegistry::new());
+        assert!(
+            ordinary
+                .resolve_analysis_time_if_needed(tmp.path())
+                .is_none()
+        );
+
+        let explicit: crate::AnalysisTime = "2024-02-29".parse().unwrap();
+        let engine =
+            Engine::new(vec![Box::new(TimeRule)], RuleRegistry::new()).with_analysis_time(explicit);
+        assert_eq!(
+            engine.resolve_analysis_time_if_needed(tmp.path()),
+            Some(crate::AnalysisTimeResolution::Available {
+                time: explicit,
+                source: crate::AnalysisTimeSource::Explicit,
+            })
+        );
+        let report = engine.run(tmp.path(), &idx(&[])).unwrap();
+        assert_eq!(
+            report.results[0].violations[0].message,
+            "reference 2024-02-29"
+        );
+    }
+    #[test]
+    fn head_analysis_time_is_cached_for_the_engine_lifetime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run_git = |args: &[&str], date: Option<&str>| {
+            let mut command = std::process::Command::new("git");
+            command.arg("-C").arg(root).args(args);
+            if let Some(date) = date {
+                command
+                    .env("GIT_AUTHOR_DATE", date)
+                    .env("GIT_COMMITTER_DATE", date);
+            }
+            assert!(command.status().unwrap().success(), "git {args:?}");
+        };
+        run_git(&["init", "-q"], None);
+        std::fs::write(root.join("tracked"), "one\n").unwrap();
+        run_git(&["add", "tracked"], None);
+        run_git(
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "one",
+            ],
+            Some("2024-01-02T03:04:05Z"),
+        );
+
+        let engine = Engine::new(vec![Box::new(TimeRule)], RuleRegistry::new());
+        let first = engine.resolve_analysis_time_if_needed(root).unwrap();
+        assert_eq!(first.time().unwrap().to_string(), "2024-01-02",);
+
+        std::fs::write(root.join("tracked"), "two\n").unwrap();
+        run_git(&["add", "tracked"], None);
+        run_git(
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "two",
+            ],
+            Some("2025-06-07T08:09:10Z"),
+        );
+        assert_eq!(engine.resolve_analysis_time_if_needed(root), Some(first));
+        assert_eq!(
+            engine.resolve_analysis_time_if_needed(&root.join(".")),
+            Some(first),
+            "a lexical alias of the same root must reuse the first resolution"
+        );
+
+        let other = tempfile::tempdir().unwrap();
+        assert_eq!(
+            engine.resolve_analysis_time_if_needed(other.path()),
+            Some(crate::AnalysisTimeResolution::Unavailable(
+                crate::AnalysisTimeUnavailable::EngineRootChanged
+            )),
+            "one engine must not silently reuse or replace another root's time"
+        );
+    }
+
+    #[test]
+    fn empty_changed_fix_and_diff_do_not_resolve_analysis_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = Engine::new(vec![Box::new(TimeRule)], RuleRegistry::new())
+            .with_changed_paths(HashSet::new());
+        let index = idx(&[]);
+        let walk_opts = crate::WalkOptions {
+            respect_gitignore: true,
+            extra_ignores: Vec::new(),
+        };
+
+        let report = engine
+            .fix(tmp.path(), &index, &walk_opts, false, Applicability::Safe)
+            .unwrap();
+        assert!(report.results.is_empty());
+        assert!(engine.analysis_time_cache.lock().is_none());
+
+        let (report, staged) = engine
+            .stage_fixes(tmp.path(), &index, Applicability::Safe)
+            .unwrap();
+        assert!(report.results.is_empty());
+        assert!(staged.is_empty());
+        assert!(engine.analysis_time_cache.lock().is_none());
+    }
+
+    #[test]
+    fn unavailable_head_time_surfaces_as_a_rule_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = Engine::new(vec![Box::new(TimeRule)], RuleRegistry::new());
+        let report = engine.run(tmp.path(), &idx(&[])).unwrap();
+        let message = report.results[0].violations[0].message.as_ref();
+        assert!(message.starts_with("rule error: analysis time unavailable: "));
+        assert!(message.contains("pass --as-of YYYY-MM-DD"));
     }
 
     fn idx(paths: &[&str]) -> FileIndex {
@@ -3787,6 +4112,69 @@ mod tests {
         fn fixer(&self) -> Option<&dyn crate::rule::Fixer> {
             Some(&self.fixer)
         }
+    }
+
+    #[derive(Debug)]
+    struct NoteOnlyRule {
+        fixer: GrowFixer,
+    }
+
+    impl Rule for NoteOnlyRule {
+        fn id(&self) -> &'static str {
+            "note-only"
+        }
+
+        fn level(&self) -> Level {
+            Level::Error
+        }
+
+        fn evaluate(&self, _ctx: &Context<'_>) -> crate::error::Result<Vec<Violation>> {
+            Ok(vec![Violation::new("informational").as_note()])
+        }
+
+        fn fixer(&self) -> Option<&dyn crate::rule::Fixer> {
+            Some(&self.fixer)
+        }
+    }
+
+    #[test]
+    fn fix_never_applies_a_fixer_to_a_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("grow.txt");
+        std::fs::write(&target, b"").unwrap();
+        let engine = Engine::new(
+            vec![Box::new(NoteOnlyRule {
+                fixer: GrowFixer {
+                    target: target.clone(),
+                },
+            })],
+            RuleRegistry::new(),
+        );
+
+        let report = engine
+            .fix(
+                tmp.path(),
+                &idx(&["grow.txt"]),
+                &crate::WalkOptions::default(),
+                false,
+                Applicability::Safe,
+            )
+            .unwrap();
+        assert!(report.results.is_empty());
+        assert_eq!(std::fs::read(target).unwrap(), b"");
+    }
+
+    #[test]
+    fn fixer_backed_note_is_never_marked_fixable() {
+        let fixer = GrowFixer {
+            target: PathBuf::from("unused"),
+        };
+        let (findings, rule_has_fixer) = mark_fixability(
+            vec![Violation::new("informational").as_note()],
+            Some(&fixer),
+        );
+        assert!(rule_has_fixer);
+        assert!(!findings[0].is_fixable);
     }
 
     #[test]

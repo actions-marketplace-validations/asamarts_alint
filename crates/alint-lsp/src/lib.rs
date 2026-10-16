@@ -92,6 +92,8 @@ pub struct LspOptions {
     /// `--show-notes`: list every informational note on stderr after a
     /// full check, instead of the default one-line count.
     pub show_notes: bool,
+    /// Explicit reference date shared by full checks and buffer re-evaluation.
+    pub analysis_time: Option<alint_core::AnalysisTime>,
 }
 
 /// One cached finding for a file: enough to publish a diagnostic and to
@@ -367,8 +369,11 @@ impl Backend {
             .iter()
             .map(|(u, t, _)| (u.clone(), t.clone()))
             .collect();
-        let check = match tokio::task::spawn_blocking(move || check_workspace(&folders, &task_docs))
-            .await
+        let analysis_time = self.options.analysis_time;
+        let check = match tokio::task::spawn_blocking(move || {
+            check_workspace(&folders, &task_docs, analysis_time)
+        })
+        .await
         {
             Ok(check) => check,
             Err(join_err) => {

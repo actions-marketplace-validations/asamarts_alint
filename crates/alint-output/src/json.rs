@@ -71,7 +71,7 @@ struct JsonResult<'a> {
     /// when empty, so results without notes are byte-identical to
     /// pre-v0.11 output.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    notes: Vec<JsonViolation<'a>>,
+    notes: Vec<JsonNote<'a>>,
 }
 
 #[derive(Serialize)]
@@ -90,10 +90,24 @@ struct JsonViolation<'a> {
     /// Matches the `agent` format's `fix_available` and the human `[fixable]` tag.
     fixable: bool,
     /// The concrete Safe fix(es) alint would apply to resolve this violation
-    /// (source region + replacement text). Present only under `--include-fixes`
-    /// and only for a fixable finding; a note never carries one.
+    /// (source region + replacement text). Present only under `--include-fixes`,
+    /// only for a fixable finding, and only when every target path has an exact
+    /// JSON string representation; a note never carries one.
     #[serde(skip_serializing_if = "Option::is_none")]
     proposed_edit: Option<&'a [ProposedEdit]>,
+}
+
+#[derive(Serialize)]
+struct JsonNote<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<Cow<'a, str>>,
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    kind: &'static str,
+    fixable: bool,
 }
 
 pub fn write_json(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
@@ -135,20 +149,22 @@ pub fn write_json_with_baseline(
                     line: v.line,
                     column: v.column,
                     fixable: v.is_fixable,
-                    proposed_edit: (!v.proposed_edits.is_empty())
-                        .then_some(v.proposed_edits.as_slice()),
+                    proposed_edit: crate::utf8_proposed_edits(v),
                 })
                 .collect(),
             notes: r
                 .notes
                 .iter()
-                .map(|v| JsonViolation {
+                .map(|v| JsonNote {
                     path: lossy_path(v.path.as_deref()),
                     message: v.message.as_ref(),
                     line: v.line,
                     column: v.column,
-                    fixable: false, // notes are non-violations; never auto-fixable
-                    proposed_edit: None, // notes are non-violations; no fix
+                    kind: v
+                        .note_kind
+                        .unwrap_or(alint_core::NoteKind::Informational)
+                        .as_str(),
+                    fixable: false,
                 })
                 .collect(),
         })

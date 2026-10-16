@@ -343,6 +343,38 @@ fn render_facts_dispatches_on_format() {
 }
 
 #[test]
+fn human_note_stderr_summarizes_by_default_and_lists_structural_kinds_on_request() {
+    let report = alint_core::Report {
+        results: vec![alint_core::RuleResult::new(
+            "bounded-scan".into(),
+            alint_core::Level::Error,
+            None,
+            vec![
+                alint_core::Violation::new("dynamic value skipped")
+                    .with_path(Path::new("Cargo.toml"))
+                    .as_note(),
+                alint_core::Violation::new("stopped at 64 KiB").as_analysis_truncated_note(),
+            ],
+            false,
+        )],
+    };
+
+    let mut summary = Vec::new();
+    write_report_notes(&report, false, &mut summary).unwrap();
+    let summary = String::from_utf8(summary).unwrap();
+    assert_eq!(
+        summary,
+        "alint: 2 informational note(s); run with --show-notes to list.\n"
+    );
+
+    let mut details = Vec::new();
+    write_report_notes(&report, true, &mut details).unwrap();
+    let details = String::from_utf8(details).unwrap();
+    assert!(details.contains("note: Cargo.toml: dynamic value skipped"));
+    assert!(details.contains("analysis truncated: stopped at 64 KiB"));
+}
+
+#[test]
 fn tracing_ansi_follows_color_choice_no_color_and_tty() {
     // Without CLICOLOR_FORCE in the environment (the resolve step only
     // upgrades `auto`), the decision table is:

@@ -1,7 +1,10 @@
 # `git_blame_age` rule kind
 
-Status: Implemented. See `crates/alint-rules/src/git_blame_age.rs`
-+ `BlameCache` in `crates/alint-core/src/git.rs`.
+Status: Implemented for v0.7. Its wall-clock and non-Git semantics are superseded
+by [v0.19 deterministic analysis time](../v0.19/analysis-time.md) and
+[ADR-0020](../../adr/0020-explicit-analysis-time.md). See
+`crates/alint-rules/src/git_blame_age.rs` + `BlameCache` in
+`crates/alint-core/src/git.rs`.
 
 Resolved open questions (from the original design draft, listed
 at the bottom of this doc):

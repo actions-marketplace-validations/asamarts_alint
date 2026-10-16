@@ -2,6 +2,7 @@
 # Run with UPDATE_SNAPSHOTS=1 to refresh after intentional flag changes.
 
 === <top-level> ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
@@ -23,6 +24,7 @@
   -q, --quiet
 
 === check ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --base <REF>
   --baseline <FILE>
@@ -45,6 +47,7 @@
   -q, --quiet
 
 === list ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --category <CATEGORY>
@@ -66,6 +69,7 @@
   -q, --quiet
 
 === explain ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
@@ -86,6 +90,7 @@
   -q, --quiet
 
 === fix ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --base <REF>
   --baseline <FILE>
@@ -112,6 +117,7 @@
   -q, --quiet
 
 === facts ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
@@ -132,6 +138,7 @@
   -q, --quiet
 
 === init ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
@@ -153,6 +160,7 @@
   -q, --quiet
 
 === suggest ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
@@ -176,6 +184,7 @@
   -q, --quiet
 
 === export-agents-md ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>

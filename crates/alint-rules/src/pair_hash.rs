@@ -453,7 +453,7 @@ mod tests {
         r.set_allow_out_of_root(true);
         let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert!(
-            v.iter().all(|x| x.is_note),
+            v.iter().all(|x| x.note_kind.is_some()),
             "only an out-of-root note: {v:?}"
         );
         assert!(

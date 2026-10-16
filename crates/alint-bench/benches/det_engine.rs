@@ -11,9 +11,10 @@
 //! gated (they false-positive on benign branch-pattern shifts; the +2-3% v0.12
 //! drift was a benign ~+7-23% mispredict delta at <1% net cycles).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use alint_core::{Engine, FileEntry, FileIndex, Rule};
+use alint_core::{Context, Engine, FileEntry, FileIndex, Level, Rule, Violation};
 use gungraun::{
     Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
 };
@@ -86,6 +87,28 @@ fn build_index(n: usize) -> FileIndex {
     FileIndex::from_entries(entries)
 }
 
+#[derive(Debug)]
+struct AnalysisTimeRule;
+
+impl Rule for AnalysisTimeRule {
+    fn id(&self) -> &'static str {
+        "analysis-time-bench"
+    }
+
+    fn level(&self) -> Level {
+        Level::Error
+    }
+
+    fn wants_analysis_time(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&self, ctx: &Context<'_>) -> alint_core::Result<Vec<Violation>> {
+        std::hint::black_box(ctx.analysis_time()?);
+        Ok(Vec::new())
+    }
+}
+
 struct Fixture {
     engine: Engine,
     index: FileIndex,
@@ -97,6 +120,42 @@ fn fixture(n: usize) -> Fixture {
         engine: Engine::new(build_rules(), alint_rules::builtin_registry()),
         index: build_index(n),
         root: PathBuf::from("/bench/root"),
+    }
+}
+
+fn run_git(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_AUTHOR_DATE", "2024-01-02T03:04:05Z")
+        .env("GIT_COMMITTER_DATE", "2024-01-02T03:04:05Z")
+        .output()
+        .expect("git is required for the deterministic analysis-time benchmark");
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn analysis_time_fixture() -> Fixture {
+    let root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/det-trees/analysis-time");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    run_git(&root, &["init", "-q", "-b", "main"]);
+    run_git(&root, &["config", "user.name", "Test"]);
+    run_git(&root, &["config", "user.email", "test@example.com"]);
+    run_git(&root, &["config", "commit.gpgsign", "false"]);
+    run_git(&root, &["commit", "--allow-empty", "-qm", "fixed"]);
+    Fixture {
+        engine: Engine::new(
+            vec![Box::new(AnalysisTimeRule)],
+            alint_rules::builtin_registry(),
+        ),
+        index: FileIndex::from_entries(Vec::new()),
+        root,
     }
 }
 
@@ -114,7 +173,18 @@ fn engine_run(fix: Fixture) {
     std::hint::black_box(engine.run(&root, &index).unwrap());
 }
 
-library_benchmark_group!(name = engine, benchmarks = engine_run);
+#[library_benchmark(setup = analysis_time_fixture)]
+#[bench::head_commit()]
+fn analysis_time_run(fix: Fixture) {
+    let Fixture {
+        engine,
+        index,
+        root,
+    } = fix;
+    std::hint::black_box(engine.run(&root, &index).unwrap());
+}
+
+library_benchmark_group!(name = engine, benchmarks = [engine_run, analysis_time_run]);
 
 main!(
     config = LibraryBenchmarkConfig::default().tool(

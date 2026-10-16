@@ -74,6 +74,20 @@ pub fn write_gitlab(
             issues.push(build_issue(result, violation, precomputed, &mut seen));
         }
     }
+    let note_count = report.total_notes();
+    if note_count > 0 {
+        let fingerprint = unique_fingerprint(note_summary_fingerprint(), &mut seen);
+        issues.push(Issue {
+            description: crate::note_summary(note_count),
+            check_name: "alint-informational-notes".to_string(),
+            fingerprint,
+            severity: "info",
+            location: Location {
+                path: ".".to_string(),
+                lines: Lines { begin: 1 },
+            },
+        });
+    }
     let json = serde_json::to_string_pretty(&issues)?;
     w.write_all(json.as_bytes())?;
     w.write_all(b"\n")?;
@@ -123,17 +137,7 @@ fn build_issue(
     // only genuine in-report collisions get a deterministic suffix.
     let base = precomputed_fingerprint
         .unwrap_or_else(|| self_fingerprint(&result.rule_id, &path, &violation.message));
-    let occurrence = {
-        let counter = seen.entry(base.clone()).or_insert(0);
-        let n = *counter;
-        *counter += 1;
-        n
-    };
-    let fingerprint = if occurrence == 0 {
-        base
-    } else {
-        occurrence_suffixed(&base, occurrence)
-    };
+    let fingerprint = unique_fingerprint(base, seen);
 
     Issue {
         description: violation.message.to_string(),
@@ -184,6 +188,26 @@ fn self_fingerprint(rule_id: &str, path: &str, message: &str) -> String {
     hasher.update(b"|");
     hasher.update(message.as_bytes());
     hex_digest(hasher)
+}
+
+/// Stable identity for the one synthetic note-summary issue. The input domain
+/// cannot be produced by a real rule issue, and the shared occurrence grid
+/// still disambiguates a precomputed canonical hash that happens to match.
+fn note_summary_fingerprint() -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"alint\0gitlab-synthetic\0informational-notes");
+    hex_digest(hasher)
+}
+
+fn unique_fingerprint(base: String, seen: &mut std::collections::HashMap<String, u32>) -> String {
+    let counter = seen.entry(base.clone()).or_insert(0);
+    let occurrence = *counter;
+    *counter += 1;
+    if occurrence == 0 {
+        base
+    } else {
+        occurrence_suffixed(&base, occurrence)
+    }
 }
 
 /// Deterministically derive a distinct fingerprint for the Nth (`occurrence` >
@@ -259,7 +283,7 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -349,7 +373,7 @@ mod tests {
                     message: "x".into(),
                     line: Some(0),
                     column: None,
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -372,7 +396,7 @@ mod tests {
                     message: "msg".into(),
                     line: Some(7),
                     column: None,
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -404,7 +428,7 @@ mod tests {
                     message: "same-msg".into(),
                     line: Some(line),
                     column: None,
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -428,7 +452,7 @@ mod tests {
             message: "forbidden pattern".into(),
             line: Some(line),
             column: None,
-            is_note: false,
+            note_kind: None,
             baseline_key: None,
             is_fixable: false,
             not_fixable: false,
@@ -459,7 +483,7 @@ mod tests {
             message: "same message".into(),
             line: Some(line),
             column: None,
-            is_note: false,
+            note_kind: None,
             baseline_key: None,
             is_fixable: false,
             not_fixable: false,
@@ -483,6 +507,25 @@ mod tests {
             arr[0]["fingerprint"], canon,
             "the FIRST occurrence keeps the raw canonical (SARIF/baseline parity)"
         );
+    }
+
+    #[test]
+    fn note_summary_does_not_collide_with_a_real_issue() {
+        // This real issue used to share the summary's fallback fingerprint
+        // exactly: rule id + root path + "note-summary".
+        let mut result = rule(
+            "alint-informational-notes",
+            Level::Info,
+            vec![Violation::new("note-summary")],
+        );
+        result.notes.push(Violation::new("detail").as_note());
+        let report = Report {
+            results: vec![result],
+        };
+
+        let arr = parse(&render(&report));
+        assert_eq!(arr.len(), 2);
+        assert_ne!(arr[0]["fingerprint"], arr[1]["fingerprint"]);
     }
 
     #[test]
@@ -526,7 +569,7 @@ mod tests {
                     message: r#"contains "quotes" and \backslashes\ and newline\nliteral"#.into(),
                     line: Some(1),
                     column: None,
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,

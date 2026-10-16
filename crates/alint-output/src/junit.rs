@@ -70,6 +70,15 @@ pub fn write_junit(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
         }
     }
 
+    let note_count = report.total_notes();
+    if note_count > 0 {
+        writeln!(
+            w,
+            "    <system-out>{}</system-out>",
+            xml_text(&crate::note_summary(note_count))
+        )?;
+    }
+
     writeln!(w, "  </testsuite>")?;
     writeln!(w, "</testsuites>")?;
     Ok(())
@@ -246,7 +255,7 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -307,7 +316,7 @@ mod tests {
                     message: "<bad> & \"quoted\"".into(),
                     line: None,
                     column: None,
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -333,7 +342,7 @@ mod tests {
                     message: "before\u{0001}\u{0008}after".into(),
                     line: None,
                     column: None,
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,
@@ -357,7 +366,7 @@ mod tests {
                     message: "line1\nline2".into(),
                     line: None,
                     column: None,
-                    is_note: false,
+                    note_kind: None,
                     baseline_key: None,
                     is_fixable: false,
                     not_fixable: false,

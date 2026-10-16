@@ -12,6 +12,10 @@ Options:
       --category <CATEGORY>
           Only rules whose kind is in this category (slug; see `alint rules categories`)
 
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
+
   -f, --format <FORMAT>
           Output format
           

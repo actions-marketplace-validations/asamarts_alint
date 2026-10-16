@@ -21,6 +21,87 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::{AnalysisTime, AnalysisTimeUnavailable};
+
+/// Environment variables that can redirect a Git command away from the
+/// repository selected by `-C`, replace its object/ref view, or alter repository
+/// discovery. This includes Git's `rev-parse --local-env-vars` set; clearing it
+/// keeps repository identity an explicit function input.
+const GIT_LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_COMMON_DIR",
+];
+
+fn clear_git_repository_env(command: &mut Command) {
+    for name in GIT_LOCAL_ENV_VARS {
+        // `Command::env_remove` records an owned override even when the parent
+        // has no such variable. Avoid building twenty dead map entries on every
+        // Git query; present redirectors are still removed deterministically.
+        if std::env::var_os(name).is_some() {
+            command.env_remove(name);
+        }
+    }
+}
+
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    clear_git_repository_env(&mut command);
+    command
+}
+/// Resolve the current HEAD commit's committer timestamp.
+///
+/// The command emits only `%ct`; raw Git stderr is deliberately excluded from
+/// the stable error returned to rule evaluation and machine formats.
+pub fn head_commit_time(root: &Path) -> Result<AnalysisTime, AnalysisTimeUnavailable> {
+    let mut command = git_command();
+    let output = command
+        // Repository/global configuration must not turn this timestamp-only
+        // query into signature verification or add verification text to stdout.
+        .args(["-c", "log.showSignature=false"])
+        .arg("-C")
+        .arg(root)
+        .args(["log", "-1", "--format=%ct", "--end-of-options", "HEAD"])
+        .output()
+        .map_err(|_| AnalysisTimeUnavailable::GitUnavailable)?;
+    if !output.status.success() {
+        return Err(AnalysisTimeUnavailable::HeadUnavailable);
+    }
+    parse_head_commit_time(&output.stdout)
+}
+
+fn parse_head_commit_time(stdout: &[u8]) -> Result<AnalysisTime, AnalysisTimeUnavailable> {
+    let digits = stdout
+        .strip_suffix(b"\n")
+        .unwrap_or(stdout)
+        .strip_suffix(b"\r")
+        .unwrap_or_else(|| stdout.strip_suffix(b"\n").unwrap_or(stdout));
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return Err(AnalysisTimeUnavailable::InvalidHeadTime);
+    }
+    let text = std::str::from_utf8(digits).map_err(|_| AnalysisTimeUnavailable::InvalidHeadTime)?;
+    let seconds = text
+        .parse::<u64>()
+        .map_err(|_| AnalysisTimeUnavailable::InvalidHeadTime)?;
+    AnalysisTime::from_unix_seconds(seconds).ok_or(AnalysisTimeUnavailable::InvalidHeadTime)
+}
+
 /// Resolve the repo's tracked-paths set, relative to `root`.
 ///
 /// `root` should be the alint root (the path passed to
@@ -62,7 +143,7 @@ pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
     // exotic bytes round-trip correctly. `--full-name` would force
     // repo-root-relative paths, but we want CWD-relative — git's
     // default with `-C <dir>` already gives that.
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(root)
         .args(["ls-files", "-z"])
@@ -133,7 +214,7 @@ pub fn untrack_path(root: &Path, rel_path: &Path, dry_run: bool) -> UntrackOutco
         Some(tracked) if !tracked.contains(rel_path) => return UntrackOutcome::NotTracked,
         Some(_) => {}
     }
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.arg("-C")
         .arg(root)
         .env("GIT_LITERAL_PATHSPECS", "1")
@@ -183,7 +264,7 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
         if base.starts_with('-') {
             return None;
         }
-        let output = Command::new("git")
+        let output = git_command()
             .arg("-C")
             .arg(root)
             .args(["diff", "--name-only", "--relative", "-z"])
@@ -209,7 +290,7 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
         // `ls-files` to finish, which is no slower than running them in turn.
         // `wait_with_output` then drains both pipes, so the child can't wedge,
         // and it is always reaped, even when `ls-files` fails to spawn.
-        let staged = Command::new("git")
+        let staged = git_command()
             .arg("-C")
             .arg(root)
             .args(["diff", "--cached", "--name-only", "--relative", "-z"])
@@ -218,7 +299,7 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
             .stderr(Stdio::piped())
             .spawn()
             .ok()?;
-        let working = Command::new("git")
+        let working = git_command()
             .arg("-C")
             .arg(root)
             .args([
@@ -288,7 +369,7 @@ fn diff_name_only(
 ) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
     // Probe: are we in a git repo at all? If not, silent None —
     // matching the advisory posture of the rest of this module.
-    let Ok(probe) = Command::new("git")
+    let Ok(probe) = git_command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -299,7 +380,7 @@ fn diff_name_only(
     if !probe.status.success() {
         return Ok(None);
     }
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.arg("-C")
         .arg(root)
         .args(["diff", "--name-only", "--relative", "-z"]);
@@ -352,7 +433,7 @@ fn diff_name_only(
 /// posture as the rest of the git module: a non-git workspace
 /// silently no-ops the rule rather than raising a hard error.
 pub fn head_commit_message(root: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(root)
         .args(["log", "-1", "--format=%B"])
@@ -384,7 +465,7 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
 /// [`commit_messages_in_range`] so a single commit round-trips
 /// through the shared commit-log parser.
 pub fn head_commit_record(root: &Path) -> Option<CommitRecord> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(root)
         .args([
@@ -478,7 +559,7 @@ pub fn commit_messages_in_range(
     // in a git repo at all. If not, this returns Ok(None) (the
     // "silent" branch) without surfacing the BadRange error,
     // matching head_commit_message's posture.
-    let probe = Command::new("git")
+    let probe = git_command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -499,7 +580,7 @@ pub fn commit_messages_in_range(
         });
     }
     let range = format!("{since}..HEAD");
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.arg("-C").arg(root).args([
         "log",
         "--reverse",
@@ -587,7 +668,7 @@ fn parse_commit_log(stdout: &[u8]) -> Vec<CommitRecord> {
 /// trust is the user's GPG config / `.git/allowed_signers`, not this
 /// rule's job.
 pub fn verify_commit(root: &Path, sha: &str) -> Option<bool> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(root)
         .args(["verify-commit", sha])
@@ -632,7 +713,7 @@ pub struct BlameLine {
 /// non-blameable file silently no-ops the rule rather than
 /// raising a hard error.
 pub fn blame_lines(root: &Path, rel_path: &Path) -> Option<Vec<BlameLine>> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(root)
         .args(["blame", "--line-porcelain", "--"])
@@ -681,6 +762,7 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
     let mut out = Vec::new();
     let mut final_line: Option<usize> = None;
     let mut author_time: Option<SystemTime> = None;
+    let mut uncommitted = false;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix('\t') {
             // Source line. Emit a BlameLine when we have both a
@@ -701,7 +783,7 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
         let key = parts.next().unwrap_or("");
         let value = parts.next().unwrap_or("");
         match key {
-            "author-time" => {
+            "author-time" if !uncommitted => {
                 if let Ok(secs) = value.parse::<u64>() {
                     // `checked_add`: a crafted commit can carry a 19-digit
                     // author-time that parses as u64 but overflows SystemTime
@@ -714,16 +796,15 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
             // SHA header: 40 hex digits + space + 3 numbers. We
             // detect by length and hex-ness; cheap heuristic.
             sha if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) => {
+                // Git assigns working-tree-only lines the all-zero pseudo SHA and
+                // may synthesize their author time from the wall clock. They are
+                // not ageable committed history, so omit them deterministically.
+                uncommitted = sha.bytes().all(|b| b == b'0');
+                author_time = None;
                 // The header line is `<sha> <orig> <final> [<num_lines>]`.
-                // We want the third field — the final line number.
-                // (Already in `value`; split off the `<orig>` first.)
                 let mut cols = value.split(' ');
                 let _orig = cols.next();
-                if let Some(final_str) = cols.next()
-                    && let Ok(n) = final_str.parse::<usize>()
-                {
-                    final_line = Some(n);
-                }
+                final_line = cols.next().and_then(|s| s.parse::<usize>().ok());
             }
             _ => {}
         }
@@ -919,6 +1000,272 @@ mod tests {
     }
 
     #[test]
+    fn head_commit_time_uses_fixed_committer_timestamp_and_detached_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        assert_eq!(
+            head_commit_time(root),
+            Err(AnalysisTimeUnavailable::HeadUnavailable)
+        );
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            head_commit_time(root),
+            Err(AnalysisTimeUnavailable::HeadUnavailable)
+        );
+        std::fs::write(root.join("tracked"), "x\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args(["add", "tracked"])
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.com",
+                    "commit",
+                    "-qm",
+                    "fixed",
+                ])
+                .env("GIT_AUTHOR_DATE", "2024-01-02T03:04:05Z")
+                .env("GIT_COMMITTER_DATE", "2024-01-02T03:04:05Z")
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let expected =
+            "2024-01-02".parse::<AnalysisTime>().unwrap().unix_seconds() + 3 * 3_600 + 4 * 60 + 5;
+        assert_eq!(head_commit_time(root).unwrap().unix_seconds(), expected);
+        assert!(
+            Command::new("git")
+                .args(["checkout", "-q", "--detach", "HEAD"])
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(head_commit_time(root).unwrap().unix_seconds(), expected);
+    }
+
+    #[test]
+    fn git_queries_ignore_foreign_repository_environment() {
+        const ROOT_ENV: &str = "ALINT_TEST_HEAD_TIME_ROOT";
+        const EXPECTED_ENV: &str = "ALINT_TEST_HEAD_TIME_EXPECTED";
+        if let Some(root) = std::env::var_os(ROOT_ENV) {
+            let expected = std::env::var(EXPECTED_ENV).unwrap().parse::<u64>().unwrap();
+            assert_eq!(
+                head_commit_time(Path::new(&root)).unwrap().unix_seconds(),
+                expected
+            );
+            let tracked = collect_tracked_paths(Path::new(&root)).unwrap();
+            assert!(tracked.contains(Path::new("tracked.txt")));
+            let blame = blame_lines(Path::new(&root), Path::new("tracked.txt")).unwrap();
+            assert_eq!(blame.len(), 1);
+            assert_eq!(blame[0].content, "2024-01-02T03:04:05Z");
+            return;
+        }
+
+        let make_repo = |date: &str| {
+            let repo = tempfile::tempdir().unwrap();
+            for args in [
+                &["init", "-q", "-b", "main"][..],
+                &["config", "user.email", "test@example.com"][..],
+                &["config", "user.name", "Test"][..],
+                &["config", "commit.gpgsign", "false"][..],
+            ] {
+                assert!(
+                    Command::new("git")
+                        .arg("-C")
+                        .arg(repo.path())
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            std::fs::write(repo.path().join("tracked.txt"), format!("{date}\n")).unwrap();
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(repo.path())
+                    .args(["add", "tracked.txt"])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(repo.path())
+                    .args(["commit", "-qm", "fixed"])
+                    .env("GIT_AUTHOR_DATE", date)
+                    .env("GIT_COMMITTER_DATE", date)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            repo
+        };
+        let target = make_repo("2024-01-02T03:04:05Z");
+        let foreign = make_repo("2030-06-07T08:09:10Z");
+        let expected =
+            "2024-01-02".parse::<AnalysisTime>().unwrap().unix_seconds() + 3 * 3_600 + 4 * 60 + 5;
+
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git::tests::git_queries_ignore_foreign_repository_environment",
+                "--nocapture",
+            ])
+            .env(ROOT_ENV, target.path())
+            .env(EXPECTED_ENV, expected.to_string())
+            .env("GIT_DIR", foreign.path().join(".git"))
+            .env("GIT_WORK_TREE", foreign.path())
+            .env("GIT_INDEX_FILE", foreign.path().join(".git/index"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn head_commit_time_disables_configured_signature_verification() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let run = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output.stdout
+        };
+        run(&["init", "-q"]);
+        std::fs::write(root.join("tracked"), "x\n").unwrap();
+        run(&["add", "tracked"]);
+        run(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "base",
+        ]);
+
+        // Install a commit carrying a signature header without depending on a
+        // real key. With log.showSignature enabled, Git would invoke the
+        // configured verifier even though this query only needs `%ct`.
+        let tree = String::from_utf8(run(&["rev-parse", "HEAD^{tree}"]))
+            .unwrap()
+            .trim()
+            .to_string();
+        let commit = format!(
+            "tree {tree}\n\
+             author Test <test@example.com> 1704164645 +0000\n\
+             committer Test <test@example.com> 1704164645 +0000\n\
+             gpgsig -----BEGIN PGP SIGNATURE-----\n\
+             \x20\n\
+             \x20ZmFrZQ==\n\
+             \x20-----END PGP SIGNATURE-----\n\
+             \n\
+             signed\n"
+        );
+        let mut hash_object = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["hash-object", "-t", "commit", "-w", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        hash_object
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(commit.as_bytes())
+            .unwrap();
+        let hash_output = hash_object.wait_with_output().unwrap();
+        assert!(hash_output.status.success());
+        let hash = String::from_utf8(hash_output.stdout).unwrap();
+        run(&["update-ref", "HEAD", hash.trim()]);
+
+        let verifier = root.join("gpg-probe.sh");
+        std::fs::write(
+            &verifier,
+            "#!/bin/sh\ntouch \"$(dirname \"$0\")/gpg-invoked\"\nexit 1\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&verifier).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&verifier, permissions).unwrap();
+        run(&["config", "log.showSignature", "true"]);
+        run(&[
+            "config",
+            "gpg.program",
+            verifier.to_str().expect("temporary path is UTF-8"),
+        ]);
+
+        assert_eq!(
+            head_commit_time(root).unwrap().unix_seconds(),
+            1_704_164_645
+        );
+        assert!(
+            !root.join("gpg-invoked").exists(),
+            "timestamp lookup must not invoke a signature verifier"
+        );
+    }
+
+    #[test]
+    fn head_commit_time_parser_rejects_empty_malformed_and_out_of_range_values() {
+        for raw in [
+            b"".as_slice(),
+            b"\n",
+            b" 123\n",
+            b"-1\n",
+            b"123 extra\n",
+            b"253402300800\n",
+        ] {
+            assert_eq!(
+                parse_head_commit_time(raw),
+                Err(AnalysisTimeUnavailable::InvalidHeadTime),
+                "{raw:?}"
+            );
+        }
+        assert_eq!(
+            parse_head_commit_time(b"0\n").unwrap(),
+            "1970-01-01".parse().unwrap()
+        );
+    }
+
+    #[test]
     fn head_message_returns_none_outside_git() {
         let tmp = tempfile::tempdir().unwrap();
         // Same advisory posture: the `git_commit_message` rule
@@ -1022,6 +1369,26 @@ filename a.rs
         let lines = parse_porcelain(porcelain);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].content, "works");
+    }
+
+    #[test]
+    fn parse_porcelain_omits_uncommitted_zero_sha_lines() {
+        let porcelain = "\
+0000000000000000000000000000000000000000 1 1 1
+author Not Committed Yet
+author-time 1999999999
+filename a.rs
+\tworking tree line
+abcd1234abcd1234abcd1234abcd1234abcd1234 2 2 1
+author Committed
+author-time 1700000000
+filename a.rs
+\tcommitted line
+";
+        let lines = parse_porcelain(porcelain);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].line_number, 2);
+        assert_eq!(lines[0].content, "committed line");
     }
 
     #[test]

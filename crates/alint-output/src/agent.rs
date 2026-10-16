@@ -35,6 +35,8 @@ struct AgentReport<'a> {
     schema_version: u32,
     format: &'static str,
     summary: AgentSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<AgentNotes>,
     violations: Vec<AgentViolation<'a>>,
 }
 
@@ -45,6 +47,12 @@ struct AgentSummary {
     fixable_violations: usize,
     passing_rules: usize,
     failing_rules: usize,
+}
+
+#[derive(Serialize)]
+struct AgentNotes {
+    count: usize,
+    details_format: &'static str,
 }
 
 #[derive(Serialize)]
@@ -91,8 +99,9 @@ struct AgentViolation<'a> {
     fix_command: Option<Vec<&'a str>>,
     /// The concrete Safe fix edit(s) alint would apply for this violation
     /// (source region + replacement text) -- distinct from `fix_command` (the
-    /// argv to run). Lets an agent apply the fix directly. Present iff the
-    /// finding is Safe-fixable; always computed for the `agent` format.
+    /// argv to run). Lets an agent apply the fix directly. Present for a
+    /// Safe-fixable finding only when every target path has an exact JSON string
+    /// representation; `fix_command` remains available otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     proposed_edit: Option<&'a [ProposedEdit]>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,14 +146,14 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
                 fix_command: v
                     .is_fixable
                     .then(|| vec!["fix", "--only", r.rule_id.as_ref()]),
-                proposed_edit: (!v.proposed_edits.is_empty())
-                    .then_some(v.proposed_edits.as_slice()),
+                proposed_edit: crate::utf8_proposed_edits(v),
                 policy_url: r.policy_url.as_deref(),
             });
         }
     }
 
     let total = violations.len();
+    let note_count = report.total_notes();
     let out = AgentReport {
         schema_version: 1,
         format: "agent",
@@ -155,6 +164,10 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
             passing_rules: report.passing_rules(),
             failing_rules: report.failing_rules(),
         },
+        notes: (note_count > 0).then_some(AgentNotes {
+            count: note_count,
+            details_format: "json",
+        }),
         violations,
     };
     serde_json::to_writer_pretty(&mut *w, &out)?;

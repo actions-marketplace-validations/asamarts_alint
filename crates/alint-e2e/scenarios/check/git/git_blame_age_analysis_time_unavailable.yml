@@ -1,10 +1,9 @@
-name: git_blame_age stays silent outside a git repo
+name: git_blame_age reports unavailable analysis time outside a git repo
 tags: [check, git_blame_age, git]
 
-# No `given.git:` block — the tempdir is not a git repo. The
-# engine's blame-cache builder probes via `git ls-files` and
-# returns None, so the rule's `ctx.git_blame` is None and
-# evaluate() short-circuits without ever calling `git blame`.
+# No `given.git:` block and no explicit analysis time: the deterministic HEAD fallback is
+# unavailable. W7 surfaces that as a rule-evaluation error; W2 will promote it to a typed,
+# always-error analysis failure.
 
 given:
   tree:
@@ -23,4 +22,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - violations:
+      - {rule: stale-todos, level: warning}

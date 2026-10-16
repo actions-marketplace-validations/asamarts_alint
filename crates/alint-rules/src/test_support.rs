@@ -69,6 +69,7 @@ pub fn ctx<'a>(root: &'a Path, idx: &'a FileIndex) -> Context<'a> {
         vars: None,
         git_tracked: None,
         git_blame: None,
+        analysis_time: None,
     }
 }
 

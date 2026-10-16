@@ -36,6 +36,9 @@ very-high deltas — RECALIBRATED 2026-06-08 to diagnostic-only + an `EstimatedC
 **Layer 1 — function-level (micro), gungraun library benches**
 (`crates/alint-bench/benches/det_engine.rs`):
 - `Engine::run` over a fixed in-memory `FileIndex` (dispatch + aggregation; H2 class)
+- one time-capable rule against a fixed Git repository, covering capability
+  discovery, root normalization, and cache initialization without folding that
+  one-off work into the common-path cells
 - the walker over a fixed tree (H1 — the +788k indirect mispredicts found in the
   investigation)
 - `Scope::matches` / the per-file `evaluate_file` dispatch
@@ -52,6 +55,8 @@ very-high deltas — RECALIBRATED 2026-06-08 to diagnostic-only + an `EstimatedC
   engine's determinism. Per-PR gate runs **1k + 10k**; the **100k tier is added at
   release time** (still load-immune, just slower under valgrind). (Earlier "DONE"
   notes below name the pre-consolidation S1–S14 ids — historical.)
+- one fixed-repository `alint explain` cell for a time-capable rule, isolating
+  the single HEAD-time lookup so Callgrind also traces the Git child process
 
 ## Gating policy (mirrors `gate.rs` gating-vs-advisory split)
 

@@ -19,6 +19,10 @@ Options:
           `for_each_dir`, `every_matching_has`, `unique_by`, `dir_contains`, `dir_only_contains`)
           and existence rules (`file_exists` et al.) still consult the full tree by definition
 
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
+
       --base <REF>
           Base ref for `--changed` (uses three-dot `<base>...HEAD`, i.e. merge-base diff). Implies
           `--changed`

@@ -230,6 +230,7 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
         };
         rule.evaluate(&ctx).unwrap()
     }
