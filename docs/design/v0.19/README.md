@@ -29,20 +29,23 @@ moves.
   the shared tree file set is built only when a rule looks ancestors up on the filtered index)
   and adotenv 0.1.1 with verified `.env` fix edits (#330). All release jobs, the post-publish
   smoke channels, the Action pin (`e3c9a85b`), and alint.org (#92) are done.
-- **W1 is in progress; slices 1 through 4 are complete.** The serializable `KindMeta` /
-  `FixOpMeta` types and metadata-taking registry APIs are in `alint-core`; metadata is mandatory
-  for every canonical registration; all 95 corrected per-kind records are declared beside their
-  builders; and all 11 aliases resolve the exact canonical record. The borrowed `KindCatalog` is
-  injected into every DSL loader call site. Runtime trust, nested confinement, Git coverage,
-  docs fail-only decisions, and load-time configured-field validation derive from metadata; the
-  former hand lists remain exact one-release equality checks. Missing catalogs and unknown
-  inherited kinds fail closed. Unsupported `paths`, `scope_filter` predicates, fixes,
-  `expect_matches`, and metadata-described common options now fail in both `check` and
-  `validate-config`, including under `require:`; composed-rule errors name the template or
-  `extends:` source that supplied the field. All bundled rulesets, shipped examples,
-  documentation examples, and scenarios pass under enforcement. Completeness,
-  audited-distribution, typed-selector transition parity, spawn-source parity,
-  rule-instance-conformance, and field-enforcement gates are in place.
+- **W1, `KindMeta`, is complete.** The serializable `KindMeta` / `FixOpMeta` types and
+  metadata-taking registry APIs are in `alint-core`; metadata is mandatory for every canonical
+  registration; all 95 corrected per-kind records are declared beside their builders; and all 11
+  aliases resolve the exact canonical record. Every DSL loader receives the borrowed
+  `KindCatalog`. Runtime trust, nested confinement, Git coverage, docs fail-only decisions, and
+  configured-field validation derive from metadata; unsupported common fields fail in both
+  `check` and `validate-config`, including under `require:` and after composition. All 95 JSON
+  Schema option surfaces now derive from Rust option models; top-level and recursively nested
+  rules share the generated kind dispatch and metadata-driven common-field restrictions, covered
+  by a record/schema parity gate. `facts.json` format v4
+  carries the canonical `kind_meta` inventory. `rules show` and `explain` expose capabilities,
+  accepted selectors, and fix operations in human and JSON output. Completeness,
+  typed-selector transition parity, spawn-source parity, rule-instance conformance,
+  field-enforcement, schema parity, facts, and ADR-0012 output-completeness gates are in place.
+  The Unreleased changelog contains the exhaustive migration matrix for all 57 formerly
+  ignored canonical kind/field pairs. All bundled rulesets, shipped examples, documentation
+  examples, and scenarios pass under enforcement.
 
 ### Completed release item: the v0.18.4 benchmark record
 
@@ -68,16 +71,13 @@ release-by-release row.
 
 ### Next work, in order
 
-1. **W1, `KindMeta`.** Slices 1 through 4 of [`kind-meta.md`](kind-meta.md) section 5.2 are
-   complete. Next, migrate the hand-written option schemas and add K4's generated per-kind
-   restrictions, record/schema parity gate, and `facts.json` section; finally add K5's
-   capabilities line to `rules show` and `explain`.
-2. **W4** (notes in every format) and **W7** (`--as-of`): small and independent of W1's tail.
-3. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half needs W1).
-4. **W5** (redaction and the leak gate), **W6** (related locations, the JSON schema relaxation,
+1. **W4** (notes in every output format) and **W7** (`--as-of`): small, independent, and the next
+   work now that W1 is complete.
+2. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half is already complete in W1).
+3. **W5** (redaction and the leak gate), **W6** (related locations, the JSON schema relaxation,
    the frozen-fingerprint gate), **W8** (duplicate-aware spanned extraction).
-5. **W9** as capacity allows, then **W10** (documentation, recipes, roadmap, the stale
-   `register_as` doc comment).
+4. **W9** as capacity allows, then **W10** (documentation, recipes, roadmap, and stale-comment
+   cleanup).
 
 Each item gets its design document in this directory before code, per the rule at the top. The
 release gates are listed at the end of this file.
@@ -133,6 +133,8 @@ W8; W9 interleaved; W10 last.
 
 ### W1. `KindMeta` capability inventory
 
+**Status: complete (2026-10-16).**
+
 - Add a static `KindMeta` declared at registration for every kind: dispatch
   class, accepted selectors (`paths`, `scope_filter`, `git_tracked_only`, change selectors),
   capabilities (spawn, Git, environment, time, host keyring), formats, and fix operations.
@@ -148,10 +150,10 @@ configured field a kind ignores (K1, a hard error), a `KindCatalog` injected int
 (K3), per-kind JSON Schema restrictions plus migrating the 20 hand-written kind schemas (K4), and
 a capabilities line in `alint rules show` and `explain` (K5).
 
-Acceptance: `KindMeta` exists for all 95 kinds and 11 aliases; trust and audit lists derive from it
-(the Git-required list grows from 3 to the correct 10); ignored fields are load errors in `check`
-and `validate-config`; the schema matches the loader; the instance-conformance audit and the
-facts gate pass.
+Acceptance: complete. `KindMeta` exists for all 95 kinds and resolves through all 11 aliases;
+trust and audit lists derive from it (the Git-required list is the corrected 10); ignored fields
+are load errors in `check` and `validate-config`; generated schema restrictions match the loader;
+the instance-conformance, facts, and all-kinds output-completeness gates pass.
 
 ### W2. Analysis failures become error findings (DEC-2)
 

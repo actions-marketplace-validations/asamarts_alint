@@ -16,20 +16,19 @@ echo "==> Running xtask docs-export --check"
 cargo run -q -p xtask -- docs-export --check
 
 # `xtask gen-schema --check` regenerates schemas/v1/config.json (+ the in-crate
-# copy) from the Rust option structs (schemars) for the migrated rule kinds and
-# fails if the committed schema drifted from the types that parse configs. The
-# regenerate-and-diff gate for the schema-from-types keystone (ADR-0001 /
-# docs/design/spec-driven-development.md). Run `cargo run -p xtask -- gen-schema`
-# to refresh after changing a migrated kind's Options struct.
+# copy) from canonical Rust option types and the shared optionless model, then
+# applies KindMeta common-field restrictions and fails on type, registry, or
+# metadata drift. This is the regenerate-and-diff gate for ADR-0001 and v0.19
+# W1. Run `cargo run -p xtask -- gen-schema` after changing an option type or KindMeta.
 echo "==> Running xtask gen-schema --check"
 cargo run -q -p xtask -- gen-schema --check
 
 # `xtask gen-facts --check` regenerates facts.json (the surface-area contract:
-# version + the six headline counts + catalogue lists) from the same canonical
-# sources coverage_audit_readme_claims pins the README to, and fails if the
-# committed facts.json drifted. Phase 3 / WS1e of the spec-driven program
-# (docs/design/facts-json.md). Run `cargo run -p xtask -- gen-facts` to refresh
-# after adding a rule kind, family, ruleset, fixer, formatter, or subcommand.
+# version, seven headline counts, catalogue lists, and canonical KindMeta
+# inventory) from the same canonical sources coverage_audit_readme_claims pins
+# the README to, and fails if the committed facts.json drifted. Phase 3 / WS1e
+# of the spec-driven program (docs/design/facts-json.md). Run
+# `cargo run -p xtask -- gen-facts` after changing any source it inventories.
 echo "==> Running xtask gen-facts --check"
 cargo run -q -p xtask -- gen-facts --check
 

@@ -28,18 +28,32 @@ use crate::for_each_dir::{
     parse_when_iter, resolve_select, validate_nested_require,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     select: SelectSpec,
-    /// Optional per-iteration filter - typical shapes:
-    /// `iter.basename matches "^[a-z]"` to skip uppercase-named
-    /// files, or `not iter.has_file(...)` (always false for
-    /// file iteration) to no-op the rule.
+    /// Per-iteration `when:` filter - see `for_each_dir.when_iter`.
+    /// `iter.has_file(...)` always evaluates to false on file iteration; useful
+    /// predicates here include `iter.basename`, `iter.ext`, and
+    /// `iter.parent_name`.
     #[serde(default)]
     when_iter: Option<String>,
+    #[schemars(schema_with = "require_schema")]
     require: Vec<NestedRuleSpec>,
 }
+
+/// Preserve the shared recursive nested-rule schema instead of deriving the
+/// flattened `NestedRuleSpec` option map.
+fn require_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "Nested rules evaluated against each matched file.",
+        "type": "array",
+        "minItems": 1,
+        "items": { "$ref": "#/$defs/nested_rule" }
+    })
+}
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct ForEachFileRule {

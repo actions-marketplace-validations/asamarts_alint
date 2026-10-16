@@ -74,9 +74,9 @@ pub(crate) fn build_kind_branch_index(
     index
 }
 
-/// Render the `## Options` section for one rule branch. Omits the
-/// universal `kind`/`paths` fields from the table (`paths` is noted
-/// in the trailing common-fields line when the kind accepts it).
+/// Render the `## Options` section for one rule branch. Omits common
+/// metadata-injected fields from the kind-specific table and lists only the
+/// common fields this kind accepts in the trailing sentence.
 pub(crate) fn options_section(
     branch: &serde_json::Value,
     schema: &serde_json::Value,
@@ -85,7 +85,6 @@ pub(crate) fn options_section(
     use std::collections::HashSet;
 
     let props = branch.get("properties").and_then(|p| p.as_object());
-    let has_paths = props.is_some_and(|p| p.contains_key("paths"));
     let required: HashSet<&str> = branch
         .get("required")
         .and_then(|r| r.as_array())
@@ -95,7 +94,12 @@ pub(crate) fn options_section(
     let mut rows: Vec<(&String, &serde_json::Value)> = props
         .map(|p| {
             p.iter()
-                .filter(|(k, _)| k.as_str() != "kind" && k.as_str() != "paths")
+                .filter(|(name, _)| {
+                    !matches!(
+                        name.as_str(),
+                        "kind" | "paths" | "scope_filter" | "fix" | "expect_matches"
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -144,49 +148,71 @@ pub(crate) fn options_section(
         }
     }
     let _ = writeln!(&mut out);
+    write_common_fields_footer(&mut out, props, released);
+    out
+}
+
+fn write_common_fields_footer(
+    out: &mut String,
+    props: Option<&serde_json::Map<String, serde_json::Value>>,
+    released: Option<Version>,
+) {
+    let has_paths = props.is_some_and(|p| p.contains_key("paths"));
+    let has_scope_filter = props.is_some_and(|p| p.contains_key("scope_filter"));
+    let has_fix = props.is_some_and(|p| p.contains_key("fix"));
+    let has_expect_matches = props.is_some_and(|p| p.contains_key("expect_matches"));
     let expect_matches_visible = released.is_none_or(|rel| rel >= (0, 18, 0));
-    let expect_matches_supported = branch
-        .get("properties")
-        .and_then(|p| p.get("kind"))
-        .is_none_or(|kind| {
-            let unsupported = ["file_exists", "file_absent", "dir_exists", "dir_absent"];
-            let canonical = kind.get("const").and_then(serde_json::Value::as_str);
-            let aliases = kind.get("enum").and_then(serde_json::Value::as_array);
-            !canonical.is_some_and(|kind| unsupported.contains(&kind))
-                && !aliases.is_some_and(|kinds| {
-                    kinds.iter().any(|kind| {
-                        kind.as_str()
-                            .is_some_and(|kind| unsupported.contains(&kind))
-                    })
-                })
-        });
-    if has_paths && expect_matches_visible && expect_matches_supported {
-        let _ = writeln!(
-            &mut out,
-            "Plus the common `paths`, `level`, `id`, `when`, and `expect_matches` fields. This table is generated from the JSON Schema; option types and defaults are authoritative."
+    let mut common_fields = Vec::with_capacity(7);
+    if has_paths {
+        common_fields.push("paths");
+    }
+    common_fields.extend(["level", "id", "when"]);
+    if has_scope_filter {
+        common_fields.push("scope_filter");
+    }
+    if has_fix {
+        common_fields.push("fix");
+    }
+    if expect_matches_visible && has_expect_matches {
+        common_fields.push("expect_matches");
+    }
+
+    let _ = write!(
+        out,
+        "Plus the common {} fields.",
+        code_field_list(&common_fields)
+    );
+    if !has_paths {
+        let _ = write!(
+            out,
+            " This rule analyses the whole repository, so it takes no `paths`{}.",
+            if expect_matches_visible && !has_expect_matches {
+                " or `expect_matches`"
+            } else {
+                ""
+            }
         );
-    } else if has_paths && expect_matches_visible {
-        let _ = writeln!(
-            &mut out,
-            "Plus the common `paths`, `level`, `id`, and `when` fields. This existence rule does not support `expect_matches`, because an empty match set is part of the rule's own semantics. This table is generated from the JSON Schema; option types and defaults are authoritative."
-        );
-    } else if has_paths {
-        let _ = writeln!(
-            &mut out,
-            "Plus the common `paths`, `level`, `id`, and `when` fields. This table is generated from the JSON Schema; option types and defaults are authoritative."
-        );
-    } else if expect_matches_visible {
-        let _ = writeln!(
-            &mut out,
-            "Plus the common `level`, `id`, and `when` fields. This rule analyses the whole repository, so it takes no `paths` or `expect_matches`. This table is generated from the JSON Schema; option types and defaults are authoritative."
-        );
-    } else {
-        let _ = writeln!(
-            &mut out,
-            "Plus the common `level`, `id`, and `when` fields. This rule analyses the whole repository, so it takes no `paths`. This table is generated from the JSON Schema; option types and defaults are authoritative."
+    } else if expect_matches_visible && !has_expect_matches {
+        let _ = write!(
+            out,
+            " This kind does not support `expect_matches`; its empty-scope semantics are \
+             kind-specific."
         );
     }
-    out
+    let _ = writeln!(
+        out,
+        " This table is generated from the JSON Schema; option types and defaults are authoritative."
+    );
+}
+
+fn code_field_list(fields: &[&str]) -> String {
+    let mut rendered: Vec<String> = fields.iter().map(|field| format!("`{field}`")).collect();
+    let last = rendered.pop().expect("every rule has common fields");
+    if rendered.is_empty() {
+        last
+    } else {
+        format!("{}, and {last}", rendered.join(", "))
+    }
 }
 
 /// Short, human-readable type label for a property schema. Enum-like
@@ -590,6 +616,9 @@ mod tests {
             "properties": {
                 "kind": { "const": "demo" },
                 "paths": { "$ref": "#/$defs/paths_spec" },
+                "scope_filter": { "$ref": "#/$defs/scope_filter" },
+                "fix": { "$ref": "#/$defs/fix" },
+                "expect_matches": { "type": "boolean" },
                 "threshold": { "type": "number", "default": 0.5, "description": "Density floor." },
                 "name": { "type": "string", "description": "Required name." }
             },
@@ -598,16 +627,17 @@ mod tests {
         let out = options_section(&branch, &schema, None);
 
         assert!(out.starts_with("## Options"));
-        // `kind` and `paths` are dropped from the table.
-        assert!(!out.contains("| `kind` |"));
-        assert!(!out.contains("| `paths` |"));
+        // Metadata-injected common fields are dropped from the kind-specific table.
+        for common in ["kind", "paths", "scope_filter", "fix", "expect_matches"] {
+            assert!(!out.contains(&format!("| `{common}` |")));
+        }
         // Required marker + default rendering + alphabetical order.
         assert!(out.contains("| `name` | string | yes |  | Required name. |"));
         assert!(out.contains("| `threshold` | number |  | `0.5` | Density floor. |"));
         assert!(out.find("`name`") < out.find("`threshold`"));
-        // Has-`paths` branch advertises the `paths` common field.
         assert!(out.contains(
-            "Plus the common `paths`, `level`, `id`, `when`, and `expect_matches` fields."
+            "Plus the common `paths`, `level`, `id`, `when`, `scope_filter`, `fix`, and \
+             `expect_matches` fields."
         ));
     }
 
@@ -652,7 +682,8 @@ mod tests {
         let with_paths = json!({
             "properties": {
                 "kind": { "const": "demo" },
-                "paths": { "$ref": "#/$defs/paths_spec" }
+                "paths": { "$ref": "#/$defs/paths_spec" },
+                "expect_matches": { "type": "boolean" }
             }
         });
         assert!(

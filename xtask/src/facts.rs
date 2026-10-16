@@ -2,12 +2,10 @@
 //! contract.
 //!
 //! `facts.json` is the single machine-readable manifest of alint's
-//! surface area: version, the seven headline counts (rule kinds,
-//! aliases, families, bundled rulesets, auto-fix ops, output formats,
-//! subcommands), and catalogue lists the README, docs, and alint.org
-//! render from instead of restating numbers in prose. Every field
-//! derives from the same canonical source `coverage_audit_readme_claims`
-//! pins the README to, so the contract can't disagree with the README.
+//! surface area: version, headline counts, catalogue lists, and the canonical
+//! per-kind capability inventory. Every field derives from the same canonical
+//! sources that the README and runtime registry use, so the contracts cannot
+//! drift independently.
 //!
 //! Mirrors `gen_schema`: `run(false)` rewrites the file, `run(true)`
 //! content-diffs the committed copy and fails on drift. Carries no
@@ -27,7 +25,7 @@ use serde::Serialize;
 
 /// Bumped when the `facts.json` shape changes, so a downstream
 /// consumer (alint.org) can pin the schema it understands.
-const FORMAT_VERSION: u32 = 3;
+const FORMAT_VERSION: u32 = 4;
 
 static RULE_REGISTRY: LazyLock<alint_core::RuleRegistry> =
     LazyLock::new(alint_rules::builtin_registry);
@@ -49,6 +47,7 @@ struct Facts {
     categories: Vec<CategoryEntry>,
     rule_categories: BTreeMap<String, Vec<String>>,
     rule_aliases: BTreeMap<String, String>,
+    kind_meta: BTreeMap<String, alint_core::KindMeta>,
     rule_source_files: BTreeMap<String, String>,
     example_rule_counts: BTreeMap<String, usize>,
     bench_scenario_rule_counts: BTreeMap<String, usize>,
@@ -129,6 +128,10 @@ fn build_facts() -> Result<Facts> {
         .iter()
         .map(|(alias, canon)| ((*alias).to_string(), (*canon).to_string()))
         .collect();
+    let kind_meta: BTreeMap<String, alint_core::KindMeta> = RULE_REGISTRY
+        .kind_metadata()
+        .map(|(kind, meta)| (kind.to_string(), meta.clone()))
+        .collect();
     let rule_source_files = rule_source_files(&root)?;
     let example_rule_counts = example_rule_counts(&root)?;
     let bench_scenario_rule_counts = bench_scenario_rule_counts(&root)?;
@@ -153,6 +156,7 @@ fn build_facts() -> Result<Facts> {
         rule_categories,
         rule_aliases,
         rule_source_files,
+        kind_meta,
         example_rule_counts,
         bench_scenario_rule_counts,
         bundled_rulesets,
@@ -596,6 +600,47 @@ mod tests {
             f.bundled_ruleset_sizes.get("oss-baseline"),
             Some(&15),
             "oss-baseline size feeds the '(15 rules)' claim on alint.org"
+        );
+    }
+
+    /// The serialized capability inventory covers exactly the canonical kinds
+    /// and preserves structured conditions/operations for machine consumers.
+    #[test]
+    fn kind_meta_covers_canonical_kinds_with_structured_capabilities() {
+        let facts = build_facts().expect("build facts");
+        let canonical: BTreeSet<String> = RULE_REGISTRY
+            .canonical_kinds()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            facts.kind_meta.keys().cloned().collect::<BTreeSet<_>>(),
+            canonical
+        );
+        assert!(
+            facts
+                .rule_aliases
+                .keys()
+                .all(|alias| !facts.kind_meta.contains_key(alias)),
+            "aliases must resolve through rule_aliases rather than duplicate KindMeta records"
+        );
+
+        let json = serde_json::to_value(&facts).expect("facts serialize");
+        let command = &json["kind_meta"]["command_idempotent"];
+        assert_eq!(
+            command["capabilities"][0]["capability"]["kind"],
+            "spawn_user_command"
+        );
+        assert_eq!(command["selectors"][0]["name"], "workdir");
+        assert_eq!(command["selectors"][0]["type"], "literal_path");
+
+        let absent = &json["kind_meta"]["file_absent"];
+        assert_eq!(
+            absent["capabilities"][0]["condition"]["option"],
+            "git_tracked_only"
+        );
+        assert_eq!(
+            absent["fix_ops"],
+            serde_json::json!(["file_remove", "git_untrack", "relocate"])
         );
     }
 

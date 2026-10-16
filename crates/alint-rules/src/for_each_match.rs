@@ -28,26 +28,38 @@ use alint_core::{
 use regex::{Captures, Regex};
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     select: String,
     require: RequireSpec,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "ForEachMatchRequireSpec")]
+#[schemars(extend(
+    "anyOf" = [
+        {"required": ["matches"]},
+        {"required": ["forbid"]},
+        {"required": ["equal"]}
+    ]
+))]
 struct RequireSpec {
-    /// The selected line must match all of these.
+    /// The selected line must match ALL of these regexes.
     #[serde(default)]
     matches: Vec<String>,
-    /// The selected line must match none of these.
+    /// The selected line must match NONE of these regexes.
     #[serde(default)]
     forbid: Vec<String>,
-    /// These named `select` captures must all be equal.
+    /// These named `select` captures must all be equal (the only way to assert
+    /// intra-line capture equality, since RE2 has no backreference).
     #[serde(default)]
+    #[schemars(length(min = 2))]
     equal: Vec<String>,
 }
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct ForEachMatchRule {

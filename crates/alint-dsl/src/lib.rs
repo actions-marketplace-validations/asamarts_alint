@@ -614,7 +614,13 @@ fn validate_effective_rule_fields(
     let kind = mapping.get("kind").and_then(serde_yaml_ng::Value::as_str);
 
     if nested_context.is_some() {
-        for field in ["fix", "git_tracked_only", "respect_gitignore"] {
+        for field in [
+            "id",
+            "level",
+            "fix",
+            "git_tracked_only",
+            "respect_gitignore",
+        ] {
             if mapping.contains_key(field) {
                 return Err(configured_field_error(
                     parent_id,

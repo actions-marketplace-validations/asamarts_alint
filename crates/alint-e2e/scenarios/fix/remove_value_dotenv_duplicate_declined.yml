@@ -1,13 +1,11 @@
 name: remove_value declines a duplicate dotenv key -- ambiguous, writes nothing
 tags: [fix, dotenv_path_absent, remove_value, dotenv, safety]
 
-# Safety property. A duplicate key is the parser's last-wins case: `$.TOKEN`
-# collapses to ONE JSON key but TWO physical lines. Deleting only one would
-# leave the other (the query would still match, so verify would fail anyway),
-# and a single contiguous range cannot express a two-line deletion -- so the
-# resolver DECLINES rather than guess which occurrence to remove. The fix is
-# `skipped` (no applicable fix), the violation stands, and `expect_tree` proves
-# both lines are byte-for-byte intact.
+# Safety property. JSONPath collapses the two physical declarations to one
+# last-wins key, without selecting a particular occurrence. The native key API
+# requires uniqueness, so the resolver declines rather than invent an occurrence
+# policy. The fix is skipped, the violation stands, and expect_tree proves both
+# declarations remain byte-for-byte intact.
 
 given:
   tree:

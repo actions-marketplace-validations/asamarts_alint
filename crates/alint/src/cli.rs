@@ -441,7 +441,7 @@ pub(crate) enum RulesCommand {
     },
     /// List the rule categories: slug, title, and how many kinds each holds.
     Categories,
-    /// Show one rule kind: its summary, categories, aliases, and docs link.
+    /// Show one rule kind: summary, capabilities, selectors, fixes, and docs.
     /// Accepts an alias (resolves to the canonical kind).
     Show {
         /// The rule kind (or alias) to describe.

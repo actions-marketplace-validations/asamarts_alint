@@ -1,10 +1,10 @@
 name: remove_value deletes a dotenv line (with its inline comment), keeping siblings
 tags: [fix, dotenv_path_absent, remove_value, dotenv]
 
-# `remove_value` deletes the whole `SECRET=...` physical line, including its
-# trailing inline comment and newline, since a dotenv key owns exactly its one
-# line. The sibling `KEEP` / `ALSO` lines are untouched. `remove_value` is Unsafe
-# by default; this rule promotes it to `safe` so a bare `fix` applies.
+# `remove_value` deletes the whole SECRET declaration, including its inline
+# comment and final line ending. Declarations may span physical lines; this
+# fixture uses one. Siblings remain untouched. The rule promotes the normally
+# Unsafe removal to safe so a bare fix applies.
 
 given:
   tree:

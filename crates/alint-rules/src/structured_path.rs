@@ -148,7 +148,7 @@ struct MatchesOptions {
 
 /// schemars-derived options schema for the eight `*_path_equals` kinds; composed
 /// into their `$defs` branches by `xtask gen-schema`. See
-/// [`crate::migrated_option_schemas`].
+/// [`crate::rule_option_schemas`].
 #[must_use]
 pub fn equals_options_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(EqualsOptions))

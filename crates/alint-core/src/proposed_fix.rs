@@ -88,8 +88,8 @@ fn serialize_path_lossy<S: serde::Serializer>(
 /// Convert a byte offset in `text` (valid UTF-8) to a 1-based `(line, column)`,
 /// where `column` counts Unicode scalar values from the start of the line.
 ///
-/// A `'\n'` ends a line and resets the column; a lone `'\r'` is an ordinary
-/// character. A leading UTF-8 BOM (U+FEFF at offset 0) is an encoding signature,
+/// LF, CRLF and lone CR end physical lines. A CRLF pair advances the line once.
+/// A leading UTF-8 BOM (U+FEFF at offset 0) is an encoding signature,
 /// not content, so it does NOT occupy a column — the first real character is
 /// column 1 (matching the common consumer convention; without this a line-1 edit
 /// in a BOM-prefixed file is off by one). An offset at or past the end clamps to
@@ -105,7 +105,7 @@ pub fn byte_to_line_col(text: &str, byte_offset: usize) -> (usize, usize) {
         if idx == 0 && ch == '\u{feff}' {
             continue; // leading BOM: not a column
         }
-        if ch == '\n' {
+        if ch == '\n' || (ch == '\r' && text.as_bytes().get(idx + 1) != Some(&b'\n')) {
             line += 1;
             column = 1;
         } else {
@@ -118,11 +118,11 @@ pub fn byte_to_line_col(text: &str, byte_offset: usize) -> (usize, usize) {
 /// The SARIF `(end_line, end_column)` for a NON-empty region ending at byte
 /// `end` in `text`. `end_column` is exclusive (the column following the last
 /// char); `end_line` is the line of the last char — so when the last char is a
-/// `'\n'`, the line stays on that newline's line (SARIF §3.30.7) rather than
-/// rolling to the next, and the column is one past the newline on that line.
+/// line ending, the line stays on that ending's line (SARIF §3.30.7) rather than
+/// rolling to the next, and the column is one past its last character.
 fn sarif_end(text: &str, end: usize) -> (usize, usize) {
-    if text[..end].ends_with('\n') {
-        // The '\n' is one byte, at `end - 1`; endLine is its line, endColumn one past it.
+    if text[..end].ends_with(['\n', '\r']) {
+        // Both line-ending characters are ASCII; retain their physical line.
         let (l, c) = byte_to_line_col(text, end - 1);
         (l, c + 1)
     } else {
@@ -386,6 +386,18 @@ mod tests {
     }
 
     #[test]
+    fn byte_to_line_col_handles_crlf_and_lone_cr() {
+        let text = "é\r\nA\rB\n";
+        assert_eq!(byte_to_line_col(text, 2), (1, 2));
+        assert_eq!(byte_to_line_col(text, 3), (1, 3));
+        assert_eq!(byte_to_line_col(text, 4), (2, 1));
+        assert_eq!(byte_to_line_col(text, 5), (2, 2));
+        assert_eq!(byte_to_line_col(text, 6), (3, 1));
+        assert_eq!(byte_to_line_col(text, 8), (4, 1));
+        assert_eq!(byte_to_line_col("a\r", usize::MAX), (2, 1));
+    }
+
+    #[test]
     fn byte_to_line_col_counts_scalars_not_bytes() {
         let t = "é=1"; // 'é' is two bytes but one column
         assert_eq!(byte_to_line_col(t, 0), (1, 1)); // 'é'
@@ -410,6 +422,14 @@ mod tests {
         assert_eq!(sarif_end(t, 4), (1, 5));
         // region ending mid-line (not at '\n'): the following-char position.
         assert_eq!(sarif_end(t, 6), (2, 3)); // after "de" on line 2
+    }
+
+    #[test]
+    fn sarif_end_retains_the_final_cr_or_crlf_line() {
+        let text = "ab\r\ncd\ref\n";
+        assert_eq!(sarif_end(text, 4), (1, 5));
+        assert_eq!(sarif_end(text, 7), (2, 4));
+        assert_eq!(sarif_end(text, 10), (3, 4));
     }
 
     #[test]

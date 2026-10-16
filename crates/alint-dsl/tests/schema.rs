@@ -359,14 +359,28 @@ rules:
 /// `alint validate-config` accepted (audit 2026-10).
 #[test]
 fn fix_schema_matches_every_fix_op() {
-    let validator = compile_schema();
     let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA_V1).expect("valid JSON");
+    let fix_schema = serde_json::json!({
+        "$schema": schema["$schema"].clone(),
+        "$ref": "#/$defs/fix",
+        "$defs": schema["$defs"].clone(),
+    });
+    let validator = jsonschema::validator_for(&fix_schema).expect("fix schema should compile");
     let branches = schema["$defs"]["fix"]["oneOf"]
         .as_array()
         .expect("$defs/fix is a oneOf");
     let schema_ops: Vec<&str> = branches
         .iter()
-        .filter_map(|b| b["required"][0].as_str())
+        .map(|branch| {
+            let branch = branch["$ref"].as_str().map_or(branch, |reference| {
+                schema
+                    .pointer(reference.strip_prefix('#').expect("local schema reference"))
+                    .expect("fix branch reference resolves")
+            });
+            branch["required"][0]
+                .as_str()
+                .expect("fix branch requires its operation")
+        })
         .collect();
 
     for op in alint_core::FixSpec::ALL_OP_NAMES {
@@ -388,13 +402,9 @@ fn fix_schema_matches_every_fix_op() {
             let body = format!("{base}{extra}");
             let fix_yaml = format!("{op}:\n{}", indent(&body));
             let serde_ok = serde_yaml_ng::from_str::<alint_core::FixSpec>(&fix_yaml).is_ok();
-            let config = yaml_to_json(&format!(
-                "version: 1\nrules:\n  - id: r\n    kind: file_exists\n    paths: x\n    \
-                 level: error\n    fix:\n{}",
-                indent(&indent(&indent(&fix_yaml)))
-            ));
+            let fix = yaml_to_json(&fix_yaml);
             assert_eq!(
-                validator.is_valid(&config),
+                validator.is_valid(&fix),
                 serde_ok,
                 "schema and serde disagree on `{op}` with {label}"
             );

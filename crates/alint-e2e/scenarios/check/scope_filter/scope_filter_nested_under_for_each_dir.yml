@@ -35,12 +35,10 @@ given:
         kind: for_each_dir
         select: "pkg/*"
         require:
-          - id: nws-data
-            kind: no_trailing_whitespace
+          - kind: no_trailing_whitespace
             paths: "{path}/data.txt"
             scope_filter:
               has_ancestor: marker.lock
-            level: warning
         level: warning
 
 when: [check]

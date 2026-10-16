@@ -813,14 +813,14 @@ mod dotenv {
     /// The original value-token range for one uniquely assigned flat key.
     /// A bare declaration has no value token and therefore no value span.
     pub(super) fn dotenv_value_span(text: &str, path: &[PathSeg]) -> Option<Range<usize>> {
-        let document = adotenv::parse_strict(text).ok()?;
+        let document = crate::dotenv::parse_document(text).ok()?;
         document.unique(flat_key(path)?).ok()?.value_span()
     }
 
     /// The whole statement range for one unique flat key. Multiline quoted
     /// assignments include every physical line in the statement.
     pub(super) fn dotenv_removal_span(text: &str, path: &[PathSeg]) -> Option<Range<usize>> {
-        let document = adotenv::parse_strict(text).ok()?;
+        let document = crate::dotenv::parse_document(text).ok()?;
         Some(document.unique(flat_key(path)?).ok()?.line_span())
     }
 
@@ -833,7 +833,7 @@ mod dotenv {
         path: &[PathSeg],
         want: &serde_json::Value,
     ) -> Option<(Range<usize>, Vec<u8>)> {
-        let document = adotenv::parse_strict(text).ok()?;
+        let document = crate::dotenv::parse_document(text).ok()?;
         let verified = document
             .set(flat_key(path)?, scalar_text(want)?.as_ref())
             .ok()?;
@@ -852,7 +852,7 @@ mod dotenv {
         text: &str,
         paths: &[Vec<PathSeg>],
     ) -> Vec<Range<usize>> {
-        let Ok(document) = adotenv::parse_strict(text) else {
+        let Ok(document) = crate::dotenv::parse_document(text) else {
             return Vec::new();
         };
         let mut item_ids = Vec::with_capacity(paths.len());

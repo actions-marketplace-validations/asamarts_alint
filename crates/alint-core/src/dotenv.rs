@@ -28,12 +28,42 @@
 
 use serde_json::{Map, Value};
 
+/// Bound lossless items and diagnostics independently of the input-byte cap.
+/// Short repeated declarations can otherwise retain hundreds of bytes per line.
+pub(crate) const MAX_PHYSICAL_LINES: usize = 100_000;
+
+/// Construct the shared lossless document only after checking resource budgets.
+/// Count CRLF once, accept a terminal line ending without a phantom empty line,
+/// and include comments and multiline value lines in the conservative budget.
+pub(crate) fn parse_document(text: &str) -> Result<adotenv::Document<'_>, String> {
+    let max_bytes = crate::structured_format::MAX_STRUCTURED_BYTES;
+    if text.len() > max_bytes {
+        return Err(format!(
+            "input exceeds the maximum supported size for a structured document ({max_bytes} bytes)"
+        ));
+    }
+    let mut lines = usize::from(!text.is_empty());
+    for (index, byte) in text.bytes().enumerate() {
+        let ends_line =
+            byte == b'\n' || (byte == b'\r' && text.as_bytes().get(index + 1) != Some(&b'\n'));
+        if ends_line && index + 1 < text.len() {
+            lines += 1;
+            if lines > MAX_PHYSICAL_LINES {
+                return Err(format!(
+                    "dotenv input exceeds the maximum supported physical line count ({MAX_PHYSICAL_LINES})"
+                ));
+            }
+        }
+    }
+    adotenv::parse_strict(text).map_err(|error| error.to_string())
+}
+
 /// Parse `.env` `text` into a flat `Value::Object`, with no variable
 /// expansion. Assigned values are strings and bare declarations are `null`.
 /// Returns the first error-severity diagnostic on malformed input; portability
 /// warnings remain accepted.
 pub(crate) fn parse(text: &str) -> Result<Value, String> {
-    let doc = adotenv::parse_strict(text).map_err(|error| error.to_string())?;
+    let doc = parse_document(text)?;
     let mut map = Map::new();
     for entry in doc.entries() {
         let value = entry
@@ -51,6 +81,26 @@ mod tests {
 
     fn obj(text: &str) -> Value {
         parse(text).expect("parse dotenv")
+    }
+
+    #[test]
+    fn lossless_document_line_budget_handles_every_line_ending() {
+        for ending in ["\n", "\r\n", "\r"] {
+            let mut source = format!(
+                "{}A=kept",
+                format!("#{ending}").repeat(MAX_PHYSICAL_LINES - 1)
+            );
+            assert_eq!(obj(&source)["A"], json!("kept"));
+            source.push_str(ending);
+            assert_eq!(obj(&source)["A"], json!("kept"));
+            source.push('#');
+            assert!(parse(&source).is_err(), "over budget with {ending:?}");
+        }
+    }
+
+    #[test]
+    fn repeated_bare_declarations_cannot_bypass_the_lossless_budget() {
+        assert!(parse(&"A\n".repeat(MAX_PHYSICAL_LINES + 1)).is_err());
     }
 
     #[test]

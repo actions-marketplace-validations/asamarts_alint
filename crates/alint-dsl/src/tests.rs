@@ -196,6 +196,23 @@ rules:
 }
 
 #[test]
+fn nested_rule_rejects_synthesized_parent_fields() {
+    for field in ["id: ignored", "level: warning"] {
+        let yaml = format!(
+            "version: 1\nrules:\n  - id: packages\n    kind: for_each_dir\n    \
+             select: packages/*\n    require:\n      - kind: file_exists\n        \
+             paths: \"{{path}}/README.md\"\n        {field}\n    level: error\n"
+        );
+        let raw: RawConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+        let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
+        assert!(
+            error.contains("not supported on a nested rule"),
+            "{field}: {error}"
+        );
+    }
+}
+
+#[test]
 fn configured_field_error_names_the_extends_source_that_supplied_it() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().join("base.yml");

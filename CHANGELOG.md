@@ -21,6 +21,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   inherited rule, or nested rule without a catalog, or with a kind absent from
   that catalog, fails closed; plugin-owned metadata is honored. The former hand
   lists remain exact one-release transition checks.
+- **Rule capabilities are now generated into every discovery surface.** `facts.json` format v4
+  adds a `kind_meta` record for every canonical kind; aliases resolve through `rule_aliases`.
+  `alint rules show <kind>` and `alint explain <id>` now print capabilities, accepted selectors,
+  and fix operations in human output and expose the structured lists in JSON. The config JSON
+  Schema now derives all 95 kinds' option surfaces from Rust option models and applies each kind's
+  metadata-described `paths`, `scope_filter`, `fix`, and `expect_matches` contract to top-level
+  and nested rules; generation fails on registry, metadata, or schema drift.
 
 ### Changed
 
@@ -29,11 +36,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `expect_matches`, and metadata-described common options before building the rule, including
   rules nested under `require:`. The error names the incompatible field and kind instead of
   silently discarding the field, and names the template or `extends:` source that supplied it
-  after composition. Migration: remove `paths` and `scope_filter` from
-  single-shot `command_idempotent` rules (or use per-file `command` when the command genuinely
-  consumes `{path}`); replace `scope_filter.changed_since` with top-level `since` on Git commit
-  kinds. Bundled rulesets, shipped examples, documentation examples, and scenario configs have
-  been migrated.
+  after composition. Nested rules also reject `id` and `level`, which are synthesized from the
+  parent and were previously ignored. Migration: remove `id` and `level` from nested `require:`
+  entries; remove `paths` and `scope_filter` from single-shot `command_idempotent` rules (or use
+  per-file `command` when the command genuinely consumes `{path}`); replace
+  `scope_filter.changed_since` with top-level `since` on Git commit kinds. Bundled rulesets,
+  shipped examples, documentation examples, and scenario configs have been migrated.
+
+  The complete W1 migration matrix below covers all 58 newly rejected canonical
+  kind/field-or-predicate pairs: 57 were silently ignored before this release, while
+  `dir_absent` with `scope_filter.changed_since` silently matched nothing. Kinds and fields not
+  listed here keep their prior meaning; aliases inherit their canonical kind's row.
+
+  | Rejected fields | Canonical kinds | Migration |
+  |---|---|---|
+  | `paths`, `scope_filter` | `changeset_requires_path`; `git_commit_author_allowlist`; `git_commit_gpg_signed`; `git_commit_message`; `git_commit_no_fixup`; `git_commit_signed_off`; `git_commit_subject_matches`; `git_no_denied_paths`; `pair_changed_together` | Remove both fields. Use the kind's own change selectors, such as `since`, `when_changed`, `denied`, `if_changed`, or `then_changed`, where applicable. |
+  | `paths`, `scope_filter`, `fix` | `command_idempotent`; `generated_file_fresh` | Remove all three fields. These are repository-level command checks; use `command` when the command must run once per selected path. |
+  | `scope_filter.changed_since` | `dir_absent` | Remove `changed_since`; `dir_absent` supports only `scope_filter.has_ancestor`. Use a file-scoped kind when the check must be narrowed to a Git diff. |
+  | `paths`, `fix` | `dir_contains`; `dir_only_contains`; `every_matching_has`; `file_graph`; `for_each_dir`; `for_each_file`; `pair`; `registry_paths_resolve`; `unique_by` | Remove `paths` and use the kind-specific selector (`select`, `nodes`, `primary`, or `source`) when narrower input is required. Remove the unsupported top-level `fix`. |
+  | `paths` | `cross_file`; `pair_hash` | Remove `paths`; use `source` and the kind's target/partner fields. |
+  | `fix` | `commented_out_code`; `dir_absent`; `file_is_text`; `file_max_lines`; `file_max_size`; `file_min_lines`; `file_min_size`; `file_shebang`; `filename_regex`; `for_each_match`; `import_gate`; `markdown_links_resolve`; `markdown_paths_resolve` | Remove the unsupported fix or move remediation to a kind that advertises the required fix operation. |
+
 - **The dotenv engine is now adotenv 0.2.0, with a lossless document model and native verified
   edits.** Parsing accepts bare declarations and maps them to JSON `null` (distinct from `KEY=`,
   which remains `""`). Compared with 0.1.1, it accepts multiline quotes and portability-warning
@@ -50,6 +73,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   assigned, and multi-key removals are verified atomically.
 
 ### Fixed
+
+- **Lossless dotenv parsing is bounded before allocating items and diagnostics.**
+  Nonempty parsed documents are limited to 100,000 physical lines as well as the
+  existing 32 MiB byte cap; CRLF counts once, and a terminal ending adds no empty
+  line. This also covers native fix entry points. Short repeated bare declarations
+  now produce a normal parse error instead of exhausting memory within the byte cap.
+
+- **Machine-readable edit proposals recognize lone carriage returns as line endings.**
+  Dotenv files accepted by adotenv 0.2 now receive correct JSON, agent and SARIF fix
+  coordinates instead of an insertion on the preceding physical line. SARIF
+  exclusive ends retain the last character's line for both CRLF and lone CR.
 
 - **The benchmark regression report now includes changed-mode 1k cells as advisories, as
   documented.** Those floor-level cells still never block publication; previously an outer size

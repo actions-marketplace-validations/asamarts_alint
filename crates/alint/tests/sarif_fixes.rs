@@ -135,6 +135,67 @@ fn assert_fidelity(dir: &Path, file: &str, original: &[u8]) -> usize {
     n
 }
 
+#[test]
+fn dotenv_proposed_edits_handle_all_physical_line_endings() {
+    for ending in ["\n", "\r\n", "\r"] {
+        let dir = tempfile::tempdir().unwrap();
+        let original = format!(
+            "\u{feff}# synthetic{ending}PORT{ending}KEEP=\"é{ending}second\" # untouched{ending}"
+        );
+        let expected = original.replacen("PORT", "PORT=8080", 1);
+        std::fs::write(dir.path().join(".env"), &original).unwrap();
+        std::fs::write(
+            dir.path().join(".alint.yml"),
+            concat!(
+                "version: 1\nrules:\n",
+                "  - id: port\n",
+                "    kind: dotenv_path_equals\n",
+                "    paths: \"**/.env\"\n",
+                "    path: \"$.PORT\"\n",
+                "    equals: \"8080\"\n",
+                "    level: error\n",
+                "    fix: { set_value: {} }\n",
+            ),
+        )
+        .unwrap();
+        for options in [
+            &["--format", "json", "--include-fixes"][..],
+            &["--format", "agent"][..],
+        ] {
+            let report = check_json(dir.path(), options);
+            let violation = if options[1] == "agent" {
+                &report["violations"][0]
+            } else {
+                &report["results"][0]["violations"][0]
+            };
+            let edit = &violation["proposed_edit"][0];
+            assert_eq!(edit["region"]["start_line"], 2, "{ending:?}");
+            assert_eq!(edit["region"]["start_column"], 5, "{ending:?}");
+            assert_eq!(edit["region"]["end_line"], 2, "{ending:?}");
+            assert_eq!(edit["region"]["end_column"], 5, "{ending:?}");
+            assert_eq!(edit["inserted"], "=8080");
+        }
+        let sarif = check_sarif(dir.path());
+        let edit =
+            &sarif["runs"][0]["results"][0]["fixes"][0]["artifactChanges"][0]["replacements"][0];
+        assert_eq!(edit["deletedRegion"]["startLine"], 2, "{ending:?}");
+        assert_eq!(edit["deletedRegion"]["startColumn"], 5, "{ending:?}");
+        assert_eq!(edit["deletedRegion"]["endLine"], 2, "{ending:?}");
+        assert_eq!(edit["deletedRegion"]["endColumn"], 5, "{ending:?}");
+        assert_eq!(edit["insertedContent"]["text"], "=8080");
+        let fixed = Command::new(alint_bin())
+            .args(["fix", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(fixed.status.success(), "{fixed:?}");
+        assert_eq!(
+            std::fs::read(dir.path().join(".env")).unwrap(),
+            expected.as_bytes()
+        );
+    }
+}
+
 /// W3b: the machine formats carry a `proposed_edit` (source region + replacement)
 /// -- `agent` ALWAYS, `json` only under `--include-fixes` -- with the same
 /// Safe-only edit SARIF advertises. Drives the real binary + the CLI flag gating.

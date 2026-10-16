@@ -12,11 +12,18 @@ use serde::Deserialize;
 use crate::case::CaseConvention;
 use crate::fixers::FileRenameFixer;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    #[schemars(schema_with = "case_schema")]
     case: CaseConvention,
 }
+
+fn case_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "$ref": "#/$defs/case_convention" })
+}
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct FilenameCaseRule {

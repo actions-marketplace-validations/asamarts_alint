@@ -6,7 +6,8 @@
 
 use std::borrow::Cow;
 
-use serde::Serialize;
+use serde::ser::{SerializeSeq, SerializeStruct};
+use serde::{Serialize, Serializer};
 
 use crate::structured_format::Format;
 
@@ -196,7 +197,7 @@ pub struct DependencyMeta {
 /// The boolean fields are independent schema capabilities, not states of one
 /// state machine, so keeping them explicit makes record audits mechanical.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KindMeta {
     pub dispatch: DispatchClass,
     pub paths: PathsSupport,
@@ -206,6 +207,10 @@ pub struct KindMeta {
     pub root_only: bool,
     pub selectors: Cow<'static, [SelectorMeta]>,
     pub since: SinceSupport,
+    /// Capabilities intrinsic to this kind. Use
+    /// [`effective_capabilities`](Self::effective_capabilities) when reporting
+    /// or auditing the complete surface: it also derives capabilities activated
+    /// by common engine fields.
     pub capabilities: Cow<'static, [CapabilityMeta]>,
     pub content: ContentAccess,
     pub formats: Cow<'static, [Format]>,
@@ -213,6 +218,71 @@ pub struct KindMeta {
     pub fix_ops: Cow<'static, [Cow<'static, str>]>,
     pub expect_matches: bool,
     pub nested_rules: bool,
+}
+
+static SCOPE_FILTER_CHANGED_SINCE_CAPABILITY: CapabilityMeta = CapabilityMeta {
+    capability: Capability::Git {
+        operations: Cow::Borrowed(&[GitOperation::Diff]),
+    },
+    condition: CapabilityCondition::CommonFieldSet {
+        field: Cow::Borrowed("scope_filter.changed_since"),
+    },
+};
+
+impl KindMeta {
+    /// All capabilities this kind can exercise, including those supplied by
+    /// common engine fields rather than its kind-specific option model.
+    pub fn effective_capabilities(&self) -> impl Iterator<Item = &CapabilityMeta> {
+        let scope_filter_git = matches!(&self.scope_filter, ScopeFilterSupport::Full)
+            .then_some(&SCOPE_FILTER_CHANGED_SINCE_CAPABILITY);
+        self.capabilities.iter().chain(scope_filter_git)
+    }
+
+    /// Allocation-free serialized view of [`Self::effective_capabilities`].
+    pub fn serialized_capabilities(&self) -> impl Serialize + '_ {
+        SerializedCapabilities(self)
+    }
+}
+
+struct SerializedCapabilities<'a>(&'a KindMeta);
+
+impl Serialize for SerializedCapabilities<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let derived_len = usize::from(matches!(&self.0.scope_filter, ScopeFilterSupport::Full));
+        let mut seq = serializer.serialize_seq(Some(self.0.capabilities.len() + derived_len))?;
+        for capability in self.0.effective_capabilities() {
+            seq.serialize_element(capability)?;
+        }
+        seq.end()
+    }
+}
+
+impl Serialize for KindMeta {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("KindMeta", 15)?;
+        state.serialize_field("dispatch", &self.dispatch)?;
+        state.serialize_field("paths", &self.paths)?;
+        state.serialize_field("scope_filter", &self.scope_filter)?;
+        state.serialize_field("git_tracked_only", &self.git_tracked_only)?;
+        state.serialize_field("respect_gitignore", &self.respect_gitignore)?;
+        state.serialize_field("root_only", &self.root_only)?;
+        state.serialize_field("selectors", &self.selectors)?;
+        state.serialize_field("since", &self.since)?;
+        state.serialize_field("capabilities", &SerializedCapabilities(self))?;
+        state.serialize_field("content", &self.content)?;
+        state.serialize_field("formats", &self.formats)?;
+        state.serialize_field("dependencies", &self.dependencies)?;
+        state.serialize_field("fix_ops", &self.fix_ops)?;
+        state.serialize_field("expect_matches", &self.expect_matches)?;
+        state.serialize_field("nested_rules", &self.nested_rules)?;
+        state.end()
+    }
 }
 
 /// Trust class applied to a fix operation before a rule-specific tier is known.
@@ -379,6 +449,42 @@ mod tests {
                     .count(),
             ],
             [2, 18, 6]
+        );
+    }
+
+    #[test]
+    fn full_scope_serializes_the_engine_derived_git_capability() {
+        let meta = KindMeta {
+            dispatch: DispatchClass::PerFile { full_index: false },
+            paths: PathsSupport::Required,
+            scope_filter: ScopeFilterSupport::Full,
+            git_tracked_only: GitTrackedSupport::None,
+            respect_gitignore: false,
+            root_only: false,
+            selectors: Cow::Borrowed(&[]),
+            since: SinceSupport::None,
+            capabilities: Cow::Borrowed(&[]),
+            content: ContentAccess::WholeFile,
+            formats: Cow::Borrowed(&[]),
+            dependencies: Cow::Borrowed(&[]),
+            fix_ops: Cow::Borrowed(&[]),
+            expect_matches: true,
+            nested_rules: false,
+        };
+
+        let capabilities: Vec<&CapabilityMeta> = meta.effective_capabilities().collect();
+        assert!(matches!(
+            capabilities.as_slice(),
+            [CapabilityMeta {
+                capability: Capability::Git { operations },
+                condition: CapabilityCondition::CommonFieldSet { field },
+            }] if operations.as_ref() == [GitOperation::Diff]
+                && field == "scope_filter.changed_since"
+        ));
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(
+            json["capabilities"][0]["condition"]["field"],
+            "scope_filter.changed_since"
         );
     }
 }

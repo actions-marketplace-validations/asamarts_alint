@@ -600,8 +600,8 @@ fn dotenv_removal_span_handles_crlf_and_preserves_a_leading_bom() {
 
 #[test]
 fn dotenv_declines_a_duplicate_key_for_both_set_and_remove() {
-    // A last-wins duplicate collapses to one JSON key but two lines: one
-    // contiguous range can't express it, so decline (degrade to Suggestion).
+    // The query collapses duplicates, so require a unique declaration rather
+    // than guessing which occurrence its last-wins value represents.
     let src = "K=1\nK=2\n";
     assert!(resolve_value_span(Format::Dotenv, src.as_bytes(), &[key("K")]).is_none());
     assert!(resolve_removal_span(Format::Dotenv, src.as_bytes(), &[key("K")]).is_none());
@@ -1599,6 +1599,19 @@ fn finalize_preserves_uniform_crlf_with_a_multiline_string() {
 }
 
 // ---- dotenv: native verified edits through adotenv 0.2 ----
+
+#[test]
+fn dotenv_native_edits_decline_over_budget_documents() {
+    let source = format!("{}A=old\n", "#\n".repeat(crate::dotenv::MAX_PHYSICAL_LINES));
+    let path = [key("A")];
+    assert!(resolve_value_span(Format::Dotenv, source.as_bytes(), &path).is_none());
+    assert!(resolve_removal_span(Format::Dotenv, source.as_bytes(), &path).is_none());
+    assert!(verified_set_edit(Format::Dotenv, source.as_bytes(), &path, &json!("new")).is_none());
+    assert_eq!(
+        verified_removal_spans(Format::Dotenv, source.as_bytes(), &[path.to_vec()]),
+        [] as [std::ops::Range<usize>; 0]
+    );
+}
 
 #[test]
 fn dotenv_verified_removal_handles_a_bare_declaration() {

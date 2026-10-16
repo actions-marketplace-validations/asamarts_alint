@@ -6,10 +6,14 @@
 //! and works anywhere, including outside a repo. See ADR-0009.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io::Write;
 use std::process::ExitCode;
 
-use alint_core::Category;
+use alint_core::{
+    Capability, CapabilityCondition, Category, GitOperation, KindMeta, OptionPredicate,
+    SelectorType,
+};
 use alint_output::Format;
 use alint_rules::categories::{ALIAS_TO_CANONICAL, KIND_CATEGORIES};
 use alint_rules::kind_docs::{KIND_DESCRIPTIONS, KIND_SUMMARIES};
@@ -24,6 +28,145 @@ struct Row {
     categories: Vec<&'static str>,
     aliases: Vec<&'static str>,
     summary: Option<&'static str>,
+}
+
+pub(crate) struct CapabilitySummary<'a>(&'a KindMeta);
+
+pub(crate) struct SelectorSummary<'a>(&'a KindMeta);
+
+pub(crate) struct FixOpSummary<'a>(&'a KindMeta);
+
+pub(crate) fn capability_summary(meta: &KindMeta) -> CapabilitySummary<'_> {
+    CapabilitySummary(meta)
+}
+
+pub(crate) fn selector_summary(meta: &KindMeta) -> SelectorSummary<'_> {
+    SelectorSummary(meta)
+}
+
+pub(crate) fn fix_op_summary(meta: &KindMeta) -> FixOpSummary<'_> {
+    FixOpSummary(meta)
+}
+
+impl fmt::Display for CapabilitySummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut capabilities = self.0.effective_capabilities().peekable();
+        if capabilities.peek().is_none() {
+            return f.write_str("none");
+        }
+        for (index, entry) in capabilities.enumerate() {
+            if index != 0 {
+                f.write_str(", ")?;
+            }
+            match &entry.capability {
+                Capability::SpawnUserCommand => f.write_str("spawn_user_command")?,
+                Capability::Git { operations } => {
+                    f.write_str("git(")?;
+                    for (op_index, op) in operations.iter().enumerate() {
+                        if op_index != 0 {
+                            f.write_str(", ")?;
+                        }
+                        f.write_str(git_operation_name(*op))?;
+                    }
+                    f.write_str(")")?;
+                }
+                Capability::HostKeyring => f.write_str("host_keyring")?,
+                Capability::EnvRead => f.write_str("env_read")?,
+                Capability::EnvExport => f.write_str("env_export")?,
+                Capability::WallClock => f.write_str("wall_clock")?,
+                Capability::OutOfRootRead => f.write_str("out_of_root_read")?,
+                Capability::WritesDuringCheck => f.write_str("writes_during_check")?,
+                Capability::UnixOnly => f.write_str("unix_only")?,
+            }
+            match &entry.condition {
+                CapabilityCondition::Always => {}
+                CapabilityCondition::OptionSet { option } => {
+                    write!(f, " [when {option} is set]")?;
+                }
+                CapabilityCondition::OptionMatches { option, predicate } => {
+                    write!(
+                        f,
+                        " [when {option} {}]",
+                        match predicate {
+                            OptionPredicate::ContainsLegacyEnvReference =>
+                                "contains a legacy environment reference",
+                        }
+                    )?;
+                }
+                CapabilityCondition::FixOpConfigured { op } => {
+                    write!(f, " [when fix.{op} is configured]")?;
+                }
+                CapabilityCondition::CommonFieldSet { field } => {
+                    write!(f, " [when {field} is set]")?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for SelectorSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.selectors.is_empty() {
+            return f.write_str("none");
+        }
+        for (index, selector) in self.0.selectors.iter().enumerate() {
+            if index != 0 {
+                f.write_str(", ")?;
+            }
+            write!(
+                f,
+                "{} ({}{})",
+                selector.name,
+                selector_type_name(selector.selector_type),
+                if selector.rerootable {
+                    ", rerootable"
+                } else {
+                    ""
+                }
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for FixOpSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.fix_ops.is_empty() {
+            return f.write_str("none");
+        }
+        for (index, op) in self.0.fix_ops.iter().enumerate() {
+            if index != 0 {
+                f.write_str(", ")?;
+            }
+            f.write_str(op)?;
+        }
+        Ok(())
+    }
+}
+
+const fn git_operation_name(operation: GitOperation) -> &'static str {
+    match operation {
+        GitOperation::TrackedSet => "tracked_set",
+        GitOperation::Blame => "blame",
+        GitOperation::Diff => "diff",
+        GitOperation::Log => "log",
+        GitOperation::VerifyCommit => "verify_commit",
+        GitOperation::Untrack => "untrack",
+    }
+}
+
+const fn selector_type_name(selector_type: SelectorType) -> &'static str {
+    match selector_type {
+        SelectorType::Glob => "glob",
+        SelectorType::GlobList => "glob_list",
+        SelectorType::BasenameGlob => "basename_glob",
+        SelectorType::LiteralPath => "literal_path",
+        SelectorType::PathTemplate => "path_template",
+        SelectorType::Regex => "regex",
+        SelectorType::DiffGlob => "diff_glob",
+        SelectorType::Extract => "extract",
+    }
 }
 
 pub(crate) fn run(command: &RulesCommand, cli: &Cli) -> Result<ExitCode> {
@@ -196,14 +339,19 @@ fn list(category: Option<&str>, search: Option<&str>, format: Format) -> Result<
     Ok(ExitCode::SUCCESS)
 }
 
-/// `alint rules show <kind>`: a single kind's summary, categories, aliases, and
-/// docs link (ADR-0011). Accepts an alias, resolving to its canonical kind.
+/// `alint rules show <kind>`: one kind's summary, categories, aliases,
+/// capabilities, accepted selectors, fix operations, and docs link.
+/// Accepts an alias, resolving to its canonical kind.
 fn show(kind: &str, format: Format, show_docs: bool) -> Result<ExitCode> {
     let cats = categories_for_kind(kind);
     if cats.is_empty() {
         bail!("unknown rule kind {kind:?}. Run `alint rules list` for the catalog.");
     }
     let canonical = canonical_kind(kind);
+    let registry = alint_rules::builtin_registry();
+    let meta = registry
+        .meta(canonical)
+        .expect("catalog kind must have registered capability metadata");
     let summary = description_for_kind(kind);
     let aliases = aliases_by_canonical()
         .get(canonical)
@@ -222,6 +370,9 @@ fn show(kind: &str, format: Format, show_docs: bool) -> Result<ExitCode> {
             "aliases": aliases,
             "summary": summary,
             "docs": docs,
+            "capabilities": meta.serialized_capabilities(),
+            "selectors": meta.selectors.as_ref(),
+            "fix_ops": meta.fix_ops.as_ref(),
         });
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
@@ -238,6 +389,9 @@ fn show(kind: &str, format: Format, show_docs: bool) -> Result<ExitCode> {
         if !aliases.is_empty() {
             writeln!(out, "  aliases:    {}", aliases.join(", "))?;
         }
+        writeln!(out, "  capabilities: {}", capability_summary(meta))?;
+        writeln!(out, "  selectors:    {}", selector_summary(meta))?;
+        writeln!(out, "  fix_ops:      {}", fix_op_summary(meta))?;
         if show_docs {
             writeln!(out, "  docs:       {docs}")?;
         }

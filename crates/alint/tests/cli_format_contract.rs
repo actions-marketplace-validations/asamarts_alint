@@ -619,14 +619,14 @@ fn help_wraps_to_narrow_terminal_width() {
     }
 }
 
-// ─── Explain surfaces a summary + docs link for every kind (ADR-0011) ─
+// ─── Explain catalog detail for every kind (ADRs 0011, 0012; v0.19 W1) ─
 //
-// The generated per-kind summary bridge must yield a non-empty `summary:` line
-// and a `docs:` deep link for EVERY registered kind. Drives `all_kinds.yaml`
-// (the same all-kinds driver ADR-0012 established) so a newly registered kind
-// missing a `docs/rules.md` summary can't ship silently.
+// The generated per-kind bridges must yield a non-empty summary, docs deep
+// link, and KindMeta discovery fields for EVERY registered kind. Drives
+// `all_kinds.yaml` (the all-kinds driver ADR-0012 established) so a newly
+// registered kind cannot silently lose catalog detail.
 #[test]
-fn explain_surfaces_summary_and_docs_for_every_kind() {
+fn explain_surfaces_catalog_detail_for_every_kind() {
     let fixture = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../alint-dsl/tests/fixtures/all_kinds.yaml"
@@ -659,8 +659,14 @@ fn explain_surfaces_summary_and_docs_for_every_kind() {
             docs.starts_with("https://alint.org/docs/rules/") && docs.contains(family),
             "explain {id} json docs link is wrong (family {family:?}): {docs:?}"
         );
+        for field in ["capabilities", "selectors", "fix_ops"] {
+            assert!(
+                v[field].is_array(),
+                "explain {id} json has no {field} array: {v}"
+            );
+        }
 
-        // Human: the same summary and the same docs link must be visible.
+        // Human: the same summary, docs link, and metadata fields are visible.
         let human = String::from_utf8_lossy(&run(dir.path(), &["explain", id]).stdout).into_owned();
         assert!(
             human.lines().any(|l| {
@@ -674,6 +680,14 @@ fn explain_surfaces_summary_and_docs_for_every_kind() {
             human.contains(docs),
             "explain {id} human is missing its docs link:\n{human}"
         );
+        for label in ["capabilities:", "selectors:", "fix_ops:"] {
+            assert!(
+                human
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(label)),
+                "explain {id} human is missing {label:?}:\n{human}"
+            );
+        }
     }
 }
 
@@ -689,17 +703,37 @@ fn rules_show_and_search_over_summaries() {
     let out =
         String::from_utf8_lossy(&run(dir.path(), &["rules", "show", "content_matches"]).stdout)
             .into_owned();
-    assert!(
-        out.contains("file_content_matches")
-            && out.contains("https://alint.org/docs/rules/content/file_content_matches/"),
-        "rules show must resolve the alias and print the canonical docs link:\n{out}"
-    );
+    for expected in [
+        "file_content_matches",
+        "https://alint.org/docs/rules/content/file_content_matches/",
+        "capabilities: git(diff) [when scope_filter.changed_since is set]",
+    ] {
+        assert!(
+            out.contains(expected),
+            "rules show must resolve the alias and include derived capabilities ({expected:?}):\n{out}"
+        );
+    }
 
-    // JSON: a summary + docs link.
+    let capabilities =
+        String::from_utf8_lossy(&run(dir.path(), &["rules", "show", "command_idempotent"]).stdout)
+            .into_owned();
+    for expected in [
+        "capabilities: spawn_user_command, env_export",
+        "selectors:    workdir (literal_path, rerootable), files_pattern (regex)",
+        "fix_ops:      none",
+    ] {
+        assert!(
+            capabilities.contains(expected),
+            "rules show human output is missing {expected:?}:\n{capabilities}"
+        );
+    }
+
+    // JSON carries the structured metadata, including capability conditions and
+    // every accepted fix operation.
     let v: serde_json::Value = serde_json::from_slice(
         &run(
             dir.path(),
-            &["rules", "show", "file_hash", "--format", "json"],
+            &["rules", "show", "file_absent", "--format", "json"],
         )
         .stdout,
     )
@@ -714,6 +748,16 @@ fn rules_show_and_search_over_summaries() {
             .is_some_and(|s| s.starts_with("https://")),
         "rules show json must carry a docs link: {v}"
     );
+    assert_eq!(v["capabilities"][0]["capability"]["kind"], "git");
+    assert_eq!(
+        v["capabilities"][0]["condition"]["option"],
+        "git_tracked_only"
+    );
+    assert_eq!(
+        v["fix_ops"],
+        serde_json::json!(["file_remove", "git_untrack", "relocate"])
+    );
+    assert_eq!(v["selectors"], serde_json::json!([]));
 
     // `list --search` matches summary text: "digest" is in file_hash's summary,
     // not its name.

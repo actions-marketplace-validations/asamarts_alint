@@ -63,8 +63,9 @@ use serde::Deserialize;
 use crate::pair_hash::Algorithm;
 
 /// How a content-extracted reference string is turned into a path.
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "FileGraphResolve")]
 enum Resolve {
     /// Join the reference onto the referencing file's directory.
     /// Only explicitly-relative refs (leading `.`) are resolved;
@@ -76,8 +77,9 @@ enum Resolve {
     RelativeToRepoRoot,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphFromContentSpec")]
 struct FromContentSpec {
     extract: ExtractSpec,
     #[serde(default)]
@@ -88,12 +90,21 @@ struct FromContentSpec {
 /// `build`): `from_content` (the reference-graph modes) or
 /// `derive_target` (a name template → `fresh` codegen-freshness or
 /// `no_dangling` derived-sibling existence).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphEdgesSpec")]
+#[schemars(extend(
+    "oneOf" = [
+        {"required": ["from_content"]},
+        {"required": ["derive_target"]}
+    ]
+))]
 struct EdgesSpec {
     #[serde(default)]
+    #[schemars(schema_with = "from_content_schema")]
     from_content: Option<FromContentSpec>,
     #[serde(default)]
+    #[schemars(schema_with = "derive_target_schema")]
     derive_target: Option<DeriveTargetSpec>,
 }
 
@@ -102,15 +113,25 @@ struct EdgesSpec {
 /// path, `to` is a replacement template using its captures (e.g.
 /// `from: '(.*)\.proto'`, `to: '$1.pb.go'`; a constant `to` maps
 /// many sources to one target). The `fresh` mode's edge.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphDeriveTargetSpec")]
 struct DeriveTargetSpec {
     from: String,
     to: String,
 }
 
-#[derive(Debug, Deserialize)]
+fn from_content_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<FromContentSpec>()
+}
+
+fn derive_target_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<DeriveTargetSpec>()
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphForbiddenEdgeSpec")]
 struct ForbiddenEdgeSpec {
     from: String,
     to: String,
@@ -122,18 +143,20 @@ struct ForbiddenEdgeSpec {
 /// unambiguously (the proven `cross_file_value_equals` `targets:`
 /// pattern - not the externally-tagged-enum-from-map trap
 /// `crate::extract` documents).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(
     untagged,
     expecting = "a mode name (`acyclic`, `no_dangling`, or `no_orphans`), or a map of require options"
 )]
+#[schemars(rename = "FileGraphRequireSpec")]
 enum RequireSpec {
     Named(NamedRequire),
     Map(RequireMap),
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "FileGraphNamedRequire")]
 enum NamedRequire {
     Acyclic,
     /// Every path-shaped reference must resolve to a path on disk.
@@ -148,22 +171,50 @@ enum NamedRequire {
 /// (`acyclic`, `no_dangling`, `no_orphans` with no roots) live in
 /// `NamedRequire`; the configured modes live here, and future ones
 /// (`fresh: { … }`) join as additional `Option` fields.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphRequireMap")]
+#[schemars(extend(
+    "oneOf" = [
+        {"required": ["forbidden_edges"]},
+        {"required": ["no_orphans"]},
+        {"required": ["fresh"]}
+    ]
+))]
 struct RequireMap {
     #[serde(default)]
+    #[schemars(schema_with = "forbidden_edges_schema")]
     forbidden_edges: Option<Vec<ForbiddenEdgeSpec>>,
     #[serde(default)]
+    #[schemars(schema_with = "no_orphans_schema")]
     no_orphans: Option<NoOrphansSpec>,
     #[serde(default)]
+    #[schemars(schema_with = "fresh_schema")]
     fresh: Option<FreshSpec>,
+}
+
+fn forbidden_edges_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+                "from": { "type": "string" },
+                "to": { "type": "string" }
+            },
+            "required": ["from", "to"]
+        }
+    })
 }
 
 /// Options for the `no_orphans` map form: `roots` lists globs whose
 /// nodes are allowed to be unreferenced (graph entry points). Bare
 /// `require: no_orphans` (no roots) is the `NamedRequire` form.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphNoOrphansSpec")]
 struct NoOrphansSpec {
     #[serde(default)]
     roots: Vec<String>,
@@ -173,21 +224,33 @@ struct NoOrphansSpec {
 /// embed the source's current `hash` digest, captured by `marker`
 /// (a regex whose group 1 is the hex digest). Content-hash, never
 /// mtime - portable on a fresh clone.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphFreshSpec")]
 struct FreshSpec {
     #[serde(default)]
+    #[schemars(extend("default" = "sha256"))]
     hash: Algorithm,
     marker: String,
 }
 
-#[derive(Debug, Deserialize)]
+fn no_orphans_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<NoOrphansSpec>()
+}
+
+fn fresh_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<FreshSpec>()
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     nodes: String,
     edges: EdgesSpec,
     require: RequireSpec,
 }
+
+crate::options_schema_for!(Options);
 
 /// A resolved forbidden-edge prohibition: an edge whose source
 /// matches `from` and whose (resolved) target matches `to` is a

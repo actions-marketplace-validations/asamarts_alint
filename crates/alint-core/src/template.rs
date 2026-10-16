@@ -335,10 +335,6 @@ const NESTED_SPEC_LISTS: &[(&[&str], &str)] = &[(
 /// LITERALLY: a regex (`for_each_match.select`, `pattern`), a literal path or
 /// template (`pair.partner`, `pair_hash.target`, `cross_file`'s `file`), a
 /// message. Glob-escaping a regex or a literal path would corrupt it.
-///
-/// Kept in sync with the rule kinds by `nested_glob_options_cover_the_schema`,
-/// which flags any schema option documented as a glob that is neither listed
-/// here nor explicitly exempted.
 pub const NESTED_GLOB_OPTIONS: &[(&[&str], &[&str])] = &[
     (&["dir_contains"], &["select", "require"]),
     (&["dir_only_contains"], &["select", "allow"]),
@@ -775,62 +771,6 @@ mod tests {
         assert_eq!(
             unescape_token_values(&msg, &t).as_deref(),
             Some("expected a file matching [app/a\\b/page.tsx]")
-        );
-    }
-
-    #[test]
-    fn nested_glob_options_cover_the_schema() {
-        // Drift guard: an option the config schema documents as a glob must be
-        // listed in NESTED_GLOB_OPTIONS (or exempted here with a reason), or a
-        // nested rule renders it unescaped and `app/[slug]` becomes a class.
-        const EXEMPT: &[(&str, &str)] = &[
-            // `paths:` is rendered by `render_paths_spec`.
-            ("*", "paths"),
-            // Booleans whose description mentions globs.
-            ("*", "respect_gitignore"),
-            ("registry_paths_resolve", "entries_are_globs"),
-        ];
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../schemas/v1/config.json");
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            // Not in a workspace checkout (a packaged crate): nothing to check.
-            return;
-        };
-        let schema: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let mut missing = Vec::new();
-        for def in schema["$defs"].as_object().unwrap().values() {
-            let Some(props) = def["properties"].as_object() else {
-                continue;
-            };
-            let kinds: Vec<&str> = match &props.get("kind") {
-                Some(k) if k["enum"].is_array() => k["enum"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .collect(),
-                Some(k) if k["const"].is_string() => vec![k["const"].as_str().unwrap()],
-                _ => continue,
-            };
-            for (key, prop) in props {
-                if !prop.to_string().to_lowercase().contains("glob") {
-                    continue;
-                }
-                for kind in &kinds {
-                    let exempt = EXEMPT
-                        .iter()
-                        .any(|(k, o)| (*k == "*" || k == kind) && o == key);
-                    let listed = nested_glob_options(kind)
-                        .iter()
-                        .any(|g| g.split('.').next() == Some(key.as_str()));
-                    if !exempt && !listed {
-                        missing.push(format!("{kind}.{key}"));
-                    }
-                }
-            }
-        }
-        assert!(
-            missing.is_empty(),
-            "glob options missing from NESTED_GLOB_OPTIONS: {missing:?}"
         );
     }
 

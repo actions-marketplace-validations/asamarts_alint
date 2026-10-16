@@ -17,10 +17,10 @@ pub mod categories;
 #[path = "kind_docs_gen.rs"]
 pub mod kind_docs;
 
-/// Generates a migrated rule kind's `options_schema()` fn: the schemars-derived
-/// JSON Schema for its `Options` struct. `xtask gen-schema` composes the result
-/// with the `kind`/`paths` structure preserved from the committed base branch.
-/// See [`migrated_option_schemas`] and ADR-0001.
+/// Generates a rule kind's `options_schema()` fn: the schemars-derived JSON
+/// Schema for its `Options` struct. `xtask gen-schema` composes the result with
+/// the `kind` discriminator and metadata-derived common-field surface.
+/// See [`rule_option_schemas`] and ADR-0001.
 macro_rules! options_schema_for {
     ($ty:ty) => {
         #[must_use]
@@ -144,19 +144,24 @@ pub mod structured_path;
 mod test_support;
 pub mod unique_by;
 
-/// Rule kinds whose options schema is generated from Rust types via schemars,
-/// rather than hand-written in `schemas/v1/config.json`. Each entry maps a
-/// `$defs/rule_<kind>` definition name to that kind's derived options schema;
-/// `xtask gen-schema` composes it with the `kind`/`paths`/`required` structure
-/// preserved from the committed base branch.
+fn optionless_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+    })
+}
+
+/// Rule-kind option schemas generated from Rust types via schemars. Each entry
+/// maps a `$defs/rule_<kind>` definition name to that kind's derived options
+/// schema; optionless kinds share an exact empty-object schema.
 ///
-/// Migration is incremental (see ADR-0001 and
-/// `docs/design/spec-driven-development.md`): a kind absent from this list keeps
-/// its hand-written branch verbatim, so the published schema stays complete and
-/// valid at every step.
+/// `xtask gen-schema` composes these with the discriminator and metadata-derived
+/// common-field restrictions. This list is complete for every canonical kind;
+/// the generator's record/schema parity gate rejects omissions and extras.
 #[must_use]
 #[allow(clippy::too_many_lines)]
-pub fn migrated_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
+pub fn rule_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
     vec![
         ("rule_file_exists", file_exists::options_schema()),
         ("rule_file_absent", file_absent::options_schema()),
@@ -372,6 +377,29 @@ pub fn migrated_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
             "rule_hcl_path_absent",
             structured_path::absent_options_schema(),
         ),
+        (
+            "rule_dir_only_contains",
+            dir_only_contains::options_schema(),
+        ),
+        ("rule_file_graph", file_graph::options_schema()),
+        ("rule_filename_case", filename_case::options_schema()),
+        ("rule_for_each_dir", for_each_dir::options_schema()),
+        ("rule_for_each_file", for_each_file::options_schema()),
+        ("rule_for_each_match", for_each_match::options_schema()),
+        ("rule_executable_has_shebang", optionless_schema()),
+        ("rule_file_is_text", optionless_schema()),
+        ("rule_final_newline", optionless_schema()),
+        ("rule_no_bidi_controls", optionless_schema()),
+        ("rule_no_bom", optionless_schema()),
+        ("rule_no_case_conflicts", optionless_schema()),
+        ("rule_no_empty_files", optionless_schema()),
+        ("rule_no_illegal_windows_names", optionless_schema()),
+        ("rule_no_merge_conflict_markers", optionless_schema()),
+        ("rule_no_submodules", optionless_schema()),
+        ("rule_no_symlinks", optionless_schema()),
+        ("rule_no_trailing_whitespace", optionless_schema()),
+        ("rule_no_zero_width_chars", optionless_schema()),
+        ("rule_shebang_has_executable", optionless_schema()),
         (
             "rule_json_schema_passes",
             json_schema_passes::options_schema(),

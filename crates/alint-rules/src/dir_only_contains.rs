@@ -20,19 +20,22 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     select: String,
     allow: AllowList,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(untagged, expecting = "a basename glob, or a list of basename globs")]
+#[schemars(rename = "DirOnlyContainsAllowList")]
 enum AllowList {
     One(String),
-    Many(Vec<String>),
+    Many(#[schemars(length(min = 1))] Vec<String>),
 }
+
+crate::options_schema_for!(Options);
 
 impl AllowList {
     fn into_vec(self) -> Vec<String> {

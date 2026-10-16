@@ -281,9 +281,9 @@ enum Commands {
         #[arg(long, default_value = "Roadmap")]
         title: String,
     },
-    /// Generate `schemas/v1/config.json` from Rust types (schemars) for the
-    /// migrated rule kinds, passing hand-written branches through for the rest.
-    /// See ADR-0001 and docs/design/spec-driven-development.md.
+    /// Generate `schemas/v1/config.json` from canonical Rust option types and
+    /// the shared optionless model, with common fields derived from `KindMeta`.
+    /// See ADR-0001 and the accepted v0.19 W1 design.
     GenSchema {
         /// Verify the committed schema is up to date instead of rewriting it.
         #[arg(long)]

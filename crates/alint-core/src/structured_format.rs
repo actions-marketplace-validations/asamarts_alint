@@ -32,7 +32,9 @@ use xml_scan::xml_within_parse_limits;
 /// cap [`crate::walker::MAX_ANALYZE_BYTES`] (256 MiB) bounds bytes, but a parsed tree
 /// costs far more RSS: measured up to ~30x the input for attribute-heavy XML
 /// (roxmltree builds its own arena alongside the `serde_json::Value` tree), ~6-10x
-/// for JSON / dotenv. So a near-read-cap structured file would peak at multiple GB --
+/// for JSON. Lossless dotenv also needs a physical-line budget because very short
+/// declarations retain items and diagnostics far larger than their input. A
+/// near-read-cap structured file would peak at multiple GB --
 /// and the per-file rule dispatch is parallel, so several parse at once. Capping the
 /// structured-parse INPUT at 32 MiB bounds a single file's tree to ~1 GB worst case
 /// (XML), far above any real config / manifest (they are KB-MB; even a large

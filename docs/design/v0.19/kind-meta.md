@@ -1,7 +1,7 @@
 # Design doc: `KindMeta`, the per-kind capability inventory (W1)
 
-Status: Accepted design (2026-10-14); implementation in progress. Migration steps 1 through 4
-completed 2026-10-15; all five questions in section 7 are decided.
+Status: Implemented (2026-10-16); all six migration steps in section 5.2 are complete and all
+five questions in section 7 are decided.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md) (Phase 0)
 and K1 to K5 in section 7; no new ADR (the trust gates' source of truth changes, not their policy).
 Demand evidence: the inventory of all 95 kinds in [`kind-inventory.md`](kind-inventory.md), which
@@ -203,9 +203,14 @@ declared is decision K3.
    template or `extends:` source. `check` and `validate-config` therefore share the same behavior.
    The shipped-config, scenario, CLI, composition-provenance, and nested-rule gates exercise
    enforcement.
-5. Migrate the 20 hand-written option schemas, generate the per-kind schema restrictions (K4) and
-   the `facts.json` section, and add the record/schema parity gate.
-6. Add the capabilities summary to `rules show` and `explain` (K5).
+5. **Completed 2026-10-16.** Migrated the final 20 hand-written option schemas. All 95 canonical
+   option surfaces now derive from Rust option models, with per-kind common-field restrictions
+   generated from `KindMeta`; nested `require:` rules reuse that exact generated kind dispatch
+   with their parent-only fields excluded. Registry/schema coverage and semantic parity fail
+   generation on drift. `facts.json` format v4 carries the canonical `kind_meta` map.
+6. **Completed 2026-10-16.** Added capabilities, accepted selectors, and fix operations to
+   `rules show` and `explain`, in both human and structured JSON output, under the all-kinds
+   ADR-0012 completeness gate.
 
 ### 5.3 Gates
 

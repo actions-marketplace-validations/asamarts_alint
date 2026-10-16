@@ -75,18 +75,32 @@ pub(crate) fn resolve_select(spec: SelectSpec, rule_id: &str) -> Result<Scope> {
     Scope::from_patterns(&patterns)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     select: SelectSpec,
-    /// Optional per-iteration filter - evaluated against each
-    /// iterated entry's `iter` context. Common shape:
-    /// `iter.has_file("Cargo.toml")` to scope the iteration to
-    /// directories that look like a workspace member.
+    /// Per-iteration `when:` filter - evaluated against `iter.*` in the iterated
+    /// entry's context. Iterations whose verdict is false are skipped before any
+    /// nested rule is built. Examples: `iter.has_file("Cargo.toml")`,
+    /// `iter.basename matches "^pkg-"`.
     #[serde(default)]
     when_iter: Option<String>,
+    #[schemars(schema_with = "require_schema")]
     require: Vec<NestedRuleSpec>,
 }
+
+/// Preserve the shared recursive nested-rule schema instead of deriving the
+/// flattened `NestedRuleSpec` option map.
+fn require_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "Nested rules evaluated against each matched directory.",
+        "type": "array",
+        "minItems": 1,
+        "items": { "$ref": "#/$defs/nested_rule" }
+    })
+}
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct ForEachDirRule {
@@ -217,11 +231,17 @@ pub(crate) fn validate_nested_require(
 ) -> Result<()> {
     let tokens = alint_core::template::PathTokens::from_path(std::path::Path::new("_"));
     for (idx, compiled) in require.iter().enumerate() {
-        // A nested rule's `fix`, `git_tracked_only`, and `respect_gitignore` are
-        // stripped before the leaf rule is built (`NestedRuleSpec::instantiate`), so
-        // they never take effect; accepting them silently made a nested existence
-        // rule count untracked files and a nested fix never apply (v0.18.3).
-        for field in ["fix", "git_tracked_only", "respect_gitignore"] {
+        // These parent-only fields are stripped before the leaf rule is built
+        // (`NestedRuleSpec::instantiate`), so they never take effect. Reject
+        // them instead of silently changing a nested rule's identity, level,
+        // tracked-file scope, or remediation behavior.
+        for field in [
+            "id",
+            "level",
+            "fix",
+            "git_tracked_only",
+            "respect_gitignore",
+        ] {
             if compiled.spec.extra.contains_key(field) {
                 return Err(Error::rule_config(
                     parent_id,
@@ -735,11 +755,12 @@ mod tests {
 
     #[test]
     fn validate_nested_rejects_fields_a_nested_rule_would_ignore() {
-        // `fix`, `git_tracked_only`, and `respect_gitignore` are stripped from a
-        // nested rule before it is built, so they never applied; they are now load
-        // errors instead of silent no-ops (v0.18.3).
+        // Parent-only fields are stripped from a nested rule before it is built,
+        // so they must be load errors rather than silent no-ops.
         let reg = registry();
         for extra in [
+            "id: ignored",
+            "level: warning",
             "git_tracked_only: true",
             "respect_gitignore: false",
             "fix:\n  file_create:\n    content: x",

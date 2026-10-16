@@ -1634,6 +1634,54 @@ fn write_scope_filter_explain(
     Ok(())
 }
 
+fn write_kind_explain(
+    out: &mut impl std::io::Write,
+    entry: &alint_core::RuleEntry,
+    kind_meta: &alint_core::KindMeta,
+    show_docs: bool,
+) -> Result<()> {
+    use alint_output::style;
+
+    let dim = style::DIM;
+    let docs = style::DOCS;
+    if !entry.kind().is_empty() {
+        writeln!(out, "{dim}kind:      {dim:#} {}", term(entry.kind()))?;
+        let cats = rules::categories_for_kind(entry.kind());
+        if !cats.is_empty() {
+            writeln!(out, "{dim}categories:{dim:#} {}", cats.join(", "))?;
+        }
+        if let Some(summary) = rules::description_for_kind(entry.kind()) {
+            writeln!(out, "{dim}summary:   {dim:#} {summary}")?;
+        }
+        writeln!(
+            out,
+            "{dim}capabilities:{dim:#} {}",
+            rules::capability_summary(kind_meta)
+        )?;
+        writeln!(
+            out,
+            "{dim}selectors:  {dim:#} {}",
+            rules::selector_summary(kind_meta)
+        )?;
+        writeln!(
+            out,
+            "{dim}fix_ops:    {dim:#} {}",
+            rules::fix_op_summary(kind_meta)
+        )?;
+        // Deep link to the kind's full docs. Family = its primary category slug
+        // (equals the docs URL family segment); an alias resolves to its
+        // canonical page. Suppressed by --no-docs, like the policy_url line.
+        if show_docs && let Some(family) = cats.first() {
+            writeln!(
+                out,
+                "{dim}docs:      {dim:#} {docs}https://alint.org/docs/rules/{family}/{}/{docs:#}",
+                term(rules::canonical_kind(entry.kind())),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     use alint_core::Level;
     use alint_output::style;
@@ -1643,6 +1691,10 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
         bail!("no rule with id {rule_id:?} found in the effective config");
     };
     let rule = &entry.rule;
+    let kind_meta = loaded
+        .registry
+        .meta(entry.kind())
+        .expect("loaded rule must have capability metadata");
 
     // `explain` honours --format for machine consumers, matching `list`:
     // `json` emits the rule's wire-shape; any other machine format is an
@@ -1650,7 +1702,7 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     let format: Format = cli.format.parse().map_err(|e: String| anyhow::anyhow!(e))?;
     match format {
         Format::Human => {}
-        Format::Json => return explain_json(entry),
+        Format::Json => return explain_json(entry, kind_meta),
         _ => bail!(
             "`alint explain` supports only `--format human` or `--format json` (got {:?})",
             cli.format
@@ -1667,28 +1719,7 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
         Level::Off => style::DIM,
     };
     writeln!(out, "{dim}id:        {dim:#} {}", term(rule.id()))?;
-    if !entry.kind().is_empty() {
-        writeln!(out, "{dim}kind:      {dim:#} {}", term(entry.kind()))?;
-        let cats = rules::categories_for_kind(entry.kind());
-        if !cats.is_empty() {
-            writeln!(out, "{dim}categories:{dim:#} {}", cats.join(", "))?;
-        }
-        if let Some(summary) = rules::description_for_kind(entry.kind()) {
-            writeln!(out, "{dim}summary:   {dim:#} {summary}")?;
-        }
-        // Deep link to the kind's full docs. Family = its primary category slug
-        // (equals the docs URL family segment); an alias resolves to its
-        // canonical page. Suppressed by --no-docs, like the policy_url line.
-        if opts.show_docs
-            && let Some(family) = cats.first()
-        {
-            writeln!(
-                out,
-                "{dim}docs:      {dim:#} {docs}https://alint.org/docs/rules/{family}/{}/{docs:#}",
-                term(rules::canonical_kind(entry.kind())),
-            )?;
-        }
-    }
+    write_kind_explain(&mut out, entry, kind_meta, opts.show_docs)?;
     writeln!(
         out,
         "{dim}level:     {dim:#} {level_style}{}{level_style:#}",
@@ -1766,7 +1797,10 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
 
 /// Machine-readable single-rule shape for `alint explain <id> --format
 /// json`. Parallels each entry of the `list --format json` inventory.
-fn explain_json(entry: &alint_core::RuleEntry) -> Result<ExitCode> {
+fn explain_json(
+    entry: &alint_core::RuleEntry,
+    kind_meta: &alint_core::KindMeta,
+) -> Result<ExitCode> {
     // `paths` normalises to `{ include, exclude }` glob lists. `rule_kind`
     // carries the rule's own kind (the envelope's `kind` is the fixed `"rule"`
     // discriminator), and `categories` matches each `list --format json` entry.
@@ -1818,6 +1852,9 @@ fn explain_json(entry: &alint_core::RuleEntry) -> Result<ExitCode> {
         "rule_kind": entry.kind(),
         "categories": rules::categories_for_kind(entry.kind()),
         "summary": rules::description_for_kind(entry.kind()),
+        "capabilities": kind_meta.serialized_capabilities(),
+        "selectors": kind_meta.selectors.as_ref(),
+        "fix_ops": kind_meta.fix_ops.as_ref(),
         // The docs deep link, always present in JSON (like policy_url) regardless
         // of --no-docs. Family = the primary category slug; alias -> canonical.
         "docs": rules::categories_for_kind(entry.kind()).first().map(|family| {
