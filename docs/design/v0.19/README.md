@@ -1,6 +1,6 @@
 # v0.19: Fail-loud findings and the capability inventory
 
-Status: In progress (2026-10-15); see [Status and next steps](#status-and-next-steps-as-of-2026-10-15). This is the first release of the general-linter program: Phase 0
+Status: In progress (2026-10-16); see [Status and next steps](#status-and-next-steps-as-of-2026-10-16). This is the first release of the general-linter program: Phase 0
 and Phase 1a of [`../general-linter.md`](../general-linter.md) section 11, decided in
 [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md). Each work item
 below gets its own design document in this directory (in the [`../TEMPLATE.md`](../TEMPLATE.md)
@@ -11,7 +11,7 @@ v0.19 is a minor release with deliberate behaviour changes (W1 turns silently ig
 load errors, W2 and W3 turn some false passes into failures, and W4 changes report text). Every
 behaviour change is listed in the changelog with its migration note.
 
-## Status and next steps (as of 2026-10-15)
+## Status and next steps (as of 2026-10-16)
 
 This section is the hand-off point for whoever picks the program up next. Update it when an item
 moves.
