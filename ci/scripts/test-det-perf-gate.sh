@@ -90,11 +90,16 @@ git -C "$repo" add -A
 git -C "$repo" commit -q -m pr
 head_sha=$(git -C "$repo" rev-parse HEAD)
 
+gate_start_on_branch=0
 # run_gate [VAR=value ...]: run the gate from the repo with a clean summary/log.
 run_gate() {
   : > "$sandbox/summary"
   : > "$sandbox/log"
-  git -C "$repo" checkout -q "$head_sha"
+  if [[ "$gate_start_on_branch" == "1" ]]; then
+    git -C "$repo" checkout -q main
+  else
+    git -C "$repo" checkout -q "$head_sha"
+  fi
   set +e
   (cd "$repo" && env PATH="$sandbox/bin:$PATH" STUB_LOG="$sandbox/log" \
     GITHUB_STEP_SUMMARY="$sandbox/summary" PR_BASE_SHA="$base_sha" \
@@ -196,6 +201,17 @@ if [[ $rc -eq 0 ]] && has out 'no distinct base' && [[ ! -s "$sandbox/log" ]]; t
   ok "no distinct base skips without building"
 else
   bad "no distinct base (rc=$rc)"
+fi
+
+echo "==> an attached PR head remains on its original branch"
+git -C "$repo" branch -f main "$head_sha"
+gate_start_on_branch=1
+run_gate
+gate_start_on_branch=0
+if [[ $rc -eq 0 ]] && [[ "$(git -C "$repo" symbolic-ref --quiet --short HEAD)" == "main" ]]; then
+  ok "an attached PR head remains attached"
+else
+  bad "attached-head restoration (rc=$rc)"
 fi
 
 echo "==> no gungraun in Cargo.lock: tooling failure, exit 1"

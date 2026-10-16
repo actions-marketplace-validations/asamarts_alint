@@ -49,6 +49,7 @@ BENCHES=(--bench det_engine --bench det_check)
 ADVISORY="${DET_PERF_ADVISORY:-1}"
 
 HEAD_SHA="$(git rev-parse HEAD)"
+HEAD_REF="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 BASE_SHA="${PR_BASE_SHA:-}"
 if [[ -z "$BASE_SHA" ]]; then
   BASE_SHA="$(git merge-base HEAD origin/main 2>/dev/null || true)"
@@ -106,20 +107,32 @@ report() { # $1 = verdict line, $2 = gungraun log
   summary "$(ir_rows "$2")"
 }
 
+bench_log=""
+restore_head() {
+  if [[ -n "$HEAD_REF" ]]; then
+    git checkout -q "$HEAD_REF" 2>/dev/null || true
+  else
+    git checkout -q "$HEAD_SHA" 2>/dev/null || true
+  fi
+}
+cleanup() {
+  [[ -z "$bench_log" ]] || rm -f "$bench_log"
+  restore_head
+}
+trap cleanup EXIT
+
 echo "==> [1/2] baseline: build + bench merge-base ${BASE_SHA:0:12}"
 git checkout -q "$BASE_SHA" || tooling_failure "could not check out the merge base ${BASE_SHA:0:12}"
 if ! run_benches --save-baseline=base; then
-  git checkout -q "$HEAD_SHA"
   tooling_failure "the baseline build or bench failed at the merge base ${BASE_SHA:0:12}"
 fi
 
 echo "==> [2/2] PR: build + bench ${HEAD_SHA:0:12}, compare vs base"
 git checkout -q "$HEAD_SHA"
 bench_log="$(mktemp)"
-trap 'rm -f "$bench_log"' EXIT
 run_benches --baseline=base 2>&1 | tee "$bench_log"
 rc="${PIPESTATUS[0]}"
-git checkout -q "$HEAD_SHA" 2>/dev/null || true # ensure tree restored
+restore_head # restore the original branch, or the detached commit
 
 if [[ "$rc" -ne 0 ]]; then
   # Distinguish a real soft-limit breach from a bench that never produced a
