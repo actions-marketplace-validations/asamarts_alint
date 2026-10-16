@@ -25,6 +25,7 @@
 //! a rule that never gets a `kind` assigned anywhere in its chain
 //! is a clean error.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,12 +37,14 @@ mod nested;
 mod trust;
 
 pub(crate) use trust::{
-    ENV_VARS_MARKER, PROVENANCE_MARKER, Provenance, SourceClass, UNTRUSTED_FIX_SOURCE_MARKER,
-    UntrustedWhenVarRead, demote_content_fixers_in, demote_content_fixers_in_rule,
-    find_spawning_fix_op, find_spawning_kind, find_template_placeholder_in_guarded_field,
-    has_untrusted_fix_source, mark_provenance_in, mark_untrusted_fix_sources_in,
-    merge_mapping_fields, reject_ambiguous_yaml_in, reject_env_expansion_in,
-    reject_env_reads_in_when, reject_remote_assembled_env_refs, reject_untrusted_assembled_when,
+    ENV_VARS_MARKER, FIELD_SOURCES_MARKER, PROVENANCE_MARKER, Provenance, SourceClass,
+    UNTRUSTED_FIX_SOURCE_MARKER, UntrustedWhenVarRead, configured_field_source,
+    demote_content_fixers_in, demote_content_fixers_in_rule, find_spawning_fix_op,
+    find_spawning_kind, find_template_placeholder_in_guarded_field, has_untrusted_fix_source,
+    mark_field_sources_in, mark_provenance_in, mark_unattributed_field_sources,
+    mark_untrusted_fix_sources_in, merge_field_sources, merge_mapping_fields,
+    reject_ambiguous_yaml_in, reject_env_expansion_in, reject_env_reads_in_when,
+    reject_remote_assembled_env_refs, reject_untrusted_assembled_when,
     reject_untrusted_env_instance_vars, reject_untrusted_env_var_reads,
     strip_fix_promotions_in_rule, take_untrusted_fix_source, union_provenance,
 };
@@ -490,6 +493,8 @@ impl RawConfig {
                 // op's own default tier.
                 strip_fix_promotions_in_rule(&mut expanded);
             }
+            validate_effective_rule_fields(&expanded, catalog, &id_hint, None, None)?;
+            expanded.remove(FIELD_SOURCES_MARKER);
             let spec: alint_core::RuleSpec = serde_yaml_ng::from_value(
                 serde_yaml_ng::Value::Mapping(expanded),
             )
@@ -559,15 +564,25 @@ fn expand_template(
 
     let untrusted_fix_source = has_untrusted_fix_source(template) || has_untrusted_fix_source(rule);
     let mut expanded = (*template).clone();
+    mark_unattributed_field_sources(&mut expanded, &format!("template `{template_id}`"));
+    let template_field_sources = expanded.remove(FIELD_SOURCES_MARKER);
     let template_provenance = expanded.remove(PROVENANCE_MARKER);
     expanded = substitute_template_vars(expanded, &vars);
     expanded.remove("id");
+    if let Some(field_sources) = template_field_sources {
+        expanded.insert(FIELD_SOURCES_MARKER.into(), field_sources);
+    }
 
+    merge_field_sources(&mut expanded, rule);
     for (k, v) in rule {
         let key = k.as_str().unwrap_or_default();
         if matches!(
             key,
-            "extends_template" | "vars" | UNTRUSTED_FIX_SOURCE_MARKER | PROVENANCE_MARKER
+            "extends_template"
+                | "vars"
+                | UNTRUSTED_FIX_SOURCE_MARKER
+                | PROVENANCE_MARKER
+                | FIELD_SOURCES_MARKER
         ) {
             continue;
         }
@@ -587,6 +602,166 @@ fn expand_template(
         );
     }
     Ok(expanded)
+}
+
+fn validate_effective_rule_fields(
+    mapping: &Mapping,
+    catalog: Option<alint_core::KindCatalog<'_>>,
+    parent_id: &str,
+    inherited_source: Option<&str>,
+    nested_context: Option<(usize, &str)>,
+) -> Result<()> {
+    let kind = mapping.get("kind").and_then(serde_yaml_ng::Value::as_str);
+
+    if nested_context.is_some() {
+        for field in ["fix", "git_tracked_only", "respect_gitignore"] {
+            if mapping.contains_key(field) {
+                return Err(configured_field_error(
+                    parent_id,
+                    nested_context,
+                    field,
+                    format!(
+                        "`{field}` is not supported on a nested rule and would be ignored; \
+                         declare a top-level rule instead"
+                    ),
+                    configured_source(mapping, field, inherited_source),
+                ));
+            }
+        }
+    }
+
+    let meta = kind.and_then(|kind| catalog.and_then(|catalog| catalog.meta(kind)));
+    if let (Some(kind), Some(meta)) = (kind, meta) {
+        let fields = configured_fields(mapping);
+        if let Err(violation) = alint_core::validate_configured_fields(&fields, kind, meta) {
+            let source = configured_source(mapping, &violation.field, inherited_source);
+            return Err(configured_field_error(
+                parent_id,
+                nested_context,
+                &violation.field,
+                violation.message,
+                source,
+            ));
+        }
+    }
+
+    if !meta.is_some_and(|meta| meta.nested_rules) {
+        return Ok(());
+    }
+
+    let nested_source = configured_source(mapping, "require", inherited_source);
+    if let Some(require) = mapping
+        .get("require")
+        .and_then(serde_yaml_ng::Value::as_sequence)
+    {
+        for (idx, value) in require.iter().enumerate() {
+            let Some(nested) = value.as_mapping() else {
+                continue;
+            };
+            let nested_kind = nested
+                .get("kind")
+                .and_then(serde_yaml_ng::Value::as_str)
+                .unwrap_or("<unknown>");
+            validate_effective_rule_fields(
+                nested,
+                catalog,
+                parent_id,
+                nested_source,
+                Some((idx, nested_kind)),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn configured_fields(mapping: &Mapping) -> alint_core::ConfiguredFields<'_> {
+    let predicates = mapping
+        .get("scope_filter")
+        .and_then(serde_yaml_ng::Value::as_mapping);
+    let fix_op = mapping
+        .get("fix")
+        .and_then(serde_yaml_ng::Value::as_mapping)
+        .and_then(|fix| {
+            fix.iter()
+                .find_map(|(op, options)| options.as_mapping().and_then(|_| op.as_str()))
+        });
+    alint_core::ConfiguredFields::new(fix_op)
+        .with(
+            alint_core::ConfiguredField::Paths,
+            mapping.contains_key("paths"),
+        )
+        .with(
+            alint_core::ConfiguredField::ScopeFilter,
+            mapping.contains_key("scope_filter"),
+        )
+        .with(
+            alint_core::ConfiguredField::Fix,
+            mapping.contains_key("fix"),
+        )
+        .with(
+            alint_core::ConfiguredField::ExpectMatches,
+            mapping.contains_key("expect_matches"),
+        )
+        .with(
+            alint_core::ConfiguredField::GitTrackedOnly,
+            mapping.contains_key("git_tracked_only"),
+        )
+        .with(
+            alint_core::ConfiguredField::RespectGitignore,
+            mapping.contains_key("respect_gitignore"),
+        )
+        .with(
+            alint_core::ConfiguredField::RootOnly,
+            mapping.contains_key("root_only"),
+        )
+        .with(
+            alint_core::ConfiguredField::Since,
+            mapping.contains_key("since"),
+        )
+        .with_scope_filter(
+            alint_core::ConfiguredScopeFilterField::ChangedSince,
+            predicates.is_some_and(|m| m.contains_key("changed_since")),
+        )
+        .with_scope_filter(
+            alint_core::ConfiguredScopeFilterField::HasAncestor,
+            predicates.is_some_and(|m| m.contains_key("has_ancestor")),
+        )
+        .with_scope_filter(
+            alint_core::ConfiguredScopeFilterField::IncludeManifestPaths,
+            predicates.is_some_and(|m| m.contains_key("include_manifest_paths")),
+        )
+        .with_scope_filter(
+            alint_core::ConfiguredScopeFilterField::ExcludeManifestPaths,
+            predicates.is_some_and(|m| m.contains_key("exclude_manifest_paths")),
+        )
+}
+
+fn configured_source<'a>(
+    mapping: &'a Mapping,
+    field: &str,
+    inherited_source: Option<&'a str>,
+) -> Option<&'a str> {
+    let top_level = field.split('.').next().unwrap_or(field);
+    mapping
+        .contains_key(top_level)
+        .then(|| configured_field_source(mapping, field).or(inherited_source))?
+}
+
+fn configured_field_error(
+    rule_id: &str,
+    nested_context: Option<(usize, &str)>,
+    field: &str,
+    mut message: String,
+    source: Option<&str>,
+) -> Error {
+    if let Some(source) = source {
+        write!(message, "; `{field}` was supplied by {source}")
+            .expect("writing to a String cannot fail");
+    }
+    if let Some((idx, kind)) = nested_context {
+        message = format!("nested rule #{idx} (`{kind}`): {message}");
+    }
+    Error::rule_config(rule_id, message)
 }
 
 /// A template instance's `vars:` map, as strings (numbers and bools stringify).

@@ -758,6 +758,20 @@ mod tests {
     }
 
     #[test]
+    fn validate_nested_uses_leaf_kind_metadata_for_common_fields() {
+        let nested: NestedRuleSpec = serde_yaml_ng::from_str(
+            "kind: dir_contains\npaths: packages/*\nselect: packages/*\nrequire: README.md\n",
+        )
+        .unwrap();
+        let error = rule("src/*", vec![nested])
+            .validate_nested(&registry())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("nested rule #0 (`dir_contains`)"), "{error}");
+        assert!(error.contains("`paths` is not supported"), "{error}");
+    }
+
+    #[test]
     fn validate_nested_rejects_unknown_kind_and_option() {
         let reg = registry();
 

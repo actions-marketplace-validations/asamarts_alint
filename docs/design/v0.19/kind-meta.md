@@ -1,6 +1,6 @@
 # Design doc: `KindMeta`, the per-kind capability inventory (W1)
 
-Status: Accepted design (2026-10-14); implementation in progress. Migration steps 1 and 2
+Status: Accepted design (2026-10-14); implementation in progress. Migration steps 1 through 4
 completed 2026-10-15; all five questions in section 7 are decided.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md) (Phase 0)
 and K1 to K5 in section 7; no new ADR (the trust gates' source of truth changes, not their policy).
@@ -195,9 +195,14 @@ declared is decision K3.
    Runtime trust, nested-config confinement, Git coverage, and docs fail-only lists now derive
    from kind/fix metadata; the former hand lists remain one-release exact-equality cross-checks.
    Missing catalogs and unknown inherited kinds fail closed, including plugin-owned metadata.
-4. Fix any bundled ruleset, documented example, or scenario that sets an ignored field (a scan of
-   the 22 bundled rulesets found none at top level), then turn on load-time enforcement
-   (section 3.3) with the K1 policy, including context-aware nested validation.
+4. **Completed 2026-10-15.** Scanned and migrated every bundled ruleset, shipped example,
+   documentation example, and scenario, then enabled K1 load-time field enforcement with
+   context-aware nested validation. `RuleRegistry::build` rejects incompatible common fields and
+   fix operations from `KindMeta` before invoking the kind builder; the DSL applies the same
+   policy while effective field provenance is still available, so errors name a contributing
+   template or `extends:` source. `check` and `validate-config` therefore share the same behavior.
+   The shipped-config, scenario, CLI, composition-provenance, and nested-rule gates exercise
+   enforcement.
 5. Migrate the 20 hand-written option schemas, generate the per-kind schema restrictions (K4) and
    the `facts.json` section, and add the record/schema parity gate.
 6. Add the capabilities summary to `rules show` and `explain` (K5).

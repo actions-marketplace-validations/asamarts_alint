@@ -258,15 +258,13 @@ rules:
   # Shell-outs — now command_idempotent (was `command` @ v0.9.17).
   # These tools are MUTATING in fmt/fix mode; we run their --check arm,
   # which is by definition idempotent (asserts the tree is already clean).
-  # scope_filter.changed_since keeps the heavy passes to the PR diff in CI;
-  # `alint check` over a whole-tree clone still runs them globally.
+  # Each checker executes once over the repository.
   # ════════════════════════════════════════════════════════════════════
   - id: ts-dprint-check
     when: facts.has_dprint_config
     kind: command_idempotent
     command: ["npx", "dprint", "check"]
     timeout: 300
-    paths: .dprint.jsonc
     level: error
     message: >-
       `npx dprint check` failed. Run `npm run format` and commit the diff.
@@ -275,9 +273,6 @@ rules:
     kind: command_idempotent
     command: ["npm", "run", "lint"]
     timeout: 600
-    paths: package.json
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     level: error
     message: >-
       `npm run lint` failed (eslint --max-warnings 0). The 9 custom AST
@@ -287,9 +282,6 @@ rules:
     kind: command_idempotent
     command: ["npm", "run", "knip"]
     timeout: 600
-    paths: knip.jsonc
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     level: warning
     message: >-
       `npm run knip` reported unused exports/dependencies (module-graph

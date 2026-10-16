@@ -29,15 +29,20 @@ moves.
   the shared tree file set is built only when a rule looks ancestors up on the filtered index)
   and adotenv 0.1.1 with verified `.env` fix edits (#330). All release jobs, the post-publish
   smoke channels, the Action pin (`e3c9a85b`), and alint.org (#92) are done.
-- **W1 is in progress; slices 1 through 3 are complete.** The serializable `KindMeta` /
+- **W1 is in progress; slices 1 through 4 are complete.** The serializable `KindMeta` /
   `FixOpMeta` types and metadata-taking registry APIs are in `alint-core`; metadata is mandatory
   for every canonical registration; all 95 corrected per-kind records are declared beside their
   builders; and all 11 aliases resolve the exact canonical record. The borrowed `KindCatalog` is
-  now injected into every DSL loader call site. Runtime trust, nested confinement, Git coverage,
-  and docs fail-only decisions derive from metadata; the former hand lists remain exact
-  one-release equality checks. Missing catalogs and unknown inherited kinds fail closed.
-  Completeness, audited-distribution, typed-selector transition parity, spawn-source parity, and
-  rule-instance conformance gates are in place.
+  injected into every DSL loader call site. Runtime trust, nested confinement, Git coverage,
+  docs fail-only decisions, and load-time configured-field validation derive from metadata; the
+  former hand lists remain exact one-release equality checks. Missing catalogs and unknown
+  inherited kinds fail closed. Unsupported `paths`, `scope_filter` predicates, fixes,
+  `expect_matches`, and metadata-described common options now fail in both `check` and
+  `validate-config`, including under `require:`; composed-rule errors name the template or
+  `extends:` source that supplied the field. All bundled rulesets, shipped examples,
+  documentation examples, and scenarios pass under enforcement. Completeness,
+  audited-distribution, typed-selector transition parity, spawn-source parity,
+  rule-instance-conformance, and field-enforcement gates are in place.
 
 ### Completed release item: the v0.18.4 benchmark record
 
@@ -63,11 +68,9 @@ release-by-release row.
 
 ### Next work, in order
 
-1. **W1, `KindMeta`.** Slices 1 through 3 of [`kind-meta.md`](kind-meta.md) section 5.2 are
-   complete. Next, scan bundled rulesets, documented examples, and scenarios for fields their
-   kinds ignore, fix every occurrence, and enable K1's load-time field enforcement with
-   context-aware nested validation. Then migrate the hand-written option schemas and add K4's
-   generated restrictions, record/schema parity gate, and `facts.json` section; finally add K5's
+1. **W1, `KindMeta`.** Slices 1 through 4 of [`kind-meta.md`](kind-meta.md) section 5.2 are
+   complete. Next, migrate the hand-written option schemas and add K4's generated per-kind
+   restrictions, record/schema parity gate, and `facts.json` section; finally add K5's
    capabilities line to `rules show` and `explain`.
 2. **W4** (notes in every format) and **W7** (`--as-of`): small and independent of W1's tail.
 3. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half needs W1).

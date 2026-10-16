@@ -293,7 +293,6 @@ rules:
   # dart format --set-exit-if-changed prints each unformatted path; parse them.
   - id: flutter-dart-format-check
     kind: command_idempotent
-    paths: analysis_options.yaml
     command: ["dart","format","--output=none","--set-exit-if-changed","."]
     files_from: stdout
     files_pattern: 'Changed (.+)'

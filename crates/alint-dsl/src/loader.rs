@@ -317,6 +317,8 @@ pub(crate) fn load_recursive(
 /// blurred where each field came from (e.g. refuse any contribution to a
 /// spawning rule, or a remote-assembled `${` env reference).
 fn mark_extended_provenance(parent: &mut RawConfig, url: &str) {
+    crate::mark_field_sources_in(&mut parent.rules, url);
+    crate::mark_field_sources_in(&mut parent.templates, url);
     crate::mark_provenance_in(&mut parent.rules, crate::SourceClass::Extended, url);
     crate::mark_provenance_in(&mut parent.templates, crate::SourceClass::Extended, url);
     if url.starts_with("https://") {

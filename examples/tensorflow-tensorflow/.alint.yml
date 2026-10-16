@@ -23,12 +23,12 @@
 #
 # ── CATALOGUE: 41 discrete structural-validation surfaces ──
 # alint-replaceable: 32 / 41 (78%).  Newly replaceable vs v0.9.17: +9.
-#   The +9: pylint/buildifier/clang-format/codespell/api-compat moved from
-#   the OLD blind `command:` kind to `command_idempotent` (real --check
-#   contract + per-file offender parsing); api-golden FRESHNESS now expressible
+#   The +9: pylint/buildifier/clang-format/codespell/api-compat use explicit
+#   non-mutating checker invocations with path attribution; api-golden
+#   FRESHNESS is now expressible
 #   via generated_file_fresh; tf.org/code link integrity via
 #   registry_paths_resolve; requirements-lock cross-version parity via
-#   cross_file_value_equals; per-rule scope_filter PR-scopes the 80k-file tree.
+#   cross_file_value_equals.
 #
 # Genuine non-replaceables (9) stay in bazel/the bats suite — see the
 # NON-REPLACEABLE block at the bottom for each + WHY.
@@ -60,32 +60,23 @@ rules:
     level: warning
 
   # ──────────────────────────────────────────────────────────────────────
-  # SANITY-CHECK SUITE → command_idempotent  (BIGGEST WIN, the +9 core)
+  # SANITY-CHECK SUITE → path-scoped command checks
   #
-  # These wrap the EXACT invocations the bats suites run. command_idempotent
-  # (v0.10) replaces the old blind `command:` kind: it asserts the tool makes
-  # NO changes in --check/diff mode, and `files_from: stdout` + `files_pattern`
-  # turn the tool's offender list into per-file alint violations (clickable,
-  # scoped, dedupable) rather than one opaque pass/fail.
-  #
-  # scope_filter.changed_since mirrors code_check_changed_files.bats — only
-  # lints files changed in the PR, which is the ONLY tractable mode on an
-  # 80k-file tree (full-tree clang/pylint is minutes-to-hours).
+  # These wrap the exact non-mutating invocations the bats suites run. Each
+  # checker receives one matched path, so `paths` and `scope_filter` constrain
+  # execution and the resulting finding is attributed to that file.
   # ──────────────────────────────────────────────────────────────────────
 
   # pylint — code_check_changed_files.bats:64 + pylint-presubmit.yml
   - id: tensorflow-pylint
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/*.py"]
       exclude:
         - "third_party/**"
         - "**/*_pb2.py"
         - "tensorflow/lite/micro/**"
-    command: ["python", "-m", "pylint", "--rcfile=tensorflow/tools/ci_build/pylintrc", "--score=false"]
-    files_from: stdout
-    # pylint emits `path/to/file.py:NN: [Cxxxx(...)] msg` — capture the path.
-    files_pattern: '^([^:]+\.py):\d+:'
+    command: ["python", "-m", "pylint", "--rcfile=tensorflow/tools/ci_build/pylintrc", "--score=false", "{path}"]
     timeout: 600
     scope_filter:
       changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
@@ -93,14 +84,11 @@ rules:
 
   # buildifier — code_check_changed_files.bats:40 (Bazel BUILD/.bzl formatter)
   - id: tensorflow-buildifier
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/BUILD", "**/BUILD.bazel", "**/*.bzl", "MODULE.bazel", "WORKSPACE"]
       exclude: ["third_party/**"]
-    command: ["buildifier", "-mode=check", "-lint=warn"]
-    files_from: stdout
-    # buildifier -mode=check prints offending paths one per line.
-    files_pattern: '^(.+)$'
+    command: ["buildifier", "-mode=check", "-lint=warn", "{path}"]
     timeout: 120
     scope_filter:
       changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
@@ -110,14 +98,14 @@ rules:
   # it "doesn't match internal clang-format checker"; offered here info-level
   # for adopters who DO want the public-clang-format gate).
   - id: tensorflow-clang-format
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/*.cc", "**/*.h"]
       exclude:
         - "third_party/**"
         - "tensorflow/lite/micro/**"
         - "**/*_generated.h"
-    command: ["clang-format-12", "--style=Google", "--dry-run", "--Werror"]
+    command: ["clang-format-12", "--style=Google", "--dry-run", "--Werror", "{path}"]
     timeout: 300
     scope_filter:
       changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
@@ -125,16 +113,14 @@ rules:
 
   # codespell — typo sweep (not in TF's bats, but a cheap polyglot win).
   - id: tensorflow-codespell
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/*.md", "**/*.py", "**/*.cc", "**/*.h"]
       exclude:
         - "third_party/**"
         - "tensorflow/security/advisory/**"
         - "RELEASE.md"
-    command: ["codespell"]
-    files_from: stdout
-    files_pattern: '^([^:]+):\d+:'
+    command: ["codespell", "{path}"]
     timeout: 120
     level: info
 
@@ -155,7 +141,6 @@ rules:
   # ──────────────────────────────────────────────────────────────────────
   - id: tensorflow-api-goldens-fresh
     kind: command_idempotent
-    paths: "tensorflow/tools/api/tests/api_compatibility_test.py"
     command: ["bazel", "test", "//tensorflow/tools/api/tests:api_compatibility_test"]
     timeout: 1800
     level: info

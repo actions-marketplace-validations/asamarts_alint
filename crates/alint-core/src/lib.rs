@@ -55,7 +55,10 @@ pub use kind_meta::{
 pub use level::Level;
 pub use pathsafe::{derive_target, normalize_confined};
 pub use proposed_fix::{EditRegion, ProposedEdit, attach_proposed_edits, byte_to_line_col};
-pub use registry::{KindCatalog, RuleBuilder, RuleRegistry};
+pub use registry::{
+    ConfiguredField, ConfiguredFieldViolation, ConfiguredFields, ConfiguredScopeFilterField,
+    KindCatalog, RuleBuilder, RuleRegistry, validate_configured_fields,
+};
 pub use report::{
     FIX_ERROR_PREFIX, FixItem, FixReport, FixRuleResult, FixStatus, Report, SkipKind,
 };

@@ -22,6 +22,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that catalog, fails closed; plugin-owned metadata is honored. The former hand
   lists remain exact one-release transition checks.
 
+### Changed
+
+- **Rule fields that their selected kind does not support now fail configuration loading.** Both
+  `check` and `validate-config` validate `paths`, every `scope_filter` predicate, `fix` operation,
+  `expect_matches`, and metadata-described common options before building the rule, including
+  rules nested under `require:`. The error names the incompatible field and kind instead of
+  silently discarding the field, and names the template or `extends:` source that supplied it
+  after composition. Migration: remove `paths` and `scope_filter` from
+  single-shot `command_idempotent` rules (or use per-file `command` when the command genuinely
+  consumes `{path}`); replace `scope_filter.changed_since` with top-level `since` on Git commit
+  kinds. Bundled rulesets, shipped examples, documentation examples, and scenario configs have
+  been migrated.
+
 ### Fixed
 
 - **The benchmark regression report now includes changed-mode 1k cells as advisories, as

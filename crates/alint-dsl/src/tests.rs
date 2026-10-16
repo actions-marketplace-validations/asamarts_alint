@@ -148,6 +148,139 @@ rules:
 }
 
 #[test]
+fn configured_field_error_names_the_template_that_supplied_it() {
+    let yaml = r"
+version: 1
+templates:
+  - id: contains-template
+    kind: dir_contains
+    paths: packages/*
+    select: packages/*
+    require: README.md
+    level: error
+rules:
+  - extends_template: contains-template
+    id: packages-have-readmes
+";
+    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
+    assert!(
+        error.contains("`paths` is not supported by `dir_contains`"),
+        "{error}"
+    );
+    assert!(error.contains("template `contains-template`"), "{error}");
+}
+#[test]
+fn nested_configured_field_error_names_the_template_that_supplied_require() {
+    let yaml = r"
+version: 1
+templates:
+  - id: nested-template
+    kind: for_each_dir
+    select: packages/*
+    require:
+      - kind: dir_contains
+        paths: packages/*
+        select: packages/*
+        require: README.md
+    level: error
+rules:
+  - extends_template: nested-template
+    id: packages-have-readmes
+";
+    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
+    assert!(error.contains("nested rule #0 (`dir_contains`)"), "{error}");
+    assert!(error.contains("`paths` is not supported"), "{error}");
+    assert!(error.contains("template `nested-template`"), "{error}");
+}
+
+#[test]
+fn configured_field_error_names_the_extends_source_that_supplied_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.yml");
+    let child = tmp.path().join(".alint.yml");
+    std::fs::write(
+        &base,
+        "version: 1\nrules:\n  - id: packages-have-readmes\n    kind: dir_contains\n    \
+         paths: packages/*\n    select: packages/*\n    require: README.md\n    level: error\n",
+    )
+    .unwrap();
+    std::fs::write(&child, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+
+    let error = load(&child).unwrap_err().to_string();
+    assert!(
+        error.contains("`paths` is not supported by `dir_contains`"),
+        "{error}"
+    );
+    assert!(error.contains("./base.yml"), "{error}");
+}
+
+#[test]
+fn local_field_override_is_not_blamed_on_the_extends_source() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().join("base.yml");
+    let child = tmp.path().join(".alint.yml");
+    std::fs::write(
+        &base,
+        "version: 1\nrules:\n  - id: packages-have-readmes\n    kind: dir_contains\n    \
+         select: packages/*\n    require: README.md\n    level: error\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &child,
+        "version: 1\nextends: [./base.yml]\nrules:\n  - id: packages-have-readmes\n    \
+         paths: packages/*\n",
+    )
+    .unwrap();
+
+    let error = load(&child).unwrap_err().to_string();
+    assert!(
+        error.contains("`paths` is not supported by `dir_contains`"),
+        "{error}"
+    );
+    assert!(!error.contains("supplied by ./base.yml"), "{error}");
+}
+
+#[test]
+fn configured_false_expect_matches_is_rejected_when_the_kind_does_not_expose_it() {
+    let yaml = r"
+version: 1
+rules:
+  - id: readme
+    kind: file_exists
+    paths: README.md
+    expect_matches: false
+    level: error
+";
+    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
+    assert!(
+        error.contains("`expect_matches` is not supported by `file_exists`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn configured_null_fix_is_rejected_when_the_kind_has_no_fix_operations() {
+    let yaml = r"
+version: 1
+rules:
+  - id: format
+    kind: command_idempotent
+    command: [cargo, fmt, --check]
+    fix: null
+    level: error
+";
+    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
+    assert!(
+        error.contains("`fix` is not supported by `command_idempotent`"),
+        "{error}"
+    );
+}
+
+#[test]
 fn template_unknown_id_errors_clearly() {
     let yaml = r"
 version: 1

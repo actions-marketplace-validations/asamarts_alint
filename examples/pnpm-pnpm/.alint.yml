@@ -216,14 +216,12 @@ rules:
   # Replaces the v0.9.17 bare `command:` rules: these assert the working
   # tree is UNCHANGED by a fix-mode run (the exact semantics of pnpm's
   # `pn lint:meta` = "meta-updater --test must be a no-op" and the
-  # pacquet pre-push "cargo fmt --check / taplo --check"). Each is
-  # scope_filtered so PR CI only pays the cost on changed packages, and
-  # each carries a timeout.
+  # pacquet pre-push "cargo fmt --check / taplo --check"). These commands
+  # execute once over the repository and carry explicit timeouts.
   # ═══════════════════════════════════════════════════════════════════
   - id: meta-updater-no-drift
     when: facts.has_meta_updater
     kind: command_idempotent
-    paths: ".meta-updater/main.mjs"
     command: ["pnpm", "run", "lint:meta"]
     timeout: 600
     level: error
@@ -237,7 +235,6 @@ rules:
   - id: rust-fmt-clean
     when: facts.has_rust
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["cargo", "fmt", "--all", "--check"]
     timeout: 300
     level: warning
@@ -248,7 +245,6 @@ rules:
   - id: toml-fmt-clean
     when: facts.has_rust
     kind: command_idempotent
-    paths: ".taplo.toml"
     command: ["taplo", "format", "--check"]
     timeout: 120
     level: warning
@@ -259,7 +255,6 @@ rules:
   - id: typos-clean
     when: facts.has_rust
     kind: command_idempotent
-    paths: ".typos.toml"
     command: ["typos"]
     timeout: 120
     level: warning

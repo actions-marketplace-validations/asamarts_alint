@@ -168,28 +168,24 @@ rules:
       (cmd/internal/*, internal/trace/*). Mirrors a deps_test.go negative edge.
 
   # ==========================================================================
-  # § 3. *** NEW ***  gofmt -l collapse across the whole tree
+  # § 3. *** NEW ***  gofmt validation
   #
-  #      gofmt -l prints ONE line per unformatted file. command_idempotent in
-  #      --check mode with `files_from: stdout` + `files_pattern` parses that
-  #      offender list into per-file violations — replacing 1000s of per-file
-  #      `command` spawns (the v0.9.17 baseline ran gofmt once PER FILE).
-  #      Shells out at runtime; declared here, not executed during validation.
+  #      `gofmt -l` exits zero even when it prints an unformatted path, so a
+  #      small shell condition turns non-empty output into the nonzero status
+  #      required by the per-file `command` rule. The path scope preserves the
+  #      repository's vendor and testdata exclusions.
   # ==========================================================================
   - id: go-gofmt-clean
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["src/**/*.go"]
       exclude: ["src/vendor/**", "src/cmd/vendor/**", "src/**/testdata/**"]
-    command: ["gofmt", "-l", "src"]
-    files_from: stdout       # each stdout line is an offending file path
-    files_pattern: '^(.+)$'  # whole line = the path
+    command: ["sh", "-c", "output=$(gofmt -l \"$1\") || exit; test -z \"$output\"", "alint-gofmt", "{path}"]
     timeout: 120
     level: error
     message: |
       gofmt reported this file as unformatted. golang/go's git-codereview
-      Gerrit hook enforces gofmt-clean at upload time; this is the static,
-      single-spawn equivalent (one `gofmt -l src`, offenders fanned out).
+      Gerrit hook enforces gofmt-clean at upload time.
 
   # ==========================================================================
   # § 4. *** NEW ***  api/*.txt freeze registry invariants

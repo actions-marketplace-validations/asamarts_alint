@@ -66,63 +66,45 @@ rules:
   # `kind: command` lacked.
   - id: turbo-cargo-fmt
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["cargo", "fmt", "--check"]
     timeout: 300
     level: error
   - id: turbo-cargo-clippy
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["cargo", "lint"]   # .cargo/config.toml alias: clippy --workspace ... -D warnings
     timeout: 900
     level: error
   - id: turbo-cargo-check
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["cargo", "check", "--workspace"]
     timeout: 900
     level: error
   - id: turbo-cargo-deny-licenses
     kind: command_idempotent
-    paths: "deny.toml"
     command: ["cargo", "deny", "check", "licenses"]
     timeout: 300
     level: error
   - id: turbo-oxlint
     kind: command_idempotent
-    paths: "package.json"
     command: ["pnpm", "exec", "oxlint", "--deny-warnings", "."]
     timeout: 300
     level: error
   - id: turbo-oxfmt-check
     kind: command_idempotent
-    paths: "package.json"
     command: ["oxfmt", "--check"]
     timeout: 300
     level: error
   - id: turbo-taplo-check
     kind: command_idempotent
-    paths: ".taplo.toml"
     command: ["pnpm", "exec", "taplo", "format", "--check"]
     timeout: 180
     level: error
   - id: turbo-ultracite-check
     kind: command_idempotent
-    paths: "package.json"
     command: ["pnpm", "exec", "ultracite", "check"]
     timeout: 300
     level: warning
 
-  # ── [scope_filter] On large PRs, run the expensive cargo gates only when
-  # Rust actually changed. PER-RULE only; {{env}} needs a default.
-  - id: turbo-cargo-clippy-changed
-    kind: command_idempotent
-    paths: "crates/**/*.rs"
-    command: ["cargo", "lint"]
-    timeout: 900
-    level: error
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
 
   # ── [import_gate] Forbid std DefaultHasher / VecDeque::new in crate
   # source — mirrors clippy.toml's disallowed-types/methods so the ban is

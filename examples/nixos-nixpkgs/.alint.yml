@@ -266,12 +266,10 @@ rules:
   # replaces the old standalone `treefmt` + `actionlint` + `zizmor`
   # command rules (all run as treefmt formatters under ci/default.nix).
   #
-  # Each rule is gated by `paths:` pointing at a file the tool reads,
-  # so it no-ops if the canonical config-of-record is deleted.
+  # Each command executes once over the repository.
   # ─────────────────────────────────────────────────────────────────
   - id: nixpkgs-treefmt-idempotent
     kind: command_idempotent
-    paths: ci/default.nix
     command: ["nix-build", "ci", "-A", "fmt.check"]
     timeout: 600
     level: error

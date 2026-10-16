@@ -82,7 +82,6 @@ rules:
   # ════════════════════════════════════════════════════════════════
   - id: istio-gen-check-clean
     kind: command_idempotent
-    paths: "Makefile.core.mk"
     command: ["make", "gen-check"]
     timeout: 1800
     level: error
@@ -150,38 +149,14 @@ rules:
       depguard.DenyOperatorAndIstioctl).
 
   # ════════════════════════════════════════════════════════════════
-  # Copyright banner  (lint_copyright_banner.sh) — collapsed onto
-  # command_idempotent with files_from: stdout. The istio script
-  # prints `Missing license: <path>` / `Missing copyright: <path>`
-  # for each offender; files_pattern parses those into per-file
-  # violations. scope_filter.changed_since fires only on PR-touched
-  # files (v0.11) — the script itself walks the whole tree, but PR CI
-  # only cares about new drift.
-  #
-  # (The v0.9.17 baseline used two static file_header regex rules;
-  # delegating to the project's own script is exact — no regex-shape
-  # drift, and `make fix-copyright-banner` stays the canonical fix.)
+  # Copyright banner (lint_copyright_banner.sh). The project script walks the
+  # repository once and prints `Missing license: <path>` /
+  # `Missing copyright: <path>` for each offender. Parse that output into
+  # per-file findings while keeping the script as the canonical check and fix.
   # ════════════════════════════════════════════════════════════════
   - id: istio-copyright-banner
     kind: command_idempotent
-    paths:
-      include:
-        - "**/*.go"
-        - "**/*.cc"
-        - "**/*.h"
-        - "**/*.proto"
-        - "**/*.py"
-        - "**/*.sh"
-        - "**/*.rs"
-      exclude:
-        - "**/*.gen.go"
-        - "**/*.pb.go"
-        - "**/*_pb2.py"
-        - "vendor/**"
-        - "common/**"
-    scope_filter:
-      changed_since: "origin/master"
-    command: ["common/scripts/lint_copyright_banner.sh", "{path}"]
+    command: ["common/scripts/lint_copyright_banner.sh"]
     files_from: stdout
     files_pattern: '^Missing (?:license|copyright): (?P<file>.+)$'
     level: error
@@ -191,12 +166,11 @@ rules:
 
   # ════════════════════════════════════════════════════════════════
   # gofmt / goimports / gofumpt / gci  (format-go ->
-  # common/scripts/format_go.sh; .golangci.yml formatters). gofmt -l
-  # prints unformatted paths to stdout. command_idempotent +
-  # files_from: stdout parses them into per-file violations. PR-scoped.
+  # common/scripts/format_go.sh; .golangci.yml formatters). This per-file
+  # command preserves the configured path exclusions and PR scope.
   # ════════════════════════════════════════════════════════════════
   - id: istio-gofmt-clean
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/*.go"]
       exclude:
@@ -207,9 +181,7 @@ rules:
         - "common/**"
     scope_filter:
       changed_since: "origin/master"
-    command: ["gofmt", "-l", "{path}"]
-    files_from: stdout
-    files_pattern: '^(?P<file>.+\.go)$'
+    command: ["sh", "-c", "output=$(gofmt -l \"$1\") || exit; test -z \"$output\"", "alint-gofmt", "{path}"]
     level: error
     message: "File is not gofmt-clean. Run `make format`."
 
@@ -219,7 +191,6 @@ rules:
   # ════════════════════════════════════════════════════════════════
   - id: istio-go-mod-tidy
     kind: command_idempotent
-    paths: "go.mod"
     command: ["go", "mod", "tidy", "-diff"]
     timeout: 120
     level: error

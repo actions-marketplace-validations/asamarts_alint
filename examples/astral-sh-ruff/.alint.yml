@@ -70,7 +70,6 @@ rules:
   # fit for the COMPOSITE check (one invocation, repo-wide):
   - id: ruff-codegen-fresh
     kind: command_idempotent
-    paths: "Cargo.toml"                       # one repo-wide invocation
     command: ["cargo", "dev", "generate-all", "--mode", "check"]
     files_from: stderr
     timeout: 600
@@ -116,7 +115,6 @@ rules:
 
   - id: ruff-rustfmt-clean
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["cargo", "fmt", "--all", "--", "--check"]
     files_from: stdout
     files_pattern: "Diff in (.+) at"          # rustfmt's offender format
@@ -127,7 +125,6 @@ rules:
     # ruff dogfooding ruff: one invocation over the tree, parse the
     # "Would reformat: <path>" list rather than spawning per .py file.
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["ruff", "format", "--check", "."]
     files_from: stderr
     files_pattern: "Would reformat: (.+)"
@@ -136,7 +133,6 @@ rules:
 
   - id: ruff-self-lint-clean
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["ruff", "check", "."]
     timeout: 120
     level: warning
@@ -315,14 +311,12 @@ rules:
   # command: --check, one spawn per file.)
   - id: ruff-mdformat-clean
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["mdformat", "--check", "."]
     timeout: 60
     level: info
 
   - id: ruff-prettier-yaml-clean
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["prettier", "--check", "**/*.{yaml,yml}"]
     timeout: 60
     level: info

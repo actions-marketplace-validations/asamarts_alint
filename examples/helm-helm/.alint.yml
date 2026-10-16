@@ -56,8 +56,7 @@ rules:
   - id: helm-dco-signoff
     kind: git_commit_signed_off
     # Only check commits unique to this branch, not all of history.
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
+    since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     level: error
     message: >-
       Every commit must carry a `Signed-off-by:` trailer matching the author

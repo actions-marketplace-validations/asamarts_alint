@@ -55,8 +55,6 @@ rules:
     files_pattern: '^([^:]+):[0-9]+:[0-9]+:'
     timeout: 300
     level: warning
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
 
   - id: node-cpplint
     # `make lint-cpp` — tools/cpplint.py (node's fork) + .cpplint filter.
@@ -204,8 +202,7 @@ rules:
     when: facts.has_node_src
     kind: git_commit_no_fixup
     level: error
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
+    since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     message: "fixup!/squash! commits must be squashed before landing (node lands clean, squashed history)."
 
   # ====================================================================

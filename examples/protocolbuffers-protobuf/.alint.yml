@@ -131,19 +131,15 @@ rules:
   #
   # We model it via command_idempotent: run the repo's OWN regen entry
   # point in a non-mutating/check posture and assert it produces no diff.
-  # NOTE: this requires Bazel on PATH; gated to PR-changed runs to keep
-  # cost sane on a Bazel-built monorepo.
+  # NOTE: this requires Bazel on PATH and executes over the repository.
   # ════════════════════════════════════════════════════════════════════
   - id: protobuf-file-lists-cmake-fresh
     kind: command_idempotent
     # cmake_lists_staleness_test supports --fix; in check mode it exits
     # non-zero iff src/file_lists.cmake is stale vs the Bazel source globs.
     command: ["bazel", "run", "//src:cmake_lists_staleness_test"]
-    paths: src/file_lists.cmake
     timeout: 600
     level: error
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     message: >-
       src/file_lists.cmake is auto-generated from the Bazel source-list
       globs (@//pkg:gen_src_file_lists_cmake). It MUST be regenerated when
@@ -153,11 +149,8 @@ rules:
   - id: protobuf-well-known-types-fresh
     kind: command_idempotent
     command: ["bazel", "run", "//src/google/protobuf:well_known_types_staleness_test"]
-    paths: src/google/protobuf/any.pb.cc
     timeout: 600
     level: error
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     message: >-
       The checked-in well-known-type descriptors (any.pb.*, struct.pb.*,
       etc.) must match protoc output. Run ./regenerate_stale_files.sh.

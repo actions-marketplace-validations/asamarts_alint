@@ -151,13 +151,12 @@ rules:
   # react squash-merges; stray `fixup!`/`squash!` commits should never land on
   # main. git_commit_no_fixup catches them declaratively. (Sign-off / DCO is
   # NOT enforced by react today, so we don't add git_commit_signed_off.)
-  # scope_filter.changed_since grandfathers history: only fire on the PR range.
+  # `since` grandfathers history: only fire on the PR range.
   # ===================================================================
   - id: react-no-fixup-commits
     when: facts.is_yarn_v1 and facts.has_react_package
     kind: git_commit_no_fixup
-    scope_filter:
-      changed_since: "{{env.GITHUB_BASE_REF | default('origin/main')}}"
+    since: "{{env.GITHUB_BASE_REF | default('origin/main')}}"
     level: error
     message: >-
       No `fixup!`/`squash!` commits in the PR range — squash them before

@@ -39,6 +39,13 @@ pub(crate) const PROVENANCE_MARKER: &str = "__alint_internal_provenance";
 /// before the effective rule is deserialized.
 pub(crate) const ENV_VARS_MARKER: &str = "__alint_internal_env_vars";
 
+/// Internal mapping from each effective top-level rule field to the template,
+/// `extends:` source, or nested config that supplied it. Unlike
+/// [`PROVENANCE_MARKER`], this marker follows last-wins field merging rather
+/// than accumulating monotonically. `finalize` uses it only to enrich a
+/// configured-field error, then removes it before typed deserialization.
+pub(crate) const FIELD_SOURCES_MARKER: &str = "__alint_internal_field_sources";
+
 /// A class of `extends:` source recorded in [`PROVENANCE_MARKER`].
 #[derive(Clone, Copy)]
 pub(crate) enum SourceClass {
@@ -122,6 +129,85 @@ pub(crate) fn union_provenance(existing: &mut Mapping, incoming: &Mapping) {
         }
     }
     existing.insert(PROVENANCE_MARKER.into(), ours.into());
+}
+
+fn is_internal_field(key: &serde_yaml_ng::Value) -> bool {
+    key.as_str()
+        .is_some_and(|name| name.starts_with("__alint_internal_"))
+}
+
+fn field_sources(mapping: &Mapping) -> Option<&Mapping> {
+    mapping
+        .get(FIELD_SOURCES_MARKER)
+        .and_then(serde_yaml_ng::Value::as_mapping)
+}
+
+/// Attribute every current user-authored field in each mapping to `source`.
+///
+/// This deliberately overwrites an older attribution: when `child.yml`
+/// extends `parent.yml` and is itself extended by the root, naming
+/// `child.yml` is the useful immediate source of its effective fields.
+pub(crate) fn mark_field_sources_in(mappings: &mut [Mapping], source: &str) {
+    for mapping in mappings {
+        let mut sources = Mapping::new();
+        for key in mapping.keys().filter(|key| !is_internal_field(key)) {
+            sources.insert(key.clone(), source.into());
+        }
+        if !sources.is_empty() {
+            mapping.insert(FIELD_SOURCES_MARKER.into(), sources.into());
+        }
+    }
+}
+
+/// Attribute fields that do not already have a more specific source.
+///
+/// Used during template expansion: fields inherited through `extends:` keep
+/// that source, while fields from a local template name the template itself.
+pub(crate) fn mark_unattributed_field_sources(mapping: &mut Mapping, source: &str) {
+    let mut sources = mapping
+        .remove(FIELD_SOURCES_MARKER)
+        .and_then(|value| value.as_mapping().cloned())
+        .unwrap_or_default();
+    for key in mapping.keys().filter(|key| !is_internal_field(key)) {
+        if !sources.contains_key(key) {
+            sources.insert(key.clone(), source.into());
+        }
+    }
+    if !sources.is_empty() {
+        mapping.insert(FIELD_SOURCES_MARKER.into(), sources.into());
+    }
+}
+
+/// Apply the same last-wins semantics to field attribution as to rule fields.
+///
+/// A local incoming value clears inherited attribution for that field; an
+/// attributed incoming value replaces it. Fields the incoming mapping does not
+/// touch retain their existing source.
+pub(crate) fn merge_field_sources(existing: &mut Mapping, incoming: &Mapping) {
+    let incoming_sources = field_sources(incoming);
+    let mut merged = existing
+        .remove(FIELD_SOURCES_MARKER)
+        .and_then(|value| value.as_mapping().cloned())
+        .unwrap_or_default();
+    for key in incoming.keys().filter(|key| !is_internal_field(key)) {
+        if let Some(source) = incoming_sources.and_then(|sources| sources.get(key)) {
+            merged.insert(key.clone(), source.clone());
+        } else {
+            merged.remove(key);
+        }
+    }
+    if !merged.is_empty() {
+        existing.insert(FIELD_SOURCES_MARKER.into(), merged.into());
+    }
+}
+
+/// Resolve the source of a configured field path such as
+/// `scope_filter.changed_since` from its top-level mapping key.
+pub(crate) fn configured_field_source<'a>(mapping: &'a Mapping, field: &str) -> Option<&'a str> {
+    let top_level = field.split('.').next().unwrap_or(field);
+    field_sources(mapping)
+        .and_then(|sources| sources.get(top_level))
+        .and_then(serde_yaml_ng::Value::as_str)
 }
 
 /// One `vars.<NAME>` read in a `when` expression of an untrusted remote.
@@ -740,6 +826,7 @@ pub(crate) fn take_untrusted_fix_source(mapping: &mut Mapping) -> bool {
 pub(crate) fn merge_mapping_fields(existing: &mut Mapping, incoming: Mapping) {
     let untrusted_fix_source =
         has_untrusted_fix_source(existing) || has_untrusted_fix_source(&incoming);
+    merge_field_sources(existing, &incoming);
     union_provenance(existing, &incoming);
     // The env-derived mark describes the `vars:` it was recorded with; a later
     // `vars:` replaces the map wholesale, so it replaces (or drops) the mark too.
@@ -749,7 +836,7 @@ pub(crate) fn merge_mapping_fields(existing: &mut Mapping, incoming: Mapping) {
     for (key, value) in incoming {
         if !matches!(
             key.as_str(),
-            Some(UNTRUSTED_FIX_SOURCE_MARKER | PROVENANCE_MARKER)
+            Some(UNTRUSTED_FIX_SOURCE_MARKER | PROVENANCE_MARKER | FIELD_SOURCES_MARKER)
         ) {
             existing.insert(key, value);
         }

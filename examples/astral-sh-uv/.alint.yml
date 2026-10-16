@@ -315,7 +315,6 @@ rules:
   # --diff` far more faithfully than a plain command shellout.
   - id: uv-ruff-check
     kind: command_idempotent
-    paths: "ruff.toml"                          # one repo-wide invocation
     command: ["uvx", "ruff@{{env.UV_RUFF_VERSION | default('latest')}}", "check", "."]
     files_from: stdout
     files_pattern: '^([^\s:]+):\d+:\d+'         # ruff's `path:line:col` offender form
@@ -327,7 +326,6 @@ rules:
 
   - id: uv-ruff-format
     kind: command_idempotent
-    paths: "ruff.toml"
     command: ["uvx", "ruff@{{env.UV_RUFF_VERSION | default('latest')}}", "format", "--check", "."]
     files_from: stdout
     files_pattern: '^Would reformat: (.+)$'     # ruff's offender form
@@ -338,7 +336,6 @@ rules:
   # ── cargo fmt via command_idempotent (NEW v0.10) ──────────────────────
   - id: uv-cargo-fmt
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["cargo", "fmt", "--all", "--", "--check"]
     files_from: stdout
     files_pattern: "Diff in (.+) at"            # rustfmt's offender form
@@ -349,7 +346,6 @@ rules:
   # ── prettier (yaml/json5) via command_idempotent (NEW v0.10) ──────────
   - id: uv-prettier-check
     kind: command_idempotent
-    paths: "Cargo.toml"
     command: ["npx", "prettier", "--check", "."]
     files_from: stderr
     files_pattern: '^\[warn\] (.+)$'            # prettier's `[warn] <path>` offender form
@@ -411,22 +407,18 @@ rules:
     level: warning
 
   # ════════════════════════════════════════════════════════════════════
-  # NEW (v0.11): contributor commit hygiene — gates only changed history.
-  # scope_filter.changed_since keeps these fast on big PRs and silent on
-  # the existing history.
+  # Contributor commit hygiene over the commits unique to the branch.
   # ════════════════════════════════════════════════════════════════════
   - id: uv-no-fixup-commits
     kind: git_commit_no_fixup
-    scope_filter:
-      changed_since: origin/main
+    since: origin/main
     level: error
     message: |
       Squash `fixup!` / `squash!` commits before merge.
 
   - id: uv-commits-gpg-signed
     kind: git_commit_gpg_signed
-    scope_filter:
-      changed_since: origin/main
+    since: origin/main
     level: warning
     message: |
       New commits should be GPG-signed (matches astral-sh's signed-commit

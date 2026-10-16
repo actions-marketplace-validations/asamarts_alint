@@ -452,8 +452,8 @@ rules:
   # 14. PER-LANGUAGE LINT SHELL-OUTS  — command_idempotent (was `command`)
   #     These wrap the existing read-only --check tools so one `alint check`
   #     fires the whole pipeline. Upgraded to command_idempotent + explicit
-  #     timeouts (v0.10). PR-scope the heavy ones with scope_filter so the
-  #     29k-file tree isn't re-walked on every push (v0.11).
+  #     timeouts (v0.10). `command_idempotent` executes once over the
+  #     repository and therefore has no per-file change filter.
   #
   #     ALL spawning kinds (command_idempotent, generated_file_fresh) are in
   #     alint-dsl SPAWNING_RULE_KINDS — an extends:'d ruleset can't smuggle a
@@ -465,16 +465,12 @@ rules:
     command: ["pnpm", "prettier-check"]
     timeout: 300
     level: error
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/canary')}}"
 
   - id: nextjs-eslint-check
     kind: command_idempotent
     command: ["pnpm", "lint-eslint", "."]
     timeout: 600
     level: error
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/canary')}}"
 
   - id: nextjs-typescript-check
     kind: command_idempotent

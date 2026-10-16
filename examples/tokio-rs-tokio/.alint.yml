@@ -54,7 +54,6 @@ rules:
   # via files_from/files_pattern, can attribute each diff to a file.
   - id: tokio-rustfmt-check
     kind: command_idempotent
-    paths: "Cargo.toml"            # anchor: fire once at the workspace root
     command: ["cargo", "fmt", "--check"]
     timeout: 120
     level: error

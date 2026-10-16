@@ -673,7 +673,7 @@
     "tensorflow-tensorflow": 55,
     "tokio-rs-tokio": 70,
     "vercel-next.js": 110,
-    "vercel-turbo": 86
+    "vercel-turbo": 85
   },
   "bench_scenario_rule_counts": {
     "S1": 16,
