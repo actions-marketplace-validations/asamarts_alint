@@ -9,13 +9,11 @@
 //! HCL (`hcl::edit`), XML (`roxmltree` node/attribute ranges), and INI +
 //! properties (a hand-rolled re-scan of the raw text, since those parsers keep no
 //! spans) are span-capable today; TOML is document-rewrite (`toml_edit`); dotenv
-//! edits are VERIFIED span edits computed and checked by `adotenv`'s `set` /
-//! `remove` (see [`uses_verified_edits`]). Every
-//! other [`Format`] returns `None`, so its
-//! `set_value` / `remove_value` declines cleanly (the violation is reported
-//! unfixed) until that format's resolver lands. This is a SAFE degradation: a
-//! `None` never corrupts bytes, and a wrong-but-parseable splice is still caught
-//! by the engine's post-edit re-verify.
+//! consumes `adotenv`'s native verified [`adotenv::TextEdit`] ranges and
+//! replacements (see [`uses_verified_edits`]). Other formats use their
+//! span-resolver or whole-document branches instead. Any unresolved operation
+//! declines cleanly, and a wrong-but-parseable edit is still caught by the
+//! engine's post-edit re-verification.
 //!
 //! R-CSTMAP realism: the `JSONPath` is resolved over the detached, parsed
 //! [`Value`](serde_json::Value); mapping its concrete path back to the CST node
@@ -184,12 +182,12 @@ pub fn supports_list_append(format: Format) -> bool {
     matches!(format, Format::Toml)
 }
 
-/// Whether `format`'s parse maps every leaf value to a STRING (XML, dotenv,
-/// properties, INI -- none carry native numbers/booleans). On such a format a
-/// non-string `equals` (`equals: 8080`) can never match the parsed string, so
-/// the `*_path_equals` rule is unsatisfiable and `set_value` can never help. The
-/// fixer's `can_fix` consults this so `check` does not promise an auto-fix that
-/// `fix` will always decline (the `mark_fixability` / fixable-accuracy contract).
+/// Whether `format` can represent assigned leaf values only as strings (XML,
+/// dotenv, properties, INI -- none carry assigned native numbers/booleans).
+/// Dotenv's bare declaration maps to `null`, but it likewise cannot be assigned
+/// a non-string value. A non-string `equals` (`equals: 8080`) is therefore not
+/// settable on these formats. The fixer's `can_fix` consults this so `check`
+/// does not promise an auto-fix that `fix` will always decline.
 #[must_use]
 pub fn format_leaves_are_strings(format: Format) -> bool {
     matches!(
@@ -235,23 +233,20 @@ pub fn removal_uses_document(format: Format) -> bool {
     matches!(format, Format::Json)
 }
 
-/// Whether `format`'s `set_value`, value `replace`, and `remove_value` are VERIFIED
-/// span edits: anchored to the entry (its value span, or its whole line) like an
-/// ordinary span splice, but computed and checked by the format's own editor
-/// ([`verified_set_edit`], [`verified_removal_spans`]). Dotenv, through `adotenv`:
-/// a set keeps the quoting its context needs, and a removal never changes how the
-/// remaining text reads.
+/// Whether `format`'s `set_value`, value `replace`, and `remove_value` use native
+/// verified text edits. Dotenv consumes `adotenv`'s exact ranges and replacements:
+/// a set preserves an exact existing quote style when possible and chooses a
+/// context-safe representation otherwise; a removal batch cannot reinterpret
+/// unselected source.
 #[must_use]
 pub fn uses_verified_edits(format: Format) -> bool {
     matches!(format, Format::Dotenv)
 }
 
-/// The `(value span, new bytes)` that set the scalar at `path` to `want`, for a
-/// [`uses_verified_edits`] format: the edit is the format editor's own (verified)
-/// result, expressed as a splice over the value span so it composes with other
-/// edits in the file. `None` (the fix declines) when the format has no verified
-/// editor, the path is not a single assignment, the value is not a scalar, or the
-/// editor refuses.
+/// The native `(range, replacement)` that sets the scalar at `path` to `want`
+/// for a [`uses_verified_edits`] format. The range may be a value token or a
+/// zero-width insertion for a bare declaration. `None` means the path is
+/// ambiguous, the value is not representable, or the editor refused the batch.
 #[must_use]
 pub fn verified_set_edit(
     format: Format,
@@ -266,12 +261,10 @@ pub fn verified_set_edit(
     }
 }
 
-/// The whole-line spans that remove every node at `paths`, for a
-/// [`uses_verified_edits`] format. The removals are verified TOGETHER first (so
-/// removing several keys at once is accepted when the combined result keeps every
-/// other entry and the BOM state intact), then, if that is refused, one key at a
-/// time; a key the editor refuses either way gets no span, so the `Absent`
-/// verifier demotes a partial removal. Empty when nothing can be removed.
+/// Native empty-replacement ranges that remove every resolvable node at `paths`
+/// for a [`uses_verified_edits`] format. The complete set is verified atomically;
+/// an unsafe combined result returns no spans, and the caller's post-edit
+/// `Absent` verifier remains the final convergence check.
 #[must_use]
 pub fn verified_removal_spans(
     format: Format,
@@ -800,146 +793,114 @@ mod xml {
     }
 }
 
-/// dotenv edits, delegated to `adotenv`, which keeps the byte span of every
-/// assignment. The fixer uses the VERIFIED edits (`dotenv_verified_set`,
-/// `dotenv_verified_removal_spans`): anchored to the entry's value span or whole
-/// line, but computed and checked by `adotenv::set` / `adotenv::remove`, so a set
-/// keeps the quoting its context needs and a removal never changes how the rest of
-/// the file reads. The plain span resolvers below answer [`resolve_value_span`] /
-/// [`resolve_removal_span`] for other callers. A key that appears MORE THAN ONCE
-/// (the parser's last-wins duplicate) collapses to one JSON key but many lines, so
-/// every path DECLINES it (the fix is skipped) rather than edit an ambiguous
-/// occurrence.
+/// Dotenv spans and edits delegated to `adotenv` 0.2's lossless document model.
+/// The fixer consumes the crate's native verified edit ranges and replacements;
+/// it does not reconstruct or diff the edited document. A key that appears more
+/// than once is ambiguous and therefore declines rather than guessing which
+/// declaration the flattened last-wins query result represents.
 mod dotenv {
     use super::PathSeg;
+    use std::borrow::Cow;
     use std::ops::Range;
 
-    /// The byte range of the value at `path` (what `set_value` overwrites).
-    pub(super) fn dotenv_value_span(text: &str, path: &[PathSeg]) -> Option<Range<usize>> {
-        Some(unique(text, path)?.value_span())
-    }
-
-    /// The whole-line removal span at `path` (what `remove_value` deletes).
-    pub(super) fn dotenv_removal_span(text: &str, path: &[PathSeg]) -> Option<Range<usize>> {
-        Some(unique(text, path)?.line_span())
-    }
-
-    /// The single assignment of a FLAT path (exactly one `Key` segment, never
-    /// nested or indexed); `None` if absent, duplicated, or unparsable.
-    fn unique(text: &str, path: &[PathSeg]) -> Option<adotenv::Entry> {
+    fn flat_key(path: &[PathSeg]) -> Option<&str> {
         let [PathSeg::Key(key)] = path else {
             return None;
         };
-        adotenv::parse(text).ok()?.unique(key).ok().cloned()
+        Some(key)
     }
 
-    /// `set_value` through `adotenv::set`, expressed as a splice over the entry's
-    /// value span. adotenv's `set` is exactly that splice (with a verified, possibly
-    /// re-quoted value), so its output differs from `text` only inside the span; the
-    /// prefix and suffix are checked before the middle is taken.
+    /// The original value-token range for one uniquely assigned flat key.
+    /// A bare declaration has no value token and therefore no value span.
+    pub(super) fn dotenv_value_span(text: &str, path: &[PathSeg]) -> Option<Range<usize>> {
+        let document = adotenv::parse_strict(text).ok()?;
+        document.unique(flat_key(path)?).ok()?.value_span()
+    }
+
+    /// The whole statement range for one unique flat key. Multiline quoted
+    /// assignments include every physical line in the statement.
+    pub(super) fn dotenv_removal_span(text: &str, path: &[PathSeg]) -> Option<Range<usize>> {
+        let document = adotenv::parse_strict(text).ok()?;
+        Some(document.unique(flat_key(path)?).ok()?.line_span())
+    }
+
+    /// Produce the exact native edit that assigns `want` to one unique key.
+    /// `adotenv` handles both assigned and bare declarations, retaining an
+    /// existing exact quote style when possible and selecting a context-safe
+    /// representation otherwise.
     pub(super) fn dotenv_verified_set(
         text: &str,
         path: &[PathSeg],
         want: &serde_json::Value,
     ) -> Option<(Range<usize>, Vec<u8>)> {
-        let [PathSeg::Key(key)] = path else {
-            return None;
-        };
-        let span = adotenv::parse(text).ok()?.unique(key).ok()?.value_span();
-        let new = adotenv::set(text, key, &scalar_text(want)?).ok()?;
-        let tail = text.len() - span.end;
-        if new.len() < span.start + tail
-            || new.as_bytes()[..span.start] != text.as_bytes()[..span.start]
-            || new.as_bytes()[new.len() - tail..] != text.as_bytes()[span.end..]
-        {
+        let document = adotenv::parse_strict(text).ok()?;
+        let verified = document
+            .set(flat_key(path)?, scalar_text(want)?.as_ref())
+            .ok()?;
+        let mut edits = verified.into_edits();
+        if edits.len() != 1 {
             return None;
         }
-        Some((
-            span.clone(),
-            new.as_bytes()[span.start..new.len() - tail].to_vec(),
-        ))
+        let edit = edits.pop()?;
+        Some((edit.range, edit.replacement.into_bytes()))
     }
 
-    /// The line spans removing every key at `paths` (flat paths assigned exactly
-    /// once). All together first: accepted when the combined removal re-parses with
-    /// the same BOM state and the same remaining entries in order (keys, values,
-    /// quoting, export status), the check `adotenv::remove` makes for one key.
-    /// Otherwise each key alone, through `adotenv::remove` itself.
+    /// Produce one verified native removal edit per selected unique flat key.
+    /// The complete batch is verified atomically by `adotenv`; if any combined
+    /// removal would reinterpret unselected source, no spans are returned.
     pub(super) fn dotenv_verified_removal_spans(
         text: &str,
         paths: &[Vec<PathSeg>],
     ) -> Vec<Range<usize>> {
-        let Ok(doc) = adotenv::parse(text) else {
+        let Ok(document) = adotenv::parse_strict(text) else {
             return Vec::new();
         };
-        let mut targets: Vec<(&str, Range<usize>)> = Vec::new();
+        let mut item_ids = Vec::with_capacity(paths.len());
         for path in paths {
-            let [PathSeg::Key(key)] = path.as_slice() else {
-                continue;
+            let Some(key) = flat_key(path) else {
+                return Vec::new();
             };
-            if let Ok(entry) = doc.unique(key)
-                && !targets.iter().any(|(k, _)| *k == key.as_str())
-            {
-                targets.push((key.as_str(), entry.line_span()));
-            }
+            let Ok(entry) = document.unique(key) else {
+                return Vec::new();
+            };
+            item_ids.push(entry.item_id());
         }
-        if targets.is_empty() {
+        item_ids.sort_unstable();
+        item_ids.dedup();
+        if item_ids.is_empty() {
             return Vec::new();
         }
-        let mut spans: Vec<Range<usize>> = targets.iter().map(|(_, s)| s.clone()).collect();
-        spans.sort_by_key(|s| s.start);
-        let mut out = String::with_capacity(text.len());
-        let mut at = 0;
-        for span in &spans {
-            out.push_str(&text[at..span.start]);
-            at = span.end;
-        }
-        out.push_str(&text[at..]);
-        let semantics = |e: &adotenv::Entry| {
-            (
-                e.key().to_string(),
-                e.value().to_string(),
-                e.quote(),
-                e.exported(),
-            )
-        };
-        let together = adotenv::parse(&out).is_ok_and(|after| {
-            let remaining = doc
-                .entries()
-                .iter()
-                .filter(|e| !targets.iter().any(|(k, _)| *k == e.key()))
-                .map(semantics);
-            doc.has_bom() == after.has_bom() && remaining.eq(after.entries().iter().map(semantics))
-        });
-        if together {
-            return spans;
-        }
-        targets
+        let operations: Vec<_> = item_ids
             .into_iter()
-            .filter(|(key, _)| adotenv::remove(text, key).is_ok())
-            .map(|(_, span)| span)
-            .collect()
+            .map(|item| adotenv::Edit::Remove { item })
+            .collect();
+        let Ok(verified) = document.edit(&operations) else {
+            return Vec::new();
+        };
+        let mut edits = verified.into_edits();
+        if edits.iter().any(|edit| !edit.replacement.is_empty()) {
+            return Vec::new();
+        }
+        edits.sort_unstable_by_key(|edit| edit.range.start);
+        edits.into_iter().map(|edit| edit.range).collect()
     }
 
     /// The text of a scalar (`null` and non-scalars have none in dotenv).
-    fn scalar_text(value: &serde_json::Value) -> Option<String> {
+    fn scalar_text(value: &serde_json::Value) -> Option<Cow<'_, str>> {
         use serde_json::Value;
         match value {
-            Value::String(s) => Some(s.clone()),
-            Value::Number(n) => Some(n.to_string()),
-            Value::Bool(b) => Some(b.to_string()),
+            Value::String(value) => Some(Cow::Borrowed(value)),
+            Value::Number(value) => Some(Cow::Owned(value.to_string())),
+            Value::Bool(value) => Some(Cow::Owned(value.to_string())),
             Value::Null | Value::Array(_) | Value::Object(_) => None,
         }
     }
 
-    /// Serialize a scalar as a dotenv value (`adotenv::encode_value`): bare
-    /// when that reads back unchanged wherever it lands after `=`, else
-    /// double-quoted with the `\n \r \t \\ \"` escapes. Declines a value
-    /// containing a control char dotenv cannot escape, and null / non-scalars,
-    /// so `set_value` degrades to a Suggestion rather than emit a raw control
-    /// byte.
+    /// Serialize a standalone dotenv scalar. Actual fixes use the context-aware
+    /// native edit above; this helper supports capability checks and callers that
+    /// need a self-contained Portable value token.
     pub(super) fn dotenv_serialize_scalar(value: &serde_json::Value) -> Option<Vec<u8>> {
-        adotenv::encode_value(&scalar_text(value)?).map(String::into_bytes)
+        adotenv::encode_value(scalar_text(value)?.as_ref()).map(String::into_bytes)
     }
 }
 

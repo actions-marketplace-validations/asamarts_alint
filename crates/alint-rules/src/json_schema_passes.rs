@@ -25,14 +25,13 @@
 //!   same `serde_json::Value` tree the schema validates against,
 //!   and XML maps in via the xmltodict-style `xml_to_value`
 //!   convention — same trick `json_path_*` uses.
-//! - **XML / dotenv / properties / INI targets are stringly-typed.**
-//!   Every value maps to a JSON string, so type those fields as
-//!   `string` (with a `pattern`) — `type: integer` / `boolean` /
-//!   `number` always fail against them. For XML, `type: array` /
-//!   `object` additionally depend on cardinality (a single vs.
-//!   repeated element is an object vs. an array). JSON / YAML /
-//!   TOML / HCL keep native types. See the mapping notes in
-//!   `docs/rules.md`.
+//! - **XML / properties / INI leaves and assigned dotenv values are
+//!   stringly-typed.** Type assigned fields as `string` (with a `pattern`);
+//!   integer / boolean / number assertions fail against them. A dotenv bare
+//!   declaration is the one exception and maps to JSON `null`. For XML,
+//!   array/object shape additionally depends on cardinality (a single vs.
+//!   repeated element is an object vs. an array). JSON / YAML / TOML / HCL keep
+//!   native types. See the mapping notes in `docs/rules.md`.
 //! - Each schema-validation error becomes one violation, with
 //!   the message including the failing instance path and the
 //!   schema's error description. A target that fails to parse

@@ -3,16 +3,17 @@
 //! that need to read a config / manifest into a `serde_json::Value`
 //! tree.
 //!
-//! [`Format`] parses JSON / YAML / TOML / XML / dotenv / properties / INI / HCL into one
-//! uniform `serde_json::Value` shape (YAML and TOML coerce through serde; XML
-//! maps via the xmltodict-style convention in `xml_to_value` — `@attr`
-//! / `#text` / repeated-element→array, leaf elements collapse to their
-//! text string, namespaces flatten to local names, every leaf is a
-//! string; dotenv and Java `.properties` are flat maps of literal-string
-//! values, and INI is a 2-level `{ section: { key: value } }` map of the
-//! same, pre-section keys hoisted to the top level; HCL maps via `hcl-rs`,
-//! JSON-native — blocks nest by type + labels, values keep their type, and
-//! an unevaluated expression is an opaque string), so a single `JSONPath`
+//! [`Format`] parses JSON / YAML / TOML / XML / dotenv / properties / INI / HCL
+//! into one uniform `serde_json::Value` shape (YAML and TOML coerce through
+//! serde; XML maps via the xmltodict-style convention in `xml_to_value` —
+//! `@attr` / `#text` / repeated-element→array, leaf elements collapse to their
+//! text string, and namespaces flatten to local names; dotenv is a flat map
+//! whose assigned values are literal strings and whose bare declarations are
+//! `null`; Java `.properties` is a flat literal-string map; INI is a 2-level
+//! `{ section: { key: value } }` map of the same, with pre-section keys hoisted
+//! to the top level; HCL maps via `hcl-rs`, JSON-native — blocks nest by type +
+//! labels, values keep their type, and an unevaluated expression is an opaque
+//! string), so a single `JSONPath`
 //! engine only ever has to reason about one tree shape. XML design +
 //! open-question resolutions: `docs/design/v0.10/xml_path.md`.
 
@@ -780,8 +781,8 @@ fn skip_heredoc(
 /// the family queries. `hcl::Value` is JSON-native, so `hcl::from_str` maps
 /// directly: a block is nested by its type then labels (`resource "t" "n" {…}` ->
 /// `$.resource.t.n`), values keep their HCL type (a number stays a number, unlike
-/// the stringly-typed dotenv/INI), and an unevaluated expression (`var.x`,
-/// `${…}`, a function call) arrives as an opaque string. A block type appearing
+/// assigned dotenv/INI values), and an unevaluated expression (`var.x`, `${…}`,
+/// a function call) arrives as an opaque string. A block type appearing
 /// once is an object but REPEATED is an array (the XML cardinality footgun);
 /// duplicate attributes and malformed input are parse errors.
 ///
@@ -1171,8 +1172,8 @@ mod tests {
     #[test]
     fn hcl_dispatches_to_a_json_native_value() {
         // hcl-rs maps HCL directly: a block nests by type + labels, values keep their
-        // HCL type (a number stays a number, unlike stringly-typed dotenv/INI), and an
-        // unevaluated expression is an opaque string.
+        // HCL type (a number stays a number, unlike assigned dotenv/INI values), and
+        // an unevaluated expression is an opaque string.
         let v = Format::Hcl
             .parse(
                 "region = \"us-east-1\"\n\
@@ -1641,9 +1642,9 @@ mod tests {
         // mismatch now fails CI. (Duplicate-key divergence has its own test above.)
         use serde_json::json;
 
-        // Stringly-typed formats store even a numeric literal as a STRING -- the root
-        // cause of "numeric/boolean filter comparators no-op on XML/dotenv/properties/
-        // INI"; a typed format keeps the number.
+        // Assigned leaves in stringly-typed formats store even a numeric literal
+        // as a STRING -- the root cause of numeric/boolean filter comparators
+        // no-oping on XML/dotenv/properties/INI. A typed format keeps the number.
         assert_eq!(
             Format::Dotenv.parse("PORT=8080").unwrap()["PORT"],
             json!("8080")
@@ -1664,7 +1665,9 @@ mod tests {
         assert_eq!(Format::Hcl.parse("a = inf").unwrap()["a"], json!("${inf}"));
         assert_eq!(Format::Hcl.parse("a = nan").unwrap()["a"], json!("${nan}"));
 
-        // Empty value: null in XML/YAML, "" in json/toml/dotenv/ini/properties.
+        // Empty assigned value: null in XML/YAML, "" in
+        // json/toml/dotenv/ini/properties. A dotenv bare declaration is distinct
+        // from an empty assignment and maps to null.
         assert_eq!(
             Format::Xml.parse("<r><a/></r>").unwrap()["r"]["a"],
             json!(null)
@@ -1673,6 +1676,7 @@ mod tests {
         assert_eq!(Format::Json.parse("{\"a\":\"\"}").unwrap()["a"], json!(""));
         assert_eq!(Format::Toml.parse("a = \"\"").unwrap()["a"], json!(""));
         assert_eq!(Format::Dotenv.parse("a=").unwrap()["a"], json!(""));
+        assert_eq!(Format::Dotenv.parse("a\n").unwrap()["a"], json!(null));
         assert_eq!(Format::Ini.parse("[s]\nk=").unwrap()["s"]["k"], json!(""));
         assert_eq!(Format::Properties.parse("k=").unwrap()["k"], json!(""));
 

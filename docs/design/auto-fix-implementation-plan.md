@@ -415,7 +415,7 @@ alint-owned parsers):
 
 | Sub | Formats | Dep reality (verified) |
 |---|---|---|
-| 2a | HCL, XML, dotenv, INI | **zero new deps.** HCL: `hcl::edit` (re-export of `hcl-edit` 0.8.8, prod). XML: `roxmltree` 0.20.0 `Node::range()` / `Attribute::range_value()` (**do not bump to 0.21**, R-ROXML). dotenv/INI: alint-owned (`dotenv.rs`, `ini.rs`), add per-value byte-offset tracking (the hand-rolled, heavier half). |
+| 2a | HCL, XML, dotenv, INI | HCL: `hcl::edit` (re-export of `hcl-edit` 0.8.8, prod). XML: `roxmltree` 0.20.0 `Node::range()` / `Attribute::range_value()` (**do not bump to 0.21**, R-ROXML). dotenv: direct prod dependency `adotenv` 0.2, whose lossless document exposes exact spans and native verified edit batches. INI: alint-owned (`ini.rs`) byte-span locator. |
 | 2b | TOML | add `toml_edit` 0.25.11 as a **new direct prod dep** (present today only transitively via the `trycmd` dev-tool - NOT a declared dev-dep to "promote"; `toml` 1.1.2 does not pull it either, its deps are `toml_parser`/`toml_writer`; R-DEP). `serde_spanned` (already prod) spans only typed `Spanned<T>` deserialization, not an arbitrary JSONPath location. |
 | 2c | properties | zero new deps; hand-roll a line/value-span locator over the span-less `java-properties`. |
 | 2d | JSON | **new prod dep `jsonc-parser`** (dprint). `strip_jsonc` (`structured_format.rs:227-312`) is a lossy rewrite, not a span source. |
@@ -432,11 +432,11 @@ Safe only for a **scalar replacing an existing scalar**, `expect: Scalar(value)`
 re-parses and re-runs the JSONPath source, asserting `.at_most_one() == value`. Object/array values,
 zero-match insertion, and nested creation are Suggestions (the lens `get` is undefined on a zero-match
 path, 5.8). `remove_value` (host `*_path_absent`, reads `path:`, Unsafe): `expect: Absent` - the
-engine re-parses and asserts the JSONPath now matches **zero** nodes. The comparison **normalizes into
-the format's value domain**: dotenv / properties / INI parse every value as a string, so a typed
-`equals: 8080` is compared in its string form there (else a correct Safe fix would be spuriously
-demoted); the typed formats (JSON/YAML/TOML/HCL/XML) compare in-type. Both PutGet checks run on the
-**detached parsed `Value`**, which
+engine re-parses and asserts the JSONPath now matches **zero** nodes. Scalar comparison is exact
+in the parsed format's value domain. XML / properties / INI and assigned dotenv values are
+strings, so a non-string `equals:` is statically unfixable rather than coerced; a dotenv bare
+declaration maps to `null`, but `set_value` cannot assign a native null. Typed formats
+(JSON/YAML/TOML/HCL) compare in type. Both PutGet checks run on the detached parsed `Value`, which
 **cannot see comments, key order, or a wrong separator** - so a wrong-separator or trivia-clobbering
 splice is caught NOT by PutGet but by the **comment/order golden files + a byte-locality assertion
 (output == input outside the edited `range`)**; the plan assigns that role explicitly rather than

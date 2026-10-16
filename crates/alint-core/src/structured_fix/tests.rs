@@ -269,8 +269,8 @@ fn every_format_is_classified_for_structured_fix() {
     enum Regime {
         Span,
         SpanSetDocRemove,
-        // Dotenv: SET and REMOVE are VERIFIED span edits, anchored to the entry but
-        // computed and checked by `adotenv::set` / `adotenv::remove`.
+        // Dotenv: SET and REMOVE are verified span edits computed atomically by
+        // adotenv's lossless document editor.
         VerifiedSpan,
         Document,
     }
@@ -559,8 +559,8 @@ fn dotenv_value_span_is_offset_past_a_leading_bom() {
 }
 
 #[test]
-fn dotenv_set_can_drop_quotes_and_round_trips() {
-    // `'old'` -> a simple value serializes bare, so the quotes go.
+fn dotenv_standalone_encoding_can_choose_a_new_quote_style() {
+    // Standalone serialization has no original style to preserve.
     let src = "A='old'\n";
     let span = denv_value(src, "A");
     let repl = serialize_scalar(Format::Dotenv, &json!("new")).unwrap();
@@ -615,16 +615,16 @@ fn dotenv_declines_a_nested_or_indexed_path() {
 }
 
 #[test]
-fn dotenv_serialize_quotes_only_when_needed() {
+fn dotenv_serialize_uses_portable_tokens() {
     let b = |v: &serde_json::Value| serialize_scalar(Format::Dotenv, v).unwrap();
-    assert_eq!(b(&json!("plain")), b"plain"); // simple -> bare
-    assert_eq!(b(&json!("a b")), b"a b"); // interior space -> bare
-    assert_eq!(b(&json!("q\"x")), b"q\"x"); // interior quote -> bare (literal)
-    assert_eq!(b(&json!(" pad ")), b"\" pad \""); // edge ws -> quote
-    assert_eq!(b(&json!("a #c")), b"\"a #c\""); // ` #` comment marker -> quote
-    assert_eq!(b(&json!("'x")), b"\"'x\""); // leading quote -> quote
-    assert_eq!(b(&json!("l1\nl2")), b"\"l1\\nl2\""); // newline -> quote + escape
-    assert_eq!(b(&json!("a\tb")), b"\"a\\tb\""); // tab -> quote + escape
+    assert_eq!(b(&json!("plain")), b"plain");
+    assert_eq!(b(&json!("a b")), b"\"a b\"");
+    assert_eq!(b(&json!("q\"x")), b"q\"x");
+    assert_eq!(b(&json!(" pad ")), b"\" pad \"");
+    assert_eq!(b(&json!("a #c")), b"\"a #c\"");
+    assert_eq!(b(&json!("'x")), b"\"'x\"");
+    assert_eq!(b(&json!("l1\nl2")), b"\"l1\\nl2\"");
+    assert_eq!(b(&json!("a\tb")), b"\"a\\tb\"");
 }
 
 #[test]
@@ -672,10 +672,10 @@ fn dotenv_serialize_declines_an_unescapable_control_char() {
 
 #[test]
 fn dotenv_value_span_is_byte_accurate_with_multibyte_neighbors() {
-    // A multibyte key AND value: the span must land on exact byte boundaries
-    // so the splice touches only the value (café=☕, with a plain sibling).
-    let src = "café=☕\nPORT=1\n";
-    let span = resolve_value_span(Format::Dotenv, src.as_bytes(), &[key("café")]).unwrap();
+    // Portable keys are ASCII in adotenv 0.2, but surrounding comments and the
+    // value can be multibyte. The span must still use original UTF-8 bytes.
+    let src = "# café\nKEY=☕\nPORT=1\n";
+    let span = resolve_value_span(Format::Dotenv, src.as_bytes(), &[key("KEY")]).unwrap();
     assert_eq!(&src[span], "☕");
 }
 
@@ -1598,30 +1598,26 @@ fn finalize_preserves_uniform_crlf_with_a_multiline_string() {
     );
 }
 
-// ---- dotenv: verified span edits through adotenv 0.1.1 ----
+// ---- dotenv: native verified edits through adotenv 0.2 ----
 
 #[test]
-fn dotenv_verified_removal_refuses_a_removal_that_would_rename_another_key() {
-    // Deleting the first line alone would expose the embedded BOM as the file's BOM,
-    // silently renaming `\u{feff}B` to `B`; adotenv refuses, so no span is emitted.
-    let src = "A=1\n\u{feff}B=2\n".as_bytes();
-    assert_eq!(
-        verified_removal_spans(Format::Dotenv, src, &[vec![key("A")]]),
-        Vec::<std::ops::Range<usize>>::new()
-    );
+fn dotenv_verified_removal_handles_a_bare_declaration() {
+    let src = b"A\nB=2\n";
+    let spans = verified_removal_spans(Format::Dotenv, src, &[vec![key("A")]]);
+    assert_eq!(spans, vec![0..2]);
 }
 
 #[test]
-fn dotenv_verified_removal_checks_keys_together() {
-    // Removing BOTH keys leaves an empty file, which changes nothing else, so the pair
-    // is accepted even though removing `A` alone is not (review: order dependence).
-    let src = "A=1\n\u{feff}B=2\n".as_bytes();
+fn dotenv_verified_removal_checks_a_multiline_batch_together() {
+    let src = "A=1\nMULTI=\"one\ntwo\"\nB=2\n";
     let spans = verified_removal_spans(
         Format::Dotenv,
-        src,
-        &[vec![key("A")], vec![key("\u{feff}B")]],
+        src.as_bytes(),
+        &[vec![key("A")], vec![key("MULTI")]],
     );
-    assert_eq!(spans, vec![0..4, 4..src.len()]);
+    assert_eq!(spans.len(), 2);
+    assert_eq!(&src[spans[0].clone()], "A=1\n");
+    assert_eq!(&src[spans[1].clone()], "MULTI=\"one\ntwo\"\n");
 }
 
 #[test]
@@ -1640,24 +1636,40 @@ fn dotenv_verified_removal_spans_are_whole_lines_per_key() {
         verified_removal_spans(Format::Dotenv, src, &[vec![key("X"), key("y")]]),
         Vec::<std::ops::Range<usize>>::new()
     );
+    // Batches are all-or-nothing: one unresolved selection must not remove the
+    // other valid key.
+    assert_eq!(
+        verified_removal_spans(Format::Dotenv, src, &[vec![key("X")], vec![key("missing")]]),
+        Vec::<std::ops::Range<usize>>::new()
+    );
 }
 
 #[test]
-fn dotenv_verified_set_keeps_quotes_that_a_trailing_tail_needs() {
-    // Text after a closing quote is ignored by the parser but would join a bare
-    // value, so a fixed bare splice (`B=ztail`) would read back wrong; adotenv
-    // chooses quoting that reads back exactly. The edit is anchored to the value span.
-    let src = b"B=\"y\"tail\n";
+fn dotenv_verified_set_uses_the_native_context_aware_replacement() {
+    let src = b"B = y # note\n";
     let (range, content) =
-        verified_set_edit(Format::Dotenv, src, &[key("B")], &json!("z")).unwrap();
-    assert_eq!(range, 2..5);
-    assert_eq!(content, b"\"z\"");
-    // Numbers and booleans are written as their text; null and non-scalars decline.
+        verified_set_edit(Format::Dotenv, src, &[key("B")], &json!("#z")).unwrap();
+    assert_eq!(&src[range.clone()], b"y");
+    assert_eq!(content, b"\"#z\"");
+    let mut out = src.to_vec();
+    out.splice(range, content);
+    assert_eq!(out, b"B = \"#z\" # note\n");
+
+    // The native editor retains an exact existing quote style where possible.
+    let (_, content) =
+        verified_set_edit(Format::Dotenv, b"A='old'\n", &[key("A")], &json!("new")).unwrap();
+    assert_eq!(content, b"'new'");
+
+    // Bare declarations gain an assignment through the editor's own zero-width
+    // insertion; numbers and booleans use their text.
+    let (range, content) =
+        verified_set_edit(Format::Dotenv, b"BARE\n", &[key("BARE")], &json!("value")).unwrap();
+    assert_eq!(range, 4..4);
+    assert_eq!(content, b"=value");
     let (_, content) =
         verified_set_edit(Format::Dotenv, b"PORT=1\n", &[key("PORT")], &json!(8080)).unwrap();
     assert_eq!(content, b"8080");
     assert!(verified_set_edit(Format::Dotenv, b"A=1\n", &[key("A")], &json!(null)).is_none());
-    // A duplicated or missing key declines.
     assert!(verified_set_edit(Format::Dotenv, b"K=1\nK=2\n", &[key("K")], &json!("x")).is_none());
     assert!(verified_set_edit(Format::Dotenv, b"A=1\n", &[key("B")], &json!("x")).is_none());
 }

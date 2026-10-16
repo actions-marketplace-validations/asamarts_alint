@@ -461,7 +461,7 @@ fn diff_shows_adjacent_dotenv_removals_and_both_apply_in_one_pass() {
     // Two rules removing adjacent dotenv keys that share a prefix (`X`, `XY`). Each
     // removal must stay anchored to its own line: an edit that drifted across the line
     // boundary (`=1\nX`) overlapped the next one, so `--diff` showed only one removal
-    // and a real `fix` needed a second pass (review of the adotenv 0.1.1 adoption).
+    // and a real `fix` needed a second pass. Keep the native batched editor honest.
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join(".alint.yml"),

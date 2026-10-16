@@ -1978,7 +1978,7 @@
       "type": "object"
     },
     "rule_dotenv_path_equals": {
-      "description": "dotenv sibling of `json_path_equals`. A `.env` file maps to a flat `{ KEY: \"value\" }` object of literal strings (no `${VAR}` expansion), so keys are queried as `$.NODE_ENV` and every value is a string (quote your `equals:`). Typical use: enforce `$.NODE_ENV == \"production\"` in `.env.production`.",
+      "description": "dotenv sibling of `json_path_equals`. A `.env` file maps to a flat object with literal assigned strings and JSON `null` for bare declarations (no `${VAR}` expansion), so keys are queried as `$.NODE_ENV`; quote `equals:` for assigned values. Typical use: enforce `$.NODE_ENV == \"production\"` in `.env.production`.",
       "properties": {
         "equals": {
           "description": "Expected value. Any JSON type (string, number, boolean, null, array, object)."
@@ -2007,7 +2007,7 @@
       "type": "object"
     },
     "rule_dotenv_path_matches": {
-      "description": "dotenv sibling of `json_path_matches` (same flat literal-string mapping as `dotenv_path_equals`). Typical use: `$.DATABASE_URL` matches `^postgres://` in `.env`.",
+      "description": "dotenv sibling of `json_path_matches` (same flat mapping of assigned literal strings as `dotenv_path_equals`; bare declarations are null and do not match a regex). Typical use: `$.DATABASE_URL` matches `^postgres://` in `.env`.",
       "properties": {
         "if_present": {
           "default": false,

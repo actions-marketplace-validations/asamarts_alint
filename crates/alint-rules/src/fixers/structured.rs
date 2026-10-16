@@ -132,9 +132,9 @@ impl StructuredFixer {
     /// `set_value` to be able to apply, all pure functions of the rule's `equals`
     /// value and this format:
     /// - it is a SCALAR (an object/array is never overwritten at tier);
-    /// - it can MATCH the parsed leaf -- a non-string `equals` against a
-    ///   string-typed format (XML / dotenv / properties / INI parse every leaf as
-    ///   a string) is unsatisfiable, so `equals: 8080` there can never match; and
+    /// - it can MATCH an assigned leaf -- XML / properties / INI and assigned
+    ///   dotenv values are strings, so a non-string `equals` is not settable
+    ///   (dotenv bare declarations map to null, but null is not assignable); and
     /// - it can be SERIALIZED to this format -- dotenv, for one, declines a value
     ///   carrying a control char it cannot escape.
     ///
@@ -147,7 +147,7 @@ impl StructuredFixer {
         if !is_scalar(want) {
             return false;
         }
-        // A non-string `equals` can never match a string-leaf format.
+        // These formats cannot assign a non-string value.
         let string_leaf_type_mismatch =
             structured_fix::format_leaves_are_strings(self.format) && !want.is_string();
         if string_leaf_type_mismatch {
@@ -426,9 +426,8 @@ impl Fixer for StructuredFixer {
                     return Vec::new();
                 }
                 let segs = to_segs(node.location());
-                // A verified-edit format (dotenv, through `adotenv::set`, which picks
-                // quoting that reads back in context) splices its editor's own result
-                // over the value span instead of one fixed encoding.
+                // A verified-edit format (dotenv, through `adotenv`'s native
+                // document editor) uses the editor's exact range and replacement.
                 if structured_fix::uses_verified_edits(self.format) {
                     let Some((range, content)) =
                         structured_fix::verified_set_edit(self.format, bytes, &segs, want)
@@ -465,10 +464,9 @@ impl Fixer for StructuredFixer {
                 }]
             }
             StructuredOp::Remove if structured_fix::uses_verified_edits(self.format) => {
-                // Verified removal (dotenv): one whole-line edit per key, with the keys
-                // checked TOGETHER by the format's editor so removing several never
-                // changes how the remaining text reads. A refused key gets no edit,
-                // and the `Absent` verifier demotes the partial removal.
+                // Native verified removal (dotenv): one whole-statement edit per
+                // key, with the full batch checked together by the format editor.
+                // A refused batch emits no edit.
                 let paths: Vec<Vec<PathSeg>> =
                     located.iter().map(|n| to_segs(n.location())).collect();
                 structured_fix::verified_removal_spans(self.format, bytes, &paths)
@@ -583,8 +581,8 @@ impl Fixer for StructuredFixer {
                         let rewritten = Value::String(rewritten.into_owned());
                         let segs = to_segs(node.location());
                         let (range, content) = if structured_fix::uses_verified_edits(self.format) {
-                            // Verified span edit (dotenv): the editor's own result over
-                            // the value span.
+                            // Native verified edit (dotenv): consume the editor's
+                            // exact range and replacement.
                             structured_fix::verified_set_edit(
                                 self.format,
                                 bytes,

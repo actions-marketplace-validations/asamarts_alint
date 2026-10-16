@@ -34,6 +34,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   consumes `{path}`); replace `scope_filter.changed_since` with top-level `since` on Git commit
   kinds. Bundled rulesets, shipped examples, documentation examples, and scenario configs have
   been migrated.
+- **The dotenv engine is now adotenv 0.2.0, with a lossless document model and native verified
+  edits.** Parsing accepts bare declarations and maps them to JSON `null` (distinct from `KEY=`,
+  which remains `""`). Compared with 0.1.1, it accepts multiline quotes and portability-warning
+  key forms, recognizes `export` followed by spaces or tabs, treats lone CR as a line ending,
+  and starts an inline comment at `#` after either a space or tab. Double-quoted `\$` decodes to
+  a literal `$`, while non-ASCII whitespace at an unquoted value's edges is retained rather than
+  trimmed. Non-ASCII keys and text after a closing quote are errors. Migration: rename invalid
+  or non-ASCII keys; move any intended quoted tail inside the closing quote (or remove it); write
+  `\\$` inside double quotes when the resulting value must retain a backslash before `$`; quote
+  values when a tab-before-`#` sequence or non-ASCII edge whitespace is meant literally; and
+  account for `null` when querying or schema-validating a bare declaration. `set_value`, value
+  `replace`, and `remove_value` now consume adotenv's exact native `TextEdit` ranges and
+  replacements; existing quote style is retained where possible, bare declarations can be
+  assigned, and multi-key removals are verified atomically.
 
 ### Fixed
 

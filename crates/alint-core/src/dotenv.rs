@@ -3,17 +3,18 @@
 //! A linter needs the value exactly as written, but `dotenvy` expands
 //! `${VAR}` / `$VAR`, which is environment-dependent and wrong for static
 //! analysis. The parser is the `adotenv` crate (extracted from alint into
-//! asamarts/adotenv): literal values, byte spans, and in-place edits, which
-//! `structured_fix` also uses. This module only maps its entries into the flat
-//! `{ KEY: "value" }` object of strings the structured-query rules read.
+//! asamarts/adotenv): literal values, diagnostics, exact spans, and verified
+//! native edits, which `structured_fix` also uses. This module maps its entries
+//! into the flat object consumed by structured-query rules.
 //!
-//! See the `adotenv` docs for the accepted syntax. In short: `KEY=VALUE` per
-//! line, `#` comments (inline only after a space on unquoted values), an
-//! optional `export ` prefix, single quotes fully literal, double quotes with
-//! the `\n \r \t \\ \"` escapes, no variable expansion, last-wins duplicates,
-//! and a leading BOM skipped. A line with no `=`, an empty or whitespace-
-//! containing key, or an unterminated quote is a parse error (one violation,
-//! like the other formats).
+//! See the `adotenv` docs for the accepted Portable syntax. In short: ASCII
+//! keys, optional bare declarations, `KEY=VALUE` assignments, `#` comments
+//! (inline only after whitespace on unquoted values), an optional `export`
+//! prefix, multiline single or double quotes, standard double-quote escapes,
+//! no variable expansion, last-wins duplicates, and a retained leading BOM.
+//! Bare declarations map to JSON `null`; every assigned value maps to a string.
+//! Error diagnostics reject the document as one parse failure, while portability
+//! warnings do not.
 //!
 //! ## Notes
 //! - Detection is filename-based and best-effort: `.env` and `.env.*` (so
@@ -27,16 +28,18 @@
 
 use serde_json::{Map, Value};
 
-/// Parse `.env` `text` into a flat `Value::Object` of string values, with no
-/// variable expansion. Returns `Err(message)` on a malformed line.
+/// Parse `.env` `text` into a flat `Value::Object`, with no variable
+/// expansion. Assigned values are strings and bare declarations are `null`.
+/// Returns the first error-severity diagnostic on malformed input; portability
+/// warnings remain accepted.
 pub(crate) fn parse(text: &str) -> Result<Value, String> {
-    let doc = adotenv::parse(text).map_err(|e| e.to_string())?;
+    let doc = adotenv::parse_strict(text).map_err(|error| error.to_string())?;
     let mut map = Map::new();
     for entry in doc.entries() {
-        map.insert(
-            entry.key().to_string(),
-            Value::String(entry.value().to_string()),
-        );
+        let value = entry
+            .value()
+            .map_or(Value::Null, |value| Value::String(value.to_owned()));
+        map.insert(entry.key().to_owned(), value);
     }
     Ok(Value::Object(map))
 }
@@ -55,18 +58,36 @@ mod tests {
         let v = obj("# a comment\n\
              NODE_ENV=production\n\
              export PORT=8080\n\
+             export\tHOST=localhost\n\
              \n\
              EMPTY=\n\
              INLINE=value # trailing comment\n\
-             HASH=a#b\n");
+             TAB_COMMENT=value\t# trailing comment\n\
+             HASH=a#b\n\
+             UNICODE_WS=\u{a0}x\u{a0}\n");
         assert_eq!(v["NODE_ENV"], json!("production"));
         assert_eq!(v["PORT"], json!("8080"), "`export ` prefix is stripped");
+        assert_eq!(
+            v["HOST"],
+            json!("localhost"),
+            "`export\\t` is also a prefix"
+        );
         assert_eq!(v["EMPTY"], json!(""), "empty value is the empty string");
         assert_eq!(v["INLINE"], json!("value"), "` #` starts an inline comment");
+        assert_eq!(
+            v["TAB_COMMENT"],
+            json!("value"),
+            "`\\t#` also starts an inline comment"
+        );
         assert_eq!(
             v["HASH"],
             json!("a#b"),
             "`#` with no leading space is literal"
+        );
+        assert_eq!(
+            v["UNICODE_WS"],
+            json!("\u{a0}x\u{a0}"),
+            "non-ASCII whitespace is value data"
         );
     }
 
@@ -110,21 +131,24 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_keys_last_wins() {
+    fn duplicate_keys_last_wins_including_bare_declarations() {
         assert_eq!(obj("K=first\nK=second\n")["K"], json!("second"));
+        assert_eq!(obj("K=assigned\nK\n")["K"], Value::Null);
     }
 
     #[test]
-    fn crlf_line_endings() {
+    fn crlf_and_lone_cr_line_endings() {
         assert_eq!(obj("A=1\r\nB=2\r\n")["B"], json!("2"));
+        assert_eq!(
+            obj("A=1\rB=2\r")["B"],
+            json!("2"),
+            "lone CR is accepted with a portability warning"
+        );
     }
 
     #[test]
-    fn malformed_lines_are_errors() {
-        assert!(
-            parse("NOEQUALS\n").is_err(),
-            "a line without `=` is a parse error"
-        );
+    fn bare_declarations_are_null_and_malformed_lines_are_errors() {
+        assert_eq!(obj("NOEQUALS\n")["NOEQUALS"], Value::Null);
         assert!(
             parse("=novalue\n").is_err(),
             "an empty key is a parse error"
@@ -133,10 +157,22 @@ mod tests {
             parse("A B=1\n").is_err(),
             "whitespace in a key is a parse error"
         );
+        assert!(parse("CAFÉ=1\n").is_err(), "Portable keys are ASCII");
         assert!(
             parse("Q=\"unterminated\n").is_err(),
-            "an unterminated quote is a parse error (no multiline)"
+            "an unmatched quote is a parse error"
         );
+        assert!(
+            parse("Q=\"value\"tail\n").is_err(),
+            "text after a closing quote is a parse error"
+        );
+    }
+
+    #[test]
+    fn multiline_quotes_and_portability_warnings_are_accepted() {
+        let value = obj("1KEY=portable-warning\nMULTI=\"one\ntwo\"\n");
+        assert_eq!(value["1KEY"], json!("portable-warning"));
+        assert_eq!(value["MULTI"], json!("one\ntwo"));
     }
 
     #[test]
@@ -167,10 +203,17 @@ mod tests {
     }
 
     #[test]
-    fn double_quote_cr_backslash_and_unknown_escapes() {
-        let v = obj("CR=\"a\\rb\"\nBS=\"a\\\\b\"\nUNK=\"a\\qb\"\n");
+    fn double_quote_cr_backslash_dollar_and_unknown_escapes() {
+        let v = obj("CR=\"a\\rb\"\nBS=\"a\\\\b\"\nDOLLAR=\"a\\$b\"\n\
+             BACKSLASH_DOLLAR=\"a\\\\$b\"\nUNK=\"a\\qb\"\n");
         assert_eq!(v["CR"], json!("a\rb"), "\\r escape");
         assert_eq!(v["BS"], json!("a\\b"), "\\\\ escape");
+        assert_eq!(v["DOLLAR"], json!("a$b"), "\\$ decodes to a literal dollar");
+        assert_eq!(
+            v["BACKSLASH_DOLLAR"],
+            json!("a\\$b"),
+            "\\\\ retains the backslash before a dollar"
+        );
         assert_eq!(v["UNK"], json!("a\\qb"), "unknown escape kept verbatim");
     }
 

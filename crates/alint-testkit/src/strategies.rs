@@ -644,9 +644,9 @@ fn rule_xml_path_absent_remove_value() -> impl Strategy<Value = String> {
 
 /// A `dotenv_path_equals` rule fixed via the located `set_value` op (Phase 2):
 /// rewrites the scalar at `$.REGION` (planted as "OLD" only in `_trig/sv.env`)
-/// to "NEW". dotenv leaves are strings, so the target is a STRING literal. Safe,
-/// so a bare `Fix` applies it -- exercising the hand-rolled dotenv resolver
-/// (re-scan the raw text -> value span -> splice -> re-parse verify).
+/// to "NEW". Assigned dotenv values are strings, so the target is a STRING
+/// literal. Safe, so a bare `Fix` applies it -- exercising adotenv's native
+/// context-aware edit followed by alint's re-parse verification.
 fn rule_dotenv_path_equals_set_value() -> impl Strategy<Value = String> {
     rule_id("dsetv").prop_map(|id| {
         format!(
@@ -656,9 +656,9 @@ fn rule_dotenv_path_equals_set_value() -> impl Strategy<Value = String> {
 }
 
 /// A `dotenv_path_absent` rule fixed via the located `remove_value` op (Phase 2):
-/// deletes the unique `$.BANNED` key line (planted only in `_trig/rv.env`).
+/// deletes the unique `$.BANNED` declaration (planted only in `_trig/rv.env`).
 /// Unsafe by default, so it is *suggested* under a bare `Fix` and *applied*
-/// under `FixUnsafe` -- exercising the dotenv whole-line removal + the tier gate.
+/// under `FixUnsafe` -- exercising adotenv's native removal + the tier gate.
 fn rule_dotenv_path_absent_remove_value() -> impl Strategy<Value = String> {
     rule_id("dremv").prop_map(|id| {
         format!(

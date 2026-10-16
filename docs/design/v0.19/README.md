@@ -89,9 +89,9 @@ release gates are listed at the end of this file.
   green; next are the Rust and protobuf emitters. Nothing is published to crates.io until it has
   real functionality (crates.io does not allow name-only placeholder releases).
 - **Phase 1b design**: `alint test` (DEC-6) and `explain --trace` (Q14), for v0.20.
-- **adotenv 0.2** is developed in its own repository. alint pins 0.1.1; 0.2's breaking model
-  will need a single migration PR here (the verified-edit helpers in
-  `crates/alint-core/src/structured_fix/mod.rs` are the integration point).
+- **adotenv 0.2 adoption is complete.** alint uses the lossless strict parser, maps bare
+  declarations to JSON `null`, and consumes native verified `TextEdit` batches in
+  `crates/alint-core/src/structured_fix/mod.rs`.
 
 ## Before v0.19: the v0.18.3 patch
 

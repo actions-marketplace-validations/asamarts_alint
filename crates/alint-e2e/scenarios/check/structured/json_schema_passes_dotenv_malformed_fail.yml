@@ -3,8 +3,8 @@ tags: [check, json_schema_passes, structured, dotenv, failing]
 
 # Two things at once: (1) the `.env` file AUTO-DETECTS as dotenv with no explicit
 # `format:` (the filename-based detect branch, exercised end-to-end nowhere else);
-# (2) the dotenv parse-error path yields exactly ONE parse-error violation (a line
-# with no `=`), symmetric with the XML malformed scenario -- not a flood.
+# (2) one invalid-key statement yields exactly ONE parse-error violation,
+# symmetric with the XML malformed scenario -- not a flood.
 
 given:
   tree:
@@ -16,7 +16,7 @@ given:
         }
     ".env": |
       NODE_ENV=production
-      THIS_LINE_HAS_NO_EQUALS
+      BAD KEY=value
   config: |
     version: 1
     rules:
