@@ -813,15 +813,75 @@ mod dotenv {
     /// The original value-token range for one uniquely assigned flat key.
     /// A bare declaration has no value token and therefore no value span.
     pub(super) fn dotenv_value_span(text: &str, path: &[PathSeg]) -> Option<Range<usize>> {
-        let document = crate::dotenv::parse_document(text).ok()?;
-        document.unique(flat_key(path)?).ok()?.value_span()
+        let (document, offset) = crate::dotenv::parse_document(text).ok()?;
+        let range = document.unique(flat_key(path)?).ok()?.value_span()?;
+        Some(range.start + offset..range.end + offset)
     }
 
     /// The whole statement range for one unique flat key. Multiline quoted
     /// assignments include every physical line in the statement.
     pub(super) fn dotenv_removal_span(text: &str, path: &[PathSeg]) -> Option<Range<usize>> {
-        let document = crate::dotenv::parse_document(text).ok()?;
-        Some(document.unique(flat_key(path)?).ok()?.line_span())
+        let (document, offset) = crate::dotenv::parse_document(text).ok()?;
+        let range = document.unique(flat_key(path)?).ok()?.line_span();
+        Some(range.start + offset..range.end + offset)
+    }
+
+    /// Bound the complete prospective source before native serialization and
+    /// verification allocate tokens, a new document, or decoded escape maps.
+    /// Double-quoted size is a conservative upper bound for other styles, except
+    /// preserved single quotes whose literal body and size are known exactly.
+    fn set_within_budget(
+        text: &str,
+        entry: adotenv::Entry<'_>,
+        offset: usize,
+        value: &str,
+    ) -> bool {
+        let range = entry
+            .value_span()
+            .unwrap_or_else(|| entry.key_span().end..entry.key_span().end);
+        let Some(token_len) = value.len().checked_add(2) else {
+            return false;
+        };
+        if token_len > crate::dotenv::MAX_DOTENV_BYTES {
+            return false;
+        }
+        let single = entry.quote() == adotenv::Quote::Single && !value.contains('\'');
+        let escapes = if single {
+            0
+        } else {
+            value
+                .bytes()
+                .filter(|&byte| matches!(byte, b'\\' | b'"' | b'\n' | b'\r' | b'\t'))
+                .count()
+        };
+        let separator = entry
+            .tokens()
+            .inline_comment
+            .as_ref()
+            .is_some_and(|comment| comment.start == range.end);
+        let Some(byte_len) = text
+            .len()
+            .checked_sub(range.len())
+            .and_then(|len| len.checked_add(token_len))
+            .and_then(|len| len.checked_add(escapes))
+            .and_then(|len| len.checked_add(usize::from(entry.value_span().is_none())))
+            .and_then(|len| len.checked_add(usize::from(separator)))
+        else {
+            return false;
+        };
+        // Quotes stand in for all non-line-ending syntax, including '=' and any
+        // comment separator. Only a preserved single-quoted body has raw CR/LF.
+        crate::dotenv::check_budget(
+            byte_len,
+            [
+                &text[..range.start + offset],
+                "'",
+                if single { value } else { "" },
+                "'",
+                &text[range.end + offset..],
+            ],
+        )
+        .is_ok()
     }
 
     /// Produce the exact native edit that assigns `want` to one unique key.
@@ -833,16 +893,27 @@ mod dotenv {
         path: &[PathSeg],
         want: &serde_json::Value,
     ) -> Option<(Range<usize>, Vec<u8>)> {
-        let document = crate::dotenv::parse_document(text).ok()?;
+        let (document, offset) = crate::dotenv::parse_document(text).ok()?;
+        let entry = document.unique(flat_key(path)?).ok()?;
+        let value = scalar_text(want)?;
+        if !set_within_budget(text, entry, offset, value.as_ref()) {
+            return None;
+        }
         let verified = document
-            .set(flat_key(path)?, scalar_text(want)?.as_ref())
+            .edit(&[adotenv::Edit::Set {
+                entry: entry.id(),
+                value: value.as_ref(),
+            }])
             .ok()?;
         let mut edits = verified.into_edits();
         if edits.len() != 1 {
             return None;
         }
         let edit = edits.pop()?;
-        Some((edit.range, edit.replacement.into_bytes()))
+        Some((
+            edit.range.start + offset..edit.range.end + offset,
+            edit.replacement.into_bytes(),
+        ))
     }
 
     /// Produce one verified native removal edit per selected unique flat key.
@@ -852,7 +923,7 @@ mod dotenv {
         text: &str,
         paths: &[Vec<PathSeg>],
     ) -> Vec<Range<usize>> {
-        let Ok(document) = crate::dotenv::parse_document(text) else {
+        let Ok((document, offset)) = crate::dotenv::parse_document(text) else {
             return Vec::new();
         };
         let mut item_ids = Vec::with_capacity(paths.len());
@@ -882,7 +953,10 @@ mod dotenv {
             return Vec::new();
         }
         edits.sort_unstable_by_key(|edit| edit.range.start);
-        edits.into_iter().map(|edit| edit.range).collect()
+        edits
+            .into_iter()
+            .map(|edit| edit.range.start + offset..edit.range.end + offset)
+            .collect()
     }
 
     /// The text of a scalar (`null` and non-scalars have none in dotenv).

@@ -36,21 +36,24 @@ pub(crate) const MAX_DOTENV_BYTES: usize = 4 * 1024 * 1024;
 /// Short repeated declarations can otherwise retain hundreds of bytes per line.
 pub(crate) const MAX_PHYSICAL_LINES: usize = 100_000;
 
-/// Construct the shared lossless document only after checking resource budgets.
-/// Count CRLF once, accept a terminal line ending without a phantom empty line,
-/// and include comments and multiline value lines in the conservative budget.
-pub(crate) fn parse_document(text: &str) -> Result<adotenv::Document<'_>, String> {
+/// Check raw bytes (or a conservative output bound) and physical lines without
+/// joining prospective source fragments. CRLF counts once even across fragments,
+/// and a terminal line ending does not create a phantom empty line.
+pub(crate) fn check_budget<'a>(
+    byte_len: usize,
+    parts: impl IntoIterator<Item = &'a str>,
+) -> Result<(), String> {
     let max_bytes = MAX_DOTENV_BYTES;
-    if text.len() > max_bytes {
+    if byte_len > max_bytes {
         return Err(format!(
             "dotenv input exceeds the maximum supported size ({max_bytes} bytes)"
         ));
     }
-    let mut lines = usize::from(!text.is_empty());
-    for (index, byte) in text.bytes().enumerate() {
-        let ends_line =
-            byte == b'\n' || (byte == b'\r' && text.as_bytes().get(index + 1) != Some(&b'\n'));
-        if ends_line && index + 1 < text.len() {
+    let mut bytes = parts.into_iter().flat_map(str::bytes).peekable();
+    let mut lines = usize::from(bytes.peek().is_some());
+    while let Some(byte) = bytes.next() {
+        let ends_line = byte == b'\n' || (byte == b'\r' && bytes.peek() != Some(&b'\n'));
+        if ends_line && bytes.peek().is_some() {
             lines += 1;
             if lines > MAX_PHYSICAL_LINES {
                 return Err(format!(
@@ -59,7 +62,19 @@ pub(crate) fn parse_document(text: &str) -> Result<adotenv::Document<'_>, String
             }
         }
     }
-    adotenv::parse_strict(text).map_err(|error| error.to_string())
+    Ok(())
+}
+
+/// Construct the shared lossless document only after checking the original raw
+/// source budget. Retain one leading BOM for native parsing and skip any others;
+/// callers translate native ranges by the returned prefix length.
+pub(crate) fn parse_document(text: &str) -> Result<(adotenv::Document<'_>, usize), String> {
+    check_budget(text.len(), [text])?;
+    let bom_bytes = text.len() - text.trim_start_matches('\u{feff}').len();
+    let skipped = bom_bytes.saturating_sub('\u{feff}'.len_utf8());
+    adotenv::parse_strict(&text[skipped..])
+        .map(|document| (document, skipped))
+        .map_err(|error| error.to_string())
 }
 
 /// Parse `.env` `text` into a flat `Value::Object`, with no variable
@@ -67,7 +82,7 @@ pub(crate) fn parse_document(text: &str) -> Result<adotenv::Document<'_>, String
 /// Returns the first error-severity diagnostic on malformed input; portability
 /// warnings remain accepted.
 pub(crate) fn parse(text: &str) -> Result<Value, String> {
-    let doc = parse_document(text)?;
+    let (doc, _) = parse_document(text)?;
     let mut map = Map::new();
     for entry in doc.entries() {
         let value = entry
@@ -94,6 +109,15 @@ mod tests {
         assert_eq!(obj(&source)["A"], json!(value));
         source.push('#');
         assert!(parse(&source).is_err());
+    }
+
+    #[test]
+    fn fragmented_budget_counts_crlf_once_and_ignores_terminal_endings() {
+        let prefix = "#\r\n".repeat(MAX_PHYSICAL_LINES - 1);
+        assert!(check_budget(prefix.len() + 3, [prefix.as_str(), "A", "\r", "\n"]).is_ok());
+        assert!(check_budget(prefix.len() + 4, [prefix.as_str(), "A", "\r", "\n#"]).is_err());
+        assert!(check_budget(MAX_DOTENV_BYTES, ["A"]).is_ok());
+        assert!(check_budget(MAX_DOTENV_BYTES + 1, ["A"]).is_err());
     }
 
     #[test]

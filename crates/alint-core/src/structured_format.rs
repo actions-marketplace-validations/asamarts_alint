@@ -84,6 +84,7 @@ impl Format {
     ];
 
     pub fn parse(self, text: &str) -> std::result::Result<Value, String> {
+        let raw_text = text;
         // Strip any leading UTF-8 BOM(s) uniformly. Some libraries (serde_json,
         // hcl-rs) reject a `\u{feff}` prefix as a syntax error, so a BOM-prefixed
         // `package.json` / `config.hcl` (common from Windows editors) would
@@ -160,7 +161,7 @@ impl Format {
             }
             Self::Toml => toml::from_str(text).map_err(|e| e.to_string()),
             Self::Xml => xml_to_value(text),
-            Self::Dotenv => crate::dotenv::parse(text),
+            Self::Dotenv => crate::dotenv::parse(raw_text),
             Self::Properties => properties_to_value(text),
             Self::Ini => crate::ini::parse(text),
             Self::Hcl => hcl_to_value(text),
@@ -1499,6 +1500,45 @@ mod tests {
         assert!(
             ok,
             "an at-limit XML document must parse on a 2 MiB worker stack"
+        );
+    }
+
+    #[test]
+    fn dotenv_budget_counts_original_bom_bytes() {
+        let cap = crate::dotenv::MAX_DOTENV_BYTES;
+        for prelude in ["", "\u{feff}", "\u{feff}\u{feff}"] {
+            let size = cap - prelude.len() - 2;
+            let mut source = format!("{prelude}A={}", "x".repeat(size - 1));
+            assert_eq!(
+                Format::Dotenv.parse(&source).unwrap()["A"]
+                    .as_str()
+                    .unwrap()
+                    .len(),
+                size - 1
+            );
+            source.push('x');
+            assert_eq!(
+                Format::Dotenv.parse(&source).unwrap()["A"]
+                    .as_str()
+                    .unwrap()
+                    .len(),
+                size
+            );
+            source.push('x');
+            assert!(Format::Dotenv.parse(&source).is_err());
+        }
+    }
+
+    #[test]
+    fn dotenv_no_config_fastpath_remains_independent_of_lossless_budgets() {
+        let source = format!(
+            "\u{feff}{}",
+            " \r\n".repeat(crate::dotenv::MAX_DOTENV_BYTES / 3)
+        );
+        assert!(source.len() > crate::dotenv::MAX_DOTENV_BYTES);
+        assert_eq!(
+            Format::Dotenv.parse(&source).unwrap(),
+            serde_json::json!({})
         );
     }
 

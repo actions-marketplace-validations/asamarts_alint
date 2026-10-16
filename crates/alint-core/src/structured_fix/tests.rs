@@ -1614,6 +1614,39 @@ fn dotenv_native_edits_decline_over_budget_documents() {
 }
 
 #[test]
+fn dotenv_native_input_byte_budget_counts_every_bom() {
+    let cap = crate::dotenv::MAX_DOTENV_BYTES;
+    let prelude = "\u{feff}\u{feff}\u{feff}";
+    let mut source = format!("{prelude}A={}", "x".repeat(cap - prelude.len() - 2));
+    let path = [key("A")];
+    assert_eq!(
+        resolve_value_span(Format::Dotenv, source.as_bytes(), &path),
+        Some(prelude.len() + 2..cap)
+    );
+    assert_eq!(
+        resolve_removal_span(Format::Dotenv, source.as_bytes(), &path),
+        Some(prelude.len()..cap)
+    );
+    let (range, replacement) =
+        verified_set_edit(Format::Dotenv, source.as_bytes(), &path, &json!("new")).unwrap();
+    let mut output = source.as_bytes().to_vec();
+    output.splice(range, replacement);
+    assert_eq!(output, format!("{prelude}A=new").as_bytes());
+    assert_eq!(
+        verified_removal_spans(Format::Dotenv, source.as_bytes(), &[path.to_vec()]),
+        vec![prelude.len()..cap]
+    );
+    source.push('x');
+    assert!(resolve_value_span(Format::Dotenv, source.as_bytes(), &path).is_none());
+    assert!(resolve_removal_span(Format::Dotenv, source.as_bytes(), &path).is_none());
+    assert!(verified_set_edit(Format::Dotenv, source.as_bytes(), &path, &json!("new")).is_none());
+    assert_eq!(
+        verified_removal_spans(Format::Dotenv, source.as_bytes(), &[path.to_vec()]),
+        Vec::<std::ops::Range<usize>>::new()
+    );
+}
+
+#[test]
 fn dotenv_verified_removal_handles_a_bare_declaration() {
     let src = b"A\nB=2\n";
     let spans = verified_removal_spans(Format::Dotenv, src, &[vec![key("A")]]);
@@ -1685,4 +1718,150 @@ fn dotenv_verified_set_uses_the_native_context_aware_replacement() {
     assert!(verified_set_edit(Format::Dotenv, b"A=1\n", &[key("A")], &json!(null)).is_none());
     assert!(verified_set_edit(Format::Dotenv, b"K=1\nK=2\n", &[key("K")], &json!("x")).is_none());
     assert!(verified_set_edit(Format::Dotenv, b"A=1\n", &[key("B")], &json!("x")).is_none());
+}
+
+#[test]
+fn dotenv_generated_output_is_bounded_before_native_verification() {
+    let bytes = crate::dotenv::MAX_DOTENV_BYTES;
+    let lines = crate::dotenv::MAX_PHYSICAL_LINES;
+    for (source, value) in [
+        ("A=\"x\"\n", "\\".repeat(bytes / 2)),
+        ("A='x'\n", "\n".repeat(lines)),
+    ] {
+        assert!(
+            verified_set_edit(
+                Format::Dotenv,
+                source.as_bytes(),
+                &[key("A")],
+                &json!(value)
+            )
+            .is_none(),
+            "native output must obey the same resource budget as parsed input"
+        );
+    }
+}
+
+#[test]
+fn dotenv_generated_byte_budget_includes_context_and_exact_single_quotes() {
+    let cap = crate::dotenv::MAX_DOTENV_BYTES;
+    // Each desired value starts with a double quote: double quoting adds one
+    // escape byte, whereas a retained single quote leaves that byte literal.
+    for (source, removed, extra) in [
+        ("A=\"x\"\n", 3, 3),
+        ("\u{feff}\u{feff}A='x'\r\nB=kept\r\n", 3, 2),
+        ("A\n", 0, 4),         // '=' plus the double-quoted token
+        ("A= # note\n", 0, 4), // token plus a separating space before '#'
+    ] {
+        let at_cap_value_len = cap - (source.len() - removed + extra);
+        for value_len in [at_cap_value_len - 1, at_cap_value_len, at_cap_value_len + 1] {
+            let want = json!(format!("\"{}", "x".repeat(value_len - 1)));
+            let edit = verified_set_edit(Format::Dotenv, source.as_bytes(), &[key("A")], &want);
+            if value_len > at_cap_value_len {
+                assert!(edit.is_none(), "over byte budget: {source:?}");
+                continue;
+            }
+            let (range, replacement) = edit.expect("under/at-cap output must remain fixable");
+            let mut output = source.as_bytes().to_vec();
+            output.splice(range, replacement);
+            assert_eq!(output.len(), cap - (at_cap_value_len - value_len));
+            assert_eq!(
+                Format::Dotenv
+                    .parse(std::str::from_utf8(&output).unwrap())
+                    .unwrap()["A"],
+                want
+            );
+        }
+    }
+}
+
+#[test]
+fn dotenv_generated_line_budget_replaces_instead_of_adding_multiline_lines() {
+    let cap = crate::dotenv::MAX_PHYSICAL_LINES;
+    for ending in ["\n", "\r\n", "\r"] {
+        for terminal in ["", ending] {
+            // Already at the line cap. Replacing the three-line token by a
+            // two-line token must reduce the count, not add to the old count.
+            let source = format!(
+                "{}A='old{ending}middle{ending}tail'{ending}B=kept{terminal}",
+                format!("#{ending}").repeat(cap - 4)
+            );
+            for newlines in [1, 2, 3] {
+                let value = format!("{}new", ending.repeat(newlines));
+                let want = json!(value);
+                let edit = verified_set_edit(Format::Dotenv, source.as_bytes(), &[key("A")], &want);
+                if newlines > 2 {
+                    assert!(edit.is_none(), "over line budget: {ending:?}, {terminal:?}");
+                    continue;
+                }
+                let (range, replacement) = edit.expect("under/at-cap physical lines");
+                let mut output = source.as_bytes().to_vec();
+                output.splice(range, replacement);
+                assert_eq!(
+                    Format::Dotenv
+                        .parse(std::str::from_utf8(&output).unwrap())
+                        .unwrap()["A"],
+                    want
+                );
+                assert!(output.ends_with(format!("B=kept{terminal}").as_bytes()));
+            }
+        }
+    }
+}
+
+#[test]
+fn dotenv_single_quote_fallback_escapes_lines_before_budgeting() {
+    // An apostrophe prevents preserving the single-quoted style. CR/LF then
+    // become escapes, so this is one physical line, not an oversized document.
+    let value = format!("'{}", "\r\n".repeat(crate::dotenv::MAX_PHYSICAL_LINES));
+    let (range, replacement) =
+        verified_set_edit(Format::Dotenv, b"A='old'\n", &[key("A")], &json!(value)).unwrap();
+    assert_eq!(range, 2..7);
+    assert!(!replacement.contains(&b'\r'));
+    assert!(!replacement.contains(&b'\n'));
+}
+
+#[test]
+fn dotenv_conservative_byte_estimate_can_decline_a_shorter_valid_encoding() {
+    // Unquoted output would fit exactly, but the preflight intentionally budgets
+    // the double-quoted upper bound instead of allocating native output to learn it.
+    let value = "x".repeat(crate::dotenv::MAX_DOTENV_BYTES - 2);
+    assert!(verified_set_edit(Format::Dotenv, b"A=x", &[key("A")], &json!(value)).is_none());
+}
+
+#[test]
+fn dotenv_native_edits_preserve_multiple_boms_and_original_coordinates() {
+    let source = "\u{feff}\u{feff}A='old'\r\nB=kept\r\n";
+    let (range, replacement) = verified_set_edit(
+        Format::Dotenv,
+        source.as_bytes(),
+        &[key("A")],
+        &json!("new"),
+    )
+    .unwrap();
+    let mut output = source.as_bytes().to_vec();
+    output.splice(range, replacement);
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "\u{feff}\u{feff}A='new'\r\nB=kept\r\n"
+    );
+    assert_eq!(
+        verified_removal_spans(Format::Dotenv, source.as_bytes(), &[vec![key("A")]]),
+        vec![6..15]
+    );
+    assert_eq!(denv_value(source, "A"), 8..13);
+    assert_eq!(denv_removal(source, "A"), 6..15);
+    let mut output = source.as_bytes().to_vec();
+    output.drain(6..15);
+    assert_eq!(output, "\u{feff}\u{feff}B=kept\r\n".as_bytes());
+    let spans = verified_removal_spans(
+        Format::Dotenv,
+        source.as_bytes(),
+        &[vec![key("A")], vec![key("B")]],
+    );
+    assert_eq!(spans, vec![6..15, 15..23]);
+    let mut output = source.as_bytes().to_vec();
+    for span in spans.into_iter().rev() {
+        output.drain(span);
+    }
+    assert_eq!(output, "\u{feff}\u{feff}".as_bytes());
 }

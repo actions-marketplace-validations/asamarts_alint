@@ -103,11 +103,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Lossless dotenv parsing is bounded before allocating its document.**
-  Nonempty parsed documents are limited to 4 MiB and 100,000 physical lines;
-  CRLF counts once, and a terminal ending adds no empty line. Native span and
-  fix entry points share these limits. Oversized single-line inputs and short
-  repeated bare declarations produce normal parse errors instead of process
-  aborts. adotenv 0.2.1 also omits discarded warning diagnostics, duplicate-only
+  Nonempty parsed documents are limited to 4 MiB of original bytes (including
+  all BOMs) and 100,000 physical lines; CRLF counts once, and a terminal ending
+  adds no empty line. Native span and fix entry points share these limits.
+  Repeated leading BOMs are accepted without changing edit/proposal coordinates
+  or removing BOM bytes. Sets budget the complete prospective output before
+  native serialization/verification allocations; conservative double-quoted
+  size estimates may decline otherwise-valid near-limit edits, while retained
+  single quotes use their exact literal size and physical lines. Oversized
+  inputs and generated output are declined rather than exhausting memory.
+  adotenv 0.2.1 also omits discarded warning diagnostics, duplicate-only
   key tries and CR merge buffers during strict parsing and native verification,
   fixing the below-cap CR warning-density allocation spike while retaining the
   documented multi-megabyte / 100,000-entry workload.
