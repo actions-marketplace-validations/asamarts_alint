@@ -584,6 +584,32 @@ rules:
     level: error
 
   # ─── Markdown / commented-code / blame-age ─────────────────────
+  - id: repository-editorconfig-policy
+    kind: editorconfig_conforms
+    paths: "**/*"
+    level: warning
+  - id: markdown-image-alt
+    kind: markdown_images_have_alt
+    paths: "docs/**/*.md"
+    level: error
+  - id: markdown-required-sections
+    kind: markdown_required_headings
+    paths: "docs/**/*.md"
+    headings: ["# Project", "*", "## Decision"]
+    level: error
+  - id: markdown-unique-headings
+    kind: markdown_no_duplicate_headings
+    paths: "docs/**/*.md"
+    level: warning
+  - id: markdown-fragments-resolve
+    kind: markdown_fragments_resolve
+    paths: "docs/**/*.md"
+    relative: resolve
+    level: error
+  - id: valid-spdx-expressions
+    kind: spdx_identifier_valid
+    paths: "src/**/*"
+    level: error
   - id: docs-links-resolve
     kind: markdown_links_resolve
     paths: "docs/**/*.md"

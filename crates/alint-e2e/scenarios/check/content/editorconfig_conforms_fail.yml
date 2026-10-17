@@ -1,0 +1,35 @@
+name: editorconfig_conforms applies repository formatting policy
+
+tags: [check, editorconfig_conforms, content, failing]
+
+docs:
+  title: Files that violate their EditorConfig policy are reported
+  case: fail
+  kind: editorconfig_conforms
+
+given:
+  tree:
+    ".editorconfig": |
+      root = true
+
+      [*.txt]
+      indent_style = space
+      indent_size = 2
+      trim_trailing_whitespace = true
+      insert_final_newline = true
+    bad.txt: "\tbad trailing   "
+  config: |
+    version: 1
+    rules:
+      - id: editor-policy
+        kind: editorconfig_conforms
+        paths: "**/*.txt"
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: editor-policy, level: error, path: bad.txt}
+      - {rule: editor-policy, level: error, path: bad.txt}
+      - {rule: editor-policy, level: error, path: bad.txt}

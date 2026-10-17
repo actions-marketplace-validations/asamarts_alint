@@ -106,6 +106,18 @@ moves.
   and HCL return an explicit unsupported result. The adapters share the structured-input byte
   bound, preserve source order and duplicates, and do not change the existing last-wins
   extraction or any shipped kind's results.
+- **The W1-W8 audit is complete and pushed** (2026-10-17, `8e85bc16`). It closed two
+  consumer-visible gaps found by the final review: every discovered-file read failure, including
+  a mid-walk removal or an over-limit file, now remains a typed `resource_read` analysis failure
+  in both file-major and rule-major dispatch; and sensitive findings now drop evidence-derived
+  related-location paths before any CLI, SARIF, baseline, fix, or LSP boundary. Targeted
+  regressions, direct CLI and LSP leak smokes, the full workspace suite, preflight, shell,
+  packaging, example, advisory, and benchmark-smoke gates passed.
+- **The first W9 increment is complete.** Six standalone kinds now enforce repository
+  EditorConfig policy, Markdown image alt text, required and duplicate headings, Markdown
+  fragment targets, and SPDX license expressions. Each has the normal metadata, schema,
+  generated documentation, declarative scenarios, and compatibility gates. **W9 remains active:
+  H1 `pinned_references` is next.**
 
 ### Completed release item: the v0.18.4 benchmark record
 
@@ -349,6 +361,8 @@ Design: [`spanned-extraction.md`](spanned-extraction.md) (implemented; row model
 semantics, format support, and compatibility boundary decided).
 
 ### W9. Standalone detection kinds, as capacity allows
+
+**A1, E2, E3, E5, E7, and F2 completed 2026-10-17. H1 is next.**
 
 From the "ship now" bucket of [`../general-linter.md`](../general-linter.md) section 11.8, in
 value order:

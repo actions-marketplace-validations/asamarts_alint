@@ -2689,6 +2689,38 @@
       ],
       "type": "object"
     },
+    "rule_editorconfig_conforms": {
+      "description": "Enforce selected formatting properties from the repository's own `.editorconfig` files without repeating those values in `.alint.yml`.",
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "fix"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "expect_matches": {
+          "default": false,
+          "description": "Require the rule's effective file scope (`paths:` plus `scope_filter:`) to match at least one file. Checked after `when:` and against the full repository even under `--changed`. Unsupported for existence and selector rules, whose empty sets have kind-specific meaning.",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "editorconfig_conforms"
+        },
+        "paths": {
+          "$ref": "#/$defs/paths_spec"
+        },
+        "scope_filter": {
+          "$ref": "#/$defs/scope_filter"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
     "rule_every_matching_has": {
       "description": "Every file OR directory matching `select` must satisfy every nested rule in `require`. Sugar that combines for_each_file + for_each_dir into one rule. Optional `when_iter:` filters iterations.",
       "not": {
@@ -5044,6 +5076,24 @@
           "$ref": "#/$defs/rule_commented_out_code"
         },
         {
+          "$ref": "#/$defs/rule_editorconfig_conforms"
+        },
+        {
+          "$ref": "#/$defs/rule_markdown_images_have_alt"
+        },
+        {
+          "$ref": "#/$defs/rule_markdown_required_headings"
+        },
+        {
+          "$ref": "#/$defs/rule_markdown_no_duplicate_headings"
+        },
+        {
+          "$ref": "#/$defs/rule_markdown_fragments_resolve"
+        },
+        {
+          "$ref": "#/$defs/rule_spdx_identifier_valid"
+        },
+        {
           "$ref": "#/$defs/rule_markdown_links_resolve"
         },
         {
@@ -5286,6 +5336,88 @@
       ],
       "type": "object"
     },
+    "rule_markdown_fragments_resolve": {
+      "description": "Require every live local Markdown link fragment to name a heading anchor in its resolved target document.",
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "scope_filter"
+            ]
+          },
+          {
+            "required": [
+              "fix"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "expect_matches": {
+          "default": false,
+          "description": "Require the rule's effective file scope (`paths:` plus `scope_filter:`) to match at least one file. Checked after `when:` and against the full repository even under `--changed`. Unsupported for existence and selector rules, whose empty sets have kind-specific meaning.",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "markdown_fragments_resolve"
+        },
+        "paths": {
+          "$ref": "#/$defs/paths_spec"
+        },
+        "relative": {
+          "$ref": "#/$defs/RelativeMode",
+          "default": "resolve",
+          "description": "How to handle relative destinations. Under `forbid`, another-file links are left to `markdown_links_resolve`; same-document fragments still run."
+        },
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MarkdownLinksRootMapSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional rendered-site root URL to repository source mapping."
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
+    "rule_markdown_images_have_alt": {
+      "description": "Require every live CommonMark image to have non-empty rendered alt text.",
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "fix"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "expect_matches": {
+          "default": false,
+          "description": "Require the rule's effective file scope (`paths:` plus `scope_filter:`) to match at least one file. Checked after `when:` and against the full repository even under `--changed`. Unsupported for existence and selector rules, whose empty sets have kind-specific meaning.",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "markdown_images_have_alt"
+        },
+        "paths": {
+          "$ref": "#/$defs/paths_spec"
+        },
+        "scope_filter": {
+          "$ref": "#/$defs/scope_filter"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
     "rule_markdown_links_resolve": {
       "description": "Validate live Markdown links, images, and reference destinations against repository files and directories.",
       "not": {
@@ -5336,6 +5468,38 @@
       ],
       "type": "object"
     },
+    "rule_markdown_no_duplicate_headings": {
+      "description": "Reject a later Markdown heading whose generated base anchor collides with an earlier heading.",
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "fix"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "expect_matches": {
+          "default": false,
+          "description": "Require the rule's effective file scope (`paths:` plus `scope_filter:`) to match at least one file. Checked after `when:` and against the full repository even under `--changed`. Unsupported for existence and selector rules, whose empty sets have kind-specific meaning.",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "markdown_no_duplicate_headings"
+        },
+        "paths": {
+          "$ref": "#/$defs/paths_spec"
+        },
+        "scope_filter": {
+          "$ref": "#/$defs/scope_filter"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
     "rule_markdown_paths_resolve": {
       "description": "Validate that backticked workspace paths in markdown files resolve to real files or directories in the repo. Targets the AGENTS.md / CLAUDE.md / .cursorrules staleness problem: agent-context files reference paths in inline backticks, and those paths drift as the codebase evolves. Skips fenced and 4-space-indented code blocks (those contain code samples, not factual claims about the tree). Required `prefixes` field marks which path-shapes to validate (e.g. `[\"src/\", \"crates/\", \"docs/\"]`); backticked tokens not starting with a configured prefix are ignored, eliminating the FP class of `\\`npm\\`` / `\\`function\\`` / etc.",
       "not": {
@@ -5379,6 +5543,47 @@
       "required": [
         "paths",
         "prefixes"
+      ],
+      "type": "object"
+    },
+    "rule_markdown_required_headings": {
+      "description": "Require the complete rendered heading sequence to match an ordered `headings` template.",
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "fix"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "expect_matches": {
+          "default": false,
+          "description": "Require the rule's effective file scope (`paths:` plus `scope_filter:`) to match at least one file. Checked after `when:` and against the full repository even under `--changed`. Unsupported for existence and selector rules, whose empty sets have kind-specific meaning.",
+          "type": "boolean"
+        },
+        "headings": {
+          "description": "Exact rendered headings (`# Text` through `###### Text`) in document order. `*` matches zero or more complete headings.",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "kind": {
+          "const": "markdown_required_headings"
+        },
+        "paths": {
+          "$ref": "#/$defs/paths_spec"
+        },
+        "scope_filter": {
+          "$ref": "#/$defs/scope_filter"
+        }
+      },
+      "required": [
+        "paths",
+        "headings"
       ],
       "type": "object"
     },
@@ -6297,6 +6502,38 @@
         },
         "kind": {
           "const": "shebang_has_executable"
+        },
+        "paths": {
+          "$ref": "#/$defs/paths_spec"
+        },
+        "scope_filter": {
+          "$ref": "#/$defs/scope_filter"
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "type": "object"
+    },
+    "rule_spdx_identifier_valid": {
+      "description": "Validate every `SPDX-License-Identifier:` value as a strict SPDX license expression.",
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "fix"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "expect_matches": {
+          "default": false,
+          "description": "Require the rule's effective file scope (`paths:` plus `scope_filter:`) to match at least one file. Checked after `when:` and against the full repository even under `--changed`. Unsupported for existence and selector rules, whose empty sets have kind-specific meaning.",
+          "type": "boolean"
+        },
+        "kind": {
+          "const": "spdx_identifier_valid"
         },
         "paths": {
           "$ref": "#/$defs/paths_spec"

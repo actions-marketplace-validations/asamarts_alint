@@ -385,6 +385,15 @@ StructuredPathRule {
     fixer: None,
 }
 
+=== kind: editorconfig_conforms | id: repository-editorconfig-policy ===
+EditorconfigConformsRule {
+    id: "repository-editorconfig-policy",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+}
+
 === kind: every_matching_has | id: every-pkg-has-src ===
 EveryMatchingHasRule {
     id: "every-pkg-has-src",
@@ -1644,6 +1653,26 @@ LineMaxWidthRule {
     max_width: 100,
 }
 
+=== kind: markdown_fragments_resolve | id: markdown-fragments-resolve ===
+MarkdownFragmentsResolveRule {
+    id: "markdown-fragments-resolve",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    relative: Resolve,
+    root_map: None,
+}
+
+=== kind: markdown_images_have_alt | id: markdown-image-alt ===
+MarkdownImagesHaveAltRule {
+    id: "markdown-image-alt",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+}
+
 === kind: markdown_links_resolve | id: docs-links-resolve ===
 MarkdownLinksResolveRule {
     id: "docs-links-resolve",
@@ -1660,6 +1689,15 @@ MarkdownLinksResolveRule {
     ),
 }
 
+=== kind: markdown_no_duplicate_headings | id: markdown-unique-headings ===
+MarkdownNoDuplicateHeadingsRule {
+    id: "markdown-unique-headings",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+}
+
 === kind: markdown_paths_resolve | id: agents-md-paths-resolve ===
 MarkdownPathsResolveRule {
     id: "agents-md-paths-resolve",
@@ -1673,6 +1711,26 @@ MarkdownPathsResolveRule {
         "docs/",
     ],
     ignore_template_vars: true,
+}
+
+=== kind: markdown_required_headings | id: markdown-required-sections ===
+MarkdownRequiredHeadingsRule {
+    id: "markdown-required-sections",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    headings: [
+        Exact {
+            level: 1,
+            text: "Project",
+        },
+        Any,
+        Exact {
+            level: 2,
+            text: "Decision",
+        },
+    ],
 }
 
 === kind: max_consecutive_blank_lines | id: max-blank-lines ===
@@ -2078,6 +2136,15 @@ ShebangHasExecutableRule {
     message: None,
     scope: Scope { ... },
     fixer: None,
+}
+
+=== kind: spdx_identifier_valid | id: valid-spdx-expressions ===
+SpdxIdentifierValidRule {
+    id: "valid-spdx-expressions",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
 }
 
 === kind: toml_path_absent | id: no-cargo-patch-section ===

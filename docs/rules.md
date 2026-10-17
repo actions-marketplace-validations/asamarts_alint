@@ -197,6 +197,48 @@ Content is detected as text (magic bytes + UTF-8 validity check) — fails on bi
 
 Every byte in the file must be < 0x80 (pure ASCII), except codepoints listed in `allow:`. Strict variant of `is_text` for configs that must round-trip through strictly-ASCII tools. `allow:` exempts specific non-ASCII codepoints — each entry a single character (`"ö"`), a `U+XXXX` codepoint, or a `U+XXXX-U+YYYY` inclusive range (curl keeps its source ASCII but allows `ö` in "Björn"; the recurring need across llvm / vscode / elixir). With `allow:` the file is decoded as UTF-8 and checked per character; without it, the strict byte-level fast path is used.
 
+### `editorconfig_conforms`
+
+**Categories:** Content, Text hygiene
+
+Enforce selected formatting properties from the repository's own `.editorconfig` files without repeating those values in `.alint.yml`.
+
+The rule discovers only `.editorconfig` files between each selected file and the lint root; a developer's parent-directory policy can never affect the result. It follows EditorConfig section order, nested-file precedence, `root = true`, `unset`, slash-relative globs, `*`/`**`/`?`, character classes, brace alternatives, and numeric ranges. Every finding points back to the declaration that supplied its effective policy. An unreadable or malformed policy file and an invalid value for a supported property are `resource_read` or `resource_parse` analysis failures rather than silent passes.
+
+Supported properties are `indent_style` (plus numeric `indent_size` / `tab_width`), `end_of_line` (`lf`, `crlf`, or `cr`), `charset` (`latin1`, `utf-8`, `utf-8-bom`, `utf-16be`, or `utf-16le`), `trim_trailing_whitespace`, `insert_final_newline`, and positive-integer `max_line_length` (`off` disables it). A false `trim_trailing_whitespace` imposes no prohibition; `insert_final_newline: false` requires a non-empty file not to end in a line break. Unknown properties remain available to other EditorConfig plugins and are ignored. Check-only: a policy-derived multi-operation repair needs the later transactional edit-plan surface.
+
+### `markdown_images_have_alt`
+
+**Categories:** Content
+
+Require every live CommonMark image to have non-empty rendered alt text.
+
+Formatted label text counts, while whitespace-only labels do not. Fenced and indented code, inline code syntax, comments, and front matter are excluded by the CommonMark parser. Raw HTML `<img>` elements are outside this kind's contract. Check-only because useful alternative text requires author intent.
+
+### `markdown_required_headings`
+
+**Categories:** Content
+
+Require the complete rendered heading sequence to match an ordered `headings` template.
+
+Each entry is `# Text` through `###### Text`; `*` matches zero or more complete headings. Matching is exact after CommonMark rendering, so `# A *title*` satisfies `"# A title"`, but a different level or extra heading outside a wildcard fails. This is the structural replacement for repeating `file_content_matches` rules when every ADR or runbook must follow one document shape.
+
+### `markdown_no_duplicate_headings`
+
+**Categories:** Content
+
+Reject a later Markdown heading whose generated base anchor collides with an earlier heading.
+
+Anchors lowercase Unicode text, turn whitespace into `-`, and remove ASCII punctuation except `-` and `_`; explicit `{#id}` heading attributes use that id. The finding cites the first colliding heading. This catches case and punctuation variants that render as competing deep-link anchors while allowing repeated visible labels with deliberately distinct explicit ids.
+
+### `spdx_identifier_valid`
+
+**Categories:** Content, Security / Unicode sanity
+
+Validate every `SPDX-License-Identifier:` value as a strict SPDX license expression.
+
+The offline SPDX License List 3.29.0 table recognizes current licenses and exceptions; `AND`, `OR`, `WITH`, and parentheses follow SPDX precedence, and valid `LicenseRef-*`, `AdditionRef-*`, and document-qualified custom references are accepted. Unknown, malformed, and deprecated standard identifiers fail. Files with no tag are silent—pair this kind with `file_content_matches` when a tag is mandatory. Binary-looking files are skipped. Check-only because selecting or changing a license is not a mechanical formatting decision.
+
 ---
 
 ## Structured query
@@ -664,6 +706,14 @@ The CommonMark-aware scanner skips YAML (`---`) and TOML (`+++`) front matter, f
 `relative: forbid` is the site mode: relative links fail even if their source-tree path exists, preventing trailing-slash rendered pages from resolving them against the wrong URL. Add a `root` map to validate root-absolute rendered routes against their source tree (`dir: .` maps to the repository root); extensionless routes try the exact path, `<route>.md`, and `<route>/index.md`.
 
 This is a whole-index cross-file rule: in `--changed` mode a non-empty change checks the complete Markdown link graph, so deleting a target is caught even when the linking page did not change. Check-only; guessing a moved destination is not a safe mechanical edit.
+
+### `markdown_fragments_resolve`
+
+**Categories:** Cross-file, Content
+
+Require every live local Markdown link fragment to name a heading anchor in its resolved target document.
+
+The rule shares `markdown_links_resolve`'s CommonMark link parsing, percent-decoded path resolution, and optional rendered-site `root` mapping, then parses each Markdown target once and generates GitHub-style anchors. Duplicate headings receive `-1`, `-2`, and later suffixes; percent-encoded fragments are decoded before comparison. External destinations and non-Markdown targets are outside this kind's contract. A missing target file is left to `markdown_links_resolve`, so the two rules compose without duplicate findings. Every bad fragment is anchored on the source destination and includes the target document as a related location.
 
 ### `registry_paths_resolve`
 

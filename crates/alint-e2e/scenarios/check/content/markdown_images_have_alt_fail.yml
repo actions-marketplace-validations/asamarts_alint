@@ -1,0 +1,29 @@
+name: markdown_images_have_alt catches inaccessible images
+
+tags: [check, markdown_images_have_alt, content, failing]
+
+docs:
+  title: A Markdown image without rendered alt text is reported
+  case: fail
+  kind: markdown_images_have_alt
+
+given:
+  tree:
+    README.md: |
+      # Project
+
+      ![](architecture.svg)
+    architecture.svg: "<svg/>\n"
+  config: |
+    version: 1
+    rules:
+      - id: image-alt
+        kind: markdown_images_have_alt
+        paths: "**/*.md"
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: image-alt, level: error, path: README.md}

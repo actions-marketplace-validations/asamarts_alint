@@ -1,0 +1,28 @@
+name: spdx_identifier_valid catches misspelled license identifiers
+
+tags: [check, spdx_identifier_valid, content, failing]
+
+docs:
+  title: An unknown identifier cannot masquerade as an SPDX expression
+  case: fail
+  kind: spdx_identifier_valid
+
+given:
+  tree:
+    src/lib.rs: |
+      // SPDX-License-Identifier: Apach-2.0 OR MIT
+
+      pub fn answer() -> u8 { 42 }
+  config: |
+    version: 1
+    rules:
+      - id: valid-spdx
+        kind: spdx_identifier_valid
+        paths: "src/**/*.rs"
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: valid-spdx, level: error, path: src/lib.rs}

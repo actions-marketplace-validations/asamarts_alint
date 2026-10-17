@@ -1,0 +1,30 @@
+name: markdown_no_duplicate_headings catches anchor collisions
+
+tags: [check, markdown_no_duplicate_headings, content, failing]
+
+docs:
+  title: Headings that normalize to the same anchor are reported
+  case: fail
+  kind: markdown_no_duplicate_headings
+
+given:
+  tree:
+    README.md: |
+      # Project
+
+      ## API: HTTP
+
+      ## API HTTP
+  config: |
+    version: 1
+    rules:
+      - id: unique-headings
+        kind: markdown_no_duplicate_headings
+        paths: "**/*.md"
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: unique-headings, level: error, path: README.md}

@@ -18,9 +18,19 @@ source, destination = sys.argv[1:]
 facts = json.load(open(source, encoding="utf-8"))
 facts["format_version"] = 2
 facts["counts"].pop("rule_aliases", None)
-# Model the v0.17 surface: remove the post-release kind and its secondary tag.
-facts["rule_kinds"].remove("markdown_links_resolve")
-facts["rule_categories"].pop("markdown_links_resolve")
+# Model the v0.17 surface: remove every kind added after that release and its
+# category membership.
+for kind in [
+    "editorconfig_conforms",
+    "markdown_fragments_resolve",
+    "markdown_images_have_alt",
+    "markdown_links_resolve",
+    "markdown_no_duplicate_headings",
+    "markdown_required_headings",
+    "spdx_identifier_valid",
+]:
+    facts["rule_kinds"].remove(kind)
+    facts["rule_categories"].pop(kind)
 facts["counts"]["rule_kinds"] = len(facts["rule_kinds"])
 json.dump(facts, open(destination, "w", encoding="utf-8"))
 PY

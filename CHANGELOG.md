@@ -36,6 +36,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   away information. The adapters share the existing structured-input byte bound. Existing
   last-wins extraction and all shipped rule results are unchanged; this is the substrate for
   duplicate-key and structured-key-order kinds.
+- **Six high-value policy gaps now have standalone rule kinds.** `editorconfig_conforms` checks
+  the effective repository-confined EditorConfig policy for indentation, line endings, charset,
+  trailing whitespace, final newlines, and line width. CommonMark-backed
+  `markdown_images_have_alt`, `markdown_required_headings`,
+  `markdown_no_duplicate_headings`, and `markdown_fragments_resolve` enforce accessibility and
+  document structure without treating examples as live markup. `spdx_identifier_valid` validates
+  strict license expressions against the bundled offline SPDX License List 3.29.0 data. All six
+  are check-only, expose precise source ranges, and declare their dispatch, selector, content,
+  and dependency capabilities through `KindMeta`.
+
 
 ### Changed
 - **Incomplete analysis is now a typed, fail-loud result instead of a policy violation.**

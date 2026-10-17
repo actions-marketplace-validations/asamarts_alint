@@ -1,0 +1,31 @@
+name: markdown_required_headings catches an incomplete document shape
+
+tags: [check, markdown_required_headings, content, failing]
+
+docs:
+  title: A required ordered heading is missing
+  case: fail
+  kind: markdown_required_headings
+
+given:
+  tree:
+    docs/adr/0001-choice.md: |
+      # Choice
+
+      ## Status
+
+      Accepted.
+  config: |
+    version: 1
+    rules:
+      - id: adr-shape
+        kind: markdown_required_headings
+        paths: "docs/adr/*.md"
+        headings: ["# Choice", "## Status", "*", "## Context", "## Decision"]
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: adr-shape, level: error, path: docs/adr/0001-choice.md}

@@ -1,0 +1,27 @@
+name: spdx_identifier_valid accepts strict expressions
+
+tags: [check, spdx_identifier_valid, content, passing]
+
+docs:
+  title: A current license expression and exception are accepted
+  case: pass
+  kind: spdx_identifier_valid
+
+given:
+  tree:
+    src/lib.rs: |
+      // SPDX-License-Identifier: MIT OR Apache-2.0 WITH LLVM-exception
+
+      pub fn answer() -> u8 { 42 }
+  config: |
+    version: 1
+    rules:
+      - id: valid-spdx
+        kind: spdx_identifier_valid
+        paths: "src/**/*.rs"
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []

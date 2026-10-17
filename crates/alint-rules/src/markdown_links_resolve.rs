@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum RelativeMode {
+pub(crate) enum RelativeMode {
     /// Resolve relative destinations against the Markdown source file.
     #[default]
     Resolve,
@@ -31,14 +31,14 @@ enum RelativeMode {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct MarkdownLinksRootMapSpec {
+pub(crate) struct MarkdownLinksRootMapSpec {
     /// Root-absolute URL prefix to validate, including leading and trailing
     /// slashes (for example `/docs/`). Other root-absolute URLs are ignored.
-    url_prefix: String,
+    pub(crate) url_prefix: String,
     /// Repository directory corresponding to `url_prefix` (for example
     /// `docs/site`, or `.` for the repository root). Extensionless routes also
     /// try `<route>.md` and `<route>/index.md`.
-    dir: String,
+    pub(crate) dir: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -58,9 +58,9 @@ struct Options {
 crate::options_schema_for!(Options);
 
 #[derive(Debug)]
-struct RootMap {
-    url_prefix: String,
-    dir: PathBuf,
+pub(crate) struct RootMap {
+    pub(crate) url_prefix: String,
+    pub(crate) dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -275,33 +275,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
-    let root_map = match opts.root {
-        Some(root) => {
-            if !root.url_prefix.starts_with('/')
-                || !root.url_prefix.ends_with('/')
-                || root.url_prefix.starts_with("//")
-            {
-                return Err(Error::rule_config(
-                    &spec.id,
-                    "`root.url_prefix` must start and end with `/` (for example `/docs/`)",
-                ));
-            }
-            let Some(dir) = (!root.dir.is_empty())
-                .then(|| normalize_link_path(Path::new(&root.dir)))
-                .flatten()
-            else {
-                return Err(Error::rule_config(
-                    &spec.id,
-                    "`root.dir` must be a repository-relative directory (use `.` for the repository root)",
-                ));
-            };
-            Some(RootMap {
-                url_prefix: root.url_prefix,
-                dir,
-            })
-        }
-        None => None,
-    };
+    let root_map = build_root_map(&spec.id, opts.root)?;
     Ok(Box::new(MarkdownLinksResolveRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -313,7 +287,38 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     }))
 }
 
-fn rendered_route_exists(ctx: &Context<'_>, mapped: &Path) -> bool {
+pub(crate) fn build_root_map(
+    rule_id: &str,
+    root: Option<MarkdownLinksRootMapSpec>,
+) -> Result<Option<RootMap>> {
+    let Some(root) = root else {
+        return Ok(None);
+    };
+    if !root.url_prefix.starts_with('/')
+        || !root.url_prefix.ends_with('/')
+        || root.url_prefix.starts_with("//")
+    {
+        return Err(Error::rule_config(
+            rule_id,
+            "`root.url_prefix` must start and end with `/` (for example `/docs/`)",
+        ));
+    }
+    let Some(dir) = (!root.dir.is_empty())
+        .then(|| normalize_link_path(Path::new(&root.dir)))
+        .flatten()
+    else {
+        return Err(Error::rule_config(
+            rule_id,
+            "`root.dir` must be a repository-relative directory (use `.` for the repository root)",
+        ));
+    };
+    Ok(Some(RootMap {
+        url_prefix: root.url_prefix,
+        dir,
+    }))
+}
+
+pub(crate) fn rendered_route_exists(ctx: &Context<'_>, mapped: &Path) -> bool {
     if mapped.as_os_str().is_empty() || ctx.index.contains_path(mapped) {
         return true;
     }
@@ -335,7 +340,7 @@ fn rendered_route_exists(ctx: &Context<'_>, mapped: &Path) -> bool {
 /// helper intentionally rejects an empty result because most rule references
 /// need a concrete file; Markdown links are the exception (`..` may validly
 /// resolve from a top-level directory to the repository root).
-fn normalize_link_path(path: &Path) -> Option<PathBuf> {
+pub(crate) fn normalize_link_path(path: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
@@ -352,7 +357,7 @@ fn normalize_link_path(path: &Path) -> Option<PathBuf> {
     Some(out)
 }
 
-fn has_uri_scheme(target: &str) -> bool {
+pub(crate) fn has_uri_scheme(target: &str) -> bool {
     let Some((scheme, _)) = target.split_once(':') else {
         return false;
     };
@@ -363,7 +368,7 @@ fn has_uri_scheme(target: &str) -> bool {
         })
 }
 
-fn percent_decode(input: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn percent_decode(input: &str) -> std::borrow::Cow<'_, str> {
     if !input.as_bytes().contains(&b'%') {
         return std::borrow::Cow::Borrowed(input);
     }

@@ -1,0 +1,36 @@
+name: --changed rechecks links when a target heading changes
+tags: [check, check_changed, changed, markdown_fragments_resolve, cross_file]
+
+# The source link is committed and unchanged. The untracked target is the only
+# changed path, but removing or renaming one of its headings can invalidate any
+# source document, so fragment resolution must evaluate the complete graph.
+
+given:
+  tree:
+    README.md: |
+      # Project
+
+      Read the [installation guide](docs/guide.md#installing).
+    docs/guide.md: |
+      # Guide
+
+      ## Setup
+  config: |
+    version: 1
+    rules:
+      - id: heading-links
+        kind: markdown_fragments_resolve
+        paths: "**/*.md"
+        level: error
+  git:
+    init: true
+    add: [README.md]
+    commit: true
+
+when: [check, check_changed]
+
+expect:
+  - violations:
+      - {rule: heading-links, level: error, path: README.md}
+  - violations:
+      - {rule: heading-links, level: error, path: README.md}

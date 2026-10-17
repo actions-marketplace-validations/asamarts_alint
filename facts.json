@@ -2,7 +2,7 @@
   "format_version": 4,
   "alint_version": "0.18.4",
   "counts": {
-    "rule_kinds": 95,
+    "rule_kinds": 101,
     "rule_aliases": 11,
     "families": 13,
     "bundled_rulesets": 22,
@@ -26,6 +26,7 @@
     "dotenv_path_absent",
     "dotenv_path_equals",
     "dotenv_path_matches",
+    "editorconfig_conforms",
     "every_matching_has",
     "executable_bit",
     "executable_has_shebang",
@@ -78,8 +79,12 @@
     "json_schema_passes",
     "line_endings",
     "line_max_width",
+    "markdown_fragments_resolve",
+    "markdown_images_have_alt",
     "markdown_links_resolve",
+    "markdown_no_duplicate_headings",
     "markdown_paths_resolve",
+    "markdown_required_headings",
     "max_consecutive_blank_lines",
     "max_directory_depth",
     "max_files_per_directory",
@@ -107,6 +112,7 @@
     "registry_paths_resolve",
     "shebang",
     "shebang_has_executable",
+    "spdx_identifier_valid",
     "toml_path_absent",
     "toml_path_equals",
     "toml_path_matches",
@@ -240,6 +246,10 @@
     ],
     "dotenv_path_matches": [
       "structured-query"
+    ],
+    "editorconfig_conforms": [
+      "content",
+      "text-hygiene"
     ],
     "every_matching_has": [
       "cross-file"
@@ -405,13 +415,26 @@
     "line_max_width": [
       "text-hygiene"
     ],
+    "markdown_fragments_resolve": [
+      "cross-file",
+      "content"
+    ],
+    "markdown_images_have_alt": [
+      "content"
+    ],
     "markdown_links_resolve": [
       "cross-file",
+      "content"
+    ],
+    "markdown_no_duplicate_headings": [
       "content"
     ],
     "markdown_paths_resolve": [
       "git-hygiene",
       "cross-file"
+    ],
+    "markdown_required_headings": [
+      "content"
     ],
     "max_consecutive_blank_lines": [
       "text-hygiene"
@@ -490,6 +513,10 @@
     "shebang_has_executable": [
       "unix-metadata",
       "content"
+    ],
+    "spdx_identifier_valid": [
+      "content",
+      "security-unicode-sanity"
     ],
     "toml_path_absent": [
       "structured-query"
@@ -1064,6 +1091,43 @@
       "fix_ops": [
         "replace"
       ],
+      "expect_matches": true,
+      "nested_rules": false
+    },
+    "editorconfig_conforms": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "other_files"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
       "expect_matches": true,
       "nested_rules": false
     },
@@ -3123,6 +3187,74 @@
       "expect_matches": true,
       "nested_rules": false
     },
+    "markdown_fragments_resolve": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "root.dir",
+          "type": "literal_path",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "other_files"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "nested_rules": false
+    },
+    "markdown_images_have_alt": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "nested_rules": false
+    },
     "markdown_links_resolve": {
       "dispatch": {
         "kind": "full_index",
@@ -3154,6 +3286,43 @@
       "expect_matches": true,
       "nested_rules": false
     },
+    "markdown_no_duplicate_headings": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "nested_rules": false
+    },
     "markdown_paths_resolve": {
       "dispatch": {
         "kind": "per_file",
@@ -3173,6 +3342,43 @@
           "rerootable": false
         }
       ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "nested_rules": false
+    },
+    "markdown_required_headings": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
       "since": "none",
       "capabilities": [
         {
@@ -4100,6 +4306,43 @@
       "expect_matches": true,
       "nested_rules": false
     },
+    "spdx_identifier_valid": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "nested_rules": false
+    },
     "toml_path_absent": {
       "dispatch": {
         "kind": "per_file",
@@ -4522,6 +4765,7 @@
     "dotenv_path_absent": "structured_path",
     "dotenv_path_equals": "structured_path",
     "dotenv_path_matches": "structured_path",
+    "editorconfig_conforms": "editorconfig_conforms",
     "every_matching_has": "every_matching_has",
     "executable_bit": "executable_bit",
     "executable_has_shebang": "executable_has_shebang",
@@ -4574,8 +4818,12 @@
     "json_schema_passes": "json_schema_passes",
     "line_endings": "line_endings",
     "line_max_width": "line_max_width",
+    "markdown_fragments_resolve": "markdown_fragments_resolve",
+    "markdown_images_have_alt": "markdown_images_have_alt",
     "markdown_links_resolve": "markdown_links_resolve",
+    "markdown_no_duplicate_headings": "markdown_no_duplicate_headings",
     "markdown_paths_resolve": "markdown_paths_resolve",
+    "markdown_required_headings": "markdown_required_headings",
     "max_consecutive_blank_lines": "max_consecutive_blank_lines",
     "max_directory_depth": "max_directory_depth",
     "max_files_per_directory": "max_files_per_directory",
@@ -4603,6 +4851,7 @@
     "registry_paths_resolve": "registry_paths_resolve",
     "shebang": "file_shebang",
     "shebang_has_executable": "shebang_has_executable",
+    "spdx_identifier_valid": "spdx_identifier_valid",
     "toml_path_absent": "structured_path",
     "toml_path_equals": "structured_path",
     "toml_path_matches": "structured_path",

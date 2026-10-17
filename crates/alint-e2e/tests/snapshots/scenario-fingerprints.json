@@ -522,6 +522,12 @@
     "fingerprint": "673cef755d30845515e8859a0554f09c0155d8aeb520529747b5139c79b29c22"
   },
   {
+    "scenario": "check/changed/changed_rechecks_markdown_fragments_on_full_tree.yml",
+    "rule_id": "heading-links",
+    "path": "README.md",
+    "fingerprint": "c8a598a2f7742a1ae359636fbcc1f3ff4225c7a98d14de95beb2d1540378a029"
+  },
+  {
     "scenario": "check/changed/changed_skips_existence_rule_when_scope_disjoint.yml",
     "rule_id": "no-env",
     "path": ".env",
@@ -538,6 +544,24 @@
     "rule_id": "no-commented-code",
     "path": "src/api.ts",
     "fingerprint": "981b945fdb373bc25066c9bde2595d11153c70f883f0669a708daa5a349d6391"
+  },
+  {
+    "scenario": "check/content/editorconfig_conforms_fail.yml",
+    "rule_id": "editor-policy",
+    "path": "bad.txt",
+    "fingerprint": "2e244a978b0de74a312328adcc853e30d35326c31cf861e3d2598d69f596db77"
+  },
+  {
+    "scenario": "check/content/editorconfig_conforms_fail.yml",
+    "rule_id": "editor-policy",
+    "path": "bad.txt",
+    "fingerprint": "51930d82d8a95d5d8e18e6a29073fb2268826007817fe86f6f2a4f292131981a"
+  },
+  {
+    "scenario": "check/content/editorconfig_conforms_fail.yml",
+    "rule_id": "editor-policy",
+    "path": "bad.txt",
+    "fingerprint": "bfd463edbc81c25b26ba184145e711ab8d8f7806517995ac306c2fa5387736c8"
   },
   {
     "scenario": "check/content/file_content_forbidden_fail.yml",
@@ -654,6 +678,18 @@
     "fingerprint": "ed22d819a6f9c024be4cf9b0f9fb9709d6dfcd3113550780bac7d1db97be94af"
   },
   {
+    "scenario": "check/content/markdown_images_have_alt_fail.yml",
+    "rule_id": "image-alt",
+    "path": "README.md",
+    "fingerprint": "3db84413db0268cdd86d9a67804ed94abe3a20e863e9bd8f5df41833123c8977"
+  },
+  {
+    "scenario": "check/content/markdown_no_duplicate_headings_fail.yml",
+    "rule_id": "unique-headings",
+    "path": "README.md",
+    "fingerprint": "495c919086f001cc474963fd12a890e6a9115196717c2f91c88d39017ade5b30"
+  },
+  {
     "scenario": "check/content/markdown_paths_resolve_fail.yml",
     "rule_id": "agents-paths-resolve",
     "path": "AGENTS.md",
@@ -670,6 +706,12 @@
     "rule_id": "agents-paths-resolve",
     "path": "AGENTS.md",
     "fingerprint": "eec4512790c989abf619a6b23d638ce2cde7d244d9b0e04d692600c59631846d"
+  },
+  {
+    "scenario": "check/content/markdown_required_headings_fail.yml",
+    "rule_id": "adr-shape",
+    "path": "docs/adr/0001-choice.md",
+    "fingerprint": "503c88bfedd8e3bff84e4d0fd7ef19a2bfc2a53c072d21cdbf233356141a2188"
   },
   {
     "scenario": "check/content/max_consecutive_blank_lines_fail.yml",
@@ -700,6 +742,12 @@
     "rule_id": "dictionary-sorted",
     "path": "dictionary.txt",
     "fingerprint": "2e7c2e822a6c3b5ca7e56b084770932f1762bc9c77400508c168c4302c0bcf46"
+  },
+  {
+    "scenario": "check/content/spdx_identifier_valid_fail.yml",
+    "rule_id": "valid-spdx",
+    "path": "src/lib.rs",
+    "fingerprint": "c12856a9e55a7bd5fc3ac13fcc60b3fc8ac790800da8a77019055b5e91700fbb"
   },
   {
     "scenario": "check/cross_file/cross_file_dotenv_app_version_drift_fail.yml",
@@ -880,6 +928,12 @@
     "rule_id": "unit-has-snapshot",
     "path": "tests/unit/lexer.rs",
     "fingerprint": "22848d1fe6207492f3f85640b54346f31a9449300ad81143b54df74407ad849d"
+  },
+  {
+    "scenario": "check/cross_file/markdown_fragments_resolve_fail.yml",
+    "rule_id": "heading-links",
+    "path": "README.md",
+    "fingerprint": "c8a598a2f7742a1ae359636fbcc1f3ff4225c7a98d14de95beb2d1540378a029"
   },
   {
     "scenario": "check/cross_file/markdown_links_expect_matches_fires.yml",

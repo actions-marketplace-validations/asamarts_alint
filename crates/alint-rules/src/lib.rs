@@ -139,6 +139,7 @@ pub mod dir_absent;
 pub mod dir_contains;
 pub mod dir_exists;
 pub mod dir_only_contains;
+pub mod editorconfig_conforms;
 pub mod every_matching_has;
 pub mod executable_bit;
 pub mod executable_has_shebang;
@@ -181,8 +182,13 @@ pub mod io;
 pub mod json_schema_passes;
 pub mod line_endings;
 pub mod line_max_width;
+mod markdown;
+pub mod markdown_fragments_resolve;
+pub mod markdown_images_have_alt;
 pub mod markdown_links_resolve;
+pub mod markdown_no_duplicate_headings;
 pub mod markdown_paths_resolve;
+pub mod markdown_required_headings;
 pub mod max_consecutive_blank_lines;
 pub mod max_directory_depth;
 pub mod max_files_per_directory;
@@ -204,6 +210,7 @@ mod pathsafe;
 pub mod registry_paths_resolve;
 pub mod shebang_has_executable;
 mod spawn;
+pub mod spdx_identifier_valid;
 pub mod structured_path;
 #[cfg(test)]
 mod test_support;
@@ -281,6 +288,14 @@ pub fn rule_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
         (
             "rule_markdown_links_resolve",
             markdown_links_resolve::options_schema(),
+        ),
+        (
+            "rule_markdown_fragments_resolve",
+            markdown_fragments_resolve::options_schema(),
+        ),
+        (
+            "rule_markdown_required_headings",
+            markdown_required_headings::options_schema(),
         ),
         (
             "rule_markdown_paths_resolve",
@@ -451,8 +466,11 @@ pub fn rule_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
         ("rule_for_each_dir", for_each_dir::options_schema()),
         ("rule_for_each_file", for_each_file::options_schema()),
         ("rule_for_each_match", for_each_match::options_schema()),
+        ("rule_editorconfig_conforms", optionless_schema()),
         ("rule_executable_has_shebang", optionless_schema()),
         ("rule_file_is_text", optionless_schema()),
+        ("rule_markdown_images_have_alt", optionless_schema()),
+        ("rule_markdown_no_duplicate_headings", optionless_schema()),
         ("rule_final_newline", optionless_schema()),
         ("rule_no_bidi_controls", optionless_schema()),
         ("rule_no_bom", optionless_schema()),
@@ -464,6 +482,7 @@ pub fn rule_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
         ("rule_no_symlinks", optionless_schema()),
         ("rule_no_trailing_whitespace", optionless_schema()),
         ("rule_no_zero_width_chars", optionless_schema()),
+        ("rule_spdx_identifier_valid", optionless_schema()),
         ("rule_shebang_has_executable", optionless_schema()),
         (
             "rule_json_schema_passes",
@@ -658,6 +677,36 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
         "markdown_links_resolve",
         &markdown_links_resolve::META,
         markdown_links_resolve::build,
+    );
+    registry.register(
+        "markdown_fragments_resolve",
+        &markdown_fragments_resolve::META,
+        markdown_fragments_resolve::build,
+    );
+    registry.register_optionless(
+        "markdown_images_have_alt",
+        &markdown_images_have_alt::META,
+        markdown_images_have_alt::build,
+    );
+    registry.register_optionless(
+        "markdown_no_duplicate_headings",
+        &markdown_no_duplicate_headings::META,
+        markdown_no_duplicate_headings::build,
+    );
+    registry.register(
+        "markdown_required_headings",
+        &markdown_required_headings::META,
+        markdown_required_headings::build,
+    );
+    registry.register_optionless(
+        "editorconfig_conforms",
+        &editorconfig_conforms::META,
+        editorconfig_conforms::build,
+    );
+    registry.register_optionless(
+        "spdx_identifier_valid",
+        &spdx_identifier_valid::META,
+        spdx_identifier_valid::build,
     );
     registry.register(
         "markdown_paths_resolve",
@@ -950,7 +999,7 @@ mod registry_tests {
             metadata, canonical,
             "every canonical builder must share its registration with one metadata record"
         );
-        assert_eq!(metadata.len(), 95, "the v0.19 migration covers 95 kinds");
+        assert_eq!(metadata.len(), 101, "the v0.19 inventory covers 101 kinds");
 
         for (alias, canonical) in registry.aliases() {
             let alias_meta = registry.meta(alias).expect("registered alias has metadata");
@@ -986,7 +1035,7 @@ mod registry_tests {
                 count(&|m| matches!(m.dispatch, DispatchClass::RuleMajorScoped)),
                 count(&|m| matches!(m.dispatch, DispatchClass::SingleShot)),
             ],
-            [51, 20, 14, 10],
+            [55, 22, 14, 10],
             "dispatch-class inventory drifted"
         );
         assert_eq!(
@@ -995,7 +1044,7 @@ mod registry_tests {
                 count(&|m| m.paths == PathsSupport::Optional),
                 count(&|m| m.paths == PathsSupport::Forbidden),
             ],
-            [72, 0, 23],
+            [78, 0, 23],
             "paths support inventory drifted"
         );
         assert_eq!(
@@ -1004,7 +1053,7 @@ mod registry_tests {
                 count(&|m| matches!(m.scope_filter, ScopeFilterSupport::AncestorOnly)),
                 count(&|m| matches!(m.scope_filter, ScopeFilterSupport::Rejected { .. })),
             ],
-            [67, 1, 27],
+            [72, 1, 28],
             "scope-filter inventory drifted"
         );
         assert_eq!(
@@ -1013,7 +1062,7 @@ mod registry_tests {
                 count(&|m| m.git_tracked_only == GitTrackedSupport::FileOnly),
                 count(&|m| m.git_tracked_only == GitTrackedSupport::DirAware),
             ],
-            [91, 2, 2],
+            [97, 2, 2],
             "git-tracked support inventory drifted"
         );
         assert_eq!(
@@ -1022,10 +1071,10 @@ mod registry_tests {
                 count(&|m| m.since == SinceSupport::Optional),
                 count(&|m| m.since == SinceSupport::Required),
             ],
-            [86, 7, 2],
+            [92, 7, 2],
             "since support inventory drifted"
         );
-        assert_eq!(count(&|m| m.expect_matches), 68);
+        assert_eq!(count(&|m| m.expect_matches), 74);
         assert_eq!(count(&|m| m.nested_rules), 3);
         assert_eq!(
             [
@@ -1038,7 +1087,7 @@ mod registry_tests {
                 count(&|m| m.content == ContentAccess::Blame),
                 count(&|m| m.content == ContentAccess::Delegated),
             ],
-            [23, 5, 6, 1, 49, 4, 1, 6],
+            [23, 5, 6, 1, 53, 6, 1, 6],
             "content-access inventory drifted"
         );
 
