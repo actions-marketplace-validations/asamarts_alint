@@ -131,4 +131,7 @@ All decisions are resolved for W5.
 - **Salt sensitive fingerprints?** No. Sensitive values are excluded from fingerprint input; the existing count model handles same-path collisions without a new baseline schema or salt lifecycle.
 - **What does `sensitive: true` redact?** The complete flattened message and fix detail. Existing kinds do not retain trustworthy evidence spans, so partial redaction would be fail-open.
 - **Do sensitive fixes still run?** Yes. Execution semantics are unchanged, but public proposed edits and outcome detail are suppressed/redacted.
-- **Are primary paths hidden?** No. Repository locations remain navigable and are not treated as extracted evidence.
+- **Are primary paths hidden?** No. The primary source location remains navigable. Secondary
+  locations are omitted from sensitive findings because relation rules may derive those paths
+  directly from extracted values and the finding model cannot distinguish those values from
+  independently known repository locations.

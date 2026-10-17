@@ -289,9 +289,9 @@ impl Rule for StructuredPathRule {
                     continue;
                 }
                 let full = ctx.root.join(literal);
-                // Cap the read so a multi-GB file matched here can't OOM the
-                // run; over-cap → skip (M3). A genuine read error fails CLOSED,
-                // matching `check`'s file-major dispatch (audit 2026-10 finding 7).
+                // Cap the read so a multi-GB file matched here cannot OOM the
+                // run. Every failure class becomes a typed `resource_read`
+                // analysis failure, matching `check`'s file-major dispatch.
                 let bytes = match crate::io::read_capped(&full) {
                     Ok(b) => b,
                     Err(e) => {
@@ -307,9 +307,9 @@ impl Rule for StructuredPathRule {
                     continue;
                 }
                 let full = ctx.root.join(&entry.path);
-                // Cap the read (multi-GB OOM guard, M3); race / over-cap → skip.
-                // A genuine read error fails CLOSED, matching `check`'s
-                // file-major dispatch (audit 2026-10 finding 7).
+                // Cap the read so a multi-GB file matched here cannot OOM the
+                // run. Every failure class becomes a typed `resource_read`
+                // analysis failure, matching `check`'s file-major dispatch.
                 let bytes = match crate::io::read_capped(&full) {
                     Ok(b) => b,
                     Err(e) => {

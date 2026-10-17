@@ -342,11 +342,11 @@ impl Violation {
         self.sensitive
     }
 
-    /// Remove internal-only identity from a sensitive finding before an engine
-    /// result crosses a public API boundary. Fixers need the original key while
-    /// they correlate a finding with an edit, but callers must never receive a
-    /// value-bearing key. The replacement is derived only from structural
-    /// metadata; the original key is not hashed.
+    /// Remove internal-only evidence from a sensitive finding before an engine
+    /// result crosses a public API boundary. Fixers need the original key and
+    /// related targets while they correlate a finding with an edit, but callers
+    /// must never receive value-bearing metadata. The replacement key is derived
+    /// only from structural metadata; the original key is not hashed.
     pub(crate) fn sanitize_sensitive_metadata(&mut self, rule_id: &str) {
         if !self.sensitive {
             return;
@@ -364,6 +364,13 @@ impl Violation {
         self.baseline_key =
             Some(format!("\0alint-sensitive\0{}", crate::redaction_marker(&locator)).into());
         self.proposed_edits.clear();
+        // A secondary path may itself be an extracted value (for example, a
+        // secret-bearing registry entry interpreted as an unresolved target).
+        // Keep the primary source path navigable, but fail closed on every
+        // secondary locator because the model cannot distinguish evidence-
+        // derived paths from independently known repository locations.
+        self.related_locations.clear();
+        self.related_locations_omitted = 0;
     }
 
     /// Structural note kind, if this producer finding is a note.
@@ -1046,8 +1053,10 @@ pub trait PerFileRule: Send + Sync + std::fmt::Debug {
 /// ```text
 /// for entry in ctx.index.files() {
 ///     if scope doesn't match { continue }
-///     let bytes = std::fs::read(full)?  // continue on read failure
-///     violations.extend(self.evaluate_file(ctx, path, &bytes)?)
+///     match read_for_analysis(full) {
+///         bytes => violations.extend(self.evaluate_file(ctx, path, &bytes)?),
+///         failure => violations.push(typed_resource_read_failure(failure)),
+///     }
 /// }
 /// ```
 ///
@@ -1731,6 +1740,7 @@ fn refuse_unwritable(path: &Path, meta: &std::fs::Metadata) -> std::io::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{FileEntry, Scope};
 
     fn empty_index() -> FileIndex {
         FileIndex::default()
@@ -1782,11 +1792,13 @@ mod tests {
     }
 
     #[test]
-    fn public_sensitive_metadata_excludes_value_bearing_baseline_key() {
+    fn public_sensitive_metadata_excludes_value_bearing_fields() {
         const SECRET: &str = "BASELINE_KEY_SECRET_DO_NOT_REPORT";
         let mut finding = Violation::new(format!("value {SECRET}"))
             .with_path(Path::new("secrets.env"))
-            .with_baseline_key(format!("query\0{SECRET}"));
+            .with_baseline_key(format!("query\0{SECRET}"))
+            .with_related_location(RelatedLocation::new(SECRET, "declared target"));
+        finding.related_locations_omitted = 2;
         finding.redact_evidence("rule", "source\0secrets.env\0query", [SECRET]);
 
         // Remediation still sees the producer key until the public boundary.
@@ -1802,6 +1814,8 @@ mod tests {
         assert!(key.starts_with("\0alint-sensitive\0"), "{key:?}");
         assert!(!key.contains(SECRET), "{key:?}");
         assert!(!finding.message.contains(SECRET), "{finding:?}");
+        assert!(finding.related_locations.is_empty(), "{finding:?}");
+        assert_eq!(finding.related_locations_omitted, 0);
     }
 
     #[test]
@@ -2022,6 +2036,57 @@ mod tests {
             "unreadable",
         ));
         assert!(!r.passed());
+    }
+
+    #[derive(Debug)]
+    struct MissingReadRule {
+        scope: Scope,
+    }
+
+    impl PerFileRule for MissingReadRule {
+        fn path_scope(&self) -> &Scope {
+            &self.scope
+        }
+
+        fn evaluate_file(
+            &self,
+            _ctx: &Context<'_>,
+            _path: &Path,
+            _bytes: &[u8],
+        ) -> Result<Vec<Violation>> {
+            panic!("a vanished file must not reach rule evaluation");
+        }
+    }
+
+    #[test]
+    fn per_file_fallback_reports_a_discovered_file_that_vanished() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = FileIndex::from_entries(vec![FileEntry {
+            path: Arc::<Path>::from(Path::new("gone.txt")),
+            is_dir: false,
+            size: 1,
+        }]);
+        let ctx = Context {
+            root: dir.path(),
+            index: &index,
+            registry: None,
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+            analysis_time: None,
+        };
+        let rule = MissingReadRule {
+            scope: Scope::from_patterns(&["**".to_string()]).unwrap(),
+        };
+
+        let findings = eval_per_file(&rule, &ctx).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].analysis_failure_kind(),
+            Some(AnalysisFailureKind::ResourceRead)
+        );
+        assert_eq!(findings[0].path.as_deref(), Some(Path::new("gone.txt")));
     }
 
     #[test]

@@ -45,15 +45,11 @@ impl Rule for FileContentMatchesRule {
                 continue;
             }
             let full = ctx.root.join(&entry.path);
-            // Cap the read so a multi-GB file matched here can't OOM the run
-            // via the `for_each`-nested path (which bypasses the engine's cap).
-            // Over-cap → skip, matching the engine's per-file batch so the same
-            // rule behaves identically whether top-level or nested (M3-F1).
-            // A genuine read error (permission / I/O) fails CLOSED with a
-            // "could not read file" finding, exactly as `check`'s file-major
-            // dispatch reports it, so `check` and `fix` (this whole-index
-            // `evaluate` is the read path `fix` uses) agree; `NotFound` (a
-            // mid-walk delete) and over-cap stay skips (audit 2026-10 finding 7).
+            // Cap the read so a multi-GB file matched here cannot OOM the run
+            // through the `for_each`-nested path, which bypasses the engine's
+            // file-major reader. Missing, unreadable, and over-cap files all
+            // become typed `resource_read` analysis failures so `check` and
+            // `fix` agree.
             let bytes = match crate::io::read_capped(&full) {
                 Ok(b) => b,
                 Err(e) => {

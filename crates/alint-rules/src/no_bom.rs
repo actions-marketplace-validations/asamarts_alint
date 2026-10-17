@@ -124,8 +124,8 @@ impl Rule for NoBomRule {
             // Bounded read: BOMs are 2-4 bytes. Solo runs read
             // just the prefix instead of the whole file.
             let full = ctx.root.join(&entry.path);
-            // A genuine read error fails CLOSED, matching `check`'s file-major
-            // dispatch (audit 2026-10 finding 7); `NotFound` stays a skip.
+            // Every read error, including a mid-walk removal, fails closed to
+            // match `check`'s file-major dispatch.
             let bytes = match read_prefix_n(&full, BOM_PREFIX_LEN) {
                 Ok(b) => b,
                 Err(e) => {

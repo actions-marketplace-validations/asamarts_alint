@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 const DOTENV_SECRET: &str = "DOTENV_TOKEN_VALUE_DO_NOT_REPORT";
 const PROPERTIES_SECRET: &str = "PROPERTIES_TOKEN_VALUE_DO_NOT_REPORT";
 const EXPLICIT_SECRET: &str = "EXPLICIT_TOKEN_VALUE_DO_NOT_REPORT";
+const RELATED_PATH_SECRET: &str = "RELATED_PATH_VALUE_DO_NOT_REPORT";
 
 fn run(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_alint"))
@@ -25,7 +26,12 @@ fn all_output(output: &Output) -> Vec<u8> {
 
 fn assert_redacted(surface: &str, bytes: &[u8]) {
     let rendered = String::from_utf8_lossy(bytes);
-    for secret in [DOTENV_SECRET, PROPERTIES_SECRET, EXPLICIT_SECRET] {
+    for secret in [
+        DOTENV_SECRET,
+        PROPERTIES_SECRET,
+        EXPLICIT_SECRET,
+        RELATED_PATH_SECRET,
+    ] {
         assert!(
             !rendered.contains(secret),
             "{surface} leaked {secret}:\n{rendered}"
@@ -41,7 +47,11 @@ fn assert_redacted(surface: &str, bytes: &[u8]) {
 
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join(".env"), format!("TOKEN={DOTENV_SECRET}\n")).unwrap();
+    std::fs::write(
+        dir.path().join(".env"),
+        format!("TOKEN={DOTENV_SECRET}\nPATH={RELATED_PATH_SECRET}\n"),
+    )
+    .unwrap();
     std::fs::write(
         dir.path().join("app.properties"),
         format!("TOKEN={PROPERTIES_SECRET}\n"),
@@ -67,6 +77,12 @@ rules:
     equals: expected
     level: error
     fix: {{ set_value: {{}} }}
+  - id: sensitive-registry-target
+    kind: registry_paths_resolve
+    source: .env
+    extract: {{ dotenv: $.PATH }}
+    base: lint_root
+    level: error
   - id: explicit-secret
     kind: file_content_forbidden
     paths: plain.txt

@@ -110,9 +110,9 @@ it non-baselinable. The boundary is whether evaluation obtained the configured v
 - a repository-derived nested instance that becomes invalid only after token substitution is an
   analysis failure.
 
-A file removed between walk and read keeps the existing race semantics: `NotFound` is ignored.
-Other read errors are failures. Repository-controlled paths and messages pass through each
-format's existing terminal, workflow-command, Markdown, XML, and JSON escaping.
+A file removed between walk and read produces the same non-baselinable `resource_read` analysis
+failure as any other unreadable discovered file. Repository-controlled paths and messages pass
+through each format's existing terminal, workflow-command, Markdown, XML, and JSON escaping.
 
 Failures never carry baseline keys, baseline state, fixability, proposed edits, or fix statuses.
 This prevents an accidental later code path from making them suppressible or remediable.

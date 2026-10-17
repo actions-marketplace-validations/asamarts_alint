@@ -96,11 +96,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `sensitive: true`, which replaces its complete flattened finding message and fix-report detail
   with a stable, value-free marker before any public report is returned. Dotenv and Java
   properties value extractors enable the same policy automatically for structured-path,
-  `cross_file`, `file_graph`, and `registry_paths_resolve` findings. Paths remain navigable;
-  evaluation, severity, exit status, fix applicability, and fix execution are unchanged. Proposed
-  replacement bytes are omitted for sensitive findings, including any composed edit for the same
-  file, and LSP does not offer sensitive code actions. Sensitive baseline fingerprints exclude
-  both the raw value and its digest. A cross-format leak gate covers all eight check formats,
+  `cross_file`, `file_graph`, and `registry_paths_resolve` findings. Primary source paths remain
+  navigable; secondary locations are omitted from sensitive findings because they may be extracted
+  values. Evaluation, severity, exit status, fix applicability, and fix execution are unchanged.
+  Proposed replacement bytes are omitted for sensitive findings, including any composed edit for
+  the same file, and LSP does not offer sensitive code actions. Sensitive baseline fingerprints
+  exclude both the raw value and its digest. A cross-format leak gate covers all eight check
+  formats,
   baseline output, human and JSON fix reports, and LSP diagnostics. Migration: add
   `sensitive: true` to any rule whose message can contain credentials or other secrets. Expect
   existing dotenv/properties findings and baseline messages to become `<redacted:…>` markers;
