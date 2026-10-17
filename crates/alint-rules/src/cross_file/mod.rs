@@ -595,9 +595,10 @@ pub struct CrossFileRule {
     normalize: Vec<Normalize>,
     allow_missing: bool,
     skip_header_lines: usize,
-    /// `relation: registered` only: the `{path}`/`{dir}`/`{stem}` template that
-    /// maps each matched member path to the value looked for (and, on fix, added)
-    /// in the target list. `None` ⇒ the default `{path}` (the matched path).
+    /// `relation: registered` only: a template over the matched member path
+    /// supporting `{path}`, `{dir}`, `{basename}`, `{stem}`, `{ext}`, and
+    /// `{parent_name}`. The rendered value is looked for (and, on fix, added) in
+    /// the target list. `None` uses `{path}` (the matched path).
     register_as: Option<String>,
     /// The `sync_from` fixer: on `relation: identical` a whole-file `SyncFromFixer`
     /// (mirror the source), on `relation: equals` a `CrossFileValueFixer`

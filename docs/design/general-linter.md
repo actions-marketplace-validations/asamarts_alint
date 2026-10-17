@@ -1641,8 +1641,10 @@ spellings frozen.
 | Build on the IR (Phase 2 or later), not before | D1 `key_parity` for nested formats (the Phase 2 pilot), C3 `dependency_version_consistency`, D2 `placeholder_parity`, F3 `reuse_license_completeness`, C5 `dependabot_ecosystem_drift`, the dead-pattern halves of A3 `ignore_consistency` and J1 `codeowners_valid`, B7 in-file reference integrity | relational; as standalone evaluators they would duplicate the Phase 3 constraint |
 | Standalone library now, reused by the IR | C4 `semver_range` | lands first as a standalone library (a canonicalizing `normalize:` band plus range-satisfaction and intersection checks), then becomes the `semver` domain scalar of section 6.2 |
 
-Flat-format key parity (`.env` against `.env.example`, `.properties`) is already expressible today
-with `cross_file` `set_equals` over a `regex:` extract, and should be documented as a recipe now.
+Flat-format key parity (`.env` against `.env.example`, `.properties`) is already expressible with
+`cross_file` `set_equals` over a `regex:` extract.
+The [cookbook recipe](https://alint.org/docs/cookbook/#keep-env-keys-aligned-with-envexample)
+shows the complete configuration; nested-format key parity remains the Phase 2 D1 pilot.
 
 ## 12. Validation and success criteria
 

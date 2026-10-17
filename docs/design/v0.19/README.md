@@ -1,7 +1,9 @@
 # v0.19: Fail-loud findings and the capability inventory
 
-Status: In progress (2026-10-17); see [Status and next steps](#status-and-next-steps-as-of-2026-10-17). This is the first release of the general-linter program: Phase 0
-and Phase 1a of [`../general-linter.md`](../general-linter.md) section 11, decided in
+Status: Implementation complete; release gates pending (2026-10-17). See
+[Status and next steps](#status-and-next-steps-as-of-2026-10-17). This is the first release of the
+general-linter program: Phase 0 and Phase 1a of
+[`../general-linter.md`](../general-linter.md) section 11, decided in
 [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md). Each work item
 below gets its own design document in this directory (in the [`../TEMPLATE.md`](../TEMPLATE.md)
 shape, including the false-positive section) before its code lands, and the item's open
@@ -132,7 +134,12 @@ moves.
   The completion audit also moved seven large inline test modules into focused companion files;
   every source file that crossed the repository's 2,000-line maintainability limit during the
   increment is back below it without changing production code or test coverage.
-  **W10 and the release gates are next.**
+- **W10 is complete.** The cookbook now documents exact dotenv key parity with the existing
+  `cross_file` `set_equals` relation. Both current `register_as` field comments name all six
+  path-template tokens. The roadmap records the delivered extraction substrate, seven standalone
+  kinds, and two consistency bundles, and its generated JSON contract is current. The stale
+  getting-started ruleset count now matches `facts.json`; the root README already had the correct
+  generated-contract counts and did not need a count edit.
 
 ### Completed release item: the v0.18.4 benchmark record
 
@@ -158,10 +165,11 @@ release-by-release row.
 
 ### Next work, in order
 
-1. **W10** documentation, recipes, roadmap, and stale-comment cleanup.
+1. **Run the v0.19 release gates and release flow** listed at the end of this file, including the
+   release-time `Latest release` update and alint.org pin bump.
 
-Each item gets its design document in this directory before code, per the rule at the top. The
-release gates are listed at the end of this file.
+Every implementation item W1-W10 has its design document in this directory. No v0.19 code or
+documentation work item remains open.
 
 ### Parallel tracks
 
@@ -402,12 +410,17 @@ rule kind, fix operation, dependency, subprocess, or network access.
 
 ### W10. Documentation, recipes, and roadmap
 
-- Document the flat key-parity recipe (`cross_file` `set_equals` over a `regex:` key extract for
-  `.env` against `.env.example`).
-- Update the README's counts only through `facts.json`; update ROADMAP's "Latest release" at
-  release time.
-- Close the remaining review follow-ups: the stale `register_as` doc comment in
-  `crates/alint-rules/src/cross_file/spec.rs` (it lists only `{path}`, `{dir}`, `{stem}`).
+**Completed 2026-10-17.**
+
+- The flat key-parity recipe uses `cross_file` `set_equals` over a `regex:` key extract for
+  `.env` against `.env.example`.
+- README surface counts remain sourced from `facts.json`; ROADMAP's "Latest release" remains a
+  release-time update.
+- Both current `register_as` field comments and their generated schema descriptions list all six
+  path-template tokens.
+
+Design: [`documentation-and-roadmap.md`](documentation-and-roadmap.md) (implemented; recipe,
+generated-source boundaries, release-time roadmap update, and validation plan decided).
 
 ## Parallel tracks during v0.19
 

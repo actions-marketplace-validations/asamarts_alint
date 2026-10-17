@@ -125,7 +125,9 @@ Exit codes: `0` no errors; `1` one or more errors; `2` config error; `3` interna
 
 ## Where to next
 
-- [Bundled Rulesets](/docs/bundled-rulesets/) — 22 one-line baselines covering Rust, Python, Go, Node, Java, monorepos, GitHub Actions hardening, agent hygiene, license compliance, and more.
+- [Bundled Rulesets](/docs/bundled-rulesets/) — 24 one-line baselines covering Rust, Python, Go,
+  Node, Java, .NET, PHP, monorepos, GitHub Actions hardening, version consistency, toolchain pins,
+  agent hygiene, license compliance, and more.
 - [Cookbook](/docs/cookbook/) — copy-pasteable patterns for real-world repo-maintenance tasks.
 - [Configuration](/docs/configuration/) — full `.alint.yml` field reference.
 - [Concepts](/docs/concepts/) — the rule model, scopes, when-expressions, composition.

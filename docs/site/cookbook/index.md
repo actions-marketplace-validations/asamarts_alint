@@ -316,6 +316,35 @@ rules:
     level: warning
 ```
 
+### Keep `.env` keys aligned with `.env.example`
+
+Use `cross_file` with `set_equals` when two flat files must declare the same keys. This rule
+makes `.env.example` authoritative, extracts only declaration names, and ignores declaration
+order and values:
+
+```yaml
+version: 1
+rules:
+  - id: env-key-parity
+    kind: cross_file
+    source:
+      file: .env.example
+      extract:
+        regex: '(?m)^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*='
+    targets:
+      - file: .env
+        extract:
+          regex: '(?m)^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*='
+    relation: set_equals
+    level: error
+```
+
+The line-start anchor excludes commented examples, and capture group 1 returns the key rather
+than its value. `set_equals` compares case-sensitive unique sets: declaration order does not
+matter, but duplicate declarations are not flagged. Keep the missing-target check strict when
+`.env` must exist; if CI does not materialize `.env`, run this rule only in the environment that
+does or point the target at a generated environment file.
+
 ## 13. Ban risky characters / files outright
 
 The security-family rules catch categories that are almost never intentional. Trojan-Source (CVE-2021-42574), zero-width tricks, and stray merge markers all create changes that do not match an author's visible intent.

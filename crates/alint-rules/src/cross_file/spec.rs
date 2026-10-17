@@ -250,10 +250,11 @@ pub(super) struct Options {
     #[serde(default)]
     pub(super) allow_missing_target: bool,
     /// For `relation: registered` only: the value to look for (and, on fix, add)
-    /// in each target list, as a `{path}` / `{dir}` / `{stem}` template over the
-    /// matched member path. Defaults to `{path}` (the matched path verbatim), so a
-    /// `files: "crates/*"` of directories needs no `register_as`; a source that
-    /// names a `.../Cargo.toml` uses `{dir}` to register the parent directory.
+    /// in each target list, rendered from `{path}`, `{dir}`, `{basename}`, `{stem}`,
+    /// `{ext}`, and `{parent_name}` tokens over the matched member path. Defaults
+    /// to `{path}` (the matched path verbatim), so a `files: "crates/*"` source of
+    /// directories needs no `register_as`; a source that names a `.../Cargo.toml`
+    /// uses `{dir}` to register the parent directory.
     #[serde(default)]
     pub(super) register_as: Option<String>,
     /// For the `identical` relation only: drop this many leading lines from
