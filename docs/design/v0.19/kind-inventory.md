@@ -155,4 +155,3 @@ Probe columns (paths / scope_filter / fix / expect_matches) were verified for ev
 | `KIND_SUMMARIES` / `KIND_DESCRIPTIONS` | crates/alint-rules/src/kind_docs_gen.rs:10,110 | generated per-kind docs text | generated. |
 | field lists (kind-agnostic) | crates/alint-dsl/src/nested.rs:26 `NESTED_SCOPE_FIELDS` = paths, select, primary; crates/alint-core/src/config.rs:1321 nested `PARENT_FIELDS` = id, level, fix, git_tracked_only, respect_gitignore; trust.rs:180 `WHEN_FIELDS` = when, when_iter | these encode per-kind facts WITHOUT kind keys, which causes bugs 1 and 3 in [`kind-meta.md`](kind-meta.md) section 1. |
 | JSON schema | schemas/v1/config.json `$defs.rule_common` | allows paths, scope_filter, fix, expect_matches, when, message, policy_url on EVERY kind | so editor validation never flags the silently ignored selectors. |
-

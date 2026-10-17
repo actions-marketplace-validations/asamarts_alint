@@ -50,13 +50,11 @@ graph TB
   Dev -. "`gets inline diagnostics in the editor`" .-> Alint.LspServer
   Ci -. "`runs as a pipeline gate / GitHub Action`" .-> Alint.Cli
   Editor -. "`speaks LSP over stdio to`" .-> Alint.LspServer
-  PreCommit -. "`runs alint check on commit (and manual 
-alint fix)`" .-> Alint.Cli
+  PreCommit -. "`runs alint check on commit (and manual alint fix)`" .-> Alint.Cli
   Alint.Cli -.-> Alint.LspServer
   Alint.LspServer -.-> Alint.Cli
   Alint.Tooling -.-> Alint.Cli
-  Alint.Cli -. "`reads files + git history; reports 
-violations`" .-> Repo
+  Alint.Cli -. "`reads files + git history; reports violations`" .-> Repo
   Alint.LspServer -. "`validates the open workspace`" .-> Repo
   Alint.Tooling -. "`produces the docs bundle consumed by`" .-> Site
   Alint.Tooling -. "`pushes the docs bundle to`" .-> Docsbundle
@@ -81,8 +79,7 @@ graph TB
   Repo["Linted repository"]
   Dev -. "`runs alint check / fix`" .-> AlintCli.AlintBin
   Ci -. "`runs as a pipeline gate / GitHub Action`" .-> AlintCli.AlintBin
-  PreCommit -. "`runs alint check on commit (and manual 
-alint fix)`" .-> AlintCli.AlintBin
+  PreCommit -. "`runs alint check on commit (and manual alint fix)`" .-> AlintCli.AlintBin
   AlintLspServer -.-> AlintCli.Core
   AlintLspServer -.-> AlintCli.Dsl
   AlintLspServer -.-> AlintCli.Rules
@@ -98,8 +95,7 @@ alint fix)`" .-> AlintCli.AlintBin
   AlintCli.Rules -.-> AlintCli.Core
   AlintCli.Output -.-> AlintCli.Core
   AlintCli.Dsl -.-> AlintCli.Rules
-  AlintCli.AlintBin -. "`reads files + git history; reports 
-violations`" .-> Repo
+  AlintCli.AlintBin -. "`reads files + git history; reports violations`" .-> Repo
   AlintCli.AlintBin -.-> AlintLspServer
 ```
 
@@ -165,18 +161,12 @@ graph LR
   AlintCliRules["alint-rules"]
   AlintCliOutput["alint-output"]
   Dev -. "`alint check .`" .-> AlintCliAlintBin
-  AlintCliAlintBin -. "`load .alint.yml + resolve extends 
-(cache, cycle-detect, SRI)`" .-> AlintCliDsl
-  AlintCliDsl -. "`reject spawning kinds in extends 
-(ADR-0004)`" .-> AlintCliDsl
-  AlintCliAlintBin -. "`evaluate facts (once, cached) + filter 
-rules by when`" .-> AlintCliCore
-  AlintCliAlintBin -. "`parallel walk -> FileIndex (sorted, 
-deterministic)`" .-> AlintCliCore
-  AlintCliCore -. "`per-file dispatch: read each file once 
--> evaluate_file`" .-> AlintCliRules
-  AlintCliCore -. "`rule-major dispatch: cross-file rules 
-scan the index`" .-> AlintCliRules
+  AlintCliAlintBin -. "`load .alint.yml + resolve extends (cache, cycle-detect, SRI)`" .-> AlintCliDsl
+  AlintCliDsl -. "`reject spawning kinds in extends (ADR-0004)`" .-> AlintCliDsl
+  AlintCliAlintBin -. "`evaluate facts (once, cached) + filter rules by when`" .-> AlintCliCore
+  AlintCliAlintBin -. "`parallel walk -> FileIndex (sorted, deterministic)`" .-> AlintCliCore
+  AlintCliCore -. "`per-file dispatch: read each file once -> evaluate_file`" .-> AlintCliRules
+  AlintCliCore -. "`rule-major dispatch: cross-file rules scan the index`" .-> AlintCliRules
   AlintCliRules -. "`Violations -> RuleResults -> Report`" .-> AlintCliCore
   AlintCliCore -. "`format via selected output (8 formats)`" .-> AlintCliOutput
   AlintCliOutput -. "`report + exit code`" .-> Dev
@@ -190,15 +180,11 @@ graph LR
   AlintCliDsl["alint-dsl"]
   AlintCliCore["alint-core"]
   AlintCliAlintBin -. "`load top-level .alint.yml`" .-> AlintCliDsl
-  AlintCliDsl -. "`resolve extends: local path / https 
-(SRI) / alint://bundled`" .-> AlintCliDsl
+  AlintCliDsl -. "`resolve extends: local path / https (SRI) / alint://bundled`" .-> AlintCliDsl
   AlintCliDsl -. "`cache + cycle detection`" .-> AlintCliDsl
-  AlintCliDsl -. "`reject command / generated_file_fresh / 
-command_idempotent in extends`" .-> AlintCliDsl
-  AlintCliDsl -. "`reject allow_out_of_root + custom facts 
-in extends`" .-> AlintCliDsl
-  AlintCliDsl -. "`deep-merge child over parent (per rule 
-id) + schema-validate`" .-> AlintCliDsl
+  AlintCliDsl -. "`reject command / generated_file_fresh / command_idempotent in extends`" .-> AlintCliDsl
+  AlintCliDsl -. "`reject allow_out_of_root + custom facts in extends`" .-> AlintCliDsl
+  AlintCliDsl -. "`deep-merge child over parent (per rule id) + schema-validate`" .-> AlintCliDsl
   AlintCliDsl -. "`Config AST`" .-> AlintCliCore
 ```
 
@@ -208,16 +194,11 @@ id) + schema-validate`" .-> AlintCliDsl
 graph LR
   AlintCliCore["alint-core"]
   AlintCliRules["alint-rules"]
-  AlintCliCore -. "`partition rules: requires_full_index() 
--> rule-major; else per-file (ADR-0003)`" .-> AlintCliCore
-  AlintCliCore -. "`rule-major: each cross-file rule scans 
-the FileIndex itself`" .-> AlintCliRules
-  AlintCliCore -. "`file-major loop: read each matched file 
-at most once`" .-> AlintCliCore
-  AlintCliCore -. "`per-file: hand the byte slice to every 
-applicable PerFileRule`" .-> AlintCliRules
-  AlintCliRules -. "`Violations from both classes, merged + 
-sorted (deterministic)`" .-> AlintCliCore
+  AlintCliCore -. "`partition rules: requires_full_index() -> rule-major; else per-file (ADR-0003)`" .-> AlintCliCore
+  AlintCliCore -. "`rule-major: each cross-file rule scans the FileIndex itself`" .-> AlintCliRules
+  AlintCliCore -. "`file-major loop: read each matched file at most once`" .-> AlintCliCore
+  AlintCliCore -. "`per-file: hand the byte slice to every applicable PerFileRule`" .-> AlintCliRules
+  AlintCliRules -. "`Violations from both classes, merged + sorted (deterministic)`" .-> AlintCliCore
 ```
 
 ## Rule catalogue
@@ -291,11 +272,9 @@ graph LR
   AlintCliAlintBin["alint"]
   AlintCliCore["alint-core"]
   AlintCliRules["alint-rules"]
-  AlintCliAlintBin -. "`evaluate facts once (any_file_exists, 
-count_files, custom, ...)`" .-> AlintCliCore
+  AlintCliAlintBin -. "`evaluate facts once (any_file_exists, count_files, custom, ...)`" .-> AlintCliCore
   AlintCliCore -. "`cache fact values keyed on input hashes`" .-> AlintCliCore
-  AlintCliCore -. "`evaluate each rule when: clause over 
-facts / vars / ctx`" .-> AlintCliCore
+  AlintCliCore -. "`evaluate each rule when: clause over facts / vars / ctx`" .-> AlintCliCore
   AlintCliCore -. "`drop rules whose when is false`" .-> AlintCliCore
   AlintCliCore -. "`run only the surviving rules`" .-> AlintCliRules
 ```
@@ -312,10 +291,8 @@ graph LR
   Dev -. "`alint fix`" .-> AlintCliAlintBin
   AlintCliAlintBin -. "`evaluate (parallel via rayon)`" .-> AlintCliCore
   AlintCliCore -. "`collect Violations with fixers`" .-> AlintCliRules
-  AlintCliRules -. "`apply fixers serially (FixEdit: set / 
-create / delete / rename)`" .-> AlintCliCore
-  AlintCliCore -. "`FixStatus: Applied / Skipped (over 
-fix_size_limit) / Unfixable`" .-> AlintCliCore
+  AlintCliRules -. "`apply fixers serially (FixEdit: set / create / delete / rename)`" .-> AlintCliCore
+  AlintCliCore -. "`FixStatus: Applied / Skipped (over fix_size_limit) / Unfixable`" .-> AlintCliCore
   AlintCliCore -. "`fix report + re-check`" .-> AlintCliOutput
 ```
 
@@ -326,15 +303,11 @@ graph LR
   AlintCliAlintBin["alint"]
   AlintCliCore["alint-core"]
   AlintCliRules["alint-rules"]
-  AlintCliAlintBin -. "`parallel walk (ignore crate 
-WalkBuilder.build_parallel)`" .-> AlintCliCore
+  AlintCliAlintBin -. "`parallel walk (ignore crate WalkBuilder.build_parallel)`" .-> AlintCliCore
   AlintCliCore -. "`honor .gitignore/.ignore + ignore: globs`" .-> AlintCliCore
-  AlintCliCore -. "`merge thread-local FileEntry vecs + 
-deterministic sort`" .-> AlintCliCore
-  AlintCliCore -. "`build lazy indices: path set, 
-parent->children, git-tracked`" .-> AlintCliCore
-  AlintCliCore -. "`FileIndex (+ git-tracked filtered views) 
-ready`" .-> AlintCliRules
+  AlintCliCore -. "`merge thread-local FileEntry vecs + deterministic sort`" .-> AlintCliCore
+  AlintCliCore -. "`build lazy indices: path set, parent->children, git-tracked`" .-> AlintCliCore
+  AlintCliCore -. "`FileIndex (+ git-tracked filtered views) ready`" .-> AlintCliRules
 ```
 
 ## Template expansion
@@ -343,14 +316,10 @@ ready`" .-> AlintCliRules
 graph LR
   AlintCliDsl["alint-dsl"]
   AlintCliCore["alint-core"]
-  AlintCliDsl -. "`collect templates by id (merged through 
-the extends chain)`" .-> AlintCliDsl
-  AlintCliDsl -. "`each rule with extends_template: clone 
-the template body`" .-> AlintCliDsl
-  AlintCliDsl -. "`substitute {{vars.*}} from the instance 
-vars`" .-> AlintCliDsl
-  AlintCliDsl -. "`expanded RuleSpecs (no template 
-indirection remains)`" .-> AlintCliCore
+  AlintCliDsl -. "`collect templates by id (merged through the extends chain)`" .-> AlintCliDsl
+  AlintCliDsl -. "`each rule with extends_template: clone the template body`" .-> AlintCliDsl
+  AlintCliDsl -. "`substitute {{vars.*}} from the instance vars`" .-> AlintCliDsl
+  AlintCliDsl -. "`expanded RuleSpecs (no template indirection remains)`" .-> AlintCliCore
 ```
 
 ## Monorepo nesting and scoping
@@ -360,14 +329,10 @@ graph LR
   AlintCliAlintBin["alint"]
   AlintCliDsl["alint-dsl"]
   AlintCliCore["alint-core"]
-  AlintCliAlintBin -. "`discover nested .alint.yml 
-(nested_configs)`" .-> AlintCliDsl
-  AlintCliDsl -. "`layer configs by directory; 
-closest-ancestor wins`" .-> AlintCliDsl
-  AlintCliDsl -. "`ecosystem rulesets scoped by 
-scope_filter has_ancestor`" .-> AlintCliCore
-  AlintCliCore -. "`per file: admit a rule only if a named 
-manifest is an ancestor`" .-> AlintCliCore
+  AlintCliAlintBin -. "`discover nested .alint.yml (nested_configs)`" .-> AlintCliDsl
+  AlintCliDsl -. "`layer configs by directory; closest-ancestor wins`" .-> AlintCliDsl
+  AlintCliDsl -. "`ecosystem rulesets scoped by scope_filter has_ancestor`" .-> AlintCliCore
+  AlintCliCore -. "`per file: admit a rule only if a named manifest is an ancestor`" .-> AlintCliCore
 ```
 
 ## Output formats
@@ -378,8 +343,7 @@ graph LR
   AlintCliOutput["alint-output"]
   Dev["Developer"]
   AlintCliCore -. "`Report`" .-> AlintCliOutput
-  AlintCliOutput -. "`human / json / sarif / github / gitlab / 
-junit / markdown / agent`" .-> Dev
+  AlintCliOutput -. "`human / json / sarif / github / gitlab / junit / markdown / agent`" .-> Dev
 ```
 
 ## LSP
@@ -391,15 +355,12 @@ graph LR
   AlintCliDsl["alint-dsl"]
   AlintCliCore["alint-core"]
   AlintCliRules["alint-rules"]
-  Editor -. "`initialize / didOpen / didChange (LSP 
-over stdio)`" .-> AlintLspServerLspd
+  Editor -. "`initialize / didOpen / didChange (LSP over stdio)`" .-> AlintLspServerLspd
   AlintLspServerLspd -. "`validate the .alint.yml config`" .-> AlintCliDsl
-  AlintLspServerLspd -. "`run_for_file: engine over the open 
-document`" .-> AlintCliCore
+  AlintLspServerLspd -. "`run_for_file: engine over the open document`" .-> AlintCliCore
   AlintCliCore -. "`evaluate the applicable rules`" .-> AlintCliRules
   AlintCliRules -. "`Violations`" .-> AlintLspServerLspd
-  AlintLspServerLspd -. "`publishDiagnostics + hover + code 
-actions (fixes)`" .-> Editor
+  AlintLspServerLspd -. "`publishDiagnostics + hover + code actions (fixes)`" .-> Editor
 ```
 
 ## Editor integrations
@@ -409,11 +370,8 @@ graph LR
   Dev["Developer"]
   Editor["Editor"]
   AlintLspServerLspd["alint-lsp"]
-  Dev -. "`install the extension (VS Code 
-Marketplace / Open VSX / JetBrains 
-Marketplace)`" .-> Editor
-  Editor -. "`LSP over stdio (VS Code, Zed, Neovim 
-native; JetBrains via LSP4IJ)`" .-> AlintLspServerLspd
+  Dev -. "`install the extension (VS Code Marketplace / Open VSX / JetBrains Marketplace)`" .-> Editor
+  Editor -. "`LSP over stdio (VS Code, Zed, Neovim native; JetBrains via LSP4IJ)`" .-> AlintLspServerLspd
   AlintLspServerLspd -. "`diagnostics, hover, code actions`" .-> Editor
 ```
 
@@ -425,13 +383,10 @@ graph LR
   AlintCliAlintBin["alint"]
   Repo["Linted repository"]
   Codescan["GitHub Code Scanning"]
-  Ci -. "`composite action: install the binary + 
-alint check --format sarif`" .-> AlintCliAlintBin
+  Ci -. "`composite action: install the binary + alint check --format sarif`" .-> AlintCliAlintBin
   AlintCliAlintBin -. "`lint the checked-out repository`" .-> Repo
-  AlintCliAlintBin -. "`SARIF report + exit code (fail the job 
-on error)`" .-> Ci
-  Ci -. "`upload-sarif -> Code Scanning 
-annotations`" .-> Codescan
+  AlintCliAlintBin -. "`SARIF report + exit code (fail the job on error)`" .-> Ci
+  Ci -. "`upload-sarif -> Code Scanning annotations`" .-> Codescan
 ```
 
 ## pre-commit: the commit gate
@@ -443,11 +398,9 @@ graph LR
   AlintCliAlintBin["alint"]
   Dev -. "`git commit`" .-> PreCommit
   PreCommit -. "`run the alint hook -> alint check`" .-> AlintCliAlintBin
-  AlintCliAlintBin -. "`errors block the commit; clean lets it 
-proceed`" .-> PreCommit
+  AlintCliAlintBin -. "`errors block the commit; clean lets it proceed`" .-> PreCommit
   Dev -. "`manual: pre-commit run alint-fix`" .-> PreCommit
-  PreCommit -. "`alint fix (writes fixes to the working 
-tree)`" .-> AlintCliAlintBin
+  PreCommit -. "`alint fix (writes fixes to the working tree)`" .-> AlintCliAlintBin
 ```
 
 ## Release and distribution
@@ -460,10 +413,8 @@ graph LR
   AlintCliAlintBin["alint"]
   Dev -. "`tag vX.Y.Z`" .-> Ci
   Ci -. "`build the per-OS/arch release matrix`" .-> Ci
-  Ci -. "`publish to crates.io / npm / Homebrew / 
-ghcr.io / GitHub releases`" .-> Registries
-  Dev -. "`install via install.sh / cargo / brew / 
-npx / docker`" .-> AlintCliAlintBin
+  Ci -. "`publish to crates.io / npm / Homebrew / ghcr.io / GitHub releases`" .-> Registries
+  Dev -. "`install via install.sh / cargo / brew / npx / docker`" .-> AlintCliAlintBin
 ```
 
 ## Contributing a rule kind
@@ -474,14 +425,10 @@ graph LR
   AlintCliRules["alint-rules"]
   AlintCliDsl["alint-dsl"]
   AlintToolingXtask["xtask"]
-  Dev -. "`impl Rule / PerFileRule in alint-rules + 
-register_builtin`" .-> AlintCliRules
-  Dev -. "`add to all_kinds.yaml + document in 
-docs/rules.md`" .-> AlintCliDsl
-  Dev -. "`gen-schema (Options -> JSON schema) + 
-gen-facts + gen-model`" .-> AlintToolingXtask
-  AlintToolingXtask -. "`gen-* --check gates fail until 
-schema/facts/arch/model are fresh`" .-> AlintToolingXtask
+  Dev -. "`impl Rule / PerFileRule in alint-rules + register_builtin`" .-> AlintCliRules
+  Dev -. "`add to all_kinds.yaml + document in docs/rules.md`" .-> AlintCliDsl
+  Dev -. "`gen-schema (Options -> JSON schema) + gen-facts + gen-model`" .-> AlintToolingXtask
+  AlintToolingXtask -. "`gen-* --check gates fail until schema/facts/arch/model are fresh`" .-> AlintToolingXtask
   Dev -. "`unit + snapshot tests (alint-testkit)`" .-> AlintCliRules
 ```
 
@@ -492,13 +439,10 @@ graph LR
   AlintToolingXtask["xtask"]
   Docsbundle["docs-bundle branch"]
   Site["alint.org"]
-  AlintToolingXtask -. "`gen-schema / gen-facts / gen-arch / 
-gen-model --check (CI freshness gates)`" .-> AlintToolingXtask
+  AlintToolingXtask -. "`gen-schema / gen-facts / gen-arch / gen-model --check (CI freshness gates)`" .-> AlintToolingXtask
   AlintToolingXtask -. "`docs-export builds + pushes the bundle`" .-> Docsbundle
-  Docsbundle -. "`Cloudflare deploy hook -> alint.org 
-rebuild`" .-> Site
-  Site -. "`sync-from-alint + internal-link / claim 
-/ meta-description gates`" .-> Site
+  Docsbundle -. "`Cloudflare deploy hook -> alint.org rebuild`" .-> Site
+  Site -. "`sync-from-alint + internal-link / claim / meta-description gates`" .-> Site
 ```
 
 ## Deterministic performance gating
@@ -508,11 +452,9 @@ graph LR
   Ci["CI / GitHub Actions"]
   AlintToolingBench["alint-bench"]
   Ci -. "`cargo bench (criterion) on a seeded tree`" .-> AlintToolingBench
-  AlintToolingBench -. "`gungraun det_engine / det_check under 
-Valgrind (callgrind Ir)`" .-> AlintToolingBench
+  AlintToolingBench -. "`gungraun det_engine / det_check under Valgrind (callgrind Ir)`" .-> AlintToolingBench
   AlintToolingBench -. "`instruction-count deltas (load-immune)`" .-> Ci
-  Ci -. "`advisory perf-gate job flags regressions 
-on the SHA`" .-> Ci
+  Ci -. "`advisory perf-gate job flags regressions on the SHA`" .-> Ci
 ```
 
 ## Plugin model
@@ -521,15 +463,10 @@ on the SHA`" .-> Ci
 graph LR
   AlintCliCore["alint-core"]
   AlintCliRules["alint-rules"]
-  AlintCliCore -. "`dispatch the command rule per matched 
-file`" .-> AlintCliRules
-  AlintCliRules -. "`spawn external checker (env: path, rule 
-id, level, vars, facts)`" .-> AlintCliRules
-  AlintCliRules -. "`exit code = verdict; stdout/stderr = 
-message -> Violation`" .-> AlintCliCore
-  AlintCliCore -. "`planned (ADR-0019): one WIT contract on 
-native Rust, process (protobuf over 
-stdio), and sandboxed WASM hosts`" .-> AlintCliCore
+  AlintCliCore -. "`dispatch the command rule per matched file`" .-> AlintCliRules
+  AlintCliRules -. "`spawn external checker (env: path, rule id, level, vars, facts)`" .-> AlintCliRules
+  AlintCliRules -. "`exit code = verdict; stdout/stderr = message -> Violation`" .-> AlintCliCore
+  AlintCliCore -. "`planned (ADR-0019): one WIT contract on native Rust, process (protobuf over stdio), and sandboxed WASM hosts`" .-> AlintCliCore
 ```
 
 ## Security: path confinement and spawning-kind gating
@@ -538,16 +475,10 @@ stdio), and sandboxed WASM hosts`" .-> AlintCliCore
 graph LR
   AlintCliDsl["alint-dsl"]
   AlintCliCore["alint-core"]
-  AlintCliDsl -. "`reject SPAWNING_RULE_KINDS (command / 
-generated_file_fresh / 
-command_idempotent) in extends 
-(ADR-0004)`" .-> AlintCliDsl
-  AlintCliDsl -. "`reject allow_out_of_root + custom facts 
-outside the top-level config`" .-> AlintCliDsl
-  AlintCliCore -. "`walker prunes symlinks that escape the 
-repo root`" .-> AlintCliCore
-  AlintCliCore -. "`git-backed rules sanitize the since: 
-range (no argument injection)`" .-> AlintCliCore
+  AlintCliDsl -. "`reject SPAWNING_RULE_KINDS (command / generated_file_fresh / command_idempotent) in extends (ADR-0004)`" .-> AlintCliDsl
+  AlintCliDsl -. "`reject allow_out_of_root + custom facts outside the top-level config`" .-> AlintCliDsl
+  AlintCliCore -. "`walker prunes symlinks that escape the repo root`" .-> AlintCliCore
+  AlintCliCore -. "`git-backed rules sanitize the since: range (no argument injection)`" .-> AlintCliCore
 ```
 
 ## Security: Trojan-source and unicode hygiene
@@ -556,10 +487,7 @@ range (no argument injection)`" .-> AlintCliCore
 graph LR
   AlintCliCore["alint-core"]
   AlintCliRules["alint-rules"]
-  AlintCliCore -. "`per-file scan: no_bidi_controls / 
-no_zero_width_chars / no_bom`" .-> AlintCliRules
-  AlintCliRules -. "`flag bidi overrides, zero-width chars, 
-BOM, conflict markers`" .-> AlintCliRules
-  AlintCliRules -. "`Violations (+ fixers: strip bidi / 
-zero-width / BOM)`" .-> AlintCliCore
+  AlintCliCore -. "`per-file scan: no_bidi_controls / no_zero_width_chars / no_bom`" .-> AlintCliRules
+  AlintCliRules -. "`flag bidi overrides, zero-width chars, BOM, conflict markers`" .-> AlintCliRules
+  AlintCliRules -. "`Violations (+ fixers: strip bidi / zero-width / BOM)`" .-> AlintCliCore
 ```

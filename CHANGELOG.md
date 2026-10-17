@@ -211,6 +211,31 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Sensitive findings no longer expose internal fix-correlation keys.** Public check, fix, and
+  staged-diff reports now clear `fix_key` alongside proposed edits and related evidence, preventing
+  extracted secret values from crossing the engine API boundary.
+
+- **Baseline and Markdown identities now follow their lossless consumer semantics.** Baseline
+  fingerprints preserve exact Unix path bytes, so distinct non-UTF-8 filenames cannot collapse to
+  the same finding. Generated Markdown heading anchors now match GitHub's Unicode-category
+  filtering, including punctuation, symbols, tabs, non-breaking spaces, emoji, and combining marks.
+
+- **Mutating generator failures restore partial output before returning.** `generated_file_fresh`
+  rescans after a failed or timed-out process, removes newly-created output, restores prior bytes,
+  and reports any restoration failure instead of silently leaving the working tree modified.
+  Staged fix previews likewise fail on source or metadata read errors rather than fabricating
+  empty-file diffs.
+
+- **Installer version inputs are validated before any URL or filesystem use.** `install.sh` and
+  the GitHub Action accept only `latest` or complete `vMAJOR.MINOR.PATCH` release tags with optional
+  pre-release and build suffixes; branch names, partial versions, and path-like inputs fail early.
+  Exact pre-release action refs select themselves, and the documented piped version pin now passes
+  `ALINT_VERSION` to `bash` rather than `curl`.
+
+- **Generated Mermaid labels no longer contain wrapped newlines or trailing spaces.** The
+  architecture generator joins LikeC4's physical wraps inside quoted labels while preserving
+  statement boundaries.
+
 - **Lossless dotenv parsing is bounded before allocating its document.**
   Nonempty parsed documents are limited to 4 MiB of original bytes (including
   all BOMs) and 100,000 physical lines; CRLF counts once, and a terminal ending

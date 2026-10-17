@@ -370,6 +370,7 @@ impl Violation {
         let locator = format!("public\0{rule_id}\0{channel}\0{path}");
         self.baseline_key =
             Some(format!("\0alint-sensitive\0{}", crate::redaction_marker(&locator)).into());
+        self.fix_key = None;
         self.proposed_edits.clear();
         // A secondary path may itself be an extracted value (for example, a
         // secret-bearing registry entry interpreted as an unresolved target).

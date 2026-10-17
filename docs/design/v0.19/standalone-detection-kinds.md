@@ -86,8 +86,9 @@ is compared after the parser's rendered text projection, not source marker spell
 zero or more complete headings; consecutive stars are rejected as redundant. The whole extracted
 heading list must match the template.
 
-Heading anchors use the documented GitHub-style algorithm: Unicode lowercase; whitespace becomes
-`-`; ASCII punctuation other than `-` and `_` is removed; other Unicode characters remain.
+Heading anchors follow GitHub's slugger: lowercase Unicode text; retain letters, marks, numbers,
+`-`, and `_`; turn ASCII spaces into `-`; and remove punctuation, symbols, controls, tabs, and
+other separators.
 Explicit CommonMark heading attributes (`{#id}`) use that id. Generated anchor collisions receive
 `-1`, `-2`, and so on while avoiding every already-issued anchor. Duplicate-heading findings use
 the unsuffixed base anchor and cite the first heading as a related location.

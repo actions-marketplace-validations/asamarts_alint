@@ -25,6 +25,7 @@ regex.workspace = true
 globset.workspace = true
 content_inspector.workspace = true
 pulldown-cmark.workspace = true
+unicode-general-category.workspace = true
 spdx.workspace = true
 sha2.workspace = true
 serde_json_path.workspace = true

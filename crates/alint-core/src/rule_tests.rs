@@ -56,8 +56,8 @@ fn public_sensitive_metadata_excludes_value_bearing_fields() {
     let mut finding = Violation::new(format!("value {SECRET}"))
         .with_path(Path::new("secrets.env"))
         .with_baseline_key(format!("query\0{SECRET}"))
+        .with_fix_key(format!("occurrence\0{SECRET}"))
         .with_related_location(RelatedLocation::new(SECRET, "declared target"));
-    finding.related_locations_omitted = 2;
     finding.redact_evidence("rule", "source\0secrets.env\0query", [SECRET]);
 
     // Remediation still sees the producer key until the public boundary.
@@ -67,11 +67,18 @@ fn public_sensitive_metadata_excludes_value_bearing_fields() {
             .as_deref()
             .is_some_and(|key| key.contains(SECRET))
     );
+    assert!(
+        finding
+            .fix_key
+            .as_deref()
+            .is_some_and(|key| key.contains(SECRET))
+    );
     finding.sanitize_sensitive_metadata("rule");
 
     let key = finding.baseline_key.as_deref().unwrap();
     assert!(key.starts_with("\0alint-sensitive\0"), "{key:?}");
     assert!(!key.contains(SECRET), "{key:?}");
+    assert!(finding.fix_key.is_none(), "{finding:?}");
     assert!(!finding.message.contains(SECRET), "{finding:?}");
     assert!(finding.related_locations.is_empty(), "{finding:?}");
     assert_eq!(finding.related_locations_omitted, 0);

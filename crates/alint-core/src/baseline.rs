@@ -13,6 +13,7 @@
 //! `check --baseline` wires this in between `Engine::run` and the
 //! formatters (see `crates/alint/src/main.rs`).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -60,7 +61,7 @@ pub fn violation_fingerprint(
     message: &str,
     file_bytes: Option<&[u8]>,
 ) -> String {
-    let path_norm = path.map(normalize_path).unwrap_or_default();
+    let path_norm: Cow<'_, [u8]> = path.map_or(Cow::Borrowed(&[]), normalize_path);
 
     let discriminator: &[u8] = if let Some(key) = baseline_key {
         key.as_bytes()
@@ -77,7 +78,7 @@ pub fn violation_fingerprint(
     };
 
     let mut hasher = Sha256::new();
-    for component in [rule_id.as_bytes(), path_norm.as_bytes(), discriminator] {
+    for component in [rule_id.as_bytes(), path_norm.as_ref(), discriminator] {
         let len = u32::try_from(component.len()).unwrap_or(u32::MAX);
         hasher.update(len.to_le_bytes());
         hasher.update(component);
@@ -121,18 +122,27 @@ pub fn fingerprint(rule_id: &str, v: &Violation, file_bytes: Option<&[u8]>) -> S
     )
 }
 
-/// Normalise a path to a stable, forward-slashed string so a fingerprint
-/// is identical across operating systems. Only on Windows is `\` a path
-/// separator (and so rewritten to `/`); on unix it is a legal filename byte,
-/// and folding it made `a\b.txt` collide with the different file `a/b.txt`
-/// (audit 2026-10 finding 10). Ordinary paths -- the only ones a baseline
-/// written on either OS can contain portably -- fingerprint exactly as before.
-fn normalize_path(path: &Path) -> String {
-    let s = path.to_string_lossy();
-    if cfg!(windows) {
-        s.replace('\\', "/")
-    } else {
-        s.into_owned()
+/// Normalise a path to stable bytes. Windows separators are rewritten to `/`;
+/// Unix paths retain their exact bytes so lossy UTF-8 replacement cannot merge
+/// distinct filenames. Portable UTF-8 paths fingerprint exactly as before and
+/// remain identical across operating systems.
+#[cfg(unix)]
+fn normalize_path(path: &Path) -> Cow<'_, [u8]> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    Cow::Borrowed(path.as_os_str().as_bytes())
+}
+
+#[cfg(windows)]
+fn normalize_path(path: &Path) -> Cow<'_, [u8]> {
+    Cow::Owned(path.to_string_lossy().replace('\\', "/").into_bytes())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn normalize_path(path: &Path) -> Cow<'_, [u8]> {
+    match path.to_string_lossy() {
+        Cow::Borrowed(path) => Cow::Borrowed(path.as_bytes()),
+        Cow::Owned(path) => Cow::Owned(path.into_bytes()),
     }
 }
 
@@ -525,6 +535,25 @@ mod tests {
         } else {
             assert_ne!(slash, back, "on unix `a\\b.txt` is a different file");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn distinct_non_utf8_paths_have_distinct_fingerprints() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let first = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![
+            b'a', b'/', 0x80, b'.', b'r', b's',
+        ]));
+        let second = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![
+            b'a', b'/', 0x81, b'.', b'r', b's',
+        ]));
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(
+            violation_fingerprint("r", Some(&first), None, None, "m", None),
+            violation_fingerprint("r", Some(&second), None, None, "m", None),
+            "lossy path rendering must not merge distinct Unix filenames"
+        );
     }
 
     #[test]

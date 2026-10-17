@@ -211,6 +211,7 @@ dependencies = [
  "spdx",
  "tempfile",
  "toml",
+ "unicode-general-category",
 ]
 
 [[package]]

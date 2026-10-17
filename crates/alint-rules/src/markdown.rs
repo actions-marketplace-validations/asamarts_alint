@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use unicode_general_category::{GeneralCategory, get_general_category};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MarkdownImage {
@@ -208,11 +209,32 @@ pub(crate) fn heading_base_anchor(heading: &MarkdownHeading) -> String {
 }
 
 pub(crate) fn slugify_heading(text: &str) -> String {
+    use GeneralCategory::{
+        DecimalNumber, EnclosingMark, LetterNumber, LowercaseLetter, ModifierLetter,
+        NonspacingMark, OtherLetter, OtherNumber, SpacingMark, TitlecaseLetter, UppercaseLetter,
+    };
+
     let mut slug = String::with_capacity(text.len());
     for ch in text.chars().flat_map(char::to_lowercase) {
-        if ch.is_whitespace() {
+        if ch == ' ' {
             slug.push('-');
-        } else if ch == '-' || ch == '_' || !ch.is_ascii_punctuation() {
+        } else if ch == '-'
+            || ch == '_'
+            || matches!(
+                get_general_category(ch),
+                UppercaseLetter
+                    | LowercaseLetter
+                    | TitlecaseLetter
+                    | ModifierLetter
+                    | OtherLetter
+                    | NonspacingMark
+                    | SpacingMark
+                    | EnclosingMark
+                    | DecimalNumber
+                    | LetterNumber
+                    | OtherNumber
+            )
+        {
             slug.push(ch);
         }
     }
@@ -305,7 +327,10 @@ mod tests {
     }
 
     #[test]
-    fn slug_preserves_unicode_and_removes_only_ascii_punctuation() {
-        assert_eq!(slugify_heading("Über — API: v2!"), "über-—-api-v2");
+    fn slug_matches_github_for_unicode_punctuation_symbols_and_marks() {
+        assert_eq!(slugify_heading("Über — API: v2!"), "über--api-v2");
+        assert_eq!(slugify_heading("Ship 🚀 now"), "ship--now");
+        assert_eq!(slugify_heading("Cafe\u{301}"), "cafe\u{301}");
+        assert_eq!(slugify_heading("a\tb\u{a0}c"), "abc");
     }
 }

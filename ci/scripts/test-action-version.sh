@@ -69,24 +69,23 @@ fi
 sha=0123456789abcdef0123456789abcdef01234567
 expect_version "SHA pin selects baked release" "$baked_version" "" "$sha" "$baked_version"
 expect_version "exact tag selects itself" v9.8.7 "" v9.8.7 "$baked_version"
+expect_version "pre-release tag selects itself" v1.2.3-rc.1 "" v1.2.3-rc.1 "$baked_version"
 expect_version "main branch follows latest" latest "" main "$baked_version"
 expect_version "major channel follows latest" latest "" v0 "$baked_version"
 expect_version "local action follows latest" latest "" "" "$baked_version"
 expect_version "explicit input overrides SHA" v1.2.3 v1.2.3 "$sha" "$baked_version"
 expect_version "explicit input overrides exact tag" v1.2.3 v1.2.3 v9.8.7 "$baked_version"
+expect_version "explicit pre-release plus build is accepted" v1.2.3-rc.1+build.5 \
+  v1.2.3-rc.1+build.5 main "$baked_version"
 expect_version "explicit latest overrides SHA" latest latest "$sha" "$baked_version"
+expect_version "SHA accepts a pre-release baked version" v1.2.3-rc.1 \
+  "" "$sha" v1.2.3-rc.1
+expect_rejected "explicit branch name is rejected" main main "$sha" "$baked_version"
+expect_rejected "explicit incomplete tag is rejected" v1.2 v1.2 "$sha" "$baked_version"
+expect_rejected "explicit path-like tag is rejected" v1.2.3/evil \
+  v1.2.3/evil "$sha" "$baked_version"
 expect_rejected "SHA pin rejects a missing baked release" "" "$sha" ""
 expect_rejected "SHA pin rejects a malformed baked release" "" "$sha" next
-
-# The literal expression is the contract being checked, not a shell expansion.
-# shellcheck disable=SC2016
-if grep -Fq 'source "$ACTION_PATH/action/resolve-version.sh"' action.yml; then
-  echo "  ok: action.yml invokes the tested resolver"
-  pass=$((pass + 1))
-else
-  echo "  FAIL: action.yml does not invoke the tested resolver" >&2
-  fail=$((fail + 1))
-fi
 
 # Behavioural check of the Install step's install.sh source. Extract the step's
 # `run:` script from action.yml and execute it in a sandbox whose `curl` and

@@ -50,6 +50,8 @@ content_inspector = "0.2"
 # features: the rule only needs the event stream, source spans, and reference
 # definition table.
 pulldown-cmark = { version = "0.13.4", default-features = false }
+# Unicode category filtering for GitHub-compatible Markdown heading slugs.
+unicode-general-category = "1.1"
 # Offline SPDX License List identifiers and strict expression parser for
 # `spdx_identifier_valid`; no optional detection/regex features and no network.
 spdx = { version = "0.13.6", default-features = false }

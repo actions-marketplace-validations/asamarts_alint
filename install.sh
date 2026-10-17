@@ -103,10 +103,10 @@ verify_signature() {
   echo "==> Signature OK (SHA256SUMS signed by ${REPO}'s release workflow)"
 }
 
-# A release tag: vMAJOR.MINOR.PATCH with an optional pre-release/build suffix.
-# Checked before a resolved tag reaches any URL or path.
+# A release tag: vMAJOR.MINOR.PATCH with optional pre-release and build
+# suffixes. Checked before a resolved or explicit tag reaches any URL or path.
 _is_release_tag() {
-  [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]
+  [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]
 }
 
 # Print the latest release's tag. First via github.com's /releases/latest
@@ -144,6 +144,10 @@ main() {
 
   REPO="${ALINT_REPO:-asamarts/alint}"
   VERSION="${ALINT_VERSION:-latest}"
+  if [[ "${VERSION}" != "latest" ]] && ! _is_release_tag "${VERSION}"; then
+    echo "error: invalid ALINT_VERSION '${VERSION}' (expected 'latest' or a tag like v1.2.3, with optional pre-release/build suffixes)." >&2
+    exit 1
+  fi
   # `set -u` would abort on a bare ${HOME} with an opaque "unbound variable"
   # when neither is set (minimal containers, `env -i`); say what to do instead.
   if [[ -z "${INSTALL_DIR:-}" ]]; then

@@ -1957,7 +1957,8 @@ impl Engine {
     /// the real fix). Fully reconciling both orders needs the Phase-1 re-walk.
     ///
     /// # Errors
-    /// Propagates any hard error from the fix pass (walk / scope resolution).
+    /// Propagates hard errors from the fix pass and from reading the current
+    /// files and metadata required to construct a faithful preview.
     #[allow(clippy::too_many_lines)]
     pub fn stage_fixes(
         &self,
@@ -2001,20 +2002,29 @@ impl Engine {
 
         // Compose-buffer entries are in-place content edits. Keys are resolved
         // absolute write targets; present them repo-relative, paired with the
-        // current on-disk (unwritten) bytes.
-        let canon_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-        let mut staged: Vec<StagedFix> = buffer
-            .into_iter()
-            .map(|(target, new)| StagedFix {
+        // current on-disk (unwritten) bytes. A concurrent removal/read failure
+        // is a hard error: substituting empty bytes would fabricate a deletion
+        // from an empty file rather than preview the real fix.
+        let canon_root = std::fs::canonicalize(root).map_err(|source| Error::Io {
+            path: root.to_path_buf(),
+            source,
+        })?;
+        let mut staged = Vec::with_capacity(buffer.len() + stage_ops.borrow().len());
+        for (target, new) in buffer {
+            let old = std::fs::read(&target).map_err(|source| Error::Io {
+                path: target.clone(),
+                source,
+            })?;
+            staged.push(StagedFix {
                 path: target
                     .strip_prefix(&canon_root)
                     .unwrap_or(&target)
                     .to_path_buf(),
-                old: std::fs::read(&target).unwrap_or_default(),
+                old,
                 new,
                 kind: StagedKind::Modify,
-            })
-            .collect();
+            });
+        }
 
         // Whole-file ops recorded by the stage sink. A fixer only reaches the
         // sink on the path where it would really act (create only when absent,
@@ -2028,7 +2038,11 @@ impl Engine {
                     kind: StagedKind::Create,
                 }),
                 FixEdit::DeleteFile { path } => {
-                    let old = std::fs::read(root.join(&path)).unwrap_or_default();
+                    let target = root.join(&path);
+                    let old = std::fs::read(&target).map_err(|source| Error::Io {
+                        path: target,
+                        source,
+                    })?;
                     staged.push(StagedFix {
                         path,
                         old,
@@ -2037,7 +2051,11 @@ impl Engine {
                     });
                 }
                 FixEdit::RenameFile { from, to } => {
-                    let old = std::fs::read(root.join(&from)).unwrap_or_default();
+                    let source_path = root.join(&from);
+                    let old = std::fs::read(&source_path).map_err(|source| Error::Io {
+                        path: source_path,
+                        source,
+                    })?;
                     staged.push(StagedFix {
                         path: to,
                         new: old.clone(),
@@ -2048,14 +2066,24 @@ impl Engine {
                 // A chmod: content is unchanged, so `old`/`new` are the current
                 // bytes and the diff renders the mode change from the recorded pair.
                 FixEdit::SetMode { path, mode } => {
+                    let target = root.join(&path);
                     #[cfg(unix)]
                     let old_mode = {
-                        use std::os::unix::fs::PermissionsExt;
-                        std::fs::metadata(root.join(&path)).map_or(0, |m| m.permissions().mode())
+                        use std::os::unix::fs::PermissionsExt as _;
+                        std::fs::metadata(&target)
+                            .map_err(|source| Error::Io {
+                                path: target.clone(),
+                                source,
+                            })?
+                            .permissions()
+                            .mode()
                     };
                     #[cfg(not(unix))]
                     let old_mode = 0u32;
-                    let content = std::fs::read(root.join(&path)).unwrap_or_default();
+                    let content = std::fs::read(&target).map_err(|source| Error::Io {
+                        path: target,
+                        source,
+                    })?;
                     staged.push(StagedFix {
                         path,
                         new: content.clone(),

@@ -193,5 +193,30 @@ latest_case "malformed redirect tag rejected" v9.8.4 1 \
 latest_case "both fail" FAIL 1
 latest_case "both malformed" FAIL 1 REDIRECT_URL="$gh/tag/..%2F" API_JSON='{"tag_name":"../../etc"}'
 
+explicit_case() { # explicit_case <label> <version> <VALID|INVALID>
+  local label=$1 version=$2 want=$3 ok=1
+  : > "$sandbox/log"
+  env -i PATH="$sandbox/latestbin:/usr/bin:/bin" HOME="$sandbox" STUB_LOG="$sandbox/log" \
+    INSTALL_DIR="$sandbox/install" ALINT_VERSION="$version" \
+    bash install.sh > "$sandbox/out" 2>&1 || true
+  if [[ "$want" == VALID ]]; then
+    grep -q "releases/download/$version/" "$sandbox/log" || ok=0
+    grep -q 'releases/latest' "$sandbox/log" && ok=0
+  else
+    grep -q "error: invalid ALINT_VERSION '$version'" "$sandbox/out" || ok=0
+    [[ ! -s "$sandbox/log" ]] || ok=0
+  fi
+  if [[ "$ok" != 1 ]]; then
+    echo "[test-install-sh] explicit version, $label: expected $want:" >&2
+    sed 's/^/    | /' "$sandbox/out" "$sandbox/log" >&2
+    fail=1
+  fi
+}
+explicit_case "stable tag" v9.8.7 VALID
+explicit_case "pre-release plus build tag" v1.2.3-rc.1+build.5 VALID
+explicit_case "branch name" main INVALID
+explicit_case "path-like tag" v1.2.3/../../asset INVALID
+explicit_case "incomplete tag" v1.2 INVALID
+
 [[ "$fail" -eq 0 ]] && echo "[test-install-sh] OK - every truncated prefix of install.sh executes nothing"
 exit "$fail"
