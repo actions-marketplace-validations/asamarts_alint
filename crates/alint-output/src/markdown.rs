@@ -28,7 +28,8 @@ pub fn write_markdown(report: &Report, w: &mut dyn Write) -> std::io::Result<()>
 
     let total = report.total_violations();
     let note_count = report.total_notes();
-    if total == 0 {
+    let failure_count = report.total_analysis_failures();
+    if total == 0 && failure_count == 0 {
         writeln!(w, "No violations found.")?;
         write_note_summary(w, note_count)?;
         return Ok(());
@@ -65,6 +66,37 @@ pub fn write_markdown(report: &Report, w: &mut dyn Write) -> std::io::Result<()>
         writeln!(w)?;
     }
 
+    if failure_count > 0 {
+        writeln!(w, "## Analysis failures ({failure_count})")?;
+        writeln!(w)?;
+        for result in &report.results {
+            for failure in &result.analysis_failures {
+                let location = failure.path.as_ref().map_or_else(
+                    || "repository".to_string(),
+                    |path| match (failure.line, failure.column) {
+                        (Some(line), Some(column)) => format!(
+                            "`{}` (line {line}, col {column})",
+                            md_inline_code(&path.display().to_string())
+                        ),
+                        (Some(line), None) => format!(
+                            "`{}` (line {line})",
+                            md_inline_code(&path.display().to_string())
+                        ),
+                        _ => format!("`{}`", md_inline_code(&path.display().to_string())),
+                    },
+                );
+                writeln!(
+                    w,
+                    "- **error** `{}` at {location} - analysis failure (`{}`): {}",
+                    md_inline_code(&result.rule_id),
+                    failure.kind.as_str(),
+                    md_escape(&failure.message),
+                )?;
+            }
+        }
+        writeln!(w)?;
+    }
+
     Ok(())
 }
 
@@ -76,7 +108,7 @@ pub fn write_fix_markdown(report: &FixReport, w: &mut dyn Write) -> std::io::Res
     let skipped = report.skipped();
     let unfixable = report.unfixable();
     let suggested = report.suggested();
-
+    let analysis_failures = report.total_analysis_failures();
     // NB: a fix report is about *fixes*, not violations, so it must NOT reuse
     // check's "No violations found." for an empty report - under `--fix-only`
     // the residual (skipped/unfixable) items are filtered out, so an empty
@@ -91,17 +123,23 @@ pub fn write_fix_markdown(report: &FixReport, w: &mut dyn Write) -> std::io::Res
     } else {
         String::new()
     };
+    let failure_part = if analysis_failures > 0 {
+        format!(", **{analysis_failures} analysis failures**")
+    } else {
+        String::new()
+    };
     writeln!(
         w,
-        "**{applied} applied**, **{skipped} skipped**, **{unfixable} unfixable**{suggested_part}.",
+        "**{applied} applied**, **{skipped} skipped**, **{unfixable} unfixable**{suggested_part}{failure_part}.",
     )?;
     writeln!(w)?;
 
     for r in &report.results {
-        if r.items.is_empty() {
+        if r.items.is_empty() && r.analysis_failures.is_empty() {
             continue;
         }
-        writeln!(w, "## `{}` ({})", md_inline_code(&r.rule_id), r.items.len())?;
+        let count = r.items.len() + r.analysis_failures.len();
+        writeln!(w, "## `{}` ({count})", md_inline_code(&r.rule_id))?;
         writeln!(w)?;
         for item in &r.items {
             // The applied summary already names its file, so show the path
@@ -131,6 +169,19 @@ pub fn write_fix_markdown(report: &FixReport, w: &mut dyn Write) -> std::io::Res
                 md_escape(&item.violation.message)
             )?;
         }
+        for failure in &r.analysis_failures {
+            let path_part = failure
+                .path
+                .as_ref()
+                .map(|p| format!("`{}` - ", md_inline_code(&p.display().to_string())))
+                .unwrap_or_default();
+            writeln!(
+                w,
+                "- {path_part}**analysis failure** (`{}`): {}",
+                failure.kind.as_str(),
+                md_escape(&failure.message)
+            )?;
+        }
         writeln!(w)?;
     }
 
@@ -150,9 +201,9 @@ fn write_note_summary(w: &mut dyn Write, count: usize) -> std::io::Result<()> {
 
 fn write_summary_line(w: &mut dyn Write, report: &Report) -> std::io::Result<()> {
     let total = report.total_violations();
+    let failure_count = report.total_analysis_failures();
     let (errors, warnings, infos) = level_counts(report);
     let bucket_count = file_bucket_count(report);
-
     let file_phrase = if bucket_count == 1 {
         "1 file".to_string()
     } else {
@@ -170,20 +221,27 @@ fn write_summary_line(w: &mut dyn Write, report: &Report) -> std::io::Result<()>
         breakdown.push(format!("{infos} info"));
     }
 
-    if breakdown.is_empty() {
-        writeln!(
-            w,
-            "**{total} violation{} across {file_phrase}.**",
-            plural_s(total)
-        )?;
-    } else {
-        writeln!(
-            w,
-            "**{total} violation{} across {file_phrase}** ({}).",
-            plural_s(total),
-            breakdown.join(", "),
-        )?;
+    if failure_count > 0 {
+        breakdown.push(format!(
+            "{failure_count} analysis failure{}",
+            plural_s(failure_count)
+        ));
     }
+
+    let failure_phrase = if failure_count == 0 {
+        String::new()
+    } else {
+        format!(
+            " and {failure_count} analysis failure{}",
+            plural_s(failure_count)
+        )
+    };
+    writeln!(
+        w,
+        "**{total} violation{}{failure_phrase} across {file_phrase}** ({}).",
+        plural_s(total),
+        breakdown.join(", "),
+    )?;
     Ok(())
 }
 
@@ -249,6 +307,9 @@ fn file_bucket_count(report: &Report) -> usize {
         }
         for v in &r.violations {
             paths.insert(v.path.as_deref());
+        }
+        for failure in &r.analysis_failures {
+            paths.insert(failure.path.as_deref());
         }
     }
     paths.len()
@@ -372,7 +433,10 @@ fn md_url(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{FixItem, FixReport, FixRuleResult, FixStatus, Report, RuleResult, Violation};
+    use alint_core::{
+        FindingDisposition, FixItem, FixReport, FixRuleResult, FixStatus, Report, RuleResult,
+        Violation,
+    };
     use std::path::{Path, PathBuf};
 
     fn render(report: &Report) -> String {
@@ -395,6 +459,7 @@ mod tests {
             violations,
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         }
     }
 
@@ -446,8 +511,12 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -472,8 +541,12 @@ mod tests {
                         message: "z".into(),
                         line: None,
                         column: None,
-                        note_kind: None,
+                        range: None,
+                        related_locations: Vec::new(),
+                        related_locations_omitted: 0,
+                        disposition: FindingDisposition::default(),
                         baseline_key: None,
+                        sensitive: false,
                         is_fixable: false,
                         not_fixable: false,
                         proposed_edits: Vec::new(),
@@ -487,8 +560,12 @@ mod tests {
                         message: "a".into(),
                         line: None,
                         column: None,
-                        note_kind: None,
+                        range: None,
+                        related_locations: Vec::new(),
+                        related_locations_omitted: 0,
+                        disposition: FindingDisposition::default(),
                         baseline_key: None,
+                        sensitive: false,
                         is_fixable: false,
                         not_fixable: false,
                         proposed_edits: Vec::new(),
@@ -572,6 +649,7 @@ mod tests {
                 violations: vec![Violation::new("x").with_path(PathBuf::from("a.rs"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -618,8 +696,12 @@ mod tests {
                     message: "x".into(),
                     line: Some(7),
                     column: None,
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -634,23 +716,31 @@ mod tests {
     #[test]
     fn output_is_deterministic_across_input_order() {
         let v1 = Violation {
+            range: None,
+            related_locations: Vec::new(),
+            related_locations_omitted: 0,
             path: Some(Path::new("a.rs").into()),
             message: "a".into(),
             line: Some(1),
             column: Some(1),
-            note_kind: None,
+            disposition: FindingDisposition::default(),
             baseline_key: None,
+            sensitive: false,
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
         };
         let v2 = Violation {
+            range: None,
+            related_locations: Vec::new(),
+            related_locations_omitted: 0,
             path: Some(Path::new("a.rs").into()),
             message: "b".into(),
             line: Some(2),
             column: Some(1),
-            note_kind: None,
+            disposition: FindingDisposition::default(),
             baseline_key: None,
+            sensitive: false,
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
@@ -697,8 +787,12 @@ mod tests {
                         message: "value mismatch".into(),
                         line: None,
                         column: None,
-                        note_kind: None,
+                        range: None,
+                        related_locations: Vec::new(),
+                        related_locations_omitted: 0,
+                        disposition: FindingDisposition::default(),
                         baseline_key: None,
+                        sensitive: false,
                         is_fixable: false,
                         not_fixable: false,
                         proposed_edits: Vec::new(),
@@ -711,6 +805,7 @@ mod tests {
                         }),
                     },
                 }],
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render_fix(&report);
@@ -740,8 +835,12 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: Some(1),
                             column: None,
-                            note_kind: None,
+                            range: None,
+                            related_locations: Vec::new(),
+                            related_locations_omitted: 0,
+                            disposition: FindingDisposition::default(),
                             baseline_key: None,
+                            sensitive: false,
                             is_fixable: false,
                             not_fixable: false,
                             proposed_edits: Vec::new(),
@@ -754,8 +853,12 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: None,
                             column: None,
-                            note_kind: None,
+                            range: None,
+                            related_locations: Vec::new(),
+                            related_locations_omitted: 0,
+                            disposition: FindingDisposition::default(),
                             baseline_key: None,
+                            sensitive: false,
                             is_fixable: false,
                             not_fixable: false,
                             proposed_edits: Vec::new(),
@@ -763,6 +866,7 @@ mod tests {
                         status: FixStatus::Unfixable,
                     },
                 ],
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render_fix(&report);

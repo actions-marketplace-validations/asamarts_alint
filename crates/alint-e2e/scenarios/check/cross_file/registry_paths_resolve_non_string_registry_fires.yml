@@ -1,0 +1,25 @@
+name: registry_paths_resolve reports non-string registry entries
+
+tags: [check, registry_paths_resolve, cross_file, structured, failing]
+
+# Registry entries must be path strings. Typed values remain visible as one
+# value-free policy finding instead of producing an empty apparent registry.
+given:
+  tree:
+    registry.json: |
+      {"members": [42, false]}
+  config: |
+    version: 1
+    rules:
+      - id: members-resolve
+        kind: registry_paths_resolve
+        source: registry.json
+        extract: { json: "$.members[*]" }
+        expect: any
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: members-resolve, level: error, path: registry.json}

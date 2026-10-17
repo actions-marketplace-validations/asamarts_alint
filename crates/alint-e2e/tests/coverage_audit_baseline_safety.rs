@@ -122,15 +122,6 @@ fn findings_of(
             .get(r.rule_id.as_ref())
             .map_or_else(|| r.rule_id.to_string(), Clone::clone);
         for v in &r.violations {
-            // W7 exposes the deterministic-time lookup failure through the engine's existing
-            // temporary `rule error` channel. It is an analysis failure, not a suppressible rule
-            // finding, so the finding-fingerprint audit does not classify it. W2 will make that
-            // distinction structural and remove this narrow projection exception.
-            if v.message
-                .starts_with("rule error: analysis time unavailable:")
-            {
-                continue;
-            }
             let bytes = v.path.as_ref().and_then(|p| {
                 cache
                     .entry(p.to_path_buf())

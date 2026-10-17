@@ -4,8 +4,8 @@
 //! given `command:` argv with path-template substitution, capture
 //! exit code and stdout/stderr. Exit `0` is a pass; non-zero is
 //! one violation whose message is the (truncated) stdout+stderr.
-//! Spawn / wait failures and timeouts produce a violation with a
-//! clear cause line.
+//! Spawn / wait failures and timeouts produce an `evaluation` analysis
+//! failure because no policy verdict was obtained.
 //!
 //! ```yaml
 //! - id: workflows-clean
@@ -51,8 +51,8 @@ use std::time::Duration;
 use alint_core::process::{RunOutcome, run_bounded};
 use alint_core::template::{PathTokens, render_path_argv};
 use alint_core::{
-    Applicability, Context, Error, FactValue, FixSpec, Fixer, Level, Result, Rule, RuleSpec, Scope,
-    Violation,
+    AnalysisFailureKind, Applicability, Context, Error, FactValue, FixSpec, Fixer, Level, Result,
+    Rule, RuleSpec, Scope, Violation,
 };
 use serde::Deserialize;
 
@@ -76,7 +76,7 @@ struct Options {
     #[schemars(length(min = 1))]
     command: Vec<String>,
     /// Per-file timeout in seconds. Default 30. Past this, the child is killed
-    /// and a violation reports the timeout.
+    /// and a non-baselinable `evaluation` analysis failure reports the timeout.
     #[serde(default)]
     #[schemars(range(min = 1))]
     timeout: Option<u64>,
@@ -122,7 +122,7 @@ impl Rule for CommandRule {
                 .iter()
                 .map(|s| render_path_argv(s, &tokens))
                 .collect();
-            if let Outcome::Fail(msg) = run_one(
+            match run_one(
                 &rendered,
                 ctx.root,
                 &entry.path,
@@ -131,20 +131,30 @@ impl Rule for CommandRule {
                 ctx,
                 self.timeout,
             ) {
-                let final_msg = self.message.clone().unwrap_or(msg);
-                violations.push(Violation::new(final_msg).with_path(entry.path.clone()));
+                Outcome::Pass => {}
+                Outcome::PolicyFailure(message) => {
+                    let message = self.message.clone().unwrap_or(message);
+                    violations.push(Violation::new(message).with_path(entry.path.clone()));
+                }
+                Outcome::AnalysisFailure(message) => {
+                    violations.push(
+                        Violation::new(message)
+                            .with_path(entry.path.clone())
+                            .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                    );
+                }
             }
         }
         Ok(violations)
     }
 }
 
-/// Outcome of one per-file invocation. `Pass` produces no
-/// violation; `Fail(message)` becomes a single violation
-/// anchored on the file path.
+/// Outcome of one per-file invocation. A nonzero process status is the
+/// configured policy verdict; spawn/wait/timeout errors mean no verdict.
 enum Outcome {
     Pass,
-    Fail(String),
+    PolicyFailure(String),
+    AnalysisFailure(String),
 }
 
 #[allow(clippy::too_many_arguments)] // Fewer args = more state-keeping; this is the natural shape.
@@ -158,7 +168,7 @@ fn run_one(
     timeout: Duration,
 ) -> Outcome {
     let Some((program, rest)) = argv.split_first() else {
-        return Outcome::Fail("command rule's argv is empty".to_string());
+        return Outcome::AnalysisFailure("command rule's argv is empty".to_string());
     };
 
     let mut cmd = StdCommand::new(program);
@@ -189,19 +199,24 @@ fn run_one(
     // `alint_core::process`). Output past the cap is read and discarded.
     match run_bounded(cmd, timeout, OUTPUT_CAP_BYTES, true) {
         RunOutcome::Exited { status, .. } if status.success() => Outcome::Pass,
+        RunOutcome::Exited { status, .. } if status.code().is_none() => {
+            Outcome::AnalysisFailure(format!(
+                "`{program}` terminated without an exit status before producing a policy verdict"
+            ))
+        }
         RunOutcome::Exited {
             status,
             stdout,
             stderr,
-        } => Outcome::Fail(format_failure(program, status.code(), &stdout, &stderr)),
-        RunOutcome::SpawnError(e) => Outcome::Fail(format!(
+        } => Outcome::PolicyFailure(format_failure(program, status.code(), &stdout, &stderr)),
+        RunOutcome::SpawnError(e) => Outcome::AnalysisFailure(format!(
             "could not spawn `{}`: {} \
              (is it on PATH? working dir: {})",
             program,
             e,
             root.display()
         )),
-        RunOutcome::TimedOut => Outcome::Fail(format!(
+        RunOutcome::TimedOut => Outcome::AnalysisFailure(format!(
             "`{}` did not exit within {}s (raise `timeout:` on the rule to extend)",
             program,
             timeout.as_secs()
@@ -422,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_emits_violation() {
+    fn timeout_emits_analysis_failure() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
         let index = idx(&["a.txt"]);
@@ -431,12 +446,34 @@ mod tests {
             "*.txt",
             Duration::from_millis(150),
         );
-        let v = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
-        assert_eq!(v.len(), 1);
-        assert!(
-            v[0].message.contains("did not exit"),
-            "msg: {}",
-            v[0].message
+        let raw = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert_eq!(
+            result.analysis_failures[0].kind,
+            AnalysisFailureKind::Evaluation,
+        );
+        assert!(result.analysis_failures[0].message.contains("did not exit"));
+    }
+
+    #[test]
+    fn signal_termination_emits_analysis_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let index = idx(&["a.txt"]);
+        let r = rule(
+            vec!["/bin/sh", "-c", "kill -TERM $$"],
+            "*.txt",
+            Duration::from_secs(5),
+        );
+        let raw = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert_eq!(
+            result.analysis_failures[0].kind,
+            AnalysisFailureKind::Evaluation,
         );
     }
 
@@ -507,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_program_produces_spawn_error_violation() {
+    fn unknown_program_produces_spawn_analysis_failure() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
         let index = idx(&["a.txt"]);
@@ -516,9 +553,15 @@ mod tests {
             "*.txt",
             Duration::from_secs(2),
         );
-        let v = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
-        assert_eq!(v.len(), 1);
-        assert!(v[0].message.contains("could not spawn"));
+        let raw = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        let result = alint_core::RuleResult::new("t".into(), Level::Info, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert!(
+            result.analysis_failures[0]
+                .message
+                .contains("could not spawn")
+        );
     }
 
     #[test]

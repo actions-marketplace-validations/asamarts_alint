@@ -1,9 +1,7 @@
-name: pair_changed_together no-ops outside a git repo
-tags: [check, pair_changed_together, git, passing]
+name: pair_changed_together fails closed outside a Git repository
+tags: [check, pair_changed_together, git]
 
-# Diff-scoped rule: with no git repo there is no changeset to assert
-# on, so it silently no-ops (the firing path needs a real two-commit
-# co-change repo and is covered natively in shell_out_rules.rs).
+# The unconditional diff capability must be available before dispatch.
 
 given:
   tree:
@@ -22,3 +20,5 @@ when: [check]
 
 expect:
   - violations: []
+    analysis_failures:
+      - {rule: format-version-bumped, kind: resource_read}

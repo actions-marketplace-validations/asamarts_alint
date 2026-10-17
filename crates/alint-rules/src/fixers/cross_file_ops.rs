@@ -18,7 +18,6 @@ use alint_core::{
     Applicability, Error, Extract, FixContext, FixEdit, FixOutcome, Fixer, Format, ReadForFix,
     Result, Violation, extract_values, is_non_literal, read_for_fix,
 };
-use serde_json_path::JsonPath;
 
 use crate::cross_file::{Normalize, apply_normalize};
 use crate::fixers::StructuredFixer;
@@ -265,7 +264,10 @@ impl CrossFileValueFixer {
         let text = String::from_utf8_lossy(&source_bytes);
         let values = extract_values(&self.source_extract, &text)
             .map_err(|e| format!("source extract failed: {e}"))?;
-        let mut literals = values.into_iter().filter(|v| !is_non_literal(v));
+        if !values.non_strings.is_empty() {
+            return Err("source extract matched a non-string value".to_string());
+        }
+        let mut literals = values.strings.into_iter().filter(|v| !is_non_literal(v));
         match (literals.next(), literals.next()) {
             (Some(one), None) => Ok(one),
             _ => Err("source did not resolve to exactly one literal value".to_string()),
@@ -293,14 +295,9 @@ impl CrossFileValueFixer {
         root: &Path,
     ) -> std::result::Result<Vec<u8>, String> {
         match extract {
-            Extract::Structured(format, query) => self.propagate_structured(
-                violation,
-                *format,
-                query,
-                source_value,
-                target_bytes,
-                root,
-            ),
+            Extract::Structured(extract) => {
+                self.propagate_structured(violation, extract, source_value, target_bytes, root)
+            }
             Extract::Regex(pattern) => {
                 self.propagate_regex(violation, pattern, source_value, target_bytes)
             }
@@ -387,6 +384,7 @@ impl CrossFileValueFixer {
             .map(|(i, collected)| LocatedEdit {
                 rule_index: 0,
                 violation_index: i,
+                sensitive: false,
                 collected,
             })
             .collect();
@@ -410,7 +408,11 @@ impl CrossFileValueFixer {
             &String::from_utf8_lossy(&new_bytes),
         )
         .map_err(|e| format!("regex re-extract failed: {e}"))?;
-        let literal_new: Vec<&String> = re_new.iter().filter(|v| !is_non_literal(v)).collect();
+        let literal_new: Vec<&String> = re_new
+            .strings
+            .iter()
+            .filter(|v| !is_non_literal(v))
+            .collect();
         if literal_new.is_empty()
             || !literal_new
                 .iter()
@@ -430,15 +432,15 @@ impl CrossFileValueFixer {
     fn propagate_structured(
         &self,
         violation: &Violation,
-        format: Format,
-        query: &str,
+        extract: &alint_core::StructuredExtract,
         source_value: &str,
         target_bytes: &[u8],
         root: &Path,
     ) -> std::result::Result<Vec<u8>, String> {
         let target_rel = violation.path.as_deref().unwrap_or_else(|| Path::new(""));
-        let path_expr =
-            JsonPath::parse(query).map_err(|_| format!("invalid target query `{query}`"))?;
+        let format = extract.format;
+        let query = extract.query.as_str();
+        let path_expr = &extract.path;
         let target_text = String::from_utf8_lossy(target_bytes);
         // TYPE-PRESERVATION GUARD (audit F1): the propagated value is always a
         // STRING (cross-file extraction yields text), so setting a NUMBER / BOOL
@@ -488,7 +490,7 @@ impl CrossFileValueFixer {
         }
         let delegate = StructuredFixer::set(
             format,
-            path_expr,
+            path_expr.clone(),
             query.to_string(),
             serde_json::Value::String(source_value.to_string()),
             self.applicability,
@@ -505,11 +507,12 @@ impl CrossFileValueFixer {
             // locate/serialize failure (no single scalar node, or the value is not
             // representable in this format). Re-extract the target to tell them apart
             // so the skip reason is honest (and idempotence reads clearly).
-            let already = extract_values(
-                &Extract::Structured(format, query.to_string()),
-                &target_text,
-            )
-            .is_ok_and(|vals| vals.iter().any(|v| v == source_value));
+            let already = format.parse(&target_text).is_ok_and(|value| {
+                path_expr
+                    .query(&value)
+                    .iter()
+                    .any(|value| value.as_str() == Some(source_value))
+            });
             return Err(if already {
                 format!(
                     "{} already equals {source_value:?} at `{query}`",
@@ -529,6 +532,7 @@ impl CrossFileValueFixer {
             .map(|(i, collected)| LocatedEdit {
                 rule_index: 0,
                 violation_index: i,
+                sensitive: false,
                 collected,
             })
             .collect();
@@ -634,7 +638,10 @@ impl Fixer for CrossFileValueFixer {
             .ok()
             .map(|b| String::from_utf8_lossy(&b).into_owned())?;
         let values = extract_values(&self.source_extract, &source_text).ok()?;
-        let mut literals = values.into_iter().filter(|v| !is_non_literal(v));
+        if !values.non_strings.is_empty() {
+            return None;
+        }
+        let mut literals = values.strings.into_iter().filter(|v| !is_non_literal(v));
         let (Some(source_value), None) = (literals.next(), literals.next()) else {
             return None;
         };
@@ -782,15 +789,17 @@ impl CreateAndRegisterFixer {
         extract: &Extract,
         target_bytes: &[u8],
     ) -> Option<(Format, Vec<alint_core::structured_fix::PathSeg>)> {
-        let Extract::Structured(fmt, array_query) = extract else {
+        let Extract::Structured(extract) = extract else {
             return None;
         };
         let text = String::from_utf8_lossy(target_bytes);
-        let value = fmt.parse(&text).ok()?;
-        let path = JsonPath::parse(array_query).ok()?;
-        let located = path.query_located(&value);
+        let value = extract.format.parse(&text).ok()?;
+        let located = extract.path.query_located(&value);
         let node = located.iter().next()?;
-        Some((*fmt, crate::fixers::structured::to_segs(node.location())))
+        Some((
+            extract.format,
+            crate::fixers::structured::to_segs(node.location()),
+        ))
     }
 
     /// The single missing member the `check_registered` finding recorded in its
@@ -857,19 +866,25 @@ impl CreateAndRegisterFixer {
         bytes: &[u8],
         members: &[String],
     ) -> std::result::Result<(), String> {
-        let Extract::Structured(fmt, array_query) = extract else {
+        let Extract::Structured(extract) = extract else {
             return Ok(());
         };
-        let element_query = format!("{array_query}[*]");
-        let elements = extract_values(
-            &Extract::Structured(*fmt, element_query),
-            &String::from_utf8_lossy(bytes),
-        )
-        .map_err(|e| format!("re-verify: the appended document did not parse: {e}"))?;
-        for m in members {
-            if !elements.iter().any(|e| e == m) {
+        let text = String::from_utf8_lossy(bytes);
+        let value = extract
+            .format
+            .parse(&text)
+            .map_err(|e| format!("re-verify: the appended document did not parse: {e}"))?;
+        let arrays = extract.path.query(&value);
+        let Some(array) = arrays.iter().next().and_then(|value| value.as_array()) else {
+            return Err("re-verify: the target list is not an array".to_string());
+        };
+        for member in members {
+            if !array
+                .iter()
+                .any(|value| value.as_str() == Some(member.as_str()))
+            {
                 return Err(format!(
-                    "re-verify: member {m:?} is not present after the append"
+                    "re-verify: member {member:?} is not present after the append"
                 ));
             }
         }
@@ -902,8 +917,8 @@ impl Fixer for CreateAndRegisterFixer {
             .as_deref()
             .and_then(|p| self.target_extract(p))
             .is_some_and(|ex| {
-                matches!(ex, Extract::Structured(fmt, _)
-                    if alint_core::structured_fix::supports_list_append(*fmt))
+                matches!(ex, Extract::Structured(extract)
+                    if alint_core::structured_fix::supports_list_append(extract.format))
             })
     }
 
@@ -993,7 +1008,7 @@ impl Fixer for CreateAndRegisterFixer {
 /// `JSONPath` query or the regex pattern.
 fn locator(extract: &Extract) -> &str {
     match extract {
-        Extract::Structured(_, query) => query,
+        Extract::Structured(extract) => &extract.query,
         Extract::Regex(pattern) => pattern,
         _ => "",
     }
@@ -1337,8 +1352,8 @@ mod tests {
     ) -> CrossFileValueFixer {
         CrossFileValueFixer::new(
             PathBuf::from(source),
-            Extract::Structured(fmt, source_q.to_string()),
-            ValueTargets::Glob(Extract::Structured(fmt, target_q.to_string())),
+            Extract::structured(fmt, source_q.to_string()).unwrap(),
+            ValueTargets::Glob(Extract::structured(fmt, target_q.to_string()).unwrap()),
             Vec::new(),
             Applicability::Unsafe,
         )
@@ -1426,6 +1441,27 @@ mod tests {
     }
 
     #[test]
+    fn value_fixer_declines_a_non_string_source_without_writing() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            &tmp,
+            "source.json",
+            br#"{"version":42,"secret":"do-not-report"}"#,
+        );
+        write(&tmp, "target.json", br#"{"version":"old"}"#);
+
+        let out = value_fixer("source.json", "$.version", Format::Json, "$.version")
+            .apply(&viol("target.json"), &ctx(&tmp, false))
+            .unwrap();
+
+        assert!(
+            matches!(&out, FixOutcome::Skipped(reason) if reason == "source extract matched a non-string value"),
+            "a non-string source must be declined, got {out:?}"
+        );
+        assert_eq!(read(&tmp, "target.json"), br#"{"version":"old"}"#);
+    }
+
+    #[test]
     fn value_dry_run_reports_without_writing() {
         let tmp = TempDir::new().unwrap();
         write(
@@ -1472,10 +1508,10 @@ mod tests {
         );
         let out = CrossFileValueFixer::new(
             PathBuf::from("Cargo.toml"),
-            Extract::Structured(Format::Toml, "$.workspace.package.version".to_string()),
+            Extract::structured(Format::Toml, "$.workspace.package.version".to_string()).unwrap(),
             ValueTargets::List(vec![(
                 victim.clone(),
-                Extract::Structured(Format::Toml, "$.package.version".to_string()),
+                Extract::structured(Format::Toml, "$.package.version").unwrap(),
             )]),
             Vec::new(),
             Applicability::Unsafe,
@@ -1824,7 +1860,7 @@ mod tests {
 
     fn register_fixer(content: Option<&str>) -> CreateAndRegisterFixer {
         CreateAndRegisterFixer::new(
-            ValueTargets::Glob(Extract::Structured(Format::Toml, "$.a".into())),
+            ValueTargets::Glob(Extract::structured(Format::Toml, "$.a").unwrap()),
             content.map(|c| alint_core::ContentSourceSpec::Inline(c.to_string())),
             Applicability::Unsafe,
         )

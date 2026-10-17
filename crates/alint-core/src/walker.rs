@@ -30,22 +30,19 @@ type EscapingSink = Arc<Mutex<Vec<Arc<Path>>>>;
 /// `docs/design/format-coverage.md`, "Resource-pressure hardening").
 pub const MAX_ANALYZE_BYTES: u64 = 256 * 1024 * 1024;
 
-/// Read a walked file's bytes, first fast-rejecting (loudly) any file whose
-/// walk-time [`FileEntry::size`] exceeds [`MAX_ANALYZE_BYTES`] (no extra `stat`),
-/// then bounding the actual read to the cap (`read_bounded`, TOCTOU-safe). The
+/// Read a walked file's bytes, first fast-rejecting any file whose walk-time
+/// [`FileEntry::size`] exceeds [`MAX_ANALYZE_BYTES`] (no extra `stat`), then
+/// bounding the actual read to the cap (`read_bounded`, TOCTOU-safe). The
 /// per-file loops read the whole file into memory, so an uncapped read of a
-/// committed multi-GB blob would OOM the process; a bounded skip keeps the run
-/// alive and observable (M3). A genuine read error (permission, I/O) is logged
-/// at `warn` so it's observable with `-v` / `RUST_LOG` rather than silent (L7);
-/// a `NotFound` is a silent skip (the benign deleted-between-walk-and-read race).
+/// committed multi-GB blob would OOM the process.
 ///
-/// A genuine read error is folded into `None` here; the per-file content
-/// dispatch (engine + [`crate::eval_per_file`]) uses [`read_for_analysis`]
-/// instead so it can fail CLOSED on it.
+/// This convenience API intentionally folds every failure into `None`; callers
+/// that determine a policy verdict MUST use [`read_for_analysis`] and surface
+/// its structural failure class instead.
 pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
     match read_for_analysis(path, size) {
         AnalysisRead::Bytes(b) => Some(b),
-        AnalysisRead::Skip => None,
+        AnalysisRead::Missing | AnalysisRead::TooLarge(_) => None,
         AnalysisRead::Unreadable(e) => {
             tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
             None
@@ -53,35 +50,33 @@ pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
     }
 }
 
-/// Outcome of [`read_for_analysis`]. A genuine read error is only logged at
-/// `debug` there: the per-file dispatch surfaces it as a finding instead.
+/// Outcome of [`read_for_analysis`]. Every non-byte variant prevents a policy
+/// verdict and must become a `resource_read` analysis failure in evaluation
+/// paths.
 #[derive(Debug)]
 pub enum AnalysisRead {
     /// The file's bytes (within [`MAX_ANALYZE_BYTES`]).
     Bytes(Vec<u8>),
-    /// A deliberate, benign skip: the file vanished between the walk and the
-    /// read (`NotFound`), or it exceeds the analysis cap (logged at `warn`).
-    Skip,
-    /// A genuine read error (permission denied, I/O). The caller must surface
-    /// it: a content rule that silently passes a file it could not read is a
-    /// fail-open false negative (audit 2026-10 finding 7) -- a mode-000 file
-    /// with trailing whitespace read "All rules passed". See
-    /// [`crate::unreadable_file_violation`].
+    /// The file vanished between repository discovery and the read.
+    Missing,
+    /// The file exceeds the bounded whole-file analysis cap. Carries the size
+    /// observed at the fast stat or `cap + 1` for a concurrent-growth read.
+    TooLarge(u64),
+    /// A genuine read error (permission denied, I/O).
     Unreadable(std::io::Error),
 }
 
-/// [`read_capped_or_skip`], but distinguishing a genuine read error
-/// ([`AnalysisRead::Unreadable`]) from a benign skip, so per-file content
-/// dispatch can report the former instead of passing the file.
+/// [`read_capped_or_skip`], but preserving the reason analysis could not read
+/// the discovered file so policy-evaluation callers can fail loudly.
 pub fn read_for_analysis(path: &Path, size: u64) -> AnalysisRead {
     if size > MAX_ANALYZE_BYTES {
         tracing::warn!(
             path = %path.display(),
             size,
             cap = MAX_ANALYZE_BYTES,
-            "skipping file larger than the analysis cap"
+            "file exceeds the analysis cap"
         );
-        return AnalysisRead::Skip;
+        return AnalysisRead::TooLarge(size);
     }
     // M3-F2 (TOCTOU): the walk-time `size` above is a fast reject only — it can
     // be stale, so a file that GREW past the cap between the walk and here would
@@ -95,8 +90,7 @@ pub fn read_for_analysis(path: &Path, size: u64) -> AnalysisRead {
 
 /// Read a whole file bounded to `cap` bytes — TOCTOU-safe: the read itself
 /// stops at `cap + 1` bytes, so the file's size *at read time* (not a possibly
-/// stale earlier stat / walk-time size) decides. A file that measures `> cap`
-/// is skipped (loud `warn`); a missing file is `None`.
+/// stale earlier stat / walk-time size) decides.
 ///
 /// `size_hint` (the walk-time [`FileEntry::size`], already stat-ed by the walk
 /// so free here) preallocates the buffer. It is strictly ADVISORY — capacity
@@ -115,7 +109,7 @@ pub fn read_for_analysis(path: &Path, size: u64) -> AnalysisRead {
 pub(crate) fn read_bounded(path: &Path, cap: u64, size_hint: u64) -> Option<Vec<u8>> {
     match read_bounded_classified(path, cap, size_hint) {
         AnalysisRead::Bytes(b) => Some(b),
-        AnalysisRead::Skip | AnalysisRead::Unreadable(_) => None,
+        AnalysisRead::Missing | AnalysisRead::TooLarge(_) | AnalysisRead::Unreadable(_) => None,
     }
 }
 
@@ -125,7 +119,7 @@ fn read_bounded_classified(path: &Path, cap: u64, size_hint: u64) -> AnalysisRea
     use std::io::Read as _;
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AnalysisRead::Skip,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AnalysisRead::Missing,
         Err(e) => {
             tracing::debug!(path = %path.display(), error = %e, "unreadable file");
             return AnalysisRead::Unreadable(e);
@@ -138,9 +132,9 @@ fn read_bounded_classified(path: &Path, cap: u64, size_hint: u64) -> AnalysisRea
             tracing::warn!(
                 path = %path.display(),
                 cap,
-                "skipping file larger than the analysis cap (grew past its walk-time size)"
+                "file grew past the analysis cap"
             );
-            AnalysisRead::Skip
+            AnalysisRead::TooLarge(cap.saturating_add(1))
         }
         Ok(_) => AnalysisRead::Bytes(buf),
         Err(e) => {
@@ -233,19 +227,19 @@ pub struct FileIndex {
     tree_files: OnceLock<SharedPathSet>,
     parent_to_children: OnceLock<HashMap<Arc<Path>, Vec<usize>>>,
     /// Per-`since`-ref diff sets backing `scope_filter.changed_since:`.
-    /// Populated once by the engine before per-file dispatch (a ref
-    /// that resolves to "not a git repo" stores an empty set, so the
-    /// predicate silently matches nothing). Read lock-free in the
-    /// hot loop after `set`.
+    /// Populated once by the engine before per-file dispatch after repository
+    /// availability has been established. An unavailable repository routes a
+    /// typed analysis failure before any predicate reads this cache. Read
+    /// lock-free in the hot loop after `set`.
     changed_paths: OnceLock<HashMap<String, HashSet<std::path::PathBuf>>>,
     /// Per-predicate manifest-derived path sets backing
-    /// `scope_filter.include_manifest_paths:` / `exclude_manifest_paths:`. Keyed
-    /// by each predicate's canonical `(source, extract, derive_target)` cache
-    /// key, so rules sharing a config share one resolved set. Populated once by
-    /// the engine before per-file dispatch (a missing key = empty set, so the
-    /// predicate contributes nothing). Read lock-free in the hot loop after
-    /// `set`.
+    /// `scope_filter.include_manifest_paths:` / `exclude_manifest_paths:`.
+    /// Keyed by canonical predicate identity and populated before dispatch.
     manifest_paths: OnceLock<HashMap<String, crate::scope_filter::ManifestSet>>,
+    /// Structural failures encountered while resolving the same predicate keys.
+    /// Kept separate from the hot membership map: `ScopeFilter::matches` stays a
+    /// set lookup, while the engine routes failures once per active owning rule.
+    manifest_failures: OnceLock<HashMap<String, crate::scope_filter::ManifestFailure>>,
     /// Evaluated `facts:` values, cached so repeated [`Engine::run_for_file`]
     /// calls (the LSP per-keystroke path) don't re-scan the tree.
     /// ASSUMPTION: a given index is evaluated by one engine's fact set
@@ -279,6 +273,7 @@ impl FileIndex {
             parent_to_children: OnceLock::new(),
             changed_paths: OnceLock::new(),
             manifest_paths: OnceLock::new(),
+            manifest_failures: OnceLock::new(),
             facts: OnceLock::new(),
         }
     }
@@ -341,8 +336,6 @@ impl FileIndex {
     }
 
     /// Look up the cached manifest-derived path set for a predicate's cache key.
-    /// `None` means the cache wasn't populated for this key (manifest absent /
-    /// unresolved); the predicate treats it as the empty set.
     #[must_use]
     pub(crate) fn manifest_paths(
         &self,
@@ -351,30 +344,43 @@ impl FileIndex {
         self.manifest_paths.get()?.get(cache_key)
     }
 
-    /// `true` once the engine has populated the manifest-paths cache.
+    /// Look up a structural manifest-resolution failure by predicate cache key.
+    #[must_use]
+    pub(crate) fn manifest_failure(
+        &self,
+        cache_key: &str,
+    ) -> Option<&crate::scope_filter::ManifestFailure> {
+        self.manifest_failures.get()?.get(cache_key)
+    }
+
+    /// `true` once the engine has populated both manifest caches.
     #[must_use]
     pub fn manifest_paths_initialized(&self) -> bool {
-        self.manifest_paths.get().is_some()
+        self.manifest_paths.get().is_some() && self.manifest_failures.get().is_some()
     }
 
-    /// Populate the manifest-paths cache (engine-only, once per run, before
-    /// parallel dispatch). A no-op if already set, so re-using one index across
-    /// `run` + `fix` is safe.
-    pub fn set_manifest_paths(&self, map: HashMap<String, crate::scope_filter::ManifestSet>) {
-        let _ = self.manifest_paths.set(map);
+    /// Populate manifest path sets and failures once before parallel dispatch.
+    pub(crate) fn set_manifest_paths(
+        &self,
+        paths: HashMap<String, crate::scope_filter::ManifestSet>,
+        failures: HashMap<String, crate::scope_filter::ManifestFailure>,
+    ) {
+        let _ = self.manifest_paths.set(paths);
+        let _ = self.manifest_failures.set(failures);
     }
 
-    /// The whole resolved manifest-paths map, if populated. The engine resolves
-    /// manifests against the FULL index (so `find_file` reaches them) and copies
-    /// the result onto the pre-filtered `--changed` index (whose own entries omit
-    /// unchanged manifests), so per-file `matches` against the filtered index
-    /// still sees the set. The declared path set is independent of which files
-    /// the run visits, so the same map is valid for both.
     #[must_use]
     pub(crate) fn manifest_paths_map(
         &self,
     ) -> Option<&HashMap<String, crate::scope_filter::ManifestSet>> {
         self.manifest_paths.get()
+    }
+
+    #[must_use]
+    pub(crate) fn manifest_failures_map(
+        &self,
+    ) -> Option<&HashMap<String, crate::scope_filter::ManifestFailure>> {
+        self.manifest_failures.get()
     }
 
     pub fn files(&self) -> impl Iterator<Item = &FileEntry> {

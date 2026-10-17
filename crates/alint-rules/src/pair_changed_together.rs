@@ -14,8 +14,8 @@
 //! `then_changed` — a `then_changed`-only change never triggers it (use
 //! a second rule with the globs swapped for a bidirectional pact).
 //!
-//! Graceful no-op outside a git repo, when `git` is unavailable, or
-//! when `if_changed` didn't change. A `since:` that fails to resolve
+//! Git or repository unavailability is an analysis failure. An unchanged
+//! `if_changed` set remains a normal pass. A `since:` that fails to resolve
 //! hard-fails with a shallow-clone hint (the user asked for a diff; a
 //! silently-empty range would mask the misconfiguration).
 //!
@@ -24,7 +24,9 @@
 use std::slice;
 
 use alint_core::git::{CommitRangeError, collect_changed_paths_checked};
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -62,7 +64,9 @@ impl Rule for PairChangedTogetherRule {
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let changed = match collect_changed_paths_checked(ctx.root, &self.since) {
             Ok(Some(set)) => set,
-            Ok(None) => return Ok(Vec::new()), // not a git repo: silent
+            // Defensive direct-evaluation fallback; Engine capability routing
+            // reports repository unavailability before dispatch.
+            Ok(None) => return Ok(Vec::new()),
             Err(CommitRangeError::BadRange { stderr }) => return Err(self.bad_range(&stderr)),
         };
 
@@ -86,11 +90,17 @@ impl Rule for PairChangedTogetherRule {
                 self.since, self.if_changed, self.then_changed,
             )
         });
-        // No path (a repo-level co-change finding) → a fixed key so the
-        // fingerprint doesn't fall through to the volatile message.
-        Ok(vec![
-            Violation::new(msg).with_baseline_key("pair-changed-together"),
-        ])
+        // Preserve the existing pathless primary anchor and fingerprint. Changed
+        // trigger paths are navigable secondary evidence.
+        let finding = Violation::new(msg)
+            .with_baseline_key("pair-changed-together")
+            .with_related_locations(
+                changed
+                    .iter()
+                    .filter(|path| self.if_scope.matches(path, ctx.index))
+                    .map(|path| RelatedLocation::new(path, "changed trigger")),
+            );
+        Ok(vec![finding])
     }
 }
 

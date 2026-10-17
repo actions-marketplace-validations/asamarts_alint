@@ -21,24 +21,43 @@ use alint_core::{Level, Report};
 pub fn write_github(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
     for rr in &report.results {
         let keyword = match rr.level {
-            Level::Error => "error",
-            Level::Warning => "warning",
-            Level::Info => "notice",
-            Level::Off => continue,
+            Level::Error => Some("error"),
+            Level::Warning => Some("warning"),
+            Level::Info => Some("notice"),
+            Level::Off => None,
         };
-        for v in &rr.violations {
-            let mut props: Vec<String> = vec![format!("title={}", escape_prop(&rr.rule_id))];
-            if let Some(path) = &v.path {
+        if let Some(keyword) = keyword {
+            for v in &rr.violations {
+                let mut props: Vec<String> = vec![format!("title={}", escape_prop(&rr.rule_id))];
+                if let Some(path) = &v.path {
+                    props.push(format!("file={}", escape_prop(&crate::slash_path(path))));
+                }
+                if let Some(line) = v.line {
+                    props.push(format!("line={line}"));
+                }
+                if let Some(col) = v.column {
+                    props.push(format!("col={col}"));
+                }
+                let body = escape_body(&v.message);
+                writeln!(w, "::{keyword} {}::{body}", props.join(","))?;
+            }
+        }
+        for failure in &rr.analysis_failures {
+            let mut props = vec![format!(
+                "title={}",
+                escape_prop(&format!("{} analysis failure", rr.rule_id))
+            )];
+            if let Some(path) = &failure.path {
                 props.push(format!("file={}", escape_prop(&crate::slash_path(path))));
             }
-            if let Some(line) = v.line {
+            if let Some(line) = failure.line {
                 props.push(format!("line={line}"));
             }
-            if let Some(col) = v.column {
+            if let Some(col) = failure.column {
                 props.push(format!("col={col}"));
             }
-            let body = escape_body(&v.message);
-            writeln!(w, "::{keyword} {}::{body}", props.join(","))?;
+            let body = escape_body(&format!("{}: {}", failure.kind.as_str(), failure.message));
+            writeln!(w, "::error {}::{body}", props.join(","))?;
         }
     }
     let note_count = report.total_notes();
@@ -78,7 +97,7 @@ fn escape_body(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{Report, RuleResult, Violation};
+    use alint_core::{FindingDisposition, Report, RuleResult, Violation};
     use std::path::Path;
 
     fn render(report: &Report) -> String {
@@ -98,6 +117,7 @@ mod tests {
                     violations: vec![Violation::new("boom")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-warn".into(),
@@ -106,6 +126,7 @@ mod tests {
                     violations: vec![Violation::new("careful")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-info".into(),
@@ -114,6 +135,7 @@ mod tests {
                     violations: vec![Violation::new("fyi")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };
@@ -133,6 +155,7 @@ mod tests {
                 violations: vec![Violation::new("should not appear")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         assert_eq!(render(&report), "");
@@ -150,14 +173,19 @@ mod tests {
                     message: "bad".into(),
                     line: Some(12),
                     column: Some(4),
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
                 }],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -177,6 +205,7 @@ mod tests {
                 violations: vec![Violation::new("m")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -193,6 +222,7 @@ mod tests {
                 violations: vec![Violation::new("a: b\nc")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);

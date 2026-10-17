@@ -107,6 +107,7 @@ dependencies = [
  "regex",
  "roxmltree",
  "saphyr",
+ "saphyr-parser",
  "schemars",
  "serde",
  "serde_json",

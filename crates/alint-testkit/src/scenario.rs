@@ -218,8 +218,9 @@ impl From<ExpectTreeMode> for VerifyMode {
     }
 }
 
-/// Per-step expectation. `violations:` is checked against a `Check`
-/// step's report; `applied:`, `skipped:`, `unfixable:` against a
+/// Per-step expectation. `violations:` and `analysis_failures:` are checked
+/// against a `Check` step's report; `analysis_failures:` is also valid for a fix
+/// report. `applied:`, `skipped:`, `suggested:`, and `unfixable:` apply to a
 /// `Fix` or `FixDryRun` step.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -227,6 +228,9 @@ pub struct ExpectStep {
     /// Expected violations for a `check` step. Each item matches by
     /// `rule` id; `level` and `path` are optional refinements.
     pub violations: Option<Vec<ExpectViolation>>,
+    /// Expected non-policy analysis failures. Each item matches by rule id;
+    /// `kind` and `path` are optional refinements.
+    pub analysis_failures: Option<Vec<ExpectAnalysisFailure>>,
     /// Rule ids expected to report `Applied` status from a fix step.
     pub applied: Option<Vec<String>>,
     /// Rule ids expected to report `Skipped` status.
@@ -246,6 +250,50 @@ pub struct ExpectViolation {
     pub level: Option<LevelName>,
     #[serde(default)]
     pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpectAnalysisFailure {
+    pub rule: String,
+    #[serde(default)]
+    pub kind: Option<AnalysisFailureKindName>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisFailureKindName {
+    Evaluation,
+    Condition,
+    ResourceRead,
+    ResourceParse,
+    NestedRuleBuild,
+}
+
+impl AnalysisFailureKindName {
+    pub fn matches(self, kind: alint_core::AnalysisFailureKind) -> bool {
+        matches!(
+            (self, kind),
+            (
+                Self::Evaluation,
+                alint_core::AnalysisFailureKind::Evaluation
+            ) | (Self::Condition, alint_core::AnalysisFailureKind::Condition)
+                | (
+                    Self::ResourceRead,
+                    alint_core::AnalysisFailureKind::ResourceRead
+                )
+                | (
+                    Self::ResourceParse,
+                    alint_core::AnalysisFailureKind::ResourceParse
+                )
+                | (
+                    Self::NestedRuleBuild,
+                    alint_core::AnalysisFailureKind::NestedRuleBuild
+                )
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -291,10 +339,11 @@ impl Scenario {
         // `expect_tree` passes unconditionally, so a completely broken fix would
         // still be "green". The effect is asserted by `expect_tree` (the on-disk
         // check after all steps) OR by any expectation AT OR AFTER the first fix
-        // step -- a fix-status on the fix step, or a post-fix `check` step's
-        // `violations:` (the runner re-walks the mutated tree between steps, so a
-        // check after a fix verifies the fix's result). An assertion BEFORE the
-        // fix (a pre-fix check) does not count -- it says nothing about the fix.
+        // step -- a fix status or analysis failure on the fix step, or a post-fix
+        // `check` step's `violations:` / `analysis_failures:` (the runner re-walks
+        // the mutated tree between steps, so a check after a fix verifies the
+        // fix's result). An assertion BEFORE the fix (a pre-fix check) does not
+        // count -- it says nothing about the fix.
         // `FixDryRun` counts as a fix step too (it produces a fix report whose
         // status is the only meaningful ground truth, since a dry run writes
         // nothing so `expect_tree` is the unchanged input).
@@ -304,6 +353,7 @@ impl Scenario {
         {
             let verifies_the_fix = self.expect.iter().skip(first_fix).any(|exp| {
                 exp.violations.is_some()
+                    || exp.analysis_failures.is_some()
                     || exp.applied.is_some()
                     || exp.skipped.is_some()
                     || exp.suggested.is_some()
@@ -313,8 +363,8 @@ impl Scenario {
                 return Err(crate::error::Error::scenario(format!(
                     "scenario {:?}: runs a fix but asserts nothing about its effect. Add an \
                      `expect_tree:`, a fix-status expectation (`applied:`/`skipped:`/\
-                     `suggested:`/`unfixable:`) on the fix step, or a post-fix `check` step \
-                     asserting `violations:`.",
+                     `suggested:`/`unfixable:`) or `analysis_failures:` on the fix step, or a \
+                     post-fix `check` step asserting `violations:` / `analysis_failures:`.",
                     self.name,
                 )));
             }

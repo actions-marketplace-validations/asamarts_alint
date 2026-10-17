@@ -955,6 +955,8 @@ fn report_baseline_summary(
 
 /// `alint baseline`: snapshot the current violations into a baseline
 /// file. Whole-tree only (the subcommand doesn't accept `--changed`).
+// Baseline generation is one ordered read/filter/fingerprint/write transaction.
+#[allow(clippy::too_many_lines)]
 fn cmd_baseline(
     path: &Path,
     output: Option<&Path>,
@@ -1010,6 +1012,33 @@ fn cmd_baseline(
     };
     let index = walk(&root, &walk_opts).context("walking repository")?;
     let report = engine.run(&root, &index).context("running rules")?;
+    if report.total_analysis_failures() > 0 {
+        let count = report.total_analysis_failures();
+        eprintln!(
+            "alint: refusing to write baseline: {count} analysis failure{}",
+            if count == 1 { "" } else { "s" }
+        );
+        for result in &report.results {
+            for failure in &result.analysis_failures {
+                let location = failure.path.as_ref().map_or_else(
+                    || "<repo>".to_string(),
+                    |path| match failure.line {
+                        Some(line) => format!("{}:{line}", path.display()),
+                        None => path.display().to_string(),
+                    },
+                );
+                let message =
+                    alint_output::sanitize_terminal(&failure.message).replace('\n', "\n    ");
+                eprintln!(
+                    "  {}: {}: {}: {message}",
+                    alint_output::sanitize_terminal(&location),
+                    alint_output::sanitize_terminal(&result.rule_id),
+                    failure.kind.as_str(),
+                );
+            }
+        }
+        return Ok(ExitCode::from(1));
+    }
 
     let mut reader = FileReader::new(&root);
     let mut items: Vec<FingerprintedViolation> = Vec::new();
@@ -1111,7 +1140,7 @@ fn write_report_notes(
     for result in &report.results {
         for note in &result.notes {
             let label = match note
-                .note_kind
+                .note_kind()
                 .unwrap_or(alint_core::NoteKind::Informational)
             {
                 alint_core::NoteKind::Informational => "note",
@@ -1261,6 +1290,23 @@ fn cmd_fix(
         tolerate_broken_pipe(alint_output::write_fix_diff(&staged, &mut out))
             .context("writing diff")?;
         out.flush().ok();
+        if report.has_analysis_failures() {
+            let mut err = io::stderr().lock();
+            for result in &report.results {
+                for failure in &result.analysis_failures {
+                    let location = failure.path.as_ref().map_or_else(String::new, |path| {
+                        format!("{}: ", term(&path.display().to_string()))
+                    });
+                    let message = term(&failure.message).replace('\n', "\nalint:   ");
+                    writeln!(
+                        err,
+                        "alint: {location}{}: analysis failure ({}): {message}",
+                        term(&result.rule_id),
+                        failure.kind.as_str(),
+                    )?;
+                }
+            }
+        }
         return Ok(fix_exit_code(&report, fix_only, cli));
     }
 
@@ -1302,10 +1348,11 @@ fn cmd_fix(
                         })
                         .cloned()
                         .collect();
-                    (!items.is_empty()).then(|| FixRuleResult {
+                    (!items.is_empty() || !r.analysis_failures.is_empty()).then(|| FixRuleResult {
                         rule_id: r.rule_id.clone(),
                         level: r.level,
                         items,
+                        analysis_failures: r.analysis_failures.clone(),
                     })
                 })
                 .collect(),
@@ -1344,8 +1391,9 @@ fn fix_exit_status(report: &FixReport, fix_only: bool, fail_on_warning: bool) ->
         return 2;
     }
     if fix_only {
-        // A benign residual is suppressed; only a genuine fix error fails.
-        return u8::from(report.had_fix_error());
+        // A benign policy residual is suppressed. Incomplete analysis and a
+        // genuine attempted-fix error still fail.
+        return u8::from(report.has_analysis_failures() || report.had_fix_error());
     }
     // `had_fix_error()`: a fix was ATTEMPTED and hit a genuine I/O error (a
     // read-only target, ENOSPC, ...), recorded as a `Skipped("fix error: ...")`.

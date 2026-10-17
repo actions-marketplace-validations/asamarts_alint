@@ -1,0 +1,23 @@
+name: changeset_requires_path fails closed outside a Git repository
+tags: [check, changeset_requires_path, git]
+
+# The unconditional diff capability must be available before dispatch.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: needs-changelog
+        kind: changeset_requires_path
+        add_glob: ".changeset/*.md"
+        since: HEAD~1
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []
+    analysis_failures:
+      - {rule: needs-changelog, kind: resource_read}

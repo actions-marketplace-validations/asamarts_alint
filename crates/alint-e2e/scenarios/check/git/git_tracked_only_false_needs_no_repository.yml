@@ -1,0 +1,23 @@
+name: explicit false git_tracked_only needs no Git repository
+tags: [check, dir_absent, git_tracked_only, git]
+
+# OptionSet capabilities follow effective values, not mere YAML presence.
+given:
+  tree:
+    target:
+      artifact: "build output"
+  config: |
+    version: 1
+    rules:
+      - id: no-target
+        kind: dir_absent
+        paths: target
+        git_tracked_only: false
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: no-target, level: error, path: target}
+    analysis_failures: []

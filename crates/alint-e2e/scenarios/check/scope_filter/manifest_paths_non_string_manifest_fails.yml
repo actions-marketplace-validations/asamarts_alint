@@ -1,0 +1,30 @@
+name: non-string manifest scope entries fail analysis
+
+tags: [check, scope_filter, no_trailing_whitespace, failing]
+
+# The query succeeds, but booleans cannot define a path set. The owning rule
+# fails closed instead of treating the unusable member set as empty.
+given:
+  tree:
+    package.json: |
+      {"files": [true]}
+    src:
+      a.rs: "fn a() {} \n"
+  config: |
+    version: 1
+    rules:
+      - id: nws
+        kind: no_trailing_whitespace
+        paths: "src/**/*.rs"
+        level: warning
+        scope_filter:
+          include_manifest_paths:
+            source: package.json
+            extract: { json: "$.files[*]" }
+
+when: [check]
+
+expect:
+  - violations: []
+    analysis_failures:
+      - {rule: nws, kind: resource_parse, path: package.json}

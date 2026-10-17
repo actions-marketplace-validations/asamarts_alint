@@ -115,6 +115,8 @@ struct Finding {
     /// Whether the rule declares a fixer — gates the "Apply fix" code
     /// action without re-deriving the rule set.
     fixable: bool,
+    /// Sensitive findings expose diagnostics but never public replacement bytes.
+    sensitive: bool,
     /// Whether this came from a per-file rule (re-evaluated on every
     /// edit) vs a cross-file rule (only on save). On `didChange` we keep
     /// the cached cross-file findings and replace only the per-file ones,
@@ -124,6 +126,7 @@ struct Finding {
     description: Option<&'static str>,
     /// The rule kind's alint.org reference page, for the hover.
     docs_url: Option<String>,
+    related_information: Vec<tower_lsp::lsp_types::DiagnosticRelatedInformation>,
 }
 
 /// Per-file findings keyed by absolute path.
@@ -264,6 +267,8 @@ struct State {
     /// Workspace folders, from the `initialize` handshake (and
     /// `didChangeWorkspaceFolders`).
     folders: Vec<PathBuf>,
+    /// Whether the client accepts `Diagnostic.relatedInformation`.
+    related_information_supported: bool,
     /// URIs of documents the editor currently has open. Diagnostics
     /// are published (and cleared) for these.
     open: HashSet<Url>,
@@ -459,7 +464,12 @@ impl Backend {
                         .map(|prev| prev.iter().filter(|f| !f.per_file).cloned().collect())
                         .unwrap_or_default();
                     merged.extend(per_file);
-                    let diags: Vec<Diagnostic> = merged.iter().map(finding_to_diagnostic).collect();
+                    let diags: Vec<Diagnostic> = merged
+                        .iter()
+                        .map(|finding| {
+                            finding_to_diagnostic(finding, state.related_information_supported)
+                        })
+                        .collect();
                     state.diagnostics.insert(uri.clone(), merged);
                     diags
                 };
@@ -498,7 +508,7 @@ impl Backend {
 
     /// The governing session, cached findings, and buffer for `uri` —
     /// everything `codeAction` needs, or `None` when any is missing.
-    fn code_action_inputs(&self, uri: &Url) -> Option<(Arc<Session>, Vec<Finding>, String)> {
+    fn code_action_inputs(&self, uri: &Url) -> Option<(Arc<Session>, Vec<Finding>, String, bool)> {
         let state = self.state.lock();
         let session = state
             .doc_config
@@ -508,6 +518,7 @@ impl Backend {
             session,
             state.diagnostics.get(uri).cloned()?,
             state.documents.get(uri).cloned()?,
+            state.related_information_supported,
         ))
     }
 
@@ -520,10 +531,21 @@ impl Backend {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> JsonRpcResult<InitializeResult> {
-        self.state.lock().folders = workspace_folders(&params);
+        let related_information_supported = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|text| text.publish_diagnostics.as_ref())
+            .and_then(|publish| publish.related_information)
+            .unwrap_or(false);
+        let mut state = self.state.lock();
+        state.folders = workspace_folders(&params);
+        state.related_information_supported = related_information_supported;
+        drop(state);
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -693,7 +715,9 @@ impl LanguageServer for Backend {
             }
         }
 
-        let Some((session, findings, text)) = self.code_action_inputs(&uri) else {
+        let Some((session, findings, text, related_information_supported)) =
+            self.code_action_inputs(&uri)
+        else {
             return Ok(None);
         };
         let Ok(abs) = uri.to_file_path() else {
@@ -702,6 +726,16 @@ impl LanguageServer for Backend {
         let Ok(rel) = abs.strip_prefix(&session.root).map(Path::to_path_buf) else {
             return Ok(None);
         };
+        // A sibling rule may have read secret-bearing evidence from this file
+        // even when the selected diagnostic itself is ordinary. Whole-file and
+        // spanning fixes can otherwise copy unchanged secret bytes into the LSP
+        // response, so suppress every public edit for a sensitive input path.
+        if session
+            .engine
+            .path_contains_sensitive_evidence(&session.root, &session.index, &rel)
+        {
+            return Ok(None);
+        }
 
         let bytes = text.as_bytes();
         // Honor the config's `fix_size_limit`: `alint fix` skips a file
@@ -720,7 +754,7 @@ impl LanguageServer for Backend {
         // fixes are already filtered out below.
         let mut unsafe_flags: Vec<bool> = Vec::new();
         for finding in &findings {
-            if !finding.fixable || !ranges_overlap(finding.range, selection) {
+            if !finding.fixable || finding.sensitive || !ranges_overlap(finding.range, selection) {
                 continue;
             }
             let Some(fixer) = session.engine.fixer_for(&finding.rule_id) else {
@@ -755,6 +789,7 @@ impl LanguageServer for Backend {
                     .map(|(i, ce)| LocatedEdit {
                         rule_index: 0,
                         violation_index: i,
+                        sensitive: false,
                         collected: ce,
                     })
                     .collect();
@@ -794,7 +829,10 @@ impl LanguageServer for Backend {
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
                 title,
                 kind: Some(CodeActionKind::QUICKFIX),
-                diagnostics: Some(vec![finding_to_diagnostic(finding)]),
+                diagnostics: Some(vec![finding_to_diagnostic(
+                    finding,
+                    related_information_supported,
+                )]),
                 edit: Some(workspace_edit),
                 ..CodeAction::default()
             }));
@@ -826,6 +864,16 @@ impl LanguageServer for Backend {
 /// engine). Each config file gets its own anchored findings — published
 /// in the SAME message, so clearing a previous config error can never
 /// wipe them.
+fn findings_to_diagnostics(
+    findings: &[Finding],
+    related_information_supported: bool,
+) -> Vec<Diagnostic> {
+    findings
+        .iter()
+        .map(|finding| finding_to_diagnostic(finding, related_information_supported))
+        .collect()
+}
+
 fn apply_check(
     state: &mut State,
     docs: &[(Url, Option<String>, Option<i32>)],
@@ -870,7 +918,7 @@ fn apply_check(
                 by_config.get(config)?.get(&abs).cloned()
             })
             .unwrap_or_default();
-        let diagnostics = findings.iter().map(finding_to_diagnostic).collect();
+        let diagnostics = findings_to_diagnostics(&findings, state.related_information_supported);
         state.diagnostics.insert(uri.clone(), findings);
         published.insert(uri.clone());
         applied
@@ -912,7 +960,8 @@ fn apply_check(
                 .get(&config)
                 .and_then(|m| m.get(&config).cloned())
                 .unwrap_or_default();
-            let diagnostics = findings.iter().map(finding_to_diagnostic).collect();
+            let diagnostics =
+                findings_to_diagnostics(&findings, state.related_information_supported);
             (findings, diagnostics)
         };
         state.diagnostics.insert(uri.clone(), findings);

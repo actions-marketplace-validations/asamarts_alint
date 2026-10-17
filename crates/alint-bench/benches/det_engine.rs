@@ -13,8 +13,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
-use alint_core::{Context, Engine, FileEntry, FileIndex, Level, Rule, Violation};
+use alint_core::{Context, Engine, FileEntry, FileIndex, Level, Rule, RuleEntry, Violation};
 use gungraun::{
     Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
 };
@@ -53,14 +54,20 @@ rules:
     level: warning
 "#;
 
-fn build_rules() -> Vec<Box<dyn Rule>> {
+/// Keep source specs attached: W3 capability routing is metadata-driven, so
+/// `Engine::new` would benchmark only its compatibility fallback.
+fn build_engine() -> Engine {
     let config = alint_dsl::parse(CONFIG_YAML).expect("bench config parses");
     let registry = alint_rules::builtin_registry();
-    config
+    let entries = config
         .rules
         .iter()
-        .map(|spec| registry.build(spec).expect("bench rule builds"))
-        .collect()
+        .map(|spec| {
+            let rule = registry.build(spec).expect("bench rule builds");
+            RuleEntry::new(rule).with_spec(Arc::new(spec.clone()))
+        })
+        .collect();
+    Engine::from_entries(entries, registry)
 }
 
 fn build_index(n: usize) -> FileIndex {
@@ -117,7 +124,7 @@ struct Fixture {
 
 fn fixture(n: usize) -> Fixture {
     Fixture {
-        engine: Engine::new(build_rules(), alint_rules::builtin_registry()),
+        engine: build_engine(),
         index: build_index(n),
         root: PathBuf::from("/bench/root"),
     }

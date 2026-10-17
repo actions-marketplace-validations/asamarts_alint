@@ -29,11 +29,13 @@
 //!   level: error
 //! ```
 
+use std::path::Path;
+
 use alint_core::template::PathTokens;
 use alint_core::when::{IterEnv, WhenExpr};
 use alint_core::{
-    CompiledNestedSpec, Context, Error, Level, NestedRuleSpec, Result, Rule, RuleSpec, Scope,
-    Violation,
+    AnalysisFailureKind, CompiledNestedSpec, Context, Error, Level, NestedRuleSpec, Result, Rule,
+    RuleSpec, Scope, Violation,
 };
 use serde::Deserialize;
 
@@ -131,6 +133,25 @@ impl Rule for ForEachDirRule {
 
     fn nested_rule_specs(&self) -> &[CompiledNestedSpec] {
         &self.require
+    }
+
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        visit_sensitive_for_each(
+            &self.id,
+            self.level,
+            explicit,
+            &self.select_scope,
+            self.when_iter.as_ref(),
+            &self.require,
+            ctx,
+            IterateMode::Dirs,
+            visit,
+        );
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -338,6 +359,74 @@ fn apply_parent_message(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn visit_sensitive_for_each(
+    parent_id: &str,
+    level: Level,
+    parent_explicit: bool,
+    select_scope: &Scope,
+    when_iter: Option<&WhenExpr>,
+    require: &[CompiledNestedSpec],
+    ctx: &Context<'_>,
+    mode: IterateMode,
+    visit: &mut dyn FnMut(&Path),
+) {
+    let Some(registry) = ctx.registry else {
+        return;
+    };
+    let entries: Box<dyn Iterator<Item = _>> = match mode {
+        IterateMode::Dirs => Box::new(ctx.index.dirs()),
+        IterateMode::Files => Box::new(ctx.index.files()),
+        IterateMode::Both => Box::new(ctx.index.dirs().chain(ctx.index.files())),
+    };
+
+    for entry in entries {
+        if !select_scope.matches(&entry.path, ctx.index) {
+            continue;
+        }
+        let iter_env = IterEnv {
+            path: &entry.path,
+            is_dir: entry.is_dir,
+            index: ctx.index,
+        };
+        if let Some(expr) = when_iter
+            && let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars)
+        {
+            let env = alint_core::WhenEnv {
+                facts,
+                vars,
+                iter: Some(iter_env),
+                env: None,
+            };
+            if !matches!(expr.evaluate(&env), Ok(true)) {
+                continue;
+            }
+        }
+
+        let tokens = PathTokens::from_path(&entry.path);
+        for (index, nested) in require.iter().enumerate() {
+            if let Some(expr) = &nested.when
+                && let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars)
+            {
+                let env = alint_core::WhenEnv {
+                    facts,
+                    vars,
+                    iter: Some(iter_env),
+                    env: None,
+                };
+                if !matches!(expr.evaluate(&env), Ok(true)) {
+                    continue;
+                }
+            }
+            let spec = nested.spec.instantiate(parent_id, index, level, &tokens);
+            let Ok(rule) = registry.build(&spec) else {
+                continue;
+            };
+            rule.visit_sensitive_paths(parent_explicit || spec.sensitive, ctx, visit);
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn evaluate_for_each(
     parent: ForEachParent<'_>,
@@ -395,7 +484,8 @@ pub(crate) fn evaluate_for_each(
                 Err(e) => {
                     violations.push(
                         Violation::new(format!("{parent_id}: when_iter error: {e}"))
-                            .with_path(entry.path.clone()),
+                            .with_path(entry.path.clone())
+                            .as_analysis_failure(AnalysisFailureKind::Condition),
                     );
                     continue;
                 }
@@ -427,12 +517,13 @@ pub(crate) fn evaluate_for_each(
                     Ok(true) => {}
                     Ok(false) => continue,
                     Err(e) => {
-                        violations.push(
-                            Violation::new(format!(
-                                "{parent_id}: nested rule #{i} when error: {e}"
-                            ))
-                            .with_path(entry.path.clone()),
-                        );
+                        let mut violation = Violation::new(format!(
+                            "{parent_id}: nested rule #{i} when error: {e}"
+                        ))
+                        .with_path(entry.path.clone())
+                        .as_analysis_failure(AnalysisFailureKind::Condition);
+                        redact_nested_finding(nested, parent_id, i, &mut violation);
+                        violations.push(violation);
                         continue;
                     }
                 }
@@ -441,28 +532,44 @@ pub(crate) fn evaluate_for_each(
             let nested_rule = match registry.build(&nested_spec) {
                 Ok(r) => r,
                 Err(e) => {
-                    violations.push(
-                        Violation::new(format!(
-                            "{parent_id}: failed to build nested rule #{i} for {}: {e}",
-                            entry.path.display()
-                        ))
-                        .with_path(entry.path.clone()),
-                    );
+                    let mut violation = Violation::new(format!(
+                        "{parent_id}: failed to build nested rule #{i} for {}: {e}",
+                        entry.path.display()
+                    ))
+                    .with_path(entry.path.clone())
+                    .as_analysis_failure(AnalysisFailureKind::NestedRuleBuild);
+                    redact_nested_finding(nested, parent_id, i, &mut violation);
+                    violations.push(violation);
                     continue;
                 }
             };
-            if let Some(mut violation) = alint_core::expect_matches_violation(
+            let scope_violation = match alint_core::expect_matches_violation(
                 nested_rule.as_ref(),
                 &nested_spec,
                 ctx.index,
                 ctx,
-            )? {
+            ) {
+                Ok(violation) => violation,
+                Err(error) => {
+                    let mut violation = Violation::new(format!(
+                        "{parent_id}: nested rule #{i} scope assertion failed for {}: {error}",
+                        entry.path.display(),
+                    ))
+                    .with_path(entry.path.clone())
+                    .as_analysis_failure(AnalysisFailureKind::Evaluation);
+                    redact_nested_finding(nested, parent_id, i, &mut violation);
+                    violations.push(violation);
+                    continue;
+                }
+            };
+            if let Some(mut violation) = scope_violation {
                 // Attribute a pathless scope-assertion failure to the selected
                 // parent entry, like other nested pathless findings.
                 violation.path = Some(entry.path.clone());
                 if let Some(message) = parent_message {
                     apply_parent_message(&mut violation, message, ctx.analysis_time);
                 }
+                redact_nested_finding(nested, parent_id, i, &mut violation);
                 violations.push(violation);
                 continue;
             }
@@ -500,21 +607,39 @@ pub(crate) fn evaluate_for_each(
                     if v.path.is_none() {
                         v.path = Some(entry.path.clone());
                     }
-                    if let Some(message) = parent_message {
+                    if v.analysis_failure_kind().is_none()
+                        && let Some(message) = parent_message
+                    {
                         apply_parent_message(&mut v, message, ctx.analysis_time);
                     }
+                    redact_manifest_scoped_finding(nested_rule.as_ref(), &mut v);
+                    redact_nested_finding(nested, parent_id, i, &mut v);
                     violations.push(v);
                 }
                 continue;
             }
-            let nested_violations = nested_rule.evaluate(ctx)?;
+            let nested_violations = match nested_rule.evaluate(ctx) {
+                Ok(violations) => violations,
+                Err(error) => vec![
+                    Violation::new(format!(
+                        "{parent_id}: nested rule #{i} error on {}: {error}",
+                        entry.path.display(),
+                    ))
+                    .with_path(entry.path.clone())
+                    .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                ],
+            };
             for mut v in nested_violations {
                 if v.path.is_none() {
                     v.path = Some(entry.path.clone());
                 }
-                if let Some(message) = parent_message {
+                if v.analysis_failure_kind().is_none()
+                    && let Some(message) = parent_message
+                {
                     apply_parent_message(&mut v, message, ctx.analysis_time);
                 }
+                redact_nested_finding(nested, parent_id, i, &mut v);
+                redact_manifest_scoped_finding(nested_rule.as_ref(), &mut v);
                 violations.push(v);
             }
         }
@@ -529,6 +654,31 @@ pub(crate) fn evaluate_for_each(
         }
     }
     Ok(violations)
+}
+
+fn redact_manifest_scoped_finding(rule: &dyn Rule, finding: &mut Violation) {
+    let scope = rule
+        .path_scope()
+        .or_else(|| rule.as_per_file().map(alint_core::PerFileRule::path_scope));
+    if scope.is_none_or(|scope| scope.sensitive_manifest_sources().next().is_none()) {
+        return;
+    }
+    let path = finding
+        .path
+        .as_deref()
+        .map(|path| path.to_string_lossy().into_owned());
+    finding.redact_evidence(rule.id(), "manifest_scope", path.as_deref());
+}
+
+fn redact_nested_finding(
+    nested: &alint_core::CompiledNestedSpec,
+    parent_id: &str,
+    index: usize,
+    finding: &mut Violation,
+) {
+    if nested.spec.sensitive {
+        finding.redact_message(&format!("{parent_id}.require[{index}]"));
+    }
 }
 
 /// Extract a single literal relative path from a nested rule
@@ -582,43 +732,21 @@ fn evaluate_one_per_file_rule(
     let bytes = match crate::io::read_capped(&abs) {
         Ok(b) => b,
         Err(crate::io::ReadCapError::TooLarge(n)) => {
-            // Over the 256 MiB whole-file cap — surface a clear
-            // violation rather than silently skipping (which used
-            // to mask an OOM-DoS surface on hostile / accidental
-            // multi-GB files reached via a `for_each_dir` literal
-            // path).
-            return vec![
-                Violation::new(format!(
-                    "{parent_id}: nested rule #{nested_i} cannot analyze {} \
-                     - file is too large ({})",
-                    literal.display(),
-                    crate::io::over_cap(n),
-                ))
-                .with_path(literal),
-            ];
+            return vec![alint_core::too_large_file_violation(literal, n)];
         }
         Err(crate::io::ReadCapError::Io(e)) => {
-            // Mirror the rule-major behaviour: a mid-walk delete
-            // (`NotFound`) skips; a genuine read error fails CLOSED with
-            // a "could not read file" finding (audit 2026-10 finding 7).
-            return crate::io::io_error_violation(literal, &e)
-                .into_iter()
-                .collect();
+            return vec![crate::io::io_error_violation(literal, &e)];
         }
     };
     match pf.evaluate_file(ctx, literal, &bytes) {
         Ok(vs) => vs,
         Err(e) => vec![
-            // No path; the message embeds a volatile error string, so key on
-            // the (dir, nested-rule index) identity instead of the message.
             Violation::new(format!(
                 "{parent_id}: nested rule #{nested_i} error on {}: {e}",
                 literal.display()
             ))
-            .with_baseline_key(format!(
-                "for-each-dir-nested-error\u{0}{}\u{0}{nested_i}",
-                crate::slash(literal)
-            )),
+            .with_path(literal)
+            .as_analysis_failure(AnalysisFailureKind::Evaluation),
         ],
     }
 }
@@ -679,6 +807,21 @@ mod tests {
         // Build via YAML to exercise the same path production users take.
         let yaml = format!("kind: file_exists\npaths: \"{path}\"\n");
         serde_yaml_ng::from_str(&yaml).unwrap()
+    }
+
+    #[test]
+    fn nested_sensitive_rule_redacts_before_parent_reporting() {
+        const SECRET: &str = "NESTED_TOKEN_VALUE_DO_NOT_REPORT";
+        let nested: NestedRuleSpec = serde_yaml_ng::from_str(&format!(
+            "kind: file_exists\npaths: \"{{path}}/missing\"\n\
+             message: \"nested evidence: {SECRET}\"\nsensitive: true\n"
+        ))
+        .unwrap();
+        let findings = eval_with(&rule("src/*", vec![nested]), &[("src/foo", true)]);
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].is_sensitive());
+        assert!(!findings[0].message.contains(SECRET));
+        assert!(findings[0].message.contains("<redacted:"));
     }
 
     #[test]
@@ -844,6 +987,69 @@ mod tests {
         assert!(
             err.contains("bogusopt") || err.contains("unknown field"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn runtime_nested_failures_are_structural_and_ordered() {
+        let build_failure: NestedRuleSpec = serde_yaml_ng::from_str(
+            "kind: filename_regex\npaths: \"{path}/**\"\npattern: \"{basename}\"\n",
+        )
+        .unwrap();
+        let condition_failure: NestedRuleSpec = serde_yaml_ng::from_str(
+            "kind: file_exists\npaths: \"{path}/README.md\"\nwhen: '1 < \"x\"'\n",
+        )
+        .unwrap();
+        let evaluation_failure: NestedRuleSpec = serde_yaml_ng::from_str(
+            "kind: git_blame_age\npaths: \"{path}/**/*.rs\"\npattern: TODO\nmax_age_days: 1\n",
+        )
+        .unwrap();
+        let rule = rule(
+            "src/*",
+            vec![build_failure, condition_failure, evaluation_failure],
+        );
+        assert!(
+            rule.validate_nested(&registry()).is_ok(),
+            "placeholder values must validate before repository substitution",
+        );
+
+        let idx = index(&[("src", true), ("src/(", true), ("src/(/a.rs", false)]);
+        let registry = registry();
+        let facts = alint_core::FactValues::new();
+        let vars = std::collections::HashMap::new();
+        let analysis_time = alint_core::AnalysisTimeResolution::Unavailable(
+            alint_core::AnalysisTimeUnavailable::HeadUnavailable,
+        );
+        let ctx = Context {
+            root: Path::new("/"),
+            index: &idx,
+            registry: Some(&registry),
+            facts: Some(&facts),
+            vars: Some(&vars),
+            git_tracked: None,
+            git_blame: None,
+            analysis_time: Some(&analysis_time),
+        };
+        let raw = rule.evaluate(&ctx).unwrap();
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty(), "{result:?}");
+        assert_eq!(
+            result
+                .analysis_failures
+                .iter()
+                .map(|failure| failure.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                AnalysisFailureKind::NestedRuleBuild,
+                AnalysisFailureKind::Condition,
+                AnalysisFailureKind::Evaluation,
+            ],
+        );
+        assert!(
+            result
+                .analysis_failures
+                .iter()
+                .all(|failure| failure.path.as_deref() == Some(Path::new("src/(")))
         );
     }
 

@@ -9,6 +9,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 
 use alint_core::{Engine, Level, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
@@ -59,10 +60,10 @@ fn build_engine(pattern: &str, max_age_days: u64) -> Engine {
          max_age_days: {max_age_days}\n\
          level: warning\n",
     );
-    let spec: alint_core::RuleSpec = serde_yaml_ng::from_str(&yaml).unwrap();
+    let spec: Arc<alint_core::RuleSpec> = Arc::new(serde_yaml_ng::from_str(&yaml).unwrap());
     let registry = builtin_registry();
     let rule = registry.build(&spec).unwrap();
-    Engine::from_entries(vec![RuleEntry::new(rule)], registry)
+    Engine::from_entries(vec![RuleEntry::new(rule).with_spec(spec)], registry)
 }
 
 #[test]
@@ -284,7 +285,7 @@ fn nested_parent_message_preserves_analysis_date() {
 }
 
 #[test]
-fn reports_analysis_time_error_outside_git() {
+fn reports_resource_read_failure_outside_git() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     // No git_init — bare tempdir.
@@ -299,10 +300,15 @@ fn reports_analysis_time_error_outside_git() {
     let report = engine.run(root, &index).unwrap();
 
     assert_eq!(report.results.len(), 1);
-    assert_eq!(report.results[0].violations.len(), 1);
-    let message = report.results[0].violations[0].message.as_ref();
-    assert!(message.starts_with("rule error: analysis time unavailable: "));
-    assert!(message.contains("pass --as-of YYYY-MM-DD"));
+    let result = &report.results[0];
+    assert!(result.violations.is_empty());
+    assert_eq!(result.analysis_failures.len(), 1);
+    let failure = &result.analysis_failures[0];
+    assert_eq!(failure.kind.as_str(), "resource_read");
+    assert_eq!(
+        failure.message,
+        "Git is unavailable or the lint root is not a usable Git repository"
+    );
 }
 
 #[test]

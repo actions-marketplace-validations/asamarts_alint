@@ -21,7 +21,9 @@
 use std::collections::BTreeMap;
 
 use alint_core::template::{PathTokens, render_message, render_path};
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -102,11 +104,16 @@ impl Rule for UniqueByRule {
             // key + the sorted path SET so a new colliding file is detected
             // (anchoring on one path alone would mask a new group member).
             let group: Vec<String> = paths.iter().map(crate::slash).collect();
-            violations.push(
-                Violation::new(msg)
-                    .with_path(anchor)
-                    .with_baseline_key(format!("{key}\u{0}{}", group.join("\u{0}"))),
-            );
+            let finding = Violation::new(msg)
+                .with_path(anchor)
+                .with_baseline_key(format!("{key}\u{0}{}", group.join("\u{0}")))
+                .with_related_locations(
+                    paths
+                        .iter()
+                        .skip(1)
+                        .map(|path| RelatedLocation::new(path.as_ref(), "shares this key")),
+                );
+            violations.push(finding);
         }
         Ok(violations)
     }
@@ -259,6 +266,9 @@ mod tests {
         assert_eq!(v[0].path.as_deref(), Some(Path::new("src/mod1/foo.rs")));
         assert!(v[0].message.contains("src/mod1/foo.rs"));
         assert!(v[0].message.contains("src/mod2/foo.rs"));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("src/mod2/foo.rs"));
+        assert_eq!(v[0].related_locations[0].label, "shares this key");
     }
 
     #[test]

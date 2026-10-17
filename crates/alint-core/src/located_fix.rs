@@ -29,6 +29,9 @@ use crate::structured_format::Format;
 pub struct LocatedEdit {
     pub rule_index: usize,
     pub violation_index: usize,
+    /// The source finding was sensitive. The engine carries this through the
+    /// synthetic value-free fix item so its status detail is still redacted.
+    pub sensitive: bool,
     pub collected: CollectedEdit,
 }
 
@@ -369,6 +372,7 @@ mod tests {
         LocatedEdit {
             rule_index,
             violation_index,
+            sensitive: false,
             collected: CollectedEdit {
                 edit,
                 applicability,

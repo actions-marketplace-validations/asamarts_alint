@@ -28,7 +28,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
+use alint_core::{AnalysisFailureKind, Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use regex::Regex;
 use serde::Deserialize;
 
@@ -69,7 +69,7 @@ struct Options {
     #[serde(default)]
     files_pattern: Option<String>,
     /// Checker timeout in seconds (default 120). On timeout the child is killed
-    /// and one violation is emitted.
+    /// and one non-baselinable `evaluation` analysis failure is emitted.
     #[serde(default)]
     #[schemars(range(min = 1))]
     timeout: Option<u64>,
@@ -122,22 +122,35 @@ impl Rule for CommandIdempotentRule {
             } => (status, stdout, stderr),
             crate::spawn::SpawnOutcome::SpawnError(e) => {
                 let program = self.command.first().map_or("", String::as_str);
-                return Ok(vec![self.violation(
-                    &self.workdir,
-                    &format!("checker `{program}` could not be spawned: {e}"),
-                )]);
+                return Ok(vec![
+                    Violation::new(format!("checker `{program}` could not be spawned: {e}"))
+                        .with_path(PathBuf::from(&self.workdir))
+                        .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                ]);
             }
             crate::spawn::SpawnOutcome::TimedOut { secs } => {
-                return Ok(vec![self.violation(
-                    &self.workdir,
-                    &format!(
+                return Ok(vec![
+                    Violation::new(format!(
                         "`{}` did not exit within {secs}s \
                          (raise `timeout:` on the rule to extend)",
                         self.command.join(" ")
-                    ),
-                )]);
+                    ))
+                    .with_path(PathBuf::from(&self.workdir))
+                    .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                ]);
             }
         };
+
+        if status.code().is_none() {
+            return Ok(vec![
+                Violation::new(format!(
+                    "`{}` terminated without an exit status before producing a policy verdict",
+                    self.command.join(" ")
+                ))
+                .with_path(PathBuf::from(&self.workdir))
+                .as_analysis_failure(AnalysisFailureKind::Evaluation),
+            ]);
+        }
 
         if status.success() {
             // The tree is idempotent / formatter-clean.
@@ -428,12 +441,36 @@ mod tests {
     }
 
     #[test]
-    fn spawn_failure_is_a_violation() {
+    fn spawn_failure_is_an_analysis_failure() {
         let dir = tempfile::tempdir().unwrap();
         let r = rule(&["alint-no-such-checker-xyz"], FilesFrom::None, None);
-        let v = eval(&r, dir.path());
-        assert_eq!(v.len(), 1);
-        assert!(v[0].message.contains("could not be spawned"));
+        let raw = eval(&r, dir.path());
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert_eq!(
+            result.analysis_failures[0].kind,
+            AnalysisFailureKind::Evaluation,
+        );
+        assert!(
+            result.analysis_failures[0]
+                .message
+                .contains("could not be spawned")
+        );
+    }
+
+    #[test]
+    fn signal_termination_is_an_analysis_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = rule(&["/bin/sh", "-c", "kill -TERM $$"], FilesFrom::None, None);
+        let raw = eval(&r, dir.path());
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert_eq!(
+            result.analysis_failures[0].kind,
+            AnalysisFailureKind::Evaluation,
+        );
     }
 
     #[test]

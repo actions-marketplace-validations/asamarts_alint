@@ -297,10 +297,10 @@ rules:
     kind: cross_file
     source:
       file: pyproject.toml
-      extract: { toml: "$.tool.uv.required-version" }
+      extract: { toml: "$.tool.uv['required-version']" }
     targets:
       files: "devel-common/pyproject.toml"
-      extract: { toml: "$.tool.uv.required-version" }
+      extract: { toml: "$.tool.uv['required-version']" }
     normalize: trim
     allow_missing_target: true
     level: warning

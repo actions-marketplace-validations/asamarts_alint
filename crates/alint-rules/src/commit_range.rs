@@ -2,11 +2,10 @@
 //! (`git_commit_signed_off`, `git_commit_no_fixup`, …).
 //!
 //! Every rule in the family takes `since:` + `include_merges:`, emits
-//! one violation per failing commit (abbreviated SHA + subject
-//! snippet), silently no-ops outside a git repo, and hard-fails on an
-//! unresolvable `since:` ref with a shallow-clone hint. This module
-//! centralises the head-or-range fetch and the per-commit violation
-//! formatting so each rule body stays thin.
+//! one violation per failing commit (abbreviated SHA + subject snippet), and
+//! hard-fails on an unresolvable `since:` ref with a shallow-clone hint. The
+//! engine gates repository availability before dispatch. This module
+//! centralises the head-or-range fetch and per-commit violation formatting.
 //!
 //! `since:` arrives already resolved: the canonical v0.11 `{{env.X}}`
 //! interpolation is performed at config load by `alint-dsl`, so these
@@ -25,11 +24,11 @@ use alint_core::{Context, Error, Result};
 /// - `since` `Some` → the `<since>..HEAD` range (the PR-CI shape),
 ///   oldest first, merge commits excluded unless `include_merges`.
 ///
-/// Returns an empty vec (silent no-op) outside a git repo, with no
-/// commits, or when `git` is unavailable. A `since:` ref that fails
-/// to resolve is an [`Error::rule_config`] with the shallow-clone
-/// hint, so the user sees the misconfiguration instead of a silently
-/// empty range.
+/// Returns an empty vec when there are no commits. The raw Git helpers can also
+/// report repository unavailability as absence, but metadata-driven engine
+/// routing gates that case before this function is dispatched. A `since:` ref
+/// that fails to resolve is an [`Error::rule_config`] with the shallow-clone
+/// hint.
 pub(crate) fn collect_commits(
     ctx: &Context<'_>,
     since: Option<&str>,

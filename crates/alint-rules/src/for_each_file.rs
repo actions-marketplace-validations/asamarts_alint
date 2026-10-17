@@ -16,6 +16,8 @@
 //!   level: warning
 //! ```
 
+use std::path::Path;
+
 use alint_core::when::WhenExpr;
 use alint_core::{
     CompiledNestedSpec, Context, Error, Level, NestedRuleSpec, Result, Rule, RuleSpec, Scope,
@@ -25,7 +27,7 @@ use serde::Deserialize;
 
 use crate::for_each_dir::{
     ForEachParent, IterateMode, SelectSpec, compile_nested_require, evaluate_for_each,
-    parse_when_iter, resolve_select, validate_nested_require,
+    parse_when_iter, resolve_select, validate_nested_require, visit_sensitive_for_each,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -84,6 +86,25 @@ impl Rule for ForEachFileRule {
 
     fn nested_rule_specs(&self) -> &[CompiledNestedSpec] {
         &self.require
+    }
+
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        visit_sensitive_for_each(
+            &self.id,
+            self.level,
+            explicit,
+            &self.select_scope,
+            self.when_iter.as_ref(),
+            &self.require,
+            ctx,
+            IterateMode::Files,
+            visit,
+        );
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {

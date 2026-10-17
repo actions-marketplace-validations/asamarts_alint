@@ -1,0 +1,27 @@
+name: configured git_untrack fails closed outside a repository
+tags: [fix, file_absent, git_untrack, git]
+
+# The fix operation activates Git even without git_tracked_only.
+given:
+  tree:
+    build:
+      out.o: "OBJ\n"
+  config: |
+    version: 1
+    rules:
+      - id: no-build-output
+        kind: file_absent
+        paths: "build/**"
+        level: error
+        fix:
+          git_untrack: {}
+
+when: [fix]
+
+expect:
+  - analysis_failures:
+      - {rule: no-build-output, kind: resource_read}
+
+expect_tree:
+  build:
+    out.o: "OBJ\n"

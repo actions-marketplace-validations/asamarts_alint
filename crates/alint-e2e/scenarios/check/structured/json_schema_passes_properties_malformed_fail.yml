@@ -1,9 +1,9 @@
-name: json_schema_passes flags a malformed .properties with one parse-error violation
+name: json_schema_passes flags malformed properties as one parse analysis failure
 tags: [check, json_schema_passes, structured, properties, failing]
 
-# The properties parse-error path (symmetry with the dotenv/xml malformed
-# scenarios): a .properties with an invalid `\uXXXX` escape fails to parse and
-# yields exactly ONE parse-error violation, not a flood.
+# The properties parse-error path (symmetry with the dotenv/XML malformed
+# scenarios): a `.properties` file with an invalid `\uXXXX` escape fails to parse
+# and yields exactly ONE parse analysis failure, not a flood.
 
 given:
   tree:
@@ -28,5 +28,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
-      - {rule: props-parse, level: error, path: application.properties}
+  - violations: []
+    analysis_failures:
+      - {rule: props-parse, kind: resource_parse, path: application.properties}

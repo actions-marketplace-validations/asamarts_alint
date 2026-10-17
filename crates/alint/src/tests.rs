@@ -63,6 +63,7 @@ fn fix_exit_status_maps_the_fix_contract() {
             violation: Violation::new("v"),
             status,
         }],
+        analysis_failures: Vec::new(),
     };
     let err_rule = || rule(Level::Error, FixStatus::Unfixable);
     // A fix that was ATTEMPTED and errored (a `Skipped` of kind `Errored`).

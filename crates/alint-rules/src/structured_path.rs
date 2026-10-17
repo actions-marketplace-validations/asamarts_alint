@@ -60,8 +60,8 @@
 use std::path::{Path, PathBuf};
 
 use alint_core::{
-    Applicability, Context, Error, FixSpec, Fixer, Format, Level, PathsSpec, PerFileRule, Result,
-    Rule, RuleSpec, Scope, Violation,
+    AnalysisFailureKind, Applicability, Context, Error, FixSpec, Fixer, Format, Level, PathsSpec,
+    PerFileRule, Result, Rule, RuleSpec, Scope, Violation,
 };
 
 use crate::fixers::StructuredFixer;
@@ -235,6 +235,38 @@ impl Rule for StructuredPathRule {
         self.fixer.as_ref().map(|f| f as &dyn Fixer)
     }
 
+    fn path_contents_sensitive_by_default(&self) -> bool {
+        self.format.redacts_by_default()
+    }
+
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        let manifest_sensitive = self.scope.sensitive_manifest_sources().next().is_some();
+        for path in self.scope.sensitive_manifest_sources() {
+            visit(path);
+        }
+        if !explicit && !manifest_sensitive && !self.format.redacts_by_default() {
+            return;
+        }
+        if let Some(literals) = &self.literal_paths {
+            for path in literals {
+                if ctx.index.contains_file(path) && self.scope.matches(path, ctx.index) {
+                    visit(path);
+                }
+            }
+            return;
+        }
+        for entry in ctx.index.files() {
+            if self.scope.matches(&entry.path, ctx.index) {
+                visit(&entry.path);
+            }
+        }
+    }
+
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
         if let Some(literals) = self.literal_paths.as_ref() {
@@ -263,7 +295,7 @@ impl Rule for StructuredPathRule {
                 let bytes = match crate::io::read_capped(&full) {
                     Ok(b) => b,
                     Err(e) => {
-                        violations.extend(crate::io::read_cap_error_violation(literal, &e));
+                        violations.push(crate::io::read_cap_error_violation(literal, &e));
                         continue;
                     }
                 };
@@ -281,7 +313,7 @@ impl Rule for StructuredPathRule {
                 let bytes = match crate::io::read_capped(&full) {
                     Ok(b) => b,
                     Err(e) => {
-                        violations.extend(crate::io::read_cap_error_violation(&entry.path, &e));
+                        violations.push(crate::io::read_cap_error_violation(&entry.path, &e));
                         continue;
                     }
                 };
@@ -317,13 +349,25 @@ impl PerFileRule for StructuredPathRule {
         if looks_binary(bytes) {
             return Ok(Vec::new());
         }
+        let sensitive = self.format.redacts_by_default();
+        let redact = |finding: &mut Violation, category: &str, evidence: &[String]| {
+            if sensitive {
+                let locator = format!(
+                    "{}\0{}\0{}\0{category}",
+                    self.format.label(),
+                    path.display(),
+                    self.path_src
+                );
+                finding.redact_evidence(&self.id, &locator, evidence.iter().map(String::as_str));
+            }
+        };
         // Lossy-decode (like `json_schema_passes` / `cross_file`) rather than a
         // strict `from_utf8` + silent skip: a non-UTF-8 file -- e.g. a Latin-1
         // `.properties`, the format's historical default -- must be ANALYZED, not
         // silently ignored. Invalid bytes become U+FFFD. For the STRICT formats
         // (JSON / TOML / XML / HCL / INI / dotenv) a truncated-but-textual file
-        // caught by a broad glob then surfaces one parse-error violation rather than
-        // hiding. The two PERMISSIVE formats do NOT: `.properties` maps almost any
+        // caught by a broad glob then surfaces one parse analysis failure rather
+        // than hiding. The two PERMISSIVE formats do NOT: `.properties` maps almost any
         // bytes to valueless keys and YAML reads bare bytes as a scalar string, so a
         // mis-globbed textual file there yields a junk tree (the query just finds no
         // match), not a parse error -- keep the glob narrow for those formats.
@@ -331,13 +375,16 @@ impl PerFileRule for StructuredPathRule {
         let root_value = match self.format.parse(&text) {
             Ok(v) => v,
             Err(err) => {
-                return Ok(vec![
-                    Violation::new(format!(
-                        "not a valid {} document: {err}",
-                        self.format.label()
-                    ))
-                    .with_path(std::sync::Arc::<Path>::from(path)),
-                ]);
+                let mut finding = Violation::new(format!(
+                    "not a valid {} document: {err}",
+                    self.format.label()
+                ))
+                .with_path(std::sync::Arc::<Path>::from(path))
+                .as_analysis_failure(AnalysisFailureKind::ResourceParse);
+                if sensitive {
+                    finding.redact_message(&self.id);
+                }
+                return Ok(vec![finding]);
             }
         };
         let matches = self.path_expr.query(&root_value);
@@ -354,11 +401,14 @@ impl PerFileRule for StructuredPathRule {
                     self.path_src
                 )
             });
-            return Ok(vec![
-                Violation::new(msg)
-                    .with_path(std::sync::Arc::<Path>::from(path))
-                    .with_baseline_key(format!("{}\u{0}absent", self.path_src)),
-            ]);
+            let mut finding = Violation::new(msg)
+                .with_path(std::sync::Arc::<Path>::from(path))
+                .with_baseline_key(format!("{}\u{0}absent", self.path_src));
+            // The matched value drives this finding even though the default
+            // message is value-free; mark secret-bearing formats so baseline
+            // identity and remediation output stay protected.
+            redact(&mut finding, "absent", &[]);
+            return Ok(vec![finding]);
         }
         if matches.is_empty() {
             if self.if_present {
@@ -368,9 +418,8 @@ impl PerFileRule for StructuredPathRule {
                 .message
                 .clone()
                 .unwrap_or_else(|| format!("JSONPath `{}` produced no match", self.path_src));
-            return Ok(vec![
-                Violation::new(msg).with_path(std::sync::Arc::<Path>::from(path)),
-            ]);
+            let finding = Violation::new(msg).with_path(std::sync::Arc::<Path>::from(path));
+            return Ok(vec![finding]);
         }
         let mut violations = Vec::new();
         for m in matches.iter() {
@@ -382,11 +431,12 @@ impl PerFileRule for StructuredPathRule {
                 // violations would collapse to one fingerprint and mask a
                 // genuinely new failing node; and a reworded `message:`
                 // must not churn the baseline. (v3 audit, §2.4.)
-                violations.push(
-                    Violation::new(base)
-                        .with_path(std::sync::Arc::<Path>::from(path))
-                        .with_baseline_key(match_baseline_key(&self.path_src, &self.op, m)),
-                );
+                let mut finding = Violation::new(base)
+                    .with_path(std::sync::Arc::<Path>::from(path))
+                    .with_baseline_key(match_baseline_key(&self.path_src, &self.op, m));
+                let evidence = sensitive.then(|| vec![m.to_string(), short_render(m)]);
+                redact(&mut finding, "mismatch", evidence.as_deref().unwrap_or(&[]));
+                violations.push(finding);
             }
         }
         Ok(violations)
@@ -1298,6 +1348,52 @@ mod tests {
         assert_eq!(short_render(&Value::String("café".to_string())), "\"café\"");
     }
 
+    #[test]
+    fn dotenv_and_properties_mismatches_redact_only_extracted_values() {
+        const SECRET: &str = "TOKEN_VALUE_DO_NOT_REPORT";
+        for (kind, file, body) in [
+            ("dotenv_path_equals", ".env", format!("TOKEN={SECRET}\n")),
+            (
+                "properties_path_equals",
+                "app.properties",
+                format!("TOKEN={SECRET}\n"),
+            ),
+        ] {
+            let spec = spec_yaml(&format!(
+                "id: t\nkind: {kind}\npaths: \"{file}\"\npath: \"$.TOKEN\"\n\
+                 equals: \"configured-public-value\"\nlevel: error\n"
+            ));
+            let rule = crate::builtin_registry().build(&spec).unwrap();
+            let (tmp, idx) = tempdir_with_files(&[(file, body.as_bytes())]);
+            let findings = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+            assert_eq!(findings.len(), 1);
+            let finding = &findings[0];
+            assert!(finding.is_sensitive());
+            assert!(!finding.message.contains(SECRET), "{finding:?}");
+            assert!(finding.message.contains("<redacted:"), "{finding:?}");
+            assert!(
+                finding.message.contains("configured-public-value"),
+                "configured prose stays visible: {finding:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn json_mismatch_with_the_same_value_remains_visible() {
+        const VALUE: &str = "TOKEN_VALUE_DO_NOT_REPORT";
+        let spec = spec_yaml(
+            "id: t\nkind: json_path_equals\npaths: \"a.json\"\npath: \"$.TOKEN\"\n\
+             equals: \"configured-public-value\"\nlevel: error\n",
+        );
+        let rule = json_path_equals_build(&spec).unwrap();
+        let body = format!(r#"{{"TOKEN":"{VALUE}"}}"#);
+        let (tmp, idx) = tempdir_with_files(&[("a.json", body.as_bytes())]);
+        let findings = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(!findings[0].is_sensitive());
+        assert!(findings[0].message.contains(VALUE), "{findings:?}");
+    }
+
     // ─── build-path errors ────────────────────────────────────
 
     #[test]
@@ -1678,6 +1774,27 @@ mod tests {
     }
 
     #[test]
+    fn dotenv_path_absent_marks_the_value_driven_finding_sensitive() {
+        const SECRET: &str = "ABSENT_SECRET_DO_NOT_REPORT";
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: dotenv_path_absent\n\
+             paths: \".env\"\n\
+             path: \"$.TOKEN\"\n\
+             level: error\n\
+             fix: { remove_value: {} }\n",
+        );
+        let rule = dotenv_path_absent_build(&spec).unwrap();
+        let body = format!("TOKEN={SECRET}\n");
+        let (tmp, idx) = tempdir_with_files(&[(".env", body.as_bytes())]);
+        let findings = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].is_sensitive(), "{findings:?}");
+        assert!(!findings[0].message.contains(SECRET), "{findings:?}");
+    }
+
+    #[test]
     fn yaml_path_absent_filter_fanout_collapses_to_one_violation() {
         // A root-level filter `$[?…]` selects *every* top-level key when the
         // predicate holds (N nodes). Absent-mode must still yield exactly ONE
@@ -1882,7 +1999,7 @@ mod tests {
     }
 
     #[test]
-    fn xml_malformed_fires_one_violation() {
+    fn xml_malformed_emits_one_analysis_failure() {
         let spec = spec_yaml(
             "id: t\n\
              kind: xml_path_equals\n\
@@ -1894,7 +2011,7 @@ mod tests {
         let rule = xml_path_equals_build(&spec).unwrap();
         let (tmp, idx) = tempdir_with_files(&[("App.csproj", b"<Project><Unclosed></Project>")]);
         let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1, "not-well-formed XML should fire once");
+        assert_eq!(v.len(), 1, "not-well-formed XML should fail analysis once");
         assert!(v[0].message.contains("XML"), "{:?}", v[0].message);
     }
 
@@ -1902,7 +2019,7 @@ mod tests {
     fn xml_deeply_nested_is_a_parse_error_not_an_abort() {
         // P1 regression: unbounded recursion would `abort()` the
         // whole process. The `MAX_XML_DEPTH` guard must instead
-        // yield exactly one ordinary parse-error violation for
+        // yield exactly one `resource_parse` analysis failure for
         // the file (no panic, no abort, per-file contained).
         let depth = alint_core::MAX_XML_DEPTH + 50;
         let xml = format!("{}deep{}", "<a>".repeat(depth), "</a>".repeat(depth));
@@ -1920,7 +2037,7 @@ mod tests {
         assert_eq!(
             v.len(),
             1,
-            "deeply-nested XML must yield exactly one parse-error violation: {v:?}"
+            "deeply-nested XML must yield exactly one parse analysis failure: {v:?}"
         );
         assert!(
             v[0].message.contains("not a valid XML") && v[0].message.contains("depth"),
@@ -1934,7 +2051,7 @@ mod tests {
         // The MAX_XML_DEPTH guard above is POST-parse; a document deep enough to
         // overflow `roxmltree::Document::parse` itself (tens of thousands of
         // levels) aborts the whole process before that guard runs. The pre-parse
-        // `xml_within_parse_limits` scan must reject it as an ordinary parse error.
+        // `xml_within_parse_limits` scan must reject it as a parse analysis failure.
         // (Without the pre-scan this test would SIGABRT the whole test binary.)
         let depth = 100_000;
         let xml = format!("{}deep{}", "<a>".repeat(depth), "</a>".repeat(depth));

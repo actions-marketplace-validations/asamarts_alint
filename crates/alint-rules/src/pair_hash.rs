@@ -21,7 +21,10 @@
 
 use std::path::Path;
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
+    unreadable_file_violation,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 
@@ -148,25 +151,28 @@ impl Rule for PairHashRule {
         let b_bytes = match crate::io::read_capped(&ctx.root.join(&target_rel)) {
             Ok(b) => b,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
-                violations.push(
-                    Violation::new(format!(
-                        "pair_hash target {:?} is too large to analyze ({})",
-                        self.target,
-                        crate::io::over_cap(n)
-                    ))
-                    .with_path(std::sync::Arc::<Path>::from(target_path)),
-                );
+                violations.push(alint_core::too_large_file_violation(target_path, n));
                 return Ok(violations);
             }
-            Err(crate::io::ReadCapError::Io(_)) => {
+            Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 let msg = self.message.clone().unwrap_or_else(|| {
-                    format!(
-                        "pair_hash target {:?} does not exist or is unreadable",
-                        self.target
-                    )
+                    format!("pair_hash target {:?} does not exist", self.target)
                 });
-                violations
-                    .push(Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)));
+                let finding = Violation::new(msg)
+                    .with_path(std::sync::Arc::<Path>::from(target_path))
+                    .with_related_locations(
+                        ctx.index
+                            .files()
+                            .filter(|entry| self.source_scope.matches(&entry.path, ctx.index))
+                            .map(|entry| {
+                                RelatedLocation::new(entry.path.as_ref(), "digest source")
+                            }),
+                    );
+                violations.push(finding);
+                return Ok(violations);
+            }
+            Err(crate::io::ReadCapError::Io(e)) => {
+                violations.push(unreadable_file_violation(target_path, &e));
                 return Ok(violations);
             }
         };
@@ -180,23 +186,22 @@ impl Rule for PairHashRule {
             let a_bytes = match crate::io::read_capped(&ctx.root.join(&entry.path)) {
                 Ok(b) => b,
                 Err(crate::io::ReadCapError::TooLarge(n)) => {
-                    violations.push(
-                        Violation::new(format!(
-                            "{} is too large to hash ({})",
-                            entry.path.display(),
-                            crate::io::over_cap(n)
-                        ))
-                        .with_path(entry.path.clone()),
-                    );
+                    violations.push(alint_core::too_large_file_violation(&entry.path, n));
                     continue;
                 }
-                // permission / race — silent skip, like content rules
-                Err(crate::io::ReadCapError::Io(_)) => continue,
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    violations.push(crate::io::io_error_violation(&entry.path, &e));
+                    continue;
+                }
             };
             let digest = self.algorithm.hex(&a_bytes);
             if let Some(desc) = self.check(&entry.path, &digest, &b_text, &b_lower) {
                 let msg = self.message.clone().unwrap_or(desc);
-                violations.push(Violation::new(msg).with_path(entry.path.clone()));
+                violations.push(
+                    Violation::new(msg)
+                        .with_path(entry.path.clone())
+                        .with_related_location(RelatedLocation::new(&target_rel, "digest target")),
+                );
             }
         }
         Ok(violations)
@@ -413,6 +418,9 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].path.as_deref(), Some(Path::new("a.txt")));
         assert!(v[0].message.contains("not found in"));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("pin.txt"));
+        assert_eq!(v[0].related_locations[0].label, "digest target");
     }
 
     #[test]
@@ -453,7 +461,7 @@ mod tests {
         r.set_allow_out_of_root(true);
         let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert!(
-            v.iter().all(|x| x.note_kind.is_some()),
+            v.iter().all(|x| x.note_kind().is_some()),
             "only an out-of-root note: {v:?}"
         );
         assert!(
@@ -573,6 +581,9 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].path.as_deref(), Some(Path::new("nope.sum")));
         assert!(v[0].message.contains("does not exist"));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("a.txt"));
+        assert_eq!(v[0].related_locations[0].label, "digest source");
     }
 
     #[test]

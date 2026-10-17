@@ -1,0 +1,27 @@
+name: cross_file reports a non-string source extraction
+
+tags: [check, cross_file, structured, failing]
+
+# A typed number is not coerced to text. The typed mismatch is the complete
+# finding; relation evaluation stops because no trustworthy source set exists.
+given:
+  tree:
+    source.json: |
+      {"version": 7}
+    target.json: |
+      {"version": "7"}
+  config: |
+    version: 1
+    rules:
+      - id: versions-match
+        kind: cross_file
+        source: { file: source.json, extract: { json: "$.version" } }
+        targets: [{ file: target.json, extract: { json: "$.version" } }]
+        relation: equals
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: versions-match, level: error, path: source.json}

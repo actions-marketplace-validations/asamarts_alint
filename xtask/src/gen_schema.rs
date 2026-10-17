@@ -33,6 +33,8 @@ pub fn build_generated_schema() -> Result<Value> {
         .and_then(Value::as_object_mut)
         .context("base schema has no `$defs` object")?;
 
+    add_sensitive_common_field(defs)?;
+
     let mut option_schemas = alint_rules::rule_option_schemas();
     let generated_defs: BTreeSet<String> = option_schemas
         .iter()
@@ -70,6 +72,23 @@ pub fn build_generated_schema() -> Result<Value> {
     normalize_descriptions(&mut schema);
     prune_unreferenced_defs(&mut schema)?;
     Ok(schema)
+}
+
+fn add_sensitive_common_field(defs: &mut serde_json::Map<String, Value>) -> Result<()> {
+    let properties = defs
+        .get_mut("rule_common")
+        .and_then(|value| value.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .context("schema has no `$defs/rule_common/properties` object")?;
+    properties.insert(
+        "sensitive".to_string(),
+        serde_json::json!({
+            "type": "boolean",
+            "default": false,
+            "description": "Redact this rule's messages, baseline evidence, proposed edits, and fix detail before any public report is returned. Use for rules whose findings may contain credentials or other secrets."
+        }),
+    );
+    Ok(())
 }
 
 /// Replace nested definitions owned by the current Rust option schemas while
@@ -375,6 +394,7 @@ fn apply_nested_rule_restrictions(defs: &mut serde_json::Map<String, Value>) -> 
                 | "paths"
                 | "policy_url"
                 | "scope_filter"
+                | "sensitive"
                 | "when"
         )
     });

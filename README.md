@@ -4,9 +4,11 @@
 [![CI](https://github.com/asamarts/alint/actions/workflows/ci.yml/badge.svg)](https://github.com/asamarts/alint/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](#license)
 
-**A general linter.**
+**A fast, general linter.**
 
 Code linters check what's inside a source file. alint checks the repository around it: files that should or shouldn't exist, naming conventions, file contents, values buried in `package.json`, `Cargo.toml` or a workflow YAML, and the relationships between files. The rules live in one `.alint.yml` and run on every pull request, in pre-commit and in your editor.
+
+**Fast at scale:** the workspace-bundle benchmark checks 100,000 files in about 1.5 seconds and one million in under 20 seconds ([measured on every release](https://alint.org/benchmarks/)).
 
 Every repository has a shape it is supposed to keep. Every package carries a README. Workflows pin their actions to a commit SHA. Nobody commits `target/` or `node_modules/`. Source files that need a license header have one. These rules are real, and a repo drifts when they slip, but they usually live in a reviewer's head or a line of `CONTRIBUTING.md`, where nothing fails when a pull request ignores them.
 
@@ -69,7 +71,7 @@ rules:
     level: error
 ```
 
-Under the hood, alint walks the repository once, in parallel, honoring `.gitignore`, and reads each file's bytes at most once. That is why a 100,000-file workspace bundle checks in about a second and a half and a million files in under twenty seconds ([benchmarks, measured per release](https://alint.org/benchmarks/)). The engine, the rules, the output formatters, and a language server for editors are all one binary, with no dynamically loaded plugins (an external tool can only be spawned per file by the opt-in, top-level-only `command` rule kind) and nothing from Node, the JVM, or Python in the path. The [concepts guide](https://alint.org/docs/concepts/) and [ARCHITECTURE.md](docs/design/ARCHITECTURE.md) go deeper.
+Under the hood, alint walks the repository once, in parallel, honoring `.gitignore`, and reads each file's bytes at most once. The engine, the rules, the output formatters, and a language server for editors are all one binary, with no dynamically loaded plugins (an external tool can only be spawned per file by the opt-in, top-level-only `command` rule kind) and nothing from Node, the JVM, or Python in the path. The [concepts guide](https://alint.org/docs/concepts/) and [ARCHITECTURE.md](docs/design/ARCHITECTURE.md) go deeper.
 
 ## What it can check
 

@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use tower_lsp::lsp_types::{
-    CodeDescription, Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url,
+    CodeDescription, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity, Location,
+    NumberOrString, Position, Range, Url,
 };
 
 use alint_core::{Engine, Level, RuleResult, Violation};
@@ -64,39 +65,75 @@ pub(crate) fn group_findings(
 ) -> FindingsByPath {
     let mut by_path = FindingsByPath::new();
     for result in results {
-        let Some(severity) = severity_of(result.level) else {
-            continue;
-        };
+        let severity = severity_of(result.level);
         let policy_url = result.policy_url.as_ref().map(ToString::to_string);
         let per_file = ctx.engine.is_per_file(&result.rule_id);
         let kind = ctx.kinds.get(result.rule_id.as_ref());
         let description = kind.and_then(|k| kind_description(k));
         let docs_url = kind.and_then(|k| rule_docs_url(k));
-        for violation in &result.violations {
-            // Anchor path-less (tree/file-level) findings to the config
-            // file so a "missing required file" still shows somewhere.
-            let abs = match &violation.path {
-                Some(rel) => ctx.root.join(rel.as_ref()),
-                None => ctx.config_path.to_path_buf(),
-            };
-            let text = if violation.path.is_some() && violation.column.is_some() {
+        if let Some(severity) = severity {
+            for violation in &result.violations {
+                // Anchor path-less (tree/file-level) findings to the config
+                // file so a "missing required file" still shows somewhere.
+                let abs = match &violation.path {
+                    Some(rel) => ctx.root.join(rel.as_ref()),
+                    None => ctx.config_path.to_path_buf(),
+                };
+                let text = if violation.path.is_some()
+                    && (violation.column.is_some() || violation.range.is_some())
+                {
+                    texts.get(&abs)
+                } else {
+                    None
+                };
+                let range = violation_range(violation, text);
+                let related_information =
+                    related_information(ctx.root, &abs, range, violation, texts);
+                by_path.entry(abs).or_default().push(Finding {
+                    range,
+                    severity,
+                    rule_id: result.rule_id.to_string(),
+                    message: violation.message.to_string(),
+                    line: violation.line,
+                    column: violation.column,
+                    policy_url: policy_url.clone(),
+                    fixable: result.is_fixable,
+                    sensitive: violation.is_sensitive(),
+                    per_file,
+                    description,
+                    docs_url: docs_url.clone(),
+                    related_information,
+                });
+            }
+        }
+        for failure in &result.analysis_failures {
+            let abs = failure
+                .path
+                .as_ref()
+                .map_or_else(|| ctx.config_path.to_path_buf(), |rel| ctx.root.join(rel));
+            let text = if failure.path.is_some() && failure.column.is_some() {
                 texts.get(&abs)
             } else {
                 None
             };
-            let range = violation_range(violation, text);
             by_path.entry(abs).or_default().push(Finding {
-                range,
-                severity,
+                range: finding_range(failure.line, failure.column, text),
+                severity: DiagnosticSeverity::ERROR,
                 rule_id: result.rule_id.to_string(),
-                message: violation.message.to_string(),
-                line: violation.line,
-                column: violation.column,
-                policy_url: policy_url.clone(),
-                fixable: result.is_fixable,
+                message: format!(
+                    "analysis failure ({}): {}",
+                    failure.kind.as_str(),
+                    failure.message
+                ),
+                line: failure.line,
+                column: failure.column,
+                policy_url: None,
+                fixable: false,
+                sensitive: false,
                 per_file,
-                description,
-                docs_url: docs_url.clone(),
+                description: None,
+                docs_url: None,
+                related_information: Vec::new(),
             });
         }
     }
@@ -120,21 +157,40 @@ pub(crate) fn severity_label(severity: DiagnosticSeverity) -> &'static str {
     }
 }
 
-/// alint line/column are 1-indexed and optional, and the column counts
-/// Unicode scalar values (`char`s); LSP positions are 0-indexed with the
-/// character offset in UTF-16 code units (the protocol default). With
-/// the document `text`, the column is converted exactly (an emoji
-/// before the marker counts as two units) and the range spans the
-/// marked character's full UTF-16 width. Without text it falls back to
-/// the raw column. File- and tree-level findings (no line) anchor at
-/// the start of the file. The range is one character wide so the editor
-/// has something to attach the marker (and hover) to.
+/// alint coordinates are 1-indexed Unicode scalar positions; LSP coordinates
+/// are 0-indexed UTF-16 positions. A primary range is preserved when present;
+/// legacy point findings retain their one-character marker.
 pub(crate) fn violation_range(violation: &Violation, text: Option<&str>) -> Range {
-    let line_idx = violation.line.map_or(0, |l| l.saturating_sub(1));
+    violation.range.as_ref().map_or_else(
+        || finding_range(violation.line, violation.column, text),
+        |range| source_range(range, text),
+    )
+}
+
+fn source_range(range: &alint_core::SourceRange, text: Option<&str>) -> Range {
+    Range::new(
+        source_position(range.start_line(), range.start_column(), text),
+        source_position(range.end_line(), range.end_column(), text),
+    )
+}
+
+fn source_position(line: usize, column: usize, text: Option<&str>) -> Position {
+    let line_idx = line.saturating_sub(1);
+    let character = text
+        .and_then(|text| text.split('\n').nth(line_idx))
+        .map_or_else(
+            || u32::try_from(column.saturating_sub(1)).unwrap_or(u32::MAX),
+            |line_text| utf16_column(line_text, column).0,
+        );
+    Position::new(u32::try_from(line_idx).unwrap_or(u32::MAX), character)
+}
+
+fn finding_range(line: Option<usize>, column: Option<usize>, text: Option<&str>) -> Range {
+    let line_idx = line.map_or(0, |line| line.saturating_sub(1));
     let line = u32::try_from(line_idx).unwrap_or(0);
-    let (col, width) = match violation.column {
+    let (col, width) = match column {
         None => (0, 1),
-        Some(column) => match text.and_then(|t| t.split('\n').nth(line_idx)) {
+        Some(column) => match text.and_then(|text| text.split('\n').nth(line_idx)) {
             Some(line_text) => utf16_column(line_text, column),
             None => (u32::try_from(column.saturating_sub(1)).unwrap_or(0), 1),
         },
@@ -143,6 +199,44 @@ pub(crate) fn violation_range(violation: &Violation, text: Option<&str>) -> Rang
         Position::new(line, col),
         Position::new(line, col.saturating_add(width)),
     )
+}
+
+pub(crate) fn related_information(
+    root: &Path,
+    primary_abs: &Path,
+    primary_range: Range,
+    violation: &Violation,
+    texts: &mut TextSource,
+) -> Vec<DiagnosticRelatedInformation> {
+    let mut information = Vec::with_capacity(
+        violation.related_locations.len() + usize::from(violation.related_locations_omitted > 0),
+    );
+    for related in &violation.related_locations {
+        let abs = root.join(&related.path);
+        let Ok(uri) = Url::from_file_path(&abs) else {
+            continue;
+        };
+        let range = related.range.as_ref().map_or_else(
+            || finding_range(None, None, None),
+            |range| source_range(range, texts.get(&abs)),
+        );
+        information.push(DiagnosticRelatedInformation {
+            location: Location::new(uri, range),
+            message: related.label.clone(),
+        });
+    }
+    if violation.related_locations_omitted > 0
+        && let Ok(uri) = Url::from_file_path(primary_abs)
+    {
+        information.push(DiagnosticRelatedInformation {
+            location: Location::new(uri, primary_range),
+            message: format!(
+                "and {} more related locations",
+                violation.related_locations_omitted
+            ),
+        });
+    }
+    information
 }
 
 /// Convert a 1-based `char` column within `line_text` to a 0-based
@@ -166,7 +260,10 @@ pub(crate) fn utf16_column(line_text: &str, column: usize) -> (u32, u32) {
     )
 }
 
-pub(crate) fn finding_to_diagnostic(f: &Finding) -> Diagnostic {
+pub(crate) fn finding_to_diagnostic(
+    f: &Finding,
+    related_information_supported: bool,
+) -> Diagnostic {
     let code_description = f
         .policy_url
         .as_deref()
@@ -179,26 +276,34 @@ pub(crate) fn finding_to_diagnostic(f: &Finding) -> Diagnostic {
         code_description,
         source: Some("alint".to_string()),
         message: f.message.clone(),
+        related_information: related_information_supported.then(|| f.related_information.clone()),
         ..Diagnostic::default()
     }
 }
 
-/// True when `pos` falls within `range` (inclusive of both ends so a
-/// hover on the single-character marker registers).
+/// True when `pos` falls within the half-open `range`. Empty ranges contain
+/// no positions.
 pub(crate) fn range_contains(range: Range, pos: Position) -> bool {
-    let after_start = (pos.line, pos.character) >= (range.start.line, range.start.character);
-    let before_end = (pos.line, pos.character) <= (range.end.line, range.end.character);
-    after_start && before_end
+    let start = (range.start.line, range.start.character);
+    let end = (range.end.line, range.end.character);
+    let pos = (pos.line, pos.character);
+    start <= pos && pos < end
 }
 
-/// True when two ranges intersect (the code-action selection vs. a
-/// finding's marker).
+/// True when two half-open ranges intersect. A zero-width selection represents
+/// an editor cursor and overlaps a non-empty range only when the cursor is
+/// inside it; the exclusive end does not match. Two empty ranges never overlap.
 pub(crate) fn ranges_overlap(a: Range, b: Range) -> bool {
     let a_start = (a.start.line, a.start.character);
     let a_end = (a.end.line, a.end.character);
     let b_start = (b.start.line, b.start.character);
     let b_end = (b.end.line, b.end.character);
-    a_start <= b_end && b_start <= a_end
+    match (a_start == a_end, b_start == b_end) {
+        (true, true) => false,
+        (true, false) => b_start <= a_start && a_start < b_end,
+        (false, true) => a_start <= b_start && b_start < a_end,
+        (false, false) => a_start < b_end && b_start < a_end,
+    }
 }
 
 /// A range that covers any whole document. LSP clients clamp positions

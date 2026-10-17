@@ -1,0 +1,28 @@
+name: registry_paths_resolve reports a non-string exclusion query
+
+tags: [check, registry_paths_resolve, cross_file, structured, failing]
+
+# The primary registry entry resolves. The independent exclusion query selects
+# a boolean and must report that mismatch rather than silently excluding nothing.
+given:
+  tree:
+    registry.json: |
+      {"members": ["pkg"], "skip": [false]}
+    pkg:
+      keep.txt: "kept\n"
+  config: |
+    version: 1
+    rules:
+      - id: members-resolve
+        kind: registry_paths_resolve
+        source: registry.json
+        extract: { json: "$.members[*]" }
+        exclude_query: "$.skip[*]"
+        expect: dir
+        level: error
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: members-resolve, level: error, path: registry.json}

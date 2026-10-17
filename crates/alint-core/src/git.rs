@@ -1,19 +1,12 @@
-//! Best-effort git-tracking integration.
+//! Bounded Git integration.
 //!
-//! `git_tracked_only` rules opt in to filtering matches against the
-//! repo's tracked-paths set — i.e. the output of `git ls-files`.
-//! That set is computed once per [`Engine::run`](crate::Engine::run)
-//! when at least one rule wants it and stashed on the rule
-//! [`Context`](crate::Context).
-//!
-//! The set is *advisory*: alint never refuses to run because a
-//! `git` invocation failed. If the directory isn't a git repo, or
-//! `git` isn't on PATH, or the repo is empty, the set is `None`
-//! and rules that consult it treat every walked entry as
-//! "untracked." Rules opting into `git_tracked_only` therefore
-//! become silent no-ops in non-git settings — which is the right
-//! default for "absence-style" rules whose intent is "don't let
-//! this be committed."
+//! The engine derives active Git dependencies from rule capability metadata,
+//! probes repository usability once, and routes probe failure to one typed
+//! analysis failure per active owning rule. The helpers in this module retain
+//! `Option`-based, best-effort results for operation-specific absence
+//! (unborn HEAD, untracked files, unblameable paths) and direct library use.
+//! `git_tracked_only` filtering reuses the probe's `git ls-files` set through
+//! the rule [`Context`](crate::Context).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -338,13 +331,13 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
 }
 
 /// Like [`collect_changed_paths`] with a `base` ref, but distinguishes
-/// "not a git repo" (silent) from "ref doesn't resolve" (hard error) —
-/// the contract `scope_filter.changed_since:` needs. Returns the set of
-/// paths changed in `<since>...HEAD` (three-dot, merge-base diff —
-/// matching `alint check --changed`), relative to `root`.
+/// repository unavailability from a ref that does not resolve — the contract
+/// `scope_filter.changed_since:` needs. Returns the set of paths changed in
+/// `<since>...HEAD` (three-dot, merge-base diff — matching
+/// `alint check --changed`), relative to `root`.
 ///
 /// - `Ok(Some(set))` — resolved.
-/// - `Ok(None)`       — not a git repo / `git` not on PATH (silent).
+/// - `Ok(None)`       — the repository or Git executable is unavailable.
 /// - `Err(BadRange)`  — in a repo, but `<since>` didn't resolve (e.g.
 ///   a shallow-clone gotcha). The caller surfaces a fetch-depth hint.
 pub fn collect_changed_paths_checked(
@@ -438,9 +431,9 @@ fn diff_name_only(
 /// - the repo has no commits yet (HEAD is unborn)
 /// - the `git log` invocation otherwise exits non-zero
 ///
-/// Used by the `git_commit_message` rule kind. Same advisory
-/// posture as the rest of the git module: a non-git workspace
-/// silently no-ops the rule rather than raising a hard error.
+/// Used by the `git_commit_message` rule kind. The engine handles repository
+/// unavailability before dispatch; `None` remains valid for an unborn HEAD or
+/// an operation-specific failure.
 pub fn head_commit_message(root: &Path) -> Option<String> {
     let output = git_command()
         .arg("-C")
@@ -469,7 +462,8 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
 /// addition to the message.
 ///
 /// Returns `None` on the same conditions as [`head_commit_message`]
-/// (no `git`, not a repo, unborn HEAD), so the rule silently no-ops.
+/// (no `git`, not a repo, unborn HEAD). The engine gates the first two before
+/// rule dispatch; an unborn HEAD has no commit policy input.
 /// Uses the same NUL-separated `--format` encoding as
 /// [`commit_messages_in_range`] so a single commit round-trips
 /// through the shared commit-log parser.
@@ -507,11 +501,9 @@ pub struct CommitRecord {
     pub author_email: String,
 }
 
-/// Errors that distinguish "git is here but the range is invalid"
-/// from "git isn't here at all." The rule layer uses this to hard-
-/// fail on misconfiguration (a bad `since:` ref, often a shallow-
-/// clone gotcha in CI) while silently no-op'ing in non-git
-/// directories.
+/// Errors that distinguish an invalid range from an unavailable repository.
+/// The engine gates repository availability from capability metadata; the rule
+/// layer uses `BadRange` to preserve the specific shallow-clone migration hint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitRangeError {
     /// The `<since>` ref doesn't resolve, or the range itself is
@@ -541,10 +533,9 @@ pub enum CommitRangeError {
 /// - `Ok(Some(records))` on success. The vec may be empty if the
 ///   range itself is empty (`since` == HEAD on a force-push PR, or
 ///   no non-merge commits in the range).
-/// - `Ok(None)` if `git` isn't on PATH or `root` isn't inside a git
-///   repo. Matches the advisory posture of the rest of this module;
-///   rules that consult this helper silently no-op in non-git
-///   settings.
+/// - `Ok(None)` if `git` isn't on PATH or `root` isn't inside a Git repository.
+///   The engine normally gates this before rule dispatch; the explicit shape
+///   keeps this low-level helper total for direct callers.
 /// - `Err(CommitRangeError::BadRange)` if `git` is present and the
 ///   repo is valid but the range couldn't be resolved. Rules
 ///   surface this as a hard error so the user sees the
@@ -562,10 +553,9 @@ pub fn commit_messages_in_range(
     since: &str,
     include_merges: bool,
 ) -> Result<Option<Vec<CommitRecord>>, CommitRangeError> {
-    // First check `git rev-parse` (no range syntax) confirms we're
-    // in a git repo at all. If not, this returns Ok(None) (the
-    // "silent" branch) without surfacing the BadRange error,
-    // matching head_commit_message's posture.
+    // First check `git rev-parse` (no range syntax) confirms repository
+    // availability. If it fails, return the distinct `Ok(None)` shape that
+    // engine capability routing promotes before normal rule dispatch.
     let probe = git_command()
         .arg("-C")
         .arg(root)
@@ -913,9 +903,9 @@ impl BlameCache {
     }
 
     /// Return the blame for `rel_path`, computing once and
-    /// caching forever (within this run). `None` means blame
-    /// failed for this path — the caller silently no-ops, by
-    /// the rule-kind's advisory posture.
+    /// caching forever (within this run). `None` means this individual path
+    /// could not be blamed, so the caller skips it; repository-wide
+    /// unavailability is handled before dispatch.
     pub fn get(&self, rel_path: &Path) -> Option<Arc<Vec<BlameLine>>> {
         // Hold the lock through the shell-out: the `git blame`
         // process spawn is the dominant cost, so contention from
@@ -1446,9 +1436,9 @@ mod tests {
     #[test]
     fn head_message_returns_none_outside_git() {
         let tmp = tempfile::tempdir().unwrap();
-        // Same advisory posture: the `git_commit_message` rule
-        // silently no-ops outside a repo rather than failing
-        // a check on workspaces that don't track in git yet.
+        // The low-level helper remains total outside Git. Engine capability
+        // routing converts this repository-wide condition to an analysis
+        // failure before a commit-message rule dispatches.
         assert!(head_commit_message(tmp.path()).is_none());
     }
 
@@ -2029,10 +2019,10 @@ filename a.rs
     #[test]
     fn commit_range_returns_none_outside_git() {
         let tmp = tempfile::tempdir().unwrap();
-        // Non-git directory: silent None. Distinguishes from the
-        // BadRange error (which a bad ref inside a real repo
-        // produces) so the rule layer can decide between "skip
-        // silently" and "hard fail."
+        // A non-Git directory produces the repository-unavailable variant,
+        // distinct from a bad range inside a usable repository. Engine
+        // capability routing turns this into a typed analysis failure before
+        // dependent rules dispatch.
         let result = commit_messages_in_range(tmp.path(), "main", false);
         assert!(matches!(result, Ok(None)));
     }
@@ -2134,7 +2124,8 @@ filename a.rs
 
     #[test]
     fn changed_paths_checked_none_outside_git_and_bad_range_inside() {
-        // Outside a git repo: silent None (so changed_since no-ops).
+        // The low-level helper preserves unavailable-repository `None`; engine
+        // capability routing turns it into an owning-rule analysis failure.
         let tmp = tempfile::tempdir().unwrap();
         assert!(matches!(
             collect_changed_paths_checked(tmp.path(), "origin/main"),

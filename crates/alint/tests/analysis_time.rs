@@ -317,6 +317,7 @@ fn expect_matches_findings_include_the_analysis_date_directly_and_nested() {
     ] {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("pkg")).unwrap();
+        git(root.path(), &["init", "-q"], None);
         std::fs::write(root.path().join(".alint.yml"), config).unwrap();
         let output = run(
             root.path(),
@@ -342,20 +343,107 @@ fn expect_matches_findings_include_the_analysis_date_directly_and_nested() {
 }
 
 #[test]
-fn explicit_time_allows_non_git_check_and_missing_fallback_is_visible() {
-    let fixture = fixture();
-    let explicit = run(fixture.path(), &["--as-of", "2025-03-04", "check"], None);
-    assert!(explicit.status.success(), "{}", stderr(&explicit));
+fn explicit_time_does_not_bypass_git_and_an_unborn_repo_exposes_the_missing_fallback() {
+    let outside_git = fixture();
+    let explicit = run(
+        outside_git.path(),
+        &["--as-of", "2025-03-04", "check"],
+        None,
+    );
+    assert_eq!(explicit.status.code(), Some(1), "{}", stderr(&explicit));
+    let combined = format!("{}{}", stdout(&explicit), stderr(&explicit));
+    assert!(
+        combined.contains("Git is unavailable") && !combined.contains("analysis time unavailable:"),
+        "{combined}"
+    );
 
-    let missing = run(fixture.path(), &["--fail-on-warning", "check"], None);
-    assert!(!missing.status.success());
+    let unborn = fixture();
+    git(unborn.path(), &["init", "-q"], None);
+    let missing = run(unborn.path(), &["check"], None);
+    assert_eq!(missing.status.code(), Some(1));
     let combined = format!("{}{}", stdout(&missing), stderr(&missing));
     assert!(
-        combined.contains("rule error: analysis time unavailable:")
+        combined.contains("analysis failure")
+            && combined.contains("analysis time unavailable:")
             && combined.contains("pass --as-of")
             && combined.contains("YYYY-MM-DD"),
         "{combined}"
     );
+}
+
+#[test]
+fn analysis_failure_reaches_every_cli_format_and_is_deterministic() {
+    let fixture = fixture();
+    git(fixture.path(), &["init", "-q"], None);
+    for format in [
+        "human", "json", "sarif", "github", "gitlab", "markdown", "junit", "agent",
+    ] {
+        let first = run(fixture.path(), &["--format", format, "check"], None);
+        let second = run(fixture.path(), &["--format", format, "check"], None);
+        assert_eq!(first.status.code(), Some(1), "{format}: {}", stderr(&first));
+        assert_eq!(
+            first.stdout, second.stdout,
+            "{format} stdout was nondeterministic"
+        );
+        assert_eq!(
+            first.stderr, second.stderr,
+            "{format} stderr was nondeterministic"
+        );
+        let combined = format!("{}{}", stdout(&first), stderr(&first));
+        for sentinel in ["stale", "evaluation", "analysis time unavailable"] {
+            assert!(
+                combined.contains(sentinel),
+                "{format} dropped `{sentinel}`:\n{combined}",
+            );
+        }
+    }
+}
+
+#[test]
+fn baseline_refuses_and_every_fix_mode_fails_on_analysis_failure() {
+    let fixture = fixture();
+    git(fixture.path(), &["init", "-q"], None);
+    let baseline_path = fixture.path().join("failure-baseline.json");
+    let baseline = run(
+        fixture.path(),
+        &["baseline", "--output", baseline_path.to_str().unwrap()],
+        None,
+    );
+    assert_eq!(baseline.status.code(), Some(1), "{}", stderr(&baseline));
+    assert!(!baseline_path.exists(), "failure must not be baselined");
+    assert!(
+        stderr(&baseline).contains("refusing to write baseline")
+            && stderr(&baseline).contains("analysis failure"),
+        "{}",
+        stderr(&baseline),
+    );
+
+    std::fs::write(
+        fixture.path().join("empty-baseline.json"),
+        "{\"schema_version\":1}\n",
+    )
+    .unwrap();
+    for args in [
+        &["fix"][..],
+        &["fix", "--dry-run"][..],
+        &["fix", "--diff"][..],
+        &["fix", "--fix-only"][..],
+        &["fix", "--baseline", "empty-baseline.json"][..],
+    ] {
+        let output = run(fixture.path(), args, None);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?}: {}{}",
+            stdout(&output),
+            stderr(&output),
+        );
+        let combined = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(
+            combined.contains("analysis failure") && combined.contains("analysis time unavailable"),
+            "{args:?}: {combined}",
+        );
+    }
 }
 
 #[test]

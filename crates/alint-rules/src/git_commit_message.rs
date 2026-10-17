@@ -20,10 +20,8 @@
 //! require commits that fix issues to include a body linking the
 //! issue.
 //!
-//! Outside a git repo, with no commits yet, or when `git` isn't on
-//! PATH, the rule silently no-ops. Same advisory posture as
-//! `git_tracked_only` and `git_no_denied_paths`: a rule about git
-//! only fires when there's git to inspect.
+//! Git or repository unavailability is an analysis failure. An initialized
+//! repository with no commits has no policy input and passes.
 //!
 //! Bad `since:` refs (typo, or a shallow-clone gotcha that left
 //! the ref out of local objects) hard-fail with a hint to widen
@@ -131,11 +129,15 @@ impl Rule for GitCommitMessageRule {
                     author_name: String::new(),
                     author_email: String::new(),
                 }],
-                None => return Ok(violations), // silent no-op
+                // Unborn HEAD is a valid empty policy input. Repository
+                // unavailability is gated by Engine before dispatch.
+                None => return Ok(violations),
             },
             Some(since) => {
                 match commit_messages_in_range(ctx.root, since, self.include_merges) {
-                    Ok(None) => return Ok(violations), // not a git repo: silent
+                    // Defensive direct-evaluation fallback; Engine capability
+                    // routing reports repository unavailability before dispatch.
+                    Ok(None) => return Ok(violations),
                     Ok(Some(records)) => records,
                     Err(CommitRangeError::BadRange { stderr }) => {
                         return Err(Error::rule_config(

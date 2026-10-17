@@ -39,7 +39,7 @@
 //!   relation: identical
 //! ```
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use alint_core::{
     Applicability, Context, Error, Extract, FixSpec, Fixer, Level, Result, Rule, RuleSpec, Scope,
@@ -101,6 +101,50 @@ impl Rule for CrossFileRule {
         // Cross-file: the source and every target may live
         // anywhere in the tree; never `--changed`-scoped.
         true
+    }
+
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        let source_sensitive = explicit
+            || self
+                .source_extract
+                .as_ref()
+                .is_some_and(Extract::redacts_by_default);
+        if source_sensitive {
+            if let Some(scope) = &self.source_glob {
+                for entry in ctx.index.files() {
+                    if scope.matches(&entry.path, ctx.index) {
+                        visit(&entry.path);
+                    }
+                }
+            } else {
+                visit(Path::new(&self.source_file));
+            }
+        }
+
+        match &self.targets {
+            Some(Targets::Glob { scope, extract })
+                if explicit || extract.as_ref().is_some_and(Extract::redacts_by_default) =>
+            {
+                for entry in ctx.index.files() {
+                    if scope.matches(&entry.path, ctx.index) {
+                        visit(&entry.path);
+                    }
+                }
+            }
+            Some(Targets::List(targets)) => {
+                for (path, extract) in targets {
+                    if explicit || extract.as_ref().is_some_and(Extract::redacts_by_default) {
+                        visit(Path::new(path));
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn fixer(&self) -> Option<&dyn Fixer> {
@@ -249,7 +293,8 @@ fn build_register_targets(
 ) -> Result<ValueTargets> {
     let array_extract = |ex: Option<&Extract>, what: &str| -> Result<Extract> {
         match ex {
-            Some(Extract::Structured(fmt, query)) => {
+            Some(Extract::Structured(extract)) => {
+                let query = &extract.query;
                 let array_query = query.strip_suffix("[*]").ok_or_else(|| {
                     cfg(format!(
                         "`relation: registered` {what} extract must select the array ELEMENTS \
@@ -273,7 +318,8 @@ fn build_register_targets(
                          would append to the wrong array"
                     )));
                 }
-                Ok(Extract::Structured(*fmt, array_query.to_string()))
+                Extract::structured(extract.format, array_query)
+                    .map_err(|e| cfg(format!("invalid registered array extract: {e}")))
             }
             _ => Err(cfg(format!(
                 "`relation: registered` {what} needs a STRUCTURED extract naming the list, \

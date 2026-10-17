@@ -4,24 +4,27 @@
 //! The config schema lives in [`super::spec`]; assembly + `build` in
 //! [`super`](super).
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use alint_core::template::{PathTokens, render_path};
-use alint_core::{Context, Extract, Result, Violation, extract_values, is_non_literal};
+use alint_core::{
+    AnalysisFailureKind, Context, Extract, RelatedLocation, Result, Violation, extract_values,
+    is_non_literal, unreadable_file_violation,
+};
 
 use super::CrossFileRule;
 use super::spec::{Relation, Targets, apply_normalize};
 
-/// Per-target callback for `each_target`: receives the target's
-/// path, its raw literal values, and the violation sink.
-type TargetFn<'a> = dyn FnMut(&Path, &[String], &mut Vec<Violation>) + 'a;
+/// Per-target callback for `each_target`: receives the target path, extractor,
+/// raw literal values, and the violation sink.
+type TargetFn<'a> = dyn FnMut(&Path, &Extract, &[String], &mut Vec<Violation>) + 'a;
 
 impl CrossFileRule {
     /// Dispatch to the per-relation check. Called by the `Rule::evaluate` shim in
-    /// [`super`](super); the rest of the impl is private to this module. Infallible
-    /// (read/parse failures are pushed as violations, never `Err`), so the shim
-    /// wraps the returned vec in `Ok`.
+    /// [`super`](super); the rest of the impl is private to this module. Infallible:
+    /// continued-scan read/parse errors use a structural finding carrier, so the
+    /// shim wraps the returned vec in `Ok`.
     pub(super) fn evaluate_impl(&self, ctx: &Context<'_>) -> Vec<Violation> {
         let mut out = Vec::new();
         match self.relation {
@@ -95,17 +98,19 @@ impl CrossFileRule {
         // index). A glob member always exists (a glob matches only existing paths).
         // `normalize` is rejected on `registered` (build), so member and target
         // elements compare VERBATIM (audit A#3/B#2).
-        let member_values: BTreeSet<String> = members
+        let mut member_sources: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+        for (path, value) in members
             .into_iter()
             .filter(|(path, _)| self.source_glob.is_some() || member_exists(ctx, path))
-            .map(|(_, value)| value)
-            .collect();
-        if member_values.is_empty() {
+        {
+            member_sources.entry(value).or_default().push(path);
+        }
+        if member_sources.is_empty() {
             return;
         }
-        self.each_target(ctx, out, &mut |target, values, out| {
+        self.each_target(ctx, out, &mut |target, target_extract, values, out| {
             let target_set: BTreeSet<&str> = values.iter().map(String::as_str).collect();
-            for member in &member_values {
+            for (member, source_paths) in &member_sources {
                 if target_set.contains(member.as_str()) {
                     continue;
                 }
@@ -120,14 +125,29 @@ impl CrossFileRule {
                 let msg = self.message.clone().unwrap_or_else(|| {
                     format!("{} is missing member {member:?}", crate::slash(target))
                 });
-                out.push(
-                    Violation::new(msg)
-                        .with_path(target.to_path_buf())
-                        .with_baseline_key(format!(
-                            "registered\u{0}member\u{0}{}\u{0}{member}",
-                            crate::slash(target)
-                        )),
+                let mut finding = Violation::new(msg)
+                    .with_path(target.to_path_buf())
+                    .with_baseline_key(format!(
+                        "registered\u{0}member\u{0}{}\u{0}{member}",
+                        crate::slash(target)
+                    ));
+                finding.set_related_locations(
+                    source_paths
+                        .iter()
+                        .map(|path| RelatedLocation::new(path, "source member")),
                 );
+                // Membership absence is still a verdict derived from the target
+                // extraction. Mark a secret-bearing target even though no existing
+                // target value is rendered in the message.
+                self.redact_extracted(
+                    &mut finding,
+                    "target",
+                    target,
+                    target_extract,
+                    "registered",
+                    &[],
+                );
+                out.push(finding);
             }
         });
     }
@@ -184,7 +204,9 @@ impl CrossFileRule {
             for entry in ctx.index.files() {
                 if scope.matches(&entry.path, ctx.index) {
                     matched += 1;
-                    if let Some(vals) = Self::source_values_from(ctx, &entry.path, extract, out) {
+                    if let Some(vals) =
+                        self.source_values_from(ctx, &entry.path, extract, out, true)
+                    {
                         all.extend(vals);
                     }
                 }
@@ -204,57 +226,80 @@ impl CrossFileRule {
             }
             return Some(all);
         }
-        Self::source_values_from(ctx, Path::new(&self.source_file), extract, out)
+        self.source_values_from(ctx, Path::new(&self.source_file), extract, out, false)
     }
 
     /// Read one source file + extract its literal values - the
     /// per-file body shared by the single-`file` and `files:`
     /// glob-union forms.
     fn source_values_from(
+        &self,
         ctx: &Context<'_>,
         src: &Path,
         extract: &Extract,
         out: &mut Vec<Violation>,
+        discovered: bool,
     ) -> Option<Vec<String>> {
         let text = match read_rel(ctx, src) {
             Ok(t) => t,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
+                out.push(alint_core::too_large_file_violation(src, n));
+                return None;
+            }
+            Err(crate::io::ReadCapError::Io(e))
+                if discovered && e.kind() == std::io::ErrorKind::NotFound =>
+            {
+                out.push(alint_core::missing_file_violation(src));
+                return None;
+            }
+            Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 out.push(Self::violation(
                     src,
-                    &format!(
-                        "source file is too large to analyze ({})",
-                        crate::io::over_cap(n)
-                    ),
+                    &format!("source file is missing: {e}"),
                 ));
                 return None;
             }
             Err(crate::io::ReadCapError::Io(e)) => {
-                out.push(Self::violation(
-                    src,
-                    &format!("source file is unreadable: {e}"),
-                ));
+                out.push(unreadable_file_violation(src, &e));
                 return None;
             }
         };
         let values = match extract_values(extract, &text) {
             Ok(v) => v,
             Err(e) => {
-                out.push(Self::violation(src, &format!("source extract failed: {e}")));
+                let mut finding = Self::analysis_failure(
+                    src,
+                    AnalysisFailureKind::ResourceParse,
+                    &format!("source extract failed: {e}"),
+                );
+                if extract.redacts_by_default() {
+                    finding.redact_message(&self.id);
+                }
+                out.push(finding);
                 return None;
             }
         };
+        let has_non_strings = !values.non_strings.is_empty();
+        if let Some(mut violation) =
+            crate::non_string_extract_violation(src, "source extract", &values.non_strings)
+        {
+            self.redact_extracted(&mut violation, "source", src, extract, "non_string", &[]);
+            out.push(violation);
+        }
+        if has_non_strings && values.strings.is_empty() {
+            return None;
+        }
         // Whole-file content is compared verbatim — the non-literal
         // skip (for interpolated *paths*) does not apply.
         if matches!(extract, Extract::WholeFile) {
-            return Some(values);
+            return Some(values.strings);
         }
         let (skipped, literal): (Vec<String>, Vec<String>) =
-            values.into_iter().partition(|v| is_non_literal(v));
+            values.strings.into_iter().partition(|v| is_non_literal(v));
         for v in &skipped {
-            out.push(Self::note(
-                src,
-                &format!("skipped non-literal source value {v:?}"),
-            ));
+            let mut finding = Self::note(src, &format!("skipped non-literal source value {v:?}"));
+            self.redact_extracted(&mut finding, "source", src, extract, "skipped", &[v]);
+            out.push(finding);
         }
         Some(literal)
     }
@@ -263,38 +308,89 @@ impl CrossFileRule {
     /// behaviour: the source must resolve to exactly one value, and
     /// every target value must equal it after normalize.
     fn check_equals(&self, ctx: &Context<'_>, source_values: &[String], out: &mut Vec<Violation>) {
+        let source_extract = self
+            .source_extract
+            .as_ref()
+            .expect("equals has a source extract");
         let source = match source_values {
             [one] => one.clone(),
             [] => {
-                out.push(Self::violation(
+                let mut finding = Self::violation(
                     Path::new(&self.source_file),
                     "canonical value not found (the source query matched no literal value)",
-                ));
+                );
+                self.redact_extracted(
+                    &mut finding,
+                    "source",
+                    Path::new(&self.source_file),
+                    source_extract,
+                    "missing",
+                    &[],
+                );
+                out.push(finding);
                 return;
             }
             _ => {
-                out.push(Self::violation(
+                let mut finding = Self::violation(
                     Path::new(&self.source_file),
                     "source must resolve to exactly one value (the query matched several); \
                      use a set relation (subset/superset/set_equals) for multi-value sources",
-                ));
+                );
+                self.redact_extracted(
+                    &mut finding,
+                    "source",
+                    Path::new(&self.source_file),
+                    source_extract,
+                    "cardinality",
+                    &[],
+                );
+                out.push(finding);
                 return;
             }
         };
         let source_norm = apply_normalize(&self.normalize, &source);
-        self.each_target(ctx, out, &mut |target, values, out| {
+        self.each_target(ctx, out, &mut |target, target_extract, values, out| {
             if values.is_empty() {
                 if !self.allow_missing {
-                    out.push(Self::violation(
+                    let mut finding = Self::violation(
                         target,
                         "no literal value to compare (the target query matched nothing)",
-                    ));
+                    );
+                    self.add_source_locations(ctx, &mut finding, "canonical source");
+                    self.redact_extracted(
+                        &mut finding,
+                        "source",
+                        Path::new(&self.source_file),
+                        source_extract,
+                        "target_missing",
+                        &[&source, &source_norm],
+                    );
+                    self.redact_extracted(
+                        &mut finding,
+                        "target",
+                        target,
+                        target_extract,
+                        "missing",
+                        &[],
+                    );
+                    out.push(finding);
                 }
                 return;
             }
             for value in values {
-                if apply_normalize(&self.normalize, value) != source_norm {
-                    out.push(self.mismatch(target, &source, value));
+                let target_norm = apply_normalize(&self.normalize, value);
+                if target_norm != source_norm {
+                    let mut finding = self.mismatch(
+                        target,
+                        source_extract,
+                        target_extract,
+                        &source,
+                        &source_norm,
+                        value,
+                        &target_norm,
+                    );
+                    self.add_source_locations(ctx, &mut finding, "canonical source");
+                    out.push(finding);
                 }
             }
         });
@@ -308,12 +404,23 @@ impl CrossFileRule {
         source_set: &BTreeSet<String>,
         out: &mut Vec<Violation>,
     ) {
-        self.each_target(ctx, out, &mut |target, values, out| {
+        let source_extract = self
+            .source_extract
+            .as_ref()
+            .expect("set relation has a source extract");
+        self.each_target(ctx, out, &mut |target, target_extract, values, out| {
             let target_set: BTreeSet<String> = values
                 .iter()
                 .map(|v| apply_normalize(&self.normalize, v))
                 .collect();
-            if let Some(v) = self.set_violation(target, source_set, &target_set) {
+            if let Some(v) = self.set_violation(
+                target,
+                ctx,
+                source_extract,
+                target_extract,
+                source_set,
+                &target_set,
+            ) {
                 out.push(v);
             }
         });
@@ -322,6 +429,9 @@ impl CrossFileRule {
     fn set_violation(
         &self,
         target: &Path,
+        ctx: &Context<'_>,
+        source_extract: &Extract,
+        target_extract: &Extract,
         source: &BTreeSet<String>,
         actual: &BTreeSet<String>,
     ) -> Option<Violation> {
@@ -350,7 +460,27 @@ impl CrossFileRule {
             .message
             .clone()
             .unwrap_or_else(|| format!("{} {reason}", crate::slash(target)));
-        Some(Violation::new(msg).with_path(target.to_path_buf()))
+        let mut finding = Violation::new(msg).with_path(target.to_path_buf());
+        self.add_source_locations(ctx, &mut finding, "comparison source");
+        let source_values: Vec<&str> = source.iter().map(String::as_str).collect();
+        let target_values: Vec<&str> = actual.iter().map(String::as_str).collect();
+        self.redact_extracted(
+            &mut finding,
+            "source",
+            Path::new(&self.source_file),
+            source_extract,
+            "set",
+            &source_values,
+        );
+        self.redact_extracted(
+            &mut finding,
+            "target",
+            target,
+            target_extract,
+            "set",
+            &target_values,
+        );
+        Some(finding)
     }
 
     /// `relation: identical` - every target file's bytes (after
@@ -367,8 +497,19 @@ impl CrossFileRule {
         let src = src.as_path();
         let src_bytes = match crate::io::read_capped(&ctx.root.join(src)) {
             Ok(b) => b,
-            Err(e) => {
-                out.push(Self::violation(src, &read_cap_reason("source file", &e)));
+            Err(crate::io::ReadCapError::TooLarge(n)) => {
+                out.push(alint_core::too_large_file_violation(src, n));
+                return;
+            }
+            Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                out.push(Self::violation(
+                    src,
+                    &format!("source file is missing: {e}"),
+                ));
+                return;
+            }
+            Err(crate::io::ReadCapError::Io(e)) => {
+                out.push(unreadable_file_violation(src, &e));
                 return;
             }
         };
@@ -389,22 +530,17 @@ impl CrossFileRule {
             let tgt_bytes = match crate::io::read_capped(&ctx.root.join(&target)) {
                 Ok(b) => b,
                 Err(crate::io::ReadCapError::TooLarge(n)) => {
-                    out.push(Self::violation(
-                        &target,
-                        &format!(
-                            "target file is too large to analyze ({})",
-                            crate::io::over_cap(n)
-                        ),
-                    ));
+                    out.push(alint_core::too_large_file_violation(&target, n));
                     continue;
                 }
-                Err(crate::io::ReadCapError::Io(_)) => {
+                Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                     if !self.allow_missing {
-                        out.push(Self::violation(
-                            &target,
-                            "target file is missing or unreadable",
-                        ));
+                        out.push(Self::violation(&target, "target file is missing"));
                     }
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    out.push(unreadable_file_violation(&target, &e));
                     continue;
                 }
             };
@@ -416,7 +552,11 @@ impl CrossFileRule {
                         self.source_file,
                     )
                 });
-                out.push(Violation::new(msg).with_path(target.clone()));
+                out.push(
+                    Violation::new(msg)
+                        .with_path(target.clone())
+                        .with_related_location(RelatedLocation::new(src, "canonical source")),
+                );
             }
         }
     }
@@ -459,16 +599,26 @@ impl CrossFileRule {
                         crate::slash(src),
                     )
                 });
-                out.push(
-                    // One source can declare many unresolved paths → key on
-                    // the source and the specific declared entry.
-                    Violation::new(msg)
-                        .with_path(src.to_path_buf())
-                        .with_baseline_key(format!(
-                            "resolves\u{0}{}\u{0}{entry}",
-                            crate::slash(src)
-                        )),
-                );
+                let mut finding = Violation::new(msg)
+                    .with_path(src.to_path_buf())
+                    .with_baseline_key(format!("resolves\u{0}{}\u{0}{entry}", crate::slash(src)));
+                if let Some(resolved) = crate::pathsafe::normalize_confined(&base.join(entry)) {
+                    finding.set_related_locations(std::iter::once(RelatedLocation::new(
+                        resolved,
+                        "declared target",
+                    )));
+                }
+                if let Some(extract) = self.source_extract.as_ref() {
+                    self.redact_extracted(
+                        &mut finding,
+                        "source",
+                        src,
+                        extract,
+                        "resolves",
+                        &[entry],
+                    );
+                }
+                out.push(finding);
             }
         }
     }
@@ -492,7 +642,7 @@ impl CrossFileRule {
                     }
                     matched += 1;
                     if let Some(values) = self.target_values(ctx, &e.path, extract, out) {
-                        f(&e.path, &values, out);
+                        f(&e.path, extract, &values, out);
                     }
                 }
                 if matched == 0 && !self.allow_missing {
@@ -510,7 +660,7 @@ impl CrossFileRule {
                     // the value fixer's stored target path (audit F2).
                     let target = Path::new(file);
                     if let Some(values) = self.target_values(ctx, target, extract, out) {
-                        f(target, &values, out);
+                        f(target, extract, &values, out);
                     }
                 }
             }
@@ -531,56 +681,88 @@ impl CrossFileRule {
         let text = match read_rel(ctx, target) {
             Ok(t) => t,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
-                // A too-large target is always a violation — never
-                // suppressed by `allow_missing` (it is present,
-                // just unanalysable).
-                out.push(Self::violation(
-                    target,
-                    &format!(
-                        "target file is too large to analyze ({})",
-                        crate::io::over_cap(n)
-                    ),
-                ));
+                out.push(alint_core::too_large_file_violation(target, n));
                 return None;
             }
-            Err(crate::io::ReadCapError::Io(_)) => {
+            Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 if !self.allow_missing {
-                    out.push(Self::violation(
-                        target,
-                        "target file is missing or unreadable",
-                    ));
+                    out.push(Self::violation(target, "target file is missing"));
                 }
+                return None;
+            }
+            Err(crate::io::ReadCapError::Io(e)) => {
+                out.push(unreadable_file_violation(target, &e));
                 return None;
             }
         };
         let values = match extract_values(extract, &text) {
             Ok(v) => v,
             Err(e) => {
-                out.push(Self::violation(
+                let mut finding = Self::analysis_failure(
                     target,
+                    AnalysisFailureKind::ResourceParse,
                     &format!("target extract failed: {e}"),
-                ));
+                );
+                if extract.redacts_by_default() {
+                    finding.redact_message(&self.id);
+                }
+                out.push(finding);
                 return None;
             }
         };
+        let has_non_strings = !values.non_strings.is_empty();
+        if let Some(mut violation) =
+            crate::non_string_extract_violation(target, "target extract", &values.non_strings)
+        {
+            self.redact_extracted(&mut violation, "target", target, extract, "non_string", &[]);
+            out.push(violation);
+        }
+        if has_non_strings && values.strings.is_empty() {
+            return None;
+        }
         // Whole-file content is compared verbatim — the non-literal
         // skip (for interpolated *paths*) does not apply.
         if matches!(extract, Extract::WholeFile) {
-            return Some(values);
+            return Some(values.strings);
         }
         let (skipped, literal): (Vec<String>, Vec<String>) =
-            values.into_iter().partition(|v| is_non_literal(v));
+            values.strings.into_iter().partition(|v| is_non_literal(v));
         for v in &skipped {
-            out.push(Self::note(
-                target,
-                &format!("skipped non-literal target value {v:?}"),
-            ));
+            let mut finding =
+                Self::note(target, &format!("skipped non-literal target value {v:?}"));
+            self.redact_extracted(&mut finding, "target", target, extract, "skipped", &[v]);
+            out.push(finding);
         }
         Some(literal)
     }
 
+    fn add_source_locations(
+        &self,
+        ctx: &Context<'_>,
+        finding: &mut Violation,
+        label: &'static str,
+    ) {
+        if let Some(scope) = &self.source_glob {
+            finding.set_related_locations(
+                ctx.index
+                    .files()
+                    .filter(|entry| scope.matches(&entry.path, ctx.index))
+                    .map(|entry| RelatedLocation::new(entry.path.as_ref(), label)),
+            );
+        } else {
+            finding.set_related_locations(std::iter::once(RelatedLocation::new(
+                Path::new(&self.source_file),
+                label,
+            )));
+        }
+    }
+
     fn violation(path: &Path, reason: &str) -> Violation {
         Violation::new(format!("{}: {reason}", crate::slash(path))).with_path(path.to_path_buf())
+    }
+
+    fn analysis_failure(path: &Path, kind: AnalysisFailureKind, reason: &str) -> Violation {
+        Self::violation(path, reason).as_analysis_failure(kind)
     }
 
     /// An informational note (non-violation finding), such as a non-literal
@@ -590,7 +772,17 @@ impl CrossFileRule {
         Self::violation(path, reason).as_note()
     }
 
-    fn mismatch(&self, target: &Path, source: &str, target_value: &str) -> Violation {
+    #[allow(clippy::too_many_arguments)]
+    fn mismatch(
+        &self,
+        target: &Path,
+        source_extract: &Extract,
+        target_extract: &Extract,
+        source: &str,
+        source_normalized: &str,
+        target_value: &str,
+        target_normalized: &str,
+    ) -> Violation {
         let msg = self.message.clone().unwrap_or_else(|| {
             format!(
                 "{} value {target_value:?} != {} value {source:?}",
@@ -598,15 +790,45 @@ impl CrossFileRule {
                 self.source_file,
             )
         });
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(target.to_path_buf())
-            // One query can match several target values → key on the target
-            // and the specific failing value so they don't collapse to one
-            // fingerprint (which would mask a genuinely new mismatch).
             .with_baseline_key(format!(
                 "equals\u{0}{}\u{0}{target_value}",
                 crate::slash(target)
-            ))
+            ));
+        self.redact_extracted(
+            &mut finding,
+            "source",
+            Path::new(&self.source_file),
+            source_extract,
+            "equals",
+            &[source, source_normalized],
+        );
+        self.redact_extracted(
+            &mut finding,
+            "target",
+            target,
+            target_extract,
+            "equals",
+            &[target_value, target_normalized],
+        );
+        finding
+    }
+
+    fn redact_extracted(
+        &self,
+        finding: &mut Violation,
+        role: &str,
+        path: &Path,
+        extract: &Extract,
+        category: &str,
+        evidence: &[&str],
+    ) {
+        if !extract.redacts_by_default() {
+            return;
+        }
+        let locator = format!("{role}\0{}\0{extract:?}\0{category}", crate::slash(path));
+        finding.redact_evidence(&self.id, &locator, evidence.iter().copied());
     }
 }
 
@@ -649,19 +871,6 @@ fn skip_header(bytes: &[u8], n: usize) -> &[u8] {
         }
     }
     &[]
-}
-
-/// The user-facing reason fragment for a capped-read failure.
-fn read_cap_reason(what: &str, e: &crate::io::ReadCapError) -> String {
-    match e {
-        crate::io::ReadCapError::TooLarge(n) => {
-            format!(
-                "{what} is too large to analyze ({})",
-                crate::io::over_cap(*n)
-            )
-        }
-        crate::io::ReadCapError::Io(e) => format!("{what} is unreadable: {e}"),
-    }
 }
 
 /// Lexically confine `rel`, then verify it doesn't escape the root through
@@ -747,6 +956,270 @@ mod tests {
         r.evaluate(&ctx).unwrap()
     }
 
+    #[test]
+    fn sensitive_equals_redacts_source_and_target_values_selectively() {
+        const SECRET: &str = "TOKEN_VALUE_DO_NOT_REPORT";
+
+        let source_dir = tempfile::tempdir().unwrap();
+        std::fs::write(source_dir.path().join(".env"), format!("TOKEN={SECRET}\n")).unwrap();
+        std::fs::write(
+            source_dir.path().join("target.json"),
+            r#"{"v":"visible-target"}"#,
+        )
+        .unwrap();
+        let source_rule = value_rule(
+            ".env",
+            Extract::structured(Format::Dotenv, "$.TOKEN").unwrap(),
+            Targets::List(vec![(
+                "target.json".into(),
+                Some(Extract::structured(Format::Json, "$.v").unwrap()),
+            )]),
+            Relation::Equals,
+            Normalize::None,
+        );
+        let source_findings = eval(
+            &source_rule,
+            source_dir.path(),
+            &index(&[".env", "target.json"]),
+        );
+        assert_eq!(source_findings.len(), 1);
+        assert!(source_findings[0].is_sensitive());
+        assert!(!source_findings[0].message.contains(SECRET));
+        assert!(source_findings[0].message.contains("visible-target"));
+
+        let target_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            target_dir.path().join("source.json"),
+            r#"{"v":"visible-source"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            target_dir.path().join("target.properties"),
+            format!("TOKEN={SECRET}\n"),
+        )
+        .unwrap();
+        let target_rule = value_rule(
+            "source.json",
+            Extract::structured(Format::Json, "$.v").unwrap(),
+            Targets::List(vec![(
+                "target.properties".into(),
+                Some(Extract::structured(Format::Properties, "$.TOKEN").unwrap()),
+            )]),
+            Relation::Equals,
+            Normalize::None,
+        );
+        let target_findings = eval(
+            &target_rule,
+            target_dir.path(),
+            &index(&["source.json", "target.properties"]),
+        );
+        assert_eq!(target_findings.len(), 1);
+        assert!(target_findings[0].is_sensitive());
+        assert!(!target_findings[0].message.contains(SECRET));
+
+        assert!(target_findings[0].message.contains("visible-source"));
+    }
+    #[test]
+    fn mixed_structured_matches_report_types_and_compare_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("source.json"), r#"["expected",7]"#).unwrap();
+        std::fs::write(root.join("target.json"), r#"["actual",false]"#).unwrap();
+        let idx = index(&["source.json", "target.json"]);
+        let all_values = || Extract::structured(Format::Json, "$[*]").unwrap();
+
+        let rule = value_rule(
+            "source.json",
+            all_values(),
+            Targets::List(vec![("target.json".into(), Some(all_values()))]),
+            Relation::Equals,
+            Normalize::None,
+        );
+        let findings = eval(&rule, root, &idx);
+
+        assert_eq!(findings.len(), 3, "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.message.contains("number")),
+            "{findings:?}"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.message.contains("boolean")),
+            "{findings:?}"
+        );
+        assert!(
+            findings.iter().any(|finding| {
+                finding.message.contains("expected") && finding.message.contains("actual")
+            }),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn sensitive_set_and_skipped_note_do_not_publish_values() {
+        const SECRET: &str = "TOKEN_VALUE_DO_NOT_REPORT";
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join(".env"),
+            format!("VALUES={SECRET}\nSKIP=${{{SECRET}}}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("target.properties"),
+            format!("VALUES=other\nSKIP=${{{SECRET}}}\n"),
+        )
+        .unwrap();
+        let idx = index(&[".env", "target.properties"]);
+
+        let set_rule = value_rule(
+            ".env",
+            Extract::structured(Format::Dotenv, "$.VALUES").unwrap(),
+            Targets::List(vec![(
+                "target.properties".into(),
+                Some(Extract::structured(Format::Properties, "$.VALUES").unwrap()),
+            )]),
+            Relation::SetEquals,
+            Normalize::None,
+        );
+        let set_findings = eval(&set_rule, root, &idx);
+        assert_eq!(set_findings.len(), 1);
+        assert!(set_findings[0].is_sensitive());
+        assert!(!set_findings[0].message.contains(SECRET));
+
+        let skipped_rule = value_rule(
+            ".env",
+            Extract::structured(Format::Dotenv, "$.SKIP").unwrap(),
+            Targets::List(vec![(
+                "target.properties".into(),
+                Some(Extract::structured(Format::Properties, "$.SKIP").unwrap()),
+            )]),
+            Relation::Equals,
+            Normalize::None,
+        );
+        let skipped = eval(&skipped_rule, root, &idx);
+        assert!(!skipped.is_empty());
+        let skipped_notes: Vec<&Violation> = skipped
+            .iter()
+            .filter(|finding| finding.message.contains("skipped"))
+            .collect();
+        assert!(!skipped_notes.is_empty(), "{skipped:?}");
+        assert!(skipped_notes.iter().all(|finding| finding.is_sensitive()));
+        assert!(
+            skipped_notes
+                .iter()
+                .all(|finding| !finding.message.contains(SECRET))
+        );
+    }
+
+    #[test]
+    fn sensitive_equals_marks_empty_query_verdicts_sensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join(".env"), "TOKEN=source-secret\n").unwrap();
+        std::fs::write(root.join("target.properties"), "TOKEN=target-secret\n").unwrap();
+        let idx = index(&[".env", "target.properties"]);
+
+        let source_missing = value_rule(
+            ".env",
+            Extract::structured(Format::Dotenv, "$.MISSING").unwrap(),
+            Targets::List(vec![(
+                "target.properties".into(),
+                Some(Extract::structured(Format::Properties, "$.TOKEN").unwrap()),
+            )]),
+            Relation::Equals,
+            Normalize::None,
+        );
+        let findings = eval(&source_missing, root, &idx);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].is_sensitive(), "{findings:?}");
+
+        let target_missing = value_rule(
+            ".env",
+            Extract::structured(Format::Dotenv, "$.TOKEN").unwrap(),
+            Targets::List(vec![(
+                "target.properties".into(),
+                Some(Extract::structured(Format::Properties, "$.MISSING").unwrap()),
+            )]),
+            Relation::Equals,
+            Normalize::None,
+        );
+        let findings = eval(&target_missing, root, &idx);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].is_sensitive(), "{findings:?}");
+    }
+
+    #[test]
+    fn sensitive_source_and_target_parse_failures_are_value_free() {
+        for (format, file, malformed) in [
+            (
+                Format::Dotenv,
+                ".env",
+                "TOKEN=\"TOKEN_VALUE_DO_NOT_REPORT\n",
+            ),
+            (
+                Format::Properties,
+                "bad.properties",
+                "TOKEN=\\uZZZZ_TOKEN_VALUE_DO_NOT_REPORT\n",
+            ),
+        ] {
+            let source_dir = tempfile::tempdir().unwrap();
+            std::fs::write(source_dir.path().join(file), malformed).unwrap();
+            std::fs::write(source_dir.path().join("target.json"), r#"{"v":"x"}"#).unwrap();
+            let source_rule = value_rule(
+                file,
+                Extract::structured(format, "$.TOKEN").unwrap(),
+                Targets::List(vec![(
+                    "target.json".into(),
+                    Some(Extract::structured(Format::Json, "$.v").unwrap()),
+                )]),
+                Relation::Equals,
+                Normalize::None,
+            );
+            let source_findings = eval(
+                &source_rule,
+                source_dir.path(),
+                &index(&[file, "target.json"]),
+            );
+            assert_eq!(source_findings.len(), 1);
+            assert!(source_findings[0].is_sensitive());
+            assert!(
+                !source_findings[0]
+                    .message
+                    .contains("TOKEN_VALUE_DO_NOT_REPORT")
+            );
+
+            let target_dir = tempfile::tempdir().unwrap();
+            std::fs::write(target_dir.path().join("source.json"), r#"{"v":"x"}"#).unwrap();
+            std::fs::write(target_dir.path().join(file), malformed).unwrap();
+            let target_rule = value_rule(
+                "source.json",
+                Extract::structured(Format::Json, "$.v").unwrap(),
+                Targets::List(vec![(
+                    file.into(),
+                    Some(Extract::structured(format, "$.TOKEN").unwrap()),
+                )]),
+                Relation::Equals,
+                Normalize::None,
+            );
+            let target_findings = eval(
+                &target_rule,
+                target_dir.path(),
+                &index(&["source.json", file]),
+            );
+            assert_eq!(target_findings.len(), 1);
+            assert!(target_findings[0].is_sensitive());
+            assert!(
+                !target_findings[0]
+                    .message
+                    .contains("TOKEN_VALUE_DO_NOT_REPORT")
+            );
+        }
+    }
+
     // ─── equals (the migrated cross_file_value_equals path) ──────
 
     #[test]
@@ -773,13 +1246,10 @@ mod tests {
         let idx = index(&["Cargo.toml", "crates/a/Cargo.toml", "crates/b/Cargo.toml"]);
         let r = value_rule(
             "Cargo.toml",
-            Extract::Structured(Format::Toml, "$.workspace.package.version".into()),
+            Extract::structured(Format::Toml, "$.workspace.package.version").unwrap(),
             Targets::Glob {
                 scope: Scope::from_patterns(&["crates/*/Cargo.toml".to_string()]).unwrap(),
-                extract: Some(Extract::Structured(
-                    Format::Toml,
-                    "$.package.version".into(),
-                )),
+                extract: Some(Extract::structured(Format::Toml, "$.package.version").unwrap()),
             },
             Relation::Equals,
             Normalize::None,
@@ -788,6 +1258,10 @@ mod tests {
         assert_eq!(v.len(), 1, "only crates/b drifts: {v:?}");
         assert!(v[0].message.contains("crates/b/Cargo.toml"));
         assert!(v[0].message.contains("1.3.0"));
+        assert_eq!(v[0].path.as_deref(), Some(Path::new("crates/b/Cargo.toml")));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("Cargo.toml"));
+        assert_eq!(v[0].related_locations[0].label, "canonical source");
     }
 
     #[test]
@@ -803,10 +1277,10 @@ mod tests {
         let make = || {
             value_rule(
                 "source.toml",
-                Extract::Structured(Format::Toml, "$.v".into()),
+                Extract::structured(Format::Toml, "$.v").unwrap(),
                 Targets::Glob {
                     scope: Scope::from_patterns(&["target.toml".to_string()]).unwrap(),
-                    extract: Some(Extract::Structured(Format::Toml, "$.missing".into())),
+                    extract: Some(Extract::structured(Format::Toml, "$.missing").unwrap()),
                 },
                 Relation::Equals,
                 Normalize::None,
@@ -861,10 +1335,10 @@ mod tests {
         let idx = index(&["m.json"]);
         let r = value_rule(
             "m.json",
-            Extract::Structured(Format::Json, "$.v[*]".into()),
+            Extract::structured(Format::Json, "$.v[*]").unwrap(),
             Targets::List(vec![(
                 "m.json".into(),
-                Some(Extract::Structured(Format::Json, "$.v[0]".into())),
+                Some(Extract::structured(Format::Json, "$.v[0]").unwrap()),
             )]),
             Relation::Equals,
             Normalize::None,
@@ -887,7 +1361,7 @@ mod tests {
         let idx = index(&["global.json", "Directory.Build.props"]);
         let r = value_rule(
             "global.json",
-            Extract::Structured(Format::Json, "$.sdk.version".into()),
+            Extract::structured(Format::Json, "$.sdk.version").unwrap(),
             Targets::List(vec![(
                 "Directory.Build.props".into(),
                 Some(Extract::Lines(alint_core::LinesOpts::default())),
@@ -908,7 +1382,7 @@ mod tests {
         let idx = index(&["version.json", "protobuf_version.bzl"]);
         let r = value_rule(
             "version.json",
-            Extract::Structured(Format::Json, "$.v".into()),
+            Extract::structured(Format::Json, "$.v").unwrap(),
             Targets::List(vec![(
                 "protobuf_version.bzl".into(),
                 Some(Extract::Lines(alint_core::LinesOpts::default())),
@@ -937,7 +1411,7 @@ mod tests {
     fn set_targets() -> Targets {
         Targets::List(vec![(
             "tgt.json".into(),
-            Some(Extract::Structured(Format::Json, "$.have[*]".into())),
+            Some(Extract::structured(Format::Json, "$.have[*]").unwrap()),
         )])
     }
 
@@ -949,7 +1423,7 @@ mod tests {
         write_sets(root, "{\"need\":[\"a\",\"b\"]}", "{\"have\":[\"a\",\"c\"]}");
         let idx = index(&["src.json", "tgt.json"]);
         let r = set_rule(
-            Extract::Structured(Format::Json, "$.need[*]".into()),
+            Extract::structured(Format::Json, "$.need[*]").unwrap(),
             set_targets(),
             Relation::Subset,
         );
@@ -972,7 +1446,7 @@ mod tests {
         );
         let idx = index(&["src.json", "tgt.json"]);
         let r = set_rule(
-            Extract::Structured(Format::Json, "$.need[*]".into()),
+            Extract::structured(Format::Json, "$.need[*]").unwrap(),
             set_targets(),
             Relation::Subset,
         );
@@ -987,7 +1461,7 @@ mod tests {
         write_sets(root, "{\"need\":[\"a\",\"b\"]}", "{\"have\":[\"a\",\"z\"]}");
         let idx = index(&["src.json", "tgt.json"]);
         let r = set_rule(
-            Extract::Structured(Format::Json, "$.need[*]".into()),
+            Extract::structured(Format::Json, "$.need[*]").unwrap(),
             set_targets(),
             Relation::Superset,
         );
@@ -1005,7 +1479,7 @@ mod tests {
         write_sets(root, "{\"need\":[\"a\",\"b\"]}", "{\"have\":[\"a\",\"z\"]}");
         let idx = index(&["src.json", "tgt.json"]);
         let r = set_rule(
-            Extract::Structured(Format::Json, "$.need[*]".into()),
+            Extract::structured(Format::Json, "$.need[*]").unwrap(),
             set_targets(),
             Relation::SetEquals,
         );
@@ -1024,7 +1498,7 @@ mod tests {
         write_sets(root, "{\"need\":[\"b\",\"a\"]}", "{\"have\":[\"a\",\"b\"]}");
         let idx = index(&["src.json", "tgt.json"]);
         let r = set_rule(
-            Extract::Structured(Format::Json, "$.need[*]".into()),
+            Extract::structured(Format::Json, "$.need[*]").unwrap(),
             set_targets(),
             Relation::SetEquals,
         );
@@ -1122,7 +1596,7 @@ mod tests {
         );
         let idx = index(&["src.json", "tgt.json"]);
         let r = set_rule(
-            Extract::Structured(Format::Json, "$.need[*]".into()),
+            Extract::structured(Format::Json, "$.need[*]").unwrap(),
             set_targets(),
             Relation::Subset,
         );
@@ -1206,6 +1680,52 @@ mod tests {
         assert_eq!(eval(&mk(0), root, &idx).len(), 1);
     }
 
+    #[test]
+    fn registered_relates_each_missing_value_only_to_its_source_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"unrelated\"]\n",
+        )
+        .unwrap();
+        let member_paths: Vec<String> = (0..22)
+            .map(|index| format!("crates/c{index:02}/Cargo.toml"))
+            .collect();
+        let mut indexed: Vec<&str> = member_paths.iter().map(String::as_str).collect();
+        indexed.push("Cargo.toml");
+        let idx = index(&indexed);
+        let rule = CrossFileRule {
+            id: "t".into(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            source_file: "crates/*/Cargo.toml".into(),
+            source_glob: Some(Scope::from_patterns(&["crates/*/Cargo.toml".to_string()]).unwrap()),
+            source_extract: None,
+            targets: Some(Targets::List(vec![(
+                "Cargo.toml".into(),
+                Some(Extract::structured(Format::Toml, "$.workspace.members[*]").unwrap()),
+            )])),
+            relation: Relation::Registered,
+            normalize: Vec::new(),
+            allow_missing: false,
+            skip_header_lines: 0,
+            register_as: Some("{dir}".into()),
+            fixer: None,
+        };
+
+        let findings = eval(&rule, root, &idx);
+        assert_eq!(findings.len(), 22);
+        for finding in findings {
+            assert_eq!(finding.related_locations.len(), 1);
+            assert_eq!(finding.related_locations_omitted, 0);
+            let source = &finding.related_locations[0].path;
+            let registered = source.parent().unwrap().to_string_lossy();
+            assert!(finding.message.contains(registered.as_ref()));
+        }
+    }
+
     // ─── resolves ───────────────────────────────────────────────
 
     fn resolves_rule(source_file: &str, extract: Extract) -> CrossFileRule {
@@ -1257,7 +1777,7 @@ mod tests {
         let idx = index_with_dirs(&["Cargo.toml"], &["crates/a"]);
         let r = resolves_rule(
             "Cargo.toml",
-            Extract::Structured(Format::Toml, "$.workspace.members[*]".into()),
+            Extract::structured(Format::Toml, "$.workspace.members[*]").unwrap(),
         );
         let v = eval(&r, root, &idx);
         assert_eq!(v.len(), 1, "{v:?}");

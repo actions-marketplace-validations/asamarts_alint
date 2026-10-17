@@ -28,8 +28,45 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Schema now derives all 95 kinds' option surfaces from Rust option models and applies each kind's
   metadata-described `paths`, `scope_filter`, `fix`, and `expect_matches` contract to top-level
   and nested rules; generation fails on registry, metadata, or schema drift.
+- **Structured extraction now has a duplicate-preserving, source-spanned row API.**
+  `alint_core::extract::extract_entry_rows` returns source-ordered object members with their
+  structural parent path, key, key span, and optional value span for dotenv, JSON/JSONC, YAML,
+  INI, and Java properties. Repeated names remain separate rows; array positions remain explicit
+  path segments. TOML, XML, and HCL return a typed unsupported-format result instead of flattening
+  away information. The adapters share the existing structured-input byte bound. Existing
+  last-wins extraction and all shipped rule results are unchanged; this is the substrate for
+  duplicate-key and structured-key-order kinds.
 
 ### Changed
+- **Incomplete analysis is now a typed, fail-loud result instead of a policy violation.**
+  Evaluation, runtime-condition, resource-read, resource-parse, and repository-derived nested-rule
+  build failures live in `analysis_failures`, always force an error exit regardless of the rule's
+  configured level, and cannot be baselined or offered to a fixer. All eight check formats, every
+  fix report mode (including `--fix-only`, `--dry-run`, and `--diff`), and LSP diagnostics expose
+  them; SARIF marks the run unsuccessful, JUnit uses `<error>`, and agent output never supplies a
+  remediation command. `alint baseline` refuses to write when analysis is incomplete, while an
+  existing baseline can still suppress ordinary violations without hiding a failure. Migration:
+  JSON, agent, and fix-report consumers must tolerate the additive `analysis_failures` arrays and
+  `total_analysis_failures` summary count. Rust callers constructing `RuleResult` or
+  `FixRuleResult` must add `analysis_failures: Vec::new()`; producers that continue after one bad
+  resource can use `Violation::as_analysis_failure(AnalysisFailureKind::...)`.
+
+- **The remaining runtime fail-open paths now report explicit outcomes.**
+  Manifest-derived `scope_filter` inputs that are missing, unreadable, malformed, over-limit, or
+  select non-string nodes produce typed resource analysis failures for every active owning rule;
+  they no longer collapse to an empty include set or a full-scope exclude. Active Git
+  dependencies derive from each kind's conditional capability metadata—including nested rules,
+  `git_tracked_only`, `scope_filter.changed_since`, and `git_untrack`—and an unavailable Git
+  executable or repository produces one `resource_read` failure per dependent top-level rule
+  while unrelated rules continue. Shared structured extraction no longer drops selected JSON,
+  YAML, TOML, or HCL numbers, booleans, nulls, arrays, or objects: manifest path sets reject them
+  as unusable input, while `cross_file`, `file_graph`, and `registry_paths_resolve` emit a
+  value-free policy violation containing only type counts. `cross_file` stops that affected
+  extraction instead of deriving a second empty-set mismatch or offering an unsafe fixer.
+  Migration: run Git-backed rules inside a Git work tree (or disable conditionally configured Git
+  features), repair unavailable manifest inputs, and narrow string-only relation JSONPaths to
+  string nodes. A literal `git_tracked_only: false` remains Git-independent.
+
 - **Informational and bounded-analysis notes now survive every check output format.** Human and
   text output keep the existing stderr count and `--show-notes` detail; JSON carries typed
   per-result notes; SARIF emits informational results or execution notifications; and GitHub,
@@ -39,16 +76,44 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   consumers should tolerate the additive JSON/agent summary fields, SARIF notifications, and
   synthetic note summaries documented in the output-format reference. Rust callers constructing
   `alint_core::Violation` must replace `is_note: bool` with
-  `note_kind: Option<alint_core::NoteKind>`; use `Violation::as_note()` for informational notes
+  `disposition: alint_core::FindingDisposition`; use `Violation::as_note()` for informational notes
   and `Violation::as_analysis_truncated_note()` for bounded-analysis truncation.
+- **Findings can now identify a primary range and bounded related locations.** The Rust finding
+  model carries an optional half-open source range and up to 20 labeled related locations in
+  deterministic path/range/label order. Relationship-heavy rules (`cross_file`,
+  `registry_paths_resolve`, `unique_by`, `pair`, and `file_graph`, plus the pair hash and
+  changed-together kinds) now preserve both sides of a failed relationship. Human output lists
+  related paths; SARIF emits primary regions and `relatedLocations`; and LSP diagnostics emit
+  `relatedInformation` only when the client advertises support. Ranges and relationships are
+  presentation metadata: they never enter baseline fingerprints, and a Linux full-scenario
+  golden gate freezes existing policy-finding identities. The v1 JSON report payload intentionally
+  remains unchanged until the next release, but `schemas/v1/check-report.json` now accepts
+  additive fields at every report object while retaining its required fields and value-type
+  checks. Migration: strict consumers should continue validating known fields and tolerate
+  additive v1 fields.
+
+- **Secret-bearing evidence is redacted from reports and baselines.** Every rule accepts
+  `sensitive: true`, which replaces its complete flattened finding message and fix-report detail
+  with a stable, value-free marker before any public report is returned. Dotenv and Java
+  properties value extractors enable the same policy automatically for structured-path,
+  `cross_file`, `file_graph`, and `registry_paths_resolve` findings. Paths remain navigable;
+  evaluation, severity, exit status, fix applicability, and fix execution are unchanged. Proposed
+  replacement bytes are omitted for sensitive findings, including any composed edit for the same
+  file, and LSP does not offer sensitive code actions. Sensitive baseline fingerprints exclude
+  both the raw value and its digest. A cross-format leak gate covers all eight check formats,
+  baseline output, human and JSON fix reports, and LSP diagnostics. Migration: add
+  `sensitive: true` to any rule whose message can contain credentials or other secrets. Expect
+  existing dotenv/properties findings and baseline messages to become `<redacted:…>` markers;
+  machine consumers must tolerate missing proposed edits for those findings.
 
 - **Time-dependent analysis now has an explicit, reproducible reference date.** The global
   `--as-of YYYY-MM-DD` option overrides `ALINT_AS_OF`; without either, affected rules use the
   current HEAD commit's committer timestamp instead of the workstation clock. `git_blame_age`
-  findings and `alint explain` show the UTC reference date, and explain JSON records its source
-  as `explicit`, `head`, or `unavailable`. Outside Git, pass `--as-of`; without it,
-  `git_blame_age` reports an evaluation failure rather than silently passing. Migration: CI jobs
-  that intentionally age findings against a release date should set `--as-of` or
+  findings and `alint explain` show the UTC reference date and its source as `explicit`, `head`,
+  or `unavailable`. An explicit date removes the HEAD-time lookup, but does not satisfy
+  `git_blame_age`'s independent requirement for a usable Git repository and blame input; when
+  either dependency is unavailable, it reports a typed, always-error analysis failure. Migration:
+  CI jobs that intentionally age findings against a release date should set `--as-of` or
   `ALINT_AS_OF`; repeated checks of the same commit otherwise remain byte-identical. The public
   capability variant and serialized metadata value are now `Capability::AnalysisTime` and
   `analysis_time`; Rust consumers with exhaustive `Capability` matches must replace

@@ -293,8 +293,8 @@ impl Fixer for StructuredFixer {
             return Vec::new();
         }
         // Parse with the SAME lossy decode the host rule uses, so the query sees
-        // the same tree. A parse failure means the rule already reported a
-        // parse-error violation; emit no edits.
+        // the same tree. A parse failure means the rule already reported an
+        // analysis failure; emit no edits.
         let text = String::from_utf8_lossy(bytes);
         let Ok(value) = self.format.parse(&text) else {
             return Vec::new();

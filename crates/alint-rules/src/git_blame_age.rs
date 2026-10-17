@@ -7,8 +7,8 @@
 //! gap between `level: warning` on every TODO (too noisy) and
 //! `level: off` (accepts unbounded debt accumulation).
 //!
-//! Outside a git repo, an unavailable deterministic analysis time is a
-//! rule-evaluation error unless the caller supplies one explicitly. Untracked
+//! An unavailable Git executable or repository is an analysis failure even
+//! when an explicit reference date avoids the HEAD-time lookup. Untracked
 //! files and individual blame failures still no-op. Heuristic notes (formatting
 //! passes reset blame age, vendored code carries the import commit's timestamp,
 //! squash merges collapse to one date) are documented in `docs/rules.md` and
@@ -235,9 +235,9 @@ mod tests {
 
     #[test]
     fn no_op_when_blame_cache_absent() {
-        // Outside a git repo (or no rule wants blame), the
-        // engine doesn't build a cache and the rule must
-        // silently produce no violations.
+        // Direct rule evaluation remains total without a blame cache. Engine
+        // capability routing reports repository unavailability before this
+        // rule dispatches in normal execution.
         let r = rule(r"\bTODO\b", 30, None);
         let idx = index(&["src/main.rs"]);
         let analysis_time = analysis_time();

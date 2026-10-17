@@ -16,7 +16,8 @@ struct Options {
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to directories that contain at least one git-tracked
-    /// file. No effect outside a git repo. Default `false`.
+    /// file. Repository unavailability is an analysis failure when enabled.
+    /// Default `false`.
     #[serde(default)]
     git_tracked_only: bool,
 }
@@ -33,9 +34,8 @@ pub struct DirExistsRule {
     patterns: Vec<String>,
     root_only: bool,
     /// When `true`, only consider directories that contain at
-    /// least one git-tracked file. Outside a git repo the
-    /// tracked set is empty, so the rule reports the "missing"
-    /// violation as if no matching directory existed.
+    /// least one git-tracked file. The engine verifies repository availability
+    /// before dispatch.
     git_tracked_only: bool,
     /// The optional `dir_create` fix (creates the missing literal directory).
     fixer: Option<DirCreateFixer>,

@@ -9,7 +9,10 @@
 //! `alint fix --format json` (CI fix-applier scripts, IDE
 //! integrations).
 
-use alint_core::{FixEdit, FixItem, FixReport, FixRuleResult, FixStatus, Level, Violation};
+use alint_core::{
+    AnalysisFailure, AnalysisFailureKind, FixEdit, FixItem, FixReport, FixRuleResult, FixStatus,
+    Level, Violation,
+};
 use alint_output::{write_fix_json, write_fix_json_with_mode};
 
 const FIX_REPORT_SCHEMA: &str = include_str!("../../../schemas/v1/fix-report.json");
@@ -35,6 +38,7 @@ fn canonical_fix_report() -> FixReport {
                         status: FixStatus::declined("file no longer exists"),
                     },
                 ],
+                analysis_failures: Vec::new(),
             },
             FixRuleResult {
                 rule_id: "no-debugger-statements".into(),
@@ -45,6 +49,7 @@ fn canonical_fix_report() -> FixReport {
                         .with_location(42, 1),
                     status: FixStatus::Unfixable,
                 }],
+                analysis_failures: Vec::new(),
             },
             FixRuleResult {
                 rule_id: "package-json-license".into(),
@@ -64,6 +69,20 @@ fn canonical_fix_report() -> FixReport {
                         }),
                     },
                 }],
+                analysis_failures: Vec::new(),
+            },
+            FixRuleResult {
+                rule_id: "malformed-config".into(),
+                level: Level::Warning,
+                items: Vec::new(),
+                analysis_failures: vec![
+                    AnalysisFailure::new(
+                        AnalysisFailureKind::ResourceParse,
+                        "not a valid JSON document",
+                    )
+                    .with_path(std::path::Path::new("broken.json"))
+                    .with_location(2, 5),
+                ],
             },
         ],
     }
@@ -119,10 +138,25 @@ fn fix_report_shape_matches_expected_keys() {
     assert_eq!(summary["skipped"], 1);
     assert_eq!(summary["unfixable"], 1);
     assert_eq!(summary["suggested"], 1);
+    assert_eq!(summary["total_analysis_failures"], 1);
     // Always present; false for this converged report.
     assert_eq!(summary["non_convergent"], false);
     let results = json["results"].as_array().unwrap();
-    assert_eq!(results.len(), 3);
+    assert_eq!(results.len(), 4);
+}
+
+#[test]
+fn v1_schema_accepts_reports_from_before_analysis_failures() {
+    let mut json: serde_json::Value =
+        serde_json::from_str(&render_json(&canonical_fix_report())).unwrap();
+    json["summary"]
+        .as_object_mut()
+        .unwrap()
+        .remove("total_analysis_failures");
+    for result in json["results"].as_array_mut().unwrap() {
+        result.as_object_mut().unwrap().remove("analysis_failures");
+    }
+    validate(&serde_json::to_string(&json).unwrap());
 }
 
 #[test]
@@ -141,6 +175,7 @@ fn non_convergent_report_surfaces_the_flag_and_validates() {
                     .with_location(1, 1),
                 status: FixStatus::Applied("edited x.txt".into()),
             }],
+            analysis_failures: Vec::new(),
         }],
     };
     let text = render_json(&report);
@@ -169,6 +204,7 @@ fn skipped_items_carry_their_skip_kind_and_validate() {
                 item(FixStatus::baselined("baselined")),
                 item(FixStatus::Unfixable),
             ],
+            analysis_failures: Vec::new(),
         }],
     };
     let text = render_json(&report);

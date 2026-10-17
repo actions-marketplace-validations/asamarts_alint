@@ -31,29 +31,18 @@ fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
-/// The fail-closed outcome of a per-file content rule's OWN read (its
-/// rule-major `evaluate` loop -- the read path `alint fix` uses) failing with
-/// an I/O error: `Some(could-not-read violation)` for a genuine error
-/// (permission, I/O), `None` for a `NotFound` (deleted mid-walk, a benign
-/// race). Mirrors the engine's file-major dispatch, which reports the same
-/// [`alint_core::unreadable_file_violation`], so `check` and `fix` agree
-/// (audit 2026-10 finding 7; this reverses the earlier fail-open choice).
-pub(crate) fn io_error_violation(
-    rel: &Path,
-    err: &std::io::Error,
-) -> Option<alint_core::Violation> {
-    (err.kind() != std::io::ErrorKind::NotFound)
-        .then(|| alint_core::unreadable_file_violation(rel, err))
+/// The fail-loud outcome of a per-file content rule's own read (the
+/// rule-major `evaluate` loop used by `alint fix`). Because these paths came
+/// from the repository index, every I/O error, including a mid-walk removal,
+/// prevents a policy verdict and becomes a `resource_read` analysis failure.
+pub(crate) fn io_error_violation(rel: &Path, err: &std::io::Error) -> alint_core::Violation {
+    alint_core::unreadable_file_violation(rel, err)
 }
 
-/// [`io_error_violation`] for a [`read_capped`] failure. An over-cap file
-/// stays a skip (matching the engine's `MAX_ANALYZE_BYTES` behaviour).
-pub(crate) fn read_cap_error_violation(
-    rel: &Path,
-    err: &ReadCapError,
-) -> Option<alint_core::Violation> {
+/// Structural failure conversion for a bounded whole-file read.
+pub(crate) fn read_cap_error_violation(rel: &Path, err: &ReadCapError) -> alint_core::Violation {
     match err {
-        ReadCapError::TooLarge(_) => None,
+        ReadCapError::TooLarge(size) => alint_core::too_large_file_violation(rel, *size),
         ReadCapError::Io(e) => io_error_violation(rel, e),
     }
 }
@@ -216,21 +205,16 @@ pub use alint_core::write_atomic;
 /// Hard cap on a single whole-file read across the rule/engine read paths.
 /// Generous - every realistic manifest / source / generated file is orders of
 /// magnitude smaller - yet bounded so a hostile or accidental multi-GB file in
-/// a linted repo can't OOM the run. The over-cap *outcome* varies by read
-/// site: the cross-file kinds (`registry_paths_resolve`, `pair_hash`, …) and
-/// the `for_each` single-literal path yield a clear over-cap violation
-/// (fail-closed); the per-file engine/rule loops and the per-file content
-/// rules skip the file (fail-open, resilient - a file too big to analyze is
-/// left un-analyzed rather than failing the build), logging at `warn` where a
-/// `tracing` sink is available (the `alint-core` loops).
+/// a linted repo cannot OOM the run. An over-cap file produces a typed
+/// `resource_read` analysis failure wherever its bytes are required for a
+/// policy verdict.
 ///
 /// Re-exported from `alint-core` so every read path shares one cap (M3).
 pub use alint_core::MAX_ANALYZE_BYTES;
 
 /// Failure of [`read_capped`]: the file exceeds
 /// [`MAX_ANALYZE_BYTES`] (carrying its size), or an ordinary I/O
-/// error (kept distinct so callers turn "too large" into a clear
-/// violation rather than reusing their not-found / skip path).
+/// error. Callers preserve this distinction in the analysis-failure message.
 #[derive(Debug)]
 pub enum ReadCapError {
     TooLarge(u64),

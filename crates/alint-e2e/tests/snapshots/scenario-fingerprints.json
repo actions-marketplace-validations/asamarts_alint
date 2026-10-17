@@ -1,0 +1,2678 @@
+[
+  {
+    "scenario": "check/bundled-compliance/apache_2_missing_notice.yml",
+    "rule_id": "apache-2-notice-file-exists",
+    "path": null,
+    "fingerprint": "223b07c5247cc518b60265492ad5940dd3e282e1cb35dcc80900ec8d93ea649c"
+  },
+  {
+    "scenario": "check/bundled-compliance/apache_2_missing_source_header.yml",
+    "rule_id": "apache-2-source-has-license-header",
+    "path": "src/util.py",
+    "fingerprint": "a97ddee5436d00ec03454f2a849b6a3f30808b73fc45d2c7d3ad5d3b08381d08"
+  },
+  {
+    "scenario": "check/bundled-compliance/reuse_missing_licenses_dir.yml",
+    "rule_id": "reuse-licenses-dir-exists",
+    "path": null,
+    "fingerprint": "064b4e7d0b91118b70caefe9ce014f7351e3f40551a53733b728f0a8670fc5b0"
+  },
+  {
+    "scenario": "check/bundled-compliance/reuse_missing_source_spdx.yml",
+    "rule_id": "reuse-source-has-copyright-text",
+    "path": "src/lib.rs",
+    "fingerprint": "d220e2ba7ff5f6d3adcdcaf924ce6aca3a57306a2cb43f2989bca18b6041d746"
+  },
+  {
+    "scenario": "check/bundled-compliance/reuse_missing_source_spdx.yml",
+    "rule_id": "reuse-source-has-spdx-identifier",
+    "path": "src/lib.rs",
+    "fingerprint": "656a0cb51ee2e3e7145cefdf888ae02a6c82f8a57b79c10094d7733fd4648374"
+  },
+  {
+    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-csproj-nullable-enabled",
+    "path": "src/App.csproj",
+    "fingerprint": "f2b0baf754d04079306ef6dbe695d8b6134cffb95118c01114df0c81273a69f9"
+  },
+  {
+    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-csproj-sdk-style",
+    "path": "src/App.csproj",
+    "fingerprint": "d4f1c3bdc5ac2b4210e9198994e473e53a2f0e74a2683636a1a67a114ee5f43e"
+  },
+  {
+    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-editorconfig-exists",
+    "path": null,
+    "fingerprint": "f6da42aa701c08fb4e0eb9fe89840862f38698db6149d9bcf17a78088d4934e0"
+  },
+  {
+    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-global-json-exists",
+    "path": null,
+    "fingerprint": "9691aa55b5b99483922a2f4e7c09c58e3f07028d59eb4a611d1d66bdc6e7c23a"
+  },
+  {
+    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-no-build-output-committed",
+    "path": "src/obj",
+    "fingerprint": "41cd2b0f7a82c012bd5f5700b82a1fcec124625fe5ac35dd3b2523be74d99818"
+  },
+  {
+    "scenario": "check/bundled-dotnet/dotnet_global_json_and_cpm_misconfigured_fire.yml",
+    "rule_id": "dotnet-central-package-management",
+    "path": "Directory.Packages.props",
+    "fingerprint": "65fe7551da05a31fc35b7dd7119c62d76449bdae8424d2d0a322c4a28e912094"
+  },
+  {
+    "scenario": "check/bundled-dotnet/dotnet_global_json_and_cpm_misconfigured_fire.yml",
+    "rule_id": "dotnet-global-json-pins-sdk",
+    "path": "global.json",
+    "fingerprint": "e4c47eab54f7d33c5316710dfa9aeee9fdb4252787782f4b6b3263e013dcb66c"
+  },
+  {
+    "scenario": "check/bundled-go/go_flags_malformed_go_mod.yml",
+    "rule_id": "go-mod-declares-go-version",
+    "path": "go.mod",
+    "fingerprint": "828b35009f31ac06a1c2d4450e528f0f839218084d79c8fe3a8f27e9967375f8"
+  },
+  {
+    "scenario": "check/bundled-go/go_flags_malformed_go_mod.yml",
+    "rule_id": "go-mod-declares-module-path",
+    "path": "go.mod",
+    "fingerprint": "275876c0daa8c40a42ea43030fcb168b262e033c12766372d7de78624bf7cf25"
+  },
+  {
+    "scenario": "check/bundled-go/go_flags_malformed_go_mod.yml",
+    "rule_id": "go-sum-exists",
+    "path": null,
+    "fingerprint": "a51b9b6fc52021fb6c41a9b41f66e8f899ceceed6c21b1d24b73203bcab86cfc"
+  },
+  {
+    "scenario": "check/bundled-go/go_flags_missing_go_sum.yml",
+    "rule_id": "go-sum-exists",
+    "path": null,
+    "fingerprint": "a51b9b6fc52021fb6c41a9b41f66e8f899ceceed6c21b1d24b73203bcab86cfc"
+  },
+  {
+    "scenario": "check/bundled-java/java_fires_on_committed_target.yml",
+    "rule_id": "java-no-class-files",
+    "path": "target/classes/com/example/Demo.class",
+    "fingerprint": "b8089e6bb45ca967eb6e6f79614cd9e6ae83a8a8c9c44d057d013a6be82012dc"
+  },
+  {
+    "scenario": "check/bundled-java/java_fires_on_committed_target.yml",
+    "rule_id": "java-no-tracked-target",
+    "path": "target",
+    "fingerprint": "313125ac4fa2e43059e4b4a75ebaab479611ab57ae1acfb5d40e4c2fec8e2f30"
+  },
+  {
+    "scenario": "check/bundled-monorepo/cargo_workspace_fires_on_missing_members.yml",
+    "rule_id": "cargo-workspace-members-declared",
+    "path": "Cargo.toml",
+    "fingerprint": "1f8d5b8b9a401b985adb6bb153680e71c7f50ea98446e095074409e04dde3756"
+  },
+  {
+    "scenario": "check/bundled-monorepo/cargo_workspace_non_canonical_layout_override.yml",
+    "rule_id": "cargo-workspace-member-has-readme",
+    "path": "cli",
+    "fingerprint": "de2f32aeabc24a4c51b50a5c05e74880a33dfb412b4dec37485806fe4e2c158b"
+  },
+  {
+    "scenario": "check/bundled-monorepo/cargo_workspace_non_canonical_layout_override.yml",
+    "rule_id": "cargo-workspace-member-has-readme",
+    "path": "runtime",
+    "fingerprint": "cd7d5133fbae60bc870758539b1d2df04b3dc2d3d26f9ccdd2c25151a1bc2b93"
+  },
+  {
+    "scenario": "check/bundled-monorepo/cargo_workspace_skips_non_member_dirs.yml",
+    "rule_id": "cargo-workspace-member-declares-name",
+    "path": "crates/beta/Cargo.toml",
+    "fingerprint": "fe2c0c67b8a52927e1daa79b28fd5976cc4b4e9786336660996d9d7784db3f25"
+  },
+  {
+    "scenario": "check/bundled-monorepo/cargo_workspace_skips_non_member_dirs.yml",
+    "rule_id": "cargo-workspace-member-has-readme",
+    "path": "crates/alpha",
+    "fingerprint": "b4b246ccbc02755385ae8b7dce36f8d5c236d1d14942f50a9cbea70ca11741ba"
+  },
+  {
+    "scenario": "check/bundled-monorepo/pnpm_workspace_filter_and_member_checks.yml",
+    "rule_id": "pnpm-workspace-member-has-readme",
+    "path": "packages/alpha",
+    "fingerprint": "c49386216ec63abbd5d1d2b467cd82800f10154f6a9cee8e538e9ff8270cb106"
+  },
+  {
+    "scenario": "check/bundled-monorepo/yarn_workspace_filter_and_member_checks.yml",
+    "rule_id": "yarn-workspace-member-has-readme",
+    "path": "apps/web",
+    "fingerprint": "c129b7c19b2a0fffe2ebaa34408c73aaf991e46621b0cfb42ba93b497056bbed"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_tag_pinned_docker.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "b269c534c55f47444696c0c55fc1aed653565ab7f4f760504ef9dfc9f379fa2c"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "f2107de9fea10ef6110510af3c77d1e3796134ef54127764ebb19cc9c882e942"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-workflow-contents-read",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "46873b6cf48c49bd35803e0d1d9d16eeb0987d9e8a7c480485c19d874f07b913"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-workflow-has-name",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "b238126378145c8bdd57112ac6ac985b430f8c4d276c05a03855c8a36b39c912"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_write_permissions.yml",
+    "rule_id": "gha-workflow-contents-read",
+    "path": ".github/workflows/contents-write.yml",
+    "fingerprint": "a9eab90fed565856ac0b2852469401405f09f7395651674f7db5de1e76113dab"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_write_permissions.yml",
+    "rule_id": "gha-workflow-contents-read",
+    "path": ".github/workflows/write-all.yml",
+    "fingerprint": "291f73eea155831c2932a1de6cb546bff8a807a26d9f3946a77bec8ddc2142b9"
+  },
+  {
+    "scenario": "check/bundled-phase-a/docs_adr_flags_filename_and_missing_sections.yml",
+    "rule_id": "adr-filename-pattern",
+    "path": "docs/adr/pick-framework.md",
+    "fingerprint": "ea22ee5dab3dd857e3a0ae225f94b6c93a2beebed86a6dffce4180bc85e176fc"
+  },
+  {
+    "scenario": "check/bundled-phase-a/docs_adr_flags_filename_and_missing_sections.yml",
+    "rule_id": "adr-has-decision-section",
+    "path": "docs/adr/0001-use-typescript.md",
+    "fingerprint": "7b3991469cc8033d8cda59e3be9df1fc5b163ef5aa65c433a3b1dc0776b6d6de"
+  },
+  {
+    "scenario": "check/bundled-phase-a/hygiene_lockfiles_flags_nested_yarn_lock.yml",
+    "rule_id": "lockfiles-no-nested-yarn",
+    "path": "packages/sub/yarn.lock",
+    "fingerprint": "4d37deea676d680be8c57c613b9883a90331146c78f4ca1f01103600f02d5e9b"
+  },
+  {
+    "scenario": "check/bundled-phase-a/hygiene_no_js_build_outputs_scoped_to_package_json.yml",
+    "rule_id": "hygiene-no-js-build-outputs",
+    "path": "frontend/dist",
+    "fingerprint": "4067961124ca33bac8996a1d75b9439ed73731c5cb4194a3fe5e9d486a1392ff"
+  },
+  {
+    "scenario": "check/bundled-phase-a/hygiene_no_macos_junk_verifies_content_signature.yml",
+    "rule_id": "hygiene-no-macos-junk",
+    "path": ".DS_Store",
+    "fingerprint": "395c169607876d1a32d8e5f9415bb15219da1bad6c81b23d7e7a2fac3abdbc06"
+  },
+  {
+    "scenario": "check/bundled-phase-a/hygiene_no_macos_junk_verifies_content_signature.yml",
+    "rule_id": "hygiene-no-macos-junk",
+    "path": "src/._Main.java",
+    "fingerprint": "724adfc54be63840ff333ad41f65cc2379d2f0576e777e074fc83bc6e770923f"
+  },
+  {
+    "scenario": "check/bundled-phase-a/hygiene_no_tracked_artifacts_flags_common_junk.yml",
+    "rule_id": "hygiene-no-env-files",
+    "path": ".env",
+    "fingerprint": "5cfa82360b951344874386db1cb072ca5b2940878d975c07849ec3200c31d269"
+  },
+  {
+    "scenario": "check/bundled-phase-a/hygiene_no_tracked_artifacts_flags_common_junk.yml",
+    "rule_id": "hygiene-no-macos-junk",
+    "path": ".DS_Store",
+    "fingerprint": "395c169607876d1a32d8e5f9415bb15219da1bad6c81b23d7e7a2fac3abdbc06"
+  },
+  {
+    "scenario": "check/bundled-phase-a/hygiene_no_tracked_artifacts_flags_common_junk.yml",
+    "rule_id": "hygiene-no-node-modules",
+    "path": "node_modules",
+    "fingerprint": "4e3b75bdc234507d2f6e29a731d9985abf3a6f34352e5d15e288def6873115b0"
+  },
+  {
+    "scenario": "check/bundled-phase-a/tooling_editorconfig_flags_missing_root_files.yml",
+    "rule_id": "tooling-editorconfig-exists",
+    "path": null,
+    "fingerprint": "99e1e365ca6516bfd059ff901ff73e35a8b8faf35bd271b4b71bde6ff3103084"
+  },
+  {
+    "scenario": "check/bundled-phase-a/tooling_editorconfig_flags_missing_root_files.yml",
+    "rule_id": "tooling-gitattributes-exists",
+    "path": null,
+    "fingerprint": "0cca6fd77d83c8e90505ea0b0def9aa610156023b4092bc1d04b14b0695d43c1"
+  },
+  {
+    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-composer-autoload-files-resolve",
+    "path": "composer.json",
+    "fingerprint": "164a2155a26fb6797c4864b922821460fd03f4efffdb55df51bd873cd538b836"
+  },
+  {
+    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-composer-bin-resolve",
+    "path": "composer.json",
+    "fingerprint": "6d2d6611e63db170c06919f0b596ef427fe92ae8ae515f01471336d61d4f146c"
+  },
+  {
+    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-composer-name-format",
+    "path": "composer.json",
+    "fingerprint": "1646330cab40bb340340d8c49a25ecb18eba7622cdcfb8e419793d30adf36a8e"
+  },
+  {
+    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-composer-psr4-dirs-resolve",
+    "path": "composer.json",
+    "fingerprint": "6df27c151b393119e4ba487a49d31325f5aaf421393ac8f6f497f4f8d753eb60"
+  },
+  {
+    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-no-vendor-committed",
+    "path": "vendor",
+    "fingerprint": "e8d37f945c2ffc0c83fdf5a5b9a06911b8a3b0359cf54e5b137be05417120acd"
+  },
+  {
+    "scenario": "check/bundled-python/python_excludes_test_fixture_paths.yml",
+    "rule_id": "python-sources-final-newline",
+    "path": "src/demo/core.py",
+    "fingerprint": "4614963f7e217679ea7cf1cc0b72136f29f9e9aff30ea7dac3ba2a456f067078"
+  },
+  {
+    "scenario": "check/bundled-python/python_excludes_test_fixture_paths.yml",
+    "rule_id": "python-sources-no-trailing-whitespace",
+    "path": "src/demo/core.py",
+    "fingerprint": "6c04aa941bb1eb6e30cb017ec10ab87e34b1a6f61387935d9416bb8eab36daad"
+  },
+  {
+    "scenario": "check/bundled-python/python_flags_incomplete_pyproject.yml",
+    "rule_id": "python-has-lockfile",
+    "path": null,
+    "fingerprint": "2efbab531152b3fc255787e39b5ca80d0fcebffc9c9225d8b18c7e5efbc37e07"
+  },
+  {
+    "scenario": "check/bundled-python/python_flags_incomplete_pyproject.yml",
+    "rule_id": "python-pyproject-declares-name",
+    "path": "pyproject.toml",
+    "fingerprint": "8f03b1872a1bb1fdf27892814445f0bb7d4d71c82e27edc4534e8a6acf366c2b"
+  },
+  {
+    "scenario": "check/bundled-python/python_flags_incomplete_pyproject.yml",
+    "rule_id": "python-pyproject-declares-requires-python",
+    "path": "pyproject.toml",
+    "fingerprint": "6ed171d5d65c4f8d817f12e66958718f61e9dae81a3a700f56aec79b8afa3127"
+  },
+  {
+    "scenario": "check/bundled-python/python_flags_missing_manifest.yml",
+    "rule_id": "python-has-lockfile",
+    "path": null,
+    "fingerprint": "2efbab531152b3fc255787e39b5ca80d0fcebffc9c9225d8b18c7e5efbc37e07"
+  },
+  {
+    "scenario": "check/bundled-python/python_flags_missing_manifest.yml",
+    "rule_id": "python-manifest-exists",
+    "path": null,
+    "fingerprint": "a647f38cc22dd0a45202855b8cc5b6da094fe1a82aceb7d562f4b5767aff5637"
+  },
+  {
+    "scenario": "check/bundled/agent_context_stub_flagged.yml",
+    "rule_id": "agent-context-non-stub",
+    "path": "AGENTS.md",
+    "fingerprint": "4d09c42569ab6797a8cf56d7e55b31966852910dab42550d0e9fff2f09004f1c"
+  },
+  {
+    "scenario": "check/bundled/agent_hygiene_scratch_doc_flagged.yml",
+    "rule_id": "agent-no-scratch-docs-at-root",
+    "path": "PLAN.md",
+    "fingerprint": "b9b2cd2da1cced477295de213648f222260177d5a0ce696b380450011f88e726"
+  },
+  {
+    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "rule_id": "apache-gov-changelog-exists",
+    "path": null,
+    "fingerprint": "0b1bb58b053635ce3097161863a9fbc7a7283ad82a7a51319ba689b005f52eea"
+  },
+  {
+    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "rule_id": "apache-gov-keys-exists",
+    "path": null,
+    "fingerprint": "c52503708d8c57f74b997693a644df9f6a8a4244e70afaf8e9a348008c05a46e"
+  },
+  {
+    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "rule_id": "apache-gov-license-exists",
+    "path": null,
+    "fingerprint": "bf8f9fc16481b23b7831c5709b339bd435904b9c488e21cdeced20e8611461f4"
+  },
+  {
+    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "rule_id": "apache-gov-notice-asf-attribution",
+    "path": "NOTICE",
+    "fingerprint": "f73b587235f7a815c7d1c37d459e07b0b7baaadf90f93adbe6ef8cc669cdf85c"
+  },
+  {
+    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "rule_id": "apache-gov-readme-exists",
+    "path": null,
+    "fingerprint": "8ccc40bdd1747f51e9ff2ebfbad56836e38028368f25784064261383db7eb305"
+  },
+  {
+    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "rule_id": "apache-gov-source-license-header",
+    "path": "src/Main.java",
+    "fingerprint": "28c6e5878cb534335814a0d5e4627292e85da419be6de4bc9c002776ca2ad980"
+  },
+  {
+    "scenario": "check/bundled/apache_governance_no_binaries_and_no_notice_fire.yml",
+    "rule_id": "apache-gov-no-binaries-in-source",
+    "path": "lib/foo.jar",
+    "fingerprint": "e7af33b6115e0ca02b9a6ef406baf95051946b42e9177d33fd8badfc3f81038e"
+  },
+  {
+    "scenario": "check/bundled/apache_governance_no_binaries_and_no_notice_fire.yml",
+    "rule_id": "apache-gov-notice-exists",
+    "path": null,
+    "fingerprint": "9940aa9ec1a4d3657ea1695c7983c1a3aaf79e64c4a7028eccc832e27f44fe97"
+  },
+  {
+    "scenario": "check/bundled/monorepo_missing_readme_flagged.yml",
+    "rule_id": "monorepo-packages-have-package-json",
+    "path": "packages/stripped",
+    "fingerprint": "ec59db93b30f40706f7509a9f202bf1d9a122e2e88418711c0fe79ee88179310"
+  },
+  {
+    "scenario": "check/bundled/monorepo_missing_readme_flagged.yml",
+    "rule_id": "monorepo-packages-have-readme",
+    "path": "packages/stripped",
+    "fingerprint": "63f3ef001203ea8bcf868f54a15c90682290865656cb68e0ab4213bd20b952a0"
+  },
+  {
+    "scenario": "check/bundled/node_missing_lockfile_and_version_pin.yml",
+    "rule_id": "node-engine-or-nvmrc",
+    "path": null,
+    "fingerprint": "0d0593464f8dea58e135c4919d8ad9f558d7d246a65eb7976b622d4258708c02"
+  },
+  {
+    "scenario": "check/bundled/node_missing_lockfile_and_version_pin.yml",
+    "rule_id": "node-has-lockfile",
+    "path": null,
+    "fingerprint": "b92beca7e840ad7abc17c6a199a5f65b6ae08a34b0a9365d360c2fc4868f586e"
+  },
+  {
+    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-code-of-conduct-exists",
+    "path": null,
+    "fingerprint": "acd49e620016c6d8c2e562cf5cfaae16dc90003e515cf8164011b279769b2b6a"
+  },
+  {
+    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-codeowners-exists",
+    "path": null,
+    "fingerprint": "e69f0e4dae12424c916f6ee2fef2e8c41c90fb3cb9d079d187c54c5ef9d4eda8"
+  },
+  {
+    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-dependency-update-tool",
+    "path": null,
+    "fingerprint": "8db6e5504be55bc52e4ce8894b90c8a6833f31fc9290c70c23b71d229c1d19bd"
+  },
+  {
+    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-gitignore-exists",
+    "path": null,
+    "fingerprint": "ea97769972d5555a6fcaca450b817231eddb7a576844ada993ae3726ba613232"
+  },
+  {
+    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-license-exists",
+    "path": null,
+    "fingerprint": "7b04d6ea718ad61cbae77fba95ceb5aae6c9cc9b09b6df2eb31b52fc80228306"
+  },
+  {
+    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-readme-exists",
+    "path": null,
+    "fingerprint": "e3836626d4ebc2c743471fc3a1c60df01e18e32cf670d078c0193f716097eb87"
+  },
+  {
+    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-security-policy-exists",
+    "path": null,
+    "fingerprint": "43ca91ae4ef2da8d565c512941927a947758d24976f51c4957ecdbde136c66bf"
+  },
+  {
+    "scenario": "check/bundled/rust_gaps_flagged.yml",
+    "rule_id": "rust-cargo-lock-exists",
+    "path": null,
+    "fingerprint": "4d0b407bd9305073370a98281a21ed98f7d41cfab1761662b87dd619ddfd16e8"
+  },
+  {
+    "scenario": "check/bundled/rust_gaps_flagged.yml",
+    "rule_id": "rust-sources-snake-case",
+    "path": "src/LibRoot.rs",
+    "fingerprint": "e8141e3501069e690c99fd15cc3217c8030564c6d7bc4daaec45d9c15294bee3"
+  },
+  {
+    "scenario": "check/bundled/rust_gaps_flagged.yml",
+    "rule_id": "rust-toolchain-pinned",
+    "path": null,
+    "fingerprint": "8b7a9c2dbd026bee8e8876768e83c557bc38bf85a7aeadc999e8649ab6abb13d"
+  },
+  {
+    "scenario": "check/bundled/rust_snake_case_excludes_compiler_internals.yml",
+    "rule_id": "rust-sources-snake-case",
+    "path": "library/foo/src/RealName.rs",
+    "fingerprint": "9c45ed2f4609065e8a46212044d8a46af0db0e05d350b3987ee160c8a1ba8f01"
+  },
+  {
+    "scenario": "check/changed/changed_empty_diff_yields_empty_report.yml",
+    "rule_id": "no-env",
+    "path": ".env",
+    "fingerprint": "a5d380c44e2a120fb7ad16af8f3c7ce217040f5b43df457067c8aa2f54a49509"
+  },
+  {
+    "scenario": "check/changed/changed_fires_per_file_rule_on_changed_file_only.yml",
+    "rule_id": "java-license-header",
+    "path": "src/Bar.java",
+    "fingerprint": "62e1bb2a8336967ad3e8c9ea0321c9276d0d6730a6cc3a73895c816dc4b554b8"
+  },
+  {
+    "scenario": "check/changed/changed_keeps_dir_absent_on_full_tree.yml",
+    "rule_id": "no-build",
+    "path": "build",
+    "fingerprint": "6f57419eecb1289df161d290435bb1a8479a2c8350cd0321da2a1759d821e803"
+  },
+  {
+    "scenario": "check/changed/changed_keeps_markdown_links_on_full_tree.yml",
+    "rule_id": "docs-links",
+    "path": "README.md",
+    "fingerprint": "1afc325c17d834c94515a445a26e732e8cfe7aa7cdfe616070d29d54e31735c6"
+  },
+  {
+    "scenario": "check/changed/changed_keeps_pair_on_full_tree.yml",
+    "rule_id": "c-needs-h",
+    "path": "src/bar.c",
+    "fingerprint": "4ab6239c441890a45799e8202bcdf92064ade9d317281ee225594eb8157e6684"
+  },
+  {
+    "scenario": "check/changed/changed_max_files_per_directory_counts_unchanged_files.yml",
+    "rule_id": "dir-size",
+    "path": "dir",
+    "fingerprint": "6a291c4bc6b17e9ea07e7a565d27387aeb3d6206f470f19f90abd4d555488b04"
+  },
+  {
+    "scenario": "check/changed/changed_no_case_conflicts_sees_unchanged_partner.yml",
+    "rule_id": "case",
+    "path": "README.md",
+    "fingerprint": "017b31f8f4175eee97186e5bb8add77ceb8a9a15059af96a1759f64531343a86"
+  },
+  {
+    "scenario": "check/changed/changed_no_case_conflicts_sees_unchanged_partner.yml",
+    "rule_id": "case",
+    "path": "Readme.md",
+    "fingerprint": "673cef755d30845515e8859a0554f09c0155d8aeb520529747b5139c79b29c22"
+  },
+  {
+    "scenario": "check/changed/changed_skips_existence_rule_when_scope_disjoint.yml",
+    "rule_id": "no-env",
+    "path": ".env",
+    "fingerprint": "a5d380c44e2a120fb7ad16af8f3c7ce217040f5b43df457067c8aa2f54a49509"
+  },
+  {
+    "scenario": "check/changed/changed_skips_per_file_rule_when_scope_disjoint.yml",
+    "rule_id": "java-license-header",
+    "path": "src/Bar.java",
+    "fingerprint": "62e1bb2a8336967ad3e8c9ea0321c9276d0d6730a6cc3a73895c816dc4b554b8"
+  },
+  {
+    "scenario": "check/content/commented_out_code_fail.yml",
+    "rule_id": "no-commented-code",
+    "path": "src/api.ts",
+    "fingerprint": "981b945fdb373bc25066c9bde2595d11153c70f883f0669a708daa5a349d6391"
+  },
+  {
+    "scenario": "check/content/file_content_forbidden_fail.yml",
+    "rule_id": "no-dbg",
+    "path": "src/main.rs",
+    "fingerprint": "d9736192e828aedb7a9d10927f4a661cbf54f1ccaf7edf92f4309440786c6c20"
+  },
+  {
+    "scenario": "check/content/file_content_matches_fail.yml",
+    "rule_id": "spdx-in-readme",
+    "path": "README.md",
+    "fingerprint": "181450f2d6db785bf7388fe370d88829588d852cc191f0024e0529c849dca451"
+  },
+  {
+    "scenario": "check/content/file_ends_with_fail.yml",
+    "rule_id": "gen-sentinel",
+    "path": "build/stripped.generated.md",
+    "fingerprint": "87b329cd9ee988ac7821f68a1b4d475afb7d9a0fb855fd91e780129127dc0e2d"
+  },
+  {
+    "scenario": "check/content/file_ends_with_fail.yml",
+    "rule_id": "gen-sentinel",
+    "path": "build/wrong_tail.generated.md",
+    "fingerprint": "6dc12c07337787baea8a27b426dfc6e59fb422cf19fd0b22f998567b8bf7661f"
+  },
+  {
+    "scenario": "check/content/file_footer_fail.yml",
+    "rule_id": "license-footer",
+    "path": "src/missing.rs",
+    "fingerprint": "1e5099a8108bf14bdaf117e70bc4e9d7b0ffc7e47cddc0187c9fe4531495ba95"
+  },
+  {
+    "scenario": "check/content/file_header_fail.yml",
+    "rule_id": "copyright-header",
+    "path": "src/a.rs",
+    "fingerprint": "0822eb7e6512acabe1bf10c8e47c5e5fbf905bc3f211286ee1a2024f4004d0fb"
+  },
+  {
+    "scenario": "check/content/file_shebang_fail.yml",
+    "rule_id": "scripts-use-env-bash",
+    "path": "scripts/hardcoded.sh",
+    "fingerprint": "7069ccc4378a90b5ffd56106b8f9c9b1eb95f4121befb9622b465f81fedd5538"
+  },
+  {
+    "scenario": "check/content/file_shebang_fail.yml",
+    "rule_id": "scripts-use-env-bash",
+    "path": "scripts/missing.sh",
+    "fingerprint": "9b074507bf722948e63cb58a68f9c7355bb7f4234de099fac818555e14d1499a"
+  },
+  {
+    "scenario": "check/content/file_starts_with_fail.yml",
+    "rule_id": "spdx-header",
+    "path": "src/no_header.rs",
+    "fingerprint": "ba84b33518f7737ccd6d78da23ac394af491977e3bc6e706239fe337b5629244"
+  },
+  {
+    "scenario": "check/content/file_starts_with_fail.yml",
+    "rule_id": "spdx-header",
+    "path": "src/wrong_spdx.rs",
+    "fingerprint": "ae5e625699a4da546f13144aa532996e0b84223cd34c7810d8a13c3968e19e14"
+  },
+  {
+    "scenario": "check/content/final_newline_fail.yml",
+    "rule_id": "eof",
+    "path": "docs/missing.md",
+    "fingerprint": "ad306e1d6219e8cfc11d8b0fdefe6ab7681ad5e55a43f21d22b63df1968e4b5c"
+  },
+  {
+    "scenario": "check/content/for_each_match_fail.yml",
+    "rule_id": "changelog-entries-well-formed",
+    "path": "CHANGELOG.md",
+    "fingerprint": "fbe74ab0826d2612530ae5a4dd0b77f5ec2f58d88c882670d432d937d0a09ae3"
+  },
+  {
+    "scenario": "check/content/for_each_match_forbid_fail.yml",
+    "rule_id": "changelog-no-fix-directive",
+    "path": "CHANGELOG.md",
+    "fingerprint": "c5e247357be6c517efee7fce026c5b10433497eb3528388e634eb8695fdfe810"
+  },
+  {
+    "scenario": "check/content/import_gate_fail.yml",
+    "rule_id": "staging-no-main-module",
+    "path": "staging/src/k8s.io/api/types.go",
+    "fingerprint": "0b7eded46943d4822486c2bf08e8abe3e8f3d5a91d3a8505511ec13945cfc62f"
+  },
+  {
+    "scenario": "check/content/indent_style_spaces_width_fail.yml",
+    "rule_id": "yml-2sp",
+    "path": "conf/bad_tab.yml",
+    "fingerprint": "58e83bf721502179a3786fcf3ad64a2c8dacb0d3a9b349027f9fadb56cacb3d2"
+  },
+  {
+    "scenario": "check/content/indent_style_spaces_width_fail.yml",
+    "rule_id": "yml-2sp",
+    "path": "conf/bad_width.yml",
+    "fingerprint": "6fa405f820a61037aab5e7ae73ca8a22059b32075c5ae3ff65f1eff541e3aa2a"
+  },
+  {
+    "scenario": "check/content/indent_style_tabs_fail.yml",
+    "rule_id": "go-tabs",
+    "path": "src/bad.go",
+    "fingerprint": "f0c1cfb1c8763eef1de8cbcd0b64fbc999ba933f39d9d987763fb78753d17a16"
+  },
+  {
+    "scenario": "check/content/line_endings_fail.yml",
+    "rule_id": "lf-only",
+    "path": "src/has_crlf.rs",
+    "fingerprint": "0d70a9f4f704a8c8cfe9ff6e3a6b97e0f0343d61e1c9ffbb62061f82b2842d43"
+  },
+  {
+    "scenario": "check/content/line_max_width_fail.yml",
+    "rule_id": "narrow",
+    "path": "src/wide.rs",
+    "fingerprint": "ed22d819a6f9c024be4cf9b0f9fb9709d6dfcd3113550780bac7d1db97be94af"
+  },
+  {
+    "scenario": "check/content/markdown_paths_resolve_fail.yml",
+    "rule_id": "agents-paths-resolve",
+    "path": "AGENTS.md",
+    "fingerprint": "2e4e84f0952a521a21747bdf5156fd77625b8c90eb4bdae7be403b6451b6804f"
+  },
+  {
+    "scenario": "check/content/markdown_paths_resolve_fail.yml",
+    "rule_id": "agents-paths-resolve",
+    "path": "AGENTS.md",
+    "fingerprint": "a9ee1782c8ec5c486f158f8b1763e195c384819c9d7ac0344c9d5d3518258c6f"
+  },
+  {
+    "scenario": "check/content/markdown_paths_resolve_fail.yml",
+    "rule_id": "agents-paths-resolve",
+    "path": "AGENTS.md",
+    "fingerprint": "eec4512790c989abf619a6b23d638ce2cde7d244d9b0e04d692600c59631846d"
+  },
+  {
+    "scenario": "check/content/max_consecutive_blank_lines_fail.yml",
+    "rule_id": "no-dbl-blank",
+    "path": "docs/gappy.md",
+    "fingerprint": "5eea4a92ecf4e788c24762d2967241b0b9829e0a1333af8bf0ecff8485475663"
+  },
+  {
+    "scenario": "check/content/no_trailing_whitespace_fail.yml",
+    "rule_id": "no-ws",
+    "path": "src/bad.rs",
+    "fingerprint": "1bea455df3a7ee521fa1570afa7635a8d08ec8244513971f1aea72d3bbf42d2c"
+  },
+  {
+    "scenario": "check/content/no_trailing_whitespace_fail.yml",
+    "rule_id": "no-ws",
+    "path": "src/tabbed.md",
+    "fingerprint": "9378d9a119e8dcbea72159a27991bd1227b01d56234356e72d1257544b0f6b4e"
+  },
+  {
+    "scenario": "check/content/ordered_block_fail.yml",
+    "rule_id": "keep-sorted",
+    "path": ".gitignore",
+    "fingerprint": "af3ef38b8586af0ca947d5ddf3b6407435ab3327cc1d7172415141aa9081b196"
+  },
+  {
+    "scenario": "check/content/ordered_block_markerless_fail.yml",
+    "rule_id": "dictionary-sorted",
+    "path": "dictionary.txt",
+    "fingerprint": "2e7c2e822a6c3b5ca7e56b084770932f1762bc9c77400508c168c4302c0bcf46"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_dotenv_app_version_drift_fail.yml",
+    "rule_id": "app-version-synced",
+    "path": "package.json",
+    "fingerprint": "e9ffc01dac56959006063b5efa92fc4f36259984607e92a7e67548913a40d0c2"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_glob_union_source_fail.yml",
+    "rule_id": "hlgroups-doc-matches-code",
+    "path": "highlight.c",
+    "fingerprint": "6480e3ce3982351b02b70dd299e603de37e89016a31ee57fbf6112a9601c6fa6"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_hcl_version_drift_fail.yml",
+    "rule_id": "app-version-synced",
+    "path": "package.json",
+    "fingerprint": "8a3d504bc5e43201874906eec5365ac8fd4d2c9ab4d7b9eda83d8672479f8484"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_identical_fail.yml",
+    "rule_id": "readme-mirrors-root",
+    "path": "crates/a/README.md",
+    "fingerprint": "1b8f77cd562c035feae58e8006f8862641a22a4f36044d6bf7e9cce6fe423cda"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_ini_version_drift_fail.yml",
+    "rule_id": "app-version-synced",
+    "path": "package.json",
+    "fingerprint": "8a3d504bc5e43201874906eec5365ac8fd4d2c9ab4d7b9eda83d8672479f8484"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_non_string_source_fires.yml",
+    "rule_id": "versions-match",
+    "path": "source.json",
+    "fingerprint": "6291d4947846ffcf8664374eed45288c76bdd6bf899abcfb593bb51cad1d2cb8"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_non_string_target_fires.yml",
+    "rule_id": "versions-match",
+    "path": "target.json",
+    "fingerprint": "4d8cff610602560b6a082c931394e9d7155beba4766a6dd98b321a2322610c52"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_properties_version_drift_fail.yml",
+    "rule_id": "app-version-synced",
+    "path": "package.json",
+    "fingerprint": "e9ffc01dac56959006063b5efa92fc4f36259984607e92a7e67548913a40d0c2"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_resolves_fail.yml",
+    "rule_id": "members-exist",
+    "path": "Cargo.toml",
+    "fingerprint": "73ac43fbb3e9ade59f8ca5ce94bf16e0664106373f3bd269b540f99e82dc5ed1"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_subset_fail.yml",
+    "rule_id": "refs-resolve",
+    "path": "have.json",
+    "fingerprint": "a3bc32c8a792133daf15f252a2519fdb903473280a0c85db28f87a1918cb65b9"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_superset_fail.yml",
+    "rule_id": "used-are-allowed",
+    "path": "used.json",
+    "fingerprint": "0b7f346f397d3802a2ad2ce73bc37e7a6403dd906deff8007784d80f7747db36"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_value_equals_fail.yml",
+    "rule_id": "workspace-versions-coherent",
+    "path": "crates/b/Cargo.toml",
+    "fingerprint": "020c4e85ac2f57b5f3f20b7b7e348a3ad0f97c141644d7a71f2d11d2e8b0655e"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_whole_file_fail.yml",
+    "rule_id": "name-matches",
+    "path": "package.json",
+    "fingerprint": "43dd99fae528fcd53233f8c925a68bbbf24bb8f8171fc5fef684635dd1f07022"
+  },
+  {
+    "scenario": "check/cross_file/cross_file_xml_version_drift_fail.yml",
+    "rule_id": "csproj-versions-coherent",
+    "path": "src/B/B.csproj",
+    "fingerprint": "50b0161748be6d8be89a56f6dfbda4297aabbd1a8a814d7f1f762c80f1cfbf09"
+  },
+  {
+    "scenario": "check/cross_file/dir_contains_fail.yml",
+    "rule_id": "packages-have-readme-and-license",
+    "path": "packages/beta",
+    "fingerprint": "eb948a7afcd10280a1e6595106b4bc5948de33907f79e00644e72f2c6595873d"
+  },
+  {
+    "scenario": "check/cross_file/dir_contains_fail.yml",
+    "rule_id": "packages-have-readme-and-license",
+    "path": "packages/gamma",
+    "fingerprint": "c24271edb4e7a03d98258433d747a208e1c0df99e1f4439ee558c59220ed87e7"
+  },
+  {
+    "scenario": "check/cross_file/dir_only_contains_fail.yml",
+    "rule_id": "src-only-rs",
+    "path": "src/notes.txt",
+    "fingerprint": "b6c2a2678488d3a2eaff847f753f51fd60b5c87b808ed63245267abcf439853e"
+  },
+  {
+    "scenario": "check/cross_file/dir_only_contains_fail.yml",
+    "rule_id": "src-only-rs",
+    "path": "src/stray.py",
+    "fingerprint": "14b3645f3174d738e53f6627ac506c8f781820cc78b241cd84f779976c485765"
+  },
+  {
+    "scenario": "check/cross_file/every_matching_has_fail.yml",
+    "rule_id": "every-pkg-has-package-json",
+    "path": "packages/beta",
+    "fingerprint": "242b78bdb5cb5c67260b90b6529ec491a4952151a856cb8b0f339fbeaf6acf88"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_acyclic_fail.yml",
+    "rule_id": "no-proto-import-cycles",
+    "path": "proto/a.proto",
+    "fingerprint": "98a30087630511fad8b070a1dbef8bb708cd5d2904745e41349a0c4d8aeb0062"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_derive_dangling_fail.yml",
+    "rule_id": "license-has-notice",
+    "path": "licenses/lucene-LICENSE.txt",
+    "fingerprint": "9f6173406acf5967dd2402709126c4ed39aff5ea08ae00be5d9e99e60b242c78"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_fail.yml",
+    "rule_id": "domain-not-depend-on-infra",
+    "path": "src/domain/order.ts",
+    "fingerprint": "5d1f9792c5196060283ee79fbba266c52dc752321dcbab58dcfba1b60ef7f7ac"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_fresh_fail.yml",
+    "rule_id": "generated-stays-fresh",
+    "path": "proto/a.pb.go",
+    "fingerprint": "fbfe8bb94373a23a726f19afc231a6a840988f2308c7c99cf6636f4d83865560"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_no_dangling_fail.yml",
+    "rule_id": "docs-links-resolve",
+    "path": "docs/a.md",
+    "fingerprint": "1122ed6dbbee6afbd1584b25985650aec96fcb72a2d30be9b7cfa7edc8df4823"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_no_orphans_fail.yml",
+    "rule_id": "no-orphan-proto",
+    "path": "proto/a.proto",
+    "fingerprint": "ae47d5098327abbd4ceded306a4abf1c2e6e96ce5f47f3664799a98b64fd5076"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_non_string_edge_fires.yml",
+    "rule_id": "graph-resolves",
+    "path": "graph.json",
+    "fingerprint": "5fdeeaca7f2da1ddcd4f8410c0999dc1dc2535d3300435eec5887b54e33db0c5"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_xml_dangling_ref_fail.yml",
+    "rule_id": "csproj-refs-resolve",
+    "path": "A.csproj",
+    "fingerprint": "51be5d2c037bff86be06662031637ff10ea8fc9d92452d67b798e6eeb54f58e8"
+  },
+  {
+    "scenario": "check/cross_file/file_graph_xml_single_ref_dangling_fail.yml",
+    "rule_id": "csproj-refs-resolve",
+    "path": "A.csproj",
+    "fingerprint": "51be5d2c037bff86be06662031637ff10ea8fc9d92452d67b798e6eeb54f58e8"
+  },
+  {
+    "scenario": "check/cross_file/for_each_dir_fail.yml",
+    "rule_id": "every-module-has-mod",
+    "path": "src/beta",
+    "fingerprint": "601c5cdb3a425eb2656e38e7979c042a6f94458154872c73986539028ac9a434"
+  },
+  {
+    "scenario": "check/cross_file/for_each_file_fail.yml",
+    "rule_id": "unit-has-snapshot",
+    "path": "tests/unit/lexer.rs",
+    "fingerprint": "22848d1fe6207492f3f85640b54346f31a9449300ad81143b54df74407ad849d"
+  },
+  {
+    "scenario": "check/cross_file/markdown_links_expect_matches_fires.yml",
+    "rule_id": "docs-links",
+    "path": null,
+    "fingerprint": "4d74eb0e367a9e4d07be2ea4a881d8faf16404704e78ef9f896da686048747d3"
+  },
+  {
+    "scenario": "check/cross_file/markdown_links_resolve_fires.yml",
+    "rule_id": "repo-links",
+    "path": "CHANGELOG.md",
+    "fingerprint": "509049d42f2501c7bf25578ac73fbb3c5b4d8560ed794d7273f944e36f924dbf"
+  },
+  {
+    "scenario": "check/cross_file/markdown_links_resolve_site_fires.yml",
+    "rule_id": "site-links",
+    "path": "docs/site/about/monorepos.md",
+    "fingerprint": "bf4990bb702034a7f3b90d1939f5e9c654950860803b284f52a519036e410b06"
+  },
+  {
+    "scenario": "check/cross_file/pair_fail.yml",
+    "rule_id": "c-requires-h",
+    "path": "src/beta.c",
+    "fingerprint": "ed6b11cc97346b5e08a1ccd393765be5acb0f58b0d60ad5a1a9f13c60d6a4882"
+  },
+  {
+    "scenario": "check/cross_file/pair_hash_fail.yml",
+    "rule_id": "sums-pins-sources",
+    "path": "hello.txt",
+    "fingerprint": "92cb1680b329c59b51fcc453d12d251db0e13f2bc6b127a1e3a8e5fdabdfad0e"
+  },
+  {
+    "scenario": "check/cross_file/path_confinement_escape_fail.yml",
+    "rule_id": "schema-confined",
+    "path": "../escape.json",
+    "fingerprint": "35a57546fb2fb12a3add0892bae373e6fecd2ef9a28c05d0f3eb8a54505d4101"
+  },
+  {
+    "scenario": "check/cross_file/registry_paths_resolve_fail.yml",
+    "rule_id": "workspace-members-resolve",
+    "path": "Cargo.toml",
+    "fingerprint": "b93d8d96ce0ad3c9664b1854c755c2ca38bcd679717dba7b7029b16935b30175"
+  },
+  {
+    "scenario": "check/cross_file/registry_paths_resolve_non_string_exclude_fires.yml",
+    "rule_id": "members-resolve",
+    "path": "registry.json",
+    "fingerprint": "078b919893302f8e0cfcb364e7e3dcba0edda20300ae56218dbd626c520822ae"
+  },
+  {
+    "scenario": "check/cross_file/registry_paths_resolve_non_string_registry_fires.yml",
+    "rule_id": "members-resolve",
+    "path": "registry.json",
+    "fingerprint": "5e21a4182d75e265be854295ec069d491f1feb830fc230d8f17f6352649069dc"
+  },
+  {
+    "scenario": "check/cross_file/registry_paths_resolve_xml_dangling_fail.yml",
+    "rule_id": "projects-resolve",
+    "path": "projects.xml",
+    "fingerprint": "8815b91c99997f904937d3aa59cf42b09cc34628fa19bb2e90d4ec51a2c5528f"
+  },
+  {
+    "scenario": "check/cross_file/unique_by_fail.yml",
+    "rule_id": "unique-rs-stems",
+    "path": "a/util.rs",
+    "fingerprint": "db2ff8be92da367eac4454f39d606b9593c0d3db297229272e50092b7bbb3a8e"
+  },
+  {
+    "scenario": "check/encoding/file_hash_fail.yml",
+    "rule_id": "locked-content",
+    "path": "reference.txt",
+    "fingerprint": "3419dbb41d95a594aba07c6e2cb063f994bc379a1a1c47ee5782da0eef488db4"
+  },
+  {
+    "scenario": "check/encoding/file_is_ascii_allow_exempts_codepoints.yml",
+    "rule_id": "ascii-with-accents",
+    "path": "src/cold.rs",
+    "fingerprint": "a341b49544f20886187208e9e287f926a1644ddb8fe09fe91a4a9a090b15c304"
+  },
+  {
+    "scenario": "check/encoding/file_is_ascii_fail.yml",
+    "rule_id": "ascii-only",
+    "path": "src/unicode.rs",
+    "fingerprint": "f23147ec8463a224703a22d34f625e5d2c20551b44199e7fd3ea14379a6cc475"
+  },
+  {
+    "scenario": "check/encoding/no_bom_fail.yml",
+    "rule_id": "no-bom",
+    "path": "docs/with_bom.md",
+    "fingerprint": "93dd52020723e149e3040dc8d4a235466938bcded1167e041288a4081427b335"
+  },
+  {
+    "scenario": "check/existence/dir_absent_fail.yml",
+    "rule_id": "no-target",
+    "path": "target",
+    "fingerprint": "b6f3f0bb857661aa0a84d4873c01bbb0c85ffc76b00a97c88796d5e0ac2cf9b9"
+  },
+  {
+    "scenario": "check/existence/dir_exists_fail.yml",
+    "rule_id": "has-src",
+    "path": null,
+    "fingerprint": "ac495ae3427fe3c3ccbb942011254fd046d72172bce59e3f88a312961f9a254e"
+  },
+  {
+    "scenario": "check/existence/file_absent_fail.yml",
+    "rule_id": "no-bak-files",
+    "path": "Cargo.lock.bak",
+    "fingerprint": "eab5e5050d3e164c438bb0ec33168ebb5ffaa3abf5af270360c6d6e288c3e828"
+  },
+  {
+    "scenario": "check/existence/file_absent_fail.yml",
+    "rule_id": "no-bak-files",
+    "path": "src/main.rs.bak",
+    "fingerprint": "ea02c8dfc7d022e3a586e112dbd974a5423674d55943f816120a1f6ad74b43ef"
+  },
+  {
+    "scenario": "check/existence/file_exists_fail.yml",
+    "rule_id": "has-readme",
+    "path": null,
+    "fingerprint": "a2f257d5622baf01fcbb21263a2c2484b6833897e6fbec169966d3edf6ca1037"
+  },
+  {
+    "scenario": "check/extends/bundled_extends_except_drops_rules_by_id.yml",
+    "rule_id": "oss-codeowners-exists",
+    "path": null,
+    "fingerprint": "e69f0e4dae12424c916f6ee2fef2e8c41c90fb3cb9d079d187c54c5ef9d4eda8"
+  },
+  {
+    "scenario": "check/extends/bundled_extends_except_drops_rules_by_id.yml",
+    "rule_id": "oss-dependency-update-tool",
+    "path": null,
+    "fingerprint": "8db6e5504be55bc52e4ce8894b90c8a6833f31fc9290c70c23b71d229c1d19bd"
+  },
+  {
+    "scenario": "check/extends/bundled_extends_except_drops_rules_by_id.yml",
+    "rule_id": "oss-gitignore-exists",
+    "path": null,
+    "fingerprint": "ea97769972d5555a6fcaca450b817231eddb7a576844ada993ae3726ba613232"
+  },
+  {
+    "scenario": "check/extends/bundled_extends_except_drops_rules_by_id.yml",
+    "rule_id": "oss-license-exists",
+    "path": null,
+    "fingerprint": "7b04d6ea718ad61cbae77fba95ceb5aae6c9cc9b09b6df2eb31b52fc80228306"
+  },
+  {
+    "scenario": "check/extends/bundled_extends_except_drops_rules_by_id.yml",
+    "rule_id": "oss-readme-exists",
+    "path": null,
+    "fingerprint": "e3836626d4ebc2c743471fc3a1c60df01e18e32cf670d078c0193f716097eb87"
+  },
+  {
+    "scenario": "check/extends/bundled_extends_except_drops_rules_by_id.yml",
+    "rule_id": "oss-security-policy-exists",
+    "path": null,
+    "fingerprint": "43ca91ae4ef2da8d565c512941927a947758d24976f51c4957ecdbde136c66bf"
+  },
+  {
+    "scenario": "check/extends/bundled_extends_only_keeps_listed_rules.yml",
+    "rule_id": "oss-readme-exists",
+    "path": null,
+    "fingerprint": "e3836626d4ebc2c743471fc3a1c60df01e18e32cf670d078c0193f716097eb87"
+  },
+  {
+    "scenario": "check/extends/local_file_inherits_rules.yml",
+    "rule_id": "has-readme",
+    "path": null,
+    "fingerprint": "a2f257d5622baf01fcbb21263a2c2484b6833897e6fbec169966d3edf6ca1037"
+  },
+  {
+    "scenario": "check/extends/local_file_inherits_rules.yml",
+    "rule_id": "local-extra",
+    "path": null,
+    "fingerprint": "93ddd1d383070970bd77447801a72a7a301e8ee455cbf64db9ac6d82f9d897d5"
+  },
+  {
+    "scenario": "check/extends/local_file_inherits_rules.yml",
+    "rule_id": "no-bak",
+    "path": "stale.bak",
+    "fingerprint": "18a3c3cb5a51ba97b5d36cf508fcc3f35b4b228d0e4f9b0b5f502716a9020734"
+  },
+  {
+    "scenario": "check/extends/local_override_wins.yml",
+    "rule_id": "no-bak",
+    "path": "stale.bak",
+    "fingerprint": "18a3c3cb5a51ba97b5d36cf508fcc3f35b4b228d0e4f9b0b5f502716a9020734"
+  },
+  {
+    "scenario": "check/extends/partial_override_level_only.yml",
+    "rule_id": "no-bak",
+    "path": "stale.bak",
+    "fingerprint": "18a3c3cb5a51ba97b5d36cf508fcc3f35b4b228d0e4f9b0b5f502716a9020734"
+  },
+  {
+    "scenario": "check/extends/partial_override_level_only.yml",
+    "rule_id": "no-swap",
+    "path": "stale.swp",
+    "fingerprint": "158ddf8014aac2ef684497265237dc74d9db625339eef2deae150166cac6a815"
+  },
+  {
+    "scenario": "check/facts/all_files_exist_truthy.yml",
+    "rule_id": "when-ready-require-changelog",
+    "path": null,
+    "fingerprint": "a56be408a7c3f9d35174a80a5e7d5f4d0f6d3aa2ff0ea5bd8d5033351633b3e9"
+  },
+  {
+    "scenario": "check/facts/any_file_exists_truthy.yml",
+    "rule_id": "rust-has-toolchain",
+    "path": null,
+    "fingerprint": "a0c95b48152312cc2cb903859b615768f5e81656b585d2e5f767964849c52445"
+  },
+  {
+    "scenario": "check/facts/count_files_gt.yml",
+    "rule_id": "require-mod-when-large",
+    "path": null,
+    "fingerprint": "865253727c308b8051a9933e72018f43d971bfae07fca8c7ca3d657722c66262"
+  },
+  {
+    "scenario": "check/facts/custom_captures_stdout.yml",
+    "rule_id": "mit-requires-ack",
+    "path": null,
+    "fingerprint": "9ed2e6d3c8d3d9402a33200123f69cd5cfe374d0b0370af96c354546ce1e5162"
+  },
+  {
+    "scenario": "check/facts/file_content_matches_truthy.yml",
+    "rule_id": "needs-tokio-util",
+    "path": "Cargo.toml",
+    "fingerprint": "99b5954fe5afac486849f7d403cf4a34ebd943ca0401e1de8ad1a5d778570b3d"
+  },
+  {
+    "scenario": "check/facts/git_branch_value.yml",
+    "rule_id": "release-needs-changelog",
+    "path": null,
+    "fingerprint": "8d47a5881aa8e4740505e245c2b2ca2188cd5ef80b84c477ca2ef3fff76c0e64"
+  },
+  {
+    "scenario": "check/git/changeset_requires_path_missing_fail.yml",
+    "rule_id": "needs-changeset",
+    "path": null,
+    "fingerprint": "572609c3ef0c9dbd9151a1919a63152d6d79a4dc3fd52d6670554d44a7426d24"
+  },
+  {
+    "scenario": "check/git/file_exists_literal_bypass_honours_git_tracked_only.yml",
+    "rule_id": "bazelversion-tracked",
+    "path": null,
+    "fingerprint": "3fcc353f397b3c4f9a5454db70e49984127ef42e46698b5c041725255a8484dd"
+  },
+  {
+    "scenario": "check/git/file_exists_misses_tracked_and_ignored_without_per_rule_override.yml",
+    "rule_id": "bazelversion-required",
+    "path": null,
+    "fingerprint": "2597e0d73c10c695e26866e9828d2af683294e3eb6080cf3890b1e3a8e70435a"
+  },
+  {
+    "scenario": "check/git/git_blame_age_nested_fires_without_top_level_blame.yml",
+    "rule_id": "per-package",
+    "path": "pkg/src/main.rs",
+    "fingerprint": "be2d5e775c4cc64bcfb1ef7aa19286ef8eb69a0e900540b0968eb68ebd3b31b0"
+  },
+  {
+    "scenario": "check/git/git_blame_age_stale_todo_fail.yml",
+    "rule_id": "stale-todos",
+    "path": "src/main.rs",
+    "fingerprint": "bc1c3875c5543aa2da7ae95e82208a8cd58e2519f00959a8108da45d6bb213af"
+  },
+  {
+    "scenario": "check/git/git_commit_author_allowlist_flags_outside_domain.yml",
+    "rule_id": "org-authors",
+    "path": null,
+    "fingerprint": "72d56327107151210746b87c4cd272f4edde463571f9846076ea39793b7503bb"
+  },
+  {
+    "scenario": "check/git/git_commit_gpg_signed_flags_unsigned.yml",
+    "rule_id": "signed-commits",
+    "path": null,
+    "fingerprint": "4573a60916091560a3a79a8e12b910a244962ba29ca53a1c66c1ecfe2a227e87"
+  },
+  {
+    "scenario": "check/git/git_commit_message_convention_fail.yml",
+    "rule_id": "conventional-commits",
+    "path": null,
+    "fingerprint": "a8b0d4d9ffdd75aab3a55e9ce13dcd63a1ea6741a5cff15d71619632ffd8e53d"
+  },
+  {
+    "scenario": "check/git/git_commit_message_head_mode_still_works.yml",
+    "rule_id": "short-subjects",
+    "path": null,
+    "fingerprint": "7845e9a2a1ce06e5fa65732b7359f0190270a5deee64ef277fd83f1d20d24dbe"
+  },
+  {
+    "scenario": "check/git/git_commit_message_range_flags_multiple_commits.yml",
+    "rule_id": "conventional-prefix",
+    "path": null,
+    "fingerprint": "461488b944ac1fa83017cdd91a8c0fdcfff4746ecbd1a7a1929f96d8df3d646a"
+  },
+  {
+    "scenario": "check/git/git_commit_message_range_flags_multiple_commits.yml",
+    "rule_id": "conventional-prefix",
+    "path": null,
+    "fingerprint": "98c500cf5c9042a3ff5381d29df8c6d61c6a2c453af01d39f7057a301cb6e9fe"
+  },
+  {
+    "scenario": "check/git/git_commit_message_range_flags_one_bad_subject.yml",
+    "rule_id": "short-subjects",
+    "path": null,
+    "fingerprint": "7a76604f6a707208f984243ba5713ccaeb15a110ecd06f3e2015a1184d297bac"
+  },
+  {
+    "scenario": "check/git/git_commit_no_fixup_flags_leftover.yml",
+    "rule_id": "no-fixup",
+    "path": null,
+    "fingerprint": "6c2cac6b852edb8420419dbf53fa92965a150df8937282019ce3e2f7ed975fb8"
+  },
+  {
+    "scenario": "check/git/git_commit_signed_off_head_lacks_trailer.yml",
+    "rule_id": "dco",
+    "path": null,
+    "fingerprint": "1c9339e65ca8dcc9bd6f625cd010153bb03def9a7b453993f8b664aaf5783a1a"
+  },
+  {
+    "scenario": "check/git/git_commit_subject_matches_flags_bad_grammar.yml",
+    "rule_id": "subject-grammar",
+    "path": null,
+    "fingerprint": "a1a7379263573b0d30d4fae0c056f674cec292cf91a4f5c2742243276e8650af"
+  },
+  {
+    "scenario": "check/git/git_no_denied_paths_fires_on_nested_secret.yml",
+    "rule_id": "no-tracked-keys",
+    "path": "secrets/id_rsa",
+    "fingerprint": "c1b75d8f0820e8b3a664434a9a798b4bc3f47b898ee4f5e3e3314f931e0a555d"
+  },
+  {
+    "scenario": "check/git/git_no_denied_paths_fires_on_secret.yml",
+    "rule_id": "no-tracked-secrets",
+    "path": ".env",
+    "fingerprint": "172746a42a857bca2d10a449491a3e77c52825eab97f3b17540831bb27fd6a35"
+  },
+  {
+    "scenario": "check/git/git_tracked_only_dir_absent_fires_when_tracked.yml",
+    "rule_id": "no-tracked-target",
+    "path": "target",
+    "fingerprint": "b02bdb58bef23c382565a3989ce63805db57d45f5cc0d118ee7d45abb623dbdc"
+  },
+  {
+    "scenario": "check/git/git_tracked_only_false_needs_no_repository.yml",
+    "rule_id": "no-target",
+    "path": "target",
+    "fingerprint": "b6f3f0bb857661aa0a84d4873c01bbb0c85ffc76b00a97c88796d5e0ac2cf9b9"
+  },
+  {
+    "scenario": "check/git/git_tracked_only_outside_git_fails_closed.yml",
+    "rule_id": "clean-readme",
+    "path": "README.md",
+    "fingerprint": "e5900dfc956fb3ddffdafca93d177cdbde17d4b8ca1d6d8b9b7e2a25a0f5a3c8"
+  },
+  {
+    "scenario": "check/git/no_submodules_fail.yml",
+    "rule_id": "no-submods",
+    "path": ".gitmodules",
+    "fingerprint": "f960e075a18e11981b98b039ba8760878db70da2e1497735ab950e3b0101a61c"
+  },
+  {
+    "scenario": "check/git/pair_changed_together_missing_fail.yml",
+    "rule_id": "format-version",
+    "path": null,
+    "fingerprint": "6639699c21d8769cf9f3539035e4d8ad9cd0cadb1da63049c7f368b8ebfc85dd"
+  },
+  {
+    "scenario": "check/interactions/multiple_rules_some_fail.yml",
+    "rule_id": "no-target",
+    "path": "target",
+    "fingerprint": "b6f3f0bb857661aa0a84d4873c01bbb0c85ffc76b00a97c88796d5e0ac2cf9b9"
+  },
+  {
+    "scenario": "check/interactions/multiple_rules_some_fail.yml",
+    "rule_id": "rust-snake",
+    "path": "src/BadCase.rs",
+    "fingerprint": "0820d60632c829433895915c77cf550a6a89e2d5b965d565634c3386bc1ada4a"
+  },
+  {
+    "scenario": "check/metadata/file_is_text_fail.yml",
+    "rule_id": "src-is-text",
+    "path": "src/accidental_blob.rs",
+    "fingerprint": "ccecf7f5727017eb6fa25cb0ceeac68b5ff99f1c4dedf7fc7de4ad9f2b095f1c"
+  },
+  {
+    "scenario": "check/metadata/file_max_lines_fail.yml",
+    "rule_id": "cap-source-file",
+    "path": "src/bloated.rs",
+    "fingerprint": "72bcc3050f7bf120cbb9975e4a0ca698bdb3e6093a1399713cb790bfda823240"
+  },
+  {
+    "scenario": "check/metadata/file_max_size_fail.yml",
+    "rule_id": "under-10-bytes",
+    "path": "big.txt",
+    "fingerprint": "b61e09110cd2c62d11d9391035e192a344a1b2dd1a0969eff80afc2de88aefb6"
+  },
+  {
+    "scenario": "check/metadata/file_min_lines_fail.yml",
+    "rule_id": "min-3-lines",
+    "path": "stub.md",
+    "fingerprint": "2b899a921483be002fd8e970f87750d6e19e394adb6dc534d52c94db9b334afc"
+  },
+  {
+    "scenario": "check/metadata/file_min_size_fail.yml",
+    "rule_id": "min-50",
+    "path": "tiny.txt",
+    "fingerprint": "392ae18d981e4e9fb82e1531efd7ebfd4b6b83f00e439419a7b9b59c9d9cae09"
+  },
+  {
+    "scenario": "check/naming/filename_case_fail.yml",
+    "rule_id": "rust-snake",
+    "path": "src/BadModule.rs",
+    "fingerprint": "ec82bdc1fc133d5aa5b69037a484ce11857244bc375fe755ef7b4329766941f9"
+  },
+  {
+    "scenario": "check/naming/filename_case_fail.yml",
+    "rule_id": "rust-snake",
+    "path": "src/OtherName.rs",
+    "fingerprint": "e15590e70151289e6b3532f7c28e95f9cd6efc1309f38ed65614ace9136f1a9b"
+  },
+  {
+    "scenario": "check/naming/filename_regex_fail.yml",
+    "rule_id": "tests-named-test-prefix",
+    "path": "tests/BadNamingHere.rs",
+    "fingerprint": "64e919e81c509c5e6a315bc975b473aad08cbe97510861db0e5db8d20fd1c249"
+  },
+  {
+    "scenario": "check/nested/monorepo_nested_configs_scope_per_subtree.yml",
+    "rule_id": "backend-rs-snake-case",
+    "path": "packages/backend/src/BadName.rs",
+    "fingerprint": "14860d3035d7fcd97a83a3ccd2165a4c38f8c8fde10c700dbd3b989134054d6b"
+  },
+  {
+    "scenario": "check/nested/monorepo_nested_configs_scope_per_subtree.yml",
+    "rule_id": "frontend-ts-final-newline",
+    "path": "packages/frontend/src/index.ts",
+    "fingerprint": "aee8102b2c34169510f6d123d86db9b8756a4c8d337b9d207cf73bef8a86454b"
+  },
+  {
+    "scenario": "check/plugin/command_fires_on_nonzero_exit.yml",
+    "rule_id": "no-todo-markers",
+    "path": "src/a.rs",
+    "fingerprint": "c836b8036158d3f6602df7a8bde91f757c174d990cfdacf263862671332d7409"
+  },
+  {
+    "scenario": "check/plugin/command_idempotent_fail.yml",
+    "rule_id": "fmt-clean",
+    "path": "src/main.rs",
+    "fingerprint": "76644a4e105967fe4af0f93eca73e5c1a6ecf85dd05691a405812afc29f6f6f3"
+  },
+  {
+    "scenario": "check/plugin/generated_file_fresh_fail.yml",
+    "rule_id": "list-fresh",
+    "path": "gen/list.txt",
+    "fingerprint": "9e72de1d72830b8f1edc6ca1e21993a78256382e820094173d8be934018b1896"
+  },
+  {
+    "scenario": "check/plugin/generated_file_fresh_mutating_fail.yml",
+    "rule_id": "list-regen-fresh",
+    "path": "gen/list.txt",
+    "fingerprint": "593c64baae76e2597e16be7663cab2c3e020c5ef54ade1ceaca4e1c2629dae2b"
+  },
+  {
+    "scenario": "check/portable/no_case_conflicts_fail.yml",
+    "rule_id": "no-case",
+    "path": "README.md",
+    "fingerprint": "cda57186662a1f97ddd88932581ed489cfb20d9bfc1055ebd8ef88e77745d1fb"
+  },
+  {
+    "scenario": "check/portable/no_case_conflicts_fail.yml",
+    "rule_id": "no-case",
+    "path": "readme.md",
+    "fingerprint": "ee347c4e658f7a0287e63bfd48065998050e1969a6ffd11b50c2d90463e0fec8"
+  },
+  {
+    "scenario": "check/portable/no_illegal_windows_names_fail.yml",
+    "rule_id": "no-win-reserved",
+    "path": "COM1.md",
+    "fingerprint": "0871bae261e05bc8e865e8ada4644639d3220b3bf78067f4fbe57972e93e4438"
+  },
+  {
+    "scenario": "check/portable/no_illegal_windows_names_fail.yml",
+    "rule_id": "no-win-reserved",
+    "path": "NUL",
+    "fingerprint": "6dc2a796edad3aee334f486fa2f5505de0aaa8c58e983bda8a6cb851ea04a4ff"
+  },
+  {
+    "scenario": "check/portable/no_illegal_windows_names_fail.yml",
+    "rule_id": "no-win-reserved",
+    "path": "con.txt",
+    "fingerprint": "f1bd2fdd289a01e6831c2a57e217c52db488c45f5b2b54d4c9ef7df1ab8a43c1"
+  },
+  {
+    "scenario": "check/portable/no_illegal_windows_names_fail.yml",
+    "rule_id": "no-win-reserved",
+    "path": "trailing_dot.",
+    "fingerprint": "329c3675e3326edb4bb36e84859f1475026b8da59b6439f11d8b8b7a6f87e6c4"
+  },
+  {
+    "scenario": "check/scope_filter/exclude_manifest_paths_bin_entrypoint.yml",
+    "rule_id": "no-console",
+    "path": "src/lib.ts",
+    "fingerprint": "797666c6eb2932d4d6885d4e82d36203ac126e30f6d34a6f06bb3a6c11de35b6"
+  },
+  {
+    "scenario": "check/scope_filter/for_each_dir_nested_literal_paths_honour_scope_filter.yml",
+    "rule_id": "ports",
+    "path": "crates/a/app.json",
+    "fingerprint": "0ec6edea2300e3fe23e0d68cf079b83bb26098a8bc46cd9312ff70ebef19f991"
+  },
+  {
+    "scenario": "check/scope_filter/include_manifest_paths_glob_member.yml",
+    "rule_id": "names",
+    "path": "crates/app/BadName.rs",
+    "fingerprint": "6cdd4e462eb7b60ccd64cd7571fd6dade195e8c74bd3f53f7788c9434897e8d7"
+  },
+  {
+    "scenario": "check/scope_filter/include_manifest_paths_glob_member.yml",
+    "rule_id": "names",
+    "path": "crates/lib/AlsoBad.rs",
+    "fingerprint": "e4228b9c5fdbd6b56e781197ffd98801f996149cea79aeeaeecd21b9c481bc76"
+  },
+  {
+    "scenario": "check/scope_filter/include_manifest_paths_negated_workspace_entry.yml",
+    "rule_id": "names",
+    "path": "packages/app/BadName.ts",
+    "fingerprint": "851f8cfdba8981a10e8c80120c4773ed1e44c4e69102b1fc0e4dba7d2b8e13ad"
+  },
+  {
+    "scenario": "check/scope_filter/include_manifest_paths_negated_workspace_entry.yml",
+    "rule_id": "names",
+    "path": "packages/internal/keep/KeptBad.ts",
+    "fingerprint": "d4615317f54d30cce448305cefd7bb2a3d23a5d6927d8e6558778f6cddab24c1"
+  },
+  {
+    "scenario": "check/scope_filter/include_manifest_paths_nested_config.yml",
+    "rule_id": "nws",
+    "path": "packages/foo/lib/a.ts",
+    "fingerprint": "3d65f9b53d19fe596dd5a1090e97004adf7991c6450bea5179d5b46b1e1d03ed"
+  },
+  {
+    "scenario": "check/scope_filter/include_manifest_paths_non_per_file_rule.yml",
+    "rule_id": "names",
+    "path": "crates/a/BadName.rs",
+    "fingerprint": "45b7375b35de8ccd7ac22b97b4ae5f83064ccaa3c6e17e4fe64d79e5a71e4530"
+  },
+  {
+    "scenario": "check/scope_filter/include_manifest_paths_workspace_members.yml",
+    "rule_id": "nws",
+    "path": "crates/a/lib.rs",
+    "fingerprint": "bd63599d46d4a0b5abce41fa9e87b2a3d54ef8ec8e22bbf33b21745fe4f8f97c"
+  },
+  {
+    "scenario": "check/scope_filter/nested_manifest_dot_entry_does_not_scope_subtree.yml",
+    "rule_id": "forbid",
+    "path": "pkg/src/app.ts",
+    "fingerprint": "b679a2aa3451b0f59c2f7cd51df98337852dbd4c437e1623541579c802413723"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_dogfood_rust_v1.yml",
+    "rule_id": "rust-cargo-lock-exists",
+    "path": null,
+    "fingerprint": "4d0b407bd9305073370a98281a21ed98f7d41cfab1761662b87dd619ddfd16e8"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_dogfood_rust_v1.yml",
+    "rule_id": "rust-cargo-toml-exists",
+    "path": null,
+    "fingerprint": "d22305cbabb6785e2bcf572541ea28aed4d61d8d1aa21832042adfc43f89b2da"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_dogfood_rust_v1.yml",
+    "rule_id": "rust-sources-final-newline",
+    "path": "crates/api/src/main.rs",
+    "fingerprint": "d6e375c1cc11d5f8589030da3467b46c6dc6a92f188cb5f5bf741664f4d4bf7d"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_dogfood_rust_v1.yml",
+    "rule_id": "rust-sources-no-trailing-whitespace",
+    "path": "crates/api/src/main.rs",
+    "fingerprint": "0cae50660176ec5c3b512a8a6801e9da03993b8712856ae8767677090c30a8f3"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_dogfood_rust_v1.yml",
+    "rule_id": "rust-toolchain-pinned",
+    "path": null,
+    "fingerprint": "8b7a9c2dbd026bee8e8876768e83c557bc38bf85a7aeadc999e8649ab6abb13d"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_extends_inheritance.yml",
+    "rule_id": "nws",
+    "path": "crates/api/src/main.rs",
+    "fingerprint": "ef32c4397a8d5512345f468e530de4655ea026cb64e893cee947ac4cb07f15cc"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_nested_under_for_each_dir.yml",
+    "rule_id": "nws-per-pkg",
+    "path": "pkg/with-marker/data.txt",
+    "fingerprint": "7e957294f069197c9a011c7cc63d1fc880678be414c795685a124340eefee253"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_skips_out_of_scope.yml",
+    "rule_id": "nws",
+    "path": "crates/api/src/main.rs",
+    "fingerprint": "ef32c4397a8d5512345f468e530de4655ea026cb64e893cee947ac4cb07f15cc"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_two_name_list.yml",
+    "rule_id": "nws",
+    "path": "app/main.py",
+    "fingerprint": "b59b742f87cc167f9434d3ea8e52b12b3d77ee6ccdb7c4e458bb84b55e08c0b5"
+  },
+  {
+    "scenario": "check/scope_filter/scope_filter_with_when_iter.yml",
+    "rule_id": "nws",
+    "path": "crates/api/src/main.rs",
+    "fingerprint": "ef32c4397a8d5512345f468e530de4655ea026cb64e893cee947ac4cb07f15cc"
+  },
+  {
+    "scenario": "check/security/no_bidi_controls_fail.yml",
+    "rule_id": "no-bidi",
+    "path": "src/sneaky.rs",
+    "fingerprint": "6c516e74d12cf792bda2cf6bb89c8d5ffdff3f6551382607638f04bfc91392dd"
+  },
+  {
+    "scenario": "check/security/no_merge_conflict_markers_fail.yml",
+    "rule_id": "no-conflict",
+    "path": "src/half_merged.rs",
+    "fingerprint": "8e13e68a650b326aa8b81c7456f8d916be8035ac4a13fcf8c348f507eb465def"
+  },
+  {
+    "scenario": "check/security/no_zero_width_chars_fail.yml",
+    "rule_id": "no-zwsp",
+    "path": "src/obfuscated.rs",
+    "fingerprint": "c5b234a424de7fbacee6bfe590725650abfccddda6d59ec1e7fd432f8d450243"
+  },
+  {
+    "scenario": "check/structure/max_directory_depth_fail.yml",
+    "rule_id": "shallow",
+    "path": "src/deep/nested/way_down/lost.rs",
+    "fingerprint": "da05d99b38d837468aab1b10fc58a321dbfc3870d40fc628cedf318b7665557f"
+  },
+  {
+    "scenario": "check/structure/max_files_per_directory_fail.yml",
+    "rule_id": "cap",
+    "path": "packages",
+    "fingerprint": "51e3e7eb908db62ccabb4d35c0b5f5cc87e4b49d8a22e4ea37d327e309e0477c"
+  },
+  {
+    "scenario": "check/structure/no_empty_files_fail.yml",
+    "rule_id": "no-empty",
+    "path": "placeholder.rs",
+    "fingerprint": "b439cbb002a4b63ae8aab83054b85bd1a6ec86526a31de8be4b05b7084744966"
+  },
+  {
+    "scenario": "check/structure/no_empty_files_fail.yml",
+    "rule_id": "no-empty",
+    "path": "stray.log",
+    "fingerprint": "e0f97a0c6e9a5c441c060c31254dda215a2382af47a603e5c6e96f91505e34d6"
+  },
+  {
+    "scenario": "check/structured/dotenv_path_absent_flags_committed_secret.yml",
+    "rule_id": "no-committed-secret",
+    "path": ".env",
+    "fingerprint": "bd258f1968c2ad200916cde19dc0508b8eefb7d7e31e322b50d0fed03e2d7ad8"
+  },
+  {
+    "scenario": "check/structured/dotenv_path_equals_enforces_node_env.yml",
+    "rule_id": "prod-node-env",
+    "path": ".env.production",
+    "fingerprint": "ff6d952172f04c11df9fcec257944fcb5e4e23169747e631c9f39dc574cb071a"
+  },
+  {
+    "scenario": "check/structured/dotenv_path_matches_flags_bad_db_url.yml",
+    "rule_id": "postgres-only",
+    "path": ".env",
+    "fingerprint": "d18c8957b3aefa9f03c48af9f046fa290c4d2c4816b2ddf9e5527c579f0d091d"
+  },
+  {
+    "scenario": "check/structured/hcl_path_absent_flags_hardcoded_key.yml",
+    "rule_id": "no-hardcoded-key",
+    "path": "main.tf",
+    "fingerprint": "0b41b5ff0854154721a18461f73fef7a8e95ddc1f99d8a8c03cf1898db050731"
+  },
+  {
+    "scenario": "check/structured/hcl_path_equals_enforces_count.yml",
+    "rule_id": "single-instance",
+    "path": "main.tf",
+    "fingerprint": "3cb6c652f9a56a35ce3a68dd529cd46c016496b73db94ac084d0b297d48d9317"
+  },
+  {
+    "scenario": "check/structured/hcl_path_matches_flags_loose_version.yml",
+    "rule_id": "pin-terraform",
+    "path": "main.tf",
+    "fingerprint": "78ce3f69dcd12fb3061f25b89909845378fd2752af9780cfef6edfd5315efa39"
+  },
+  {
+    "scenario": "check/structured/if_present_skips_missing_field.yml",
+    "rule_id": "pin-actions-if-present",
+    "path": ".github/workflows/unpinned.yml",
+    "fingerprint": "b4beaada0b1cac5411f21c4d6e7dc8c938eb98da8b0605f4c96e5f7dc0926c3e"
+  },
+  {
+    "scenario": "check/structured/ini_path_absent_flags_debug_enabled.yml",
+    "rule_id": "no-debug",
+    "path": "config.ini",
+    "fingerprint": "2c31cfd5c533e4dd7e355af811d93280833581839bf0b9fd6c6c4da3c6296e57"
+  },
+  {
+    "scenario": "check/structured/ini_path_equals_enforces_port.yml",
+    "rule_id": "canonical-port",
+    "path": "config.ini",
+    "fingerprint": "0e6f718c73999851994b16f16c90d85c4986f8f120a6de8cbbb76c3fcbfa39f3"
+  },
+  {
+    "scenario": "check/structured/ini_path_matches_flags_bad_jdbc.yml",
+    "rule_id": "postgres-only",
+    "path": "config.ini",
+    "fingerprint": "7483c429c8ead2b41a2f6d711587d73fffcc8553cd0888aff711c82dbfdfb665"
+  },
+  {
+    "scenario": "check/structured/json_path_absent_flags_postinstall.yml",
+    "rule_id": "no-postinstall-script",
+    "path": "package.json",
+    "fingerprint": "c2f04b3c4e5e39de32d74907dbb0c72a0b5a4c4b0ef071a00819978562c9c1fb"
+  },
+  {
+    "scenario": "check/structured/json_path_equals_enforces_license.yml",
+    "rule_id": "require-mit-license",
+    "path": "packages/bad/package.json",
+    "fingerprint": "98126a46700723e1dd2e610502e3a1f190b21b2feae3ff2e334259d6dedcc93b"
+  },
+  {
+    "scenario": "check/structured/json_path_matches_enforces_version_pattern.yml",
+    "rule_id": "require-semver-version",
+    "path": "packages/bad/package.json",
+    "fingerprint": "c49d06c3997b933451924a94ec1b355b63e8fa1a08ff1c5a038da0f2e17acb7b"
+  },
+  {
+    "scenario": "check/structured/json_path_missing_field_is_flagged.yml",
+    "rule_id": "require-license-key",
+    "path": "package.json",
+    "fingerprint": "64304dd6e392829caca928a746318ac1e3fe64aaaa12795083a8e90da90d05c3"
+  },
+  {
+    "scenario": "check/structured/json_schema_passes_dotenv_missing_key_fail.yml",
+    "rule_id": "env-has-db-url",
+    "path": ".env",
+    "fingerprint": "d46395ac3f9148c4dcfa43e41fa4281af9964d1f6969e5fbead7b49d29444b82"
+  },
+  {
+    "scenario": "check/structured/json_schema_passes_fail.yml",
+    "rule_id": "package-conforms",
+    "path": "package.json",
+    "fingerprint": "31bb9b9bec3a189014f80e060b2d1f506443f7f5ee37d7d6ca2615cb7008bbc6"
+  },
+  {
+    "scenario": "check/structured/json_schema_passes_hcl_missing_block_fail.yml",
+    "rule_id": "has-terraform-block",
+    "path": "main.tf",
+    "fingerprint": "a0434ad87fcf7a05a147d454d3c35217c23888d415a58ab8fc66f8d0849f7ce5"
+  },
+  {
+    "scenario": "check/structured/json_schema_passes_ini_missing_key_fail.yml",
+    "rule_id": "app-has-server",
+    "path": "config.ini",
+    "fingerprint": "f9726b59a60a8f8e87a52c02cd65ab23d434f1adb97ae2dfe9ab297d9be14037"
+  },
+  {
+    "scenario": "check/structured/json_schema_passes_properties_missing_key_fail.yml",
+    "rule_id": "app-has-port",
+    "path": "application.properties",
+    "fingerprint": "28fbef0feb053cf252f4315726cfeb08045ba9a187c23c2542be14f64eabccfc"
+  },
+  {
+    "scenario": "check/structured/json_schema_passes_xml_autodetect_fail.yml",
+    "rule_id": "csproj-conforms",
+    "path": "App.csproj",
+    "fingerprint": "dae978921cdca413bd0665b1207139db47fa7c16fa7cf015b4133a91f3f60d4b"
+  },
+  {
+    "scenario": "check/structured/properties_path_absent_flags_debug_enabled.yml",
+    "rule_id": "no-debug",
+    "path": "application.properties",
+    "fingerprint": "673fe9dae4a406e2ca89b857b0ff932b76af930a3528d7a7569e3167e0b40530"
+  },
+  {
+    "scenario": "check/structured/properties_path_equals_enforces_port.yml",
+    "rule_id": "canonical-port",
+    "path": "application.properties",
+    "fingerprint": "7f65f32d2798a4614e534bc439a9a24aaf1cf8fef1f1e2ffae90549f3985f7c4"
+  },
+  {
+    "scenario": "check/structured/properties_path_matches_flags_bad_jdbc.yml",
+    "rule_id": "postgres-only",
+    "path": "application.properties",
+    "fingerprint": "40385bac2063658fd3b6d4ab2bc9264711ef66c950bdb033f9f8778865271f23"
+  },
+  {
+    "scenario": "check/structured/toml_path_absent_flags_patch_table.yml",
+    "rule_id": "no-cargo-patch",
+    "path": "Cargo.toml",
+    "fingerprint": "fd00f00f9a184f1a3bd71e2482591d3e3b62c201e69b7e3297e8f3385fe22069"
+  },
+  {
+    "scenario": "check/structured/toml_path_equals_enforces_cargo_edition.yml",
+    "rule_id": "rust-edition-2024",
+    "path": "crates/bad/Cargo.toml",
+    "fingerprint": "8110c102b03e48dc85066d244640c0902db79fef672dbbad6801ec3dcfd66452"
+  },
+  {
+    "scenario": "check/structured/toml_path_matches_flags_bad_semver.yml",
+    "rule_id": "pinned-version",
+    "path": "crates/b/Cargo.toml",
+    "fingerprint": "37756eb18cb6de2a2089172ecc5568782a9e167dcf83fee47d34b63f23fcdfbb"
+  },
+  {
+    "scenario": "check/structured/xml_path_absent_flags_unsafe_blocks.yml",
+    "rule_id": "no-unsafe-blocks",
+    "path": "App.csproj",
+    "fingerprint": "9e5a488074c0b72821644be2a82bf7654a490969825703ef38d5efc6b062826b"
+  },
+  {
+    "scenario": "check/structured/xml_path_equals_enforces_csproj_tfm.yml",
+    "rule_id": "csproj-net8",
+    "path": "src/Bad/Bad.csproj",
+    "fingerprint": "9aa7db8763f6ac3b2c7d5e382f3b8919ba3a0ef754fb1104b203a36657eae059"
+  },
+  {
+    "scenario": "check/structured/xml_path_matches_flags_unversioned_dep.yml",
+    "rule_id": "pom-deps-pinned",
+    "path": "pom.xml",
+    "fingerprint": "951b8f975854dd4d5aeaece31d596e75bdb43368456e58b1e4dbeab68a2a15b4"
+  },
+  {
+    "scenario": "check/structured/yaml_path_absent_flags_write_all.yml",
+    "rule_id": "no-write-all-token",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "aed026336ede0722d88451ec5f7b9fa870c1eae18e385e04621c982055303e75"
+  },
+  {
+    "scenario": "check/structured/yaml_path_equals_enforces_workflow_perms.yml",
+    "rule_id": "workflow-contents-read",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "4892faa3482a6707825f7aeb15209f88dad49dcca73e18c9187a24bea2bcab69"
+  },
+  {
+    "scenario": "check/structured/yaml_path_matches_flags_floating_action_tag.yml",
+    "rule_id": "pin-actions-to-sha",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "7037c4bc0781dc437751efca52ad94cf76de5e39dc17ed86427ab793c872daa7"
+  },
+  {
+    "scenario": "check/unix_metadata/executable_bit_fail.yml",
+    "rule_id": "docs-not-exec",
+    "path": "docs/generate.sh",
+    "fingerprint": "9f3ab785e7e409358fc6f750cf1e6d8be045e5d0d987170a321bd1b891a0d12b"
+  },
+  {
+    "scenario": "check/unix_metadata/executable_has_shebang_fail.yml",
+    "rule_id": "exec-shebang",
+    "path": "scripts/run",
+    "fingerprint": "109a3ec99a5b5579cf1c73752a7f1a10a7d5698bb2416eb005987f9e23f76258"
+  },
+  {
+    "scenario": "check/unix_metadata/no_symlinks_fail.yml",
+    "rule_id": "no-links",
+    "path": "latest.rs",
+    "fingerprint": "098a8ee084a0ad626e07f398e8ec62bd63c090b3383bd45881345a2304c6fd0d"
+  },
+  {
+    "scenario": "check/unix_metadata/shebang_has_executable_fail.yml",
+    "rule_id": "shebang-needs-x",
+    "path": "scripts/build.py",
+    "fingerprint": "1a6982d10243d6c93810125633986979cc96559cc4f2b3ceab6807ca3819d7b4"
+  },
+  {
+    "scenario": "check/unix_metadata/shebang_has_executable_fail.yml",
+    "rule_id": "shebang-needs-x",
+    "path": "scripts/hello.sh",
+    "fingerprint": "fefe85fb1d9a51c5b26cef56263c9085501351f36150edab768883c2a3c182b1"
+  },
+  {
+    "scenario": "check/when_facts/when_gate_admits.yml",
+    "rule_id": "rust-has-toolchain",
+    "path": null,
+    "fingerprint": "a0c95b48152312cc2cb903859b615768f5e81656b585d2e5f767964849c52445"
+  },
+  {
+    "scenario": "check/when_iter/for_each_dir_escapes_glob_metachars_in_dir_names.yml",
+    "rule_id": "route-has-page",
+    "path": "app/[id]",
+    "fingerprint": "e66c86e97edd45ac7a49b319e91e243578ac45d9a165658a334dac0b247f3172"
+  },
+  {
+    "scenario": "check/when_iter/when_iter_combines_with_facts.yml",
+    "rule_id": "workspace-member-needs-readme",
+    "path": "crates/alpha",
+    "fingerprint": "6abe22d9ad5692a98eccc0b94f6c2039523cd5934d9b37394bbed85c176fbe8e"
+  },
+  {
+    "scenario": "check/when_iter/when_iter_iter_basename_predicate.yml",
+    "rule_id": "pkg-needs-readme",
+    "path": "pkg-backend",
+    "fingerprint": "a474c2d81f6164717e43dcf7053a1eef31586d86f49b5664662b4cd535893610"
+  },
+  {
+    "scenario": "check/when_iter/when_iter_recursive_glob.yml",
+    "rule_id": "proto-pkg-needs-readme",
+    "path": "services/api",
+    "fingerprint": "2162139642b7bca060c74afb65a3b4e1e02c295db333cc987101d1a600d6bc33"
+  },
+  {
+    "scenario": "check/when_iter/when_iter_skips_dirs_without_marker.yml",
+    "rule_id": "cargo-pkg-needs-readme",
+    "path": "crates/alint-rules",
+    "fingerprint": "4554525d70f4b8e7cff25496da7c51f57fc6061fb2805dd3e5fc5f105b0e4ae6"
+  },
+  {
+    "scenario": "cross_file/registered_flags_an_unregistered_member.yml",
+    "rule_id": "members-registered",
+    "path": "Cargo.toml",
+    "fingerprint": "2544bf2507c714a7fde85b1c2984b654ba3441308d92c30d99434ba5f4127189"
+  },
+  {
+    "scenario": "cross_file/registered_templates_the_member_value.yml",
+    "rule_id": "manifests-registered",
+    "path": "Cargo.toml",
+    "fingerprint": "7db83eb1d2db8d6ac35aaa32d18a864018d742bae891f486ad3d7cc3b530a6f1"
+  },
+  {
+    "scenario": "fix/chmod_executable_bit_clear.yml",
+    "rule_id": "docs-not-exec",
+    "path": "docs/generate.sh",
+    "fingerprint": "9f3ab785e7e409358fc6f750cf1e6d8be045e5d0d987170a321bd1b891a0d12b"
+  },
+  {
+    "scenario": "fix/chmod_shebang_has_executable.yml",
+    "rule_id": "shebang-needs-x",
+    "path": "scripts/hello.sh",
+    "fingerprint": "fefe85fb1d9a51c5b26cef56263c9085501351f36150edab768883c2a3c182b1"
+  },
+  {
+    "scenario": "fix/command_default_is_suggested_under_bare_fix.yml",
+    "rule_id": "js",
+    "path": "src/a.js",
+    "fingerprint": "aa9872a321433fee101948a8bb68d4f4b771011a06d5e6980d2e6541f2709699"
+  },
+  {
+    "scenario": "fix/command_runs_the_user_fix_command.yml",
+    "rule_id": "js-needs-fixed-marker",
+    "path": "src/messy.js",
+    "fingerprint": "64c6aa8d98f51757b5e198f0ddebb5adece3be88020eccf4fb28b71d1be9bf36"
+  },
+  {
+    "scenario": "fix/command_safe_promoted_runs_on_bare_fix.yml",
+    "rule_id": "js",
+    "path": "src/a.js",
+    "fingerprint": "aa9872a321433fee101948a8bb68d4f4b771011a06d5e6980d2e6541f2709699"
+  },
+  {
+    "scenario": "fix/dir_create_makes_a_missing_dir.yml",
+    "rule_id": "needs-adr-dir",
+    "path": null,
+    "fingerprint": "17c32464a1b2963642468d0603d72b2a56d8af4c40da4c76437b970a35f5d62d"
+  },
+  {
+    "scenario": "fix/file_append.yml",
+    "rule_id": "spdx-in-readme",
+    "path": "README.md",
+    "fingerprint": "181450f2d6db785bf7388fe370d88829588d852cc191f0024e0529c849dca451"
+  },
+  {
+    "scenario": "fix/file_create.yml",
+    "rule_id": "has-readme",
+    "path": null,
+    "fingerprint": "a2f257d5622baf01fcbb21263a2c2484b6833897e6fbec169966d3edf6ca1037"
+  },
+  {
+    "scenario": "fix/file_footer.yml",
+    "rule_id": "license-footer",
+    "path": "src/missing.rs",
+    "fingerprint": "1e5099a8108bf14bdaf117e70bc4e9d7b0ffc7e47cddc0187c9fe4531495ba95"
+  },
+  {
+    "scenario": "fix/file_prepend.yml",
+    "rule_id": "header-required",
+    "path": "src/a.rs",
+    "fingerprint": "118e7c4a3b122c15be423f28450e5aec09cfa47789c0c557fbc38b96fe496911"
+  },
+  {
+    "scenario": "fix/file_remove.yml",
+    "rule_id": "no-bak-files",
+    "path": "Cargo.lock.bak",
+    "fingerprint": "eab5e5050d3e164c438bb0ec33168ebb5ffaa3abf5af270360c6d6e288c3e828"
+  },
+  {
+    "scenario": "fix/file_remove.yml",
+    "rule_id": "no-bak-files",
+    "path": "src/notes.md.bak",
+    "fingerprint": "ce57904de8bfbe335e2c25f023705b0896bf74319a7a3798e9b37681c62999f1"
+  },
+  {
+    "scenario": "fix/file_remove_unsafe_by_default.yml",
+    "rule_id": "no-bak",
+    "path": "stale.bak",
+    "fingerprint": "18a3c3cb5a51ba97b5d36cf508fcc3f35b4b228d0e4f9b0b5f502716a9020734"
+  },
+  {
+    "scenario": "fix/file_remove_unsafe_flag_applies.yml",
+    "rule_id": "no-bak",
+    "path": "stale.bak",
+    "fingerprint": "18a3c3cb5a51ba97b5d36cf508fcc3f35b4b228d0e4f9b0b5f502716a9020734"
+  },
+  {
+    "scenario": "fix/file_rename.yml",
+    "rule_id": "rust-snake",
+    "path": "src/FooBar.rs",
+    "fingerprint": "3e4e7d57d459d29968603ab676b677caff756a47c9494207e66f36b0593ac7f4"
+  },
+  {
+    "scenario": "fix/file_rename.yml",
+    "rule_id": "rust-snake",
+    "path": "src/XMLParser.rs",
+    "fingerprint": "e6ed9f594c45fb42316a53b839aaf2d7eb8c931a1409e5c9543243455d7688d1"
+  },
+  {
+    "scenario": "fix/final_newline.yml",
+    "rule_id": "eof",
+    "path": "docs/a.md",
+    "fingerprint": "1d9f22f413aa5891d18264cf3b57c6ab3504e3bd0971d53e5cde59f88ed6cb9d"
+  },
+  {
+    "scenario": "fix/fix_unsafe_applies_safe_ops.yml",
+    "rule_id": "no-ws",
+    "path": "src/bad.rs",
+    "fingerprint": "1bea455df3a7ee521fa1570afa7635a8d08ec8244513971f1aea72d3bbf42d2c"
+  },
+  {
+    "scenario": "fix/git_untrack_removes_from_index.yml",
+    "rule_id": "no-tracked-build",
+    "path": "build/out.o",
+    "fingerprint": "9ce8a2370117d9f71987be4cdcdfa8b2850da96d6e06798573f93efba0330fe8"
+  },
+  {
+    "scenario": "fix/git_untrack_suggested_under_bare_fix.yml",
+    "rule_id": "no-tracked-build",
+    "path": "build/out.o",
+    "fingerprint": "9ce8a2370117d9f71987be4cdcdfa8b2850da96d6e06798573f93efba0330fe8"
+  },
+  {
+    "scenario": "fix/idempotent_refix_is_a_noop.yml",
+    "rule_id": "no-ws",
+    "path": "src/bad.rs",
+    "fingerprint": "1bea455df3a7ee521fa1570afa7635a8d08ec8244513971f1aea72d3bbf42d2c"
+  },
+  {
+    "scenario": "fix/indent_style_declines_ambiguous.yml",
+    "rule_id": "spaces-4",
+    "path": "app.py",
+    "fingerprint": "b52010699b02e748bfc9e783907a4b60eb664febac8041302fbf1ca270e18f5d"
+  },
+  {
+    "scenario": "fix/indent_style_reindents_tabs.yml",
+    "rule_id": "spaces-4",
+    "path": "app.py",
+    "fingerprint": "5f82f9fc50ba8268e3b8a43deda4dfa9dd9c6c3417b39b3b038d1b71d09839e4"
+  },
+  {
+    "scenario": "fix/indent_style_unfixable_first_not_suppressed.yml",
+    "rule_id": "ind",
+    "path": "a.py",
+    "fingerprint": "a4dea2bc79a71bbe9459fe517f5494427b16ab3851ae82bccbe4d7dd30623383"
+  },
+  {
+    "scenario": "fix/insert_header_after_shebang.yml",
+    "rule_id": "license",
+    "path": "run.sh",
+    "fingerprint": "b2d8b04bbdb2641febe7d3b34e630f0ed144fa0e7c268769ebdff1b6b0dddae8"
+  },
+  {
+    "scenario": "fix/insert_header_after_xml_declaration.yml",
+    "rule_id": "xml-license",
+    "path": "doc.xml",
+    "fingerprint": "254def97ec7ea8d3f77b1075f8eca4c3484c75df2b592ba5b4009813d5a61175"
+  },
+  {
+    "scenario": "fix/insert_line_appends_when_last.yml",
+    "rule_id": "allow",
+    "path": "allow.txt",
+    "fingerprint": "eb5114cc4f0b9aaa37faab3c931526d43da42b3b30d27eda60d2b8927f3ae31e"
+  },
+  {
+    "scenario": "fix/insert_line_at_sorted_position.yml",
+    "rule_id": "codeowners-required",
+    "path": "CODEOWNERS",
+    "fingerprint": "b224a2fd526e6df79ec1a24b3ef39dc27cd337baad3bdf9c27f5209d8ee4f0c8"
+  },
+  {
+    "scenario": "fix/insert_line_suggested_under_bare_fix.yml",
+    "rule_id": "keep-negation",
+    "path": ".gitignore",
+    "fingerprint": "77a6c8bd66a1fdbcb21c938323e624c3188f0c84be2298a241aa07146ab1b5ef"
+  },
+  {
+    "scenario": "fix/interactions/append_applies_once_when_not_self_satisfying.yml",
+    "rule_id": "needs-spdx",
+    "path": "README.md",
+    "fingerprint": "ea0662732966ef1b746b4b980b285c6e463133996e691e3a2023647a96985e65"
+  },
+  {
+    "scenario": "fix/interactions/content_edit_and_rename_same_file_no_corruption.yml",
+    "rule_id": "no-ws",
+    "path": "src/FooBar.rs",
+    "fingerprint": "30ef19732896d23909c1b37ccddaba511ea534136ea09ad01567b5914e780e87"
+  },
+  {
+    "scenario": "fix/interactions/content_edit_and_rename_same_file_no_corruption.yml",
+    "rule_id": "rust-snake",
+    "path": "src/FooBar.rs",
+    "fingerprint": "3e4e7d57d459d29968603ab676b677caff756a47c9494207e66f36b0593ac7f4"
+  },
+  {
+    "scenario": "fix/interactions/create_at_a_different_path_is_not_applied.yml",
+    "rule_id": "has-license",
+    "path": null,
+    "fingerprint": "d76738c50af81339a17bc2b8f202ecbea1e850a25963646aab2428b825c61408"
+  },
+  {
+    "scenario": "fix/interactions/create_into_gitignored_path_is_not_applied.yml",
+    "rule_id": "has-env",
+    "path": null,
+    "fingerprint": "8e665fc79ee6555f6db937c4f068d7d875b4010ce4a491a915326b82ad322b65"
+  },
+  {
+    "scenario": "fix/interactions/create_then_content_fix_cascades.yml",
+    "rule_id": "has-readme",
+    "path": null,
+    "fingerprint": "a2f257d5622baf01fcbb21263a2c2484b6833897e6fbec169966d3edf6ca1037"
+  },
+  {
+    "scenario": "fix/interactions/cross_rule_resolution_drops_a_suggestion.yml",
+    "rule_id": "a-suggest",
+    "path": "x.txt",
+    "fingerprint": "3e1bc5bbeb9618274ed88836a249c1bfa6fb2d3a60e98288985425168819fb40"
+  },
+  {
+    "scenario": "fix/interactions/cross_rule_resolution_drops_a_suggestion.yml",
+    "rule_id": "b-drop",
+    "path": "x.txt",
+    "fingerprint": "2bee311e816aa06f6fc482150da6918c71fd00d11fa4382add4edd7bbabf7683"
+  },
+  {
+    "scenario": "fix/interactions/cross_rule_resolution_drops_phantom.yml",
+    "rule_id": "no-foo",
+    "path": "f.txt",
+    "fingerprint": "228a9d08f82611bf9f7bd8a92ec7c15ca9d1ea7468d900367e657b752842826e"
+  },
+  {
+    "scenario": "fix/interactions/cross_rule_resolution_drops_phantom.yml",
+    "rule_id": "no-foobar",
+    "path": "f.txt",
+    "fingerprint": "282f144a8905b0edf519ec5b98797813464fce04f3246ff4bd085357161ad4db"
+  },
+  {
+    "scenario": "fix/interactions/located_and_whole_file_compose.yml",
+    "rule_id": "no-ws",
+    "path": "app.json",
+    "fingerprint": "f57aef57fc12dbe5716b9cac701cf3e1cd15569369b49da75f069aaa97bc88c8"
+  },
+  {
+    "scenario": "fix/interactions/located_and_whole_file_compose.yml",
+    "rule_id": "port",
+    "path": "app.json",
+    "fingerprint": "d52a06821486d8485ed3cd6a97d3ca9b2de027fe6a86a266fc2f92830d871058"
+  },
+  {
+    "scenario": "fix/interactions/mixed_fixable_and_unfixable.yml",
+    "rule_id": "has-readme",
+    "path": null,
+    "fingerprint": "a2f257d5622baf01fcbb21263a2c2484b6833897e6fbec169966d3edf6ca1037"
+  },
+  {
+    "scenario": "fix/interactions/mixed_fixable_and_unfixable.yml",
+    "rule_id": "no-dbg",
+    "path": "src/dbg_use.rs",
+    "fingerprint": "b8a1df08ecc910cc65df9d52225e7fdc17faaf129fb8dc4993896ce554e8922c"
+  },
+  {
+    "scenario": "fix/interactions/multiple_fixes_in_one_pass.yml",
+    "rule_id": "has-readme",
+    "path": null,
+    "fingerprint": "a2f257d5622baf01fcbb21263a2c2484b6833897e6fbec169966d3edf6ca1037"
+  },
+  {
+    "scenario": "fix/interactions/multiple_fixes_in_one_pass.yml",
+    "rule_id": "no-bak",
+    "path": "old.bak",
+    "fingerprint": "d0a398b402309e1750f92bcb2832ddd999c2a4fe6188369e5ec1f05e4c7cd8e1"
+  },
+  {
+    "scenario": "fix/interactions/multiple_fixes_in_one_pass.yml",
+    "rule_id": "rust-header",
+    "path": "src/alpha.rs",
+    "fingerprint": "93bc89f6c2aa83eb0281e9effe4831fd31bd0d448a3c7a53e5f0d532b5879c81"
+  },
+  {
+    "scenario": "fix/interactions/replace_boundary_rematch_converges.yml",
+    "rule_id": "no-double-dash",
+    "path": "x.txt",
+    "fingerprint": "3206bb84b21af37a3eecb9b24aba8c59545f3e537557c398fd1115e038f3b9fd"
+  },
+  {
+    "scenario": "fix/interactions/replace_declined_reports_standing_violation.yml",
+    "rule_id": "no-foo",
+    "path": "a.txt",
+    "fingerprint": "67fe89dda9eb0af2d924ae0c55b4b13b395e64ecd1c6e59beb54d95291b5ae14"
+  },
+  {
+    "scenario": "fix/interactions/same_file_content_fixers_compose.yml",
+    "rule_id": "eof",
+    "path": "note.txt",
+    "fingerprint": "930bcf8ebe309aaaab6292cb603d0b3a3a89b507fbf576a2b4127e60bdca45e7"
+  },
+  {
+    "scenario": "fix/interactions/same_file_content_fixers_compose.yml",
+    "rule_id": "no-ws",
+    "path": "note.txt",
+    "fingerprint": "ee8b0ff765d7ff15b01223c485d878a975e228a2ef8ceea2b7947496a86d537d"
+  },
+  {
+    "scenario": "fix/interactions/same_file_header_and_collapse_compose.yml",
+    "rule_id": "blanks",
+    "path": "src/mod.rs",
+    "fingerprint": "16d73d9399251e8ead803a25fb2050c0d91cab778ddd83cdb45a5521a6f4b656"
+  },
+  {
+    "scenario": "fix/interactions/same_file_header_and_collapse_compose.yml",
+    "rule_id": "header",
+    "path": "src/mod.rs",
+    "fingerprint": "9f8c84d92bffc34f04fe26d6cfd902a2068622f6a375a9d51bd1c62681475b30"
+  },
+  {
+    "scenario": "fix/interactions/symlink_and_target_coalesce.yml",
+    "rule_id": "no-ws",
+    "path": "link.rs",
+    "fingerprint": "121c041d7d98e3bd91ae38aa000f23bf5a4506d142da8287280af87310598de6"
+  },
+  {
+    "scenario": "fix/interactions/symlink_and_target_coalesce.yml",
+    "rule_id": "no-ws",
+    "path": "real.rs",
+    "fingerprint": "f48e23458c31b1a605ef150869f0af437cc8444b7817ce5e7e183a7342509cf7"
+  },
+  {
+    "scenario": "fix/interactions/symlinked_dir_alias_coalesce.yml",
+    "rule_id": "no-ws",
+    "path": "link/file.rs",
+    "fingerprint": "b68f19fe85643c95a6d200544ff9abd7ff82a470307fc21ddd86fd69aa935181"
+  },
+  {
+    "scenario": "fix/interactions/symlinked_dir_alias_coalesce.yml",
+    "rule_id": "no-ws",
+    "path": "real/file.rs",
+    "fingerprint": "b287579a4cba309b154b4d2f6a20ba531face4f5175d676f5e12a133de723a81"
+  },
+  {
+    "scenario": "fix/line_endings.yml",
+    "rule_id": "lf-only",
+    "path": "src/a.rs",
+    "fingerprint": "8f88c2fee6e8e323ae9491c1472ab695d0586d24668dcebf7cd63f48f28a9380"
+  },
+  {
+    "scenario": "fix/line_endings_doubled_cr_converges.yml",
+    "rule_id": "lf-only",
+    "path": "src/a.rs",
+    "fingerprint": "8f88c2fee6e8e323ae9491c1472ab695d0586d24668dcebf7cd63f48f28a9380"
+  },
+  {
+    "scenario": "fix/max_consecutive_blank_lines.yml",
+    "rule_id": "no-dbl-blank",
+    "path": "gappy.md",
+    "fingerprint": "f0a4377bb9c37032fe28e79c6207c5fb72b66fc2acd5c54ef0b8de2eece58c18"
+  },
+  {
+    "scenario": "fix/no_bidi_controls.yml",
+    "rule_id": "no-bidi",
+    "path": "src/sneaky.rs",
+    "fingerprint": "6c516e74d12cf792bda2cf6bb89c8d5ffdff3f6551382607638f04bfc91392dd"
+  },
+  {
+    "scenario": "fix/no_bom.yml",
+    "rule_id": "no-bom",
+    "path": "docs/a.md",
+    "fingerprint": "6e28a9891c639c726067339254ef8674e8ff86cbf09e4169f75dbd3ee9ebc860"
+  },
+  {
+    "scenario": "fix/no_bom_stacked_converges.yml",
+    "rule_id": "no-bom",
+    "path": "docs/a.md",
+    "fingerprint": "ac6d209f4457a0dcf8333a28f9e2580b165943f2837e73594f16fd7a34f24fdb"
+  },
+  {
+    "scenario": "fix/no_empty_files.yml",
+    "rule_id": "no-empty",
+    "path": "drop.log",
+    "fingerprint": "0c027bac273c2d7ddc0c08ea7cebc6d18d337d2d0fa188d6fa36ad936c2c6376"
+  },
+  {
+    "scenario": "fix/no_submodules.yml",
+    "rule_id": "no-submods",
+    "path": ".gitmodules",
+    "fingerprint": "f960e075a18e11981b98b039ba8760878db70da2e1497735ab950e3b0101a61c"
+  },
+  {
+    "scenario": "fix/no_trailing_whitespace.yml",
+    "rule_id": "no-ws",
+    "path": "src/bad.rs",
+    "fingerprint": "1bea455df3a7ee521fa1570afa7635a8d08ec8244513971f1aea72d3bbf42d2c"
+  },
+  {
+    "scenario": "fix/no_trailing_whitespace_dry_run.yml",
+    "rule_id": "no-ws",
+    "path": "a.txt",
+    "fingerprint": "fb2302ca646bd3dc1857d55dae21181e4285f767e2f0c7b6df7848ca9f622156"
+  },
+  {
+    "scenario": "fix/no_trailing_whitespace_interior_cr_converges.yml",
+    "rule_id": "no-ws",
+    "path": "src/a.txt",
+    "fingerprint": "6aa39a4a4f1b03d6de71eba3765809befb9cc5c63cdc0f7ff47eb6541007812c"
+  },
+  {
+    "scenario": "fix/no_zero_width_chars.yml",
+    "rule_id": "no-zwsp",
+    "path": "src/a.rs",
+    "fingerprint": "c0199a06ec6c85da1bf6f6cb6a5e4e20de443287d45c3b246ad660113be6aad0"
+  },
+  {
+    "scenario": "fix/registered_creates_and_registers_a_missing_member.yml",
+    "rule_id": "docs-crate",
+    "path": "crates/docs/Cargo.toml",
+    "fingerprint": "25dd8163581f2d6684ab4ea2893836fca8f35fa673095d6039bc9780b2ce66aa"
+  },
+  {
+    "scenario": "fix/registered_excludes_a_loose_file.yml",
+    "rule_id": "reg",
+    "path": "Cargo.toml",
+    "fingerprint": "06c3a2b4973701e803a07b603672fe4605e5c9ee165a619937f444cd15f94e28"
+  },
+  {
+    "scenario": "fix/registered_no_phantom_when_create_unavailable.yml",
+    "rule_id": "r",
+    "path": "crates/docs/Cargo.toml",
+    "fingerprint": "8c14c0934c43b0f003cc96ff10eff66fc918ed0539ed6edef808744d6b529ff7"
+  },
+  {
+    "scenario": "fix/registered_registers_a_missing_member.yml",
+    "rule_id": "members-registered",
+    "path": "Cargo.toml",
+    "fingerprint": "2544bf2507c714a7fde85b1c2984b654ba3441308d92c30d99434ba5f4127189"
+  },
+  {
+    "scenario": "fix/registered_suggested_under_bare_fix.yml",
+    "rule_id": "members-registered",
+    "path": "Cargo.toml",
+    "fingerprint": "2544bf2507c714a7fde85b1c2984b654ba3441308d92c30d99434ba5f4127189"
+  },
+  {
+    "scenario": "fix/relocate_declines_a_root_level_file.yml",
+    "rule_id": "lockfile-nowhere",
+    "path": "Cargo.lock",
+    "fingerprint": "34430d23436fb99723a48729a6fd733fc1a28f42fde0f136f9447390575cdf98"
+  },
+  {
+    "scenario": "fix/relocate_moves_a_nested_lockfile.yml",
+    "rule_id": "lockfile-at-root",
+    "path": "crates/widget/Cargo.lock",
+    "fingerprint": "994ba772807b6b284b0616a30033f9254030b4ac28870f57ab9a0f28a522e02b"
+  },
+  {
+    "scenario": "fix/relocate_skips_when_root_slot_taken.yml",
+    "rule_id": "lockfile-at-root",
+    "path": "crates/widget/Cargo.lock",
+    "fingerprint": "994ba772807b6b284b0616a30033f9254030b4ac28870f57ab9a0f28a522e02b"
+  },
+  {
+    "scenario": "fix/relocate_suggested_under_bare_fix.yml",
+    "rule_id": "lockfile-at-root",
+    "path": "crates/widget/Cargo.lock",
+    "fingerprint": "994ba772807b6b284b0616a30033f9254030b4ac28870f57ab9a0f28a522e02b"
+  },
+  {
+    "scenario": "fix/remove_value.yml",
+    "rule_id": "no-secret",
+    "path": "main.tf",
+    "fingerprint": "8ea216a0c7408f3fec085582883d360f975f719eff0fdd9b8a74070886ff37f6"
+  },
+  {
+    "scenario": "fix/remove_value_dotenv.yml",
+    "rule_id": "no-secret",
+    "path": ".env",
+    "fingerprint": "b009ee2dbe2557487dd586fdf59b32deae4fb0b6bc5a9e2b42c95521a1b6f4d0"
+  },
+  {
+    "scenario": "fix/remove_value_dotenv_bare_declaration.yml",
+    "rule_id": "no-a",
+    "path": ".env",
+    "fingerprint": "170c714ed9d8f2eed08e6e47bd774691a1cec877e0a72ced0bf5d2412c3e8f83"
+  },
+  {
+    "scenario": "fix/remove_value_dotenv_duplicate_declined.yml",
+    "rule_id": "no-token",
+    "path": ".env",
+    "fingerprint": "b08d47fac5c0b2b333ce0b9f5ff12e59f6d37fd9e6f8aac11ca781f90c71a53e"
+  },
+  {
+    "scenario": "fix/remove_value_ini.yml",
+    "rule_id": "no-debug",
+    "path": "app.ini",
+    "fingerprint": "148fa442f546688ae8bdae04f712fb34aab0942691a8b421308dab6384ba2e96"
+  },
+  {
+    "scenario": "fix/remove_value_ini_multiline.yml",
+    "rule_id": "no-deps",
+    "path": "tox.ini",
+    "fingerprint": "82faea0dc74eaf64c903f771b0d9dcd0f898c89c809d78ae90fd8d000f580220"
+  },
+  {
+    "scenario": "fix/remove_value_json.yml",
+    "rule_id": "no-debug",
+    "path": "app.json",
+    "fingerprint": "a442840ba3820a0417f879cc0a51bba963c388fceafc5d51a87b7ceacef297fa"
+  },
+  {
+    "scenario": "fix/remove_value_partial_is_all_or_nothing.yml",
+    "rule_id": "no-secret",
+    "path": "main.tf",
+    "fingerprint": "100645f3ef5b2c9b481783b944b32f361e238ff486537609794bf48d358d83a8"
+  },
+  {
+    "scenario": "fix/remove_value_properties.yml",
+    "rule_id": "no-debug",
+    "path": "app.properties",
+    "fingerprint": "b81890847e5a1d41ac1e405677c3d5e4c11f3857757c22450dea06ba424fa788"
+  },
+  {
+    "scenario": "fix/remove_value_suggested.yml",
+    "rule_id": "no-secret",
+    "path": "main.tf",
+    "fingerprint": "8ea216a0c7408f3fec085582883d360f975f719eff0fdd9b8a74070886ff37f6"
+  },
+  {
+    "scenario": "fix/remove_value_toml.yml",
+    "rule_id": "no-debug",
+    "path": "app.toml",
+    "fingerprint": "0045922405a803f0a4f057aea60b3fbf937a66f1ff44c4c61293e9885b7291d1"
+  },
+  {
+    "scenario": "fix/remove_value_xml.yml",
+    "rule_id": "no-debug",
+    "path": "config.xml",
+    "fingerprint": "32c12477736caa6a3a462aa3def4396e91f0e8e7f46082ab793716785ecdcde7"
+  },
+  {
+    "scenario": "fix/remove_value_xml_partial_is_all_or_nothing.yml",
+    "rule_id": "no-node",
+    "path": "n.xml",
+    "fingerprint": "1dfeb394c06a99ffd163ee7cabb1135f3231d28835fe39fb8edec6dd5a27a490"
+  },
+  {
+    "scenario": "fix/remove_value_xml_root_is_declined.yml",
+    "rule_id": "no-project",
+    "path": "pom.xml",
+    "fingerprint": "e1caa08b696d85766d1c4dd1ea112938410c952fac17d20d9cea135bb4af72c8"
+  },
+  {
+    "scenario": "fix/remove_value_yaml.yml",
+    "rule_id": "no-debug",
+    "path": "app.yaml",
+    "fingerprint": "e5e804ecb6b6ac9c891b79ea98fac85294b8873e987391e60957ac78daea2844"
+  },
+  {
+    "scenario": "fix/remove_value_yaml_flow_member_declined.yml",
+    "rule_id": "no-a",
+    "path": "app.yaml",
+    "fingerprint": "cb361760edb881c1c2d12f54cf7588a89eb243ee9d17502432e71b0d9db85c8e"
+  },
+  {
+    "scenario": "fix/replace.yml",
+    "rule_id": "no-console",
+    "path": "app.js",
+    "fingerprint": "f7c59b54253cb761388c6de519c244813bfb9d4a3bdefeea038f9b6d60e8900d"
+  },
+  {
+    "scenario": "fix/replace_dotenv_path_matches.yml",
+    "rule_id": "v-prefix",
+    "path": ".env",
+    "fingerprint": "52df694b7eca42370afe22eface362c2255a0b7625fa3256327a99f4d3974081"
+  },
+  {
+    "scenario": "fix/replace_dotenv_uses_context_safe_quoting.yml",
+    "rule_id": "v-prefix",
+    "path": ".env",
+    "fingerprint": "52df694b7eca42370afe22eface362c2255a0b7625fa3256327a99f4d3974081"
+  },
+  {
+    "scenario": "fix/replace_hcl_path_matches.yml",
+    "rule_id": "v-prefix",
+    "path": "main.tf",
+    "fingerprint": "9876fb015288d26d91df92f699f01d1c1ed063dd7de5b816c49f0ce08fccb11e"
+  },
+  {
+    "scenario": "fix/replace_ini_path_matches.yml",
+    "rule_id": "v-prefix",
+    "path": "app.ini",
+    "fingerprint": "90b8fc0ece42b306df6e0421753ca9bfcb5fef0e8d6b3cdfbcb17baf24bd3f79"
+  },
+  {
+    "scenario": "fix/replace_json_path_matches.yml",
+    "rule_id": "v-prefix",
+    "path": "app.json",
+    "fingerprint": "f141f9b2c8d0a2e00b7fba415dee5793c987d568d98bb93fe2ad56668f8d2c2e"
+  },
+  {
+    "scenario": "fix/replace_json_path_matches_wildcard.yml",
+    "rule_id": "v-pins",
+    "path": "app.json",
+    "fingerprint": "02df8ed6c4844ffa2cd576a75b9ef4fa6a6e946f3536eece66b86af1a50ab51a"
+  },
+  {
+    "scenario": "fix/replace_properties_path_matches.yml",
+    "rule_id": "v-prefix",
+    "path": "app.properties",
+    "fingerprint": "e1ebc1eb36b686c123877ff55c7d293e1776b7da5b8239d1a86fd92d4b4c3b8c"
+  },
+  {
+    "scenario": "fix/replace_unsafe_by_default.yml",
+    "rule_id": "no-console",
+    "path": "app.js",
+    "fingerprint": "f7c59b54253cb761388c6de519c244813bfb9d4a3bdefeea038f9b6d60e8900d"
+  },
+  {
+    "scenario": "fix/replace_xml_path_matches.yml",
+    "rule_id": "v-prefix",
+    "path": "config.xml",
+    "fingerprint": "1adf6bfc7abeab5306f3ea32e91b0dc14c1f016a6c459677524cf90131f11c5f"
+  },
+  {
+    "scenario": "fix/replace_yaml_path_matches.yml",
+    "rule_id": "v-prefix",
+    "path": "app.yaml",
+    "fingerprint": "0fec69c7d11b0bf8a20ace0322993a13872dd10a026ea37c20c46e966e5bcc78"
+  },
+  {
+    "scenario": "fix/set_value.yml",
+    "rule_id": "tf-version",
+    "path": "main.tf",
+    "fingerprint": "5d8dff96c46790123b2cab04419b3101ef8b8f34e371d41c2e4b30d3191dbeb9"
+  },
+  {
+    "scenario": "fix/set_value_dotenv.yml",
+    "rule_id": "node-env",
+    "path": ".env",
+    "fingerprint": "921cae4619a43867451c2642d4974d08a622959510d39623d61abc5bdfa66280"
+  },
+  {
+    "scenario": "fix/set_value_dotenv_bare_declaration.yml",
+    "rule_id": "port",
+    "path": ".env",
+    "fingerprint": "4d7117cd3d489ebd15f0e0eca05fb37fea25cf4e857fa63036f4f0309ced0976"
+  },
+  {
+    "scenario": "fix/set_value_dotenv_control_char_not_fixable.yml",
+    "rule_id": "msg",
+    "path": ".env",
+    "fingerprint": "9a6d7de01a200cef2e54e355203985ebf0055d7efd4a932337de1becf3e7687a"
+  },
+  {
+    "scenario": "fix/set_value_dotenv_uses_context_safe_quoting.yml",
+    "rule_id": "b",
+    "path": ".env",
+    "fingerprint": "545e33d5951d8a4292100080dd944ad86b7c03af4e8e4ba45491d1a5cde05143"
+  },
+  {
+    "scenario": "fix/set_value_dry_run.yml",
+    "rule_id": "port",
+    "path": "app.json",
+    "fingerprint": "d52a06821486d8485ed3cd6a97d3ca9b2de027fe6a86a266fc2f92830d871058"
+  },
+  {
+    "scenario": "fix/set_value_hcl_bom.yml",
+    "rule_id": "port",
+    "path": "main.tf",
+    "fingerprint": "94c92edf8000ebe305c55c0abcf40c2e1c4c8aecc9cc41aa63d4913cf52fc1f8"
+  },
+  {
+    "scenario": "fix/set_value_ini.yml",
+    "rule_id": "port",
+    "path": "app.ini",
+    "fingerprint": "6411270fb62ffc93bad68ee1c7bd1a1b07467d2bb770e6929702b4971c79f50e"
+  },
+  {
+    "scenario": "fix/set_value_json.yml",
+    "rule_id": "port",
+    "path": "app.json",
+    "fingerprint": "c4b22632c6fbc848ae718f30ef46c258f262366c78a2678c9d9d6e45ea43da83"
+  },
+  {
+    "scenario": "fix/set_value_json_bom.yml",
+    "rule_id": "port",
+    "path": "app.json",
+    "fingerprint": "d52a06821486d8485ed3cd6a97d3ca9b2de027fe6a86a266fc2f92830d871058"
+  },
+  {
+    "scenario": "fix/set_value_literal_paths_honours_scope_filter.yml",
+    "rule_id": "port",
+    "path": "pkg/app.json",
+    "fingerprint": "2c88a339a4d121f25301b28a59856fc50946f047aa21a668fc262bd13c18a40f"
+  },
+  {
+    "scenario": "fix/set_value_properties.yml",
+    "rule_id": "host",
+    "path": "app.properties",
+    "fingerprint": "098b5bf0b606c49198693a2a668d87e9dcc0cb87dbae400fa86f2c1076c49608"
+  },
+  {
+    "scenario": "fix/set_value_toml.yml",
+    "rule_id": "port",
+    "path": "app.toml",
+    "fingerprint": "8d00d6e38156f7cdefcf26bd56873506e10387618ddff41a8166b235cbc14aee"
+  },
+  {
+    "scenario": "fix/set_value_toml_multi_rule.yml",
+    "rule_id": "debug",
+    "path": "app.toml",
+    "fingerprint": "06b0b044228f0a9e59596f6b7fd8236a304e466dfd53e112bbe899209927c1ef"
+  },
+  {
+    "scenario": "fix/set_value_toml_multi_rule.yml",
+    "rule_id": "host",
+    "path": "app.toml",
+    "fingerprint": "3f4d44b8b4a56648cd005ee28bc0d6e5b57228b24e24cc0945f5af7a691ec385"
+  },
+  {
+    "scenario": "fix/set_value_toml_multi_rule.yml",
+    "rule_id": "port",
+    "path": "app.toml",
+    "fingerprint": "8d00d6e38156f7cdefcf26bd56873506e10387618ddff41a8166b235cbc14aee"
+  },
+  {
+    "scenario": "fix/set_value_xml.yml",
+    "rule_id": "ver",
+    "path": "config.xml",
+    "fingerprint": "f2e4f9ac69c56c0c0b2a6e99b462ef258f50051c31adfe40e9ae3d5ba26f1bf6"
+  },
+  {
+    "scenario": "fix/set_value_xml_number_equals_is_not_applied.yml",
+    "rule_id": "port-num",
+    "path": "ports.xml",
+    "fingerprint": "d92b2e5fdaced7510abc4b4da4637eee1fb33c943afbfd75633a7c23de9529ba"
+  },
+  {
+    "scenario": "fix/set_value_yaml.yml",
+    "rule_id": "port",
+    "path": "app.yaml",
+    "fingerprint": "05bf071249f94b0d70e789bd281127caa7a0802e85112c200a06328526bd19d1"
+  },
+  {
+    "scenario": "fix/set_value_yaml_alias_declined.yml",
+    "rule_id": "use-nine",
+    "path": "app.yaml",
+    "fingerprint": "456811be37c64cfaeffef85a2ff5d79ae8eeba609293fc64b2744bbb3b82db7d"
+  },
+  {
+    "scenario": "fix/set_value_yaml_bom.yml",
+    "rule_id": "port",
+    "path": "app.yaml",
+    "fingerprint": "1034252f774ed5676ae91e88e22cab601c5a06e234c3e6b08e1baa0cc8ac95b5"
+  },
+  {
+    "scenario": "fix/set_value_yaml_quoted_preserves_comment.yml",
+    "rule_id": "host",
+    "path": "app.yaml",
+    "fingerprint": "d746a73d8a571c752030b2e9d4693e72768eccc352c6fecbe76b15a68d8f4c36"
+  },
+  {
+    "scenario": "fix/size_limit_skips_large_files.yml",
+    "rule_id": "no-ws",
+    "path": "src/big.rs",
+    "fingerprint": "fe0604f41d303e6a47e6687772d234c1135c1210cc0a1a3bc6c929e75a29a20c"
+  },
+  {
+    "scenario": "fix/size_limit_skips_large_files.yml",
+    "rule_id": "no-ws",
+    "path": "src/small.rs",
+    "fingerprint": "15c06610f2d203c175321b1a991ec2ad7e7066356e31291caaa261db5ba5bf63"
+  },
+  {
+    "scenario": "fix/sort_dedups_a_unique_block.yml",
+    "rule_id": "keep-unique",
+    "path": "allow.txt",
+    "fingerprint": "3e5f2dde46e7e47f4bad5f5fcb6385cb2822d4d59cdb073afcac25a6464bf696"
+  },
+  {
+    "scenario": "fix/sort_orders_a_markerless_whole_file.yml",
+    "rule_id": "sorted-file",
+    "path": "CODEOWNERS",
+    "fingerprint": "1c951374d711ed488ee6b439bb8d26872056a7af1a438852ec0150c8a52ffd4a"
+  },
+  {
+    "scenario": "fix/sort_reorders_a_keep_sorted_block.yml",
+    "rule_id": "keep-sorted",
+    "path": "deps.txt",
+    "fingerprint": "0f73d56f6e402727689bc683c2478b56832b7f1fe47c97615491f718d104a5c2"
+  },
+  {
+    "scenario": "fix/sort_surfaces_an_unclosed_residual.yml",
+    "rule_id": "ks",
+    "path": "f.txt",
+    "fingerprint": "0e655c0e0091f94449221e77784c41d79483fc82fe65b9d870c5116d53b77aeb"
+  },
+  {
+    "scenario": "fix/sort_surfaces_an_unclosed_residual.yml",
+    "rule_id": "ks",
+    "path": "f.txt",
+    "fingerprint": "3a221db071e6d6543a209f7a61f021e2d384b0c58992f22c76affc5f6f48d0b6"
+  },
+  {
+    "scenario": "fix/sort_two_blocks_in_one_file.yml",
+    "rule_id": "keep-sorted",
+    "path": "deps.txt",
+    "fingerprint": "0f73d56f6e402727689bc683c2478b56832b7f1fe47c97615491f718d104a5c2"
+  },
+  {
+    "scenario": "fix/sort_two_blocks_in_one_file.yml",
+    "rule_id": "keep-sorted",
+    "path": "deps.txt",
+    "fingerprint": "a77039354a20ec49f7c3a6119ccd4c426a91cfd8f98fa8bd8795ff4cd0382557"
+  },
+  {
+    "scenario": "fix/sync_from_equals_json.yml",
+    "rule_id": "pkg-version-matches-manifest",
+    "path": "web/package.json",
+    "fingerprint": "ce99a396a96b27e5bbe1607a9069dca669fd96055e4001c812b623958a272288"
+  },
+  {
+    "scenario": "fix/sync_from_equals_propagates_a_value.yml",
+    "rule_id": "crate-versions-match-workspace",
+    "path": "crates/drifted/Cargo.toml",
+    "fingerprint": "ae49c0c10ff54df78c21ac033a72bc9c3818424a3ae92075d162bccabc5890ca"
+  },
+  {
+    "scenario": "fix/sync_from_equals_regex.yml",
+    "rule_id": "pin-version-everywhere",
+    "path": "Dockerfile",
+    "fingerprint": "2bc09de06c475747a5dcc8fccd112c9bb829f9d611a3668230be47fc3b9a71c5"
+  },
+  {
+    "scenario": "fix/sync_from_equals_regex.yml",
+    "rule_id": "pin-version-everywhere",
+    "path": "README.md",
+    "fingerprint": "778313349a3f22085c24f41237e793afd38de933e576f4c12c14c9fb02b7480c"
+  },
+  {
+    "scenario": "fix/sync_from_equals_skips_a_template.yml",
+    "rule_id": "img-version",
+    "path": "deploy.yml",
+    "fingerprint": "29d9e1b5f75a5424f9587a6082a95c3141899eb01e09d6ce0dc135bafbe18671"
+  },
+  {
+    "scenario": "fix/sync_from_mirrors_a_drifted_file.yml",
+    "rule_id": "license-mirror",
+    "path": "crates/widget/LICENSE",
+    "fingerprint": "2b5cc47c02d70f3c88b7b916cf27dc7189ee7b9779940770212d4fe0401254ee"
+  },
+  {
+    "scenario": "fix/sync_from_non_string_source_is_not_applied.yml",
+    "rule_id": "versions-match",
+    "path": "source.json",
+    "fingerprint": "6291d4947846ffcf8664374eed45288c76bdd6bf899abcfb593bb51cad1d2cb8"
+  },
+  {
+    "scenario": "fix/sync_from_non_string_target_is_unfixable.yml",
+    "rule_id": "versions-match",
+    "path": "target.json",
+    "fingerprint": "4d8cff610602560b6a082c931394e9d7155beba4766a6dd98b321a2322610c52"
+  },
+  {
+    "scenario": "fix/sync_from_suggested_under_bare_fix.yml",
+    "rule_id": "license-mirror",
+    "path": "crates/widget/LICENSE",
+    "fingerprint": "2b5cc47c02d70f3c88b7b916cf27dc7189ee7b9779940770212d4fe0401254ee"
+  }
+]

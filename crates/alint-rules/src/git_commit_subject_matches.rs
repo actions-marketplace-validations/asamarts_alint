@@ -14,9 +14,10 @@
 //! Shares the family shape (the `commit_range` module): `since:`
 //! unset checks HEAD only; `since:` set checks `<since>..HEAD`,
 //! oldest-first, merge commits excluded unless `include_merges:`.
-//! Silent outside a git repo / with no commits; a bad `since:` ref
-//! hard-fails with a shallow-clone hint. `since:`'s `{{env.X}}`
-//! interpolation is resolved at config load by `alint-dsl`.
+//! An unavailable Git executable or repository is an analysis
+//! failure; an unborn repository has no commits and may pass. A bad
+//! `since:` ref hard-fails with a shallow-clone hint. `since:`'s
+//! `{{env.X}}` interpolation is resolved at config load by `alint-dsl`.
 //!
 //! Check-only — alint can't rewrite the user's commit history.
 

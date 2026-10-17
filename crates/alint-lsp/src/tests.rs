@@ -1,10 +1,11 @@
 use super::config::{build_session, config_for_document};
 use super::diagnostics::{
-    TextSource, byte_offset_to_position, group_findings, severity_of, utf16_column, violation_range,
+    TextSource, byte_offset_to_position, group_findings, related_information, severity_of,
+    utf16_column, violation_range,
 };
 use super::render::{kind_description, rule_docs_url};
 use super::*;
-use alint_core::{FixEdit, Level};
+use alint_core::{FindingDisposition, FixEdit, Level, RelatedLocation, SourceRange};
 use std::borrow::Cow;
 use tower_lsp::lsp_types::{DocumentChangeOperation, DocumentChanges, NumberOrString, ResourceOp};
 
@@ -27,8 +28,12 @@ fn violation(line: Option<usize>, column: Option<usize>) -> Violation {
         message: Cow::Borrowed("boom"),
         line,
         column,
-        note_kind: None,
+        range: None,
+        related_locations: Vec::new(),
+        related_locations_omitted: 0,
+        disposition: FindingDisposition::default(),
         baseline_key: None,
+        sensitive: false,
         is_fixable: false,
         not_fixable: false,
         proposed_edits: Vec::new(),
@@ -46,9 +51,11 @@ fn finding(policy_url: Option<&str>) -> Finding {
         column: Some(7),
         policy_url: policy_url.map(ToString::to_string),
         fixable: false,
+        sensitive: false,
         per_file: true,
         description: None,
         docs_url: None,
+        related_information: Vec::new(),
     }
 }
 
@@ -82,7 +89,7 @@ fn violation_range_without_line_anchors_at_file_start() {
 
 #[test]
 fn finding_to_diagnostic_carries_rule_and_policy_link() {
-    let d = finding_to_diagnostic(&finding(Some("https://example.com/policy")));
+    let d = finding_to_diagnostic(&finding(Some("https://example.com/policy")), true);
     assert_eq!(d.code, Some(NumberOrString::String("my-rule".to_string())));
     assert_eq!(d.source.as_deref(), Some("alint"));
     assert_eq!(d.message, "boom");
@@ -94,17 +101,93 @@ fn finding_to_diagnostic_carries_rule_and_policy_link() {
 
 #[test]
 fn finding_to_diagnostic_omits_code_description_for_non_url_policy() {
-    let d = finding_to_diagnostic(&finding(Some("not a url")));
+    let d = finding_to_diagnostic(&finding(Some("not a url")), true);
     assert!(d.code_description.is_none());
 }
 
 #[test]
-fn range_contains_is_inclusive_of_both_ends() {
+fn range_contains_uses_half_open_end_and_empty_ranges_match_nothing() {
     let r = Range::new(Position::new(3, 6), Position::new(3, 7));
     assert!(range_contains(r, Position::new(3, 6)));
-    assert!(range_contains(r, Position::new(3, 7)));
+    assert!(!range_contains(r, Position::new(3, 7)));
     assert!(!range_contains(r, Position::new(3, 8)));
     assert!(!range_contains(r, Position::new(2, 6)));
+    let empty = Range::new(Position::new(3, 6), Position::new(3, 6));
+    assert!(!range_contains(empty, Position::new(3, 6)));
+}
+#[test]
+fn ranged_locations_use_utf16_and_related_information_respects_capability() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let primary = root.join("primary.txt");
+    let related = root.join("related.txt");
+    let text = "a😀z\n";
+    let mut overlays = std::collections::HashMap::new();
+    overlays.insert(related.clone(), text.to_string());
+    let mut texts = TextSource::with_overlays(overlays);
+    let violation = Violation::new("boom")
+        .with_path(Path::new("primary.txt"))
+        .with_range(SourceRange::new(1, 1, 1, 2).unwrap())
+        .with_related_location(
+            RelatedLocation::new("related.txt", "secondary")
+                .with_range(SourceRange::new(1, 2, 1, 4).unwrap()),
+        );
+    let primary_range = violation_range(&violation, Some(text));
+    let information = related_information(root, &primary, primary_range, &violation, &mut texts);
+    assert_eq!(information.len(), 1);
+    assert_eq!(
+        information[0].location.uri,
+        Url::from_file_path(related).unwrap()
+    );
+    assert_eq!(information[0].location.range.start, Position::new(0, 1));
+    assert_eq!(information[0].location.range.end, Position::new(0, 4));
+    assert_eq!(information[0].message, "secondary");
+
+    let mut finding = finding(None);
+    finding.related_information = information;
+    assert_eq!(
+        finding_to_diagnostic(&finding, true)
+            .related_information
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        finding_to_diagnostic(&finding, false)
+            .related_information
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn initialize_records_related_information_capability() {
+    use tower_lsp::lsp_types::{
+        ClientCapabilities, PublishDiagnosticsClientCapabilities, TextDocumentClientCapabilities,
+    };
+
+    for supported in [false, true] {
+        let (service, _socket) = LspService::new(test_backend);
+        let backend = service.inner();
+        let params = InitializeParams {
+            capabilities: ClientCapabilities {
+                text_document: Some(TextDocumentClientCapabilities {
+                    publish_diagnostics: Some(PublishDiagnosticsClientCapabilities {
+                        related_information: Some(supported),
+                        ..PublishDiagnosticsClientCapabilities::default()
+                    }),
+                    ..TextDocumentClientCapabilities::default()
+                }),
+                ..ClientCapabilities::default()
+            },
+            ..InitializeParams::default()
+        };
+
+        backend.initialize(params).await.unwrap();
+        assert_eq!(
+            backend.state.lock().related_information_supported,
+            supported
+        );
+    }
 }
 
 #[test]
@@ -172,6 +255,95 @@ rules:
 }
 
 #[test]
+fn lsp_diagnostic_redacts_dotenv_evidence() {
+    const SECRET: &str = "LSP_TOKEN_VALUE_DO_NOT_REPORT";
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join(".alint.yml");
+    let env_path = dir.path().join(".env");
+    std::fs::write(&env_path, format!("TOKEN={SECRET}\n")).unwrap();
+    std::fs::write(
+        &config_path,
+        r"version: 1
+rules:
+  - id: token
+    kind: dotenv_path_equals
+    paths: .env
+    path: $.TOKEN
+    equals: expected
+    level: error
+    fix: { set_value: {} }
+",
+    )
+    .unwrap();
+
+    let session = build_session(dir.path())
+        .expect("build_session succeeds")
+        .expect("config present");
+    let report = session
+        .engine
+        .run(&session.root, &session.index)
+        .expect("rule evaluates");
+    let by_path = group_findings(
+        &session.group_ctx(),
+        &report.results,
+        &mut TextSource::default(),
+    );
+    let diagnostics = by_path.get(&env_path).expect("finding is anchored to .env");
+    assert_eq!(diagnostics.len(), 1);
+    assert!(!diagnostics[0].message.contains(SECRET));
+    assert!(diagnostics[0].message.contains("<redacted:"));
+    assert!(diagnostics[0].fixable);
+    assert!(diagnostics[0].sensitive);
+}
+
+#[test]
+fn lsp_incremental_diagnostic_applies_explicit_sensitivity() {
+    const SECRET: &str = "LSP_EXPLICIT_VALUE_DO_NOT_REPORT";
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join(".alint.yml");
+    let file_path = dir.path().join("secret.txt");
+    std::fs::write(&file_path, SECRET).unwrap();
+    std::fs::write(
+        &config_path,
+        format!(
+            r"version: 1
+rules:
+  - id: secret
+    kind: file_content_forbidden
+    paths: secret.txt
+    pattern: {SECRET}
+    message: evidence={SECRET}
+    sensitive: true
+    level: error
+"
+        ),
+    )
+    .unwrap();
+
+    let session = build_session(dir.path())
+        .expect("build_session succeeds")
+        .expect("config present");
+    let results = session
+        .engine
+        .run_for_file(
+            &session.root,
+            &session.index,
+            Path::new("secret.txt"),
+            SECRET.as_bytes(),
+        )
+        .expect("incremental rule evaluates");
+    let by_path = group_findings(&session.group_ctx(), &results, &mut TextSource::default());
+    let diagnostics = by_path
+        .get(&file_path)
+        .expect("finding is anchored to secret.txt");
+
+    assert_eq!(diagnostics.len(), 1);
+    assert!(!diagnostics[0].message.contains(SECRET));
+    assert!(diagnostics[0].message.contains("<redacted:"));
+    assert!(diagnostics[0].sensitive);
+}
+
+#[test]
 fn build_session_rejects_invalid_deeply_nested_rule() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -210,6 +382,7 @@ fn group_findings_anchors_pathless_to_config() {
         violations: vec![Violation::new("LICENSE is missing")],
         notes: Vec::new(),
         is_fixable: false,
+        analysis_failures: Vec::new(),
     }];
     let kinds = HashMap::new();
     let ctx = GroupCtx {
@@ -236,6 +409,46 @@ fn group_findings_anchors_pathless_to_config() {
 }
 
 #[test]
+fn group_findings_escalates_and_anchors_analysis_failures() {
+    use alint_core::{AnalysisFailure, AnalysisFailureKind, Engine, RuleResult};
+
+    let engine = Engine::new(vec![], alint_core::RuleRegistry::new());
+    let root = repo_root();
+    let config = root.join(".alint.yml");
+    let results = vec![RuleResult {
+        rule_id: std::sync::Arc::from("broken-warning"),
+        level: Level::Warning,
+        policy_url: None,
+        violations: Vec::new(),
+        notes: Vec::new(),
+        is_fixable: true,
+        analysis_failures: vec![AnalysisFailure::new(
+            AnalysisFailureKind::Evaluation,
+            "sentinel failure",
+        )],
+    }];
+    let kinds = HashMap::new();
+    let ctx = GroupCtx {
+        root: &root,
+        engine: &engine,
+        config_path: &config,
+        kinds: &kinds,
+    };
+
+    let by_path = group_findings(&ctx, &results, &mut TextSource::default());
+    let finding = &by_path[&config][0];
+    assert_eq!(finding.severity, DiagnosticSeverity::ERROR);
+    assert_eq!(
+        finding.message,
+        "analysis failure (evaluation): sentinel failure",
+    );
+    assert_eq!(finding.line, None);
+    assert_eq!(finding.column, None);
+    assert!(!finding.fixable);
+    assert!(!finding.per_file);
+}
+
+#[test]
 fn group_findings_threads_violation_line_and_column() {
     use alint_core::{Engine, RuleResult};
     let engine = Engine::new(vec![], alint_core::RuleRegistry::new());
@@ -252,6 +465,7 @@ fn group_findings_threads_violation_line_and_column() {
         ],
         notes: Vec::new(),
         is_fixable: true,
+        analysis_failures: Vec::new(),
     }];
     let kinds = HashMap::new();
     let ctx = GroupCtx {
@@ -271,7 +485,7 @@ fn group_findings_threads_violation_line_and_column() {
 }
 
 #[test]
-fn ranges_overlap_detects_intersection_and_disjoint() {
+fn ranges_overlap_uses_half_open_ends_and_cursor_selections() {
     let a = Range::new(Position::new(2, 0), Position::new(2, 10));
     assert!(ranges_overlap(
         a,
@@ -283,7 +497,19 @@ fn ranges_overlap_detects_intersection_and_disjoint() {
     ));
     assert!(!ranges_overlap(
         a,
+        Range::new(Position::new(2, 10), Position::new(2, 11))
+    ));
+    assert!(!ranges_overlap(
+        a,
         Range::new(Position::new(3, 0), Position::new(3, 1))
+    ));
+    assert!(ranges_overlap(
+        a,
+        Range::new(Position::new(2, 5), Position::new(2, 5))
+    ));
+    assert!(!ranges_overlap(
+        a,
+        Range::new(Position::new(2, 10), Position::new(2, 10))
     ));
 }
 
@@ -511,9 +737,11 @@ async fn code_action_offers_the_located_replace_fix_end_to_end() {
         column: Some(3),
         policy_url: None,
         fixable: true,
+        sensitive: false,
         per_file: true,
         description: None,
         docs_url: None,
+        related_information: Vec::new(),
     };
     {
         let mut st = backend.state.lock();
@@ -564,6 +792,152 @@ async fn code_action_offers_the_located_replace_fix_end_to_end() {
 }
 
 #[tokio::test]
+async fn code_action_omits_sensitive_replacement_bytes() {
+    use tower_lsp::lsp_types::{
+        CodeActionContext, PartialResultParams, TextDocumentIdentifier, WorkDoneProgressParams,
+    };
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    std::fs::write(
+        root.join(".alint.yml"),
+        "version: 1\nrules:\n  - id: token\n    kind: dotenv_path_equals\n    \
+         paths: .env\n    path: $.TOKEN\n    equals: expected\n    level: error\n    \
+         fix: { set_value: {} }\n",
+    )
+    .unwrap();
+    let session = build_session(&root)
+        .expect("build_session ok")
+        .expect("config present");
+    let (service, _socket) = LspService::new(test_backend);
+    let backend = service.inner();
+    let uri = Url::from_file_path(root.join(".env")).unwrap();
+    let finding = Finding {
+        range: Range::new(Position::new(0, 6), Position::new(0, 12)),
+        severity: DiagnosticSeverity::ERROR,
+        rule_id: "token".to_string(),
+        message: "sensitive evidence <redacted:000000000000>".to_string(),
+        line: Some(1),
+        column: Some(7),
+        policy_url: None,
+        fixable: true,
+        sensitive: true,
+        per_file: true,
+        description: None,
+        docs_url: None,
+        related_information: Vec::new(),
+    };
+    {
+        let mut state = backend.state.lock();
+        install_session(&mut state, &root, &uri, session);
+        state.open.insert(uri.clone());
+        state
+            .documents
+            .insert(uri.clone(), "TOKEN=secret\n".to_string());
+        state.diagnostics.insert(uri.clone(), vec![finding]);
+    }
+    let response = backend
+        .code_action(CodeActionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range: Range::new(Position::new(0, 6), Position::new(0, 12)),
+            context: CodeActionContext {
+                diagnostics: vec![],
+                only: None,
+                trigger_kind: None,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .await
+        .expect("code_action succeeds");
+    assert!(
+        response.is_none(),
+        "sensitive findings must not expose replacement bytes: {response:?}"
+    );
+}
+
+#[tokio::test]
+async fn code_action_omits_a_sibling_fix_for_a_sensitive_input_file() {
+    use tower_lsp::lsp_types::{
+        CodeActionContext, PartialResultParams, TextDocumentIdentifier, WorkDoneProgressParams,
+    };
+
+    const SECRET: &str = "LSP_PASSING_SECRET_DO_NOT_REPORT";
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let env_text = format!("TOKEN={SECRET}");
+    std::fs::write(root.join(".env"), &env_text).unwrap();
+    std::fs::write(root.join("target.properties"), format!("TOKEN={SECRET}\n")).unwrap();
+    std::fs::write(
+        root.join(".alint.yml"),
+        r#"version: 1
+rules:
+  - id: token
+    kind: cross_file
+    source: { file: .env, extract: { dotenv: "$.TOKEN" } }
+    targets:
+      - { file: target.properties, extract: { properties: "$.TOKEN" } }
+    relation: equals
+    level: error
+  - id: append
+    kind: file_content_matches
+    paths: .env
+    pattern: NEVER
+    level: error
+    fix: { file_append: { content: "\n" } }
+"#,
+    )
+    .unwrap();
+    let session = build_session(&root)
+        .expect("build_session ok")
+        .expect("config present");
+    let (service, _socket) = LspService::new(test_backend);
+    let backend = service.inner();
+    let uri = Url::from_file_path(root.join(".env")).unwrap();
+    let finding = Finding {
+        range: Range::new(Position::new(0, 0), Position::new(0, 1)),
+        severity: DiagnosticSeverity::ERROR,
+        rule_id: "append".to_string(),
+        message: "required pattern is missing".to_string(),
+        line: Some(1),
+        column: Some(1),
+        policy_url: None,
+        fixable: true,
+        sensitive: false,
+        per_file: true,
+        description: None,
+        docs_url: None,
+        related_information: Vec::new(),
+    };
+    {
+        let mut state = backend.state.lock();
+        install_session(&mut state, &root, &uri, session);
+        state.open.insert(uri.clone());
+        state.documents.insert(uri.clone(), env_text);
+        state.diagnostics.insert(uri.clone(), vec![finding]);
+    }
+
+    let response = backend
+        .code_action(CodeActionParams {
+            text_document: TextDocumentIdentifier { uri: uri.clone() },
+            range: Range::new(Position::new(0, 0), Position::new(0, 1)),
+            context: CodeActionContext {
+                diagnostics: vec![],
+                only: None,
+                trigger_kind: None,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        })
+        .await
+        .expect("code_action succeeds");
+    assert!(
+        response.is_none(),
+        "a sibling fix must not serialize bytes from a sensitive input: {response:?}"
+    );
+}
+
+#[tokio::test]
 async fn code_action_offers_a_structured_set_value_fix() {
     // Follow-up 4: the structured located fixers (`set_value`/`remove_value`/
     // `replace` on the `*_path_*` kinds) reach the editor through the SAME
@@ -597,9 +971,11 @@ async fn code_action_offers_a_structured_set_value_fix() {
         column: Some(10),
         policy_url: None,
         fixable: true,
+        sensitive: false,
         per_file: true,
         description: None,
         docs_url: None,
+        related_information: Vec::new(),
     };
     {
         let mut st = backend.state.lock();
@@ -676,9 +1052,11 @@ async fn code_action_withholds_a_fix_the_pipeline_would_demote() {
         column: Some(1),
         policy_url: None,
         fixable: true,
+        sensitive: false,
         per_file: true,
         description: None,
         docs_url: None,
+        related_information: Vec::new(),
     };
     {
         let mut st = backend.state.lock();
@@ -738,9 +1116,11 @@ async fn code_action_labels_an_unsafe_fix_and_does_not_prefer_it() {
         column: Some(3),
         policy_url: None,
         fixable: true,
+        sensitive: false,
         per_file: true,
         description: None,
         docs_url: None,
+        related_information: Vec::new(),
     };
     {
         let mut st = backend.state.lock();

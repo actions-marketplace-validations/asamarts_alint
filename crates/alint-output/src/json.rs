@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::path::Path;
 
-use alint_core::{FixReport, FixStatus, Level, ProposedEdit, Report};
+use alint_core::{AnalysisFailure, FixReport, FixStatus, Level, ProposedEdit, Report};
 use serde::Serialize;
 
 use crate::BaselineMarks;
@@ -33,6 +33,7 @@ struct Summary {
     failing_rules: usize,
     passing_rules: usize,
     total_violations: usize,
+    total_analysis_failures: usize,
     has_errors: bool,
     has_warnings: bool,
     /// Occurrences suppressed by the baseline this run, when one is in effect.
@@ -72,6 +73,7 @@ struct JsonResult<'a> {
     /// pre-v0.11 output.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     notes: Vec<JsonNote<'a>>,
+    analysis_failures: Vec<JsonAnalysisFailure<'a>>,
 }
 
 #[derive(Serialize)]
@@ -109,6 +111,17 @@ struct JsonNote<'a> {
     kind: &'static str,
     fixable: bool,
 }
+#[derive(Serialize)]
+struct JsonAnalysisFailure<'a> {
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<Cow<'a, str>>,
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+}
 
 pub fn write_json(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
     write_json_with_baseline(report, None, false, w)
@@ -127,6 +140,7 @@ pub fn write_json_with_baseline(
         failing_rules: report.failing_rules(),
         passing_rules: report.passing_rules(),
         total_violations: report.total_violations(),
+        total_analysis_failures: report.total_analysis_failures(),
         has_errors: report.has_errors(),
         has_warnings: report.has_warnings(),
         baselined_suppressed: baseline.map(|b| b.suppressed_total),
@@ -161,11 +175,16 @@ pub fn write_json_with_baseline(
                     line: v.line,
                     column: v.column,
                     kind: v
-                        .note_kind
+                        .note_kind()
                         .unwrap_or(alint_core::NoteKind::Informational)
                         .as_str(),
                     fixable: false,
                 })
+                .collect(),
+            analysis_failures: r
+                .analysis_failures
+                .iter()
+                .map(json_analysis_failure)
                 .collect(),
         })
         .collect();
@@ -221,6 +240,7 @@ struct FixSummary {
     /// suggestion, or verification-demoted). Always present (a machine
     /// format keeps a stable envelope); `0` when none.
     suggested: usize,
+    total_analysis_failures: usize,
     /// `true` when the fix loop hit its pass cap without settling (a
     /// non-convergent config). This is the ONLY structured signal of the
     /// distinct exit 2 ("fix could not complete"): without it a capped run --
@@ -235,6 +255,7 @@ struct JsonFixRuleResult<'a> {
     id: &'a str,
     level: Level,
     items: Vec<JsonFixItem<'a>>,
+    analysis_failures: Vec<JsonAnalysisFailure<'a>>,
 }
 
 #[derive(Serialize)]
@@ -300,6 +321,11 @@ pub fn write_fix_json_with_mode(
                     }
                 })
                 .collect(),
+            analysis_failures: r
+                .analysis_failures
+                .iter()
+                .map(json_analysis_failure)
+                .collect(),
         })
         .collect();
     let out = JsonFixReport {
@@ -310,6 +336,7 @@ pub fn write_fix_json_with_mode(
             skipped: report.skipped(),
             unfixable: report.unfixable(),
             suggested: report.suggested(),
+            total_analysis_failures: report.total_analysis_failures(),
             non_convergent: report.non_convergent,
         },
         results,
@@ -317,6 +344,16 @@ pub fn write_fix_json_with_mode(
     serde_json::to_writer_pretty(&mut *w, &out)?;
     writeln!(w)?;
     Ok(())
+}
+
+fn json_analysis_failure(failure: &AnalysisFailure) -> JsonAnalysisFailure<'_> {
+    JsonAnalysisFailure {
+        kind: failure.kind.as_str(),
+        path: lossy_path(failure.path.as_deref()),
+        message: failure.message.as_ref(),
+        line: failure.line,
+        column: failure.column,
+    }
 }
 
 #[cfg(test)]
@@ -385,6 +422,7 @@ mod tests {
                         }),
                     },
                 }],
+                analysis_failures: Vec::new(),
             }],
         };
         let mut buf = Vec::new();

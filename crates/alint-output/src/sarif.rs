@@ -94,6 +94,8 @@ fn emit_sarif(sarif: &Sarif, w: &mut dyn Write) -> std::io::Result<()> {
     Ok(())
 }
 
+// One pass keeps rule registration, result ordering, and fingerprint indexes aligned.
+#[allow(clippy::too_many_lines)]
 fn build_sarif(
     report: &Report,
     baseline: Option<&BaselineMarks>,
@@ -103,6 +105,7 @@ fn build_sarif(
     let mut rules = Vec::with_capacity(report.results.len());
     let mut results = Vec::new();
     let mut notifications = Vec::new();
+    let mut execution_successful = true;
 
     for (idx, rr) in report.results.iter().enumerate() {
         rules.push(SarifRule {
@@ -140,7 +143,7 @@ fn build_sarif(
         }
 
         for note in &rr.notes {
-            match note.note_kind.unwrap_or(NoteKind::Informational) {
+            match note.note_kind().unwrap_or(NoteKind::Informational) {
                 NoteKind::Informational => {
                     let mut result = base_result(rr.rule_id.as_ref(), rr.level, note, config_uri);
                     result.level = "note";
@@ -157,6 +160,30 @@ fn build_sarif(
                     });
                 }
             }
+        }
+        for failure in &rr.analysis_failures {
+            execution_successful = false;
+            results.push(SarifResult {
+                rule_id: rr.rule_id.to_string(),
+                level: "error",
+                kind: Some("fail"),
+                message: SarifText {
+                    text: format!(
+                        "analysis failure ({}): {}",
+                        failure.kind.as_str(),
+                        failure.message
+                    ),
+                },
+                locations: analysis_failure_locations(failure, config_uri),
+                related_locations: Vec::new(),
+                suppressions: Vec::new(),
+                baseline_state: None,
+                partial_fingerprints: None,
+                fixes: Vec::new(),
+                properties: Some(SarifResultProperties {
+                    analysis_failure: failure.kind.as_str(),
+                }),
+            });
         }
 
         // Baselined findings — marked, not removed, so Code Scanning dismisses
@@ -187,9 +214,9 @@ fn build_sarif(
             // alint's columns (and fix regions) count Unicode scalar values,
             // not UTF-16 code units (the SARIF default when absent).
             column_kind: "unicodeCodePoints",
-            invocations: (!notifications.is_empty()).then(|| {
+            invocations: (!execution_successful || !notifications.is_empty()).then(|| {
                 vec![SarifInvocation {
-                    execution_successful: true,
+                    execution_successful,
                     tool_execution_notifications: notifications,
                 }]
             }),
@@ -296,57 +323,123 @@ fn push_percent_encoded_byte(out: &mut String, byte: u8) {
 
 /// A SARIF result with the shared fields filled in (no baseline annotations).
 fn base_result(rule_id: &str, level: Level, v: &Violation, config_uri: &str) -> SarifResult {
-    let locations = finding_locations(v, config_uri);
     SarifResult {
         rule_id: rule_id.to_string(),
         level: level_to_sarif(level),
+        kind: None,
         message: SarifText {
             text: v.message.to_string(),
         },
-        locations,
+        locations: finding_locations(v, config_uri),
+        related_locations: finding_related_locations(v, config_uri),
         suppressions: Vec::new(),
         baseline_state: None,
         partial_fingerprints: None,
         fixes: build_fixes(rule_id, v),
+        properties: None,
     }
 }
 
 fn finding_locations(v: &Violation, config_uri: &str) -> Vec<SarifLocation> {
-    let region = if v.line.is_some() || v.column.is_some() {
-        Some(SarifRegion {
+    let region = v.range.as_ref().map(source_range_to_sarif).or_else(|| {
+        (v.line.is_some() || v.column.is_some()).then_some(SarifRegion {
             start_line: v.line,
             start_column: v.column,
             end_line: None,
             end_column: None,
         })
-    } else {
-        None
-    };
-    if let Some(path) = &v.path {
-        vec![SarifLocation {
-            physical_location: SarifPhysicalLocation {
-                artifact_location: SarifArtifactLocation {
-                    uri: path_to_uri(path),
-                },
-                region,
-            },
-        }]
+    });
+    let (uri, region) = if let Some(path) = &v.path {
+        (path_to_uri(path), region)
     } else {
         // GitHub Code Scanning drops a location-less result/notification.
-        vec![SarifLocation {
-            physical_location: SarifPhysicalLocation {
-                artifact_location: SarifArtifactLocation {
-                    uri: config_uri.to_string(),
-                },
-                region: Some(SarifRegion {
+        (
+            config_uri.to_string(),
+            region.or_else(|| {
+                Some(SarifRegion {
                     start_line: Some(v.line.unwrap_or(1)),
                     start_column: v.column,
                     end_line: None,
                     end_column: None,
-                }),
+                })
+            }),
+        )
+    };
+    vec![SarifLocation {
+        physical_location: SarifPhysicalLocation {
+            artifact_location: SarifArtifactLocation { uri },
+            region,
+        },
+    }]
+}
+
+fn finding_related_locations(v: &Violation, config_uri: &str) -> Vec<SarifRelatedLocation> {
+    let mut locations = Vec::with_capacity(
+        v.related_locations.len() + usize::from(v.related_locations_omitted > 0),
+    );
+    locations.extend(
+        v.related_locations
+            .iter()
+            .map(|related| SarifRelatedLocation {
+                physical_location: SarifPhysicalLocation {
+                    artifact_location: SarifArtifactLocation {
+                        uri: path_to_uri(&related.path),
+                    },
+                    region: related.range.as_ref().map(source_range_to_sarif),
+                },
+                message: SarifText {
+                    text: related.label.clone(),
+                },
+            }),
+    );
+    if v.related_locations_omitted > 0 {
+        locations.push(SarifRelatedLocation {
+            physical_location: SarifPhysicalLocation {
+                artifact_location: SarifArtifactLocation {
+                    uri: config_uri.to_string(),
+                },
+                region: None,
             },
-        }]
+            message: SarifText {
+                text: format!("and {} more related locations", v.related_locations_omitted),
+            },
+        });
     }
+    locations
+}
+
+fn source_range_to_sarif(range: &alint_core::SourceRange) -> SarifRegion {
+    SarifRegion {
+        start_line: Some(range.start_line()),
+        start_column: Some(range.start_column()),
+        end_line: Some(range.end_line()),
+        end_column: Some(range.end_column()),
+    }
+}
+fn analysis_failure_locations(
+    failure: &alint_core::AnalysisFailure,
+    config_uri: &str,
+) -> Vec<SarifLocation> {
+    let pathless = failure.path.is_none();
+    let uri = failure
+        .path
+        .as_deref()
+        .map_or_else(|| config_uri.to_string(), path_to_uri);
+    let region =
+        (pathless || failure.line.is_some() || failure.column.is_some()).then_some(SarifRegion {
+            start_line: failure
+                .line
+                .or((pathless || failure.column.is_some()).then_some(1)),
+            start_column: failure.column,
+            end_line: None,
+            end_column: None,
+        });
+    vec![SarifLocation {
+        physical_location: SarifPhysicalLocation {
+            artifact_location: SarifArtifactLocation { uri },
+            region,
+        },
+    }]
 }
 
 /// Build the SARIF `result.fixes` for a violation from its check-computed
@@ -477,8 +570,12 @@ struct SarifResult {
     #[serde(rename = "ruleId")]
     rule_id: String,
     level: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
     message: SarifText,
     locations: Vec<SarifLocation>,
+    #[serde(rename = "relatedLocations", skip_serializing_if = "Vec::is_empty")]
+    related_locations: Vec<SarifRelatedLocation>,
     /// `[{ "kind": "external" }]` for a baselined finding; empty otherwise.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     suppressions: Vec<SarifSuppression>,
@@ -496,6 +593,14 @@ struct SarifResult {
     /// violation's proposed edits). Empty (the common case) omits the key.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     fixes: Vec<SarifFix>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<SarifResultProperties>,
+}
+
+#[derive(Serialize)]
+struct SarifResultProperties {
+    #[serde(rename = "analysisFailure")]
+    analysis_failure: &'static str,
 }
 
 /// A SARIF `fix` — a described set of artifact changes a consumer can apply.
@@ -539,6 +644,13 @@ struct SarifLocation {
 }
 
 #[derive(Serialize)]
+struct SarifRelatedLocation {
+    #[serde(rename = "physicalLocation")]
+    physical_location: SarifPhysicalLocation,
+    message: SarifText,
+}
+
+#[derive(Serialize)]
 struct SarifPhysicalLocation {
     #[serde(rename = "artifactLocation")]
     artifact_location: SarifArtifactLocation,
@@ -566,7 +678,10 @@ struct SarifRegion {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{EditRegion, ProposedEdit, Report, RuleResult, Violation};
+    use alint_core::{
+        EditRegion, FindingDisposition, ProposedEdit, RelatedLocation, Report, RuleResult,
+        SourceRange, Violation,
+    };
     use serde_json::Value;
     use std::path::{Path, PathBuf};
 
@@ -617,6 +732,7 @@ mod tests {
                 violations: vec![v],
                 notes: Vec::new(),
                 is_fixable: true,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -644,6 +760,7 @@ mod tests {
                 violations: vec![Violation::new("missing")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -738,6 +855,7 @@ mod tests {
                 violations: vec![v],
                 notes: Vec::new(),
                 is_fixable: true,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -778,6 +896,7 @@ mod tests {
                     violations: vec![Violation::new("va1"), Violation::new("va2")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-b".into(),
@@ -786,6 +905,7 @@ mod tests {
                     violations: vec![Violation::new("vb")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };
@@ -818,6 +938,7 @@ mod tests {
                     violations: vec![Violation::new("x")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "info".into(),
@@ -826,6 +947,7 @@ mod tests {
                     violations: vec![Violation::new("y")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };
@@ -847,14 +969,19 @@ mod tests {
                     message: "m".into(),
                     line: Some(7),
                     column: Some(3),
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
                 }],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let v = render(&report);
@@ -862,6 +989,50 @@ mod tests {
         assert_eq!(loc["artifactLocation"]["uri"], "src/lib.rs");
         assert_eq!(loc["region"]["startLine"], 7);
         assert_eq!(loc["region"]["startColumn"], 3);
+    }
+
+    #[test]
+    fn ranges_related_locations_and_truncation_are_projected() {
+        let mut violation = Violation::new("m")
+            .with_path(Path::new("src/lib.rs"))
+            .with_range(SourceRange::new(2, 3, 4, 5).unwrap())
+            .with_related_location(
+                RelatedLocation::new("src/other.rs", "canonical source")
+                    .with_range(SourceRange::new(7, 8, 9, 10).unwrap()),
+            );
+        violation.related_locations_omitted = 2;
+        let report = Report {
+            results: vec![RuleResult {
+                rule_id: "r".into(),
+                level: Level::Error,
+                policy_url: None,
+                violations: vec![violation],
+                notes: Vec::new(),
+                is_fixable: false,
+                analysis_failures: Vec::new(),
+            }],
+        };
+
+        let rendered = render(&report);
+        let result = &rendered["runs"][0]["results"][0];
+        let primary = &result["locations"][0]["physicalLocation"]["region"];
+        assert_eq!(primary["startLine"], 2);
+        assert_eq!(primary["startColumn"], 3);
+        assert_eq!(primary["endLine"], 4);
+        assert_eq!(primary["endColumn"], 5);
+        let related = result["relatedLocations"].as_array().unwrap();
+        assert_eq!(related.len(), 2);
+        assert_eq!(
+            related[0]["physicalLocation"]["artifactLocation"]["uri"],
+            "src/other.rs"
+        );
+        assert_eq!(related[0]["physicalLocation"]["region"]["startLine"], 7);
+        assert_eq!(related[0]["physicalLocation"]["region"]["endColumn"], 10);
+        assert_eq!(related[0]["message"]["text"], "canonical source");
+        assert_eq!(
+            related[1]["message"]["text"],
+            "and 2 more related locations"
+        );
     }
 
     #[test]
@@ -874,6 +1045,7 @@ mod tests {
                 violations: vec![Violation::new("no-path")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let v = render(&report);
@@ -928,6 +1100,7 @@ mod tests {
                 ],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let v = render(&report);
@@ -967,6 +1140,7 @@ mod tests {
                 violations: vec![Violation::new("new TODO").with_path(Path::new("b.txt"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let marks = BaselineMarks {
@@ -1014,6 +1188,7 @@ mod tests {
                 violations: vec![Violation::new("v").with_path(Path::new("f"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let v = render(&report); // write_sarif — no baseline
@@ -1039,6 +1214,7 @@ mod tests {
                     violations: vec![Violation::new("a1").with_path(Path::new("a.txt"))],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-b".into(),
@@ -1047,6 +1223,7 @@ mod tests {
                     violations: vec![Violation::new("b1").with_path(Path::new("b.txt"))],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-c".into(),
@@ -1061,6 +1238,7 @@ mod tests {
                     ],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };
@@ -1105,6 +1283,7 @@ mod tests {
                     violations: vec![Violation::new("a1").with_path(Path::new("a.txt"))],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-b".into(),
@@ -1113,6 +1292,7 @@ mod tests {
                     violations: vec![Violation::new("b1").with_path(Path::new("b.txt"))],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };

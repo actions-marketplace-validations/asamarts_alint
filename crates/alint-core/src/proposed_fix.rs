@@ -281,14 +281,37 @@ fn whole_file_edit_to_proposed(orig: &[u8], edit: &FixEdit) -> Option<ProposedEd
 // policy, not a `check` one. Thread the changed set into this stage only if strict
 // SARIF/`--changed` parity with the `fix` blast radius is ever required.
 pub fn attach_proposed_edits(engine: &Engine, report: &mut Report, root: &Path, index: &FileIndex) {
+    // A proposed replacement can include unchanged bytes around its minimal edit.
+    // If any sensitive finding names that file, suppress every composed edit for
+    // the file: a non-sensitive sibling fixer must not serialize the secret as
+    // surrounding SARIF replacement text.
+    let sensitive_files: HashSet<PathBuf> = report
+        .results
+        .iter()
+        .flat_map(|result| result.violations.iter().chain(&result.notes))
+        .filter(|finding| finding.is_sensitive())
+        .filter_map(|finding| finding.path.as_deref().map(Path::to_path_buf))
+        .chain(
+            report
+                .results
+                .iter()
+                .flat_map(|result| &result.analysis_failures)
+                .filter(|failure| failure.is_sensitive())
+                .filter_map(|failure| failure.path.as_deref().map(Path::to_path_buf)),
+        )
+        .collect();
+
     // In-place content changes, composed exactly as `fix` composes them (one
     // single-pass compose; the `--diff` fidelity caveat about multi-pass cascades
     // applies here identically). Best-effort: a hard error -> no advertised fixes.
     let mut modify: BTreeMap<PathBuf, ProposedEdit> = BTreeMap::new();
-    if let Ok((_, staged)) = engine.stage_fixes(root, index, Applicability::Safe) {
+    if let Ok((_fix_report, staged)) = engine.stage_fixes(root, index, Applicability::Safe) {
         for sf in staged {
             // Creates handled below; delete / rename / chmod carry no text region.
             if !matches!(sf.kind, StagedKind::Modify) {
+                continue;
+            }
+            if sensitive_files.contains(&sf.path) {
                 continue;
             }
             if let Some(pe) = whole_file_edit_to_proposed(
@@ -316,7 +339,7 @@ pub fn attach_proposed_edits(engine: &Engine, report: &mut Report, root: &Path, 
         for v in rr
             .violations
             .iter()
-            .filter(|v| v.is_fixable && v.path.is_none())
+            .filter(|v| v.is_fixable && !v.is_sensitive() && v.path.is_none())
         {
             if let Some(edit) = fixer.fix_edit(v, &[], root)
                 && let Some(pe) = whole_file_edit_to_proposed(&[], &edit)
@@ -333,7 +356,7 @@ pub fn attach_proposed_edits(engine: &Engine, report: &mut Report, root: &Path, 
     let mut done_creates: HashSet<usize> = HashSet::new();
     for (ri, rr) in report.results.iter_mut().enumerate() {
         for v in &mut rr.violations {
-            if !v.is_fixable {
+            if !v.is_fixable || v.is_sensitive() {
                 continue;
             }
             if let Some(p) = v.path.as_deref() {

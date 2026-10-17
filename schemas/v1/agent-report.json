@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/agent-report.json",
   "title": "alint agent report (v1)",
-  "description": "Output schema emitted by `alint check --format agent`. Optimised for AI coding agents that consume alint inside their own self-correction loops. Differs from `--format json` by (1) flattening rule-results into a single `violations` array, (2) adding a templated `agent_instruction` per violation, and (3) reporting `severity` as a lowercase string rather than the SARIF mapping. The format is stable behind `schema_version: 1`; field additions are non-breaking, removals or semantic changes bump the version.",
+  "description": "Output schema emitted by `alint check --format agent`. Optimised for AI coding agents that consume alint inside their own self-correction loops. Differs from `--format json` by (1) flattening rule-results into a single `violations` array, (2) adding a templated `agent_instruction` per violation, (3) reporting `severity` as a lowercase string rather than the SARIF mapping, and (4) flattening non-remediation `analysis_failures` separately. The format is stable behind `schema_version: 1`; field additions are non-breaking, removals or semantic changes bump the version.",
   "type": "object",
   "required": ["schema_version", "format", "summary", "violations"],
   "additionalProperties": false,
@@ -43,12 +43,21 @@
           "description": "Subset of total_violations that a bare `alint fix` resolves (a Safe, applicable fix), counted per-violation; an Unsafe or `can_fix`-declined finding is not counted. An agent uses this to decide whether to suggest `alint fix`."
         },
         "passing_rules": { "type": "integer", "minimum": 0 },
-        "failing_rules": { "type": "integer", "minimum": 0 }
+        "failing_rules": { "type": "integer", "minimum": 0 },
+        "total_analysis_failures": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of operational failures that prevented a rule from obtaining a verdict."
+        }
       }
     },
     "violations": {
       "type": "array",
       "items": { "$ref": "#/$defs/violation" }
+    },
+    "analysis_failures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/analysis_failure" }
     },
     "notes": {
       "$ref": "#/$defs/notes_summary",
@@ -120,6 +129,25 @@
           "description": "Optional documentation URL provided by the rule.",
           "format": "uri"
         }
+      }
+    },
+    "analysis_failure": {
+      "type": "object",
+      "required": ["rule_id", "kind", "human_message"],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["evaluation", "condition", "resource_read", "resource_parse", "nested_rule_build"]
+        },
+        "file": {
+          "type": "string",
+          "description": "Repo-relative resource path; absent for repository-wide failures."
+        },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 },
+        "human_message": { "type": "string" }
       }
     },
     "proposed_edit": {

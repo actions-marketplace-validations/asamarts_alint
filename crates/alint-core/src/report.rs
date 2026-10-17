@@ -23,9 +23,9 @@ pub struct Report {
 
 impl Report {
     pub fn has_errors(&self) -> bool {
-        self.results
-            .iter()
-            .any(|r| r.level == Level::Error && !r.violations.is_empty())
+        self.results.iter().any(|r| {
+            !r.analysis_failures.is_empty() || (r.level == Level::Error && !r.violations.is_empty())
+        })
     }
 
     pub fn has_warnings(&self) -> bool {
@@ -36,6 +36,12 @@ impl Report {
 
     pub fn total_violations(&self) -> usize {
         self.results.iter().map(|r| r.violations.len()).sum()
+    }
+
+    /// Total structural analysis failures across all rule results.
+    #[must_use]
+    pub fn total_analysis_failures(&self) -> usize {
+        self.results.iter().map(|r| r.analysis_failures.len()).sum()
     }
 
     /// Total non-violation notes across all rule results.
@@ -72,6 +78,9 @@ pub struct FixRuleResult {
     pub rule_id: Arc<str>,
     pub level: Level,
     pub items: Vec<FixItem>,
+    /// Evaluation failures are separate from fix items: no fixer was run and
+    /// no baseline may suppress them.
+    pub analysis_failures: Vec<crate::rule::AnalysisFailure>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +203,25 @@ impl FixStatus {
             kind: SkipKind::Baselined,
         }
     }
+
+    /// Remove repository-controlled fix detail without changing outcome
+    /// classification. Suggested replacement bytes are report data too.
+    #[must_use]
+    pub fn redact_detail(self, locator: &str) -> Self {
+        let detail = format!("sensitive fix detail {}", crate::redaction_marker(locator));
+        match self {
+            Self::Applied(_) => Self::Applied(detail),
+            Self::Skipped { kind, .. } => Self::Skipped {
+                reason: detail,
+                kind,
+            },
+            Self::Suggested { .. } => Self::Suggested {
+                summary: detail,
+                edit: None,
+            },
+            Self::Unfixable => Self::Unfixable,
+        }
+    }
 }
 
 impl FixReport {
@@ -224,6 +252,17 @@ impl FixReport {
             .count()
     }
 
+    /// Total analysis failures encountered while evaluating fixes.
+    #[must_use]
+    pub fn total_analysis_failures(&self) -> usize {
+        self.results.iter().map(|r| r.analysis_failures.len()).sum()
+    }
+
+    #[must_use]
+    pub fn has_analysis_failures(&self) -> bool {
+        self.results.iter().any(|r| !r.analysis_failures.is_empty())
+    }
+
     /// Whether any fix was *attempted and errored* (as opposed to declined or
     /// unfixable). The engine records a fixer error or a failed write as a
     /// `Skipped { kind: SkipKind::Errored, .. }` (see `Engine::fix`). Used by
@@ -244,11 +283,14 @@ impl FixReport {
         })
     }
 
-    /// Any rule at `level: error` whose violations were not all fixed.
+    /// Any structural analysis failure, or an error-level rule whose policy
+    /// violations were not all fixed.
     pub fn has_unfixable_errors(&self) -> bool {
-        self.results
-            .iter()
-            .any(|r| r.level == Level::Error && has_unresolved(&r.items))
+        self.has_analysis_failures()
+            || self
+                .results
+                .iter()
+                .any(|r| r.level == Level::Error && has_unresolved(&r.items))
     }
 
     pub fn has_unfixable_warnings(&self) -> bool {
@@ -294,6 +336,7 @@ mod tests {
                 .collect(),
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         }
     }
 
@@ -308,6 +351,7 @@ mod tests {
                     status,
                 })
                 .collect(),
+            analysis_failures: Vec::new(),
         }
     }
 
@@ -350,6 +394,53 @@ mod tests {
         };
         assert!(!r.has_errors());
         assert!(r.has_warnings());
+    }
+
+    #[test]
+    fn failures_are_error_bearing_at_every_level_and_keep_stable_order() {
+        use crate::{AnalysisFailure, AnalysisFailureKind};
+
+        let kinds = [
+            AnalysisFailureKind::Evaluation,
+            AnalysisFailureKind::Condition,
+            AnalysisFailureKind::ResourceRead,
+            AnalysisFailureKind::ResourceParse,
+            AnalysisFailureKind::NestedRuleBuild,
+        ];
+        assert_eq!(
+            kinds.map(AnalysisFailureKind::as_str),
+            [
+                "evaluation",
+                "condition",
+                "resource_read",
+                "resource_parse",
+                "nested_rule_build",
+            ]
+        );
+        for level in [Level::Warning, Level::Info, Level::Off] {
+            let mut result = rr("broken", level, 0);
+            result.analysis_failures = kinds
+                .iter()
+                .enumerate()
+                .map(|(index, kind)| AnalysisFailure::new(*kind, format!("failure {index}")))
+                .collect();
+            let report = Report {
+                results: vec![result],
+            };
+            assert!(report.has_errors(), "{level:?} failure must be an error");
+            assert!(!report.has_warnings());
+            assert_eq!(report.total_violations(), 0);
+            assert_eq!(report.total_analysis_failures(), 5);
+            assert_eq!(report.failing_rules(), 1);
+            assert_eq!(
+                report.results[0]
+                    .analysis_failures
+                    .iter()
+                    .map(|failure| failure.kind)
+                    .collect::<Vec<_>>(),
+                kinds,
+            );
+        }
     }
 
     #[test]

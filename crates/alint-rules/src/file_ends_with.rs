@@ -56,7 +56,7 @@ impl Rule for FileEndsWithRule {
             let tail = match read_suffix_n(&full, self.suffix.len()) {
                 Ok(b) => b,
                 Err(e) => {
-                    violations.extend(crate::io::io_error_violation(&entry.path, &e));
+                    violations.push(crate::io::io_error_violation(&entry.path, &e));
                     continue;
                 }
             };

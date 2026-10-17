@@ -43,7 +43,7 @@ impl Rule for FileIsTextRule {
             let bytes = match read_prefix(&full) {
                 Ok(b) => b,
                 Err(e) => {
-                    violations.extend(crate::io::io_error_violation(&entry.path, &e));
+                    violations.push(crate::io::io_error_violation(&entry.path, &e));
                     continue;
                 }
             };

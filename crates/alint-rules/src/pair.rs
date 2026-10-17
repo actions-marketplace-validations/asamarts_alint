@@ -20,7 +20,9 @@
 use std::path::{Path, PathBuf};
 
 use alint_core::template::{PathTokens, render_message, render_path};
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -107,7 +109,11 @@ impl Rule for PairRule {
                 continue;
             }
             let message = self.format_message(&entry.path, &partner_path);
-            violations.push(Violation::new(message).with_path(entry.path.clone()));
+            violations.push(
+                Violation::new(message)
+                    .with_path(entry.path.clone())
+                    .with_related_location(RelatedLocation::new(partner_path, "expected partner")),
+            );
         }
         Ok(violations)
     }
@@ -273,6 +279,9 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].path.as_deref(), Some(Path::new("src/mod/foo.c")));
         assert!(v[0].message.contains("src/mod/foo.h"));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("src/mod/foo.h"));
+        assert_eq!(v[0].related_locations[0].label, "expected partner");
     }
 
     #[test]

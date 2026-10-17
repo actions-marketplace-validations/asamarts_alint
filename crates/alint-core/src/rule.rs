@@ -7,6 +7,7 @@ use std::sync::Arc;
 use crate::error::{Error, Result};
 use crate::facts::FactValues;
 use crate::level::Level;
+use crate::location::{RelatedLocation, SourceRange};
 use crate::registry::RuleRegistry;
 use crate::walker::FileIndex;
 
@@ -31,6 +32,115 @@ impl NoteKind {
     }
 }
 
+/// Stable structural class for an analysis failure.
+///
+/// Unlike a policy violation, an analysis failure means alint did not obtain
+/// the configured verdict. It is always error-bearing and never baselinable or
+/// fixable, regardless of the owning rule's configured level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisFailureKind {
+    Evaluation,
+    Condition,
+    ResourceRead,
+    ResourceParse,
+    NestedRuleBuild,
+}
+
+impl AnalysisFailureKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Evaluation => "evaluation",
+            Self::Condition => "condition",
+            Self::ResourceRead => "resource_read",
+            Self::ResourceParse => "resource_parse",
+            Self::NestedRuleBuild => "nested_rule_build",
+        }
+    }
+}
+
+/// Internal producer classification for a finding returned through the
+/// existing `Result<Vec<Violation>>` rule API.
+///
+/// [`RuleResult::new`] moves notes and analysis failures into their dedicated
+/// collections before reporting, baseline, or fix processing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FindingDisposition {
+    #[default]
+    Violation,
+    Note(NoteKind),
+    AnalysisFailure(AnalysisFailureKind),
+}
+
+/// A rule evaluation that could not produce a policy verdict.
+#[derive(Debug, Clone)]
+pub struct AnalysisFailure {
+    pub kind: AnalysisFailureKind,
+    pub path: Option<Arc<Path>>,
+    pub message: Cow<'static, str>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    sensitive: bool,
+}
+
+impl AnalysisFailure {
+    #[must_use]
+    pub fn new(kind: AnalysisFailureKind, message: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            kind,
+            path: None,
+            message: message.into(),
+            line: None,
+            column: None,
+            sensitive: false,
+        }
+    }
+
+    /// Whether this failure originated from secret-bearing evidence.
+    #[must_use]
+    pub fn is_sensitive(&self) -> bool {
+        self.sensitive
+    }
+
+    #[must_use]
+    pub fn with_path(mut self, path: impl Into<Arc<Path>>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_location(mut self, line: usize, column: usize) -> Self {
+        self.line = Some(line);
+        self.column = Some(column);
+        self
+    }
+
+    /// Replace repository-controlled detail with the standard sensitive marker.
+    pub fn redact_message(&mut self, rule_id: &str) {
+        let path = self
+            .path
+            .as_deref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+        let locator = format!(
+            "explicit\0{rule_id}\0analysis_failure\0{}\0{path}",
+            self.kind.as_str()
+        );
+        self.message = format!("sensitive evidence {}", crate::redaction_marker(&locator)).into();
+        self.sensitive = true;
+    }
+
+    fn from_finding(finding: Violation, kind: AnalysisFailureKind) -> Self {
+        Self {
+            kind,
+            path: finding.path,
+            message: finding.message,
+            line: finding.line,
+            column: finding.column,
+            sensitive: finding.sensitive,
+        }
+    }
+}
+
 /// A single linting violation or non-violation note produced by a rule.
 ///
 /// `path` holds an [`Arc<Path>`]; rules clone the [`Arc`] from
@@ -49,11 +159,15 @@ pub struct Violation {
     pub message: Cow<'static, str>,
     pub line: Option<usize>,
     pub column: Option<usize>,
-    /// `Some` marks this as a non-violation note. The engine partitions notes
-    /// out of [`RuleResult::violations`] into [`RuleResult::notes`] at result
-    /// assembly, so notes never affect pass/fail. The kind remains on the
-    /// note for format-specific projection.
-    pub note_kind: Option<NoteKind>,
+    /// Optional half-open primary range. The legacy point fields project its start.
+    pub range: Option<SourceRange>,
+    /// Canonically ordered, bounded secondary locations.
+    pub related_locations: Vec<RelatedLocation>,
+    /// Number of secondary locations omitted by the model cap.
+    pub related_locations_omitted: usize,
+    /// Producer-side classification. The engine moves notes and analysis
+    /// failures out of the violation collection before exposing a result.
+    pub disposition: FindingDisposition,
     /// Optional stable structural identity for baseline fingerprinting
     /// ([`crate::baseline`]). A rule sets this when its violation is not
     /// uniquely identified by `(path, offending-line content)` — e.g. a
@@ -63,6 +177,12 @@ pub struct Violation {
     /// content" (see [`crate::baseline::violation_fingerprint`]). It
     /// never affects rendering or pass/fail.
     pub baseline_key: Option<Cow<'static, str>>,
+    /// Whether dynamic evidence has been redacted from this finding. Producers
+    /// set this only through [`Self::redact_evidence`] or
+    /// [`Self::redact_message`], which also remove reportable replacement bytes.
+    /// The original baseline key remains available to remediation internals;
+    /// fingerprinting ignores it whenever this flag is set.
+    pub sensitive: bool,
     /// Engine-computed: whether a bare `alint fix` would resolve *this*
     /// violation. A rule sets this to `false` at construction (rules do not know
     /// about fixers); the engine overwrites it at result-assembly time as
@@ -100,8 +220,12 @@ impl Violation {
             message: message.into(),
             line: None,
             column: None,
-            note_kind: None,
+            range: None,
+            related_locations: Vec::new(),
+            related_locations_omitted: 0,
+            disposition: FindingDisposition::Violation,
             baseline_key: None,
+            sensitive: false,
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
@@ -124,15 +248,140 @@ impl Violation {
     /// Mark this finding as an informational note rather than a violation.
     #[must_use]
     pub fn as_note(mut self) -> Self {
-        self.note_kind = Some(NoteKind::Informational);
+        self.disposition = FindingDisposition::Note(NoteKind::Informational);
         self
     }
 
     /// Mark this finding as a bounded-analysis truncation note.
     #[must_use]
     pub fn as_analysis_truncated_note(mut self) -> Self {
-        self.note_kind = Some(NoteKind::AnalysisTruncated);
+        self.disposition = FindingDisposition::Note(NoteKind::AnalysisTruncated);
         self
+    }
+
+    /// Mark this producer finding as an analysis failure. Result assembly moves
+    /// it into [`RuleResult::analysis_failures`], so it can never reach
+    /// baseline or fix processing as a policy violation.
+    #[must_use]
+    pub fn as_analysis_failure(mut self, kind: AnalysisFailureKind) -> Self {
+        self.disposition = FindingDisposition::AnalysisFailure(kind);
+        self.baseline_key = None;
+        self.is_fixable = false;
+        self.not_fixable = true;
+        self.proposed_edits.clear();
+        self
+    }
+
+    /// Mark a value-free engine-generated finding as sensitive while preserving
+    /// its structural message. Producer findings must use [`Self::redact_evidence`]
+    /// or [`Self::redact_message`] instead.
+    pub(crate) fn mark_sensitive(&mut self, _locator: &str) {
+        self.sensitive = true;
+        self.proposed_edits.clear();
+    }
+
+    /// Apply the explicit `sensitive: true` policy to a flattened finding.
+    pub fn redact_message(&mut self, rule_id: &str) {
+        let path = self
+            .path
+            .as_deref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+        let channel = match self.disposition {
+            FindingDisposition::Violation => "violation",
+            FindingDisposition::Note(kind) => kind.as_str(),
+            FindingDisposition::AnalysisFailure(kind) => kind.as_str(),
+        };
+        let locator = format!("explicit\0{rule_id}\0{channel}\0{path}");
+        self.message = format!("sensitive evidence {}", crate::redaction_marker(&locator)).into();
+        self.sensitive = true;
+        self.proposed_edits.clear();
+    }
+
+    /// Redact only known evidence substrings while preserving fixed explanatory
+    /// text. `locator` must be structural and value-free.
+    pub fn redact_evidence<'a>(
+        &mut self,
+        rule_id: &str,
+        locator: &str,
+        evidence: impl IntoIterator<Item = &'a str>,
+    ) {
+        let locator = format!("implicit\0{rule_id}\0{locator}");
+        let mut rendered = Vec::new();
+        for value in evidence {
+            if value.is_empty() {
+                continue;
+            }
+            let debug = format!("{value:?}");
+            // Built-in messages commonly render extracted strings with `Debug`
+            // so controls and quotes cannot forge report structure. Include
+            // both forms: a message can contain the escaped rendering and a
+            // raw/normalized occurrence of the same evidence.
+            rendered.push(value.to_string());
+            if debug != value {
+                rendered.push(debug);
+            }
+        }
+        self.message =
+            crate::redact_evidence(&self.message, &locator, rendered.iter().map(String::as_str))
+                .into();
+        self.sensitive = true;
+        self.proposed_edits.clear();
+    }
+
+    /// Builder form of [`Self::redact_message`].
+    #[must_use]
+    pub fn with_redacted_message(mut self, rule_id: &str) -> Self {
+        self.redact_message(rule_id);
+        self
+    }
+
+    /// Whether this finding contains evidence that must remain redacted on every
+    /// public surface.
+    #[must_use]
+    pub fn is_sensitive(&self) -> bool {
+        self.sensitive
+    }
+
+    /// Remove internal-only identity from a sensitive finding before an engine
+    /// result crosses a public API boundary. Fixers need the original key while
+    /// they correlate a finding with an edit, but callers must never receive a
+    /// value-bearing key. The replacement is derived only from structural
+    /// metadata; the original key is not hashed.
+    pub(crate) fn sanitize_sensitive_metadata(&mut self, rule_id: &str) {
+        if !self.sensitive {
+            return;
+        }
+        let path = self
+            .path
+            .as_deref()
+            .map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+        let channel = match self.disposition {
+            FindingDisposition::Violation => "violation",
+            FindingDisposition::Note(kind) => kind.as_str(),
+            FindingDisposition::AnalysisFailure(kind) => kind.as_str(),
+        };
+        let locator = format!("public\0{rule_id}\0{channel}\0{path}");
+        self.baseline_key =
+            Some(format!("\0alint-sensitive\0{}", crate::redaction_marker(&locator)).into());
+        self.proposed_edits.clear();
+    }
+
+    /// Structural note kind, if this producer finding is a note.
+    #[must_use]
+    pub fn note_kind(&self) -> Option<NoteKind> {
+        match self.disposition {
+            FindingDisposition::Note(kind) => Some(kind),
+            FindingDisposition::Violation | FindingDisposition::AnalysisFailure(_) => None,
+        }
+    }
+
+    /// Structural analysis-failure kind, if this producer finding is a failure.
+    #[must_use]
+    pub fn analysis_failure_kind(&self) -> Option<AnalysisFailureKind> {
+        match self.disposition {
+            FindingDisposition::AnalysisFailure(kind) => Some(kind),
+            FindingDisposition::Violation | FindingDisposition::Note(_) => None,
+        }
     }
 
     /// Attach a path to the violation. Accepts anything convertible
@@ -153,7 +402,53 @@ impl Violation {
     pub fn with_location(mut self, line: usize, column: usize) -> Self {
         self.line = Some(line);
         self.column = Some(column);
+        self.range = None;
         self
+    }
+
+    #[must_use]
+    pub fn with_range(mut self, mut range: SourceRange) -> Self {
+        let identity_line = self
+            .range
+            .as_ref()
+            .map_or(self.line, SourceRange::baseline_identity_line);
+        range.set_baseline_identity_line(identity_line);
+        self.line = Some(range.start_line());
+        self.column = Some(range.start_column());
+        self.range = Some(range);
+        self
+    }
+
+    /// Attach a single secondary location as the complete location batch. Use
+    /// [`Self::with_related_locations`] when producing a collection.
+    #[must_use]
+    pub fn with_related_location(self, location: RelatedLocation) -> Self {
+        self.with_related_locations(std::iter::once(location))
+    }
+
+    /// Attach a complete batch of secondary locations.
+    ///
+    /// The batch is sorted and deduplicated before the canonical first 20 are
+    /// retained, so the omitted count is the number of remaining distinct
+    /// locations and is independent of producer iteration order.
+    #[must_use]
+    pub fn with_related_locations(
+        mut self,
+        locations: impl IntoIterator<Item = RelatedLocation>,
+    ) -> Self {
+        self.set_related_locations(locations);
+        self
+    }
+
+    /// Replace secondary locations from one complete producer batch.
+    pub fn set_related_locations(&mut self, locations: impl IntoIterator<Item = RelatedLocation>) {
+        let mut locations: Vec<_> = locations.into_iter().collect();
+        locations.sort_unstable();
+        locations.dedup();
+        self.related_locations_omitted =
+            locations.len().saturating_sub(crate::MAX_RELATED_LOCATIONS);
+        locations.truncate(crate::MAX_RELATED_LOCATIONS);
+        self.related_locations = locations;
     }
 
     /// Set the baseline fingerprint key — the rule's stable structural
@@ -179,6 +474,9 @@ pub struct RuleResult {
     pub level: Level,
     pub policy_url: Option<Arc<str>>,
     pub violations: Vec<Violation>,
+    /// Analysis that did not produce a policy verdict. Always error-bearing,
+    /// never baselinable or fixable, independent of [`Self::level`].
+    pub analysis_failures: Vec<AnalysisFailure>,
     /// Informational notes (non-violation findings) the rule
     /// produced — e.g. entries it skipped rather than failed on.
     /// Partitioned out of the rule's raw output by
@@ -191,10 +489,10 @@ pub struct RuleResult {
 }
 
 impl RuleResult {
-    /// Build a result from a rule's raw output, partitioning note-kind
-    /// [`Violation`]s into [`notes`](Self::notes) and the rest into
-    /// [`violations`](Self::violations). Centralises the split so pass/fail and
-    /// violation formatters never mistake notes for policy failures.
+    /// Build a result from a rule's raw output, partitioning analysis failures
+    /// and notes into dedicated collections. Centralises the split so policy
+    /// violation formatters, baseline logic, and fixers cannot mistake either
+    /// class for a suppressible or remediable violation.
     #[must_use]
     pub fn new(
         rule_id: Arc<str>,
@@ -204,23 +502,80 @@ impl RuleResult {
         is_fixable: bool,
     ) -> Self {
         // Reuse the producer's allocation for the overwhelmingly common
-        // violation-only path; `partition` would allocate and move every item.
-        let notes: Vec<_> = raw
-            .extract_if(.., |violation| violation.note_kind.is_some())
-            .collect();
+        // violation-only path. Extract every non-violation in one traversal so
+        // successful analysis does not pay two scans of a large finding set.
+        // `extract_if` preserves the relative order of retained and extracted
+        // findings.
+        let mut analysis_failures = Vec::new();
+        let mut notes = Vec::new();
+        for finding in raw.extract_if(.., |finding| {
+            !matches!(finding.disposition, FindingDisposition::Violation)
+        }) {
+            match finding.disposition {
+                FindingDisposition::AnalysisFailure(kind) => {
+                    analysis_failures.push(AnalysisFailure::from_finding(finding, kind));
+                }
+                FindingDisposition::Note(_) => notes.push(finding),
+                FindingDisposition::Violation => {
+                    unreachable!("extract predicate excludes policy violations");
+                }
+            }
+        }
         let violations = raw;
         Self {
             rule_id,
             level,
             policy_url,
             violations,
+            analysis_failures,
             notes,
             is_fixable,
         }
     }
 
+    /// Apply the common `sensitive: true` policy after finding partitioning.
+    pub fn redact_sensitive(&mut self) {
+        for finding in self.violations.iter_mut().chain(&mut self.notes) {
+            finding.redact_message(&self.rule_id);
+        }
+        for failure in &mut self.analysis_failures {
+            failure.redact_message(&self.rule_id);
+        }
+    }
+
+    /// Mark findings selected through a secret-bearing manifest scope. The
+    /// selected path is the only manifest-derived evidence available at this
+    /// boundary, so redact it from flattened messages while retaining fixed
+    /// prose. Analysis failures are conservatively redacted in full.
+    pub(crate) fn redact_manifest_scope(&mut self) {
+        for (index, finding) in self
+            .violations
+            .iter_mut()
+            .chain(&mut self.notes)
+            .enumerate()
+        {
+            let path = finding
+                .path
+                .as_deref()
+                .map(|path| path.to_string_lossy().into_owned());
+            let locator = format!("manifest_scope\0{index}");
+            finding.redact_evidence(&self.rule_id, &locator, path.as_deref());
+        }
+        for failure in &mut self.analysis_failures {
+            failure.redact_message(&self.rule_id);
+        }
+    }
+
+    /// Strip internal sensitive identity after remediation and before returning
+    /// this result to a caller.
+    pub(crate) fn sanitize_sensitive_metadata(&mut self) {
+        for finding in self.violations.iter_mut().chain(&mut self.notes) {
+            finding.sanitize_sensitive_metadata(&self.rule_id);
+        }
+    }
+
     pub fn passed(&self) -> bool {
-        self.violations.is_empty()
+        self.violations.is_empty() && self.analysis_failures.is_empty()
     }
 }
 
@@ -232,16 +587,14 @@ impl RuleResult {
 /// - `facts` — resolved fact values, computed once per `Engine::run`.
 /// - `vars` — user-supplied string variables from the config's `vars:` section.
 /// - `git_tracked` — set of repo paths reported by `git ls-files`,
-///   computed once per run when at least one rule has
-///   `git_tracked_only: true`. `None` outside a git repo or when
-///   no rule asked for it. Rules that opt in consult it via
-///   [`Context::is_git_tracked`].
-/// - `git_blame` — per-file `git blame` cache, computed lazily
-///   when at least one rule reports `wants_git_blame()`. `None`
-///   when no rule asked for it. Rules consult it via
-///   [`crate::git::BlameCache::get`]; both "outside a git repo"
-///   and "blame failed for this file" surface as a `None`
-///   lookup, which the rule treats as "silent no-op."
+///   computed once per run when an active rule declares a Git capability.
+///   `None` means no rule asked for it or repository probing failed. The engine
+///   turns the latter into one analysis failure per active owning rule before
+///   dispatch; direct rule-unit tests can still supply `None`.
+/// - `git_blame` — per-file `git blame` cache, computed lazily when at least
+///   one rule reports `wants_git_blame()`. Repository unavailability is gated
+///   before dispatch; an individual untracked or unblameable file remains a
+///   `None` lookup and is skipped by the rule.
 /// - `analysis_time` — one explicit or HEAD-derived reference instant for
 ///   time-dependent rules. Resolution failures stay structural until a rule
 ///   actually asks for the value.
@@ -258,12 +611,10 @@ pub struct Context<'a> {
 }
 
 impl Context<'_> {
-    /// True if `rel_path` is in git's index. Returns `false` when
-    /// no tracked-set was computed (no git repo, or no rule asked
-    /// for it). Rules that opt into `git_tracked_only` therefore
-    /// silently skip every entry outside a git repo, which is the
-    /// right behaviour for the canonical "don't let X be
-    /// committed" use case.
+    /// True if `rel_path` is in git's index. Returns `false` when no tracked set
+    /// was supplied. Production engine dispatch fails an active Git-dependent
+    /// owning rule before this method is reached when repository probing failed;
+    /// the fallback keeps direct rule evaluation total.
     pub fn is_git_tracked(&self, rel_path: &Path) -> bool {
         match self.git_tracked {
             Some(set) => set.contains(rel_path),
@@ -284,9 +635,8 @@ impl Context<'_> {
 
     /// Return the deterministic reference instant requested by this rule.
     ///
-    /// An unavailable HEAD fallback is an evaluation error, which the engine
-    /// surfaces through its ordinary rule-error path until W2 promotes all such
-    /// errors to structural analysis failures.
+    /// An unavailable reference is returned as an error; engine result assembly
+    /// converts it to a typed analysis failure.
     pub fn analysis_time(&self) -> Result<crate::AnalysisTime> {
         let resolution = self.analysis_time.ok_or_else(|| {
             Error::internal("rule requested analysis time without declaring the capability")
@@ -533,6 +883,53 @@ pub trait Rule: Send + Sync + std::fmt::Debug {
         scope.is_some_and(|scope| index.files().any(|entry| scope.matches(&entry.path, index)))
     }
 
+    /// Whether every file selected by this rule's path scope is secret-bearing
+    /// even without `sensitive: true`. Structured dotenv/properties rules
+    /// override this so editor buffers absent from the last walk still suppress
+    /// public replacement bytes.
+    fn path_contents_sensitive_by_default(&self) -> bool {
+        false
+    }
+
+    /// Visit repository files whose bytes must not be serialized through a
+    /// staged fix. `explicit` is the rule-level `sensitive: true` policy.
+    ///
+    /// The default covers ordinary path-scoped rules. A cross-file rule with no
+    /// declared scope falls back to every indexed file under an explicit policy;
+    /// such rules should override this when they can identify their inputs more
+    /// precisely. Rules with implicitly secret-bearing extractors override this
+    /// even when `explicit` is false.
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        let scope = self
+            .path_scope()
+            .or_else(|| self.as_per_file().map(PerFileRule::path_scope));
+        let manifest_sensitive =
+            scope.is_some_and(|scope| scope.sensitive_manifest_sources().next().is_some());
+        if let Some(scope) = scope {
+            for path in scope.sensitive_manifest_sources() {
+                visit(path);
+            }
+        }
+        if !explicit && !manifest_sensitive {
+            return;
+        }
+        if let Some(scope) = scope {
+            for entry in ctx.index.files() {
+                if scope.matches(&entry.path, ctx.index) {
+                    visit(&entry.path);
+                }
+            }
+        } else {
+            for entry in ctx.index.files() {
+                visit(&entry.path);
+            }
+        }
+    }
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>>;
 
     /// Optional automatic-fix strategy. Rules whose violations can be
@@ -659,9 +1056,8 @@ pub trait PerFileRule: Send + Sync + std::fmt::Debug {
 /// of them to a one-liner. The helper takes `&R: PerFileRule` so
 /// it inlines for static dispatch.
 ///
-/// A file deleted mid-walk (`NotFound`) or over the analysis cap is skipped;
-/// a genuine read error (permission, I/O) yields an
-/// [`unreadable_file_violation`] -- the same fail-closed outcome as the
+/// Every in-scope file discovered by the walk must produce bytes or a typed
+/// `resource_read` analysis failure. The same fail-loud outcome is used by the
 /// engine's file-major dispatch, so `check` and `fix` agree.
 pub fn eval_per_file<R: PerFileRule + ?Sized>(
     rule: &R,
@@ -673,14 +1069,16 @@ pub fn eval_per_file<R: PerFileRule + ?Sized>(
             continue;
         }
         let full = ctx.root.join(&entry.path);
-        // Skip a file larger than the analysis cap (index size, no extra
-        // stat) so a multi-GB blob can't OOM the run (M3); a genuine read error
-        // fails CLOSED with a finding, matching the engine's per-file dispatch.
         match crate::walker::read_for_analysis(&full, entry.size) {
             crate::walker::AnalysisRead::Bytes(bytes) => {
                 violations.extend(rule.evaluate_file(ctx, &entry.path, &bytes)?);
             }
-            crate::walker::AnalysisRead::Skip => {}
+            crate::walker::AnalysisRead::Missing => {
+                violations.push(missing_file_violation(&entry.path));
+            }
+            crate::walker::AnalysisRead::TooLarge(size) => {
+                violations.push(too_large_file_violation(&entry.path, size));
+            }
             crate::walker::AnalysisRead::Unreadable(e) => {
                 violations.push(unreadable_file_violation(&entry.path, &e));
             }
@@ -689,26 +1087,32 @@ pub fn eval_per_file<R: PerFileRule + ?Sized>(
     Ok(violations)
 }
 
-/// The finding a per-file content rule reports for an in-scope file it could
-/// not read (permission denied, I/O error): `could not read file: <err>`,
-/// anchored on the file, at the rule's level. Content rules fail CLOSED on a
-/// read error -- silently passing a file the rule never inspected is a false
-/// negative (audit 2026-10 finding 7: a mode-000 file with trailing whitespace
-/// read "All rules passed", exit 0). A `NotFound` (deleted between the walk and
-/// the read) and an over-cap file stay benign skips. The violation carries a
-/// fixed `baseline_key` so its fingerprint is stable (the file's content, which
-/// the default fingerprint would hash, is exactly what cannot be read).
+/// The analysis failure for a file that vanished after repository discovery.
+#[must_use]
+pub fn missing_file_violation(rel: &Path) -> Violation {
+    Violation::new("file vanished after repository discovery")
+        .with_path(Arc::<Path>::from(rel))
+        .as_analysis_failure(AnalysisFailureKind::ResourceRead)
+}
+
+/// The analysis failure for a file that exceeds the whole-file analysis cap.
+#[must_use]
+pub fn too_large_file_violation(rel: &Path, size: u64) -> Violation {
+    Violation::new(format!(
+        "file is too large to analyze ({size} bytes; {} MiB cap)",
+        crate::walker::MAX_ANALYZE_BYTES / (1024 * 1024)
+    ))
+    .with_path(Arc::<Path>::from(rel))
+    .as_analysis_failure(AnalysisFailureKind::ResourceRead)
+}
+
+/// The analysis failure for an in-scope file that could not be read.
 #[must_use]
 pub fn unreadable_file_violation(rel: &Path, err: &std::io::Error) -> Violation {
     Violation::new(format!("could not read file: {err}"))
         .with_path(Arc::<Path>::from(rel))
-        .with_baseline_key(UNREADABLE_FILE_KEY)
+        .as_analysis_failure(AnalysisFailureKind::ResourceRead)
 }
-
-/// The `baseline_key` [`unreadable_file_violation`] stamps. The engine also
-/// keys on it to never tag such a finding `fixable` (the fixer would hit the
-/// same read error).
-pub(crate) const UNREADABLE_FILE_KEY: &str = "alint:unreadable-file";
 
 /// Runtime context for applying a fix.
 #[derive(Debug)]
@@ -1332,6 +1736,90 @@ mod tests {
         FileIndex::default()
     }
 
+    #[test]
+    fn range_builder_projects_start_to_legacy_point_fields() {
+        let range = SourceRange::new(2, 3, 4, 5).unwrap();
+        let finding = Violation::new("m").with_range(range.clone());
+        assert_eq!(finding.line, Some(2));
+        assert_eq!(finding.column, Some(3));
+        assert_eq!(finding.range, Some(range));
+    }
+
+    #[test]
+    fn point_builder_after_range_clears_range_projection() {
+        let finding = Violation::new("m")
+            .with_range(SourceRange::new(2, 3, 4, 5).unwrap())
+            .with_location(7, 8);
+        assert_eq!((finding.line, finding.column), (Some(7), Some(8)));
+        assert!(finding.range.is_none());
+    }
+
+    #[test]
+    fn related_locations_are_deduplicated_capped_and_order_independent() {
+        fn collect(indices: impl Iterator<Item = usize>) -> Violation {
+            Violation::new("m").with_related_locations(
+                indices.map(|index| RelatedLocation::new(format!("path-{index:02}"), "secondary")),
+            )
+        }
+
+        let forward = collect((0..25).chain([24, 24, 23]));
+        let reverse = collect((0..25).rev().chain([24, 24, 23]));
+        assert_eq!(forward.related_locations, reverse.related_locations);
+        assert_eq!(
+            forward.related_locations.len(),
+            crate::MAX_RELATED_LOCATIONS
+        );
+        assert_eq!(forward.related_locations_omitted, 5);
+        assert_eq!(reverse.related_locations_omitted, 5);
+        assert_eq!(
+            forward.related_locations.first().unwrap().path,
+            Path::new("path-00")
+        );
+        assert_eq!(
+            forward.related_locations.last().unwrap().path,
+            Path::new("path-19")
+        );
+    }
+
+    #[test]
+    fn public_sensitive_metadata_excludes_value_bearing_baseline_key() {
+        const SECRET: &str = "BASELINE_KEY_SECRET_DO_NOT_REPORT";
+        let mut finding = Violation::new(format!("value {SECRET}"))
+            .with_path(Path::new("secrets.env"))
+            .with_baseline_key(format!("query\0{SECRET}"));
+        finding.redact_evidence("rule", "source\0secrets.env\0query", [SECRET]);
+
+        // Remediation still sees the producer key until the public boundary.
+        assert!(
+            finding
+                .baseline_key
+                .as_deref()
+                .is_some_and(|key| key.contains(SECRET))
+        );
+        finding.sanitize_sensitive_metadata("rule");
+
+        let key = finding.baseline_key.as_deref().unwrap();
+        assert!(key.starts_with("\0alint-sensitive\0"), "{key:?}");
+        assert!(!key.contains(SECRET), "{key:?}");
+        assert!(!finding.message.contains(SECRET), "{finding:?}");
+    }
+
+    #[test]
+    fn evidence_redaction_removes_raw_and_debug_escaped_values() {
+        const SECRET: &str = "line one\n\"line two\"";
+        let rendered = format!("source value {SECRET:?}; raw value {SECRET} does not match");
+        let mut finding = Violation::new(rendered);
+        finding.redact_evidence("rule", "source\0.env\0$.TOKEN", [SECRET]);
+
+        assert!(!finding.message.contains("line one"), "{finding:?}");
+        assert!(!finding.message.contains("line two"), "{finding:?}");
+        assert!(finding.message.contains("<redacted:"), "{finding:?}");
+        assert!(
+            finding.message.contains("source value") && finding.message.contains("does not match"),
+            "{finding:?}"
+        );
+    }
+
     // Unix-only: NAME_MAX is the unix limit this pins; on Windows the long
     // absolute tempdir path would trip MAX_PATH instead, an unrelated limit.
     #[cfg(unix)]
@@ -1466,23 +1954,32 @@ mod tests {
     }
 
     #[test]
-    fn new_partitions_notes_out_of_violations() {
+    fn new_partitions_notes_and_failures_out_of_violations() {
         let raw = vec![
             Violation::new("real one"),
             Violation::new("a skipped entry").as_note(),
             Violation::new("analysis stopped at the byte limit").as_analysis_truncated_note(),
+            Violation::new("could not parse input")
+                .with_path(Path::new("data.json"))
+                .with_location(3, 7)
+                .as_analysis_failure(AnalysisFailureKind::ResourceParse),
             Violation::new("real two"),
         ];
-        let r = RuleResult::new("x".into(), Level::Error, None, raw, false);
-        assert_eq!(r.violations.len(), 2, "notes excluded from violations");
+        let r = RuleResult::new("x".into(), Level::Error, None, raw, true);
+        assert_eq!(r.violations.len(), 2, "notes and failures excluded");
         assert_eq!(r.notes.len(), 2);
         assert_eq!(r.notes[0].message, "a skipped entry");
-        assert_eq!(r.notes[0].note_kind, Some(NoteKind::Informational));
-        assert_eq!(r.notes[1].note_kind, Some(NoteKind::AnalysisTruncated));
-        assert!(!r.passed(), "real violations present → not passed");
+        assert_eq!(r.notes[0].note_kind(), Some(NoteKind::Informational));
+        assert_eq!(r.notes[1].note_kind(), Some(NoteKind::AnalysisTruncated));
+        assert_eq!(r.analysis_failures.len(), 1);
+        let failure = &r.analysis_failures[0];
+        assert_eq!(failure.kind, AnalysisFailureKind::ResourceParse);
+        assert_eq!(failure.path.as_deref(), Some(Path::new("data.json")));
+        assert_eq!(failure.line, Some(3));
+        assert_eq!(failure.column, Some(7));
+        assert!(!r.passed(), "real violations and failure present");
 
-        // A result whose only finding is a note passes (notes never
-        // affect pass/fail).
+        // Notes alone pass; a failure alone does not.
         let only_notes = RuleResult::new(
             "y".into(),
             Level::Error,
@@ -1493,10 +1990,20 @@ mod tests {
         assert!(only_notes.passed(), "notes-only result passes");
         assert!(only_notes.violations.is_empty());
         assert_eq!(only_notes.notes.len(), 1);
+        let only_failure = RuleResult::new(
+            "z".into(),
+            Level::Info,
+            None,
+            vec![Violation::new("failed").as_analysis_failure(AnalysisFailureKind::Evaluation)],
+            false,
+        );
+        assert!(!only_failure.passed(), "failure-only result fails");
+        assert!(only_failure.violations.is_empty());
+        assert_eq!(only_failure.analysis_failures.len(), 1);
     }
 
     #[test]
-    fn rule_result_passed_iff_violations_empty() {
+    fn rule_result_passes_only_without_violations_or_failures() {
         let mut r = RuleResult {
             rule_id: "x".into(),
             level: Level::Error,
@@ -1504,9 +2011,16 @@ mod tests {
             violations: Vec::new(),
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         };
         assert!(r.passed());
         r.violations.push(Violation::new("oops"));
+        assert!(!r.passed());
+        r.violations.clear();
+        r.analysis_failures.push(AnalysisFailure::new(
+            AnalysisFailureKind::ResourceRead,
+            "unreadable",
+        ));
         assert!(!r.passed());
     }
 

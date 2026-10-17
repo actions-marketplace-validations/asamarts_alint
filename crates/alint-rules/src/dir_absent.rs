@@ -11,7 +11,8 @@ struct Options {
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to directories that contain at least one git-tracked
-    /// file. No effect outside a git repo. Default `false`.
+    /// file. Repository unavailability is an analysis failure when enabled.
+    /// Default `false`.
     #[serde(default)]
     git_tracked_only: bool,
 }
@@ -216,17 +217,12 @@ mod tests {
 
     #[test]
     fn git_tracked_only_advertises_dir_aware_mode() {
-        // v0.9.11: the silent-no-op-outside-git-repo guarantee
-        // moved from a per-rule runtime check to an engine-side
-        // pre-filtered FileIndex. Calling `evaluate` directly
-        // bypasses the engine's filtering, so this unit test
-        // can no longer assert the no-op behaviour at the rule
-        // level — instead it asserts the rule advertises the
-        // correct `GitTrackedMode`, which is what tells the
-        // engine to substitute an empty index when the
-        // tracked-set is `None`. The end-to-end no-op behaviour
-        // is asserted by
-        // `crates/alint-e2e/scenarios/check/git/git_tracked_only_outside_git_silently_passes_absent.yml`.
+        // The rule advertises `DirAware` so the engine can build the
+        // tracked-directory index once. Repository unavailability is gated from
+        // capability metadata before this rule dispatches; direct evaluation
+        // tests only assert the runtime index mode here. End-to-end routing is
+        // covered by
+        // `git_tracked_only_outside_git_fails_closed.yml`.
         let spec = spec_yaml(
             "id: t\n\
              kind: dir_absent\n\

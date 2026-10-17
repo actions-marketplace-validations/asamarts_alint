@@ -17,8 +17,8 @@ struct Options {
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to files tracked in git's index: entries present in the
-    /// walked tree but not in `git ls-files` are skipped. No effect outside a
-    /// git repo. Default `false`.
+    /// walked tree but not in `git ls-files` are skipped. Repository
+    /// unavailability is an analysis failure when enabled. Default `false`.
     #[serde(default)]
     git_tracked_only: bool,
     /// Per-rule override for the workspace `respect_gitignore` setting. When
@@ -55,9 +55,9 @@ pub struct FileExistsRule {
     literal_paths: Option<Vec<PathBuf>>,
     root_only: bool,
     /// When `true`, only consider walked entries that are also
-    /// in git's index. Outside a git repo this becomes a silent
-    /// no-op - no entries qualify, so the rule reports the
-    /// "missing" violation as if no file existed.
+    /// in Git's index. The engine derives this dependency from
+    /// kind metadata and gates repository unavailability before
+    /// dispatch.
     git_tracked_only: bool,
     /// When `Some(false)`, the literal-path fast path also
     /// checks the filesystem directly via `ctx.root.join(p)` -

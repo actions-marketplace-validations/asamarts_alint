@@ -5,7 +5,7 @@
   "description": "Output schema emitted by `alint check --format json`. Locks the public contract for downstream tooling.",
   "type": "object",
   "required": ["schema_version", "summary", "results"],
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "schema_version": {
       "const": 1,
@@ -20,11 +20,16 @@
         "has_errors",
         "has_warnings"
       ],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "failing_rules": { "type": "integer", "minimum": 0 },
         "passing_rules": { "type": "integer", "minimum": 0 },
         "total_violations": { "type": "integer", "minimum": 0 },
+        "total_analysis_failures": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of evaluation failures. These are always error-bearing and are not included in total_violations."
+        },
         "has_errors": { "type": "boolean" },
         "has_warnings": { "type": "boolean" },
         "baselined_suppressed": {
@@ -52,7 +57,7 @@
     "rule_result": {
       "type": "object",
       "required": ["id", "level", "passed", "fixable", "violations"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "id": {
           "type": "string",
@@ -61,7 +66,7 @@
         "level": { "$ref": "#/$defs/level" },
         "passed": {
           "type": "boolean",
-          "description": "True when the rule produced zero violations."
+          "description": "True when the rule produced neither policy violations nor analysis failures."
         },
         "policy_url": {
           "type": "string",
@@ -76,6 +81,11 @@
           "type": "array",
           "items": { "$ref": "#/$defs/violation" }
         },
+        "analysis_failures": {
+          "type": "array",
+          "description": "Operational failures that prevented this rule from obtaining a policy verdict. Never baselinable or fixable.",
+          "items": { "$ref": "#/$defs/analysis_failure" }
+        },
         "notes": {
           "type": "array",
           "description": "Informational notes (non-violation findings, e.g. entries a rule skipped rather than failed on). Omitted when empty; never affects `passed`.",
@@ -86,7 +96,7 @@
     "violation": {
       "type": "object",
       "required": ["message", "fixable"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "path": {
           "type": "string",
@@ -109,7 +119,7 @@
     "note": {
       "type": "object",
       "required": ["message", "fixable"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "path": {
           "type": "string",
@@ -129,17 +139,35 @@
         }
       }
     },
+    "analysis_failure": {
+      "type": "object",
+      "required": ["kind", "message"],
+      "additionalProperties": true,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["evaluation", "condition", "resource_read", "resource_parse", "nested_rule_build"]
+        },
+        "path": {
+          "type": "string",
+          "description": "Repo-relative resource path; absent for repository-wide failures."
+        },
+        "message": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
+      }
+    },
     "proposed_edit": {
       "type": "object",
       "required": ["path", "region", "inserted"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "A concrete fix edit: replace `region` of `path` with `inserted` (empty for a pure deletion).",
       "properties": {
         "path": { "type": "string", "description": "Repo-relative path of the edited file." },
         "region": {
           "type": "object",
           "required": ["start_line", "start_column", "end_line", "end_column"],
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "start_line": { "type": "integer", "minimum": 1 },
             "start_column": { "type": "integer", "minimum": 1 },
@@ -153,7 +181,7 @@
     "baselined": {
       "type": "object",
       "required": ["id", "message", "fingerprint"],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "A finding grandfathered by the active baseline.",
       "properties": {
         "id": { "type": "string", "description": "Rule id." },

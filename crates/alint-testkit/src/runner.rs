@@ -336,22 +336,43 @@ fn assert_step(
 ) -> Result<()> {
     let prefix = format!("scenario {:?} step {idx}", scenario.name);
 
-    match (outcome, expect.violations.as_ref()) {
-        (StepOutcome::Check(report), Some(wanted)) => {
-            assert_violations(&prefix, report, wanted)?;
-        }
-        (StepOutcome::Check(_), None)
+    match outcome {
+        StepOutcome::Check(report) => {
             if expect.applied.is_some()
                 || expect.skipped.is_some()
                 || expect.suggested.is_some()
-                || expect.unfixable.is_some() =>
-        {
-            return Err(Error::scenario(format!(
-                "{prefix}: check step cannot carry applied/skipped/suggested/unfixable expectations"
-            )));
+                || expect.unfixable.is_some()
+            {
+                return Err(Error::scenario(format!(
+                    "{prefix}: check step cannot carry applied/skipped/suggested/unfixable expectations"
+                )));
+            }
+            if let Some(wanted) = &expect.violations {
+                assert_violations(&prefix, report, wanted)?;
+            }
+            let actual_failures: Vec<_> = report
+                .results
+                .iter()
+                .flat_map(|result| {
+                    result.analysis_failures.iter().map(|failure| {
+                        (
+                            result.rule_id.to_string(),
+                            failure.kind,
+                            failure
+                                .path
+                                .as_ref()
+                                .map(|path| path.display().to_string().replace('\\', "/")),
+                        )
+                    })
+                })
+                .collect();
+            if let Some(wanted) = &expect.analysis_failures {
+                assert_analysis_failures(&prefix, &actual_failures, wanted)?;
+            } else if expect.violations.is_some() {
+                assert_analysis_failures(&prefix, &actual_failures, &[])?;
+            }
         }
-        (StepOutcome::Check(_), None) => {}
-        (StepOutcome::Fix(report), _) => {
+        StepOutcome::Fix(report) => {
             if let Some(applied) = &expect.applied {
                 assert_fix_status(&prefix, "applied", report, applied, |s| {
                     matches!(s, FixStatus::Applied(_))
@@ -376,6 +397,31 @@ fn assert_step(
                 return Err(Error::scenario(format!(
                     "{prefix}: fix step cannot carry `violations` expectation"
                 )));
+            }
+            let actual_failures: Vec<_> = report
+                .results
+                .iter()
+                .flat_map(|result| {
+                    result.analysis_failures.iter().map(|failure| {
+                        (
+                            result.rule_id.to_string(),
+                            failure.kind,
+                            failure
+                                .path
+                                .as_ref()
+                                .map(|path| path.display().to_string().replace('\\', "/")),
+                        )
+                    })
+                })
+                .collect();
+            if let Some(wanted) = &expect.analysis_failures {
+                assert_analysis_failures(&prefix, &actual_failures, wanted)?;
+            } else if expect.applied.is_some()
+                || expect.skipped.is_some()
+                || expect.suggested.is_some()
+                || expect.unfixable.is_some()
+            {
+                assert_analysis_failures(&prefix, &actual_failures, &[])?;
             }
         }
     }
@@ -437,6 +483,44 @@ fn assert_violations(
     Ok(())
 }
 
+fn assert_analysis_failures(
+    prefix: &str,
+    actual: &[(String, alint_core::AnalysisFailureKind, Option<String>)],
+    wanted: &[crate::scenario::ExpectAnalysisFailure],
+) -> Result<()> {
+    if actual.len() != wanted.len() {
+        return Err(Error::scenario(format!(
+            "{prefix}: expected {} analysis failure(s), got {}: {:?}",
+            wanted.len(),
+            actual.len(),
+            actual.iter().map(|(rule, _, _)| rule).collect::<Vec<_>>(),
+        )));
+    }
+    let mut claimed = vec![false; actual.len()];
+    for expected in wanted {
+        let found = actual.iter().enumerate().position(|(index, observed)| {
+            !claimed[index]
+                && observed.0 == expected.rule
+                && expected.kind.is_none_or(|kind| kind.matches(observed.1))
+                && match (&expected.path, &observed.2) {
+                    (Some(path), Some(observed_path)) => path == observed_path,
+                    (None, _) => true,
+                    (Some(_), None) => false,
+                }
+        });
+        match found {
+            Some(index) => claimed[index] = true,
+            None => {
+                return Err(Error::scenario(format!(
+                    "{prefix}: no analysis failure matching rule={:?} kind={:?} path={:?}. Actual: {actual:?}",
+                    expected.rule, expected.kind, expected.path,
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn assert_fix_status(
     prefix: &str,
     label: &str,
@@ -483,6 +567,7 @@ mod tests {
                         }),
                     },
                 }],
+                analysis_failures: Vec::new(),
             }],
         }
     }

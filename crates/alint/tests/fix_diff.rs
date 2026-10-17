@@ -457,11 +457,12 @@ fn diff_warns_when_a_located_edit_is_deferred_behind_a_whole_file_fix() {
 }
 
 #[test]
-fn diff_shows_adjacent_dotenv_removals_and_both_apply_in_one_pass() {
-    // Two rules removing adjacent dotenv keys that share a prefix (`X`, `XY`). Each
-    // removal must stay anchored to its own line: an edit that drifted across the line
-    // boundary (`=1\nX`) overlapped the next one, so `--diff` showed only one removal
-    // and a real `fix` needed a second pass. Keep the native batched editor honest.
+fn adjacent_dotenv_removals_both_apply_in_one_pass() {
+    // Two rules removing adjacent dotenv keys that share a prefix (`X`, `XY`).
+    // Each removal must stay anchored to its own line: an edit that drifts
+    // across the line boundary overlaps the next one and needs a second pass.
+    // Sensitive dotenv edits are intentionally absent from `--diff`, so the
+    // resulting file is the observable contract for the native batched editor.
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(
         tmp.path().join(".alint.yml"),
@@ -484,14 +485,6 @@ rules:
     )
     .unwrap();
     std::fs::write(tmp.path().join(".env"), "X=1\nXY=1\nQ=1\n").unwrap();
-
-    let diff = run(tmp.path(), &["fix", "--diff", "."]);
-    let shown = String::from_utf8_lossy(&diff.stdout);
-    assert!(
-        shown.contains("-X=1") && shown.contains("-XY=1"),
-        "both removals: {shown}"
-    );
-    assert_eq!(diff.status.code(), Some(0), "{shown}");
 
     let fix = run(tmp.path(), &["fix", "."]);
     assert!(

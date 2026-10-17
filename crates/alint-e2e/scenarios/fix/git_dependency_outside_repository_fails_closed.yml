@@ -1,0 +1,25 @@
+name: fix reports a Git dependency failure outside a repository
+tags: [fix, file_absent, git_tracked_only, git]
+
+given:
+  tree:
+    secret.env: "SECRET=value\n"
+  config: |
+    version: 1
+    rules:
+      - id: no-secret
+        kind: file_absent
+        paths: secret.env
+        git_tracked_only: true
+        level: error
+        fix:
+          file_remove: { applicability: safe }
+
+when: [fix]
+
+expect:
+  - analysis_failures:
+      - {rule: no-secret, kind: resource_read}
+
+expect_tree:
+  secret.env: "SECRET=value\n"

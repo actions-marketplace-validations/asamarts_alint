@@ -1,17 +1,19 @@
 # v0.19: Fail-loud findings and the capability inventory
 
-Status: In progress (2026-10-16); see [Status and next steps](#status-and-next-steps-as-of-2026-10-16). This is the first release of the general-linter program: Phase 0
+Status: In progress (2026-10-17); see [Status and next steps](#status-and-next-steps-as-of-2026-10-17). This is the first release of the general-linter program: Phase 0
 and Phase 1a of [`../general-linter.md`](../general-linter.md) section 11, decided in
 [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md). Each work item
 below gets its own design document in this directory (in the [`../TEMPLATE.md`](../TEMPLATE.md)
 shape, including the false-positive section) before its code lands, and the item's open
 questions are decided there, one at a time.
 
-v0.19 is a minor release with deliberate behaviour changes (W1 turns silently ignored fields into
-load errors, W2 and W3 turn some false passes into failures, and W4 changes report text). Every
-behaviour change is listed in the changelog with its migration note.
+v0.19 is a minor release with deliberate behaviour changes: W1 turns silently ignored fields into
+load errors; W2 and W3 turn false passes into failures; W4 adds notes to machine reports; W5
+redacts sensitive evidence; W6 adds ranges and related locations to human, SARIF, and LSP output;
+and W7 makes analysis time reproducible. Every behaviour change is listed in the changelog with
+its migration note.
 
-## Status and next steps (as of 2026-10-16)
+## Status and next steps (as of 2026-10-17)
 
 This section is the hand-off point for whoever picks the program up next. Update it when an item
 moves.
@@ -46,21 +48,64 @@ moves.
   The Unreleased changelog contains the exhaustive migration matrix for all 57 formerly
   ignored canonical kind/field pairs. All bundled rulesets, shipped examples, documentation
   examples, and scenarios pass under enforcement.
+- **W2, fail-loud analysis failures, is complete.** `RuleResult` and `FixRuleResult` now carry
+  typed `analysis_failures` separately from policy violations, notes, and fix items. Evaluation,
+  runtime-condition, resource-read, resource-parse, and repository-derived nested-rule build
+  failures always count as errors at every configured level. Engine rule-major, file-major,
+  single-file, `expect_matches`, nested, command spawn/timeout, and structured-parse paths use the
+  structural contract. Baselines cannot record, suppress, or fingerprint failures; all fix modes
+  preserve them without invoking a fixer. All eight check formats, human and JSON fix reports, and
+  LSP diagnostics expose failures with the required error semantics. The JSON, agent, and fix
+  schemas were updated atomically, and the ADR-0012 positive-completeness gate plus CLI, baseline,
+  fix, LSP, and migrated scenario regressions are in place.
+- **W3, the remaining fail-open sites, is complete.** Manifest-derived scope now gives every
+  owning rule one typed resource read/parse failure when its manifest cannot produce a trustworthy
+  path set. Active Git dependencies derive from each configured kind's conditional capability
+  metadata, including nested rules; the engine probes once and gives each dependent top-level rule
+  one resource-read failure when Git or the repository is unavailable, while unrelated rules
+  continue. Shared structured extraction preserves non-string matches separately: path-set
+  consumers fail explicitly, and relation consumers report a policy violation instead of silently
+  dropping the selected values.
 - **W4, notes in every output format, is complete.** `RuleResult` partitions ordinary
   informational notes from bounded-analysis truncation; all eight check formats preserve them
   through either full structured detail or the accepted count-and-pointer projection. SARIF maps
   informational notes to `note` results and truncation to execution notifications. The JSON and
   agent schemas, CLI `--show-notes` behavior, baseline/fix exclusion, and ADR-0012 cross-format
   completeness gate are covered.
+- **W5, evidence redaction and the leak gate, is complete.** Every rule and nested rule accepts
+  `sensitive: true`; dotenv and Java properties extraction enable the same policy automatically.
+  Sensitive findings preserve structural identity and location while replacing complete explicit
+  messages, extracted implicit values, parser detail, and fix-report detail before reports or
+  baselines are exposed. Sensitive fingerprints exclude evidence bytes and proposed report edits
+  are suppressed without changing real fix execution. Focused relation, structured-path,
+  registry, graph, nested, fingerprint, and fix regressions cover the producer paths. The
+  end-to-end leak gate scans all eight check formats, baseline bytes, human/JSON fix output, and
+  LSP diagnostics; sensitive LSP code actions and same-file composed report edits are suppressed.
+- **W6, related locations and ranges, is complete.** Findings can carry a half-open primary range
+  and up to 20 labeled, deterministically ordered related locations. Human output lists the
+  relationships; SARIF emits primary regions and `relatedLocations`; and the LSP emits
+  `Diagnostic.relatedInformation` only when the client advertises support. The first producers
+  are `cross_file`, `registry_paths_resolve`, `unique_by`, `pair`, and `file_graph`, with the pair
+  hash and changed-together kinds covered too. The v1 JSON report schema now accepts additive
+  fields while retaining every required field and value-type check; report payload fields remain
+  deferred by DEC-4. Ranges and relationships are excluded from baseline identity, enforced by a
+  Linux corpus gate that recomputes every policy-finding fingerprint.
 - **W7, deterministic analysis time, is complete.** `--as-of YYYY-MM-DD` overrides
   `ALINT_AS_OF`, with the HEAD committer timestamp as the fallback resolved once per engine.
   `git_blame_age` no longer reads wall time; findings and human/JSON `explain` expose the
   reference date and source. HEAD and blame ignore repository redirects and clone-local
   replacement refs; blame pins its diff algorithm, accepts SHA-1 and SHA-256 repositories, and
   uses only a tracked, regular `.git-blame-ignore-revs` instead of configured ignore lists.
-  Non-Git evaluation without explicit input reports the stable error W2 will promote, capability
-  metadata now says `analysis_time`, and ADR-0020 supersedes the affected part of constitution
-  invariant 1.
+  Without explicit input, an unavailable repository or unborn HEAD produces the typed,
+  always-error analysis failure described by W2. An explicit date removes that HEAD lookup but
+  does not satisfy `git_blame_age`'s independent W3 Git/blame dependency. Capability metadata says
+  `analysis_time`, and ADR-0020 supersedes the affected part of constitution invariant 1.
+- **W8, duplicate-aware spanned extraction, is complete.** `alint_core::extract` exposes
+  source-ordered `StructuredEntryRow` values with structural parent paths, duplicate keys, and
+  exact key/value byte spans for dotenv, JSON/JSONC, YAML, INI, and Java properties. TOML, XML,
+  and HCL return an explicit unsupported result. The adapters share the structured-input byte
+  bound, preserve source order and duplicates, and do not change the existing last-wins
+  extraction or any shipped kind's results.
 
 ### Completed release item: the v0.18.4 benchmark record
 
@@ -86,11 +131,8 @@ release-by-release row.
 
 ### Next work, in order
 
-1. **W2** then **W3** (fail-loud analysis; W3's reject-at-load half is already complete in W1).
-2. **W5** (redaction and the leak gate), **W6** (related locations, the JSON schema relaxation,
-   the frozen-fingerprint gate), **W8** (duplicate-aware spanned extraction).
-3. **W9** as capacity allows, then **W10** (documentation, recipes, roadmap, and stale-comment
-   cleanup).
+1. **W9** standalone detection kinds, as capacity allows.
+2. **W10** documentation, recipes, roadmap, and stale-comment cleanup.
 
 Each item gets its design document in this directory before code, per the rule at the top. The
 release gates are listed at the end of this file.
@@ -170,6 +212,9 @@ the instance-conformance, facts, and all-kinds output-completeness gates pass.
 
 ### W2. Analysis failures become error findings (DEC-2)
 
+**Status: complete (2026-10-16).**
+
+
 - Separate "the rule could not evaluate this resource" from violations in the engine's result
   type, at every site that today wraps an `Err` as `Violation::new("rule error: ...")`.
 - A failure caused by repository content is reported as a finding that always counts as error,
@@ -179,26 +224,33 @@ the instance-conformance, facts, and all-kinds output-completeness gates pass.
 - Configuration failures keep exit 2 and internal errors keep exit 3; no new exit code.
 - Every format renders them (an ADR-0012 positive-completeness gate).
 
-Acceptance: a warning-level rule over an unparseable target exits 1; `alint baseline` does not
-record the failure; scenarios cover each former "rule error" site; changelog entry under
-"Changed".
+Acceptance: complete. A warning-level rule over malformed configured input exits 1 while a
+successfully parsed policy mismatch remains a warning violation; baseline generation refuses
+incomplete analysis; every former engine wrapper and continued-scan producer has structural
+coverage; all check and fix projections preserve failures; the schemas validate; and the
+Unreleased changelog carries migration guidance.
 
 ### W3. Close the remaining fail-open sites
+
+**Completed 2026-10-16.**
 
 From [`../general-linter.md`](../general-linter.md) section 4.12:
 
 - **`scope_filter` on kinds that ignore it**: done in W1 (K1), which rejects every ignored field at
   load and in `validate-config`, including manifest predicates.
-- **Manifest-derived scope parse failure** becomes an analysis failure (W2) instead of an empty
-  member set or a silent fallback to full scope.
-- **Git unavailable**: Git-aware kinds report an analysis failure when Git or the repository is
-  unavailable, instead of no findings.
-- **Non-string extraction results**: a typed value at a queried path is either compared by its
-  lexeme or reported, never silently dropped (the exact rule is decided in this item's design
-  document).
+- **Manifest-derived scope failures** are typed resource read/parse failures for every owning rule,
+  never an empty member set or a fallback to full scope.
+- **Git unavailable**: active conditional capabilities are evaluated from `KindMeta`; each
+  dependent top-level rule reports one resource-read failure, including when the dependency comes
+  from a nested rule. Unrelated and conditionally inactive rules continue.
+- **Non-string extraction results** remain separate from strings. Manifest path sets reject them
+  as unusable input; `cross_file`, `file_graph`, and `registry_paths_resolve` report a stable
+  policy violation with the selected type counts rather than silently dropping them.
 
-Acceptance: each site has firing scenarios proving the new outcome and a gate asserting the
-invariant; changelog entries under "Changed".
+Acceptance: complete. Firing scenarios cover missing and malformed manifest inputs, native
+non-string manifest members, every structured extraction consumer, an unavailable repository,
+effective conditional Git options, unrelated-rule continuation, nested ownership, and fix mode.
+The Unreleased changelog carries migration guidance.
 
 ### W4. Notes in every output format
 
@@ -210,27 +262,35 @@ invariant; changelog entries under "Changed".
   full list; JUnit and agent formats get an equivalent.
 - Human output keeps `--show-notes`.
 
-Acceptance: an ADR-0012 positive-completeness gate proves a note reaches every format.
+Acceptance: complete. The ADR-0012 positive-completeness gate proves a note reaches every format.
 
-Design: [`notes-output-completeness.md`](notes-output-completeness.md) (accepted; all format
+Design: [`notes-output-completeness.md`](notes-output-completeness.md) (implemented; all format
 projections and truncation semantics decided).
 
 ### W5. Evidence redaction and the leak gate (DEC-3)
+
+**Completed 2026-10-16.**
 
 - Values extracted from dotenv and properties files are redacted by default in every message
   and format (rendered as a short marker plus a digest).
 - A new `sensitive: true` rule option opts any other rule into redaction.
 - Baseline files never store raw values: the advisory message is redacted, and the fingerprint
-  remains a hash of the identity. The design document must address that an unsalted hash of a
-  low-entropy value can be brute-forced (for example, by hashing with a per-repository salt or
-  by excluding redacted values from the fingerprint input).
-- A leak gate: a scenario plants a known secret in `.env` and asserts its bytes appear in no
-  output format and in no baseline file.
+  hashes structural identity without the value or its digest, so low-entropy evidence cannot be
+  recovered by enumerating candidate values.
+- The leak gate plants unique sentinels in dotenv, properties, and explicitly sensitive inputs and
+  scans every public report surface for their bytes.
 
-Acceptance: the leak gate passes for all eight formats and the baseline; existing fingerprints
-are unchanged for non-redacted rules (W6's golden gate).
+Acceptance: complete. The byte-scanning leak gate covers all eight formats, the baseline, human
+and JSON fix reports, and LSP diagnostics; existing non-sensitive fingerprint pins are unchanged.
+Actual fixes still execute, while sensitive report-side proposed edits and status detail do not
+expose values.
+
+Design: [`evidence-redaction.md`](evidence-redaction.md) (implemented; implicit and explicit
+sensitivity, value-free fingerprints, remediation, and leak-gate scope decided).
 
 ### W6. Related locations and ranges on findings (DEC-4, DEC-5)
+
+**Completed 2026-10-16.**
 
 - Extend the finding model with a primary range and labeled related locations, with deterministic
   ordering and caps (at most a fixed number of related locations, then "and N more").
@@ -249,13 +309,17 @@ are unchanged for non-redacted rules (W6's golden gate).
 Acceptance: the golden fingerprint gate is green with zero changes; SARIF and LSP gates prove
 related locations reach both; the JSON schema relaxation ships with its changelog notice.
 
+Design: [`related-locations.md`](related-locations.md) (implemented; model, ordering, cap,
+projections, schema timing, and fingerprint identity decided).
+
 ### W7. `--as-of` input (DEC-11)
 
 **Completed 2026-10-16.**
 
 - A global `--as-of <date>` flag and an `ALINT_AS_OF` environment variable.
-- Without either, time-dependent kinds use the HEAD commit time; outside a Git repository they
-  report an analysis failure (W2) unless `--as-of` is given.
+- Without either, time-dependent kinds use the HEAD commit time; an unavailable repository or
+  unborn HEAD produces an analysis failure (W2). `--as-of` removes only that HEAD-time lookup:
+  kinds such as `git_blame_age` can still require Git for their policy input under W3.
 - `git_blame_age` moves onto it; the reference time is shown in `explain` and in its findings.
 - A superseding ADR records the time input in constitution invariant 1.
 
@@ -266,6 +330,8 @@ Design: [`analysis-time.md`](analysis-time.md) (accepted; input, fallback, displ
 semantics decided). Decision: [ADR-0020](../../adr/0020-explicit-analysis-time.md).
 
 ### W8. Duplicate-aware spanned extraction (substrate)
+
+**Completed 2026-10-16.**
 
 - Extraction gains ordered entry rows with spans for the formats whose parsers can provide them
   (dotenv through `adotenv`; JSON through the `jsonc-parser` AST; YAML, INI, and properties
@@ -278,6 +344,9 @@ semantics decided). Decision: [ADR-0020](../../adr/0020-explicit-analysis-time.m
 
 Acceptance: extraction exposes duplicates with spans for the listed formats; no change to
 existing kinds' results.
+
+Design: [`spanned-extraction.md`](spanned-extraction.md) (implemented; row model, duplicate
+semantics, format support, and compatibility boundary decided).
 
 ### W9. Standalone detection kinds, as capacity allows
 

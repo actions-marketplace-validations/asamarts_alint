@@ -12,7 +12,9 @@ use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation, unreadable_file_violation,
+};
 use pulldown_cmark::{BrokenLink, Event, LinkType, Options as MarkdownOptions, Parser, Tag};
 use serde::Deserialize;
 
@@ -105,26 +107,26 @@ impl Rule for MarkdownLinksResolveRule {
             let bytes = match crate::io::read_capped(&ctx.root.join(&entry.path)) {
                 Ok(bytes) => bytes,
                 Err(crate::io::ReadCapError::TooLarge(size)) => {
-                    violations.push(
-                        Violation::new(format!(
-                            "Markdown file is too large to analyze ({})",
-                            crate::io::over_cap(size)
-                        ))
-                        .with_path(Arc::clone(&entry.path))
-                        .with_baseline_key("read"),
-                    );
+                    violations.push(alint_core::too_large_file_violation(&entry.path, size));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(err))
+                    if err.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    violations.push(alint_core::missing_file_violation(&entry.path));
                     continue;
                 }
                 Err(crate::io::ReadCapError::Io(err)) => {
-                    violations.push(
-                        Violation::new(format!("could not read Markdown file: {err}"))
-                            .with_path(Arc::clone(&entry.path))
-                            .with_baseline_key("read"),
-                    );
+                    violations.push(unreadable_file_violation(&entry.path, &err));
                     continue;
                 }
             };
             let Ok(text) = std::str::from_utf8(&bytes) else {
+                violations.push(
+                    Violation::new("Markdown file is not valid UTF-8")
+                        .with_path(Arc::clone(&entry.path))
+                        .as_analysis_failure(alint_core::AnalysisFailureKind::ResourceParse),
+                );
                 continue;
             };
             let scanned = scan_markdown(text);

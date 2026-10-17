@@ -136,7 +136,7 @@ fn assert_fidelity(dir: &Path, file: &str, original: &[u8]) -> usize {
 }
 
 #[test]
-fn dotenv_proposed_edits_handle_all_physical_line_endings() {
+fn dotenv_sensitive_edits_still_apply_but_are_not_proposed() {
     for ending in ["\n", "\r\n", "\r"] {
         let dir = tempfile::tempdir().unwrap();
         let original = format!(
@@ -168,21 +168,36 @@ fn dotenv_proposed_edits_handle_all_physical_line_endings() {
             } else {
                 &report["results"][0]["violations"][0]
             };
-            let edit = &violation["proposed_edit"][0];
-            assert_eq!(edit["region"]["start_line"], 2, "{ending:?}");
-            assert_eq!(edit["region"]["start_column"], 5, "{ending:?}");
-            assert_eq!(edit["region"]["end_line"], 2, "{ending:?}");
-            assert_eq!(edit["region"]["end_column"], 5, "{ending:?}");
-            assert_eq!(edit["inserted"], "=8080");
+            let message = if options[1] == "agent" {
+                &violation["human_message"]
+            } else {
+                &violation["message"]
+            };
+            assert!(
+                message
+                    .as_str()
+                    .is_some_and(|message| message.contains("<redacted:")),
+                "{report}"
+            );
+            assert!(
+                violation["proposed_edit"]
+                    .as_array()
+                    .is_none_or(Vec::is_empty),
+                "{report}"
+            );
         }
         let sarif = check_sarif(dir.path());
-        let edit =
-            &sarif["runs"][0]["results"][0]["fixes"][0]["artifactChanges"][0]["replacements"][0];
-        assert_eq!(edit["deletedRegion"]["startLine"], 2, "{ending:?}");
-        assert_eq!(edit["deletedRegion"]["startColumn"], 5, "{ending:?}");
-        assert_eq!(edit["deletedRegion"]["endLine"], 2, "{ending:?}");
-        assert_eq!(edit["deletedRegion"]["endColumn"], 5, "{ending:?}");
-        assert_eq!(edit["insertedContent"]["text"], "=8080");
+        let result = &sarif["runs"][0]["results"][0];
+        assert!(
+            result["message"]["text"]
+                .as_str()
+                .is_some_and(|message| message.contains("<redacted:")),
+            "{sarif}"
+        );
+        assert!(
+            result["fixes"].as_array().is_none_or(Vec::is_empty),
+            "{sarif}"
+        );
         let fixed = Command::new(alint_bin())
             .args(["fix", "."])
             .current_dir(dir.path())
@@ -193,6 +208,252 @@ fn dotenv_proposed_edits_handle_all_physical_line_endings() {
             std::fs::read(dir.path().join(".env")).unwrap(),
             expected.as_bytes()
         );
+    }
+}
+
+#[test]
+fn sensitive_file_suppresses_a_non_sensitive_sibling_proposed_edit() {
+    const SECRET: &str = "SIBLING_TOKEN_VALUE_DO_NOT_REPORT";
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(".env"), format!("TOKEN={SECRET}  \n")).unwrap();
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        "version: 1\nrules:\n\
+         \x20 - id: token\n    kind: dotenv_path_equals\n    paths: .env\n\
+         \x20   path: $.TOKEN\n    equals: expected\n    level: error\n\
+         \x20 - id: whitespace\n    kind: no_trailing_whitespace\n    paths: .env\n\
+         \x20   level: error\n    fix: { file_trim_trailing_whitespace: {} }\n",
+    )
+    .unwrap();
+
+    let sarif = check_sarif(dir.path());
+    for result in sarif["runs"][0]["results"].as_array().unwrap() {
+        assert!(
+            result["fixes"].as_array().is_none_or(Vec::is_empty),
+            "{sarif}"
+        );
+    }
+    assert!(
+        !serde_json::to_string(&sarif).unwrap().contains(SECRET),
+        "{sarif}"
+    );
+
+    let json = check_json(dir.path(), &["--format", "json", "--include-fixes"]);
+    for result in json["results"].as_array().unwrap() {
+        for violation in result["violations"].as_array().unwrap() {
+            assert!(
+                violation["proposed_edit"]
+                    .as_array()
+                    .is_none_or(Vec::is_empty),
+                "{json}"
+            );
+        }
+    }
+    assert!(
+        !serde_json::to_string(&json).unwrap().contains(SECRET),
+        "{json}"
+    );
+}
+
+#[test]
+fn sensitive_note_suppresses_a_non_sensitive_sibling_edit() {
+    const SECRET: &str = "SENSITIVE_NOTE_VALUE_DO_NOT_REPORT";
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".env"),
+        format!("SKIP=${{{SECRET}}}\nPADDING=value  \n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("target.properties"),
+        format!("SKIP=${{{SECRET}}}\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        r#"version: 1
+rules:
+  - id: skipped-values
+    kind: cross_file
+    source: { file: .env, extract: { dotenv: "$.SKIP" } }
+    targets:
+      - { file: target.properties, extract: { properties: "$.SKIP" } }
+    relation: set_equals
+    level: error
+  - id: whitespace
+    kind: no_trailing_whitespace
+    paths: .env
+    level: error
+    fix: { file_trim_trailing_whitespace: {} }
+"#,
+    )
+    .unwrap();
+
+    let sarif = check_sarif(dir.path());
+    for result in sarif["runs"][0]["results"].as_array().unwrap() {
+        assert!(
+            result["fixes"].as_array().is_none_or(Vec::is_empty),
+            "{sarif}"
+        );
+    }
+    assert!(
+        !serde_json::to_string(&sarif).unwrap().contains(SECRET),
+        "{sarif}"
+    );
+
+    let diff = Command::new(alint_bin())
+        .args(["fix", "--diff", "."])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(diff.status.success(), "{diff:?}");
+    assert!(diff.stdout.is_empty(), "{diff:?}");
+    assert!(
+        !String::from_utf8_lossy(&diff.stderr).contains(SECRET),
+        "{diff:?}"
+    );
+}
+
+fn assert_sensitive_reader_suppresses_edits(
+    name: &str,
+    config: &str,
+    needs_target: bool,
+    secret: &str,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".env"),
+        format!("BEFORE=x  \nTOKEN={secret}\nAFTER=y  \n"),
+    )
+    .unwrap();
+    if needs_target {
+        std::fs::write(
+            dir.path().join("target.properties"),
+            format!("TOKEN={secret}\n"),
+        )
+        .unwrap();
+    }
+    std::fs::write(dir.path().join(secret), "ok\n").unwrap();
+    std::fs::write(dir.path().join(".alint.yml"), config).unwrap();
+
+    let sarif = check_sarif(dir.path());
+    for result in sarif["runs"][0]["results"].as_array().unwrap() {
+        assert!(
+            result["fixes"].as_array().is_none_or(Vec::is_empty),
+            "{name}: {sarif}"
+        );
+    }
+    assert!(
+        !serde_json::to_string(&sarif).unwrap().contains(secret),
+        "{name}: {sarif}"
+    );
+
+    let diff = Command::new(alint_bin())
+        .args(["fix", "--diff", "."])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(diff.status.success(), "{name}: {diff:?}");
+    assert!(diff.stdout.is_empty(), "{name}: {diff:?}");
+    assert!(
+        !String::from_utf8_lossy(&diff.stderr).contains(secret),
+        "{name}: {diff:?}"
+    );
+}
+
+#[test]
+fn passing_sensitive_readers_suppress_spanning_sibling_edits() {
+    const SECRET: &str = "PASSING_SENSITIVE_VALUE_DO_NOT_REPORT";
+    let cases = [
+        (
+            "implicit-cross-file",
+            r#"version: 1
+rules:
+  - id: token
+    kind: cross_file
+    source: { file: .env, extract: { dotenv: "$.TOKEN" } }
+    targets:
+      - { file: target.properties, extract: { properties: "$.TOKEN" } }
+    relation: equals
+    level: error
+  - id: whitespace
+    kind: no_trailing_whitespace
+    paths: .env
+    level: error
+    fix: { file_trim_trailing_whitespace: {} }
+"#
+            .to_string(),
+            true,
+        ),
+        (
+            "explicit-top-level",
+            format!(
+                r"version: 1
+rules:
+  - id: token
+    kind: file_content_matches
+    paths: .env
+    pattern: {SECRET}
+    sensitive: true
+    level: error
+  - id: whitespace
+    kind: no_trailing_whitespace
+    paths: .env
+    level: error
+    fix: {{ file_trim_trailing_whitespace: {{}} }}
+"
+            ),
+            false,
+        ),
+        (
+            "implicit-nested",
+            format!(
+                r#"version: 1
+rules:
+  - id: token
+    kind: for_each_file
+    select: .env
+    level: error
+    require:
+      - kind: dotenv_path_equals
+        paths: "{{path}}"
+        path: $.TOKEN
+        equals: {SECRET}
+  - id: whitespace
+    kind: no_trailing_whitespace
+    paths: .env
+    level: error
+    fix: {{ file_trim_trailing_whitespace: {{}} }}
+"#
+            ),
+            false,
+        ),
+        (
+            "implicit-manifest-scope",
+            r#"version: 1
+rules:
+  - id: selected-content
+    kind: file_content_matches
+    paths: "*"
+    pattern: "^ok"
+    scope_filter:
+      include_manifest_paths:
+        source: .env
+        extract: { dotenv: "$.TOKEN" }
+    level: error
+  - id: whitespace
+    kind: no_trailing_whitespace
+    paths: .env
+    level: error
+    fix: { file_trim_trailing_whitespace: {} }
+"#
+            .to_string(),
+            false,
+        ),
+    ];
+
+    for (name, config, needs_target) in cases {
+        assert_sensitive_reader_suppresses_edits(name, &config, needs_target, SECRET);
     }
 }
 
@@ -673,22 +934,22 @@ fn located_and_whole_file_on_one_file_do_not_corrupt() {
             "version: 1\n",
             "rules:\n",
             "  - id: set-k\n",
-            "    kind: properties_path_equals\n",
-            "    paths: \"**/*.properties\"\n",
+            "    kind: json_path_equals\n",
+            "    paths: \"**/*.json\"\n",
             "    path: \"$.key\"\n",
             "    equals: \"newval\"\n",
             "    level: error\n",
             "    fix: { set_value: { applicability: safe } }\n",
             "  - id: no-ws\n",
             "    kind: no_trailing_whitespace\n",
-            "    paths: \"**/*.properties\"\n",
+            "    paths: \"**/*.json\"\n",
             "    level: error\n",
             "    fix: { file_trim_trailing_whitespace: {} }\n",
         ),
     )
     .unwrap();
-    let original = b"key=oldval   \n";
-    std::fs::write(dir.path().join("app.properties"), original).unwrap();
+    let original = b"{\"key\":\"oldval\"}   \n";
+    std::fs::write(dir.path().join("app.json"), original).unwrap();
 
     // At most one advertised edit for the file (no overlapping pair), and applying
     // it yields a VALID, non-corrupting result -- the trailing whitespace trimmed,
@@ -711,7 +972,7 @@ fn located_and_whole_file_on_one_file_do_not_corrupt() {
     }
     assert_eq!(
         String::from_utf8_lossy(&buf),
-        "key=oldval\n",
+        "{\"key\":\"oldval\"}\n",
         "applying the advertised edit is a valid (trimmed) subset, never corrupt"
     );
 }

@@ -14,9 +14,8 @@
 //! - **`schema_path`** points at a JSON Schema file relative to
 //!   the lint root. Schema is loaded + compiled lazily on the
 //!   first `evaluate()` call and cached on the rule struct
-//!   (`OnceLock`); a malformed schema produces one
-//!   repository-level violation rather than one violation per
-//!   target file.
+//!   (`OnceLock`); an unreadable or malformed schema produces one typed
+//!   analysis failure rather than one policy violation per target file.
 //! - The target's format is auto-detected from its extension
 //!   (`.json` / `.yaml` / `.yml` / `.toml` / `.properties` / `.ini` /
 //!   `.cfg` / `.hcl` / `.tf` / `.tfvars` / `.nomad` / `.xml` and the `.csproj` /
@@ -32,11 +31,11 @@
 //!   array/object shape additionally depends on cardinality (a single vs.
 //!   repeated element is an object vs. an array). JSON / YAML / TOML / HCL keep
 //!   native types. See the mapping notes in `docs/rules.md`.
-//! - Each schema-validation error becomes one violation, with
+//! - Each schema-validation mismatch becomes one policy violation, with
 //!   the message including the failing instance path and the
 //!   schema's error description. A target that fails to parse
-//!   produces one parse-error violation, not a flood of schema
-//!   errors against junk.
+//!   produces one `resource_parse` analysis failure, not a flood of
+//!   schema errors against junk.
 //!
 //! Check-only — fixing schema violations is a "the user knows
 //! what value belongs there" problem, not alint's.
@@ -44,7 +43,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use alint_core::{Context, Error, Format, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    AnalysisFailureKind, Context, Error, Format, Level, Result, Rule, RuleSpec, Scope, Violation,
+};
 use jsonschema::Validator;
 use serde::Deserialize;
 use serde_json::Value;
@@ -118,7 +119,7 @@ pub struct JsonSchemaPassesRule {
     /// missing or malformed schema produces a single
     /// repository-level violation rather than re-attempting the
     /// load per matched file.
-    compiled: OnceLock<std::result::Result<Validator, String>>,
+    compiled: OnceLock<std::result::Result<Validator, (AnalysisFailureKind, String)>>,
 }
 
 impl Rule for JsonSchemaPassesRule {
@@ -141,6 +142,8 @@ impl Rule for JsonSchemaPassesRule {
         self.allow_out_of_root = allow;
     }
 
+    // Linear read/parse/validate handling keeps each failure owned by its input file.
+    #[allow(clippy::too_many_lines)]
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
 
@@ -174,19 +177,16 @@ impl Rule for JsonSchemaPassesRule {
             }
         };
         let schema_abs = ctx.root.join(&schema_rel);
-        let validator_res = self.compiled.get_or_init(|| compile_schema(&schema_abs));
+        let validator_res = self
+            .compiled
+            .get_or_init(|| compile_schema(&schema_abs, &self.schema_path));
         let validator = match validator_res {
             Ok(v) => v,
-            Err(msg) => {
-                // Schema unusable → one repository-level
-                // violation, then we're done. Per-file
-                // validation against a broken schema would
-                // dump the same error N times.
-                // No path (a repo-level schema-load failure) → a fixed key so
-                // the fingerprint doesn't fall through to the volatile message.
+            Err((kind, msg)) => {
                 violations.push(
                     Violation::new(msg.clone())
-                        .with_baseline_key("json-schema-passes-schema-unusable"),
+                        .with_path(schema_rel.clone())
+                        .as_analysis_failure(*kind),
                 );
                 return Ok(violations);
             }
@@ -200,23 +200,15 @@ impl Rule for JsonSchemaPassesRule {
             let text = match crate::io::read_capped(&full) {
                 Ok(b) => String::from_utf8_lossy(&b).into_owned(),
                 Err(crate::io::ReadCapError::TooLarge(n)) => {
-                    // Over the 256 MiB whole-file cap — surface
-                    // a clear violation rather than the previous
-                    // silent skip (which masked an OOM-DoS
-                    // surface on hostile / accidental multi-GB
-                    // candidate files).
-                    violations.push(
-                        Violation::new(format!(
-                            "file is too large to analyze ({})",
-                            crate::io::over_cap(n),
-                        ))
-                        .with_path(entry.path.clone()),
-                    );
+                    violations.push(alint_core::too_large_file_violation(&entry.path, n));
                     continue;
                 }
-                Err(crate::io::ReadCapError::Io(_)) => {
-                    // Permission / race — silent skip, like other
-                    // content rules.
+                Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    violations.push(alint_core::missing_file_violation(&entry.path));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    violations.push(alint_core::unreadable_file_violation(&entry.path, &e));
                     continue;
                 }
             };
@@ -230,7 +222,8 @@ impl Rule for JsonSchemaPassesRule {
                         "could not detect format from extension; pass `format:` \
                          (`json` / `yaml` / `toml` / `xml` / `dotenv` / `properties` / `ini` / `hcl`) on the rule",
                     )
-                    .with_path(entry.path.clone()),
+                    .with_path(entry.path.clone())
+                    .as_analysis_failure(AnalysisFailureKind::ResourceParse),
                 );
                 continue;
             };
@@ -240,7 +233,8 @@ impl Rule for JsonSchemaPassesRule {
                 Err(err) => {
                     violations.push(
                         Violation::new(format!("not a valid {} document: {err}", format.label()))
-                            .with_path(entry.path.clone()),
+                            .with_path(entry.path.clone())
+                            .as_analysis_failure(AnalysisFailureKind::ResourceParse),
                     );
                     continue;
                 }
@@ -270,23 +264,36 @@ impl Rule for JsonSchemaPassesRule {
     }
 }
 
-fn compile_schema(schema_abs: &std::path::Path) -> std::result::Result<Validator, String> {
-    let bytes = crate::io::read_capped(schema_abs).map_err(|e| match e {
-        crate::io::ReadCapError::TooLarge(n) => format!(
-            "schema {} is too large to read ({})",
-            schema_abs.display(),
-            crate::io::over_cap(n),
-        ),
-        crate::io::ReadCapError::Io(e) => {
-            format!("could not read schema {}: {e}", schema_abs.display())
-        }
+fn compile_schema(
+    schema_abs: &std::path::Path,
+    display_path: &std::path::Path,
+) -> std::result::Result<Validator, (AnalysisFailureKind, String)> {
+    let bytes = crate::io::read_capped(schema_abs).map_err(|e| {
+        let message = match e {
+            crate::io::ReadCapError::TooLarge(n) => format!(
+                "schema {} is too large to read ({})",
+                display_path.display(),
+                crate::io::over_cap(n),
+            ),
+            crate::io::ReadCapError::Io(e) => {
+                format!("could not read schema {}: {e}", display_path.display())
+            }
+        };
+        (AnalysisFailureKind::ResourceRead, message)
     })?;
-    let schema_value: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("schema {} is not valid JSON: {e}", schema_abs.display()))?;
+    let schema_value: Value = serde_json::from_slice(&bytes).map_err(|e| {
+        (
+            AnalysisFailureKind::ResourceParse,
+            format!("schema {} is not valid JSON: {e}", display_path.display()),
+        )
+    })?;
     jsonschema::validator_for(&schema_value).map_err(|e| {
-        format!(
-            "schema {} is not a valid JSON Schema: {e}",
-            schema_abs.display()
+        (
+            AnalysisFailureKind::ResourceParse,
+            format!(
+                "schema {} is not a valid JSON Schema: {e}",
+                display_path.display()
+            ),
         )
     })
 }
@@ -421,7 +428,7 @@ mod tests {
         let (tmp, idx) = tempdir_with_files(&[("data.json", b"{}")]);
         let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert!(
-            v.iter().all(|x| x.note_kind.is_some()),
+            v.iter().all(|x| x.note_kind().is_some()),
             "only an out-of-root note: {v:?}"
         );
         assert!(
@@ -528,9 +535,10 @@ mod tests {
     #[test]
     fn compile_fails_loudly_on_missing_file() {
         let bogus = std::path::PathBuf::from("/nonexistent/schema.json");
-        let res = compile_schema(&bogus);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("could not read schema"));
+        let (kind, message) =
+            compile_schema(&bogus, std::path::Path::new("schema.json")).unwrap_err();
+        assert_eq!(kind, AnalysisFailureKind::ResourceRead);
+        assert!(message.contains("could not read schema"));
     }
 
     #[test]
@@ -538,9 +546,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("schema.json");
         std::fs::write(&path, "{ this is not json").unwrap();
-        let res = compile_schema(&path);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("not valid JSON"));
+        let (kind, message) =
+            compile_schema(&path, std::path::Path::new("schema.json")).unwrap_err();
+        assert_eq!(kind, AnalysisFailureKind::ResourceParse);
+        assert!(message.contains("not valid JSON"));
+        assert!(
+            !message.contains(&dir.path().display().to_string()),
+            "failure message leaked the checkout location: {message}",
+        );
     }
 
     #[test]
@@ -550,9 +563,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("schema.json");
         std::fs::write(&path, r#"{"type": 12345}"#).unwrap();
-        let res = compile_schema(&path);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("not a valid JSON Schema"));
+        let (kind, message) =
+            compile_schema(&path, std::path::Path::new("schema.json")).unwrap_err();
+        assert_eq!(kind, AnalysisFailureKind::ResourceParse);
+        assert!(message.contains("not a valid JSON Schema"));
     }
 
     #[test]

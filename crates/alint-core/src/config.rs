@@ -379,6 +379,10 @@ pub struct RuleSpec {
     /// whose empty sets already have kind-specific meaning.
     #[serde(default)]
     pub expect_matches: bool,
+    /// Redact this rule's flattened finding messages and fix detail before any
+    /// report or baseline is exposed. Defaults to `false`.
+    #[serde(default)]
+    pub sensitive: bool,
     /// Optional mechanical-fix strategy. Rules whose builders understand
     /// the chosen op attach a [`Fixer`](crate::Fixer) to the built rule;
     /// rules whose kind is incompatible with the op return a config error
@@ -1212,6 +1216,9 @@ pub struct NestedRuleSpec {
     /// selected iteration after the nested `when:` gate is true.
     #[serde(default)]
     pub expect_matches: bool,
+    /// Nested-rule equivalent of [`RuleSpec::sensitive`].
+    #[serde(default)]
+    pub sensitive: bool,
     /// Per-file scope filter — see [`RuleSpec::scope_filter`]
     /// for semantics. Inherited unchanged when
     /// [`NestedRuleSpec::instantiate`] synthesises a full
@@ -1303,6 +1310,7 @@ impl NestedRuleSpec {
             policy_url: self.policy_url.clone(),
             when: self.when.clone(),
             expect_matches: self.expect_matches,
+            sensitive: self.sensitive,
             fix: None,
             // `git_tracked_only` and `respect_gitignore` are both kind-specific
             // options now (ADR-0008), stripped from the nested `extra` via

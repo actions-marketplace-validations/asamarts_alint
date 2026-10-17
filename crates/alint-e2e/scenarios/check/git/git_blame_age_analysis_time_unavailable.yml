@@ -1,9 +1,7 @@
-name: git_blame_age reports unavailable analysis time outside a git repo
+name: git_blame_age reports unavailable Git outside a repository
 tags: [check, git_blame_age, git]
 
-# No `given.git:` block and no explicit analysis time: the deterministic HEAD fallback is
-# unavailable. W7 surfaces that as a rule-evaluation error; W2 will promote it to a typed,
-# always-error analysis failure.
+# The kind's unconditional Git capability fails closed before dispatch.
 
 given:
   tree:
@@ -22,5 +20,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
-      - {rule: stale-todos, level: warning}
+  - violations: []
+    analysis_failures:
+      - {rule: stale-todos, kind: resource_read}

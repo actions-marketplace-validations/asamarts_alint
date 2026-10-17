@@ -11,10 +11,10 @@
 //! `<since>...HEAD` three-dot (merge-base) diff as
 //! `scope_filter.changed_since:` / `alint check --changed`.
 //!
-//! Graceful no-op outside a git repo, when `git` is unavailable, or
-//! when nothing relevant changed. A `since:` that fails to resolve
-//! hard-fails with a shallow-clone hint (the user asked for a diff;
-//! a silently-empty range would mask the misconfiguration).
+//! Git or repository unavailability is an analysis failure. No relevant
+//! changes remains a normal pass. A `since:` that fails to resolve hard-fails
+//! with a shallow-clone hint (the user asked for a diff; a silently-empty range
+//! would mask the misconfiguration).
 //!
 //! Check-only — alint can't author the missing changelog entry.
 
@@ -60,7 +60,9 @@ impl Rule for ChangesetRequiresPathRule {
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let all_changed = match collect_changed_paths_checked(ctx.root, &self.since) {
             Ok(Some(set)) => set,
-            Ok(None) => return Ok(Vec::new()), // not a git repo: silent
+            // Defensive direct-evaluation fallback; Engine capability routing
+            // reports repository unavailability before dispatch.
+            Ok(None) => return Ok(Vec::new()),
             Err(CommitRangeError::BadRange { stderr }) => return Err(self.bad_range(&stderr)),
         };
 

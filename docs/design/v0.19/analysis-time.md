@@ -48,10 +48,13 @@ Precedence is:
 The HEAD fallback uses the commit's committer timestamp, including its time of day, as a Unix
 instant. The displayed reference is its UTC calendar date. The fallback ignores dirty working-tree
 mtime, the host wall clock, inherited repository-redirecting Git environment variables, and
-clone-local replacement refs. Outside a Git repository, with Git unavailable, or with unborn HEAD,
-a time-dependent rule has no reference time and reports an evaluation error. W2 classifies that
-error as an always-error analysis failure; W7 supplies the deterministic failure and message
-without changing unrelated error classification ahead of W2.
+clone-local replacement refs. When neither explicit source is provided, an unavailable Git
+repository or executable, or an unborn HEAD, leaves a time-dependent rule without a reference time
+and produces an evaluation
+error. W2 classifies that error as an always-error analysis failure; W7 supplies the deterministic
+failure and message without changing unrelated error classification ahead of W2. An explicit date
+removes only the HEAD-time lookup: `git_blame_age` still independently requires a usable Git
+repository for tracked-file selection and blame, as enforced by W3.
 
 `git_blame_age` computes each line's age from the single context value, never by calling
 `SystemTime::now()`. A future-dated blame timestamp has age zero. The threshold remains strict:
@@ -114,8 +117,9 @@ reads outside the central model.
   required; explicit time works outside Git.
 - `git_blame_age` tests create commits with fixed author/committer dates and prove old, boundary,
   young, and future lines; findings contain the reference date.
-- CLI tests cover flag-over-environment precedence, invalid flag/environment values, non-Git
-  explicit success, missing-fallback failure, explain human/JSON fields, and unsupported commands.
+- CLI tests cover flag-over-environment precedence, invalid flag/environment values, explicit
+  time without a repository still failing `git_blame_age`'s independent Git dependency, the
+  unborn-HEAD fallback failure, explain human/JSON fields, and unsupported commands.
 - A determinism test runs the same committed fixture with different process wall-clock settings
   and compares bytes. Because the implementation never reads the wall clock, both outputs must be
   identical.

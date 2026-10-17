@@ -1,0 +1,34 @@
+name: git_tracked_only fails closed outside Git while unrelated rules continue
+tags: [check, dir_absent, git_tracked_only, git]
+
+# A true git_tracked_only option activates the kind's tracked-set capability.
+# Repository unavailability is a typed analysis failure for that owning rule;
+# a non-Git-dependent rule still evaluates normally.
+
+given:
+  tree:
+    README.md: "# demo \n"
+    target:
+      release:
+        binary: "build artefact"
+  config: |
+    version: 1
+    rules:
+      - id: no-tracked-target
+        kind: dir_absent
+        paths: "**/target"
+        git_tracked_only: true
+        level: error
+      - id: clean-readme
+        kind: no_trailing_whitespace
+        paths: README.md
+        level: warning
+  # No `git:` block — tempdir is a plain non-git directory.
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: clean-readme, level: warning, path: README.md}
+    analysis_failures:
+      - {rule: no-tracked-target, kind: resource_read}

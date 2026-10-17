@@ -285,6 +285,7 @@ mod tests {
             policy_url: None,
             when: None,
             expect_matches: false,
+            sensitive: false,
             fix: None,
             scope_filter: None,
             extra: serde_yaml_ng::Mapping::new(),

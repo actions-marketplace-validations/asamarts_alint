@@ -6,8 +6,8 @@ tags: [check, hcl_path_absent, structured, hcl, failing]
 # depth pre-scan only recognized a bare `EOT` + newline. So a deep expression placed
 # AFTER a whitespace/comment-terminated heredoc was skipped as "heredoc body" and never
 # depth-counted, letting hcl-rs recurse into it and stack-abort (SIGABRT). The scan now
-# ends the heredoc wherever hcl-rs does, so this is one parse-error violation. If the
-# terminator handling regresses, `alint check` CRASHES here (in-process, debug) instead.
+# ends the heredoc wherever hcl-rs does, so this is one parse analysis failure.
+# If the terminator handling regresses, `alint check` CRASHES here (in-process, debug) instead.
 
 given:
   tree:
@@ -28,5 +28,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
-      - {rule: probe, level: error, path: bomb.tf}
+  - violations: []
+    analysis_failures:
+      - {rule: probe, kind: resource_parse, path: bomb.tf}

@@ -15,8 +15,8 @@ struct Options {
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to files tracked in git's index: entries present in the
-    /// walked tree but not in `git ls-files` are skipped. No effect outside a
-    /// git repo. Default `false`.
+    /// walked tree but not in `git ls-files` are skipped. Repository
+    /// unavailability is an analysis failure when enabled. Default `false`.
     #[serde(default)]
     git_tracked_only: bool,
     /// When non-empty, a file matching `paths` is reported only if its raw
@@ -44,11 +44,9 @@ pub struct FileAbsentRule {
     patterns: Vec<String>,
     root_only: bool,
     /// When `true`, only fire on entries that are also tracked
-    /// in git's index. Outside a git repo or with no rules
-    /// opting in, the tracked-set is `None` and every entry
-    /// reads as "untracked," so the rule becomes a no-op -
-    /// which is the right default for "don't let X be
-    /// committed" semantics.
+    /// in Git's index. The engine derives this dependency from
+    /// kind metadata and gates repository unavailability before
+    /// dispatch.
     git_tracked_only: bool,
     /// Parsed `content_prefix_hex` signatures. Empty ⇒ pure name-based
     /// matching (the historical behaviour); non-empty ⇒ a name match is only
@@ -403,17 +401,10 @@ mod tests {
 
     #[test]
     fn git_tracked_only_advertises_file_only_mode() {
-        // v0.9.11: the silent-no-op-outside-git-repo guarantee
-        // moved from a per-rule runtime check to an engine-side
-        // pre-filtered FileIndex. Calling `evaluate` directly
-        // bypasses the engine's filtering, so this unit test
-        // can no longer assert the no-op behaviour at the rule
-        // level — instead it asserts the rule advertises the
-        // correct `GitTrackedMode`, which is what tells the
-        // engine to substitute an empty index when the
-        // tracked-set is `None`. The end-to-end no-op behaviour
-        // is asserted by the e2e scenarios under
-        // `crates/alint-e2e/scenarios/check/git/`.
+        // Direct evaluation bypasses the engine's tracked-index construction
+        // and repository-availability gate, so this test asserts only the
+        // advertised `GitTrackedMode`. End-to-end routing is covered by the
+        // scenarios under `crates/alint-e2e/scenarios/check/git/`.
         let spec = spec_yaml(
             "id: t\n\
              kind: file_absent\n\

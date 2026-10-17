@@ -15,8 +15,9 @@ use crate::located_fix::{self, LocatedEdit, LocatedOutcome};
 use crate::registry::RuleRegistry;
 use crate::report::{FIX_ERROR_PREFIX, FixItem, FixReport, FixRuleResult, FixStatus, Report};
 use crate::rule::{
-    Applicability, Context, FixContext, FixEdit, FixOutcome, Fixer, ReadForFix, Rule, RuleResult,
-    Violation, read_for_fix, write_atomic,
+    AnalysisFailureKind, Applicability, Context, FindingDisposition, FixContext, FixEdit,
+    FixOutcome, Fixer, PerFileRule, ReadForFix, Rule, RuleResult, Violation, read_for_fix,
+    write_atomic,
 };
 use crate::walker::FileIndex;
 use crate::when::{WhenEnv, WhenExpr};
@@ -154,6 +155,20 @@ fn cached_analysis_time(cache: &AnalysisTimeCache, root: &Path) -> crate::Analys
 /// assertions) to emit verbatim.
 type LivePerFileEntries<'a> = (Vec<(usize, &'a RuleEntry)>, Vec<(usize, RuleResult)>);
 
+/// One fix-pass report, its composed in-memory file buffers, and every path
+/// whose public diff/proposed edit must be suppressed as sensitive.
+type FixRunOutput = (FixReport, BTreeMap<PathBuf, Vec<u8>>, HashSet<PathBuf>);
+
+/// Shared inputs for gates that run before a rule evaluates. The aligned slices
+/// are indexed by `Engine::entries`; keeping them together makes that invariant
+/// explicit at every dispatch path.
+struct RunGateInputs<'a, 'env> {
+    when_env: &'a WhenEnv<'env>,
+    manifest_failures: &'a [Vec<Violation>],
+    git_required: &'a [bool],
+    git_available: bool,
+}
+
 /// Visitor used while walking top-level and recursively nested runtime rules.
 type RuleTreeVisitor<'a> = dyn FnMut(&dyn Rule, Option<&crate::RuleSpec>) -> Result<()> + 'a;
 
@@ -283,6 +298,102 @@ impl RuleEntry {
         )?;
         Ok(wants)
     }
+
+    /// Whether this configured rule tree has an active Git capability.
+    ///
+    /// Metadata, not a kind allow-list, is authoritative. A nested rule only
+    /// contributes when its compiled `when:` can activate for this index; this
+    /// is the same per-iteration environment used by runtime evaluation.
+    fn requires_git(
+        &self,
+        registry: &RuleRegistry,
+        index: &FileIndex,
+        when_env: &WhenEnv<'_>,
+    ) -> Result<bool> {
+        let mut requires = false;
+        visit_active_rule_tree_with_registry(
+            registry,
+            self.rule.as_ref(),
+            self.spec.as_deref(),
+            index,
+            when_env,
+            &mut |rule, spec| {
+                if let Some(spec) = spec
+                    && let Some(meta) = registry.meta(&spec.kind)
+                {
+                    requires |= meta.effective_capabilities().any(|capability| {
+                        matches!(capability.capability, crate::Capability::Git { .. })
+                            && capability_condition_is_active(&capability.condition, spec)
+                    });
+                } else {
+                    // `Engine::new` can receive rules without source specs. Keep
+                    // the runtime traits as the conservative fallback for the
+                    // two Git requirements they expose directly.
+                    requires |= rule.git_tracked_mode() != crate::rule::GitTrackedMode::Off
+                        || rule.wants_git_blame();
+                }
+                Ok(())
+            },
+        )?;
+        Ok(requires)
+    }
+}
+
+fn option_value_is_set(value: &serde_yaml_ng::Value) -> bool {
+    match value {
+        serde_yaml_ng::Value::Null => false,
+        serde_yaml_ng::Value::Bool(value) => *value,
+        serde_yaml_ng::Value::String(value) => !value.is_empty(),
+        serde_yaml_ng::Value::Sequence(value) => !value.is_empty(),
+        serde_yaml_ng::Value::Mapping(value) => !value.is_empty(),
+        serde_yaml_ng::Value::Number(_) => true,
+        serde_yaml_ng::Value::Tagged(value) => option_value_is_set(&value.value),
+    }
+}
+
+fn capability_condition_is_active(
+    condition: &crate::CapabilityCondition,
+    spec: &crate::RuleSpec,
+) -> bool {
+    match condition {
+        crate::CapabilityCondition::Always => true,
+        crate::CapabilityCondition::OptionSet { option } => spec
+            .extra
+            .get(option.as_ref())
+            .is_some_and(option_value_is_set),
+        crate::CapabilityCondition::OptionMatches { option, predicate } => {
+            let Some(value) = spec
+                .extra
+                .get(option.as_ref())
+                .and_then(|value| value.as_str())
+            else {
+                return false;
+            };
+            match predicate {
+                crate::OptionPredicate::ContainsLegacyEnvReference => value.contains("${"),
+            }
+        }
+        crate::CapabilityCondition::FixOpConfigured { op } => spec
+            .fix
+            .as_ref()
+            .is_some_and(|fix| fix.op_name() == op.as_ref()),
+        crate::CapabilityCondition::CommonFieldSet { field } => match field.as_ref() {
+            "scope_filter.changed_since" => spec
+                .scope_filter
+                .as_ref()
+                .and_then(|filter| filter.changed_since.as_ref())
+                .is_some(),
+            // Git currently has no other common-field condition. Keep unknown
+            // future fields inactive until their effective-value semantics are
+            // defined here rather than treating mere YAML presence as truth.
+            _ => false,
+        },
+    }
+}
+
+fn unavailable_git_failure() -> Violation {
+    Violation::new("Git is unavailable or the lint root is not a usable Git repository")
+        .as_analysis_failure(AnalysisFailureKind::ResourceRead)
 }
 
 fn visit_rule_tree_with_registry(
@@ -311,6 +422,175 @@ fn visit_rule_tree_with_registry(
             )
         })?;
         visit_rule_tree_with_registry(registry, nested_rule.as_ref(), Some(&nested_spec), visit)?;
+    }
+    Ok(())
+}
+
+fn when_expr_uses_iter(expr: &WhenExpr) -> bool {
+    use crate::when::Namespace;
+
+    match expr {
+        WhenExpr::Ident { ns, .. } | WhenExpr::Call { ns, .. } => *ns == Namespace::Iter,
+        WhenExpr::Not(inner) => when_expr_uses_iter(inner),
+        WhenExpr::And(left, right)
+        | WhenExpr::Or(left, right)
+        | WhenExpr::Cmp { left, right, .. } => {
+            when_expr_uses_iter(left) || when_expr_uses_iter(right)
+        }
+        WhenExpr::Matches { left, .. } => when_expr_uses_iter(left),
+        WhenExpr::List(items) => items.iter().any(when_expr_uses_iter),
+        WhenExpr::Literal(_) => false,
+    }
+}
+
+fn configured_iteration_gate(spec: Option<&crate::RuleSpec>) -> Result<Option<WhenExpr>> {
+    spec.and_then(|spec| spec.extra.get("when_iter"))
+        .and_then(serde_yaml_ng::Value::as_str)
+        .map(crate::when::parse)
+        .transpose()
+        .map_err(|error| {
+            Error::Other(format!(
+                "prepared nested iteration gate is invalid: {error}"
+            ))
+        })
+}
+
+fn configured_select_scope(spec: Option<&crate::RuleSpec>) -> Result<Option<crate::Scope>> {
+    let Some(value) = spec.and_then(|spec| spec.extra.get("select")) else {
+        return Ok(None);
+    };
+    let patterns = match value {
+        serde_yaml_ng::Value::String(pattern) => vec![pattern.clone()],
+        serde_yaml_ng::Value::Sequence(patterns) => patterns
+            .iter()
+            .filter_map(serde_yaml_ng::Value::as_str)
+            .map(str::to_string)
+            .collect(),
+        _ => return Ok(None),
+    };
+    crate::Scope::from_patterns(&patterns).map(Some)
+}
+
+fn nested_iteration_accepts_entry(spec: Option<&crate::RuleSpec>, is_dir: bool) -> bool {
+    match spec.map(|spec| spec.kind.as_str()) {
+        Some("for_each_dir") => is_dir,
+        Some("for_each_file") => !is_dir,
+        // `every_matching_has` and extension kinds can iterate either shape.
+        // Unknown nested owners stay conservative rather than losing a needed
+        // dependency.
+        _ => true,
+    }
+}
+
+/// Whether a nested spec reaches at least one runtime iteration.
+///
+/// The scan is dependency preparation only: it never builds or evaluates the
+/// child. It mirrors the parent's configured selector and `when_iter:` gate,
+/// then evaluates the child's already-compiled `when:` with the exact
+/// per-iteration facts. This prevents a dependency probe/read for a child whose
+/// gate is false for every iteration.
+fn nested_rule_can_activate(
+    parent_spec: Option<&crate::RuleSpec>,
+    parent_gate: Option<&WhenExpr>,
+    select: Option<&crate::Scope>,
+    nested: &crate::CompiledNestedSpec,
+    index: &FileIndex,
+    when_env: &WhenEnv<'_>,
+) -> bool {
+    let child_uses_iter = nested.when.as_ref().is_some_and(when_expr_uses_iter);
+    let parent_uses_iter = parent_gate.is_some_and(when_expr_uses_iter);
+
+    if !child_uses_iter
+        && nested
+            .when
+            .as_ref()
+            .is_some_and(|expr| !matches!(expr.evaluate(when_env), Ok(true)))
+    {
+        return false;
+    }
+    if !parent_uses_iter
+        && parent_gate.is_some_and(|expr| !matches!(expr.evaluate(when_env), Ok(true)))
+    {
+        return false;
+    }
+
+    for entry in index.dirs().chain(index.files()) {
+        if !nested_iteration_accepts_entry(parent_spec, entry.is_dir)
+            || select.is_some_and(|scope| !scope.matches(&entry.path, index))
+        {
+            continue;
+        }
+        let iter = crate::when::IterEnv {
+            path: &entry.path,
+            is_dir: entry.is_dir,
+            index,
+        };
+        let env = WhenEnv {
+            facts: when_env.facts,
+            vars: when_env.vars,
+            iter: Some(iter),
+            env: when_env.env,
+        };
+        if parent_gate.is_some_and(|expr| !matches!(expr.evaluate(&env), Ok(true)))
+            || nested
+                .when
+                .as_ref()
+                .is_some_and(|expr| !matches!(expr.evaluate(&env), Ok(true)))
+        {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+fn visit_active_rule_tree_with_registry(
+    registry: &RuleRegistry,
+    rule: &dyn Rule,
+    spec: Option<&crate::RuleSpec>,
+    index: &FileIndex,
+    when_env: &WhenEnv<'_>,
+    visit: &mut RuleTreeVisitor<'_>,
+) -> Result<()> {
+    visit(rule, spec)?;
+    if rule.nested_rule_specs().is_empty() {
+        return Ok(());
+    }
+
+    let parent_gate = configured_iteration_gate(spec)?;
+    let select = configured_select_scope(spec)?;
+    let tokens = crate::template::PathTokens::from_path(Path::new("_"));
+    for (idx, compiled) in rule.nested_rule_specs().iter().enumerate() {
+        if !nested_rule_can_activate(
+            spec,
+            parent_gate.as_ref(),
+            select.as_ref(),
+            compiled,
+            index,
+            when_env,
+        ) {
+            continue;
+        }
+        let nested_spec = compiled
+            .spec
+            .instantiate(rule.id(), idx, rule.level(), &tokens);
+        let nested_rule = registry.build(&nested_spec).map_err(|error| {
+            Error::rule_config(
+                rule.id(),
+                format!(
+                    "nested rule #{idx} (`{}`) could not be prepared: {error}",
+                    compiled.spec.kind
+                ),
+            )
+        })?;
+        visit_active_rule_tree_with_registry(
+            registry,
+            nested_rule.as_ref(),
+            Some(&nested_spec),
+            index,
+            when_env,
+            visit,
+        )?;
     }
     Ok(())
 }
@@ -469,6 +749,75 @@ impl Engine {
             .is_some_and(|e| e.rule.as_per_file().is_some())
     }
 
+    /// Whether a public edit for `path` could serialize bytes read by an active
+    /// sensitive rule. The LSP calls this after a successful full run before
+    /// offering a code action; `true` is the conservative answer when fact or
+    /// manifest resolution cannot be reproduced.
+    pub fn path_contains_sensitive_evidence(
+        &self,
+        root: &Path,
+        index: &FileIndex,
+        path: &Path,
+    ) -> bool {
+        let Ok(fact_values) = evaluate_facts(&self.facts, root, index) else {
+            return true;
+        };
+        let when_env = WhenEnv {
+            facts: &fact_values,
+            vars: &self.vars,
+            iter: None,
+            env: None,
+        };
+        if self
+            .resolve_manifest_paths(root, index, &when_env, None)
+            .is_err()
+        {
+            return true;
+        }
+        let ctx = Context {
+            root,
+            index,
+            registry: Some(&self.registry),
+            facts: Some(&fact_values),
+            vars: Some(&self.vars),
+            git_tracked: None,
+            git_blame: None,
+            analysis_time: None,
+        };
+        let target = Self::normalized_write_target(root, path);
+        self.entries.iter().any(|entry| {
+            if entry
+                .when
+                .as_ref()
+                .is_some_and(|when| !matches!(when.evaluate(&when_env), Ok(true)))
+            {
+                return false;
+            }
+            let explicit = entry.spec.as_deref().is_some_and(|spec| spec.sensitive);
+            let scope_path = path.strip_prefix(root).unwrap_or(path);
+            let scope = entry
+                .rule
+                .path_scope()
+                .or_else(|| entry.rule.as_per_file().map(PerFileRule::path_scope));
+            let manifest_sensitive =
+                scope.is_some_and(|scope| scope.sensitive_manifest_sources().next().is_some());
+            if (explicit
+                || entry.rule.path_contents_sensitive_by_default()
+                || (entry.rule.as_per_file().is_some() && manifest_sensitive))
+                && scope.is_some_and(|scope| scope.matches(scope_path, index))
+            {
+                return true;
+            }
+            let mut found = false;
+            entry
+                .rule
+                .visit_sensitive_paths(explicit, &ctx, &mut |candidate| {
+                    found |= Self::normalized_write_target(root, candidate) == target;
+                });
+            found
+        })
+    }
+
     // ~125 lines but each block has its own purpose (changed-set
     // short-circuit, fact eval, git probe, filtered-index build,
     // cross-file partition, per-file partition, assembly). Splitting
@@ -493,10 +842,18 @@ impl Engine {
         let t_facts = Instant::now();
         let fact_values = evaluate_facts(&self.facts, root, index)?;
         phase!(t_facts, "evaluate_facts", facts = self.facts.len() as u64);
+        let when_env = WhenEnv {
+            facts: &fact_values,
+            vars: &self.vars,
+            iter: None,
+            env: None,
+        };
 
         let t_git = Instant::now();
-        let git_tracked = self.collect_git_tracked_if_needed(root);
-        let git_blame = self.build_blame_cache_if_needed(root);
+        let git_required = self.git_requirements(index, &when_env)?;
+        let git_tracked = Self::collect_git_tracked_if_needed(root, &git_required);
+        let git_available = git_tracked.is_some();
+        let git_blame = self.build_blame_cache_if_needed(root, git_tracked.as_ref());
         let analysis_time = self.resolve_analysis_time_if_needed(root);
         phase!(t_git, "git_setup");
 
@@ -562,25 +919,26 @@ impl Engine {
                 git_blame: git_blame.as_ref(),
                 analysis_time: analysis_time.as_ref(),
             });
-        let when_env = WhenEnv {
-            facts: &fact_values,
-            vars: &self.vars,
-            iter: None,
-            env: None,
-        };
 
-        // Resolve `scope_filter.changed_since:` diffs + manifest path sets ONCE,
-        // before ANY dispatch. BOTH the cross-file/rule-major partition below and
-        // the per-file partition read these caches via `Scope::matches` — a
-        // non-per-file rule (e.g. `filename_case`) dispatches in the rule-major
-        // loop, so resolving *after* it silently emptied its manifest/diff scope.
-        // Resolve against the FULL index (so the manifest is reachable even when
-        // unchanged), then copy the maps onto every alternate index a context may
-        // dispatch against (the `--changed` filtered index and the git-tracked
-        // file-only / dir-aware indexes) — each is a fresh FileIndex with empty
-        // caches, and the declared set is independent of which files it holds.
-        self.resolve_changed_paths(root, index)?;
-        self.resolve_manifest_paths(root, index)?;
+        // Resolve active `scope_filter.changed_since:` diffs + manifest path
+        // sets ONCE, before ANY dispatch. BOTH the cross-file/rule-major
+        // partition below and the per-file partition read these caches via
+        // `Scope::matches` — a non-per-file rule (e.g. `filename_case`)
+        // dispatches in the rule-major loop, so resolving after it would
+        // silently empty its manifest/diff scope. Repository unavailability is
+        // gated before diff operations, and false `when:` rules do not touch
+        // either dependency.
+        //
+        // Resolve against the FULL index (so the manifest is reachable even
+        // when unchanged), then copy the maps onto every alternate index a
+        // context may dispatch against (the `--changed` filtered index and the
+        // git-tracked file-only / dir-aware indexes) — each is a fresh
+        // `FileIndex` with empty caches, and the declared set is independent of
+        // which files it holds.
+        if git_available {
+            self.resolve_changed_paths(root, index, &when_env)?;
+        }
+        self.resolve_manifest_paths(root, index, &when_env, None)?;
         let alt_indexes = [
             filtered_index.as_ref(),
             git_tracked_indexes
@@ -591,13 +949,22 @@ impl Engine {
                 .and_then(|g| g.dir_aware.as_ref()),
         ];
         for fi in alt_indexes.into_iter().flatten() {
-            if let Some(map) = index.manifest_paths_map() {
-                fi.set_manifest_paths(map.clone());
+            if let (Some(paths), Some(failures)) =
+                (index.manifest_paths_map(), index.manifest_failures_map())
+            {
+                fi.set_manifest_paths(paths.clone(), failures.clone());
             }
             if let Some(map) = index.changed_paths_map() {
                 fi.set_changed_paths(map.clone());
             }
         }
+        let manifest_failures = self.manifest_failures_by_entry(index, &when_env)?;
+        let gate_inputs = RunGateInputs {
+            when_env: &when_env,
+            manifest_failures: &manifest_failures,
+            git_required: &git_required,
+            git_available,
+        };
         // A `has_ancestor` marker lookup on the `--changed` index must see unchanged
         // files too. Only the changed-set index shares the full tree's file set
         // (the git-tracked indexes are deliberately subsets and must not), and only
@@ -647,11 +1014,11 @@ impl Engine {
                     );
                     let t_rule = Instant::now();
                     let result = run_entry(
+                        idx,
                         entry,
                         ctx,
                         full_ctx.index,
-                        &when_env,
-                        &fact_values,
+                        &gate_inputs,
                         skipped_for_changed,
                     );
                     // u128 → u64 saturating: same rationale as the
@@ -713,7 +1080,8 @@ impl Engine {
         // matches. Coalesces N reads of one file across N rules
         // sharing it.
         let t_per_file = Instant::now();
-        let per_file_results = self.run_per_file(root, &full_ctx, filtered_ctx.as_ref(), &when_env);
+        let per_file_results =
+            self.run_per_file(root, &full_ctx, filtered_ctx.as_ref(), &gate_inputs);
         phase!(
             t_per_file,
             "per_file_partition",
@@ -738,10 +1106,22 @@ impl Engine {
             per_file_results.into_iter().collect();
         let mut results = Vec::with_capacity(self.entries.len());
         for idx in 0..self.entries.len() {
-            if let Some(rr) = cross_by_idx.remove(&idx) {
-                results.push(rr);
-            } else if let Some(rr) = per_file_by_idx.remove(&idx) {
-                results.push(rr);
+            let result = cross_by_idx
+                .remove(&idx)
+                .or_else(|| per_file_by_idx.remove(&idx));
+            if let Some(mut result) = result {
+                if Self::has_sensitive_manifest_scope(self.entries[idx].rule.as_ref()) {
+                    result.redact_manifest_scope();
+                }
+                if self.entries[idx]
+                    .spec
+                    .as_deref()
+                    .is_some_and(|spec| spec.sensitive)
+                {
+                    result.redact_sensitive();
+                }
+                result.sanitize_sensitive_metadata();
+                results.push(result);
             }
         }
         phase!(t_assembly, "assembly", results = results.len() as u64);
@@ -764,9 +1144,9 @@ impl Engine {
         root: &'a Path,
         full_ctx: &'a Context<'a>,
         filtered_ctx: Option<&'a Context<'a>>,
-        when_env: &'a WhenEnv<'a>,
+        gate_inputs: &RunGateInputs<'_, '_>,
     ) -> Vec<(usize, RuleResult)> {
-        let (live, gate_results) = self.collect_live_per_file_entries(full_ctx, when_env);
+        let (live, gate_results) = self.collect_live_per_file_entries(full_ctx, gate_inputs);
         if live.is_empty() {
             return gate_results;
         }
@@ -849,22 +1229,38 @@ impl Engine {
                     if applicable.is_empty() {
                         return Vec::new();
                     }
-                    // 2. Read once, skipping a file larger than the
-                    // analysis cap (from the index size, no extra
-                    // stat) so a multi-GB blob can't OOM the run (M3).
-                    // A genuinely-absent file (deleted mid-walk) skips
-                    // silently. A real read error (permission, I/O)
-                    // fails CLOSED: every applicable rule reports
-                    // "could not read file" on it at its own level, so
-                    // an unreadable in-scope file can never read as
-                    // "passed" (audit 2026-10 finding 7). `eval_per_file`
-                    // and the rules' own `evaluate` loops (the `fix`
-                    // read path) report the same, so `check` and `fix`
-                    // agree.
+                    // 2. Read once for every applicable rule. Every failure after
+                    // repository discovery is a typed `resource_read` analysis
+                    // failure for each owning rule; an unreadable or over-cap
+                    // in-scope file can never look like a policy pass.
                     let abs = root.join(&file_entry.path);
                     let bytes = match crate::walker::read_for_analysis(&abs, file_entry.size) {
                         crate::walker::AnalysisRead::Bytes(b) => b,
-                        crate::walker::AnalysisRead::Skip => return Vec::new(),
+                        crate::walker::AnalysisRead::Missing => {
+                            return applicable
+                                .iter()
+                                .map(|(entry_idx, _)| {
+                                    (
+                                        *entry_idx,
+                                        crate::rule::missing_file_violation(&file_entry.path),
+                                    )
+                                })
+                                .collect();
+                        }
+                        crate::walker::AnalysisRead::TooLarge(size) => {
+                            return applicable
+                                .iter()
+                                .map(|(entry_idx, _)| {
+                                    (
+                                        *entry_idx,
+                                        crate::rule::too_large_file_violation(
+                                            &file_entry.path,
+                                            size,
+                                        ),
+                                    )
+                                })
+                                .collect();
+                        }
                         crate::walker::AnalysisRead::Unreadable(e) => {
                             return applicable
                                 .iter()
@@ -898,7 +1294,12 @@ impl Engine {
                                 }
                             }
                             Err(e) => {
-                                out.push((entry_idx, Violation::new(format!("rule error: {e}"))));
+                                out.push((
+                                    entry_idx,
+                                    Violation::new(format!("rule evaluation failed: {e}"))
+                                        .with_path(file_entry.path.clone())
+                                        .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                                ));
                             }
                         }
                     }
@@ -952,7 +1353,7 @@ impl Engine {
     fn collect_live_per_file_entries<'a>(
         &'a self,
         ctx: &Context<'_>,
-        when_env: &WhenEnv<'_>,
+        gate_inputs: &RunGateInputs<'_, '_>,
     ) -> LivePerFileEntries<'a> {
         let index = ctx.index;
         let mut live: Vec<(usize, &RuleEntry)> = Vec::new();
@@ -970,42 +1371,41 @@ impl Engine {
                 continue;
             }
             if let Some(expr) = &entry.when {
-                match expr.evaluate(when_env) {
+                match expr.evaluate(gate_inputs.when_env) {
                     Ok(true) => {}
                     Ok(false) => continue,
                     Err(e) => {
-                        gate_results.push((
-                            idx,
-                            RuleResult {
-                                rule_id: Arc::from(entry.rule.id()),
-                                level: entry.rule.level(),
-                                policy_url: entry.rule.policy_url().map(Arc::from),
-                                violations: vec![Violation::new(format!(
-                                    "when evaluation error: {e}"
-                                ))],
-                                notes: Vec::new(),
-                                is_fixable: entry.rule.fixer().is_some(),
-                            },
-                        ));
+                        let failure = Violation::new(format!("when evaluation failed: {e}"))
+                            .as_analysis_failure(AnalysisFailureKind::Condition);
+                        gate_results.push((idx, nonfixable_rule_result(entry, vec![failure])));
                         continue;
                     }
                 }
+            }
+            let manifest_failures = &gate_inputs.manifest_failures[idx];
+            if !manifest_failures.is_empty() {
+                gate_results.push((
+                    idx,
+                    nonfixable_rule_result(entry, manifest_failures.clone()),
+                ));
+                continue;
+            }
+            if gate_inputs.git_required[idx] && !gate_inputs.git_available {
+                gate_results.push((
+                    idx,
+                    nonfixable_rule_result(entry, vec![unavailable_git_failure()]),
+                ));
+                continue;
             }
             let scope_violation = match entry.spec.as_deref() {
                 Some(spec) => {
                     match crate::expect_matches_violation(entry.rule.as_ref(), spec, index, ctx) {
                         Ok(violation) => violation,
                         Err(e) => {
-                            gate_results.push((
-                                idx,
-                                RuleResult::new(
-                                    Arc::from(entry.rule.id()),
-                                    entry.rule.level(),
-                                    entry.rule.policy_url().map(Arc::from),
-                                    vec![Violation::new(format!("rule error: {e}"))],
-                                    false,
-                                ),
-                            ));
+                            let failure =
+                                Violation::new(format!("scope assertion evaluation failed: {e}"))
+                                    .as_analysis_failure(AnalysisFailureKind::Evaluation);
+                            gate_results.push((idx, nonfixable_rule_result(entry, vec![failure])));
                             continue;
                         }
                     }
@@ -1015,17 +1415,7 @@ impl Engine {
             if let Some(violation) = scope_violation {
                 // This is a configuration-integrity finding, not a finding the
                 // host rule's fixer can repair (there is no target file).
-                let (violations, is_fixable) = mark_fixability(vec![violation], None);
-                gate_results.push((
-                    idx,
-                    RuleResult::new(
-                        Arc::from(entry.rule.id()),
-                        entry.rule.level(),
-                        entry.rule.policy_url().map(Arc::from),
-                        violations,
-                        is_fixable,
-                    ),
-                ));
+                gate_results.push((idx, nonfixable_rule_result(entry, vec![violation])));
                 continue;
             }
             if skipped_for_changed {
@@ -1075,13 +1465,23 @@ impl Engine {
             index.set_facts(computed);
             index.cached_facts().expect("facts just set on the index")
         };
-        let git_tracked = self.collect_git_tracked_if_needed(root);
-        let git_blame = self.build_blame_cache_if_needed(root);
+        let when_env = WhenEnv {
+            facts: fact_values,
+            vars: &self.vars,
+            iter: None,
+            env: None,
+        };
+        let git_required = self.git_requirements(index, &when_env)?;
+        let git_tracked = Self::collect_git_tracked_if_needed(root, &git_required);
+        let git_available = git_tracked.is_some();
+        let git_blame = self.build_blame_cache_if_needed(root, git_tracked.as_ref());
         let analysis_time = self.resolve_analysis_time_if_needed(root);
-        // Per-file rules may carry `scope_filter.changed_since:`; resolve
-        // (and cache) the diff before any `Scope::matches` reads it.
-        self.resolve_changed_paths(root, index)?;
-        self.resolve_manifest_paths(root, index)?;
+        // Per-file rules may carry `scope_filter.changed_since:` or manifest
+        // scopes; resolve active dependencies before any `Scope::matches`.
+        if git_available {
+            self.resolve_changed_paths(root, index, &when_env)?;
+        }
+        self.resolve_manifest_paths(root, index, &when_env, None)?;
 
         let ctx = Context {
             root,
@@ -1093,14 +1493,15 @@ impl Engine {
             git_blame: git_blame.as_ref(),
             analysis_time: analysis_time.as_ref(),
         };
-        let when_env = WhenEnv {
-            facts: fact_values,
-            vars: &self.vars,
-            iter: None,
-            env: None,
-        };
 
-        let (live, gate_results) = self.collect_live_per_file_entries(&ctx, &when_env);
+        let manifest_failures = self.manifest_failures_by_entry(index, &when_env)?;
+        let gate_inputs = RunGateInputs {
+            when_env: &when_env,
+            manifest_failures: &manifest_failures,
+            git_required: &git_required,
+            git_available,
+        };
+        let (live, gate_results) = self.collect_live_per_file_entries(&ctx, &gate_inputs);
 
         // Dispatch each in-scope rule against the supplied bytes. The
         // raw violations (notes included) are bucketed by entry index;
@@ -1122,10 +1523,11 @@ impl Engine {
                         bucket.entry(*idx).or_default().extend(vs);
                     }
                 }
-                Err(e) => bucket
-                    .entry(*idx)
-                    .or_default()
-                    .push(Violation::new(format!("rule error: {e}"))),
+                Err(e) => bucket.entry(*idx).or_default().push(
+                    Violation::new(format!("rule evaluation failed: {e}"))
+                        .with_path(file_path)
+                        .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                ),
             }
         }
 
@@ -1148,8 +1550,19 @@ impl Engine {
         // Preserve `self.entries` order, mirroring `run`'s assembly.
         let mut results = Vec::with_capacity(by_idx.len());
         for idx in 0..self.entries.len() {
-            if let Some(rr) = by_idx.remove(&idx) {
-                results.push(rr);
+            if let Some(mut result) = by_idx.remove(&idx) {
+                if Self::has_sensitive_manifest_scope(self.entries[idx].rule.as_ref()) {
+                    result.redact_manifest_scope();
+                }
+                if self.entries[idx]
+                    .spec
+                    .as_deref()
+                    .is_some_and(|spec| spec.sensitive)
+                {
+                    result.redact_sensitive();
+                }
+                result.sanitize_sensitive_metadata();
+                results.push(result);
             }
         }
         Ok(results)
@@ -1194,7 +1607,7 @@ impl Engine {
             // Single-pass preview: a dry run writes nothing, so there is no
             // changed tree to re-walk. It shows the first pass; a real `fix` may
             // do more (docs/design/v0.17/fixpoint.md 2). No stage sink.
-            let (mut report, _) = self.fix_run(
+            let (mut report, _, _) = self.fix_run(
                 root,
                 index,
                 &std::collections::HashSet::new(),
@@ -1205,6 +1618,7 @@ impl Engine {
                 None,
             )?;
             self.predict_unresolved_creates(root, index, walk_opts, &mut report);
+            Self::sanitize_fix_report(&mut report);
             return Ok(report);
         }
         // Byte-level fixpoint (docs/design/v0.17/fixpoint.md): re-walk and re-fix
@@ -1254,7 +1668,7 @@ impl Engine {
         let write_failures_reported = RefCell::new(HashSet::new());
         for _pass in 0..MAX_PASSES {
             let cur = owned_index.as_ref().unwrap_or(index);
-            let (report, _buf) = self.fix_run(
+            let (report, _buf, _) = self.fix_run(
                 root,
                 cur,
                 &created,
@@ -1345,8 +1759,24 @@ impl Engine {
                     !touched.contains(&Self::violation_key(&rr.rule_id, &it.violation))
                 });
             }
+            // Failures describe the current evaluation pass, not a historical
+            // fix action. Clear the prior pass, then install this pass's records
+            // while merging fix items under their existing keep-last contract.
+            for rr in &mut results {
+                rr.analysis_failures.clear();
+            }
             let mut newly_locked: Vec<String> = Vec::new();
-            for rr in report.results {
+            for mut rr in report.results {
+                let failures = std::mem::take(&mut rr.analysis_failures);
+                if !failures.is_empty() {
+                    push_fix_result(
+                        &mut results,
+                        Arc::clone(&rr.rule_id),
+                        rr.level,
+                        Vec::new(),
+                        failures,
+                    );
+                }
                 for item in rr.items {
                     let key = Self::violation_key(&rr.rule_id, &item.violation);
                     if locked.contains(&key) {
@@ -1388,7 +1818,7 @@ impl Engine {
         // and stays non-convergent.
         if !converged {
             let cur = owned_index.as_ref().unwrap_or(index);
-            let (confirm, _) = self.fix_run(
+            let (confirm, _, _) = self.fix_run(
                 root,
                 cur,
                 &created,
@@ -1398,17 +1828,37 @@ impl Engine {
                 None,
                 None,
             )?;
-            if confirm.applied() == 0 {
+            let confirm_applied = confirm.applied();
+            let confirm_keys: std::collections::HashSet<String> = confirm
+                .results
+                .iter()
+                .flat_map(|rr| {
+                    rr.items
+                        .iter()
+                        .map(move |it| Self::violation_key(&rr.rule_id, &it.violation))
+                })
+                .collect();
+            // The confirmation is the only evaluation of the final on-disk tree.
+            // Failures are current state, not an audit trail: replace the tenth
+            // pass's records even when the confirmation still finds work.
+            for rr in &mut results {
+                rr.analysis_failures.clear();
+            }
+            for mut rr in confirm.results {
+                let failures = std::mem::take(&mut rr.analysis_failures);
+                if !failures.is_empty() {
+                    push_fix_result(
+                        &mut results,
+                        Arc::clone(&rr.rule_id),
+                        rr.level,
+                        Vec::new(),
+                        failures,
+                    );
+                }
+            }
+            if confirm_applied == 0 {
                 converged = true;
-                final_keys = confirm
-                    .results
-                    .iter()
-                    .flat_map(|rr| {
-                        rr.items
-                            .iter()
-                            .map(move |it| Self::violation_key(&rr.rule_id, &it.violation))
-                    })
-                    .collect();
+                final_keys = confirm_keys;
             }
         }
         // Reconcile the residual against the converged final state (see
@@ -1457,7 +1907,16 @@ impl Engine {
         }
         // A rule whose every item was superseded (and not re-emitted) drops out,
         // matching `fix_run`'s "rules that pass are omitted".
-        results.retain(|rr| !rr.items.is_empty());
+        results.retain(|rr| !rr.items.is_empty() || !rr.analysis_failures.is_empty());
+        // Results can first appear on different passes, but every projection
+        // promises configured rule order rather than first-seen order.
+        let rule_order: HashMap<&str, usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| (entry.rule.id(), idx))
+            .collect();
+        results.sort_by_key(|rr| rule_order.get(rr.rule_id.as_ref()).copied());
         if !converged {
             let mut stuck: Vec<&str> = last_applied_rules.iter().map(Arc::as_ref).collect();
             stuck.sort_unstable();
@@ -1470,10 +1929,12 @@ impl Engine {
                 stuck.join(", ")
             );
         }
-        Ok(FixReport {
+        let mut report = FixReport {
             results,
             non_convergent: !converged,
-        })
+        };
+        Self::sanitize_fix_report(&mut report);
+        Ok(report)
     }
 
     /// Compose the fixes without writing, and hand back what each file would
@@ -1497,6 +1958,7 @@ impl Engine {
     ///
     /// # Errors
     /// Propagates any hard error from the fix pass (walk / scope resolution).
+    #[allow(clippy::too_many_lines)]
     pub fn stage_fixes(
         &self,
         root: &Path,
@@ -1526,7 +1988,7 @@ impl Engine {
         // Single pass: a `--diff` preview shows what one fix pass would compose;
         // it does not re-walk (there is no changed tree to walk), so it cannot
         // preview a multi-pass cascade -- documented in `stage_fixes`' caveat.
-        let (report, buffer) = self.fix_run(
+        let (mut report, buffer, mut sensitive_targets) = self.fix_run(
             root,
             index,
             /* created */ &std::collections::HashSet::new(),
@@ -1614,6 +2076,21 @@ impl Engine {
         // Deterministic output: the compose buffer is sorted, the sink is
         // push-ordered, so re-sort the union by the presented path.
         staged.sort_by(|a, b| a.path.cmp(&b.path));
+        sensitive_targets.extend(self.sensitive_fix_targets(&report, root));
+        staged.retain(|fix| {
+            let target = Self::normalized_write_target(root, &fix.path);
+            if sensitive_targets.contains(&target) {
+                return false;
+            }
+            if let StagedKind::Rename { from } = &fix.kind {
+                let source = Self::normalized_write_target(root, from);
+                if sensitive_targets.contains(&source) {
+                    return false;
+                }
+            }
+            true
+        });
+        Self::sanitize_fix_report(&mut report);
         Ok((report, staged))
     }
 
@@ -1674,6 +2151,100 @@ impl Engine {
         }
     }
 
+    /// Remove remediation-only identity from sensitive findings after every
+    /// fixer has finished and before a fix report crosses the public API.
+    fn sanitize_fix_report(report: &mut FixReport) {
+        for result in &mut report.results {
+            for item in &mut result.items {
+                item.violation.sanitize_sensitive_metadata(&result.rule_id);
+            }
+        }
+    }
+
+    /// Resolved targets touched by sensitive fix items. `stage_fixes` uses this
+    /// to omit the entire composed file from `--diff`, including non-sensitive
+    /// sibling edits whose whole-file context could contain secret bytes.
+    fn sensitive_fix_targets(&self, report: &FixReport, root: &Path) -> HashSet<PathBuf> {
+        let mut targets = HashSet::new();
+        for result in &report.results {
+            let fixer = self.fixer_for(&result.rule_id);
+            for item in &result.items {
+                if !item.violation.is_sensitive() {
+                    continue;
+                }
+                if let Some(path) = item.violation.path.as_deref() {
+                    targets.insert(Self::normalized_write_target(root, path));
+                }
+                let Some(fixer) = fixer else {
+                    continue;
+                };
+                let bytes = item
+                    .violation
+                    .path
+                    .as_deref()
+                    .and_then(|path| std::fs::read(root.join(path)).ok())
+                    .unwrap_or_default();
+                if let Some(edit) = fixer.fix_edit(&item.violation, &bytes, root) {
+                    Self::insert_fix_targets(root, &edit, &mut targets);
+                }
+            }
+        }
+        targets
+    }
+
+    fn insert_fix_targets(root: &Path, edit: &FixEdit, targets: &mut HashSet<PathBuf>) {
+        match edit {
+            FixEdit::SetContent { path, .. }
+            | FixEdit::CreateFile { path, .. }
+            | FixEdit::DeleteFile { path }
+            | FixEdit::ReplaceRange { path, .. }
+            | FixEdit::SetMode { path, .. } => {
+                targets.insert(Self::normalized_write_target(root, path));
+            }
+            FixEdit::RenameFile { from, to } => {
+                targets.insert(Self::normalized_write_target(root, from));
+                targets.insert(Self::normalized_write_target(root, to));
+            }
+        }
+    }
+
+    fn normalized_write_target(root: &Path, path: &Path) -> PathBuf {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        crate::rule::resolve_write_target(&absolute)
+    }
+
+    fn has_sensitive_manifest_scope(rule: &dyn Rule) -> bool {
+        rule.path_scope()
+            .or_else(|| rule.as_per_file().map(PerFileRule::path_scope))
+            .is_some_and(|scope| scope.sensitive_manifest_sources().next().is_some())
+    }
+
+    fn record_sensitive_result_paths(
+        entry: &RuleEntry,
+        result: &RuleResult,
+        root: &Path,
+        targets: &mut HashSet<PathBuf>,
+    ) {
+        let explicit = entry.spec.as_deref().is_some_and(|spec| spec.sensitive);
+        for finding in result.violations.iter().chain(&result.notes) {
+            if (explicit || finding.is_sensitive())
+                && let Some(path) = finding.path.as_deref()
+            {
+                targets.insert(Self::normalized_write_target(root, path));
+            }
+        }
+        for failure in &result.analysis_failures {
+            if (explicit || failure.is_sensitive())
+                && let Some(path) = failure.path.as_deref()
+            {
+                targets.insert(Self::normalized_write_target(root, path));
+            }
+        }
+    }
     /// Identity key for grouping a violation's report items ACROSS fixpoint
     /// passes (docs/design/v0.17/fixpoint.md 7). Reuses the baseline fingerprint
     /// (it folds in `rule_id` + path + the rule's stable identity via
@@ -1691,14 +2262,7 @@ impl Engine {
     /// `baseline_key` or, absent one, the path (or the message for a pathless
     /// violation).
     fn violation_key(rule_id: &str, v: &Violation) -> String {
-        crate::baseline::violation_fingerprint(
-            rule_id,
-            v.path.as_deref(),
-            v.line,
-            v.baseline_key.as_deref(),
-            &v.message,
-            None,
-        )
+        crate::baseline::fingerprint(rule_id, v, None)
     }
 
     // `created` (2b) is the eighth parameter; the signature stays flat rather than
@@ -1722,10 +2286,18 @@ impl Engine {
         // per fixpoint pass). `None` for a preview (`--dry-run` / `--diff`).
         flush: Option<&RefCell<HashSet<PathBuf>>>,
         stage_ops: Option<&RefCell<Vec<FixEdit>>>,
-    ) -> Result<(FixReport, BTreeMap<PathBuf, Vec<u8>>)> {
+    ) -> Result<FixRunOutput> {
         let fact_values = evaluate_facts(&self.facts, root, index)?;
-        let git_tracked = self.collect_git_tracked_if_needed(root);
-        let git_blame = self.build_blame_cache_if_needed(root);
+        let when_env = WhenEnv {
+            facts: &fact_values,
+            vars: &self.vars,
+            iter: None,
+            env: None,
+        };
+        let git_required = self.git_requirements(index, &when_env)?;
+        let git_tracked = Self::collect_git_tracked_if_needed(root, &git_required);
+        let git_available = git_tracked.is_some();
+        let git_blame = self.build_blame_cache_if_needed(root, git_tracked.as_ref());
         let filtered_index = self.build_filtered_index(index, Some(created));
         let git_tracked_indexes = self.build_git_tracked_indexes(index, git_tracked.as_ref());
         let full_ctx = Context {
@@ -1774,12 +2346,6 @@ impl Engine {
                 git_blame: git_blame.as_ref(),
                 analysis_time,
             });
-        let when_env = WhenEnv {
-            facts: &fact_values,
-            vars: &self.vars,
-            iter: None,
-            env: None,
-        };
         // Compose mode for a real (non-dry-run) pass: content fixers route
         // their whole-file writes into this buffer instead of hitting disk, so
         // a file touched by several fixers in config order composes in memory
@@ -1798,10 +2364,12 @@ impl Engine {
             stage_ops,
         };
 
-        // Same `scope_filter.changed_since:` resolution as `run`, so a
-        // fix pass respects per-rule diff scoping too.
-        self.resolve_changed_paths(root, index)?;
-        self.resolve_manifest_paths(root, index)?;
+        // Same dependency resolution as `run`, so a fix pass respects per-rule
+        // diff and manifest scoping without touching false `when:` rules.
+        if git_available {
+            self.resolve_changed_paths(root, index, &when_env)?;
+        }
+        self.resolve_manifest_paths(root, index, &when_env, Some(created))?;
         // Propagate BOTH resolved caches onto every alternate index the fix loop
         // may `pick_ctx` (see `run`): the `--changed` filtered index and the
         // git-tracked file-only / dir-aware indexes, so `fix` respects manifest
@@ -1816,13 +2384,16 @@ impl Engine {
                 .and_then(|g| g.dir_aware.as_ref()),
         ];
         for fi in alt_indexes.into_iter().flatten() {
-            if let Some(map) = index.manifest_paths_map() {
-                fi.set_manifest_paths(map.clone());
+            if let (Some(paths), Some(failures)) =
+                (index.manifest_paths_map(), index.manifest_failures_map())
+            {
+                fi.set_manifest_paths(paths.clone(), failures.clone());
             }
             if let Some(map) = index.changed_paths_map() {
                 fi.set_changed_paths(map.clone());
             }
         }
+        let manifest_failures = self.manifest_failures_by_entry(index, &when_env)?;
         // A `has_ancestor` marker lookup on the `--changed` index must see unchanged
         // files too. Only the changed-set index shares the full tree's file set
         // (the git-tracked indexes are deliberately subsets and must not), and only
@@ -1836,6 +2407,10 @@ impl Engine {
         }
 
         let mut results: Vec<FixRuleResult> = Vec::new();
+        // Every sensitive finding path observed during evaluation, including
+        // notes that never enter a fix report. A staged diff omits these files
+        // so unchanged secret bytes cannot leak through a sibling edit.
+        let mut sensitive_paths = HashSet::new();
         // Accumulator for the located-edit regime, filled by fixers that opt in
         // via `collects_located_edits` and applied once per file after the loop.
         // Phase 0 stays empty (no shipped fixer opts in), so the located pass is
@@ -1875,26 +2450,84 @@ impl Engine {
                     Ok(true) => {}
                     Ok(false) => continue,
                     Err(e) => {
-                        results.push(FixRuleResult {
-                            rule_id: Arc::from(entry.rule.id()),
-                            level: entry.rule.level(),
-                            items: vec![FixItem {
-                                violation: Violation::new(format!("when evaluation error: {e}")),
-                                status: FixStatus::Unfixable,
-                            }],
-                        });
+                        push_fix_result(
+                            &mut results,
+                            Arc::from(entry.rule.id()),
+                            entry.rule.level(),
+                            Vec::new(),
+                            vec![crate::AnalysisFailure::new(
+                                AnalysisFailureKind::Condition,
+                                format!("when evaluation failed: {e}"),
+                            )],
+                        );
                         continue;
                     }
                 }
             }
+            let manifest_failures = &manifest_failures[rule_index];
+            if !manifest_failures.is_empty() {
+                let evaluated = RuleResult::new(
+                    Arc::from(entry.rule.id()),
+                    entry.rule.level(),
+                    None,
+                    manifest_failures.clone(),
+                    false,
+                );
+                if stage_ops.is_some() {
+                    Self::record_sensitive_result_paths(
+                        entry,
+                        &evaluated,
+                        root,
+                        &mut sensitive_paths,
+                    );
+                }
+                push_fix_result(
+                    &mut results,
+                    Arc::from(entry.rule.id()),
+                    entry.rule.level(),
+                    Vec::new(),
+                    evaluated.analysis_failures,
+                );
+                continue;
+            }
+            if git_required[rule_index] && !git_available {
+                let evaluated = RuleResult::new(
+                    Arc::from(entry.rule.id()),
+                    entry.rule.level(),
+                    None,
+                    vec![unavailable_git_failure()],
+                    false,
+                );
+                if stage_ops.is_some() {
+                    Self::record_sensitive_result_paths(
+                        entry,
+                        &evaluated,
+                        root,
+                        &mut sensitive_paths,
+                    );
+                }
+                push_fix_result(
+                    &mut results,
+                    Arc::from(entry.rule.id()),
+                    entry.rule.level(),
+                    Vec::new(),
+                    evaluated.analysis_failures,
+                );
+                continue;
+            }
             let scope_violation = match entry.spec.as_deref() {
-                Some(spec) => crate::expect_matches_violation(
+                Some(spec) => match crate::expect_matches_violation(
                     entry.rule.as_ref(),
                     spec,
                     full_ctx.index,
                     &full_ctx,
-                )
-                .unwrap_or_else(|e| Some(Violation::new(format!("rule error: {e}")))),
+                ) {
+                    Ok(violation) => violation,
+                    Err(e) => Some(
+                        Violation::new(format!("scope assertion evaluation failed: {e}"))
+                            .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                    ),
+                },
                 None => None,
             };
             if scope_violation.is_none() && skipped_for_changed {
@@ -1905,7 +2538,7 @@ impl Engine {
             // through baseline classification below so `check --baseline` and
             // `fix --baseline` agree; only the fixer selection is suppressed.
             let scope_assertion_failed = scope_violation.is_some();
-            let mut violations = if let Some(violation) = scope_violation {
+            let violations = if let Some(violation) = scope_violation {
                 vec![violation]
             } else {
                 let ctx = pick_ctx(
@@ -1916,14 +2549,48 @@ impl Engine {
                     git_file_only_ctx.as_ref(),
                     git_dir_aware_ctx.as_ref(),
                 );
+                if stage_ops.is_some() {
+                    let explicit = entry.spec.as_deref().is_some_and(|spec| spec.sensitive);
+                    entry
+                        .rule
+                        .visit_sensitive_paths(explicit, ctx, &mut |path| {
+                            sensitive_paths.insert(Self::normalized_write_target(root, path));
+                        });
+                }
                 match entry.rule.evaluate(ctx) {
                     Ok(v) => v,
-                    Err(e) => vec![Violation::new(format!("rule error: {e}"))],
+                    Err(e) => vec![
+                        Violation::new(format!("rule evaluation failed: {e}"))
+                            .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                    ],
                 }
             };
-            // Notes are check-report detail, never remediation targets. Drop them
-            // before baseline classification and before either fixer regime.
-            violations.retain(|violation| violation.note_kind.is_none());
+            // Partition non-remediation findings before baseline and fixer
+            // processing. Notes are check-only; failures are reported through
+            // their dedicated collection and never reach either path.
+            let mut evaluated = RuleResult::new(
+                Arc::from(entry.rule.id()),
+                entry.rule.level(),
+                None,
+                violations,
+                false,
+            );
+            if Self::has_sensitive_manifest_scope(entry.rule.as_ref()) {
+                evaluated.redact_manifest_scope();
+            }
+            if stage_ops.is_some() {
+                Self::record_sensitive_result_paths(entry, &evaluated, root, &mut sensitive_paths);
+            }
+            let violations = evaluated.violations;
+            if !evaluated.analysis_failures.is_empty() {
+                push_fix_result(
+                    &mut results,
+                    Arc::from(entry.rule.id()),
+                    entry.rule.level(),
+                    Vec::new(),
+                    evaluated.analysis_failures,
+                );
+            }
             // W4 (`fix --baseline`): SKIP -- surface, never apply -- any violation
             // the baseline grandfathers, so `fix` resolves only NEW findings. Reuse
             // `baseline::apply` on THIS rule's violations: the fingerprint includes
@@ -1939,6 +2606,7 @@ impl Engine {
                         level: entry.rule.level(),
                         policy_url: None,
                         violations,
+                        analysis_failures: Vec::new(),
                         notes: Vec::new(),
                         is_fixable: false,
                     }],
@@ -1958,22 +2626,25 @@ impl Engine {
                     crate::baseline::fingerprint(rid, v, bytes)
                 });
                 if !applied.suppressed.is_empty() {
-                    results.push(FixRuleResult {
-                        rule_id: Arc::from(entry.rule.id()),
-                        level: entry.rule.level(),
-                        items: applied
-                            .suppressed
-                            .into_iter()
-                            .map(|s| FixItem {
-                                violation: s.violation,
-                                status: FixStatus::baselined(format!(
-                                    "{} grandfathered by the baseline (not fixed; run without \
-                                     --baseline to fix it, or re-run `alint baseline`)",
-                                    crate::report::BASELINED_SKIP_PREFIX
-                                )),
-                            })
-                            .collect(),
-                    });
+                    let items = applied
+                        .suppressed
+                        .into_iter()
+                        .map(|s| FixItem {
+                            violation: s.violation,
+                            status: FixStatus::baselined(format!(
+                                "{} grandfathered by the baseline (not fixed; run without \
+                                 --baseline to fix it, or re-run `alint baseline`)",
+                                crate::report::BASELINED_SKIP_PREFIX
+                            )),
+                        })
+                        .collect();
+                    push_fix_result(
+                        &mut results,
+                        Arc::from(entry.rule.id()),
+                        entry.rule.level(),
+                        items,
+                        Vec::new(),
+                    );
                 }
                 // Only the live (new) violations proceed to the fixer.
                 applied
@@ -2060,6 +2731,7 @@ impl Engine {
                     by_file.entry(key).or_default().push(v);
                 }
                 for (file, file_violations) in by_file {
+                    let sensitive = file_violations.iter().any(Violation::is_sensitive);
                     let abs = root.join(&file);
                     let bytes = match read_for_fix(&abs, &file, &fix_ctx) {
                         Ok(ReadForFix::Bytes(b)) => b,
@@ -2143,16 +2815,19 @@ impl Engine {
                             .push(LocatedEdit {
                                 rule_index,
                                 violation_index: ordinal,
+                                sensitive,
                                 collected,
                             });
                     }
                 }
                 if !declined.is_empty() {
-                    results.push(FixRuleResult {
-                        rule_id: Arc::from(entry.rule.id()),
-                        level: entry.rule.level(),
-                        items: declined,
-                    });
+                    push_fix_result(
+                        &mut results,
+                        Arc::from(entry.rule.id()),
+                        entry.rule.level(),
+                        declined,
+                        Vec::new(),
+                    );
                 }
                 continue;
             }
@@ -2231,11 +2906,13 @@ impl Engine {
                     status,
                 });
             }
-            results.push(FixRuleResult {
-                rule_id: Arc::from(entry.rule.id()),
-                level: entry.rule.level(),
+            push_fix_result(
+                &mut results,
+                Arc::from(entry.rule.id()),
+                entry.rule.level(),
                 items,
-            });
+                Vec::new(),
+            );
         }
 
         // Apply the located-edit batches collected above. Per file, the edits
@@ -2353,27 +3030,34 @@ impl Engine {
                     } else {
                         status
                     };
+                    let mut violation = Violation::new(format!(
+                        "located edit at {range_key} in {}",
+                        file.display()
+                    ))
+                    .with_path(file.clone())
+                    .with_baseline_key(range_key.clone());
+                    if edit.sensitive {
+                        violation.mark_sensitive(&format!(
+                            "fix\0{}\0{}\0{range_key}",
+                            edit.rule_index,
+                            file.display()
+                        ));
+                    }
                     located_items
                         .entry(edit.rule_index)
                         .or_default()
-                        .push(FixItem {
-                            violation: Violation::new(format!(
-                                "located edit at {range_key} in {}",
-                                file.display()
-                            ))
-                            .with_path(file.clone())
-                            .with_baseline_key(range_key),
-                            status,
-                        });
+                        .push(FixItem { violation, status });
                 }
             }
             for (rule_index, items) in located_items {
                 let entry = &self.entries[rule_index];
-                results.push(FixRuleResult {
-                    rule_id: Arc::from(entry.rule.id()),
-                    level: entry.rule.level(),
+                push_fix_result(
+                    &mut results,
+                    Arc::from(entry.rule.id()),
+                    entry.rule.level(),
                     items,
-                });
+                    Vec::new(),
+                );
             }
         }
 
@@ -2433,6 +3117,35 @@ impl Engine {
                 }
             }
         }
+        // Redact only after all fixers have run: remediation needs the original
+        // evidence, while every public fix report must be safe. Explicit
+        // sensitivity applies to the whole owning result; implicit sensitivity
+        // is carried by each finding.
+        for result in &mut results {
+            let explicit = self.entries.iter().any(|entry| {
+                entry.rule.id() == result.rule_id.as_ref()
+                    && entry.spec.as_deref().is_some_and(|spec| spec.sensitive)
+            });
+            for failure in &mut result.analysis_failures {
+                if explicit {
+                    failure.redact_message(&result.rule_id);
+                }
+            }
+            for item in &mut result.items {
+                if explicit {
+                    item.violation.redact_message(&result.rule_id);
+                }
+                if item.violation.is_sensitive() {
+                    let path = item
+                        .violation
+                        .path
+                        .as_deref()
+                        .map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+                    let locator = format!("fix\0{}\0{path}", result.rule_id);
+                    item.status = item.status.clone().redact_detail(&locator);
+                }
+            }
+        }
         Ok((
             // A single `fix_run` never sets non-convergence: that is the
             // fixpoint loop's verdict, assembled in `Engine::fix` from the whole
@@ -2443,50 +3156,50 @@ impl Engine {
                 non_convergent: false,
             },
             compose_buf.map_or_else(BTreeMap::new, RefCell::into_inner),
+            sensitive_paths,
         ))
     }
 
-    /// Collect git's tracked-paths set, but only if at least one
-    /// loaded rule asked for it. Most repos / configs never opt
-    /// in, so this returns `None` zero-cost in the common case.
-    /// Inside a non-git directory, or when `git` exits non-zero
-    /// (corrupt repo, missing binary), the helper also returns
-    /// `None` — rules that consult it then treat every entry as
-    /// "untracked," which is the right default for absence-style
-    /// rules with `git_tracked_only: true`.
-    fn collect_git_tracked_if_needed(
-        &self,
-        root: &Path,
-    ) -> Option<std::collections::HashSet<std::path::PathBuf>> {
-        let any_wants = self
-            .entries
+    /// Resolve active Git dependencies from each configured rule tree's
+    /// capability metadata. The vector stays aligned with `self.entries`.
+    fn git_requirements(&self, index: &FileIndex, when_env: &WhenEnv<'_>) -> Result<Vec<bool>> {
+        self.entries
             .iter()
-            .any(|e| e.rule.git_tracked_mode() != crate::rule::GitTrackedMode::Off);
-        if !any_wants {
-            return None;
-        }
-        crate::git::collect_tracked_paths(root)
+            .map(|entry| {
+                if entry
+                    .when
+                    .as_ref()
+                    .is_some_and(|expr| !matches!(expr.evaluate(when_env), Ok(true)))
+                {
+                    Ok(false)
+                } else {
+                    entry.requires_git(&self.registry, index, when_env)
+                }
+            })
+            .collect()
     }
 
-    /// Build the per-file `git blame` cache when at least one
-    /// loaded rule asked for it. Returns `None` otherwise — the
-    /// common case (most configs have no `git_blame_age` rules)
-    /// pays nothing. The cache itself is empty at construction;
-    /// rules trigger blame on first access per file.
-    ///
-    /// We use [`crate::git::collect_tracked_paths`] both as the
-    /// is-this-a-git-repo probe and to decide whether the repository's
-    /// `.git-blame-ignore-revs` is tracked. The rule therefore no-ops cleanly
-    /// outside a repo without per-file blame failures littering the cache. When
-    /// a rule also opts into `git_tracked_only`, that independent setup path
-    /// collects the set once more; the sub-millisecond probe is negligible
-    /// beside blame itself.
-    fn build_blame_cache_if_needed(&self, root: &Path) -> Option<crate::git::BlameCache> {
-        // Nested `require:` rules count too: a `git_blame_age` under `for_each_dir`
-        // reads the same cache, and deciding from top-level rules alone made it
-        // silently never fire. The visit builds each nested rule once with
-        // placeholder tokens; its errors are already surfaced by the scope
-        // preparation pass, so a failed visit here falls back to the top level.
+    /// Probe repository usability once when any configured rule tree has an
+    /// active Git dependency. `Some(empty)` is a usable unborn/empty repository;
+    /// `None` is either "not needed" or "unavailable", distinguished by the
+    /// per-entry requirements at the routing sites.
+    fn collect_git_tracked_if_needed(root: &Path, required: &[bool]) -> Option<HashSet<PathBuf>> {
+        required
+            .iter()
+            .any(|required| *required)
+            .then(|| crate::git::collect_tracked_paths(root))
+            .flatten()
+    }
+
+    /// Build the lazy per-file blame cache when a loaded rule asks for it,
+    /// reusing the tracked set from the single repository-usability probe.
+    fn build_blame_cache_if_needed(
+        &self,
+        root: &Path,
+        tracked: Option<&HashSet<PathBuf>>,
+    ) -> Option<crate::git::BlameCache> {
+        // Nested `require:` rules count too: a `git_blame_age` under
+        // `for_each_dir` reads the same cache.
         let mut any_wants = self.entries.iter().any(|e| e.rule.wants_git_blame());
         if !any_wants {
             let _ = self.visit_all_rules(&mut |rule, _spec| {
@@ -2497,14 +3210,9 @@ impl Engine {
         if !any_wants {
             return None;
         }
-        // Probe: a non-git workspace short-circuits to `None` so the rule's
-        // "silent no-op outside git" path is exercised at the engine level
-        // rather than per file. Reuse this set when deciding whether the
-        // conventional ignore-revs file is repository input.
-        let tracked = crate::git::collect_tracked_paths(root)?;
         Some(crate::git::BlameCache::new_with_tracked_paths(
             root.to_path_buf(),
-            &tracked,
+            tracked?,
         ))
     }
 
@@ -2571,9 +3279,10 @@ impl Engine {
     /// shape (see `docs/design/v0.9/git-tracked-filtered-index.md`).
     ///
     /// Returns `None` when no rule opts in (no
-    /// `GitTrackedMode::FileOnly` or `DirAware` declared) OR
-    /// when the tracked-set is unavailable (no git repo). When
-    /// `Some`, contains:
+    /// `GitTrackedMode::FileOnly` or `DirAware` declared). When the tracked set
+    /// is unavailable, defensive empty indexes are built; metadata-driven
+    /// dependency routing prevents every active owning rule from dispatching
+    /// against them.
     ///
     /// - `file_only`: files where `tracked.contains(path)`. The
     ///   index `file_exists`-style rules iterate via
@@ -2606,13 +3315,10 @@ impl Engine {
             return None;
         }
 
-        // No git repo (or `git ls-files` failed): build EMPTY
-        // indexes for the modes that rules opt into. Preserves
-        // the pre-v0.9.11 silent-no-op semantics — rules that
-        // require git_tracked_only outside a git repo iterate
-        // an empty index and fire zero violations, matching
-        // user expectations for the "don't let X be committed"
-        // pattern.
+        // Repository probing failed. Build defensive empty indexes so no
+        // consumer can accidentally see the full tree; active dependent rules
+        // are short-circuited to `resource_read` analysis failures before
+        // dispatch.
         let Some(tracked) = tracked else {
             return Some(GitTrackedIndexes {
                 file_only: any_file_only.then(|| FileIndex::from_entries(Vec::new())),
@@ -2733,14 +3439,54 @@ impl Engine {
         let Some(scope) = rule.path_scope() else {
             return false;
         };
+        // If manifest resolution failed, matching through the unavailable set
+        // could falsely classify an include-scoped rule as inactive. Ignore
+        // only that predicate while deciding invocation activity: globs and all
+        // other filters can still prove that the rule is outside `--changed`.
+        let manifest_failed = scope.scope_filter().is_some_and(|filter| {
+            filter
+                .manifest_predicates()
+                .iter()
+                .any(|predicate| index.manifest_failure(predicate.cache_key()).is_some())
+        });
         // A file THIS `fix` run created (2b) joins the changed set, so a rule scoped
         // ENTIRELY to created files is not skipped -- its cascade can complete.
         // `check` passes `None` (nothing is created during a check), so `check` and
         // `fix` skip the same rules on the original tree; `fix` only additionally
         // keeps a rule alive for files it creates.
+        !set.iter().chain(created.into_iter().flatten()).any(|p| {
+            if manifest_failed {
+                scope.matches_without_manifest(p, index)
+            } else {
+                scope.matches(p, index)
+            }
+        })
+    }
+
+    /// Pre-resolution invocation check for manifest-backed scopes.
+    ///
+    /// Manifest membership itself cannot decide whether its own source should
+    /// be read. Match the configured globs and every already-resolved
+    /// non-manifest predicate; if none can see a changed/created path, the rule
+    /// is invocation-inactive and its manifest remains untouched.
+    fn skip_for_changed_without_manifest(
+        &self,
+        rule: &dyn Rule,
+        index: &FileIndex,
+        created: Option<&HashSet<PathBuf>>,
+    ) -> bool {
+        let Some(set) = &self.changed_paths else {
+            return false;
+        };
+        if self.dependency_changed(rule) {
+            return false;
+        }
+        let Some(scope) = effective_path_scope(rule) else {
+            return false;
+        };
         !set.iter()
             .chain(created.into_iter().flatten())
-            .any(|p| scope.matches(p, index))
+            .any(|path| scope.matches_without_manifest(path, index))
     }
 
     /// Whether a fix for `violation` under `rule` would write OUTSIDE the
@@ -2804,6 +3550,37 @@ impl Engine {
         Ok(())
     }
 
+    /// Visit configured rule trees whose top-level and nested gates can
+    /// activate for this index.
+    ///
+    /// A false or invalid condition cannot consume a runtime dependency: the
+    /// dispatch path either skips it or reports the condition failure itself.
+    fn visit_active_rules(
+        &self,
+        index: &FileIndex,
+        when_env: &WhenEnv<'_>,
+        visit: &mut RuleTreeVisitor<'_>,
+    ) -> Result<()> {
+        for entry in &self.entries {
+            if entry
+                .when
+                .as_ref()
+                .is_some_and(|expr| !matches!(expr.evaluate(when_env), Ok(true)))
+            {
+                continue;
+            }
+            visit_active_rule_tree_with_registry(
+                &self.registry,
+                entry.rule.as_ref(),
+                entry.spec.as_deref(),
+                index,
+                when_env,
+                visit,
+            )?;
+        }
+        Ok(())
+    }
+
     fn any_expect_matches(&self) -> Result<bool> {
         let mut found = false;
         self.visit_all_rules(&mut |_rule, spec| {
@@ -2813,19 +3590,22 @@ impl Engine {
         Ok(found)
     }
 
-    /// Resolve every distinct `scope_filter.changed_since:` ref across
-    /// the rule set and cache each `<ref>...HEAD` diff on the index,
-    /// once per run (before any `Scope::matches` reads it). A ref that
-    /// isn't a git repo caches an empty set — the documented silent
-    /// no-op. A ref that doesn't resolve *inside* a repo is a hard
-    /// error with a shallow-clone hint, so the misconfiguration
-    /// surfaces instead of silently matching nothing.
-    fn resolve_changed_paths(&self, root: &Path, index: &FileIndex) -> Result<()> {
+    /// Resolve every distinct active `scope_filter.changed_since:` ref and
+    /// cache each `<ref>...HEAD` diff on the index once per run, before any
+    /// `Scope::matches` reads it. Repository usability has already been probed;
+    /// false or invalid top-level and nested `when:` gates are excluded so they
+    /// cannot trigger a Git operation or a stale-ref error.
+    fn resolve_changed_paths(
+        &self,
+        root: &Path,
+        index: &FileIndex,
+        when_env: &WhenEnv<'_>,
+    ) -> Result<()> {
         if index.changed_paths_initialized() {
             return Ok(());
         }
         let mut refs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        self.visit_all_rules(&mut |rule, _spec| {
+        self.visit_active_rules(index, when_env, &mut |rule, _spec| {
             // Per-file rules expose their scope via `PerFileRule::path_scope`
             // (the `Rule::path_scope` default is `None`); rule-major rules
             // expose it via `Rule::path_scope`. changed_since is a per-file
@@ -2869,14 +3649,15 @@ impl Engine {
         Ok(())
     }
 
-    /// Resolve every per-file rule's manifest-derived path set once per run and
-    /// cache them on the index, mirroring [`resolve_changed_paths`](Self::resolve_changed_paths).
-    /// Keyed by each predicate's cache key, so rules sharing a `(source,
-    /// extract, derive_target)` config resolve once. A manifest that is absent /
-    /// unreadable yields the empty set (the predicate contributes nothing,
-    /// consistent with `has_ancestor`); an empty set on an
-    /// `include_manifest_paths:` predicate that expects one is warned about (an
-    /// empty include would otherwise silently no-op the whole rule). Reads are
+    /// Resolve every active rule's manifest-derived path set once per run and
+    /// cache it on the index. Keys identify `(source, extract, derive_target)`,
+    /// so shared predicates read and parse once. Missing, unreadable, malformed,
+    /// or non-string manifests cache a typed structural failure beside an empty
+    /// defensive set; active owning rules consume that failure before scope
+    /// matching. False or invalid top-level and nested `when:` gates, plus
+    /// rules excluded by the invocation, do not read their manifests. A
+    /// successfully resolved empty include set still uses `expect_nonempty` to
+    /// warn about an intentional but potentially surprising no-op. Reads are
     /// confined to the repo root; `source` was confined at build time.
     /// Fail loud if a rule declares a manifest-derived scope (`include`/
     /// `exclude_manifest_paths`) but exposes no scope for the engine to resolve
@@ -2906,7 +3687,13 @@ impl Engine {
         })
     }
 
-    fn resolve_manifest_paths(&self, root: &Path, index: &FileIndex) -> Result<()> {
+    fn resolve_manifest_paths(
+        &self,
+        root: &Path,
+        index: &FileIndex,
+        when_env: &WhenEnv<'_>,
+        created: Option<&HashSet<PathBuf>>,
+    ) -> Result<()> {
         if index.manifest_paths_initialized() {
             return Ok(());
         }
@@ -2919,63 +3706,101 @@ impl Engine {
             String,
             Vec<crate::scope_filter::ManifestPredicate>,
         > = std::collections::BTreeMap::new();
-        self.visit_all_rules(&mut |rule, _spec| {
-            let scope = rule
-                .as_per_file()
-                .map(super::rule::PerFileRule::path_scope)
-                .or_else(|| rule.path_scope());
-            if let Some(scope) = scope
-                && let Some(filter) = scope.scope_filter()
+        for entry in &self.entries {
+            if entry
+                .when
+                .as_ref()
+                .is_some_and(|expr| !matches!(expr.evaluate(when_env), Ok(true)))
+                || (!entry.expect_matches()
+                    && !entry.rule.requires_full_index()
+                    && self.skip_for_changed_without_manifest(entry.rule.as_ref(), index, created))
             {
-                for pred in filter.manifest_predicates() {
-                    groups
-                        .entry(pred.cache_key().to_string())
-                        .or_default()
-                        .push(pred.clone());
-                }
+                continue;
             }
-            Ok(())
-        })?;
+            visit_active_rule_tree_with_registry(
+                &self.registry,
+                entry.rule.as_ref(),
+                entry.spec.as_deref(),
+                index,
+                when_env,
+                &mut |rule, _spec| {
+                    if let Some(scope) = effective_path_scope(rule)
+                        && let Some(filter) = scope.scope_filter()
+                    {
+                        for pred in filter.manifest_predicates() {
+                            groups
+                                .entry(pred.cache_key().to_string())
+                                .or_default()
+                                .push(pred.clone());
+                        }
+                    }
+                    Ok(())
+                },
+            )?;
+        }
         if groups.is_empty() {
+            index.set_manifest_paths(HashMap::new(), HashMap::new());
             return Ok(());
         }
-        let mut map = std::collections::HashMap::new();
+        let mut paths = HashMap::new();
+        let mut failures = HashMap::new();
         for (key, group) in groups {
             // Every predicate in the group shares one `(source, extract,
-            // derive_target)`, so any member resolves the same set. Read the
-            // manifest with the same confined direct read `explain` uses
-            // (`read_manifest_confined`: canonicalize-confined + is_file +
-            // size-capped), NOT through the walked index: `find_file` also honors
-            // `.gitignore`, so a gitignored manifest would resolve to the empty
-            // set here while `explain` (a direct read) showed a non-empty set — a
-            // legibility split undercutting ADR-0010's "explain shows the resolved
-            // set". A direct confined read matches `registry_paths_resolve` /
-            // `file_graph`, which read their sources via `read_capped(root.join())`
-            // regardless of the walk. Absent / oversized / escaping -> empty set.
+            // derive_target)`, so any member resolves the same set. A direct
+            // confined read reaches a gitignored manifest and matches `explain`.
+            // Cache failures beside an empty set; active owning rules route the
+            // typed failure before policy evaluation.
             let rep = &group[0];
-            let set = crate::scope_filter::ManifestSet::from_paths(rep.resolve_set(
-                &crate::scope_filter::read_manifest_confined(root, rep.source()),
-            ));
-            // Warn per group, not per first-iterated predicate: an `include` that
-            // expects a non-empty set must be flagged even when an `exclude`
-            // sharing the manifest sorted first (the empty-include silent no-op is
-            // exactly the footgun `expect_nonempty` guards).
-            if set.is_empty()
+            let resolution = crate::scope_filter::read_manifest_confined(root, rep.source())
+                .and_then(|text| rep.resolve_set(&text));
+            let set = match resolution {
+                Ok(resolved) => crate::scope_filter::ManifestSet::from_paths(resolved),
+                Err(failure) => {
+                    failures.insert(key.clone(), failure);
+                    crate::scope_filter::ManifestSet::from_paths(Vec::new())
+                }
+            };
+            // A successfully resolved but empty include remains a diagnostic
+            // warning unless the user opted out. Read/parse failures are findings,
+            // not duplicate log-only warnings.
+            if !failures.contains_key(&key)
+                && set.is_empty()
                 && group
                     .iter()
                     .any(crate::scope_filter::ManifestPredicate::warns_on_empty)
             {
                 tracing::warn!(
                     "scope_filter.include_manifest_paths: `{}` resolved to no paths (the manifest \
-                     is missing, unreadable, or declares none), so the rule matches nothing. Set \
-                     `expect_nonempty: false` if that is intended.",
+                     declares none), so the rule matches nothing. Set `expect_nonempty: false` if \
+                     that is intended.",
                     rep.source().display()
                 );
             }
-            map.insert(key, set);
+            paths.insert(key, set);
         }
-        index.set_manifest_paths(map);
+        index.set_manifest_paths(paths, failures);
         Ok(())
+    }
+
+    fn manifest_failures_by_entry(
+        &self,
+        index: &FileIndex,
+        when_env: &WhenEnv<'_>,
+    ) -> Result<Vec<Vec<Violation>>> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                if entry
+                    .when
+                    .as_ref()
+                    .is_some_and(|expr| !matches!(expr.evaluate(when_env), Ok(true)))
+                {
+                    Ok(Vec::new())
+                } else {
+                    manifest_scope_failures(entry, &self.registry, index, when_env)
+                }
+            })
+            .collect()
     }
 }
 
@@ -3017,6 +3842,28 @@ pub enum StagedKind {
 /// passes. This is the append half of the loop's keep-last merge: the caller
 /// has already retained-out any earlier item this pass supersedes, so appending
 /// here cannot duplicate a superseded violation. See docs/design/v0.17/fixpoint.md 7.
+/// Append one rule's fix items and analysis failures, coalescing the several
+/// fixer regimes into one deterministic result.
+fn push_fix_result(
+    results: &mut Vec<FixRuleResult>,
+    rule_id: Arc<str>,
+    level: crate::Level,
+    items: Vec<FixItem>,
+    analysis_failures: Vec<crate::AnalysisFailure>,
+) {
+    if let Some(rr) = results.iter_mut().find(|r| r.rule_id == rule_id) {
+        rr.items.extend(items);
+        rr.analysis_failures.extend(analysis_failures);
+    } else {
+        results.push(FixRuleResult {
+            rule_id,
+            level,
+            items,
+            analysis_failures,
+        });
+    }
+}
+
 fn push_fix_item(
     results: &mut Vec<FixRuleResult>,
     rule_id: &Arc<str>,
@@ -3030,6 +3877,7 @@ fn push_fix_item(
             rule_id: Arc::clone(rule_id),
             level,
             items: vec![item],
+            analysis_failures: Vec::new(),
         });
     }
 }
@@ -3121,45 +3969,114 @@ fn pick_ctx<'a>(
     }
 }
 
+fn effective_path_scope(rule: &dyn Rule) -> Option<&crate::Scope> {
+    rule.as_per_file()
+        .map(super::rule::PerFileRule::path_scope)
+        .or_else(|| rule.path_scope())
+}
+
+/// Return each distinct manifest-resolution failure that prevents any active
+/// rule in `entry`'s tree from obtaining its verdict. Failures stay owned by
+/// the top-level entry, and shared predicates are deduplicated by cache key.
+fn manifest_scope_failures(
+    entry: &RuleEntry,
+    registry: &RuleRegistry,
+    index: &FileIndex,
+    when_env: &WhenEnv<'_>,
+) -> Result<Vec<Violation>> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let mut failures = Vec::new();
+    visit_active_rule_tree_with_registry(
+        registry,
+        entry.rule.as_ref(),
+        entry.spec.as_deref(),
+        index,
+        when_env,
+        &mut |rule, spec| {
+            let Some(filter) = effective_path_scope(rule).and_then(crate::Scope::scope_filter)
+            else {
+                return Ok(());
+            };
+            for predicate in filter.manifest_predicates() {
+                let cache_key = predicate.cache_key();
+                let existing = seen.get(cache_key).copied();
+                let Some(failure) = index.manifest_failure(cache_key) else {
+                    continue;
+                };
+                let finding_index = if let Some(index) = existing {
+                    index
+                } else {
+                    let index = failures.len();
+                    seen.insert(cache_key.to_string(), index);
+                    failures.push(
+                        Violation::new(failure.message.clone())
+                            .with_path(predicate.source().to_path_buf())
+                            .as_analysis_failure(failure.kind),
+                    );
+                    index
+                };
+                if predicate.redacts_by_default()
+                    || spec.is_some_and(|nested_spec| nested_spec.sensitive)
+                {
+                    failures[finding_index].redact_message(rule.id());
+                }
+            }
+            Ok(())
+        },
+    )?;
+    Ok(failures)
+}
+
+fn nonfixable_rule_result(entry: &RuleEntry, violations: Vec<Violation>) -> RuleResult {
+    RuleResult::new(
+        Arc::from(entry.rule.id()),
+        entry.rule.level(),
+        entry.rule.policy_url().map(Arc::from),
+        violations,
+        false,
+    )
+}
+
 fn run_entry(
+    entry_idx: usize,
     entry: &RuleEntry,
     ctx: &Context<'_>,
     full_index: &FileIndex,
-    when_env: &WhenEnv<'_>,
-    _facts: &FactValues,
+    gate_inputs: &RunGateInputs<'_, '_>,
     skipped_for_changed: bool,
 ) -> Option<RuleResult> {
     if skipped_for_changed && !entry.expect_matches() {
         return None;
     }
     if let Some(expr) = &entry.when {
-        match expr.evaluate(when_env) {
+        match expr.evaluate(gate_inputs.when_env) {
             Ok(true) => {} // proceed
             Ok(false) => return None,
             Err(e) => {
-                return Some(RuleResult {
-                    rule_id: Arc::from(entry.rule.id()),
-                    level: entry.rule.level(),
-                    policy_url: entry.rule.policy_url().map(Arc::from),
-                    violations: vec![Violation::new(format!("when evaluation error: {e}"))],
-                    notes: Vec::new(),
-                    is_fixable: entry.rule.fixer().is_some(),
-                });
+                let failure = Violation::new(format!("when evaluation failed: {e}"))
+                    .as_analysis_failure(AnalysisFailureKind::Condition);
+                return Some(nonfixable_rule_result(entry, vec![failure]));
             }
         }
+    }
+    let manifest_failures = gate_inputs.manifest_failures[entry_idx].clone();
+    if !manifest_failures.is_empty() {
+        return Some(nonfixable_rule_result(entry, manifest_failures));
+    }
+    if gate_inputs.git_required[entry_idx] && !gate_inputs.git_available {
+        return Some(nonfixable_rule_result(
+            entry,
+            vec![unavailable_git_failure()],
+        ));
     }
     let scope_violation = match entry.spec.as_deref() {
         Some(spec) => {
             match crate::expect_matches_violation(entry.rule.as_ref(), spec, full_index, ctx) {
                 Ok(violation) => violation,
                 Err(e) => {
-                    return Some(RuleResult::new(
-                        Arc::from(entry.rule.id()),
-                        entry.rule.level(),
-                        entry.rule.policy_url().map(Arc::from),
-                        vec![Violation::new(format!("rule error: {e}"))],
-                        false,
-                    ));
+                    let failure = Violation::new(format!("scope assertion evaluation failed: {e}"))
+                        .as_analysis_failure(AnalysisFailureKind::Evaluation);
+                    return Some(nonfixable_rule_result(entry, vec![failure]));
                 }
             }
         }
@@ -3168,21 +4085,17 @@ fn run_entry(
     if let Some(violation) = scope_violation {
         // This is a configuration-integrity finding, not a finding the host
         // rule's fixer can repair (there is no target file).
-        let (violations, is_fixable) = mark_fixability(vec![violation], None);
-        return Some(RuleResult::new(
-            Arc::from(entry.rule.id()),
-            entry.rule.level(),
-            entry.rule.policy_url().map(Arc::from),
-            violations,
-            is_fixable,
-        ));
+        return Some(nonfixable_rule_result(entry, vec![violation]));
     }
     if skipped_for_changed {
         return None;
     }
     let violations = match entry.rule.evaluate(ctx) {
         Ok(v) => v,
-        Err(e) => vec![Violation::new(format!("rule error: {e}"))],
+        Err(e) => vec![
+            Violation::new(format!("rule evaluation failed: {e}"))
+                .as_analysis_failure(AnalysisFailureKind::Evaluation),
+        ],
     };
     // `new` partitions any note-flagged violations into `notes`.
     let (violations, is_fixable) = mark_fixability(violations, entry.rule.fixer());
@@ -3228,12 +4141,11 @@ fn mark_fixability(
             // does not apply here, so those violations are not "auto-fixable".
             let applies_by_default = f.applicability().applies_at(Applicability::Safe);
             for v in &mut violations {
-                // Notes are never remediation targets even when their owning
-                // rule declares a fixer.
-                v.is_fixable = v.note_kind.is_none()
+                // Only policy violations are remediation targets. Notes and
+                // analysis failures are partitioned after this pass.
+                v.is_fixable = v.disposition == FindingDisposition::Violation
                     && applies_by_default
-                    && !is_unfixable_finding(f, v)
-                    && v.baseline_key.as_deref() != Some(crate::rule::UNREADABLE_FILE_KEY);
+                    && !is_unfixable_finding(f, v);
             }
             (violations, true)
         }
@@ -3244,9 +4156,9 @@ fn mark_fixability(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::level::Level;
     use crate::scope::Scope;
     use crate::walker::FileEntry;
+    use crate::{PerFileRule, level::Level};
     use std::path::Path;
 
     #[test]
@@ -3343,6 +4255,357 @@ mod tests {
             expose_scope: false,
         })
     }
+    fn manifest_scope() -> Scope {
+        let spec: crate::RuleSpec = serde_yaml_ng::from_str(
+            "id: a\nkind: x\nlevel: error\npaths: \"**/*.txt\"\n\
+             scope_filter:\n  include_manifest_paths:\n    source: package.json\n    \
+             extract: { json: \"$.files[*]\" }\n",
+        )
+        .unwrap();
+        Scope::from_spec(&spec).unwrap()
+    }
+
+    fn manifest_stub(id: &str) -> Box<dyn Rule> {
+        Box::new(StubRule {
+            id: id.into(),
+            level: Level::Error,
+            scope: manifest_scope(),
+            full_index: false,
+            expose_scope: true,
+        })
+    }
+
+    #[test]
+    fn malformed_manifest_fails_every_owning_rule_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), b"{not json").unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let report = Engine::new(
+            vec![manifest_stub("first"), manifest_stub("second")],
+            RuleRegistry::new(),
+        )
+        // The changed file matches `paths:`. The unavailable include set must
+        // not make changed-mode dispatch silently skip either owning rule.
+        .with_changed_paths(HashSet::from([PathBuf::from("a.txt")]))
+        .run(tmp.path(), &index)
+        .unwrap();
+
+        assert_eq!(report.total_violations(), 0);
+        assert_eq!(report.total_analysis_failures(), 2);
+        assert_eq!(report.results.len(), 2);
+        for result in &report.results {
+            assert_eq!(result.analysis_failures.len(), 1);
+            let failure = &result.analysis_failures[0];
+            assert_eq!(failure.kind, AnalysisFailureKind::ResourceParse);
+            assert_eq!(failure.path.as_deref(), Some(Path::new("package.json")));
+            assert!(failure.message.contains("extract failed"), "{failure:?}");
+        }
+
+        // A rule whose ordinary path/filter gates exclude the invocation does
+        // not report an unused dependency failure.
+        let skipped = Engine::new(vec![manifest_stub("skipped")], RuleRegistry::new())
+            .with_changed_paths(HashSet::from([PathBuf::from("README.md")]))
+            .run(tmp.path(), &index)
+            .unwrap();
+        assert_eq!(skipped.total_analysis_failures(), 0);
+        assert!(skipped.results.is_empty());
+    }
+
+    #[test]
+    fn false_when_does_not_resolve_manifest_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), b"{not json").unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let entry = RuleEntry::new(manifest_stub("inactive"))
+            .with_when(crate::when::parse("false").unwrap());
+
+        let report = Engine::from_entries(vec![entry], RuleRegistry::new())
+            .run(tmp.path(), &index)
+            .unwrap();
+
+        assert!(report.results.is_empty());
+        assert!(
+            index.manifest_failures_map().is_some_and(HashMap::is_empty),
+            "an inactive rule must not read or cache its malformed manifest"
+        );
+    }
+
+    #[derive(Debug)]
+    struct NestedDependencyParent {
+        id: &'static str,
+        nested: Vec<crate::CompiledNestedSpec>,
+    }
+
+    impl Rule for NestedDependencyParent {
+        fn id(&self) -> &str {
+            self.id
+        }
+
+        fn level(&self) -> Level {
+            Level::Error
+        }
+
+        fn requires_full_index(&self) -> bool {
+            true
+        }
+
+        fn nested_rule_specs(&self) -> &[crate::CompiledNestedSpec] {
+            &self.nested
+        }
+
+        fn evaluate(&self, _ctx: &Context<'_>) -> Result<Vec<Violation>> {
+            Ok(vec![Violation::new("parent evaluated")])
+        }
+    }
+
+    fn nested_leaf_builder(spec: &crate::RuleSpec) -> Result<Box<dyn Rule>> {
+        Ok(Box::new(StubRule {
+            id: spec.id.clone(),
+            level: spec.level,
+            scope: Scope::from_spec(spec)?,
+            full_index: false,
+            expose_scope: true,
+        }))
+    }
+
+    static TEST_GIT_CAPABILITIES: &[crate::CapabilityMeta] = &[crate::CapabilityMeta {
+        capability: crate::Capability::Git {
+            operations: std::borrow::Cow::Borrowed(&[crate::GitOperation::Diff]),
+        },
+        condition: crate::CapabilityCondition::Always,
+    }];
+
+    static TEST_NESTED_SCOPE_META: crate::KindMeta = crate::KindMeta {
+        dispatch: crate::DispatchClass::RuleMajorScoped,
+        paths: crate::PathsSupport::Optional,
+        scope_filter: crate::ScopeFilterSupport::Full,
+        git_tracked_only: crate::GitTrackedSupport::None,
+        respect_gitignore: false,
+        root_only: false,
+        selectors: std::borrow::Cow::Borrowed(&[]),
+        since: crate::SinceSupport::None,
+        capabilities: std::borrow::Cow::Borrowed(&[]),
+        content: crate::ContentAccess::PathOnly,
+        formats: std::borrow::Cow::Borrowed(&[]),
+        dependencies: std::borrow::Cow::Borrowed(&[]),
+        fix_ops: std::borrow::Cow::Borrowed(&[]),
+        expect_matches: true,
+        nested_rules: false,
+    };
+
+    static TEST_NESTED_GIT_META: crate::KindMeta = crate::KindMeta {
+        dispatch: crate::DispatchClass::RuleMajorScoped,
+        paths: crate::PathsSupport::Optional,
+        scope_filter: crate::ScopeFilterSupport::Full,
+        git_tracked_only: crate::GitTrackedSupport::None,
+        respect_gitignore: false,
+        root_only: false,
+        selectors: std::borrow::Cow::Borrowed(&[]),
+        since: crate::SinceSupport::None,
+        capabilities: std::borrow::Cow::Borrowed(TEST_GIT_CAPABILITIES),
+        content: crate::ContentAccess::PathOnly,
+        formats: std::borrow::Cow::Borrowed(&[]),
+        dependencies: std::borrow::Cow::Borrowed(&[]),
+        fix_ops: std::borrow::Cow::Borrowed(&[]),
+        expect_matches: true,
+        nested_rules: false,
+    };
+
+    fn nested_registry() -> RuleRegistry {
+        let mut registry = RuleRegistry::new();
+        registry.register(
+            "nested_scope_fixture",
+            &TEST_NESTED_SCOPE_META,
+            nested_leaf_builder,
+        );
+        registry.register(
+            "nested_git_fixture",
+            &TEST_NESTED_GIT_META,
+            nested_leaf_builder,
+        );
+        registry
+    }
+
+    fn nested_parent(yaml: &str) -> Box<dyn Rule> {
+        let spec: crate::NestedRuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
+        let compiled = crate::CompiledNestedSpec::compile(spec, "owner", 0).unwrap();
+        Box::new(NestedDependencyParent {
+            id: "owner",
+            nested: vec![compiled],
+        })
+    }
+
+    #[test]
+    fn inactive_nested_git_and_changed_since_do_not_probe_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+
+        for yaml in [
+            "kind: nested_git_fixture\nwhen: false\n",
+            "kind: nested_git_fixture\nwhen: iter.basename == \"never\"\n",
+            "kind: nested_scope_fixture\nwhen: false\nscope_filter:\n  changed_since: definitely-not-a-ref\n",
+            "kind: nested_scope_fixture\nwhen: iter.basename == \"never\"\nscope_filter:\n  changed_since: definitely-not-a-ref\n",
+        ] {
+            let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+            let report = Engine::new(vec![nested_parent(yaml)], nested_registry())
+                .run(tmp.path(), &index)
+                .unwrap();
+            assert_eq!(report.total_analysis_failures(), 0);
+            assert_eq!(report.total_violations(), 1);
+            assert_eq!(report.results[0].rule_id.as_ref(), "owner");
+        }
+    }
+
+    #[test]
+    fn active_nested_git_failure_is_owned_once_and_other_rules_continue() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let report = Engine::new(
+            vec![
+                nested_parent("kind: nested_git_fixture\nwhen: iter.basename == \"a.txt\"\n"),
+                stub("unrelated", "**/*.txt"),
+            ],
+            nested_registry(),
+        )
+        .run(tmp.path(), &index)
+        .unwrap();
+
+        assert_eq!(report.total_analysis_failures(), 1);
+        assert_eq!(report.results.len(), 2);
+        let owner = report
+            .results
+            .iter()
+            .find(|result| result.rule_id.as_ref() == "owner")
+            .unwrap();
+        assert!(owner.violations.is_empty());
+        assert_eq!(owner.analysis_failures.len(), 1);
+        assert_eq!(
+            owner.analysis_failures[0].kind,
+            AnalysisFailureKind::ResourceRead
+        );
+        let unrelated = report
+            .results
+            .iter()
+            .find(|result| result.rule_id.as_ref() == "unrelated")
+            .unwrap();
+        assert_eq!(unrelated.violations.len(), 1);
+    }
+
+    #[test]
+    fn inactive_nested_manifest_is_never_resolved() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let report = Engine::new(
+            vec![nested_parent(
+                "kind: nested_scope_fixture\nwhen: iter.basename == \"never\"\n\
+                 paths: \"**/*.txt\"\n\
+                 scope_filter:\n  include_manifest_paths:\n    source: missing.json\n    \
+                 extract: { json: \"$.files[*]\" }\n",
+            )],
+            nested_registry(),
+        )
+        .run(tmp.path(), &index)
+        .unwrap();
+
+        assert_eq!(report.total_analysis_failures(), 0);
+        assert_eq!(report.total_violations(), 1);
+        assert!(
+            index.manifest_failures_map().is_some_and(HashMap::is_empty),
+            "a false-gated nested rule must not touch its manifest"
+        );
+    }
+
+    #[test]
+    fn active_nested_manifest_failure_is_owned_once_and_other_rules_continue() {
+        for (contents, expected_kind) in [
+            (None, AnalysisFailureKind::ResourceRead),
+            (Some("{not json"), AnalysisFailureKind::ResourceParse),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+            if let Some(contents) = contents {
+                std::fs::write(tmp.path().join("package.json"), contents).unwrap();
+            }
+            let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+            let report = Engine::new(
+                vec![
+                    nested_parent(
+                        "kind: nested_scope_fixture\nwhen: iter.basename == \"a.txt\"\n\
+                         paths: \"**/*.txt\"\n\
+                         scope_filter:\n  include_manifest_paths:\n    source: package.json\n    \
+                         extract: { json: \"$.files[*]\" }\n  exclude_manifest_paths:\n    \
+                         source: package.json\n    extract: { json: \"$.files[*]\" }\n",
+                    ),
+                    stub("unrelated", "**/*.txt"),
+                ],
+                nested_registry(),
+            )
+            .run(tmp.path(), &index)
+            .unwrap();
+            assert_eq!(
+                index.manifest_failures_map().map(HashMap::len),
+                Some(1),
+                "shared include/exclude predicates must cache one resolution"
+            );
+
+            assert_eq!(report.total_analysis_failures(), 1);
+            assert_eq!(report.results.len(), 2);
+            let owner = report
+                .results
+                .iter()
+                .find(|result| result.rule_id.as_ref() == "owner")
+                .unwrap();
+            assert!(owner.violations.is_empty());
+            assert_eq!(owner.analysis_failures.len(), 1);
+            assert_eq!(owner.analysis_failures[0].kind, expected_kind);
+            assert_eq!(
+                owner.analysis_failures[0].path.as_deref(),
+                Some(Path::new("package.json"))
+            );
+            let unrelated = report
+                .results
+                .iter()
+                .find(|result| result.rule_id.as_ref() == "unrelated")
+                .unwrap();
+            assert_eq!(unrelated.violations.len(), 1);
+        }
+    }
+
+    #[test]
+    fn active_nested_manifest_failure_stays_owned_in_fix_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let report = Engine::new(
+            vec![nested_parent(
+                "kind: nested_scope_fixture\npaths: \"**/*.txt\"\n\
+                 scope_filter:\n  include_manifest_paths:\n    source: missing.json\n    \
+                 extract: { json: \"$.files[*]\" }\n",
+            )],
+            nested_registry(),
+        )
+        .fix(
+            tmp.path(),
+            &index,
+            &crate::WalkOptions::default(),
+            true,
+            Applicability::Safe,
+        )
+        .unwrap();
+
+        assert_eq!(report.total_analysis_failures(), 1);
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].rule_id.as_ref(), "owner");
+        assert_eq!(report.results[0].analysis_failures.len(), 1);
+        assert_eq!(
+            report.results[0].analysis_failures[0].kind,
+            AnalysisFailureKind::ResourceRead
+        );
+    }
 
     #[derive(Debug)]
     struct TimeRule;
@@ -3366,6 +4629,117 @@ mod tests {
                 ctx.analysis_time()?
             ))])
         }
+    }
+
+    #[derive(Debug)]
+    struct FailingPerFileRule {
+        scope: Scope,
+    }
+
+    #[derive(Debug)]
+    struct MustNotRunFixer;
+
+    static FIXER_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static MUST_NOT_RUN_FIXER: MustNotRunFixer = MustNotRunFixer;
+
+    impl Fixer for MustNotRunFixer {
+        fn describe(&self) -> String {
+            "must not run".to_string()
+        }
+
+        fn apply(&self, _violation: &Violation, _ctx: &FixContext<'_>) -> Result<FixOutcome> {
+            FIXER_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(FixOutcome::Applied("unexpected".to_string()))
+        }
+    }
+
+    impl Rule for FailingPerFileRule {
+        fn id(&self) -> &'static str {
+            "failing-per-file"
+        }
+
+        fn level(&self) -> Level {
+            Level::Warning
+        }
+
+        fn evaluate(&self, _ctx: &Context<'_>) -> Result<Vec<Violation>> {
+            Err(Error::Other("rule-major boom".to_string()))
+        }
+
+        fn fixer(&self) -> Option<&dyn Fixer> {
+            Some(&MUST_NOT_RUN_FIXER)
+        }
+
+        fn as_per_file(&self) -> Option<&dyn PerFileRule> {
+            Some(self)
+        }
+    }
+
+    impl PerFileRule for FailingPerFileRule {
+        fn path_scope(&self) -> &Scope {
+            &self.scope
+        }
+
+        fn evaluate_file(
+            &self,
+            _ctx: &Context<'_>,
+            _path: &Path,
+            _bytes: &[u8],
+        ) -> Result<Vec<Violation>> {
+            Err(Error::Other("file boom".to_string()))
+        }
+    }
+
+    fn failing_per_file_rule() -> Box<dyn Rule> {
+        Box::new(FailingPerFileRule {
+            scope: Scope::from_patterns(&["*.rs".to_string()]).unwrap(),
+        })
+    }
+
+    #[test]
+    fn per_file_single_file_and_fix_failures_are_structural_and_path_preserving() {
+        FIXER_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+        let index = idx(&["a.rs"]);
+        let walk_opts = crate::WalkOptions {
+            respect_gitignore: true,
+            extra_ignores: Vec::new(),
+        };
+
+        let engine = Engine::new(vec![failing_per_file_rule()], RuleRegistry::new());
+        let report = engine.run(tmp.path(), &index).unwrap();
+        assert!(
+            report.has_errors(),
+            "warning-level failure must count as error"
+        );
+        assert_eq!(report.total_violations(), 0);
+        let failure = &report.results[0].analysis_failures[0];
+        assert_eq!(failure.kind, AnalysisFailureKind::Evaluation);
+        assert_eq!(failure.path.as_deref(), Some(Path::new("a.rs")));
+        assert_eq!(failure.message, "rule evaluation failed: file boom");
+
+        let single = engine
+            .run_for_file(tmp.path(), &index, Path::new("a.rs"), b"fn main() {}\n")
+            .unwrap();
+        assert_eq!(single.len(), 1);
+        assert!(single[0].violations.is_empty());
+        assert_eq!(
+            single[0].analysis_failures[0].path.as_deref(),
+            Some(Path::new("a.rs")),
+        );
+
+        let fix = engine
+            .fix(tmp.path(), &index, &walk_opts, true, Applicability::Safe)
+            .unwrap();
+        assert!(fix.results.iter().all(|result| result.items.is_empty()));
+        assert_eq!(fix.total_analysis_failures(), 1);
+        assert_eq!(
+            fix.results[0].analysis_failures[0].message,
+            "rule evaluation failed: rule-major boom",
+        );
+        assert!(fix.has_unfixable_errors());
+        assert_eq!(FIXER_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -3485,13 +4859,22 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_head_time_surfaces_as_a_rule_error() {
+    fn unavailable_head_time_surfaces_as_an_analysis_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let engine = Engine::new(vec![Box::new(TimeRule)], RuleRegistry::new());
         let report = engine.run(tmp.path(), &idx(&[])).unwrap();
-        let message = report.results[0].violations[0].message.as_ref();
-        assert!(message.starts_with("rule error: analysis time unavailable: "));
-        assert!(message.contains("pass --as-of YYYY-MM-DD"));
+        let result = &report.results[0];
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        let failure = &result.analysis_failures[0];
+        assert_eq!(failure.kind, AnalysisFailureKind::Evaluation);
+        assert!(
+            failure
+                .message
+                .starts_with("rule evaluation failed: analysis time unavailable: ")
+        );
+        assert!(failure.message.contains("pass --as-of YYYY-MM-DD"));
+        assert!(report.has_errors());
     }
 
     fn idx(paths: &[&str]) -> FileIndex {
@@ -3595,6 +4978,42 @@ mod tests {
 
     fn located_rule() -> Box<dyn Rule> {
         located_rule_with(Applicability::Safe)
+    }
+
+    #[test]
+    fn malformed_manifest_blocks_fixing_and_preserves_the_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), b"{not json").unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"01234567").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let rule = Box::new(LocatedRule {
+            id: "manifest-fix".into(),
+            scope: manifest_scope(),
+            fixer: LocatedFixture {
+                app: Applicability::Safe,
+            },
+        });
+
+        let report = Engine::new(vec![rule], RuleRegistry::new())
+            .fix(
+                tmp.path(),
+                &index,
+                &crate::WalkOptions::default(),
+                false,
+                Applicability::Safe,
+            )
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(tmp.path().join("a.txt")).unwrap(),
+            b"01234567"
+        );
+        assert_eq!(report.total_analysis_failures(), 1);
+        assert!(report.results[0].items.is_empty());
+        assert_eq!(
+            report.results[0].analysis_failures[0].kind,
+            AnalysisFailureKind::ResourceParse,
+        );
     }
 
     // ---- Fixture for a MIXED real+identity located batch (Phase-2 pre-reqs) ----
@@ -4083,6 +5502,37 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct LengthFailureRule {
+        target: PathBuf,
+        fail_when: fn(usize) -> bool,
+    }
+
+    impl Rule for LengthFailureRule {
+        fn id(&self) -> &'static str {
+            "length-failure"
+        }
+
+        fn level(&self) -> Level {
+            Level::Warning
+        }
+
+        fn path_scope(&self) -> Option<&Scope> {
+            None
+        }
+
+        fn evaluate(&self, _ctx: &Context<'_>) -> crate::error::Result<Vec<Violation>> {
+            let len = std::fs::read(&self.target).map_or(0, |bytes| bytes.len());
+            if !(self.fail_when)(len) {
+                return Ok(Vec::new());
+            }
+            Ok(vec![
+                Violation::new("length-dependent analysis failed")
+                    .as_analysis_failure(AnalysisFailureKind::Evaluation),
+            ])
+        }
+    }
+
     fn grow_engine(target: &Path, stop_at: Option<usize>) -> Engine {
         Engine::new(
             vec![Box::new(GrowRule {
@@ -4300,6 +5750,87 @@ mod tests {
             10,
             "the fix ran to completion (10 bytes); the dry-run confirmation did not write"
         );
+    }
+
+    #[test]
+    fn cap_confirmation_installs_new_failures_and_keeps_rule_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("grow.txt");
+        std::fs::write(&target, b"").unwrap();
+        let engine = Engine::new(
+            vec![
+                Box::new(LengthFailureRule {
+                    target: target.clone(),
+                    fail_when: |len| len >= 10,
+                }),
+                Box::new(GrowRule {
+                    id: "grow".into(),
+                    fixer: GrowFixer {
+                        target: target.clone(),
+                    },
+                    stop_at: Some(10),
+                }),
+            ],
+            RuleRegistry::new(),
+        );
+
+        let report = engine
+            .fix(
+                tmp.path(),
+                &idx(&["grow.txt"]),
+                &crate::WalkOptions::default(),
+                false,
+                Applicability::Safe,
+            )
+            .unwrap();
+
+        assert!(!report.non_convergent);
+        assert_eq!(report.total_analysis_failures(), 1);
+        assert_eq!(
+            report
+                .results
+                .iter()
+                .map(|result| result.rule_id.as_ref())
+                .collect::<Vec<_>>(),
+            ["length-failure", "grow"],
+            "a result first seen during confirmation still follows configured rule order"
+        );
+    }
+
+    #[test]
+    fn cap_confirmation_removes_failure_resolved_by_last_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("grow.txt");
+        std::fs::write(&target, b"").unwrap();
+        let engine = Engine::new(
+            vec![
+                Box::new(LengthFailureRule {
+                    target: target.clone(),
+                    fail_when: |len| len == 9,
+                }),
+                Box::new(GrowRule {
+                    id: "grow".into(),
+                    fixer: GrowFixer {
+                        target: target.clone(),
+                    },
+                    stop_at: Some(10),
+                }),
+            ],
+            RuleRegistry::new(),
+        );
+
+        let report = engine
+            .fix(
+                tmp.path(),
+                &idx(&["grow.txt"]),
+                &crate::WalkOptions::default(),
+                false,
+                Applicability::Safe,
+            )
+            .unwrap();
+
+        assert!(!report.non_convergent);
+        assert_eq!(report.total_analysis_failures(), 0);
     }
 
     #[test]
@@ -4669,6 +6200,49 @@ mod tests {
     }
 
     #[test]
+    fn runtime_when_error_is_a_condition_failure_in_check_and_fix() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.rs"), "fn main() {}\n").unwrap();
+        let rule = Box::new(StubRule {
+            id: "gated".into(),
+            level: Level::Warning,
+            scope: Scope::from_patterns(&["*.rs".to_string()]).unwrap(),
+            full_index: false,
+            expose_scope: true,
+        });
+        let entry = RuleEntry::new(rule).with_when(crate::when::parse("1 < \"x\"").unwrap());
+        let engine = Engine::from_entries(vec![entry], RuleRegistry::new());
+        let index = idx(&["a.rs"]);
+
+        let report = engine.run(tmp.path(), &index).unwrap();
+        assert!(report.has_errors());
+        assert_eq!(report.total_violations(), 0);
+        assert_eq!(
+            report.results[0].analysis_failures[0].kind,
+            AnalysisFailureKind::Condition,
+        );
+
+        let fix = engine
+            .fix(
+                tmp.path(),
+                &index,
+                &crate::WalkOptions {
+                    respect_gitignore: true,
+                    extra_ignores: Vec::new(),
+                },
+                true,
+                Applicability::Safe,
+            )
+            .unwrap();
+        assert_eq!(fix.total_analysis_failures(), 1);
+        assert!(fix.results[0].items.is_empty());
+        assert_eq!(
+            fix.results[0].analysis_failures[0].kind,
+            AnalysisFailureKind::Condition,
+        );
+    }
+
+    #[test]
     fn fix_size_limit_default_is_one_mib() {
         // The builder default; tests that override engines via
         // `with_fix_size_limit` rely on this baseline.
@@ -4929,6 +6503,62 @@ mod tests {
         assert_eq!(results[0].violations.len(), 1);
     }
 
+    #[test]
+    fn run_for_file_applies_explicit_sensitivity_before_returning() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"secret editor bytes").unwrap();
+        let rule = Box::new(PerFileStub {
+            id: "needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let spec: crate::RuleSpec = serde_yaml_ng::from_str(
+            "id: needs-magic\nkind: file_content_matches\npaths: \"**/*.txt\"\n\
+             pattern: MAGIC\nsensitive: true\nlevel: error\n",
+        )
+        .unwrap();
+        let entry = RuleEntry::new(rule).with_spec(std::sync::Arc::new(spec));
+        let engine = Engine::from_entries(vec![entry], RuleRegistry::new());
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+
+        let results = engine
+            .run_for_file(
+                tmp.path(),
+                &index,
+                Path::new("a.txt"),
+                b"secret unsaved editor bytes",
+            )
+            .unwrap();
+
+        assert_eq!(results.len(), 1, "{results:?}");
+        let finding = &results[0].violations[0];
+        assert!(finding.is_sensitive());
+        assert!(finding.message.contains("<redacted:"), "{finding:?}");
+        assert!(!finding.message.contains("missing prefix"), "{finding:?}");
+    }
+
+    #[test]
+    fn explicit_sensitive_scope_covers_an_unindexed_editor_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rule = Box::new(PerFileStub {
+            id: "needs-magic".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let spec: crate::RuleSpec = serde_yaml_ng::from_str(
+            "id: needs-magic\nkind: file_content_matches\npaths: \"**/*.txt\"\n\
+             pattern: MAGIC\nsensitive: true\nlevel: error\n",
+        )
+        .unwrap();
+        let entry = RuleEntry::new(rule).with_spec(std::sync::Arc::new(spec));
+        let engine = Engine::from_entries(vec![entry], RuleRegistry::new());
+
+        assert!(engine.path_contains_sensitive_evidence(
+            tmp.path(),
+            &FileIndex::default(),
+            Path::new("new.txt"),
+        ));
+    }
     #[test]
     fn run_for_file_uses_supplied_bytes_not_disk() {
         // On-disk content passes the rule; the in-memory edited bytes

@@ -1,9 +1,9 @@
-name: json_schema_passes flags a malformed .tf with one parse-error violation
+name: json_schema_passes flags malformed HCL as one parse analysis failure
 tags: [check, json_schema_passes, structured, hcl, failing]
 
-# The hcl parse-error path (symmetry with the dotenv/properties/ini/xml malformed
-# scenarios): an incomplete block fails to parse and yields exactly ONE parse-error
-# violation, not a flood.
+# The HCL parse-error path (symmetry with the dotenv/properties/INI/XML malformed
+# scenarios): an incomplete block fails to parse and yields exactly ONE parse
+# analysis failure, not a flood.
 
 given:
   tree:
@@ -28,5 +28,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
-      - {rule: hcl-parse, level: error, path: main.tf}
+  - violations: []
+    analysis_failures:
+      - {rule: hcl-parse, kind: resource_parse, path: main.tf}

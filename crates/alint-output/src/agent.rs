@@ -38,6 +38,7 @@ struct AgentReport<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     notes: Option<AgentNotes>,
     violations: Vec<AgentViolation<'a>>,
+    analysis_failures: Vec<AgentAnalysisFailure<'a>>,
 }
 
 #[derive(Serialize)]
@@ -47,6 +48,7 @@ struct AgentSummary {
     fixable_violations: usize,
     passing_rules: usize,
     failing_rules: usize,
+    total_analysis_failures: usize,
 }
 
 #[derive(Serialize)]
@@ -107,6 +109,18 @@ struct AgentViolation<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     policy_url: Option<&'a str>,
 }
+#[derive(Serialize)]
+struct AgentAnalysisFailure<'a> {
+    rule_id: &'a str,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<Cow<'a, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    human_message: &'a str,
+}
 
 pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
     let mut violations: Vec<AgentViolation<'_>> = Vec::new();
@@ -116,6 +130,7 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
         info: 0,
     };
     let mut fixable_violations = 0;
+    let mut analysis_failures = Vec::new();
 
     for r in &report.results {
         for v in &r.violations {
@@ -150,6 +165,18 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
                 policy_url: r.policy_url.as_deref(),
             });
         }
+        analysis_failures.extend(
+            r.analysis_failures
+                .iter()
+                .map(|failure| AgentAnalysisFailure {
+                    rule_id: r.rule_id.as_ref(),
+                    kind: failure.kind.as_str(),
+                    file: failure.path.as_deref().map(Path::to_string_lossy),
+                    line: failure.line,
+                    column: failure.column,
+                    human_message: failure.message.as_ref(),
+                }),
+        );
     }
 
     let total = violations.len();
@@ -163,12 +190,14 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
             fixable_violations,
             passing_rules: report.passing_rules(),
             failing_rules: report.failing_rules(),
+            total_analysis_failures: analysis_failures.len(),
         },
         notes: (note_count > 0).then_some(AgentNotes {
             count: note_count,
             details_format: "json",
         }),
         violations,
+        analysis_failures,
     };
     serde_json::to_writer_pretty(&mut *w, &out)?;
     writeln!(w)?;
@@ -293,6 +322,7 @@ mod tests {
             ],
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         };
         let out = run(vec![result]);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -323,6 +353,7 @@ mod tests {
             violations: vec![v],
             notes: Vec::new(),
             is_fixable: true,
+            analysis_failures: Vec::new(),
         };
         let out = run(vec![result]);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -372,6 +403,7 @@ mod tests {
             violations: vec![stuck, ok],
             notes: Vec::new(),
             is_fixable: true, // the RULE has a fixer
+            analysis_failures: Vec::new(),
         };
         let out = run(vec![result]);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -425,6 +457,7 @@ mod tests {
             violations: vec![Violation::new("Multiple lockfiles found.")],
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         };
         let out = run(vec![result]);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -449,6 +482,7 @@ mod tests {
                 violations: vec![Violation::new("a")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             },
             RuleResult {
                 rule_id: "rule-b".into(),
@@ -457,6 +491,7 @@ mod tests {
                 violations: vec![Violation::new("b1"), Violation::new("b2")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             },
             RuleResult {
                 rule_id: "rule-c".into(),
@@ -465,6 +500,7 @@ mod tests {
                 violations: vec![Violation::new("c")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             },
             RuleResult {
                 rule_id: "rule-d".into(),
@@ -473,6 +509,7 @@ mod tests {
                 violations: vec![],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             },
         ];
         let out = run(results);

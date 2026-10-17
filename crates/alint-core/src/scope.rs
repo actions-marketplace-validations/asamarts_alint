@@ -131,6 +131,16 @@ impl Scope {
         self.scope_filter.as_ref()
     }
 
+    /// Secret-bearing manifest files read by this scope's membership predicates.
+    /// Used by staged-fix redaction so a passing predicate cannot leak unchanged
+    /// manifest bytes through an unrelated composed edit.
+    #[doc(hidden)]
+    pub fn sensitive_manifest_sources(&self) -> impl Iterator<Item = &Path> {
+        self.scope_filter
+            .iter()
+            .flat_map(ScopeFilter::sensitive_manifest_sources)
+    }
+
     /// Returns `true` iff `path` is in scope:
     /// 1. Excluded patterns reject (dominant).
     /// 2. Include patterns must match — **skipped if there are no includes**,
@@ -165,6 +175,23 @@ impl Scope {
             return false;
         }
         true
+    }
+
+    /// Match path globs and every non-manifest filter predicate.
+    ///
+    /// This is a changed-mode failure-routing primitive, not a second policy
+    /// matcher: callers use it only when the manifest set is unavailable.
+    #[inline]
+    pub(crate) fn matches_without_manifest(&self, path: &Path, index: &FileIndex) -> bool {
+        if self.exclude.is_match(path) {
+            return false;
+        }
+        if self.has_include && !self.include.is_match(path) {
+            return false;
+        }
+        self.scope_filter
+            .as_ref()
+            .is_none_or(|filter| filter.matches_without_manifest(path, index))
     }
 }
 

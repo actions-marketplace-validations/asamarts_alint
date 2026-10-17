@@ -18,7 +18,7 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 
-use alint_core::{FixReport, FixStatus, Level, Report, RuleResult, Violation};
+use alint_core::{AnalysisFailure, FixReport, FixStatus, Level, Report, RuleResult, Violation};
 
 use crate::sanitize::sanitize_terminal;
 use crate::style::{self, GlyphSet, HumanOptions, write_hyperlink};
@@ -52,17 +52,19 @@ pub fn write_human(report: &Report, w: &mut dyn Write, opts: HumanOptions) -> st
     // before `Some`, which we want — repository-level gaps lead.
     // Cloning the Arc is an atomic refcount bump, not a path-byte
     // copy.
-    let mut by_bucket: BTreeMap<Option<Arc<Path>>, Vec<(&RuleResult, &Violation)>> =
-        BTreeMap::new();
+    let mut by_bucket: BTreeMap<Option<Arc<Path>>, Vec<HumanFinding<'_>>> = BTreeMap::new();
     for result in &report.results {
-        if result.passed() {
-            continue;
-        }
         for violation in &result.violations {
             by_bucket
                 .entry(violation.path.clone())
                 .or_default()
-                .push((result, violation));
+                .push(HumanFinding::Violation(result, violation));
+        }
+        for failure in &result.analysis_failures {
+            by_bucket
+                .entry(failure.path.clone())
+                .or_default()
+                .push(HumanFinding::AnalysisFailure(result, failure));
         }
     }
 
@@ -89,8 +91,15 @@ pub fn write_human(report: &Report, w: &mut dyn Write, opts: HumanOptions) -> st
         );
         write_section_header(w, &label, width, &opts.glyphs)?;
 
-        for (result, violation) in items {
-            write_violation(w, result, violation, &opts)?;
+        for item in items {
+            match item {
+                HumanFinding::Violation(result, violation) => {
+                    write_violation(w, result, violation, &opts)?;
+                }
+                HumanFinding::AnalysisFailure(result, failure) => {
+                    write_analysis_failure(w, result, failure, &opts)?;
+                }
+            }
         }
     }
 
@@ -102,6 +111,11 @@ pub fn write_human(report: &Report, w: &mut dyn Write, opts: HumanOptions) -> st
 /// Emit a `─── <label> ─────…` section header stretched to
 /// `width` columns. Falls back gracefully when the label alone
 /// exceeds the width (just emits `─── label`, no trailing fill).
+enum HumanFinding<'a> {
+    Violation(&'a RuleResult, &'a Violation),
+    AnalysisFailure(&'a RuleResult, &'a AnalysisFailure),
+}
+
 fn write_section_header(
     w: &mut dyn Write,
     label: &str,
@@ -191,6 +205,31 @@ fn write_violation(
         writeln!(w, "{MSG_INDENT}{line}")?;
     }
 
+    for related in &violation.related_locations {
+        let label = sanitize_terminal(&related.label);
+        let lossy_path = related.path.to_string_lossy();
+        let path = sanitize_terminal(&lossy_path);
+        if let Some(range) = &related.range {
+            writeln!(
+                w,
+                "{MSG_INDENT}{dim}related:{dim:#} {label}: {path}:{}:{}-{}:{}",
+                range.start_line(),
+                range.start_column(),
+                range.end_line(),
+                range.end_column(),
+            )?;
+        } else {
+            writeln!(w, "{MSG_INDENT}{dim}related:{dim:#} {label}: {path}")?;
+        }
+    }
+    if violation.related_locations_omitted > 0 {
+        writeln!(
+            w,
+            "{MSG_INDENT}{dim}and {} more related locations{dim:#}",
+            violation.related_locations_omitted,
+        )?;
+    }
+
     // Policy URL, if present. Printed once per violation to stay
     // near the relevant message (not once per rule as before —
     // that hid the link below the list). When the terminal
@@ -226,6 +265,34 @@ fn write_violation(
     Ok(())
 }
 
+fn write_analysis_failure(
+    w: &mut dyn Write,
+    result: &RuleResult,
+    failure: &AnalysisFailure,
+    opts: &HumanOptions,
+) -> std::io::Result<()> {
+    let s = style::ERROR;
+    let rule_style = style::RULE_ID;
+    let safe_rule_id = sanitize_terminal(&result.rule_id);
+    writeln!(
+        w,
+        "  {s}{}  analysis failure{s:#}  {rule_style}{safe_rule_id}{rule_style:#}",
+        opts.glyphs.error,
+    )?;
+
+    let safe_message = sanitize_terminal(&failure.message);
+    let kind = failure.kind.as_str();
+    let message = match (failure.line, failure.column) {
+        (Some(line), Some(column)) => format!("{kind}, {line}:{column}: {safe_message}"),
+        (Some(line), None) => format!("{kind}, line {line}: {safe_message}"),
+        _ => format!("{kind}: {safe_message}"),
+    };
+    for line in wrap_message(&message, MSG_INDENT.len(), opts.effective_width()) {
+        writeln!(w, "{MSG_INDENT}{line}")?;
+    }
+    Ok(())
+}
+
 /// Summary block: per-level counts, overall passing/failing/fixable
 /// totals, and a `alint fix` call-to-action when anything's auto-fixable.
 fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::io::Result<()> {
@@ -252,12 +319,22 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
     }
 
     let total = errors + warnings + infos;
+    let failure_count = report.total_analysis_failures();
     let failing = report.failing_rules();
     let passing = report.passing_rules();
     let dim = style::DIM;
 
-    let plural = if total == 1 { "" } else { "s" };
-    writeln!(w, "{dim}Summary ({total} violation{plural}):{dim:#}")?;
+    let violation_plural = if total == 1 { "" } else { "s" };
+    let failure_part = if failure_count > 0 {
+        let plural = if failure_count == 1 { "" } else { "s" };
+        format!(", {failure_count} analysis failure{plural}")
+    } else {
+        String::new()
+    };
+    writeln!(
+        w,
+        "{dim}Summary ({total} violation{violation_plural}{failure_part}):{dim:#}"
+    )?;
 
     // First line: per-level breakdown. Skip levels with zero count
     // to keep the line short on typical runs.
@@ -281,6 +358,14 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
     if infos > 0 {
         let s = style::INFO;
         parts.push(format!("{s}{} {infos} info{s:#}", glyphs.info));
+    }
+    if failure_count > 0 {
+        let s = style::ERROR;
+        parts.push(format!(
+            "{s}{} {failure_count} analysis failure{p}{s:#}",
+            glyphs.error,
+            p = if failure_count == 1 { "" } else { "s" }
+        ));
     }
     writeln!(w, "  {}", parts.join("   "))?;
 
@@ -335,6 +420,8 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
 /// obvious even without the grouped format's per-file separators; levels are
 /// color-tagged too. The `AutoStream` strips SGR escapes when the sink
 /// isn't a TTY, so pipe-safe `path:line:col` output is automatic.
+// The compact grammar and its counters are one linear write transaction.
+#[allow(clippy::too_many_lines)]
 fn write_human_compact(
     report: &Report,
     w: &mut dyn Write,
@@ -343,6 +430,7 @@ fn write_human_compact(
     let mut errors = 0usize;
     let mut warnings = 0usize;
     let mut infos = 0usize;
+    let mut analysis_failures = 0usize;
     let mut fixable = 0usize;
 
     for result in &report.results {
@@ -401,12 +489,34 @@ fn write_human_compact(
                 "{loc_style}{loc}{loc_style:#}: {level_style}{level_name}{level_style:#}: {rule_style}{safe_rule_id}{rule_style:#}: {message}{fix_tag}",
             )?;
         }
+        for failure in &result.analysis_failures {
+            analysis_failures += 1;
+            let path = failure.path.as_ref().map_or_else(
+                || "<repo>".to_string(),
+                |p| sanitize_terminal(&p.display().to_string()).into_owned(),
+            );
+            let loc = match (failure.line, failure.column) {
+                (Some(line), Some(column)) => format!("{path}:{line}:{column}"),
+                (Some(line), None) => format!("{path}:{line}"),
+                _ => path,
+            };
+            let kind = failure.kind.as_str();
+            let message = sanitize_terminal(&failure.message);
+            let safe_rule_id = sanitize_terminal(&result.rule_id);
+            let loc_style = style::LOCATION;
+            let level_style = style::ERROR;
+            let rule_style = style::RULE_ID;
+            writeln!(
+                w,
+                "{loc_style}{loc}{loc_style:#}: {level_style}analysis failure{level_style:#}: {rule_style}{safe_rule_id}{rule_style:#}: {kind}: {message}",
+            )?;
+        }
     }
 
     // Trailing summary: one line, sentence-cased, no box. Stays
     // at stderr-style density so `alint check --compact | wc -l`
     // still counts only violations + summary (+1).
-    if errors == 0 && warnings == 0 && infos == 0 {
+    if errors == 0 && warnings == 0 && infos == 0 && analysis_failures == 0 {
         let s = style::SUCCESS;
         writeln!(w, "{s}{} all rules passed.{s:#}", opts.glyphs.success)?;
         return Ok(());
@@ -431,6 +541,13 @@ fn write_human_compact(
         let s = style::INFO;
         parts.push(format!("{s}{infos} info{s:#}"));
     }
+    if analysis_failures > 0 {
+        let s = style::ERROR;
+        parts.push(format!(
+            "{s}{analysis_failures} analysis failure{p}{s:#}",
+            p = if analysis_failures == 1 { "" } else { "s" }
+        ));
+    }
     let mut line = parts.join(", ");
     if fixable > 0 {
         use std::fmt::Write as _;
@@ -449,6 +566,8 @@ fn write_human_compact(
 /// 4 cols sits under the `· `/`✓ ` glyph so wrapped lines align.
 const FIX_INDENT: &str = "    ";
 
+// Keep status selection, wrapping, and output order in one linear renderer.
+#[allow(clippy::too_many_lines)]
 pub fn write_fix_human(
     report: &FixReport,
     w: &mut dyn Write,
@@ -541,12 +660,35 @@ pub fn write_fix_human(
                 writeln!(w, "{FIX_INDENT}{line_style_open}{line}{line_style_close}")?;
             }
         }
+        for failure in &rule.analysis_failures {
+            let path_prefix = failure
+                .path
+                .as_ref()
+                .map(|p| format!("{} - ", p.display()))
+                .unwrap_or_default();
+            let content = format!(
+                "{path_prefix}{}: {}",
+                failure.kind.as_str(),
+                failure.message
+            );
+            let content = sanitize_terminal(&content);
+            let lines = wrap_message(&content, FIX_INDENT.len(), total_width);
+            let (first_line, rest) = lines
+                .split_first()
+                .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
+            let s = style::ERROR;
+            writeln!(w, "  {s}{} {first_line}{s:#}", opts.glyphs.error)?;
+            for line in rest {
+                writeln!(w, "{FIX_INDENT}{s}{line}{s:#}")?;
+            }
+        }
     }
 
     let applied = report.applied();
     let skipped = report.skipped();
     let unfixable = report.unfixable();
     let suggested = report.suggested();
+    let analysis_failures = report.total_analysis_failures();
     let ok = style::SUCCESS;
     // Append `suggested` only when non-zero, so a run without suggestions is
     // byte-identical to pre-tier output (the fix-*.stdout snapshots).
@@ -555,9 +697,15 @@ pub fn write_fix_human(
     } else {
         String::new()
     };
+    let failure_part = if analysis_failures > 0 {
+        let plural = if analysis_failures == 1 { "" } else { "s" };
+        format!(", {analysis_failures} analysis failure{plural}")
+    } else {
+        String::new()
+    };
     writeln!(
         w,
-        "\n{ok}{applied} applied{ok:#}, {skipped} skipped, {unfixable} unfixable{suggested_part}."
+        "\n{ok}{applied} applied{ok:#}, {skipped} skipped, {unfixable} unfixable{suggested_part}{failure_part}."
     )?;
     Ok(())
 }
@@ -754,6 +902,39 @@ mod tests {
     }
 
     #[test]
+    fn human_format_renders_sanitized_related_locations_and_truncation() {
+        let mut violation = Violation::new("relationship failed")
+            .with_path(std::path::Path::new("primary.txt"))
+            .with_related_location(
+                alint_core::RelatedLocation::new(
+                    format!("other-{RAW_CLEAR}.txt"),
+                    format!("source {RAW_CLEAR}"),
+                )
+                .with_range(alint_core::SourceRange::new(2, 3, 4, 5).unwrap()),
+            );
+        violation.related_locations_omitted = 2;
+        let report = Report {
+            results: vec![RuleResult::new(
+                "relation".into(),
+                Level::Error,
+                None,
+                vec![violation],
+                false,
+            )],
+        };
+        let mut buf = Vec::new();
+        write_human(&report, &mut buf, HumanOptions::default()).unwrap();
+        let rendered = String::from_utf8(buf).unwrap();
+
+        assert_neutralized(&rendered);
+        let plain = strip_sgr(&rendered);
+        assert!(
+            plain.contains("related: source \\x1b[2J\\x1b[H: other-\\x1b[2J\\x1b[H.txt:2:3-4:5")
+        );
+        assert!(plain.contains("and 2 more related locations"));
+    }
+
+    #[test]
     fn compact_format_neutralizes_terminal_escapes() {
         let mut buf = Vec::new();
         let opts = HumanOptions {
@@ -921,6 +1102,7 @@ mod tests {
                     violation: v,
                     status: FixStatus::Unfixable,
                 }],
+                analysis_failures: Vec::new(),
             }],
         };
         let mut buf = Vec::new();
@@ -947,6 +1129,7 @@ mod tests {
                         }),
                     },
                 }],
+                analysis_failures: Vec::new(),
             }],
         };
         let mut buf = Vec::new();

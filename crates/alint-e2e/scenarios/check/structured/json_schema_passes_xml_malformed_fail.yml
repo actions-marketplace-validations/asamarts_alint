@@ -1,9 +1,9 @@
-name: json_schema_passes flags a malformed XML target with one parse-error violation
+name: json_schema_passes flags malformed XML as one parse analysis failure
 tags: [check, json_schema_passes, structured, xml, failing]
 
 # The XML parse-error path, distinct from the schema-violation fail scenario: a
-# malformed .csproj auto-detects as XML, fails to parse, and yields exactly ONE
-# parse-error violation ("not a valid XML document") -- not a flood of schema
+# malformed `.csproj` auto-detects as XML, fails to parse, and yields exactly ONE
+# parse analysis failure ("not a valid XML document") -- not a flood of schema
 # errors against junk.
 
 given:
@@ -30,5 +30,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
-      - {rule: csproj-parses, level: error, path: Broken.csproj}
+  - violations: []
+    analysis_failures:
+      - {rule: csproj-parses, kind: resource_parse, path: Broken.csproj}

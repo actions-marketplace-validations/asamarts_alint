@@ -406,6 +406,7 @@ EveryMatchingHasRule {
                 policy_url: None,
                 when: None,
                 expect_matches: false,
+                sensitive: false,
                 scope_filter: None,
                 extra: Mapping {},
             },
@@ -930,6 +931,7 @@ ForEachDirRule {
                 policy_url: None,
                 when: None,
                 expect_matches: false,
+                sensitive: false,
                 scope_filter: None,
                 extra: Mapping {},
             },
@@ -959,6 +961,7 @@ ForEachFileRule {
                 policy_url: None,
                 when: None,
                 expect_matches: false,
+                sensitive: false,
                 scope_filter: None,
                 extra: Mapping {},
             },
@@ -2040,8 +2043,11 @@ RegistryPathsResolveRule {
     must_contain: Some(
         "Cargo.toml",
     ),
-    exclude_query: Some(
-        "$.workspace.exclude[*]",
+    exclude_extract: Some(
+        Structured(
+            Toml,
+            "$.workspace.exclude[*]",
+        ),
     ),
     orphans: Some(
         OrphansSpec {

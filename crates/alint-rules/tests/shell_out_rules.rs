@@ -14,6 +14,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 
 use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
@@ -43,10 +44,11 @@ fn git_init(root: &Path) {
 }
 
 fn build_engine_from_yaml(yaml: &str) -> Engine {
-    let spec: alint_core::RuleSpec = serde_yaml_ng::from_str(yaml).expect("rule spec parses");
+    let spec: Arc<alint_core::RuleSpec> =
+        Arc::new(serde_yaml_ng::from_str(yaml).expect("rule spec parses"));
     let registry = builtin_registry();
     let rule = registry.build(&spec).expect("rule builds");
-    Engine::from_entries(vec![RuleEntry::new(rule)], registry)
+    Engine::from_entries(vec![RuleEntry::new(rule).with_spec(spec)], registry)
 }
 
 fn run_engine(engine: &Engine, root: &Path) -> alint_core::Report {
@@ -67,6 +69,19 @@ fn collect_violations(report: &alint_core::Report) -> Vec<&alint_core::Violation
         .iter()
         .flat_map(|r| r.violations.iter())
         .collect()
+}
+
+fn assert_git_unavailable(report: &alint_core::Report, rule_id: &str) {
+    assert_eq!(report.results.len(), 1);
+    let result = &report.results[0];
+    assert_eq!(result.rule_id.as_ref(), rule_id);
+    assert!(result.violations.is_empty());
+    assert_eq!(result.analysis_failures.len(), 1);
+    assert_eq!(result.analysis_failures[0].kind.as_str(), "resource_read");
+    assert_eq!(
+        result.analysis_failures[0].message,
+        "Git is unavailable or the lint root is not a usable Git repository"
+    );
 }
 
 // ─── git_no_denied_paths ────────────────────────────────────
@@ -127,9 +142,8 @@ fn git_no_denied_paths_silent_when_secrets_untracked() {
 }
 
 #[test]
-fn git_no_denied_paths_silent_outside_git() {
-    // No git_init: the rule must silently no-op when there's no
-    // repo, like every other git-* rule.
+fn git_no_denied_paths_fails_closed_outside_git() {
+    // No git_init: the rule's active Git capability fails closed.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     std::fs::write(root.join(".env"), b"x").unwrap();
@@ -141,10 +155,7 @@ fn git_no_denied_paths_silent_outside_git() {
          level: error\n",
     );
     let report = run_engine(&engine, root);
-    assert!(
-        collect_violations(&report).is_empty(),
-        "no-repo must not fire git_no_denied_paths"
-    );
+    assert_git_unavailable(&report, "no-secrets");
 }
 
 #[test]
@@ -255,7 +266,7 @@ fn git_commit_message_silent_when_head_matches() {
 }
 
 #[test]
-fn git_commit_message_silent_outside_git() {
+fn git_commit_message_fails_closed_outside_git() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let engine = build_engine_from_yaml(
@@ -265,10 +276,7 @@ fn git_commit_message_silent_outside_git() {
          level: warning\n",
     );
     let report = run_engine(&engine, root);
-    assert!(
-        collect_violations(&report).is_empty(),
-        "no-repo must not fire git_commit_message"
-    );
+    assert_git_unavailable(&report, "conventional");
 }
 
 // ─── git_commit_signed_off ──────────────────────────────────
@@ -344,7 +352,7 @@ fn git_commit_signed_off_silent_when_head_has_trailer() {
 }
 
 #[test]
-fn git_commit_signed_off_silent_outside_git() {
+fn git_commit_signed_off_fails_closed_outside_git() {
     let tmp = tempfile::tempdir().unwrap();
     let engine = build_engine_from_yaml(
         "id: dco\n\
@@ -352,10 +360,7 @@ fn git_commit_signed_off_silent_outside_git() {
          level: error\n",
     );
     let report = run_engine(&engine, tmp.path());
-    assert!(
-        collect_violations(&report).is_empty(),
-        "no-repo must not fire git_commit_signed_off"
-    );
+    assert_git_unavailable(&report, "dco");
 }
 
 // ─── git_commit_no_fixup ────────────────────────────────────
@@ -431,7 +436,7 @@ fn git_commit_no_fixup_silent_on_normal_commit() {
 }
 
 #[test]
-fn git_commit_no_fixup_silent_outside_git() {
+fn git_commit_no_fixup_fails_closed_outside_git() {
     let tmp = tempfile::tempdir().unwrap();
     let engine = build_engine_from_yaml(
         "id: no-fixup\n\
@@ -439,10 +444,7 @@ fn git_commit_no_fixup_silent_outside_git() {
          level: error\n",
     );
     let report = run_engine(&engine, tmp.path());
-    assert!(
-        collect_violations(&report).is_empty(),
-        "no-repo must not fire git_commit_no_fixup"
-    );
+    assert_git_unavailable(&report, "no-fixup");
 }
 
 // ─── git_commit_author_allowlist ────────────────────────────
@@ -509,7 +511,7 @@ fn git_commit_author_allowlist_silent_when_author_matches() {
 }
 
 #[test]
-fn git_commit_author_allowlist_silent_outside_git() {
+fn git_commit_author_allowlist_fails_closed_outside_git() {
     let tmp = tempfile::tempdir().unwrap();
     let engine = build_engine_from_yaml(
         "id: org-authors\n\
@@ -518,10 +520,7 @@ fn git_commit_author_allowlist_silent_outside_git() {
          level: error\n",
     );
     let report = run_engine(&engine, tmp.path());
-    assert!(
-        collect_violations(&report).is_empty(),
-        "no-repo must not fire git_commit_author_allowlist"
-    );
+    assert_git_unavailable(&report, "org-authors");
 }
 
 // ─── git_commit_gpg_signed ──────────────────────────────────
@@ -561,7 +560,7 @@ fn git_commit_gpg_signed_fires_on_unsigned_commit() {
 }
 
 #[test]
-fn git_commit_gpg_signed_silent_outside_git() {
+fn git_commit_gpg_signed_fails_closed_outside_git() {
     let tmp = tempfile::tempdir().unwrap();
     let engine = build_engine_from_yaml(
         "id: signed-commits\n\
@@ -569,10 +568,7 @@ fn git_commit_gpg_signed_silent_outside_git() {
          level: error\n",
     );
     let report = run_engine(&engine, tmp.path());
-    assert!(
-        collect_violations(&report).is_empty(),
-        "no-repo must not fire git_commit_gpg_signed"
-    );
+    assert_git_unavailable(&report, "signed-commits");
 }
 
 // ─── scope_filter.changed_since (engine end-to-end) ─────────
@@ -637,9 +633,8 @@ fn changed_since_scopes_a_per_file_rule_to_the_diff() {
 }
 
 #[test]
-fn changed_since_outside_git_matches_nothing() {
-    // No repo: the diff resolves to nothing, so the rule silently
-    // checks zero files (does not fire on every file).
+fn changed_since_fails_closed_outside_git() {
+    // No repo: the active diff capability fails closed.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     std::fs::write(root.join("a.rs"), b"fn a() {}\n").unwrap();
@@ -653,10 +648,7 @@ fn changed_since_outside_git_matches_nothing() {
          level: error\n",
     );
     let report = run_engine(&engine, root);
-    assert!(
-        collect_violations(&report).is_empty(),
-        "outside a git repo, changed_since matches nothing"
-    );
+    assert_git_unavailable(&report, "spdx-on-changed");
 }
 
 // ─── command ────────────────────────────────────────────────
@@ -740,7 +732,7 @@ fn command_passes_alint_path_via_env() {
 
 #[cfg(unix)]
 #[test]
-fn command_reports_spawn_failure_as_violation() {
+fn command_reports_spawn_failure_as_analysis_failure() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     std::fs::create_dir(root.join("src")).unwrap();
@@ -754,13 +746,18 @@ fn command_reports_spawn_failure_as_violation() {
          level: error\n",
     );
     let report = run_engine(&engine, root);
-    let v = collect_violations(&report);
-    assert_eq!(v.len(), 1, "missing bin must produce one violation");
-    assert!(
-        v[0].message.contains("spawn") || v[0].message.contains("PATH"),
-        "spawn-failure message should reference the binary or PATH: {}",
-        v[0].message
+    assert!(collect_violations(&report).is_empty());
+    let failures: Vec<_> = report
+        .results
+        .iter()
+        .flat_map(|result| &result.analysis_failures)
+        .collect();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(
+        failures[0].kind,
+        alint_core::AnalysisFailureKind::Evaluation
     );
+    assert_eq!(failures[0].path.as_deref(), Some(Path::new("src/a.rs")));
 }
 
 // ─── changeset_requires_path ────────────────────────────────
@@ -863,17 +860,14 @@ fn changeset_requires_path_when_changed_gates_the_requirement() {
 }
 
 #[test]
-fn changeset_requires_path_silent_outside_git() {
-    // No git_init: the diff-scoped rule no-ops without a repo.
+fn changeset_requires_path_fails_closed_outside_git() {
+    // No git_init: the diff-scoped rule fails closed.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     std::fs::write(root.join("README.md"), b"x").unwrap();
     let engine = build_engine_from_yaml(CHANGELOG_RULE);
     let report = run_engine(&engine, root);
-    assert!(
-        collect_violations(&report).is_empty(),
-        "no repo: changeset_requires_path must no-op"
-    );
+    assert_git_unavailable(&report, "needs-changelog");
 }
 
 // ─── pair_changed_together ──────────────────────────────────
@@ -917,6 +911,10 @@ fn pair_changed_together_fires_when_only_if_changed() {
     let v = collect_violations(&report);
     assert_eq!(v.len(), 1, "if_changed changed without then_changed: {v:?}");
     assert!(v[0].message.contains("FORMAT_VERSION"), "{}", v[0].message);
+    assert!(v[0].path.is_none(), "the primary anchor must not move");
+    assert_eq!(v[0].related_locations.len(), 1);
+    assert_eq!(v[0].related_locations[0].path, Path::new("src/format.rs"));
+    assert_eq!(v[0].related_locations[0].label, "changed trigger");
 }
 
 #[test]
@@ -967,15 +965,12 @@ fn pair_changed_together_silent_when_only_then_changes() {
 }
 
 #[test]
-fn pair_changed_together_silent_outside_git() {
-    // No git_init: the diff-scoped rule no-ops without a repo.
+fn pair_changed_together_fails_closed_outside_git() {
+    // No git_init: the diff-scoped rule fails closed.
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     std::fs::write(root.join("README.md"), b"x").unwrap();
     let engine = build_engine_from_yaml(CO_CHANGE_RULE);
     let report = run_engine(&engine, root);
-    assert!(
-        collect_violations(&report).is_empty(),
-        "no repo: pair_changed_together must no-op"
-    );
+    assert_git_unavailable(&report, "format-co-change");
 }

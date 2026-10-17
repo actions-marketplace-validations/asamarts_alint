@@ -1,11 +1,11 @@
-name: hcl over-deep nesting is rejected with one parse-error violation, not a crash
+name: hcl over-deep nesting is rejected with one parse analysis failure, not a crash
 tags: [check, hcl_path_absent, structured, hcl, failing]
 
 # SAFETY: hcl-rs stack-overflows (SIGABRT, whole-process abort) on deeply-nested
 # input. The `hcl_depth_within_limit` guard (MAX_HCL_DEPTH=256) must reject an
-# over-deep file as ONE parse-error violation through the real binary -- if the
+# over-deep file as ONE parse analysis failure through the real binary -- if the
 # guard or the large-stack parse thread regressed, `alint check` would crash here
-# instead of emitting this violation. The value is a 300-deep nested tuple.
+# instead of emitting the failure. The value is a 300-deep nested tuple.
 
 given:
   tree:
@@ -23,5 +23,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
-      - {rule: probe, level: error, path: deep.tf}
+  - violations: []
+    analysis_failures:
+      - {rule: probe, kind: resource_parse, path: deep.tf}

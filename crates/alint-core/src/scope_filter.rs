@@ -52,8 +52,9 @@ use regex::Regex;
 use serde::{Deserialize, Deserializer};
 
 use crate::error::{Error, Result};
-use crate::extract::{Extract, ExtractSpec, extract_values, is_non_literal};
+use crate::extract::{Extract, ExtractSpec, NonStringValueKind, extract_values, is_non_literal};
 use crate::pathsafe::{derive_target, normalize_confined};
+use crate::rule::AnalysisFailureKind;
 use crate::walker::FileIndex;
 
 /// Per-file rule gate. Today's only primitive is
@@ -180,6 +181,31 @@ enum ManifestSense {
     Exclude,
 }
 
+/// A manifest-derived scope that could not produce a trustworthy membership
+/// set. Cached beside the empty set so every active owning rule receives the
+/// same typed analysis failure without rereading or reparsing the manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManifestFailure {
+    pub kind: AnalysisFailureKind,
+    pub message: String,
+}
+
+impl ManifestFailure {
+    fn read(message: impl Into<String>) -> Self {
+        Self {
+            kind: AnalysisFailureKind::ResourceRead,
+            message: message.into(),
+        }
+    }
+
+    fn parse(message: impl Into<String>) -> Self {
+        Self {
+            kind: AnalysisFailureKind::ResourceParse,
+            message: message.into(),
+        }
+    }
+}
+
 /// The validated, resolve-ready form of one `*_manifest_paths:` predicate. The
 /// path SET it gates by is resolved once per run by the engine and cached on the
 /// [`FileIndex`] under [`Self::cache_key`]; this struct holds only the config
@@ -285,19 +311,21 @@ impl ManifestPredicate {
         &self.source
     }
 
+    pub(crate) fn redacts_by_default(&self) -> bool {
+        self.extract.redacts_by_default()
+    }
+
     /// True for an `include_manifest_paths:` predicate that wants a non-empty
     /// set — the engine warns when its resolved set is empty.
     pub(crate) fn warns_on_empty(&self) -> bool {
         self.sense == ManifestSense::Include && self.expect_nonempty
     }
 
-    /// Resolve the declared path set from the manifest's text: extract, drop
-    /// non-literal entries, optionally `derive_target`-map, resolve relative to
-    /// the manifest's directory, and confine each result to the repo root. Pure
-    /// — the engine does the file read and caches the result on the
-    /// [`FileIndex`]. An unparseable manifest / bad extract yields the empty set
-    /// (the engine warns); the predicate then contributes nothing.
-    ///
+    /// Resolve the declared path set from the manifest's text: extract, reject
+    /// non-string values, drop non-literal strings, optionally
+    /// `derive_target`-map, resolve relative to the manifest's directory, and
+    /// confine each result to the repo root. Pure — the engine does the file read
+    /// and caches either this set or the structural failure on the [`FileIndex`].
     /// The result is in DECLARED order: a workspace
     /// entry prefixed `!` (`!packages/internal` in a pnpm / npm `workspaces`
     /// list) is an EXCLUDE, resolved like any other entry and returned with a
@@ -312,12 +340,31 @@ impl ManifestPredicate {
     /// FIRST occurrence instead dropped a later re-include, and
     /// `["packages/*", "!packages/internal", "packages/*"]` wrongly excluded
     /// `packages/internal`.
-    pub(crate) fn resolve_set(&self, text: &str) -> Vec<PathBuf> {
+    pub(crate) fn resolve_set(
+        &self,
+        text: &str,
+    ) -> std::result::Result<Vec<PathBuf>, ManifestFailure> {
         let base = self.source.parent().unwrap_or_else(|| Path::new(""));
-        let Ok(raw) = extract_values(&self.extract, text) else {
-            return Vec::new();
-        };
+        let raw = extract_values(&self.extract, text).map_err(|error| {
+            ManifestFailure::parse(format!("scope manifest extract failed: {error}"))
+        })?;
+        if !raw.non_strings.is_empty() {
+            let count = raw.non_strings.len();
+            let mut kinds = raw.non_strings;
+            kinds.sort_unstable();
+            kinds.dedup();
+            let kinds = kinds
+                .into_iter()
+                .map(NonStringValueKind::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ManifestFailure::parse(format!(
+                "scope manifest extract matched {count} non-string value(s) \
+                 (types: {kinds}); path entries must be strings"
+            )));
+        }
         let resolved: Vec<PathBuf> = raw
+            .strings
             .into_iter()
             .filter(|e| !is_non_literal(e))
             .filter_map(|entry| {
@@ -358,7 +405,7 @@ impl ManifestPredicate {
         let mut seen: HashSet<&PathBuf> = HashSet::new();
         let mut keep: Vec<&PathBuf> = resolved.iter().rev().filter(|p| seen.insert(*p)).collect();
         keep.reverse();
-        keep.into_iter().cloned().collect()
+        Ok(keep.into_iter().cloned().collect())
     }
 }
 
@@ -622,31 +669,58 @@ pub struct ResolvedManifestScope {
     pub paths: Vec<PathBuf>,
 }
 
-/// Read a manifest for `explain`'s resolved-set display, which (unlike the
-/// engine) has no `FileIndex` to read through: confine against a `source` that
-/// resolves — via a symlink — outside `root` (the canonical target must stay
-/// under the canonical root, ADR-0004), and cap the read at the analysis limit.
-/// Returns "" if the manifest is absent, escapes the root, or is too large; the
-/// predicate then shows the empty set.
-pub(crate) fn read_manifest_confined(root: &Path, rel: &Path) -> String {
+/// Read one manifest-derived scope source while preserving why it could not be
+/// read. The canonical target must remain under the canonical lint root
+/// (ADR-0004), only regular files are accepted, and the normal analysis cap is
+/// enforced by the bounded reader.
+pub(crate) fn read_manifest_confined(
+    root: &Path,
+    rel: &Path,
+) -> std::result::Result<String, ManifestFailure> {
     let abs = root.join(rel);
-    let (Ok(croot), Ok(cabs)) = (root.canonicalize(), abs.canonicalize()) else {
-        return String::new();
-    };
+    let croot = root.canonicalize().map_err(|error| {
+        ManifestFailure::read(format!("lint root could not be resolved: {error}"))
+    })?;
+    let cabs = abs.canonicalize().map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ManifestFailure::read("scope manifest is missing")
+        } else {
+            ManifestFailure::read(format!("scope manifest could not be resolved: {error}"))
+        }
+    })?;
     if !cabs.starts_with(&croot) {
-        return String::new(); // a symlinked source that escapes the root
+        return Err(ManifestFailure::read(
+            "scope manifest resolves outside the lint root",
+        ));
     }
-    let Ok(meta) = std::fs::metadata(&cabs) else {
-        return String::new();
-    };
-    // Only a regular file is a manifest: a FIFO / device / socket would block or
-    // hang the read (the walker applies the same is_file filter for the engine).
+    let meta = std::fs::metadata(&cabs).map_err(|error| {
+        ManifestFailure::read(format!(
+            "scope manifest metadata could not be read: {error}"
+        ))
+    })?;
     if !meta.is_file() {
-        return String::new();
+        return Err(ManifestFailure::read(
+            "scope manifest is not a regular file",
+        ));
     }
-    crate::walker::read_capped_or_skip(&cabs, meta.len())
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default()
+    let bytes = match crate::walker::read_for_analysis(&cabs, meta.len()) {
+        crate::walker::AnalysisRead::Bytes(bytes) => bytes,
+        crate::walker::AnalysisRead::Missing => {
+            return Err(ManifestFailure::read("scope manifest is missing"));
+        }
+        crate::walker::AnalysisRead::TooLarge(size) => {
+            return Err(ManifestFailure::read(format!(
+                "scope manifest is too large to analyze ({size} bytes)"
+            )));
+        }
+        crate::walker::AnalysisRead::Unreadable(error) => {
+            return Err(ManifestFailure::read(format!(
+                "scope manifest could not be read: {error}"
+            )));
+        }
+    };
+    String::from_utf8(bytes)
+        .map_err(|_| ManifestFailure::parse("scope manifest is not valid UTF-8"))
 }
 
 impl ScopeFilter {
@@ -707,6 +781,13 @@ impl ScopeFilter {
         })
     }
 
+    pub(crate) fn sensitive_manifest_sources(&self) -> impl Iterator<Item = &Path> {
+        self.manifest_predicates
+            .iter()
+            .filter(|predicate| predicate.redacts_by_default())
+            .map(ManifestPredicate::source)
+    }
+
     /// Direct construction without validation. Tests only.
     #[doc(hidden)]
     pub fn has_ancestor_unchecked(names: Vec<&str>) -> Self {
@@ -744,30 +825,13 @@ impl ScopeFilter {
     /// matching ancestor's path is not exposed (this is a
     /// boolean filter).
     pub fn matches(&self, file: &Path, index: &FileIndex) -> bool {
-        if !self.has_ancestor.is_empty() && !self.ancestor_matches(file, index) {
+        if !self.matches_without_manifest(file, index) {
             return false;
         }
-        if let Some(since) = &self.changed_since {
-            // The diff set is resolved once per run and cached on the
-            // index; a missing entry (ref the engine didn't resolve, or
-            // a no-git repo) matches nothing — the documented silent
-            // no-op.
-            let in_diff = index
-                .changed_paths(since)
-                .is_some_and(|set| set.contains(file));
-            if !in_diff {
-                return false;
-            }
-        }
         for pred in &self.manifest_predicates {
-            // The manifest set is resolved once per run and cached on the index
-            // (like `changed_since`); a missing entry (manifest absent /
-            // unresolved) is the empty set. Membership is directory-aware: a
-            // declared FILE (`bin` -> `src/cli.ts`) matches itself, a declared
-            // DIRECTORY (`crates/a`) matches every file under it (component-wise
-            // `starts_with`, so `crates/a` does not match `crates/ab/x.rs`), and a
-            // declared GLOB (`crates/*`) matches a file whose component-prefix
-            // matches it. `include` keeps files IN the set; `exclude` drops them.
+            // The engine resolves the set ONCE and stores it on the index.
+            // A missing cache entry behaves as empty only defensively; active
+            // engine runs route a cached resolution failure before matching.
             let in_set = index
                 .manifest_paths(pred.cache_key())
                 .is_some_and(|set| set.contains_file(file));
@@ -782,6 +846,28 @@ impl ScopeFilter {
         true
     }
 
+    /// Match every filter predicate except manifest-derived membership.
+    ///
+    /// Changed-mode dispatch uses this only when manifest resolution failed: a
+    /// path rejected here proves the rule is invocation-inactive without
+    /// consulting the unavailable set; a path accepted here keeps the rule
+    /// active so the engine can surface its cached analysis failure.
+    #[inline]
+    pub(crate) fn matches_without_manifest(&self, file: &Path, index: &FileIndex) -> bool {
+        if !self.has_ancestor.is_empty() && !self.ancestor_matches(file, index) {
+            return false;
+        }
+        if let Some(since) = &self.changed_since {
+            let Some(changed) = index.changed_paths(since) else {
+                return false;
+            };
+            if !changed.contains(file) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// The manifest predicates configured on this filter. The engine reads these
     /// from every per-file rule to resolve each declared path set once per run.
     pub(crate) fn manifest_predicates(&self) -> &[ManifestPredicate] {
@@ -789,7 +875,8 @@ impl ScopeFilter {
     }
 
     /// Resolve each manifest predicate's declared path set against `root`, for
-    /// display by `alint explain`. Reads each manifest (absent → empty set).
+    /// display by `alint explain`. A failed source or extract is displayed as an
+    /// empty set; `check` and `fix` surface the corresponding structural failure.
     /// Not the hot path — the engine caches these on the [`FileIndex`] for
     /// [`matches`](Self::matches).
     #[must_use]
@@ -797,13 +884,27 @@ impl ScopeFilter {
         self.manifest_predicates
             .iter()
             .map(|p| {
-                let text = read_manifest_confined(root, &p.source);
-                let mut paths: Vec<PathBuf> = p.resolve_set(&text);
+                let mut paths = read_manifest_confined(root, &p.source)
+                    .and_then(|text| p.resolve_set(&text))
+                    .unwrap_or_default();
                 // Sorted for a stable display, unless a negated (`!`) member is
                 // present: then declared order IS the semantics (last match
                 // wins), so it is shown as declared.
                 if !paths.iter().any(|p| p.to_string_lossy().starts_with('!')) {
                     paths.sort();
+                }
+                if p.redacts_by_default() {
+                    let source = p.source.to_string_lossy().replace('\\', "/");
+                    paths = paths
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, _)| {
+                            PathBuf::from(crate::redaction_marker(&format!(
+                                "manifest_scope\0{source}\0{:?}\0{index}",
+                                p.extract
+                            )))
+                        })
+                        .collect();
                 }
                 ResolvedManifestScope {
                     include: p.sense == ManifestSense::Include,
@@ -1199,7 +1300,8 @@ mod tests {
 
     #[test]
     fn changed_since_with_unpopulated_cache_matches_nothing() {
-        // No git / unresolved ref → empty/absent cache → silent no-op.
+        // A missing cache defensively matches nothing. The engine resolves it
+        // before dispatch and separately gates repository unavailability.
         let f = ScopeFilter::changed_since_unchecked("origin/main");
         let i = idx(&["src/a.rs"]);
         assert!(!f.matches(Path::new("src/a.rs"), &i));
@@ -1273,7 +1375,7 @@ mod tests {
             key.to_string(),
             ManifestSet::from_paths(set.iter().map(PathBuf::from).collect::<Vec<_>>()),
         );
-        i.set_manifest_paths(map);
+        i.set_manifest_paths(map, HashMap::new());
         i
     }
 
@@ -1467,7 +1569,7 @@ mod tests {
             key,
             ManifestSet::from_paths([PathBuf::from("crates/x/b.rs")]),
         );
-        i.set_manifest_paths(map);
+        i.set_manifest_paths(map, HashMap::new());
         assert!(
             f.matches(Path::new("crates/x/a.rs"), &i),
             "under manifest, not excluded"
@@ -1489,7 +1591,7 @@ mod tests {
         );
         let pred = &f.manifest_predicates()[0];
         let text = r#"{ "bin": { "cli": "dist/cli.js", "helper": "dist/sub/helper.js" } }"#;
-        let set = pred.resolve_set(text);
+        let set = pred.resolve_set(text).unwrap();
         assert!(
             set.contains(&PathBuf::from("src/cli.ts")),
             "mapped bin → src: {set:?}"
@@ -1507,9 +1609,26 @@ mod tests {
         );
         let text = r#"{ "bin": { "sh": "scripts/run.sh" } }"#;
         assert!(
-            f.manifest_predicates()[0].resolve_set(text).is_empty(),
+            f.manifest_predicates()[0]
+                .resolve_set(text)
+                .unwrap()
+                .is_empty(),
             "an entry that doesn't match `from` is dropped"
         );
+    }
+
+    #[test]
+    fn resolve_set_rejects_non_string_members() {
+        let f = manifest_filter(
+            "include_manifest_paths:\n  source: package.json\n  extract: { json: \"$.files[*]\" }",
+        );
+        let failure = f.manifest_predicates()[0]
+            .resolve_set(r#"{ "files": ["src", true, 7, null] }"#)
+            .unwrap_err();
+        assert_eq!(failure.kind, AnalysisFailureKind::ResourceParse);
+        for kind in ["boolean", "number", "null"] {
+            assert!(failure.message.contains(kind), "{}", failure.message);
+        }
     }
 
     #[test]
@@ -1518,7 +1637,7 @@ mod tests {
             "include_manifest_paths:\n  source: packages/foo/package.json\n  extract: { json: \"$.files[*]\" }",
         );
         let text = r#"{ "files": ["src/index.ts"] }"#;
-        let set = f.manifest_predicates()[0].resolve_set(text);
+        let set = f.manifest_predicates()[0].resolve_set(text).unwrap();
         assert!(
             set.contains(&PathBuf::from("packages/foo/src/index.ts")),
             "declared path resolves under the manifest's own dir: {set:?}"
@@ -1532,7 +1651,7 @@ mod tests {
         );
         // `../../etc/x` escapes the repo root once resolved under packages/foo/.
         let text = r#"{ "files": ["../../etc/x", "src/ok.ts"] }"#;
-        let set = f.manifest_predicates()[0].resolve_set(text);
+        let set = f.manifest_predicates()[0].resolve_set(text).unwrap();
         assert!(set.contains(&PathBuf::from("packages/foo/src/ok.ts")));
         assert!(
             !set.iter().any(|p| p.starts_with("..")),
@@ -1550,7 +1669,7 @@ mod tests {
             "include_manifest_paths:\n  source: web/package.json\n  extract: { json: \"$.workspaces[*]\" }",
         );
         let text = r#"{ "workspaces": ["packages/*", "!packages/internal", "packages/app"] }"#;
-        let set = f.manifest_predicates()[0].resolve_set(text);
+        let set = f.manifest_predicates()[0].resolve_set(text).unwrap();
         assert_eq!(
             set,
             vec![
@@ -1571,7 +1690,7 @@ mod tests {
             "include_manifest_paths:\n  source: package.json\n  extract: { json: \"$.workspaces[*]\" }",
         );
         let resolve = |text: &str| {
-            let set = f.manifest_predicates()[0].resolve_set(text);
+            let set = f.manifest_predicates()[0].resolve_set(text).unwrap();
             ManifestSet::from_paths(set)
         };
         let dup =
@@ -1583,8 +1702,9 @@ mod tests {
             assert!(set.contains_file(Path::new("packages/app/a.txt")));
         }
         // A plain duplicate collapses to its last position.
-        let set =
-            f.manifest_predicates()[0].resolve_set(r#"{ "workspaces": ["a", "!b", "a", "!b"] }"#);
+        let set = f.manifest_predicates()[0]
+            .resolve_set(r#"{ "workspaces": ["a", "!b", "a", "!b"] }"#)
+            .unwrap();
         assert_eq!(set, vec![PathBuf::from("a"), PathBuf::from("!b")]);
         // ...and the exclusion still holds when nothing re-includes it.
         let set =
@@ -1798,8 +1918,9 @@ mod tests {
         let f = manifest_filter(
             "include_manifest_paths:\n  source: pkg/tsconfig.json\n  extract: { json: \"$.include[*]\" }",
         );
-        let set =
-            f.manifest_predicates()[0].resolve_set(r#"{"include": [".", "", "a/..", "src"]}"#);
+        let set = f.manifest_predicates()[0]
+            .resolve_set(r#"{"include": [".", "", "a/..", "src"]}"#)
+            .unwrap();
         assert!(
             !set.contains(&PathBuf::from("pkg")),
             "a vacuous entry must not scope the whole subtree: {set:?}"
@@ -1820,8 +1941,9 @@ mod tests {
         let f = manifest_filter(
             "include_manifest_paths:\n  source: packages/web/tsconfig.json\n  extract: { json: \"$.include[*]\" }",
         );
-        let set =
-            f.manifest_predicates()[0].resolve_set(r#"{"include": ["src", "../shared/src", "."]}"#);
+        let set = f.manifest_predicates()[0]
+            .resolve_set(r#"{"include": ["src", "../shared/src", "."]}"#)
+            .unwrap();
         assert!(
             set.contains(&PathBuf::from("packages/web/src")),
             "the child `src` is kept: {set:?}"
@@ -1844,11 +1966,33 @@ mod tests {
         std::fs::write(root.join("m.json"), r#"{"x":1}"#).unwrap();
         // A regular in-root manifest reads.
         assert_eq!(
-            read_manifest_confined(root, Path::new("m.json")),
+            read_manifest_confined(root, Path::new("m.json")).unwrap(),
             r#"{"x":1}"#
         );
-        // Absent -> "".
-        assert_eq!(read_manifest_confined(root, Path::new("missing.json")), "");
+        let failure = read_manifest_confined(root, Path::new("missing.json")).unwrap_err();
+        assert_eq!(failure.kind, AnalysisFailureKind::ResourceRead);
+        assert!(failure.message.contains("missing"), "{}", failure.message);
+    }
+
+    #[test]
+    fn include_manifest_rejects_invalid_utf8_without_disclosing_bytes_or_values() {
+        let root_dir = tempfile::tempdir().unwrap();
+        let root = root_dir.path();
+        let filter = manifest_filter(
+            "include_manifest_paths:\n  source: manifest.json\n  extract: { json: \"$.paths[*]\" }",
+        );
+        let predicate = &filter.manifest_predicates()[0];
+        std::fs::write(
+            root.join(predicate.source()),
+            b"{\"paths\":[\"\xff-secret\"]}",
+        )
+        .unwrap();
+
+        let failure = read_manifest_confined(root, predicate.source()).expect_err("invalid UTF-8");
+        assert_eq!(failure.kind, AnalysisFailureKind::ResourceParse);
+        assert_eq!(failure.message, "scope manifest is not valid UTF-8");
+        assert!(!failure.message.contains('\u{fffd}'));
+        assert!(!failure.message.contains("secret"));
     }
 
     #[cfg(unix)]
@@ -1863,11 +2007,9 @@ mod tests {
             root.join("link.json"),
         )
         .unwrap();
-        // The symlink resolves outside root -> refused (empty), no out-of-tree read.
-        assert!(
-            read_manifest_confined(root, Path::new("link.json")).is_empty(),
-            "an escaping-symlink source must not be read"
-        );
+        let failure = read_manifest_confined(root, Path::new("link.json")).unwrap_err();
+        assert_eq!(failure.kind, AnalysisFailureKind::ResourceRead);
+        assert!(failure.message.contains("outside"), "{}", failure.message);
     }
 
     #[test]
@@ -1883,7 +2025,7 @@ mod tests {
             filtered.manifest_paths("KEY").is_none(),
             "filtered index starts with no manifest cache"
         );
-        filtered.set_manifest_paths(full.manifest_paths_map().unwrap().clone());
+        filtered.set_manifest_paths(full.manifest_paths_map().unwrap().clone(), HashMap::new());
         assert!(
             filtered
                 .manifest_paths("KEY")

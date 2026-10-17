@@ -54,8 +54,8 @@ use std::path::{Path, PathBuf};
 use std::slice;
 
 use alint_core::{
-    Context, Error, Extract, ExtractSpec, Level, Result, Rule, RuleSpec, Scope, Violation,
-    extract_values, is_non_literal,
+    AnalysisFailureKind, Context, Error, Extract, ExtractSpec, Level, RelatedLocation, Result,
+    Rule, RuleSpec, Scope, Violation, extract_values, is_non_literal, unreadable_file_violation,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -313,6 +313,38 @@ impl Rule for FileGraphRule {
         true
     }
 
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        let manifest_sensitive = self.nodes.sensitive_manifest_sources().next().is_some();
+        for path in self.nodes.sensitive_manifest_sources() {
+            visit(path);
+        }
+        let implicit = matches!(
+            &self.edges,
+            EdgeSource::FromContent { extract, .. } if extract.redacts_by_default()
+        );
+        if !explicit && !implicit && !manifest_sensitive {
+            return;
+        }
+        for entry in ctx.index.files() {
+            if !self.nodes.matches(&entry.path, ctx.index) {
+                continue;
+            }
+            visit(&entry.path);
+            if explicit
+                && let EdgeSource::DeriveTarget { from, to } = &self.edges
+                && let Some(target) =
+                    alint_core::derive_target(from, to, &entry.path.to_string_lossy())
+            {
+                visit(&target);
+            }
+        }
+    }
+
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         // Stable node ordering → byte-identical violation output
         // (the snapshot discipline the parallel walker upholds).
@@ -454,7 +486,7 @@ impl FileGraphRule {
 
     /// Resolve a node to its outgoing edge targets. For `from_content`
     /// edges this reads the node and resolves every content reference
-    /// to a path (unreadable / unparseable nodes push a violation and
+    /// to a path (unreadable / unparseable nodes push an analysis failure and
     /// yield no edges; references that don't resolve to a path are
     /// dropped). For `derive_target` edges it derives the single target
     /// from the node *path* (no file read): the node through the
@@ -494,34 +526,59 @@ impl FileGraphRule {
         let text = match crate::io::read_capped(&abs) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
             Err(crate::io::ReadCapError::TooLarge(n)) => {
-                out.push(Self::node_violation(
-                    node,
-                    &format!("is too large to analyze ({})", crate::io::over_cap(n)),
-                ));
+                out.push(alint_core::too_large_file_violation(node, n));
+                return Vec::new();
+            }
+            Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                out.push(alint_core::missing_file_violation(node));
                 return Vec::new();
             }
             Err(crate::io::ReadCapError::Io(e)) => {
-                out.push(Self::node_violation(
-                    node,
-                    &format!("could not be read: {e}"),
-                ));
+                out.push(unreadable_file_violation(node, &e));
                 return Vec::new();
             }
         };
         let refs = match extract_values(extract, &text) {
             Ok(v) => v,
             Err(e) => {
-                out.push(Self::node_violation(
-                    node,
-                    &format!("edge extraction failed: {e}"),
-                ));
+                let mut finding = Violation::new(format!("edge extraction failed: {e}"))
+                    .with_path(node.to_path_buf())
+                    .as_analysis_failure(AnalysisFailureKind::ResourceParse);
+                if extract.redacts_by_default() {
+                    finding.redact_message(&self.id);
+                }
+                out.push(finding);
                 return Vec::new();
             }
         };
-        refs.iter()
+        if let Some(mut violation) =
+            crate::non_string_extract_violation(node, "edge extract", &refs.non_strings)
+        {
+            self.redact_edge_finding(&mut violation, node, "non_string", std::iter::empty());
+            out.push(violation);
+        }
+        refs.strings
+            .iter()
             .filter(|r| !is_non_literal(r))
             .filter_map(|r| resolve_ref(r, node, *resolve))
             .collect()
+    }
+
+    fn redact_edge_finding<'a>(
+        &self,
+        finding: &mut Violation,
+        source: &Path,
+        category: &str,
+        evidence: impl IntoIterator<Item = &'a str>,
+    ) {
+        let EdgeSource::FromContent { extract, .. } = &self.edges else {
+            return;
+        };
+        if !extract.redacts_by_default() {
+            return;
+        }
+        let locator = format!("edge\0{}\0{extract:?}\0{category}", crate::slash(source));
+        finding.redact_evidence(&self.id, &locator, evidence);
     }
 
     /// One violation per stale `derive_target` output: the source's
@@ -566,31 +623,52 @@ impl FileGraphRule {
 
             let src_bytes = match crate::io::read_capped(&ctx.root.join(source)) {
                 Ok(b) => b,
-                Err(e) => {
-                    out.push(Self::node_violation(source, &read_cap_reason(&e)));
+                Err(crate::io::ReadCapError::TooLarge(n)) => {
+                    out.push(alint_core::too_large_file_violation(source, n));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    out.push(alint_core::missing_file_violation(source));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    out.push(unreadable_file_violation(source, &e));
                     continue;
                 }
             };
             let digest = algo.hex(&src_bytes);
 
-            let Ok(tgt_bytes) = crate::io::read_capped(&ctx.root.join(&target)) else {
-                out.push(self.fresh_violation(
-                    &target,
-                    &format!(
-                        "is missing or unreadable (the derived output for {})",
-                        crate::slash(source)
-                    ),
-                ));
-                continue;
+            let tgt_bytes = match crate::io::read_capped(&ctx.root.join(&target)) {
+                Ok(bytes) => bytes,
+                Err(crate::io::ReadCapError::TooLarge(n)) => {
+                    out.push(alint_core::too_large_file_violation(&target, n));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    out.push(self.fresh_violation(
+                        &target,
+                        source,
+                        &format!(
+                            "is missing (the derived output for {})",
+                            crate::slash(source)
+                        ),
+                    ));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    out.push(unreadable_file_violation(&target, &e));
+                    continue;
+                }
             };
-            let tgt_text = String::from_utf8_lossy(&tgt_bytes).into_owned();
+            let tgt_text = String::from_utf8_lossy(&tgt_bytes);
             let fresh = marker
                 .captures_iter(&tgt_text)
                 .filter_map(|c| c.get(1))
-                .any(|m| m.as_str() == digest);
+                .any(|m| m.as_str().eq_ignore_ascii_case(&digest));
             if !fresh {
                 out.push(self.fresh_violation(
                     &target,
+                    source,
                     &format!(
                         "is out of date with {}: it carries no {} freshness marker matching the \
                          source's current digest (regenerate it)",
@@ -614,26 +692,32 @@ impl FileGraphRule {
     }
 
     fn forbidden_violation(&self, src: &Path, target: &Path, pat: &ForbiddenPattern) -> Violation {
+        let target_text = crate::slash(target);
         let msg = self.message.clone().unwrap_or_else(|| {
             format!(
                 "{} has a forbidden dependency edge to {} (forbidden_edges: from {:?} to {:?})",
                 crate::slash(src),
-                crate::slash(target),
+                target_text,
                 pat.from_glob,
                 pat.to_glob,
             )
         });
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(src.to_path_buf())
-            // A node can have forbidden edges to several targets → key on the
-            // source, the offending target, and the prohibition pattern.
             .with_baseline_key(format!(
-                "forbidden\u{0}{}\u{0}{}\u{0}{}=>{}",
+                "forbidden\u{0}{}\u{0}{target_text}\u{0}{}=>{}",
                 crate::slash(src),
-                crate::slash(target),
                 pat.from_glob,
                 pat.to_glob
             ))
+            .with_related_location(RelatedLocation::new(target, "dependency target"));
+        self.redact_edge_finding(
+            &mut finding,
+            src,
+            "forbidden",
+            std::iter::once(target_text.as_str()),
+        );
+        finding
     }
 
     fn cycle_violation(&self, nodes: &[PathBuf], comp: &CyclicComponent) -> Violation {
@@ -669,28 +753,47 @@ impl FileGraphRule {
         // per-cycle reporting produced.
         let mut key_members = members;
         key_members.sort();
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(nodes[comp.members[0]].clone())
             .with_baseline_key(format!("cycle\u{0}{}", key_members.join("\u{0}")))
+            .with_related_locations(
+                comp.members
+                    .iter()
+                    .copied()
+                    .filter(|&member| member != comp.members[0])
+                    .map(|member| RelatedLocation::new(&nodes[member], "cycle member")),
+            );
+        self.redact_edge_finding(
+            &mut finding,
+            &nodes[comp.members[0]],
+            "cycle",
+            key_members.iter().map(String::as_str),
+        );
+        finding
     }
 
     fn dangling_violation(&self, src: &Path, target: &Path) -> Violation {
+        let target_text = crate::slash(target);
         let msg = self.message.clone().unwrap_or_else(|| {
             format!(
-                "{} references {}, which does not resolve to any path on disk",
+                "{} references {target_text}, which does not resolve to any path on disk",
                 crate::slash(src),
-                crate::slash(target),
             )
         });
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(src.to_path_buf())
-            // A node can reference several dangling targets → key on the
-            // source and the specific unresolved target.
             .with_baseline_key(format!(
-                "dangling\u{0}{}\u{0}{}",
+                "dangling\u{0}{}\u{0}{target_text}",
                 crate::slash(src),
-                crate::slash(target)
             ))
+            .with_related_location(RelatedLocation::new(target, "unresolved target"));
+        self.redact_edge_finding(
+            &mut finding,
+            src,
+            "dangling",
+            std::iter::once(target_text.as_str()),
+        );
+        finding
     }
 
     fn orphan_violation(&self, node: &Path) -> Violation {
@@ -700,15 +803,17 @@ impl FileGraphRule {
                 crate::slash(node),
             )
         });
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(node.to_path_buf())
-            .with_baseline_key(format!("file_graph-orphan\u{0}{}", crate::slash(node)))
+            .with_baseline_key(format!("file_graph-orphan\u{0}{}", crate::slash(node)));
+        self.redact_edge_finding(&mut finding, node, "orphan", std::iter::empty());
+        finding
     }
 
     /// A stale / missing `derive_target` output. Anchored on the
     /// target (the file that needs regenerating); `reason` already
     /// names the source.
-    fn fresh_violation(&self, target: &Path, reason: &str) -> Violation {
+    fn fresh_violation(&self, target: &Path, source: &Path, reason: &str) -> Violation {
         let msg = self
             .message
             .clone()
@@ -716,16 +821,7 @@ impl FileGraphRule {
         Violation::new(msg)
             .with_path(target.to_path_buf())
             .with_baseline_key(format!("file_graph-fresh\u{0}{}", crate::slash(target)))
-    }
-}
-
-/// The user-facing reason fragment for a capped-read failure.
-fn read_cap_reason(e: &crate::io::ReadCapError) -> String {
-    match e {
-        crate::io::ReadCapError::TooLarge(n) => {
-            format!("is too large to analyze ({})", crate::io::over_cap(*n))
-        }
-        crate::io::ReadCapError::Io(e) => format!("could not be read: {e}"),
+            .with_related_location(RelatedLocation::new(source, "freshness source"))
     }
 }
 
@@ -1117,7 +1213,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{FileEntry, FileIndex};
+    use alint_core::{FileEntry, FileIndex, Format};
 
     #[test]
     fn require_spec_error_names_accepted_forms_not_internal_enum() {
@@ -1478,6 +1574,46 @@ mod tests {
     }
 
     #[test]
+    fn dotenv_and_properties_graph_edges_redact_derived_targets() {
+        const SECRET: &str = "TOKEN_VALUE_DO_NOT_REPORT";
+        for (format, file, body) in [
+            (Format::Dotenv, ".env", format!("DEP={SECRET}\n")),
+            (
+                Format::Properties,
+                "app.properties",
+                format!("DEP={SECRET}\n"),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join(file), body).unwrap();
+            let mut rule = FileGraphRule {
+                id: "t".into(),
+                level: Level::Error,
+                policy_url: None,
+                message: None,
+                nodes: scope(file),
+                edges: EdgeSource::FromContent {
+                    extract: Extract::structured(format, "$.DEP").unwrap(),
+                    resolve: Resolve::RelativeToRepoRoot,
+                },
+                require: Require::NoDangling,
+            };
+            let findings = eval(&rule, dir.path(), &index(&[file]));
+            assert_eq!(findings.len(), 1);
+            assert!(findings[0].is_sensitive());
+            assert!(!findings[0].message.contains(SECRET), "{findings:?}");
+            assert!(findings[0].message.contains("<redacted:"), "{findings:?}");
+            assert!(findings[0].message.contains(file), "{findings:?}");
+
+            rule.require = Require::NoOrphans { roots: None };
+            let findings = eval(&rule, dir.path(), &index(&[file]));
+            assert_eq!(findings.len(), 1);
+            assert!(findings[0].is_sensitive(), "{findings:?}");
+            assert!(!findings[0].message.contains(SECRET), "{findings:?}");
+        }
+    }
+
+    #[test]
     fn no_dangling_fires_on_missing_then_silent_when_resolved() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -1497,6 +1633,10 @@ mod tests {
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].message.contains("docs/missing.md"));
         assert!(v[0].message.contains("docs/a.md"));
+        assert_eq!(v[0].path.as_deref(), Some(Path::new("docs/a.md")));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("docs/missing.md"));
+        assert_eq!(v[0].related_locations[0].label, "unresolved target");
 
         // a.md links the existing real.md -> silent.
         std::fs::write(root.join("docs/a.md"), "see [r](./real.md)\n").unwrap();
@@ -1642,6 +1782,10 @@ mod tests {
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].message.contains("proto/a.pb.go"));
         assert!(v[0].message.contains("out of date"));
+        assert_eq!(v[0].path.as_deref(), Some(Path::new("proto/a.pb.go")));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("proto/a.proto"));
+        assert_eq!(v[0].related_locations[0].label, "freshness source");
     }
 
     #[test]
@@ -1659,8 +1803,8 @@ mod tests {
         );
         let v = eval(&r, root, &idx);
         assert_eq!(v.len(), 1, "{v:?}");
-        assert!(v[0].message.contains("proto/a.pb.go"));
-        assert!(v[0].message.contains("missing or unreadable"));
+        assert_eq!(v[0].path.as_deref(), Some(Path::new("proto/a.pb.go")));
+        assert!(v[0].analysis_failure_kind().is_none());
     }
 
     #[cfg(unix)]

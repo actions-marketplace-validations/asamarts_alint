@@ -3,6 +3,8 @@
 //! Rules are registered into an [`alint_core::RuleRegistry`] via
 //! [`register_builtin`]. Each kind has its own submodule.
 
+use std::fmt::Write as _;
+
 use alint_core::RuleRegistry;
 
 /// The generated kind-to-category bridge (`xtask gen-categories`, from the
@@ -42,6 +44,45 @@ pub(crate) fn slash(path: impl AsRef<std::path::Path>) -> String {
     path.as_ref().display().to_string().replace('\\', "/")
 }
 
+/// One policy violation for a structured extractor that selected values a
+/// string-only relation cannot consume. Values themselves are deliberately
+/// excluded: only stable JSON types and counts enter reports and baselines.
+fn non_string_extract_violation(
+    path: &std::path::Path,
+    what: &str,
+    kinds: &[alint_core::NonStringValueKind],
+) -> Option<alint_core::Violation> {
+    if kinds.is_empty() {
+        return None;
+    }
+    let mut summary = String::new();
+    for kind in [
+        alint_core::NonStringValueKind::Null,
+        alint_core::NonStringValueKind::Boolean,
+        alint_core::NonStringValueKind::Number,
+        alint_core::NonStringValueKind::Array,
+        alint_core::NonStringValueKind::Object,
+    ] {
+        let count = kinds.iter().filter(|candidate| **candidate == kind).count();
+        if count == 0 {
+            continue;
+        }
+        if !summary.is_empty() {
+            summary.push_str(", ");
+        }
+        write!(summary, "{}: {count}", kind.as_str()).expect("writing to String cannot fail");
+    }
+    Some(
+        alint_core::Violation::new(format!(
+            "{}: {what} matched non-string value(s) ({summary}); expected strings",
+            slash(path)
+        ))
+        .with_path(path.to_path_buf())
+        .with_baseline_key(format!("extract-non-string\u{0}{what}\u{0}{summary}"))
+        .with_not_fixable(),
+    )
+}
+
 /// True when `path` names something NESTED - more than one path component,
 /// i.e. not directly at the repository root. The existence family
 /// (`file_exists`/`file_absent`/`dir_exists`/`dir_absent`) uses this to honour
@@ -52,7 +93,7 @@ pub(crate) fn is_nested(path: &std::path::Path) -> bool {
 }
 
 #[cfg(test)]
-mod slash_tests {
+mod helper_tests {
     #[test]
     fn renders_forward_slashes_regardless_of_separator() {
         use std::path::Path;
@@ -60,6 +101,30 @@ mod slash_tests {
         // replacement the fix relies on for Windows path separators.
         assert_eq!(super::slash(Path::new("a\\b\\c")), "a/b/c");
         assert_eq!(super::slash(Path::new("a/b/c")), "a/b/c");
+    }
+
+    #[test]
+    fn non_string_diagnostic_is_ordered_and_never_contains_values() {
+        use alint_core::NonStringValueKind::{Boolean, Number, Object};
+        use std::path::Path;
+
+        let violation = super::non_string_extract_violation(
+            Path::new("config.json"),
+            "registry extract",
+            &[Object, Number, Boolean, Number],
+        )
+        .expect("non-string matches produce a violation");
+
+        assert_eq!(
+            violation.message,
+            "config.json: registry extract matched non-string value(s) \
+             (boolean: 1, number: 2, object: 1); expected strings"
+        );
+        assert!(!violation.message.contains("do-not-report"));
+        assert!(
+            violation.not_fixable,
+            "a typed extraction mismatch cannot be repaired by the owning rule's fixer"
+        );
     }
 }
 

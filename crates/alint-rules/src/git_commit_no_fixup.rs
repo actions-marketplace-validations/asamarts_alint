@@ -8,9 +8,10 @@
 //!
 //! Shares the commit-validation family shape (the `commit_range`
 //! module): `since:` unset checks HEAD only; `since:` set checks
-//! `<since>..HEAD`. Silent outside a git repo; a bad `since:` ref
-//! hard-fails with a shallow-clone hint. No configuration knobs — the
-//! matched prefixes are exactly what `--autosquash` understands.
+//! `<since>..HEAD`. An unavailable Git executable or repository is
+//! an analysis failure; a bad `since:` ref hard-fails with a
+//! shallow-clone hint. No configuration knobs — the matched prefixes
+//! are exactly what `--autosquash` understands.
 //!
 //! Check-only — alint can't rebase the user's history.
 

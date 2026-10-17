@@ -1292,3 +1292,35 @@ fn explain_surfaces_manifest_scope_filter() {
         assert!(s.contains(needle), "explain human dropped {needle:?}:\n{s}");
     }
 }
+
+#[test]
+fn explain_redacts_secret_bearing_manifest_scope_values() {
+    const SECRET: &str = "EXPLAIN_SCOPE_SECRET_DO_NOT_REPORT";
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join(".env"), format!("FILES={SECRET}\n")).unwrap();
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        "version: 1\n\
+         rules:\n\
+        \x20 - id: selected-files\n\
+        \x20   kind: no_trailing_whitespace\n\
+        \x20   paths: \"**\"\n\
+        \x20   level: warning\n\
+        \x20   scope_filter:\n\
+        \x20     include_manifest_paths:\n\
+        \x20       source: .env\n\
+        \x20       extract: { dotenv: \"$.FILES\" }\n",
+    )
+    .unwrap();
+
+    for args in [
+        &["explain", "selected-files"][..],
+        &["explain", "selected-files", "--format", "json"][..],
+    ] {
+        let output = run(dir.path(), args);
+        assert!(output.status.success(), "{output:?}");
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        assert!(!rendered.contains(SECRET), "{rendered}");
+        assert!(rendered.contains("<redacted:"), "{rendered}");
+    }
+}

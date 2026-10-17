@@ -30,7 +30,7 @@
 
 use std::io::Write;
 
-use alint_core::{Level, Report, RuleResult, Violation};
+use alint_core::{AnalysisFailure, Level, Report, RuleResult, Violation};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -63,15 +63,17 @@ pub fn write_gitlab(
     // Deterministic: report iteration order is stable.
     let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for (ri, result) in report.results.iter().enumerate() {
-        if result.level == Level::Off {
-            continue;
+        if result.level != Level::Off {
+            for (vi, violation) in result.violations.iter().enumerate() {
+                let precomputed = fingerprints
+                    .and_then(|f| f.get(ri))
+                    .and_then(|r| r.get(vi))
+                    .cloned();
+                issues.push(build_issue(result, violation, precomputed, &mut seen));
+            }
         }
-        for (vi, violation) in result.violations.iter().enumerate() {
-            let precomputed = fingerprints
-                .and_then(|f| f.get(ri))
-                .and_then(|r| r.get(vi))
-                .cloned();
-            issues.push(build_issue(result, violation, precomputed, &mut seen));
+        for failure in &result.analysis_failures {
+            issues.push(build_analysis_failure_issue(result, failure, &mut seen));
         }
     }
     let note_count = report.total_notes();
@@ -157,6 +159,37 @@ fn build_issue(
     }
 }
 
+fn build_analysis_failure_issue(
+    result: &RuleResult,
+    failure: &AnalysisFailure,
+    seen: &mut std::collections::HashMap<String, u32>,
+) -> Issue {
+    let path = failure
+        .path
+        .as_ref()
+        .map_or_else(|| ".".to_string(), |p| crate::slash_path(p));
+    let description = format!(
+        "analysis failure ({}): {}",
+        failure.kind.as_str(),
+        failure.message
+    );
+    let check_name = format!("{} analysis failure", result.rule_id);
+    let base = self_fingerprint(&check_name, &path, &description);
+
+    Issue {
+        description,
+        check_name,
+        fingerprint: unique_fingerprint(base, seen),
+        severity: "critical",
+        location: Location {
+            path,
+            lines: Lines {
+                begin: failure.line.unwrap_or(1).max(1),
+            },
+        },
+    }
+}
+
 fn severity(level: Level) -> &'static str {
     // `Off` rules are filtered upstream; the `Off` arm only
     // exists for exhaustiveness and shares the `Info` body.
@@ -235,7 +268,7 @@ fn hex_digest(hasher: Sha256) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{Report, RuleResult, Violation};
+    use alint_core::{FindingDisposition, Report, RuleResult, Violation};
     use serde_json::Value;
     use std::path::{Path, PathBuf};
 
@@ -260,6 +293,7 @@ mod tests {
             violations,
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         }
     }
 
@@ -283,8 +317,12 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -342,6 +380,7 @@ mod tests {
                 violations: vec![Violation::new("ignored").with_path(PathBuf::from("a"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         assert_eq!(parse(&render(&report)).len(), 0);
@@ -373,8 +412,12 @@ mod tests {
                     message: "x".into(),
                     line: Some(0),
                     column: None,
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -396,8 +439,12 @@ mod tests {
                     message: "msg".into(),
                     line: Some(7),
                     column: None,
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -428,8 +475,12 @@ mod tests {
                     message: "same-msg".into(),
                     line: Some(line),
                     column: None,
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -448,12 +499,16 @@ mod tests {
         // collide — the Code Climate spec requires per-report uniqueness, and
         // a collision makes GitLab drop the duplicate.
         let mk_v = |line: usize| Violation {
+            range: None,
+            related_locations: Vec::new(),
+            related_locations_omitted: 0,
             path: Some(Path::new("a.rs").into()),
             message: "forbidden pattern".into(),
             line: Some(line),
             column: None,
-            note_kind: None,
+            disposition: FindingDisposition::default(),
             baseline_key: None,
+            sensitive: false,
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
@@ -479,12 +534,16 @@ mod tests {
         // still correlates with SARIF/baseline. (Regression: the unified path
         // used to emit the canonical verbatim, dropping the 2nd in GitLab.)
         let mk_v = |line: usize| Violation {
+            range: None,
+            related_locations: Vec::new(),
+            related_locations_omitted: 0,
             path: Some(Path::new("notes.txt").into()),
             message: "same message".into(),
             line: Some(line),
             column: None,
-            note_kind: None,
+            disposition: FindingDisposition::default(),
             baseline_key: None,
+            sensitive: false,
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
@@ -569,8 +628,12 @@ mod tests {
                     message: r#"contains "quotes" and \backslashes\ and newline\nliteral"#.into(),
                     line: Some(1),
                     column: None,
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),

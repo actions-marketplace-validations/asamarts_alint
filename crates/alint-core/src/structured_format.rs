@@ -83,6 +83,15 @@ impl Format {
         Format::Hcl,
     ];
 
+    /// Whether values read from this format are secret-bearing by default.
+    /// Every extraction and structured-query surface delegates to this single
+    /// classification so a future format change cannot redact on one path and
+    /// leak on another.
+    #[must_use]
+    pub fn redacts_by_default(self) -> bool {
+        matches!(self, Self::Dotenv | Self::Properties)
+    }
+
     pub fn parse(self, text: &str) -> std::result::Result<Value, String> {
         let raw_text = text;
         // Strip any leading UTF-8 BOM(s) uniformly. Some libraries (serde_json,

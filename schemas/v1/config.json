@@ -1911,6 +1911,11 @@
         "scope_filter": {
           "$ref": "#/$defs/scope_filter"
         },
+        "sensitive": {
+          "default": false,
+          "description": "Redact this rule's messages, baseline evidence, proposed edits, and fix detail before any public report is returned. Use for rules whose findings may contain credentials or other secrets.",
+          "type": "boolean"
+        },
         "when": {
           "description": "Gate the rule on a fact-based expression (available from v0.2).",
           "type": "string"
@@ -2055,7 +2060,7 @@
         },
         "timeout": {
           "default": null,
-          "description": "Per-file timeout in seconds. Default 30. Past this, the child is killed and a violation reports the timeout.",
+          "description": "Per-file timeout in seconds. Default 30. Past this, the child is killed and a non-baselinable `evaluation` analysis failure reports the timeout.",
           "format": "uint64",
           "minimum": 1,
           "type": [
@@ -2123,7 +2128,7 @@
         },
         "timeout": {
           "default": null,
-          "description": "Checker timeout in seconds (default 120). On timeout the child is killed and one violation is emitted.",
+          "description": "Checker timeout in seconds (default 120). On timeout the child is killed and one non-baselinable `evaluation` analysis failure is emitted.",
           "format": "uint64",
           "minimum": 1,
           "type": [
@@ -2238,6 +2243,11 @@
         },
         "scope_filter": {
           "$ref": "#/$defs/scope_filter"
+        },
+        "sensitive": {
+          "default": false,
+          "description": "Redact this rule's messages, baseline evidence, proposed edits, and fix detail before any public report is returned. Use for rules whose findings may contain credentials or other secrets.",
+          "type": "boolean"
         },
         "when": {
           "description": "Gate the rule on a fact-based expression (available from v0.2).",
@@ -2361,7 +2371,7 @@
       "properties": {
         "git_tracked_only": {
           "default": false,
-          "description": "Restrict matches to directories that contain at least one git-tracked file. No effect outside a git repo. Default `false`.",
+          "description": "Restrict matches to directories that contain at least one git-tracked file. Repository unavailability is an analysis failure when enabled. Default `false`.",
           "type": "boolean"
         },
         "kind": {
@@ -2484,7 +2494,7 @@
         },
         "git_tracked_only": {
           "default": false,
-          "description": "Restrict matches to directories that contain at least one git-tracked file. No effect outside a git repo. Default `false`.",
+          "description": "Restrict matches to directories that contain at least one git-tracked file. Repository unavailability is an analysis failure when enabled. Default `false`.",
           "type": "boolean"
         },
         "kind": {
@@ -2846,7 +2856,7 @@
         },
         "git_tracked_only": {
           "default": false,
-          "description": "Restrict matches to files tracked in git's index: entries present in the walked tree but not in `git ls-files` are skipped. No effect outside a git repo. Default `false`.",
+          "description": "Restrict matches to files tracked in git's index: entries present in the walked tree but not in `git ls-files` are skipped. Repository unavailability is an analysis failure when enabled. Default `false`.",
           "type": "boolean"
         },
         "kind": {
@@ -3009,7 +3019,7 @@
         },
         "git_tracked_only": {
           "default": false,
-          "description": "Restrict matches to files tracked in git's index: entries present in the walked tree but not in `git ls-files` are skipped. No effect outside a git repo. Default `false`.",
+          "description": "Restrict matches to files tracked in git's index: entries present in the walked tree but not in `git ls-files` are skipped. Repository unavailability is an analysis failure when enabled. Default `false`.",
           "type": "boolean"
         },
         "kind": {
@@ -3879,7 +3889,7 @@
         },
         "timeout": {
           "default": null,
-          "description": "Generator timeout in seconds (default 120). On timeout the child is killed and one violation is emitted.",
+          "description": "Generator timeout in seconds (default 120). On timeout the child is killed and one non-baselinable `evaluation` analysis failure is emitted.",
           "format": "uint64",
           "minimum": 1,
           "type": [

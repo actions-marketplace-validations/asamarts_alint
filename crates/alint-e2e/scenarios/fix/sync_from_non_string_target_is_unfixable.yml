@@ -1,0 +1,43 @@
+name: sync_from never edits or suggests a typed non-string target
+
+tags: [fix, cross_file, sync_from, structured, applicability]
+
+# The relation consumes strings, so a typed target number is a structural
+# extraction mismatch rather than drift that sync_from can repair. Neither the
+# ordinary suggestion path nor --unsafe-fixes may advertise or rewrite it.
+given:
+  tree:
+    source.json: |
+      {"version": "7"}
+    target.json: |
+      {"version": 7}
+  config: |
+    version: 1
+    rules:
+      - id: versions-match
+        kind: cross_file
+        source: { file: source.json, extract: { json: "$.version" } }
+        targets: [{ file: target.json, extract: { json: "$.version" } }]
+        relation: equals
+        level: error
+        fix: { sync_from: {} }
+
+when: [check, fix, fix_unsafe, check]
+
+expect:
+  - violations:
+      - {rule: versions-match, level: error, path: target.json}
+  - unfixable: [versions-match]
+    suggested: []
+    applied: []
+  - unfixable: [versions-match]
+    suggested: []
+    applied: []
+  - violations:
+      - {rule: versions-match, level: error, path: target.json}
+
+expect_tree:
+  source.json: |
+    {"version": "7"}
+  target.json: |
+    {"version": 7}

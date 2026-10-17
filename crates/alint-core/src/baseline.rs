@@ -90,12 +90,31 @@ pub fn violation_fingerprint(
 /// is passed separately because it lives on the owning `RuleResult`, not
 /// the violation. `file_bytes` is the violation's file content, consulted
 /// only for the line-content discriminator.
+///
+/// Sensitive findings always use a constant discriminator and never consult
+/// their producer key, message, or offending-line bytes. The path and rule id
+/// remain structural identity, while duplicate findings collapse through the
+/// baseline count.
 #[must_use]
 pub fn fingerprint(rule_id: &str, v: &Violation, file_bytes: Option<&[u8]>) -> String {
+    if v.is_sensitive() {
+        return violation_fingerprint(
+            rule_id,
+            v.path.as_deref(),
+            None,
+            Some("sensitive"),
+            "",
+            None,
+        );
+    }
+    let identity_line = v
+        .range
+        .as_ref()
+        .map_or(v.line, crate::SourceRange::baseline_identity_line);
     violation_fingerprint(
         rule_id,
         v.path.as_deref(),
-        v.line,
+        identity_line,
         v.baseline_key.as_deref(),
         &v.message,
         file_bytes,
@@ -670,6 +689,52 @@ mod tests {
         assert_eq!(a, c);
     }
 
+    #[test]
+    fn ranges_and_related_locations_do_not_change_existing_point_fingerprints() {
+        let original = Violation::new("bad")
+            .with_path(Path::new("a.rs"))
+            .with_location(2, 1);
+        let enriched = original
+            .clone()
+            .with_range(crate::SourceRange::new(3, 1, 3, 2).unwrap())
+            .with_related_location(crate::RelatedLocation::new("b.rs", "secondary"));
+
+        assert_eq!(
+            fingerprint("rule", &original, Some(b"ok\nbad\nmore\n")),
+            fingerprint("rule", &enriched, Some(b"ok\nbad\nmore\n"))
+        );
+    }
+
+    #[test]
+    fn adding_a_range_to_path_only_finding_preserves_path_identity() {
+        let original = Violation::new("bad").with_path(Path::new("a.rs"));
+        let enriched = original
+            .clone()
+            .with_range(crate::SourceRange::new(2, 1, 2, 2).unwrap());
+        assert_eq!(
+            fingerprint("rule", &original, Some(b"ok\nbad\n")),
+            fingerprint("rule", &enriched, Some(b"ok\nbad\n"))
+        );
+    }
+
+    #[test]
+    fn sensitive_fingerprint_ignores_message_key_and_file_bytes() {
+        let make = |message: &str, key: &str, line: usize| {
+            let mut violation = Violation::new(message.to_string())
+                .with_path(std::path::PathBuf::from("secrets.env"))
+                .with_location(line, 1)
+                .with_baseline_key(key.to_string());
+            violation.redact_message("rule");
+            violation
+        };
+        let first = make("TOKEN_VALUE_DO_NOT_REPORT", "raw-key-one", 1);
+        let second = make("different secret", "raw-key-two", 2);
+        assert_eq!(
+            fingerprint("rule", &first, Some(b"TOKEN_VALUE_DO_NOT_REPORT\nother\n")),
+            fingerprint("rule", &second, Some(b"other\ndifferent secret\n")),
+        );
+    }
+
     fn item(rule: &str, path: Option<&str>, fp: &str) -> FingerprintedViolation {
         FingerprintedViolation {
             rule_id: rule.into(),
@@ -980,7 +1045,7 @@ mod tests {
         assert!(out.live.results[0].violations.is_empty());
         assert_eq!(out.live.total_notes(), 1);
         assert_eq!(
-            out.live.results[0].notes[0].note_kind,
+            out.live.results[0].notes[0].note_kind(),
             Some(crate::NoteKind::AnalysisTruncated)
         );
     }
@@ -1072,5 +1137,43 @@ mod tests {
         }
         assert_eq!(out.live.results[0].violations[0].message.as_ref(), "B");
         assert_eq!(out.live.results[1].violations[0].message.as_ref(), "D");
+    }
+
+    #[test]
+    fn apply_never_fingerprints_or_suppresses_analysis_failures() {
+        use crate::AnalysisFailureKind;
+
+        let rep = Report {
+            results: vec![RuleResult::new(
+                std::sync::Arc::from("r"),
+                Level::Warning,
+                None,
+                vec![
+                    Violation::new("same").with_path(Path::new("f.rs")),
+                    Violation::new("same")
+                        .with_path(Path::new("f.rs"))
+                        .as_analysis_failure(AnalysisFailureKind::ResourceRead),
+                ],
+                false,
+            )],
+        };
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("same", 2)],
+        };
+        let mut fingerprint_calls = 0;
+        let out = apply(&rep, &base, |rule, violation| {
+            fingerprint_calls += 1;
+            by_message(rule, violation)
+        });
+
+        assert_eq!(
+            fingerprint_calls, 1,
+            "only policy violations are fingerprinted"
+        );
+        assert_eq!(out.suppressed_total, 1);
+        assert!(out.live.results[0].violations.is_empty());
+        assert_eq!(out.live.results[0].analysis_failures.len(), 1);
+        assert!(out.live.has_errors(), "baseline cannot downgrade a failure");
     }
 }

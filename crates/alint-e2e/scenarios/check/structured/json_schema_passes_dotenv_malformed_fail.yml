@@ -1,9 +1,9 @@
-name: json_schema_passes auto-detects a malformed .env and flags one parse-error
+name: json_schema_passes auto-detects malformed dotenv as one parse analysis failure
 tags: [check, json_schema_passes, structured, dotenv, failing]
 
 # Two things at once: (1) the `.env` file AUTO-DETECTS as dotenv with no explicit
 # `format:` (the filename-based detect branch, exercised end-to-end nowhere else);
-# (2) one invalid-key statement yields exactly ONE parse-error violation,
+# (2) one invalid-key statement yields exactly ONE parse analysis failure,
 # symmetric with the XML malformed scenario -- not a flood.
 
 given:
@@ -29,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
-      - {rule: env-parses, level: error, path: .env}
+  - violations: []
+    analysis_failures:
+      - {rule: env-parses, kind: resource_parse, path: .env}

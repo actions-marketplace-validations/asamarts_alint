@@ -13,13 +13,11 @@
 //! generated artefacts that don't belong in version control
 //! (`*.log`, `dist/**`), legacy "do not commit" sentinels.
 //!
-//! Outside a git repo (no `git` on PATH, `root` not inside a
-//! repo, etc.) the rule silently no-ops — same advisory posture
-//! as `git_tracked_only`. Check-only — fixing means
-//! `git rm --cached`, which is a sensitive operation alint
-//! should never automate.
+//! Git or repository unavailability is an analysis failure. Check-only —
+//! fixing means `git rm --cached`, which is a sensitive operation alint should
+//! never automate.
 
-use alint_core::git::{CommitRangeError, collect_changed_paths_checked, collect_tracked_paths};
+use alint_core::git::{CommitRangeError, collect_changed_paths_checked};
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
@@ -62,10 +60,9 @@ impl Rule for GitNoDeniedPathsRule {
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
-        let Some(tracked) = collect_tracked_paths(ctx.root) else {
-            // Not a git repo, or git not on PATH — silent
-            // no-op, by design. The rule's intent only makes
-            // sense inside a tracked working tree.
+        let Some(tracked) = ctx.git_tracked else {
+            // Defensive direct-evaluation fallback; Engine capability routing
+            // reports repository unavailability before dispatch.
             return Ok(violations);
         };
 
@@ -90,7 +87,7 @@ impl Rule for GitNoDeniedPathsRule {
             },
         };
 
-        for path in &tracked {
+        for path in tracked {
             if let Some(diff) = &diff
                 && !diff.contains(path)
             {

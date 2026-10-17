@@ -118,6 +118,63 @@ fn accepts_every_rule_kind() {
     assert_valid(&validator, &instance, "all_kinds.yaml fixture");
 }
 
+#[test]
+fn sensitive_boolean_is_accepted_on_every_kind_and_nested_rule() {
+    fn mark_rules(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if object.contains_key("kind") {
+                    object.insert("sensitive".into(), serde_json::Value::Bool(true));
+                }
+                for child in object.values_mut() {
+                    mark_rules(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    mark_rules(item);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut instance = yaml_to_json(include_str!("fixtures/all_kinds.yaml"));
+    mark_rules(&mut instance);
+    assert_valid(
+        &compile_schema(),
+        &instance,
+        "sensitive on every top-level and nested rule",
+    );
+
+    let config: alint_core::Config =
+        serde_json::from_value(instance).expect("runtime model accepts sensitive booleans");
+    let registry = alint_rules::builtin_registry();
+    for spec in &config.rules {
+        registry
+            .build(spec)
+            .unwrap_or_else(|error| panic!("{} rejected sensitive: {error}", spec.kind));
+    }
+}
+
+#[test]
+fn sensitive_rejects_non_boolean_values() {
+    let instance = yaml_to_json(concat!(
+        "version: 1\n",
+        "rules:\n",
+        "  - id: t\n",
+        "    kind: file_exists\n",
+        "    paths: a\n",
+        "    sensitive: definitely\n",
+        "    level: error\n",
+    ));
+    assert_invalid(&compile_schema(), &instance, "sensitive must be a boolean");
+    assert!(
+        serde_json::from_value::<alint_core::Config>(instance).is_err(),
+        "runtime model must reject a non-boolean sensitive value"
+    );
+}
+
 /// Rot-prevention guard. Asserts the `all_kinds.yaml` fixture
 /// covers every rule kind registered in `alint-rules`. Without
 /// this gate, a newly-added rule kind ships with schema

@@ -1,6 +1,6 @@
 # Design doc: notes in every output format
 
-Status: Accepted (2026-10-16).
+Status: Implemented in the v0.19 development tree.
 Decisions: [ADR-0012](../../adr/0012-output-completeness-testing.md),
 [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 Demand evidence: [`general-linter.md` section 4.12](../general-linter.md#412-current-fail-open-and-leak-sites)

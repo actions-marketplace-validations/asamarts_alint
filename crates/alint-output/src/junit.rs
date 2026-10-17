@@ -21,30 +21,34 @@
 
 use std::io::Write;
 
-use alint_core::{Level, Report, RuleResult, Violation};
+use alint_core::{AnalysisFailure, Level, Report, RuleResult, Violation};
 
 pub fn write_junit(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
-    // `Level::Off` rules are silenced at format time — they
-    // contribute neither testcases nor failures, matching the
-    // human / github / sarif formatters.
-    let active: Vec<&RuleResult> = report
+    // `Level::Off` suppresses policy violations and passing cases, but an
+    // analysis failure is independent of policy severity and always becomes an
+    // errored testcase.
+    let total_violations: usize = report
         .results
         .iter()
-        .filter(|r| r.level != Level::Off)
-        .collect();
-
-    let total_violations: usize = active.iter().map(|r| r.violations.len()).sum();
-    let passing_rules = active.iter().filter(|r| r.passed()).count();
-    let total_cases = passing_rules + total_violations;
+        .filter(|result| result.level != Level::Off)
+        .map(|result| result.violations.len())
+        .sum();
+    let total_analysis_failures = report.total_analysis_failures();
+    let passing_rules = report
+        .results
+        .iter()
+        .filter(|result| result.level != Level::Off && result.passed())
+        .count();
+    let total_cases = passing_rules + total_violations + total_analysis_failures;
 
     writeln!(w, r#"<?xml version="1.0" encoding="UTF-8"?>"#)?;
     writeln!(
         w,
-        r#"<testsuites name="alint" tests="{total_cases}" failures="{total_violations}" errors="0" time="0">"#
+        r#"<testsuites name="alint" tests="{total_cases}" failures="{total_violations}" errors="{total_analysis_failures}" time="0">"#
     )?;
     writeln!(
         w,
-        r#"  <testsuite name="alint" tests="{total_cases}" failures="{total_violations}" errors="0" time="0">"#
+        r#"  <testsuite name="alint" tests="{total_cases}" failures="{total_violations}" errors="{total_analysis_failures}" time="0">"#
     )?;
 
     // Stable iteration order: results in their original order
@@ -52,21 +56,26 @@ pub fn write_junit(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
     // the order the rule produced them. Consumers don't sort
     // testcases themselves so determinism here matters for
     // report-diff workflows.
-    for result in active {
-        if result.passed() {
-            // Passing rule → one self-closed testcase. Provides
-            // a "tests run" denominator for consumers that show
-            // pass-rate metrics.
-            writeln!(
-                w,
-                r#"    <testcase classname="alint.{}" name="{}" time="0"/>"#,
-                xml_attr(&result.rule_id),
-                xml_attr(&result.rule_id),
-            )?;
-            continue;
+    for result in &report.results {
+        if result.level != Level::Off {
+            if result.passed() {
+                // Passing rule → one self-closed testcase. Provides
+                // a "tests run" denominator for consumers that show
+                // pass-rate metrics.
+                writeln!(
+                    w,
+                    r#"    <testcase classname="alint.{}" name="{}" time="0"/>"#,
+                    xml_attr(&result.rule_id),
+                    xml_attr(&result.rule_id),
+                )?;
+            } else {
+                for violation in &result.violations {
+                    write_failure_case(w, result, violation)?;
+                }
+            }
         }
-        for violation in &result.violations {
-            write_failure_case(w, result, violation)?;
+        for failure in &result.analysis_failures {
+            write_error_case(w, result, failure)?;
         }
     }
 
@@ -114,6 +123,52 @@ fn write_failure_case(
         r#"      <failure message="{msg}" type="{level_attr}">{body}</failure>"#,
         msg = xml_attr(&violation.message),
         body = xml_text(&format_failure_body(result, violation)),
+    )?;
+    writeln!(w, "    </testcase>")?;
+    Ok(())
+}
+
+fn write_error_case(
+    w: &mut dyn Write,
+    result: &RuleResult,
+    failure: &AnalysisFailure,
+) -> std::io::Result<()> {
+    let case_name = match &failure.path {
+        Some(path) => crate::slash_path(path),
+        None => "(repository)".to_string(),
+    };
+    let body = match (&failure.path, failure.line, failure.column) {
+        (Some(path), Some(line), Some(column)) => format!(
+            "{}:{line}:{column}: {}: {}",
+            crate::slash_path(path),
+            failure.kind.as_str(),
+            failure.message
+        ),
+        (Some(path), Some(line), None) => format!(
+            "{}:{line}: {}: {}",
+            crate::slash_path(path),
+            failure.kind.as_str(),
+            failure.message
+        ),
+        (Some(path), None, _) => format!(
+            "{}: {}: {}",
+            crate::slash_path(path),
+            failure.kind.as_str(),
+            failure.message
+        ),
+        (None, _, _) => format!("{}: {}", failure.kind.as_str(), failure.message),
+    };
+    writeln!(
+        w,
+        r#"    <testcase classname="alint.{rule}" name="{name}" time="0">"#,
+        rule = xml_attr(&result.rule_id),
+        name = xml_attr(&case_name),
+    )?;
+    writeln!(
+        w,
+        r#"      <error message="{message}" type="analysis_failure">{body}</error>"#,
+        message = xml_attr(&failure.message),
+        body = xml_text(&body),
     )?;
     writeln!(w, "    </testcase>")?;
     Ok(())
@@ -204,7 +259,7 @@ fn is_xml_illegal_control(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{Report, RuleResult, Violation};
+    use alint_core::{FindingDisposition, Report, RuleResult, Violation};
     use std::path::{Path, PathBuf};
 
     fn render(report: &Report) -> String {
@@ -221,6 +276,7 @@ mod tests {
             violations,
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         }
     }
 
@@ -255,8 +311,12 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -316,8 +376,12 @@ mod tests {
                     message: "<bad> & \"quoted\"".into(),
                     line: None,
                     column: None,
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -342,8 +406,12 @@ mod tests {
                     message: "before\u{0001}\u{0008}after".into(),
                     line: None,
                     column: None,
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -366,8 +434,12 @@ mod tests {
                     message: "line1\nline2".into(),
                     line: None,
                     column: None,
-                    note_kind: None,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    sensitive: false,
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
@@ -391,6 +463,7 @@ mod tests {
                 violations: vec![Violation::new("x").with_path(PathBuf::from("a"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -407,6 +480,7 @@ mod tests {
                 violations: vec![Violation::new("ignored").with_path(PathBuf::from("a"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);

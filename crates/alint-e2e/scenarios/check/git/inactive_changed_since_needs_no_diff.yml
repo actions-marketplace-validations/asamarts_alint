@@ -1,0 +1,38 @@
+name: inactive changed_since needs no Git diff
+
+tags: [check, scope_filter, changed_since, when, git, passing]
+
+# The active history rule makes the repository probe succeed. The false-gated
+# scope rule must still not try to resolve its deliberately invalid ref.
+
+given:
+  tree:
+    README.md: "# demo\n"
+    src:
+      lib.rs: "pub fn demo() {} \n"
+  config: |
+    version: 1
+    vars:
+      enforce_changed_lines: false
+    rules:
+      - id: changed-lines
+        kind: no_trailing_whitespace
+        paths: "src/**/*.rs"
+        when: vars.enforce_changed_lines == "true"
+        level: warning
+        scope_filter:
+          changed_since: no-such-ref
+      - id: commit-readable
+        kind: git_commit_message
+        pattern: ".*"
+        level: warning
+  git:
+    init: true
+    add: [README.md, src]
+    commit: true
+
+when: [check]
+
+expect:
+  - violations: []
+    analysis_failures: []

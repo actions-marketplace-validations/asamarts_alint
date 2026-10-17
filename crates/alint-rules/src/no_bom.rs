@@ -129,7 +129,7 @@ impl Rule for NoBomRule {
             let bytes = match read_prefix_n(&full, BOM_PREFIX_LEN) {
                 Ok(b) => b,
                 Err(e) => {
-                    violations.extend(crate::io::io_error_violation(&entry.path, &e));
+                    violations.push(crate::io::io_error_violation(&entry.path, &e));
                     continue;
                 }
             };

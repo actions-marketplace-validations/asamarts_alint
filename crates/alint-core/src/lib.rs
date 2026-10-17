@@ -11,7 +11,7 @@ pub mod did_you_mean;
 mod dotenv;
 mod engine;
 mod error;
-mod extract;
+pub mod extract;
 pub mod facts;
 pub mod git;
 mod ini;
@@ -20,9 +20,11 @@ pub mod jsonpath_diagnostics;
 mod kind_meta;
 mod level;
 pub mod located_fix;
+mod location;
 mod pathsafe;
 pub mod process;
 pub mod proposed_fix;
+mod redaction;
 mod registry;
 mod report;
 mod rule;
@@ -50,7 +52,11 @@ pub use config::{
 };
 pub use engine::{Engine, RuleEntry, StagedFix, StagedKind};
 pub use error::{Error, Result};
-pub use extract::{Extract, ExtractSpec, LinesOpts, WholeFileOpts, extract_values, is_non_literal};
+pub use extract::{
+    ByteSpan, EntryPathSegment, EntryRowsError, Extract, ExtractSpec, ExtractedValues, LinesOpts,
+    NonStringValueKind, StructuredEntryRow, StructuredExtract, WholeFileOpts, extract_entry_rows,
+    extract_values, is_non_literal,
+};
 pub use facts::{FactKind, FactSpec, FactValue, FactValues, evaluate_facts};
 pub use kind_meta::{
     Capability, CapabilityCondition, CapabilityMeta, ContentAccess, DependencyMeta, DispatchClass,
@@ -58,8 +64,10 @@ pub use kind_meta::{
     PathsSupport, ScopeFilterSupport, SelectorMeta, SelectorType, SinceSupport,
 };
 pub use level::Level;
+pub use location::{MAX_RELATED_LOCATIONS, RelatedLocation, SourceRange};
 pub use pathsafe::{derive_target, normalize_confined};
 pub use proposed_fix::{EditRegion, ProposedEdit, attach_proposed_edits, byte_to_line_col};
+pub use redaction::{redact_evidence, redaction_marker};
 pub use registry::{
     ConfiguredField, ConfiguredFieldViolation, ConfiguredFields, ConfiguredScopeFilterField,
     KindCatalog, RuleBuilder, RuleRegistry, validate_configured_fields,
@@ -68,10 +76,11 @@ pub use report::{
     FIX_ERROR_PREFIX, FixItem, FixReport, FixRuleResult, FixStatus, Report, SkipKind,
 };
 pub use rule::{
-    Applicability, CollectedEdit, Context, EditVerifier, ExpectedValue, FixContext, FixEdit,
-    FixOutcome, Fixer, GitTrackedMode, GroupId, NoteKind, PerFileRule, ReadForFix, Rule,
-    RuleResult, Violation, check_fix_size, eval_per_file, expect_matches_violation, read_for_fix,
-    unreadable_file_violation, write_atomic,
+    AnalysisFailure, AnalysisFailureKind, Applicability, CollectedEdit, Context, EditVerifier,
+    ExpectedValue, FindingDisposition, FixContext, FixEdit, FixOutcome, Fixer, GitTrackedMode,
+    GroupId, NoteKind, PerFileRule, ReadForFix, Rule, RuleResult, Violation, check_fix_size,
+    eval_per_file, expect_matches_violation, missing_file_violation, read_for_fix,
+    too_large_file_violation, unreadable_file_violation, write_atomic,
 };
 pub use scope::Scope;
 pub use scope_filter::{

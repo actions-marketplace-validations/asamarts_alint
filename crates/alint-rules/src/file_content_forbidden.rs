@@ -57,7 +57,7 @@ impl Rule for FileContentForbiddenRule {
             let bytes = match crate::io::read_capped(&full) {
                 Ok(b) => b,
                 Err(e) => {
-                    violations.extend(crate::io::read_cap_error_violation(&entry.path, &e));
+                    violations.push(crate::io::read_cap_error_violation(&entry.path, &e));
                     continue;
                 }
             };

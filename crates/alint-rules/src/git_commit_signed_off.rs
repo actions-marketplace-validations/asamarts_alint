@@ -8,9 +8,9 @@
 //!
 //! Shares the commit-validation family shape (the `commit_range` module):
 //! `since:` unset checks HEAD only (push-trigger / hook); `since:` set
-//! checks `<since>..HEAD` (PR-CI). Outside a git repo, with no
-//! commits, or when `git` is unavailable, silently no-ops. A bad
-//! `since:` ref hard-fails with a shallow-clone hint.
+//! checks `<since>..HEAD` (PR-CI). Git or repository unavailability is an
+//! analysis failure; an initialized repository with no commits has no policy
+//! input and passes. A bad `since:` ref hard-fails with a shallow-clone hint.
 //!
 //! Check-only — alint can't rewrite history to add a trailer.
 
