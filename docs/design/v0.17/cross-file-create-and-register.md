@@ -79,10 +79,10 @@ grouping of create-and-register with the `cross_file` family.
   a bare directory glob (`crates/*`): a bare glob also matches LOOSE files under the directory (a
   `crates/README.md`, a `.gitkeep`), which would be flagged as members and appended as invalid
   entries. `register_as: "{dir}"` then maps each matched manifest to its crate directory.
-- **`register_as`**: the value appended to the list, as a template over the matched member path
-  with `{path}`, `{dir}`, `{basename}`, `{stem}`, `{ext}`, and `{parent_name}` (the same tokens as
-  the `command` fix). **Defaults to `{path}`**. Note `normalize` is REJECTED on `registered` — the
-  member path is registered verbatim, never a normalized form.
+- **`register_as`**: the value appended to the list, as a `{path}`/`{dir}`/`{stem}` template over
+  the matched member path (same templating as the `command` fix). **Defaults to `{path}`**. Note
+  `normalize` is REJECTED on `registered` — the member path is registered verbatim, never a
+  normalized form.
 - **`targets`**: one or more `{ file, extract }`, where `extract` is a structured JSONPath that
   selects the array ELEMENTS with a trailing `[*]` (`$.workspace.members[*]`) over a STATIC array
   path (no extra wildcard / recursive-descent / filter — that would target the wrong array). The

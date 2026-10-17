@@ -33,7 +33,7 @@ This item changes documentation, two Rust doc comments, and generated schema des
 - close W10 in the v0.19 hand-off and replace provisional roadmap wording with the delivered W8,
   W9, and bundled-ruleset surfaces;
 - regenerate `roadmap.json` from the canonical roadmap;
-- correct the stale bundled-ruleset count from the generated facts contract;
+- remove the stale duplicated bundled-ruleset count from the getting-started page;
 - replace the general-linter proposal's future-tense key-parity note with a link to the recipe.
 
 There is no DSL validation, schema-shape, runtime, output, fix, baseline, dependency, subprocess,
@@ -68,17 +68,18 @@ A missing `.env` remains a finding: silently allowing it would weaken the advert
 check. Repositories that do not materialize `.env` in CI should target a generated or tracked
 environment file that exists in that job, or omit the rule there.
 
-Counts remain generated-contract facts, not estimates. W10 does not edit a correct root README
-count. The roadmap's `Latest release` stays at v0.18.4 until the v0.19 release commit, when the
-normal release procedure updates it.
+Counts remain generated-contract facts, not estimates. W10 removes the duplicated count from the
+getting-started page instead of adding another synchronization mechanism, and it does not edit a
+correct root README count. The roadmap's `Latest release` stays at v0.18.4 until the v0.19 release
+commit, when the normal release procedure updates it.
 
 ## 4. Implementation notes
 
 The cookbook placement is under its existing cross-file relationships section, avoiding a second
 concept page for one pattern. The roadmap source remains `docs/design/ROADMAP.md`; `roadmap.json`
 is regenerated with `xtask gen-roadmap`, never hand-edited. The schema descriptions derive from
-the Rust option comment and are regenerated with `xtask gen-schema`. No new abstraction is
-introduced for the one stale getting-started count.
+the Rust option comment and are regenerated with `xtask gen-schema`. Prose that does not need a
+count does not duplicate one or introduce a new count-synchronization mechanism.
 
 ## 5. Tests
 

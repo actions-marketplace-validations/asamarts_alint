@@ -137,8 +137,8 @@ moves.
 - **W10 is complete.** The cookbook now documents exact dotenv key parity with the existing
   `cross_file` `set_equals` relation. Both current `register_as` field comments name all six
   path-template tokens. The roadmap records the delivered extraction substrate, seven standalone
-  kinds, and two consistency bundles, and its generated JSON contract is current. The stale
-  getting-started ruleset count now matches `facts.json`; the root README already had the correct
+  kinds, and two consistency bundles, and its generated JSON contract is current. The stale,
+  unsourced getting-started ruleset count was removed; the root README already had the correct
   generated-contract counts and did not need a count edit.
 
 ### Completed release item: the v0.18.4 benchmark record
@@ -414,8 +414,8 @@ rule kind, fix operation, dependency, subprocess, or network access.
 
 - The flat key-parity recipe uses `cross_file` `set_equals` over a `regex:` key extract for
   `.env` against `.env.example`.
-- README surface counts remain sourced from `facts.json`; ROADMAP's "Latest release" remains a
-  release-time update.
+- README surface counts remain sourced from `facts.json`; the getting-started prose does not
+  duplicate them; ROADMAP's "Latest release" remains a release-time update.
 - Both current `register_as` field comments and their generated schema descriptions list all six
   path-template tokens.
 

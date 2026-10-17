@@ -125,7 +125,7 @@ Exit codes: `0` no errors; `1` one or more errors; `2` config error; `3` interna
 
 ## Where to next
 
-- [Bundled Rulesets](/docs/bundled-rulesets/) — 24 one-line baselines covering Rust, Python, Go,
+- [Bundled Rulesets](/docs/bundled-rulesets/) — one-line baselines covering Rust, Python, Go,
   Node, Java, .NET, PHP, monorepos, GitHub Actions hardening, version consistency, toolchain pins,
   agent hygiene, license compliance, and more.
 - [Cookbook](/docs/cookbook/) — copy-pasteable patterns for real-world repo-maintenance tasks.
