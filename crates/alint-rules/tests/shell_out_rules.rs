@@ -653,13 +653,9 @@ fn changed_since_fails_closed_outside_git() {
 
 // ─── command ────────────────────────────────────────────────
 
-// Linux-only because the macOS GitHub runner's `/bin/true`
-// returns a non-success outcome here (root cause unconfirmed —
-// possibly stripped userland or sandboxing). The same pathology
-// is documented on the matching e2e scenario at
-// `crates/alint-e2e/scenarios/check/plugin/command_pass_on_zero_exit.yml`
-// (tagged `linux-only`).
-#[cfg(target_os = "linux")]
+// Use shell built-ins instead of the macOS runner's `/bin/true` and
+// `/bin/false`, whose outcomes are unreliable in this integration harness.
+#[cfg(unix)]
 #[test]
 fn command_passes_when_wrapped_cli_exits_zero() {
     let tmp = tempfile::tempdir().unwrap();
@@ -671,13 +667,13 @@ fn command_passes_when_wrapped_cli_exits_zero() {
         "id: trivial-pass\n\
          kind: command\n\
          paths: \"src/**/*.rs\"\n\
-         command: [\"/bin/true\"]\n\
+         command: [\"/bin/sh\", \"-c\", \"exit 0\"]\n\
          level: error\n",
     );
     let report = run_engine(&engine, root);
     assert!(
         collect_violations(&report).is_empty(),
-        "/bin/true must produce no violations"
+        "a zero exit must produce no violations"
     );
 }
 
@@ -693,12 +689,16 @@ fn command_fires_when_wrapped_cli_exits_nonzero() {
         "id: always-fails\n\
          kind: command\n\
          paths: \"src/**/*.rs\"\n\
-         command: [\"/bin/false\"]\n\
+         command: [\"/bin/sh\", \"-c\", \"exit 1\"]\n\
          level: error\n",
     );
     let report = run_engine(&engine, root);
     let v = collect_violations(&report);
-    assert_eq!(v.len(), 1, "/bin/false must produce one violation: {v:?}");
+    assert_eq!(
+        v.len(),
+        1,
+        "a nonzero exit must produce one violation: {v:?}"
+    );
     assert_eq!(v[0].path.as_deref(), Some(Path::new("src/a.rs")));
 }
 
