@@ -361,6 +361,12 @@ way to ingest an existing bump-tool config as the rule source, and a git-tag kin
 half. The fix already exists: `sync_from` on a `cross_file equals` rule (shipped in v0.17.0,
 Unsafe by default) rewrites each drifted value from the declared source.
 
+**v0.19 status (2026-10-17):** the file-to-file C1 surface shipped as
+`alint://bundled/versioning@v1`, and the exact-pin C2 surface shipped as
+`alint://bundled/toolchain-pins@v1`. Both use explicit authorities, optional targets, exact
+comparison, and the existing Unsafe `sync_from` fix. Bump-tool config ingestion and the C1 tag
+half remain follow-on work; tags stay C6, and range semantics stay C4.
+
 **`semver_range` is the one class alint structurally cannot do today.** `normalize:` compares
 version-band **equality**; range **intersection** and **satisfaction** (syncpack "Same Range",
 manypkg `INTERNAL_MISMATCH`) need a small self-contained semver algebra. Deterministic and
@@ -573,10 +579,10 @@ one of six buckets (ship now, needs local Git tag access, needs a Phase 1 substr
 3. `key_parity` (D1): cross-file key-set equality for i18n and `.env.example`; alint's
    territory, no general linter does it; the flat-format half is a recipe today, the nested half
    is the proposed IR pilot. (P+K)
-4. version-SSOT ruleset + config-ingest (C1): huge proven demand; mostly expressible, needs
-   packaging plus a tag kind. (P+K)
-5. toolchain-pins ruleset (C2): under-served, because Dependabot ignores pin files. (P for exact
-   pins; range pins are C4 `semver_range`)
+4. version-SSOT config-ingest + tag completion (C1): the file-to-file ruleset shipped in v0.19;
+   importing bump-tool manifests remains an ergonomics gap and tags remain C6. (P+K)
+5. toolchain-pins ruleset (C2): exact-pin policy shipped in v0.19; range pins are tracked
+   separately as C4. (P)
 6. `semver_range` awareness (C4): the one class alint structurally cannot do. (K)
 7. `dependency_version_consistency` (C3): the syncpack/manypkg headline. (K)
 8. `license_detectable` (F1): the deferred `detect:` fact; Scorecard/Repolinter/GitHub gate on

@@ -1,0 +1,29 @@
+name: versioning bundle accepts matching release surfaces and absent optional targets
+tags: [check, extends, bundled, versioning, cross_file]
+
+given:
+  tree:
+    VERSION: "1.8.2\n"
+    package.json: |
+      {"name":"demo","version":"1.8.2"}
+    Cargo.toml: |
+      [package]
+      name = "demo"
+      authors = ["Acme"]
+      version = "1.8.2"
+    api:
+      openapi.json: |
+        {"openapi":"3.1.0","info":{"title":"demo","version":"1.8.2"}}
+    CHANGELOG.md: |
+      # Changelog
+
+      ## 1.8.2
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/versioning@v1
+
+when: [check]
+
+expect:
+  - violations: []

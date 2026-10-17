@@ -690,14 +690,15 @@ mod tests {
     }
 
     #[test]
-    fn ranges_and_related_locations_do_not_change_existing_point_fingerprints() {
+    fn ranges_related_locations_and_fix_keys_do_not_change_existing_fingerprints() {
         let original = Violation::new("bad")
             .with_path(Path::new("a.rs"))
             .with_location(2, 1);
         let enriched = original
             .clone()
             .with_range(crate::SourceRange::new(3, 1, 3, 2).unwrap())
-            .with_related_location(crate::RelatedLocation::new("b.rs", "secondary"));
+            .with_related_location(crate::RelatedLocation::new("b.rs", "secondary"))
+            .with_fix_key("occurrence\0one");
 
         assert_eq!(
             fingerprint("rule", &original, Some(b"ok\nbad\nmore\n")),

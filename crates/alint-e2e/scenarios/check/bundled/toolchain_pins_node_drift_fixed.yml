@@ -1,0 +1,82 @@
+name: toolchain-pins bundle reports and repairs Node pin drift across local Docker and CI files
+tags: [check, fix, extends, bundled, toolchain_pins, cross_file, node]
+
+given:
+  tree:
+    .nvmrc: "22.14.0\n"
+    .node-version: "22.13.1\n"
+    .tool-versions: |
+      nodejs 22.13.1
+      python 3.13.7
+    package.json: |
+      {"name":"demo","engines":{"node":"22.13.1"},"volta":{"node":"22.13.1"}}
+    Dockerfile: |
+      FROM node:22.13.1-alpine
+      RUN node --version
+    .github:
+      workflows:
+        ci.yml: |
+          name: CI
+          on: push
+          jobs:
+            test:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/setup-node@v4
+                  with:
+                    node-version: '22.13.1'
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/toolchain-pins@v1
+
+when: [check, fix, check, fix_unsafe, check]
+
+expect:
+  - violations:
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: .node-version}
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: .tool-versions}
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: package.json}
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: package.json}
+      - {rule: toolchain-node-dockerfiles-coherent, level: warning, path: Dockerfile}
+      - {rule: toolchain-node-github-actions-coherent, level: warning, path: .github/workflows/ci.yml}
+  - suggested:
+      - toolchain-node-declarations-coherent
+      - toolchain-node-dockerfiles-coherent
+      - toolchain-node-github-actions-coherent
+  - violations:
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: .node-version}
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: .tool-versions}
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: package.json}
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: package.json}
+      - {rule: toolchain-node-dockerfiles-coherent, level: warning, path: Dockerfile}
+      - {rule: toolchain-node-github-actions-coherent, level: warning, path: .github/workflows/ci.yml}
+  - applied:
+      - toolchain-node-declarations-coherent
+      - toolchain-node-dockerfiles-coherent
+      - toolchain-node-github-actions-coherent
+  - violations: []
+
+expect_tree:
+  .nvmrc: "22.14.0\n"
+  .node-version: "22.14.0\n"
+  .tool-versions: |
+    nodejs 22.14.0
+    python 3.13.7
+  package.json: |
+    {"name":"demo","engines":{"node":"22.14.0"},"volta":{"node":"22.14.0"}}
+  Dockerfile: |
+    FROM node:22.14.0-alpine
+    RUN node --version
+  .github:
+    workflows:
+      ci.yml: |
+        name: CI
+        on: push
+        jobs:
+          test:
+            runs-on: ubuntu-latest
+            steps:
+              - uses: actions/setup-node@v4
+                with:
+                  node-version: "22.14.0"

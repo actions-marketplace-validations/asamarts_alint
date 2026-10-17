@@ -51,6 +51,10 @@ pub struct StructuredFixer {
     path_src: String,
     op: StructuredOp,
     applicability: Applicability,
+    /// Cross-file propagation may use a union query but must rewrite only the
+    /// string value represented by the live finding.
+    selected_current: Option<String>,
+    selected_occurrence: Option<usize>,
 }
 
 impl StructuredFixer {
@@ -71,6 +75,8 @@ impl StructuredFixer {
             path_src,
             op: StructuredOp::Set(value),
             applicability,
+            selected_current: None,
+            selected_occurrence: None,
         }
     }
 
@@ -89,6 +95,8 @@ impl StructuredFixer {
             path_src,
             op: StructuredOp::Remove,
             applicability,
+            selected_current: None,
+            selected_occurrence: None,
         }
     }
 
@@ -116,6 +124,8 @@ impl StructuredFixer {
                 matches,
             },
             applicability,
+            selected_current: None,
+            selected_occurrence: None,
         }
     }
 
@@ -155,6 +165,30 @@ impl StructuredFixer {
         }
         // The value must be representable in this format's syntax.
         structured_fix::serialize_scalar(self.format, want).is_some()
+    }
+
+    /// Cross-file `sync_from`: locate a possibly multi-node query, but set only
+    /// the indexed string node whose exact current value identifies the live
+    /// finding.
+    #[must_use]
+    pub(crate) fn set_selected_string(
+        format: Format,
+        path_expr: JsonPath,
+        path_src: String,
+        value: String,
+        current: String,
+        occurrence: usize,
+        applicability: Applicability,
+    ) -> Self {
+        Self {
+            format,
+            path_expr,
+            path_src,
+            op: StructuredOp::Set(Value::String(value)),
+            applicability,
+            selected_current: Some(current),
+            selected_occurrence: Some(occurrence),
+        }
     }
 }
 
@@ -300,6 +334,9 @@ impl Fixer for StructuredFixer {
             return Vec::new();
         };
         let located = self.path_expr.query_located(&value);
+        if located.len() > crate::cross_file::MAX_EXTRACTED_VALUES {
+            return Vec::new();
+        }
 
         // A round-trip-CST format (TOML / toml_edit) rewrites the WHOLE document
         // rather than splicing a span: toml_edit despans on parse, and owns the
@@ -311,7 +348,7 @@ impl Fixer for StructuredFixer {
         // touching the SAME span still overlap -> the engine serializes them (a
         // genuinely conflicting config still oscillates to a loud exit 2).
         if structured_fix::uses_document_rewrite(self.format) {
-            let one = |doc: Vec<u8>, expect: ExpectedValue| {
+            let one = |doc: Vec<u8>, expect: Option<ExpectedValue>| {
                 let (range, content) = structured_fix::minimal_replace(bytes, &doc);
                 if range.is_empty() && content.is_empty() {
                     return Vec::new(); // reserialize was byte-identical: no-op
@@ -323,27 +360,46 @@ impl Fixer for StructuredFixer {
                         content,
                     },
                     applicability: self.applicability,
-                    verify: self.verifier(expect),
+                    verify: expect.map_or(EditVerifier::None, |expect| self.verifier(expect)),
                     isolation_group: None,
                 }]
             };
             return match &self.op {
                 StructuredOp::Set(want) => {
+                    if !self.set_value_is_statically_applicable(want) {
+                        return Vec::new();
+                    }
+                    if let Some(current) = self.selected_current.as_deref() {
+                        let occurrence = self.selected_occurrence.unwrap_or(0);
+                        let Some(node) = located
+                            .iter()
+                            .filter(|node| {
+                                node.node().as_str() == Some(current) && is_scalar(node.node())
+                            })
+                            .nth(occurrence)
+                        else {
+                            return Vec::new();
+                        };
+                        let segs = to_segs(node.location());
+                        let Some(doc) =
+                            structured_fix::document_set(self.format, bytes, &segs, want)
+                        else {
+                            return Vec::new();
+                        };
+                        return one(doc, None);
+                    }
                     if located.len() != 1 {
                         return Vec::new();
                     }
                     let Some(node) = located.iter().next() else {
                         return Vec::new();
                     };
-                    // Same gates as the span path: single scalar match + the shared
-                    // config-only predicate (so check and fix agree). TOML is TYPED,
-                    // so a numeric/bool `equals` clears the predicate.
-                    if !is_scalar(node.node()) || !self.set_value_is_statically_applicable(want) {
+                    if !is_scalar(node.node()) {
                         return Vec::new();
                     }
                     let segs = to_segs(node.location());
                     match structured_fix::document_set(self.format, bytes, &segs, want) {
-                        Some(doc) => one(doc, ExpectedValue::Scalar(want.clone())),
+                        Some(doc) => one(doc, Some(ExpectedValue::Scalar(want.clone()))),
                         None => Vec::new(),
                     }
                 }
@@ -355,7 +411,7 @@ impl Fixer for StructuredFixer {
                     let paths: Vec<Vec<PathSeg>> =
                         located.iter().map(|n| to_segs(n.location())).collect();
                     match structured_fix::document_remove(self.format, bytes, &paths) {
-                        Some(doc) => one(doc, ExpectedValue::Absent),
+                        Some(doc) => one(doc, Some(ExpectedValue::Absent)),
                         None => Vec::new(),
                     }
                 }
@@ -401,6 +457,58 @@ impl Fixer for StructuredFixer {
 
         match &self.op {
             StructuredOp::Set(want) => {
+                if let Some(current) = self.selected_current.as_deref() {
+                    if !self.set_value_is_statically_applicable(want) {
+                        return Vec::new();
+                    }
+                    let Some(content) = structured_fix::serialize_scalar(self.format, want) else {
+                        return Vec::new();
+                    };
+                    let occurrence = self.selected_occurrence.unwrap_or(0);
+                    return located
+                        .iter()
+                        .filter(|node| {
+                            node.node().as_str() == Some(current) && is_scalar(node.node())
+                        })
+                        .nth(occurrence)
+                        .and_then(|node| {
+                            let segs = to_segs(node.location());
+                            let (range, replacement) =
+                                if structured_fix::uses_verified_edits(self.format) {
+                                    structured_fix::verified_set_edit(
+                                        self.format,
+                                        bytes,
+                                        &segs,
+                                        want,
+                                    )?
+                                } else {
+                                    (
+                                        structured_fix::resolve_value_span(
+                                            self.format,
+                                            bytes,
+                                            &segs,
+                                        )?,
+                                        content,
+                                    )
+                                };
+                            Some(CollectedEdit {
+                                edit: FixEdit::ReplaceRange {
+                                    path: file.to_path_buf(),
+                                    range,
+                                    content: replacement,
+                                },
+                                applicability: self.applicability,
+                                verify: EditVerifier::Structured {
+                                    format: self.format,
+                                    query: segs_to_query(&segs),
+                                    expect: ExpectedValue::Scalar(want.clone()),
+                                },
+                                isolation_group: None,
+                            })
+                        })
+                        .into_iter()
+                        .collect();
+                }
                 // The Safe case ONLY: exactly one match, the existing node AND the
                 // wanted value both scalar, and the span resolvable. Everything
                 // else declines (no edit; the violation honestly stands) rather

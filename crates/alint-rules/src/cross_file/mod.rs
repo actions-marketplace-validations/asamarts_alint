@@ -39,6 +39,7 @@
 //!   relation: identical
 //! ```
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use alint_core::{
@@ -46,6 +47,7 @@ use alint_core::{
     Violation,
 };
 
+use crate::fixers::cross_file_ops::ValueTargetMatches;
 use crate::fixers::{CreateAndRegisterFixer, CrossFileValueFixer, SyncFromFixer, ValueTargets};
 
 mod eval;
@@ -59,6 +61,517 @@ pub(crate) use spec::options_schema;
 // correlate its edits to the check's normalized comparison (audit: the fixer must
 // skip a capture the check deemed correct under `normalize`).
 pub(crate) use spec::{Normalize, apply_normalize};
+
+/// Hard ceiling for values one cross-file extraction may materialize. Exceeding
+/// it is a fail-loud analysis failure, never a truncated policy pass.
+pub(crate) const MAX_EXTRACTED_VALUES: usize = 10_000;
+const MAX_SYNTAX_PHYSICAL_LINES: usize = 100_000;
+
+fn enforce_syntax_line_limit(text: &str, format: &str) -> std::result::Result<(), String> {
+    let mut lines = usize::from(!text.is_empty() && !text.ends_with('\n'));
+    for byte in text.bytes() {
+        if byte == b'\n' {
+            lines += 1;
+            if lines > MAX_SYNTAX_PHYSICAL_LINES {
+                return Err(format!(
+                    "{format} exceeds the {MAX_SYNTAX_PHYSICAL_LINES}-line safety limit"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Capture-group-1 byte ranges for a target regex. Dockerfile `FROM`, Python
+/// `__version__`, extensionless Rust toolchain, and Gemfile selectors receive
+/// syntax-aware filtering so inert strings and heredocs cannot impersonate declarations.
+#[derive(Debug)]
+pub(crate) struct RegexCaptureRanges {
+    pub(crate) any_match: bool,
+    pub(crate) had_group: bool,
+    pub(crate) ranges: Vec<Range<usize>>,
+}
+
+pub(crate) fn target_regex_capture_ranges(
+    path: &Path,
+    text: &str,
+    pattern: &str,
+) -> std::result::Result<RegexCaptureRanges, String> {
+    let regex = regex::Regex::new(pattern)
+        .map_err(|error| format!("invalid target regex `{pattern}`: {error}"))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let mut expected_capture = None;
+    let allowed_lines = if name.starts_with("Dockerfile") && pattern.contains("FROM") {
+        Some(crate::pinned_references::dockerfile_from_lines(text)?)
+    } else if path.extension().and_then(|ext| ext.to_str()) == Some("py")
+        && pattern.contains("__version__")
+    {
+        Some(python_top_level_code_lines(text)?)
+    } else if name == "rust-toolchain" && pattern.contains("channel") {
+        let (lines, expected) = rust_toolchain_code_lines(text)?;
+        expected_capture = expected;
+        lines
+    } else if name == "Gemfile" && pattern.contains("ruby") {
+        Some(ruby_code_lines(text)?)
+    } else {
+        None
+    };
+    let mut next_newline = text
+        .match_indices('\n')
+        .map(|(offset, _)| offset)
+        .peekable();
+    let mut line = 1usize;
+    let mut any_match = false;
+    let mut had_group = false;
+    let mut ranges = Vec::new();
+    let mut accepted_matches = 0usize;
+    for captures in regex.captures_iter(text) {
+        let start = captures.get(0).map_or(0, |matched| matched.start());
+        while next_newline.peek().is_some_and(|offset| *offset < start) {
+            next_newline.next();
+            line += 1;
+        }
+        if allowed_lines
+            .as_ref()
+            .is_some_and(|lines| lines.binary_search(&line).is_err())
+        {
+            continue;
+        }
+        let group = captures.get(1);
+        if expected_capture
+            .as_deref()
+            .is_some_and(|expected| group.is_none_or(|group| group.as_str() != expected))
+        {
+            continue;
+        }
+        accepted_matches += 1;
+        if accepted_matches > MAX_EXTRACTED_VALUES {
+            return Err(format!(
+                "target regex selected more than the {MAX_EXTRACTED_VALUES}-value safety limit"
+            ));
+        }
+        any_match = true;
+        let Some(group) = group else {
+            continue;
+        };
+        had_group = true;
+        ranges.push(group.range());
+    }
+    Ok(RegexCaptureRanges {
+        any_match,
+        had_group,
+        ranges,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct PythonQuote {
+    delimiter: u8,
+    triple: bool,
+}
+
+/// Lines that begin in top-level Python code rather than a string, comment
+/// continuation, or bracketed expression. This is a lexical guard for the
+/// bundle's column-zero `__version__` regex, not a general Python parser.
+fn python_top_level_code_lines(text: &str) -> std::result::Result<Vec<usize>, String> {
+    enforce_syntax_line_limit(text, "Python source")?;
+    let mut lines = Vec::new();
+    let mut quote: Option<PythonQuote> = None;
+    let mut bracket_depth = 0usize;
+    let mut explicit_continuation = false;
+
+    for (index, physical) in text.split_inclusive('\n').enumerate() {
+        if quote.is_none() && bracket_depth == 0 && !explicit_continuation {
+            lines.push(index + 1);
+        }
+        let bytes = physical.as_bytes();
+        let mut offset = 0usize;
+        let mut last_code_non_whitespace = None;
+        while offset < bytes.len() {
+            if let Some(active) = quote {
+                if bytes[offset] == b'\\' {
+                    offset = (offset + 2).min(bytes.len());
+                    continue;
+                }
+                if active.triple
+                    && offset + 2 < bytes.len()
+                    && bytes[offset] == active.delimiter
+                    && bytes[offset + 1] == active.delimiter
+                    && bytes[offset + 2] == active.delimiter
+                {
+                    quote = None;
+                    offset += 3;
+                    continue;
+                }
+                if !active.triple && bytes[offset] == active.delimiter {
+                    quote = None;
+                }
+                offset += 1;
+                continue;
+            }
+
+            let byte = bytes[offset];
+            if byte == b'#' {
+                break;
+            }
+            if matches!(byte, b'\'' | b'"') {
+                let triple = offset + 2 < bytes.len()
+                    && bytes[offset + 1] == byte
+                    && bytes[offset + 2] == byte;
+                quote = Some(PythonQuote {
+                    delimiter: byte,
+                    triple,
+                });
+                offset += if triple { 3 } else { 1 };
+                continue;
+            }
+            match byte {
+                b'(' | b'[' | b'{' => bracket_depth += 1,
+                b')' | b']' | b'}' => bracket_depth = bracket_depth.saturating_sub(1),
+                _ => {}
+            }
+            if !byte.is_ascii_whitespace() {
+                last_code_non_whitespace = Some(byte);
+            }
+            offset += 1;
+        }
+        explicit_continuation =
+            quote.is_none() && bracket_depth == 0 && last_code_non_whitespace == Some(b'\\');
+    }
+    Ok(lines)
+}
+
+fn rust_toolchain_code_lines(
+    text: &str,
+) -> std::result::Result<(Option<Vec<usize>>, Option<String>), String> {
+    enforce_syntax_line_limit(text, "rust-toolchain TOML")?;
+    let trimmed = text.trim();
+    if trimmed.lines().count() <= 1 && !trimmed.contains(['=', '[', ']', '"', '\'']) {
+        // The legacy rust-toolchain form is one bare token; the rule's
+        // whole-file regex remains the exact grammar and needs no line filter.
+        return Ok((None, None));
+    }
+    let parsed: toml::Value =
+        toml::from_str(text).map_err(|error| format!("invalid rust-toolchain TOML: {error}"))?;
+    let expected = parsed
+        .get("toolchain")
+        .and_then(|toolchain| toolchain.get("channel"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned);
+    let code_lines = toml_code_lines(text);
+    Ok((
+        Some(rust_toolchain_channel_lines(text, &code_lines)),
+        expected,
+    ))
+}
+
+#[derive(Clone, Copy)]
+enum TomlQuote {
+    Basic { multiline: bool },
+    Literal { multiline: bool },
+}
+
+/// Physical lines that start outside TOML strings. The document is parsed
+/// before this scanner is used, so this only locates syntax already accepted by
+/// the TOML parser; it does not attempt independent validation.
+fn toml_code_lines(text: &str) -> Vec<usize> {
+    let mut lines = Vec::new();
+    let mut quote = None;
+    for (index, physical) in text.split_inclusive('\n').enumerate() {
+        if quote.is_none() {
+            lines.push(index + 1);
+        }
+        let bytes = physical.as_bytes();
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            match quote {
+                Some(TomlQuote::Basic { multiline }) => {
+                    if bytes[offset] == b'\\' {
+                        offset = (offset + 2).min(bytes.len());
+                    } else if multiline
+                        && bytes.get(offset..offset + 3) == Some(b"\"\"\"".as_slice())
+                    {
+                        quote = None;
+                        offset += 3;
+                    } else if !multiline && bytes[offset] == b'"' {
+                        quote = None;
+                        offset += 1;
+                    } else {
+                        offset += 1;
+                    }
+                }
+                Some(TomlQuote::Literal { multiline }) => {
+                    if multiline && bytes.get(offset..offset + 3) == Some(b"'''".as_slice()) {
+                        quote = None;
+                        offset += 3;
+                    } else if !multiline && bytes[offset] == b'\'' {
+                        quote = None;
+                        offset += 1;
+                    } else {
+                        offset += 1;
+                    }
+                }
+                None => match bytes[offset] {
+                    b'#' => break,
+                    b'"' => {
+                        let multiline = bytes.get(offset..offset + 3) == Some(b"\"\"\"".as_slice());
+                        quote = Some(TomlQuote::Basic { multiline });
+                        offset += if multiline { 3 } else { 1 };
+                    }
+                    b'\'' => {
+                        let multiline = bytes.get(offset..offset + 3) == Some(b"'''".as_slice());
+                        quote = Some(TomlQuote::Literal { multiline });
+                        offset += if multiline { 3 } else { 1 };
+                    }
+                    _ => offset += 1,
+                },
+            }
+        }
+    }
+    lines
+}
+
+fn rust_toolchain_channel_lines(text: &str, code_lines: &[usize]) -> Vec<usize> {
+    let mut in_toolchain = false;
+    let mut channel_lines = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line_number = index + 1;
+        if code_lines.binary_search(&line_number).is_err() {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            let header = trimmed
+                .split_once('#')
+                .map_or(trimmed, |(header, _)| header)
+                .trim();
+            in_toolchain = header == "[toolchain]";
+            continue;
+        }
+        if in_toolchain
+            && trimmed
+                .strip_prefix("channel")
+                .is_some_and(|rest| rest.trim_start().starts_with('='))
+        {
+            channel_lines.push(line_number);
+        }
+    }
+    channel_lines
+}
+
+#[derive(Clone, Copy)]
+enum RubyQuote {
+    Simple {
+        delimiter: u8,
+        escaped: bool,
+    },
+    Percent {
+        open: u8,
+        close: u8,
+        depth: usize,
+        escaped: bool,
+    },
+}
+
+/// Lines that start outside Ruby strings and heredoc bodies. This deliberately
+/// recognizes only lexical constructs needed to keep a Gemfile's top-level
+/// `ruby` directive distinct from inert embedded text.
+// One state machine must carry quote, heredoc, block-comment, and delimiter
+// state together; splitting it would duplicate or desynchronize transitions.
+#[allow(clippy::too_many_lines)]
+fn ruby_code_lines(text: &str) -> std::result::Result<Vec<usize>, String> {
+    enforce_syntax_line_limit(text, "Gemfile")?;
+    let mut lines = Vec::new();
+    let mut quote = None;
+    let mut heredocs: Vec<(String, bool)> = Vec::new();
+    let mut block_comment = false;
+
+    for (index, physical) in text.split_inclusive('\n').enumerate() {
+        let line = physical
+            .strip_suffix('\n')
+            .unwrap_or(physical)
+            .strip_suffix('\r')
+            .unwrap_or_else(|| physical.strip_suffix('\n').unwrap_or(physical));
+        if let Some((delimiter, allow_indent)) = heredocs.first() {
+            let candidate = if *allow_indent {
+                line.trim_start()
+            } else {
+                line
+            };
+            if candidate == delimiter {
+                heredocs.remove(0);
+            }
+            continue;
+        }
+        if block_comment {
+            if line
+                .strip_prefix("=end")
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                block_comment = false;
+            }
+            continue;
+        }
+        if quote.is_none() {
+            if line == "__END__" {
+                break;
+            }
+            if line
+                .strip_prefix("=begin")
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                block_comment = true;
+                continue;
+            }
+        }
+
+        if quote.is_none() {
+            lines.push(index + 1);
+        }
+        let bytes = physical.as_bytes();
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            match quote {
+                Some(RubyQuote::Simple { delimiter, escaped }) => {
+                    if escaped {
+                        quote = Some(RubyQuote::Simple {
+                            delimiter,
+                            escaped: false,
+                        });
+                    } else if bytes[offset] == b'\\' {
+                        quote = Some(RubyQuote::Simple {
+                            delimiter,
+                            escaped: true,
+                        });
+                    } else if bytes[offset] == delimiter {
+                        quote = None;
+                    }
+                    offset += 1;
+                }
+                Some(RubyQuote::Percent {
+                    open,
+                    close,
+                    mut depth,
+                    escaped,
+                }) => {
+                    if escaped {
+                        quote = Some(RubyQuote::Percent {
+                            open,
+                            close,
+                            depth,
+                            escaped: false,
+                        });
+                    } else if bytes[offset] == b'\\' {
+                        quote = Some(RubyQuote::Percent {
+                            open,
+                            close,
+                            depth,
+                            escaped: true,
+                        });
+                    } else if open != close && bytes[offset] == open {
+                        depth += 1;
+                        quote = Some(RubyQuote::Percent {
+                            open,
+                            close,
+                            depth,
+                            escaped: false,
+                        });
+                    } else if bytes[offset] == close {
+                        depth -= 1;
+                        quote = (depth != 0).then_some(RubyQuote::Percent {
+                            open,
+                            close,
+                            depth,
+                            escaped: false,
+                        });
+                    }
+                    offset += 1;
+                }
+                None => {
+                    let byte = bytes[offset];
+                    if byte == b'#' {
+                        break;
+                    }
+                    if matches!(byte, b'\'' | b'"' | b'`') {
+                        quote = Some(RubyQuote::Simple {
+                            delimiter: byte,
+                            escaped: false,
+                        });
+                        offset += 1;
+                        continue;
+                    }
+                    if byte == b'%' {
+                        let mut delimiter_at = offset + 1;
+                        if bytes.get(delimiter_at).is_some_and(|kind| {
+                            matches!(kind, b'q' | b'Q' | b'w' | b'W' | b'x' | b'r' | b'i' | b'I')
+                        }) {
+                            delimiter_at += 1;
+                        }
+                        if let Some(&open) = bytes.get(delimiter_at)
+                            && !open.is_ascii_alphanumeric()
+                            && !open.is_ascii_whitespace()
+                        {
+                            let close = match open {
+                                b'(' => b')',
+                                b'[' => b']',
+                                b'{' => b'}',
+                                b'<' => b'>',
+                                _ => open,
+                            };
+                            quote = Some(RubyQuote::Percent {
+                                open,
+                                close,
+                                depth: 1,
+                                escaped: false,
+                            });
+                            offset = delimiter_at + 1;
+                            continue;
+                        }
+                    }
+                    if bytes.get(offset..offset + 2) == Some(b"<<".as_slice()) {
+                        let mut at = offset + 2;
+                        let allow_indent = matches!(bytes.get(at), Some(b'-' | b'~'));
+                        if allow_indent {
+                            at += 1;
+                        }
+                        let quoted = bytes
+                            .get(at)
+                            .copied()
+                            .filter(|byte| matches!(byte, b'\'' | b'"' | b'`'));
+                        if quoted.is_some() {
+                            at += 1;
+                        }
+                        let start = at;
+                        while bytes
+                            .get(at)
+                            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                        {
+                            at += 1;
+                        }
+                        if at > start
+                            && quoted.is_none_or(|delimiter| bytes.get(at) == Some(&delimiter))
+                        {
+                            heredocs.push((
+                                String::from_utf8_lossy(&bytes[start..at]).into_owned(),
+                                allow_indent,
+                            ));
+                            offset = at + usize::from(quoted.is_some());
+                            continue;
+                        }
+                    }
+                    offset += 1;
+                }
+            }
+        }
+    }
+    if quote.is_some() || !heredocs.is_empty() || block_comment {
+        return Err("unterminated Ruby string, heredoc, or block comment in Gemfile".to_string());
+    }
+    Ok(lines)
+}
 
 #[derive(Debug)]
 pub struct CrossFileRule {
@@ -127,7 +640,7 @@ impl Rule for CrossFileRule {
         }
 
         match &self.targets {
-            Some(Targets::Glob { scope, extract })
+            Some(Targets::Glob { scope, extract, .. })
                 if explicit || extract.as_ref().is_some_and(Extract::redacts_by_default) =>
             {
                 for entry in ctx.index.files() {
@@ -137,9 +650,14 @@ impl Rule for CrossFileRule {
                 }
             }
             Some(Targets::List(targets)) => {
-                for (path, extract) in targets {
-                    if explicit || extract.as_ref().is_some_and(Extract::redacts_by_default) {
-                        visit(Path::new(path));
+                for target in targets {
+                    if explicit
+                        || target
+                            .extract
+                            .as_ref()
+                            .is_some_and(Extract::redacts_by_default)
+                    {
+                        visit(Path::new(&target.file));
                     }
                 }
             }
@@ -210,14 +728,17 @@ fn build_sync_from_fixer(
                             || cfg("`sync_from` on `equals` needs `source.extract`".into()),
                         )?
                         .clone();
-                    let value_targets = build_value_targets(targets, cfg)?;
-                    Ok(Some(Box::new(CrossFileValueFixer::new(
-                        PathBuf::from(source_file),
-                        source_extract,
-                        value_targets,
-                        normalize.to_vec(),
-                        tier,
-                    ))))
+                    let (value_targets, target_matches) = build_value_targets(targets, cfg)?;
+                    Ok(Some(Box::new(
+                        CrossFileValueFixer::new(
+                            PathBuf::from(source_file),
+                            source_extract,
+                            value_targets,
+                            normalize.to_vec(),
+                            tier,
+                        )
+                        .with_target_matches(target_matches),
+                    )))
                 }
                 other => Err(cfg(format!(
                     "`sync_from` supports `relation: identical` (mirror the whole file) or \
@@ -328,15 +849,32 @@ fn build_register_targets(
         }
     };
     match targets {
-        Some(Targets::Glob { extract, .. }) => Ok(ValueTargets::Glob(array_extract(
-            extract.as_ref(),
-            "the `targets.files` glob",
-        )?)),
+        Some(Targets::Glob {
+            extract, matches, ..
+        }) => {
+            if matches.is_some() {
+                return Err(cfg(
+                    "`targets.matches` is not supported by `relation: registered`".into(),
+                ));
+            }
+            Ok(ValueTargets::Glob(array_extract(
+                extract.as_ref(),
+                "the `targets.files` glob",
+            )?))
+        }
         Some(Targets::List(list)) => {
             let mut out = Vec::with_capacity(list.len());
-            for (file, ex) in list {
-                let e = array_extract(ex.as_ref(), &format!("target `{file}`"))?;
-                out.push((PathBuf::from(file), e));
+            for target in list {
+                if target.matches.is_some() {
+                    return Err(cfg(
+                        "`targets.matches` is not supported by `relation: registered`".into(),
+                    ));
+                }
+                let e = array_extract(
+                    target.extract.as_ref(),
+                    &format!("target `{}`", target.file),
+                )?;
+                out.push((PathBuf::from(&target.file), e));
             }
             Ok(ValueTargets::List(out))
         }
@@ -351,7 +889,7 @@ fn build_register_targets(
 fn build_value_targets(
     targets: Option<&Targets>,
     cfg: &impl Fn(String) -> Error,
-) -> Result<ValueTargets> {
+) -> Result<(ValueTargets, ValueTargetMatches)> {
     let unsupported = |what: &str| {
         cfg(format!(
             "`sync_from` on `equals` needs a STRUCTURED (toml/json/yaml/xml/ini/hcl/dotenv/\
@@ -367,17 +905,25 @@ fn build_value_targets(
         }
     };
     match targets {
-        Some(Targets::Glob { extract, .. }) => Ok(ValueTargets::Glob(value_extract(
-            extract.as_ref(),
-            "the `targets.files` glob",
-        )?)),
+        Some(Targets::Glob {
+            extract, matches, ..
+        }) => Ok((
+            ValueTargets::Glob(value_extract(extract.as_ref(), "the `targets.files` glob")?),
+            ValueTargetMatches::Glob(matches.clone()),
+        )),
         Some(Targets::List(list)) => {
             let mut out = Vec::with_capacity(list.len());
-            for (file, ex) in list {
-                let e = value_extract(ex.as_ref(), &format!("target `{file}`"))?;
-                out.push((PathBuf::from(file), e));
+            let mut filters = Vec::with_capacity(list.len());
+            for target in list {
+                let extract = value_extract(
+                    target.extract.as_ref(),
+                    &format!("target `{}`", target.file),
+                )?;
+                let path = PathBuf::from(&target.file);
+                out.push((path.clone(), extract));
+                filters.push((path, target.matches.clone()));
             }
-            Ok(ValueTargets::List(out))
+            Ok((ValueTargets::List(out), ValueTargetMatches::List(filters)))
         }
         None => Err(cfg("`sync_from` on `equals` needs `targets`".into())),
     }
@@ -1147,5 +1693,98 @@ mod tests {
             build(&spec_yaml(ok_resolves)).is_ok(),
             "valid resolves should build"
         );
+    }
+    #[test]
+    fn python_version_regex_ignores_assignments_inside_strings() {
+        let text = concat!(
+            "\"\"\"module docs\n",
+            "__version__ = \"1.0.0\"\n",
+            "\"\"\"\n",
+            "payload = '''\n",
+            "__version__ = \"1.5.0\"\n",
+            "'''\n",
+            "__version__: str = \"2.0.0\"\n",
+        );
+        let captures = target_regex_capture_ranges(
+            Path::new("pkg/__init__.py"),
+            text,
+            r#"(?m)^__version__[ \t]*(?::[ \t]*[^=\r\n]+)?=[ \t]*["']([^"'\r\n]+)["']"#,
+        )
+        .unwrap();
+        let values: Vec<&str> = captures
+            .ranges
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect();
+        assert_eq!(values, ["2.0.0"]);
+    }
+
+    #[test]
+    fn dockerfile_dash_name_ignores_from_inside_a_heredoc() {
+        let text = "RUN <<'EOF'\nFROM node:1.0.0\nEOF\nFROM node:2.0.0\n";
+        let captures = target_regex_capture_ranges(
+            Path::new("Dockerfile-prod"),
+            text,
+            r"(?mi)^FROM node:([0-9.]+)$",
+        )
+        .unwrap();
+        let values: Vec<&str> = captures
+            .ranges
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect();
+        assert_eq!(values, ["2.0.0"]);
+    }
+
+    #[test]
+    fn rust_toolchain_regex_ignores_channel_inside_a_multiline_string() {
+        let text =
+            "[toolchain]\nnotes = \"\"\"\nchannel = \"1.0.0\"\n\"\"\"\nchannel = \"2.0.0\"\n";
+        let captures = target_regex_capture_ranges(
+            Path::new("rust-toolchain"),
+            text,
+            r#"(?m)^channel = "([^"]+)"$"#,
+        )
+        .unwrap();
+        let values: Vec<&str> = captures
+            .ranges
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect();
+        assert_eq!(values, ["2.0.0"]);
+    }
+
+    #[test]
+    fn gemfile_regex_ignores_ruby_inside_inert_lexical_regions() {
+        let text = "=begin\nruby \"0.5.0\"\n=end\nexample = <<'RUBY'\n=begin\nruby \"1.0.0\"\n=end\nRUBY\nruby \"2.0.0\"\n__END__\nruby \"1.5.0\"\n";
+        let captures =
+            target_regex_capture_ranges(Path::new("Gemfile"), text, r#"(?m)^ruby "([^"]+)"$"#)
+                .unwrap();
+        let values: Vec<&str> = captures
+            .ranges
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect();
+        assert_eq!(values, ["2.0.0"]);
+    }
+
+    #[test]
+    fn syntax_aware_scanners_reject_excessive_physical_lines() {
+        let text = "\n".repeat(MAX_SYNTAX_PHYSICAL_LINES + 1);
+        let error = target_regex_capture_ranges(
+            Path::new("version.py"),
+            &text,
+            r#"(?m)^__version__ = "([^"]+)"$"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("line safety limit"), "{error}");
+    }
+
+    #[test]
+    fn target_regex_capture_count_is_bounded_before_materialization() {
+        let text = "v=x\n".repeat(MAX_EXTRACTED_VALUES + 1);
+        let error = target_regex_capture_ranges(Path::new("pins.txt"), &text, r"(?m)^v=([a-z])$")
+            .unwrap_err();
+        assert!(error.contains("value safety limit"), "{error}");
     }
 }

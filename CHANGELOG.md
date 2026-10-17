@@ -56,6 +56,27 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now see warnings for mutable reusable workflows, composite-action steps, and workflow
   container/service images: pin them to a full commit SHA or sha256 digest, or narrow/disable the
   inherited rule when that mutable input is intentional.
+- **Two opt-in bundled rulesets enforce cross-file release and toolchain consistency.**
+  `alint://bundled/versioning@v1` uses a root `VERSION` authority to compare existing package,
+  Cargo, pyproject, Python, Helm, OpenAPI, and changelog values. The
+  `alint://bundled/toolchain-pins@v1` policy uses explicit Node, Rust, Python, Ruby, JVM, and .NET
+  authorities to compare literal local declarations, supported Docker images, and matching
+  GitHub Actions setup inputs. Missing authorities make each policy silent; missing targets are
+  optional; malformed or unsafe authorities fail once; ranges, leading-`v` workflow inputs, and
+  computed targets remain outside the exact-pin surface. Structured authorities and declaration
+  targets are selected from root-qualified nodes, so nested lookalikes cannot activate or satisfy
+  policy; Docker `FROM` selectors reuse the Dockerfile parser and ignore heredoc payloads.
+  `sync_from` repairs are suggested by bare `fix` and require `--unsafe-fixes` to apply. Repairs
+  correlate to the exact live finding (so baseline-suppressed duplicate values in one file stay
+  untouched) and enforce extraction-count, syntax-line, edit-count, and output-size ceilings. The
+  reusable
+  `file_content_matches.extract` fact option applies any of the eight structured formats
+  (JSON/YAML/TOML/XML/dotenv/properties/INI/HCL) before matching, while
+  `cross_file.targets.matches` filters extracted target strings before comparison or repair.
+  Migration: this is additive and affects only repositories that explicitly extend either new URI
+  or adopt the new optional fields. Semver-range policy remains C4 and Git-tag consistency remains
+  C6.
+
 
 
 ### Changed

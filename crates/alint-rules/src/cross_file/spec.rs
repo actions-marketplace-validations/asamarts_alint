@@ -5,6 +5,7 @@
 //! [`super`](super).
 
 use alint_core::{Error, Extract, ExtractSpec, Result, Scope};
+use regex::Regex;
 use serde::Deserialize;
 
 /// The file whose extracted value(s) form the reference side of the relation:
@@ -36,6 +37,10 @@ pub(super) struct TargetEntrySpec {
     /// The extraction to apply to this target (absent for `identical`).
     #[serde(default)]
     extract: Option<ExtractSpec>,
+    /// Optional regex selecting which extracted target strings participate in
+    /// the relation.
+    #[serde(default)]
+    matches: Option<String>,
 }
 
 /// `targets:` is either a `{ files: <glob>, extract: … }` map
@@ -62,6 +67,11 @@ pub(super) enum TargetsSpec {
         // serde and schemars, and `resolve()` moves through the `Box` unchanged.
         #[serde(default)]
         extract: Option<Box<ExtractSpec>>,
+        /// Optional regex selecting which extracted target strings participate
+        /// in the relation. A parsed but non-matching value is treated as an
+        /// absent optional target value.
+        #[serde(default)]
+        matches: Option<String>,
     },
     /// Form b: a sequence of heterogeneous `{ file, extract }` pins.
     List(Vec<TargetEntrySpec>),
@@ -258,13 +268,24 @@ crate::options_schema_for!(Options);
 
 /// Resolved target shape. `extract` is `None` for `identical`
 /// (whole-file), `Some` for the value relations.
+// A `Targets` value lives once per rule. Keeping `Scope` inline avoids one heap
+// allocation and one indirection on every glob-target match.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(super) enum Targets {
     Glob {
         scope: Scope,
         extract: Option<Extract>,
+        matches: Option<Regex>,
     },
-    List(Vec<(String, Option<Extract>)>),
+    List(Vec<Target>),
+}
+
+#[derive(Debug)]
+pub(super) struct Target {
+    pub(super) file: String,
+    pub(super) extract: Option<Extract>,
+    pub(super) matches: Option<Regex>,
 }
 
 /// Resolve a `targets:` spec, validating each glob / list entry.
@@ -272,7 +293,11 @@ pub(super) enum Targets {
 /// relation-shape coupling is checked in `validate_shape`.
 pub(super) fn resolve_targets(ts: TargetsSpec, cfg: &impl Fn(String) -> Error) -> Result<Targets> {
     match ts {
-        TargetsSpec::Glob { files, extract } => {
+        TargetsSpec::Glob {
+            files,
+            extract,
+            matches,
+        } => {
             if files.trim().is_empty() {
                 return Err(cfg("`targets.files` must not be empty".into()));
             }
@@ -285,7 +310,17 @@ pub(super) fn resolve_targets(ts: TargetsSpec, cfg: &impl Fn(String) -> Error) -
                 ),
                 None => None,
             };
-            Ok(Targets::Glob { scope, extract })
+            let matches = matches
+                .map(|pattern| {
+                    Regex::new(&pattern)
+                        .map_err(|e| cfg(format!("invalid `targets.matches` regex: {e}")))
+                })
+                .transpose()?;
+            Ok(Targets::Glob {
+                scope,
+                extract,
+                matches,
+            })
         }
         TargetsSpec::List(list) => {
             if list.is_empty() {
@@ -296,13 +331,20 @@ pub(super) fn resolve_targets(ts: TargetsSpec, cfg: &impl Fn(String) -> Error) -
                 if t.file.trim().is_empty() {
                     return Err(cfg(format!("`targets[{i}].file` must not be empty")));
                 }
-                let ex = match t.extract {
+                let extract = match t.extract {
                     Some(e) => Some(
                         e.resolve()
                             .map_err(|e| cfg(format!("invalid `targets[{i}].extract`: {e}")))?,
                     ),
                     None => None,
                 };
+                let matches = t
+                    .matches
+                    .map(|pattern| {
+                        Regex::new(&pattern)
+                            .map_err(|e| cfg(format!("invalid `targets[{i}].matches` regex: {e}")))
+                    })
+                    .transpose()?;
                 // Normalize the config-verbatim path (strip `./`, resolve `..`
                 // lexically) at the single resolution point, so BOTH the check
                 // (violation path) and the value fixer (its stored target path) use
@@ -324,7 +366,11 @@ pub(super) fn resolve_targets(ts: TargetsSpec, cfg: &impl Fn(String) -> Error) -
                         s.replace(std::path::MAIN_SEPARATOR, "/")
                     }
                 });
-                resolved.push((file, ex));
+                resolved.push(Target {
+                    file,
+                    extract,
+                    matches,
+                });
             }
             Ok(Targets::List(resolved))
         }
@@ -341,14 +387,22 @@ pub(super) fn validate_shape(
     targets: Option<&Targets>,
     cfg: &impl Fn(String) -> Error,
 ) -> Result<()> {
-    let (any_target_extract, all_target_extract) = match targets {
-        Some(Targets::Glob { extract, .. }) => (extract.is_some(), extract.is_some()),
+    let (any_target_extract, all_target_extract, any_target_matches) = match targets {
+        Some(Targets::Glob {
+            extract, matches, ..
+        }) => (extract.is_some(), extract.is_some(), matches.is_some()),
         Some(Targets::List(list)) => (
-            list.iter().any(|(_, e)| e.is_some()),
-            list.iter().all(|(_, e)| e.is_some()),
+            list.iter().any(|target| target.extract.is_some()),
+            list.iter().all(|target| target.extract.is_some()),
+            list.iter().any(|target| target.matches.is_some()),
         ),
-        None => (false, false),
+        None => (false, false, false),
     };
+    if any_target_matches && !relation.is_value() {
+        return Err(cfg(
+            "`targets.matches` is supported only by value relations".into(),
+        ));
+    }
     if relation.is_value() {
         if source_extract.is_none() {
             return Err(cfg(format!(
@@ -434,8 +488,8 @@ pub(super) fn validate_extract_regexes(
         match t {
             Targets::Glob { extract, .. } => check(extract.as_ref())?,
             Targets::List(list) => {
-                for (_, e) in list {
-                    check(e.as_ref())?;
+                for target in list {
+                    check(target.extract.as_ref())?;
                 }
             }
         }
@@ -565,10 +619,30 @@ mod tests {
         let ts = TargetsSpec::List(vec![TargetEntrySpec {
             file: "./sub/t.json".into(),
             extract: None,
+            matches: None,
         }]);
         match resolve_targets(ts, &cfg).unwrap() {
-            Targets::List(list) => assert_eq!(list[0].0, "sub/t.json", "`./` stripped"),
+            Targets::List(list) => {
+                assert_eq!(list[0].file, "sub/t.json", "`./` stripped");
+            }
             Targets::Glob { .. } => panic!("expected a List, got a Glob"),
         }
+    }
+    #[test]
+    fn resolve_targets_rejects_an_invalid_match_filter() {
+        let cfg = |m: String| Error::rule_config("t", m);
+        let targets = TargetsSpec::List(vec![TargetEntrySpec {
+            file: "target.json".into(),
+            extract: None,
+            matches: Some("[".into()),
+        }]);
+
+        let error = resolve_targets(targets, &cfg).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid `targets[0].matches` regex"),
+            "{error}"
+        );
     }
 }

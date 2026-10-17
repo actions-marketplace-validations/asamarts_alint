@@ -1425,8 +1425,18 @@ struct DockerInstruction {
     escape: char,
 }
 
+const MAX_DOCKERFILE_PHYSICAL_LINES: usize = 100_000;
+
 fn dockerfile_instructions(text: &str) -> std::result::Result<Vec<DockerInstruction>, String> {
-    let lines: Vec<&str> = text.lines().collect();
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if lines.len() == MAX_DOCKERFILE_PHYSICAL_LINES {
+            return Err(format!(
+                "Dockerfile exceeds the {MAX_DOCKERFILE_PHYSICAL_LINES}-line safety limit"
+            ));
+        }
+        lines.push(line);
+    }
     let escape = docker_escape(&lines)?;
     let mut instructions = Vec::new();
     let mut index = 0;
@@ -1484,6 +1494,19 @@ fn dockerfile_instructions(text: &str) -> std::result::Result<Vec<DockerInstruct
         skip_docker_heredocs(&lines, &mut index, &heredocs, start_line)?;
     }
     Ok(instructions)
+}
+
+/// Physical line numbers whose parsed top-level instruction is `FROM`.
+///
+/// `cross_file` uses this for Dockerfile `FROM` regex extracts so heredoc
+/// payloads cannot impersonate an instruction while retaining the generic
+/// regex capture/fix surface.
+pub(crate) fn dockerfile_from_lines(text: &str) -> std::result::Result<Vec<usize>, String> {
+    Ok(dockerfile_instructions(text)?
+        .into_iter()
+        .filter(|instruction| instruction.name == "FROM")
+        .map(|instruction| instruction.span.start_line)
+        .collect())
 }
 
 fn docker_escape(lines: &[&str]) -> std::result::Result<char, String> {
@@ -2452,6 +2475,13 @@ mod tests {
             findings[0].analysis_failure_kind(),
             Some(AnalysisFailureKind::ResourceParse)
         );
+    }
+
+    #[test]
+    fn dockerfile_rejects_excessive_physical_lines_before_collecting_them() {
+        let source = "#\n".repeat(MAX_DOCKERFILE_PHYSICAL_LINES + 1);
+        let error = dockerfile_instructions(&source).unwrap_err();
+        assert!(error.contains("line safety limit"), "{error}");
     }
 
     #[test]

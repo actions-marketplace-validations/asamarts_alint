@@ -1,0 +1,146 @@
+name: versioning bundle reports and repairs drift across common release surfaces
+tags: [check, fix, extends, bundled, versioning, cross_file]
+
+given:
+  tree:
+    VERSION: "2.4.0\n"
+    package.json: |
+      {"name":"demo","version":"2.3.0"}
+    Cargo.toml: |
+      [workspace]
+      members = []
+
+      [workspace.package]
+      authors = ["Acme"]
+      version = "2.3.0"
+
+      [package]
+      name = "demo"
+      keywords = ["lint", "policy"]
+      version = "2.3.0"
+    pyproject.toml: |
+      [project]
+      name = "demo"
+      version = "2.3.0"
+
+      [tool.poetry]
+      version = "2.3.0"
+    src:
+      __init__.py: "__version__ = \"2.3.0\"\n"
+    chart:
+      Chart.yaml: |
+        apiVersion: v2
+        name: demo
+        appVersion: "2.3.0"
+    api:
+      swagger.json: |
+        {"swagger":"2.0","info":{"title":"demo","version":"2.3.0"}}
+      openapi.yaml: |
+        openapi: 3.1.0
+        info:
+          title: demo
+          version: 2.3.0
+    CHANGELOG.md: |
+      # Changelog
+
+      ## [Unreleased]
+
+      ## [2.3.0] - 2026-10-01
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/versioning@v1
+
+when: [check, fix, check, fix_unsafe, check]
+
+expect:
+  - violations:
+      - {rule: versioning-package-json, level: error, path: package.json}
+      - {rule: versioning-cargo-package, level: error, path: Cargo.toml}
+      - {rule: versioning-cargo-workspace, level: error, path: Cargo.toml}
+      - {rule: versioning-pyproject-project, level: error, path: pyproject.toml}
+      - {rule: versioning-pyproject-poetry, level: error, path: pyproject.toml}
+      - {rule: versioning-python-module, level: error, path: src/__init__.py}
+      - {rule: versioning-helm-chart, level: error, path: chart/Chart.yaml}
+      - {rule: versioning-openapi-json, level: error, path: api/swagger.json}
+      - {rule: versioning-openapi-yaml, level: error, path: api/openapi.yaml}
+      - {rule: versioning-changelog, level: error, path: CHANGELOG.md}
+  - suggested:
+      - versioning-package-json
+      - versioning-cargo-package
+      - versioning-cargo-workspace
+      - versioning-pyproject-project
+      - versioning-pyproject-poetry
+      - versioning-python-module
+      - versioning-helm-chart
+      - versioning-openapi-json
+      - versioning-openapi-yaml
+      - versioning-changelog
+  - violations:
+      - {rule: versioning-package-json, level: error, path: package.json}
+      - {rule: versioning-cargo-package, level: error, path: Cargo.toml}
+      - {rule: versioning-cargo-workspace, level: error, path: Cargo.toml}
+      - {rule: versioning-pyproject-project, level: error, path: pyproject.toml}
+      - {rule: versioning-pyproject-poetry, level: error, path: pyproject.toml}
+      - {rule: versioning-python-module, level: error, path: src/__init__.py}
+      - {rule: versioning-helm-chart, level: error, path: chart/Chart.yaml}
+      - {rule: versioning-openapi-json, level: error, path: api/swagger.json}
+      - {rule: versioning-openapi-yaml, level: error, path: api/openapi.yaml}
+      - {rule: versioning-changelog, level: error, path: CHANGELOG.md}
+  - applied:
+      - versioning-package-json
+      - versioning-cargo-package
+      - versioning-cargo-workspace
+      - versioning-pyproject-project
+      - versioning-pyproject-poetry
+      - versioning-python-module
+      - versioning-helm-chart
+      - versioning-openapi-json
+      - versioning-openapi-yaml
+      - versioning-changelog
+  - violations: []
+
+expect_tree:
+  VERSION: "2.4.0\n"
+  package.json: |
+    {"name":"demo","version":"2.4.0"}
+  Cargo.toml: |
+    [workspace]
+    members = []
+
+    [workspace.package]
+    authors = ["Acme"]
+    version = "2.4.0"
+
+    [package]
+    name = "demo"
+    keywords = ["lint", "policy"]
+    version = "2.4.0"
+  pyproject.toml: |
+    [project]
+    name = "demo"
+    version = "2.4.0"
+
+    [tool.poetry]
+    version = "2.4.0"
+  src:
+    __init__.py: "__version__ = \"2.4.0\"\n"
+  chart:
+    Chart.yaml: |
+      apiVersion: v2
+      name: demo
+      appVersion: "2.4.0"
+  api:
+    swagger.json: |
+      {"swagger":"2.0","info":{"title":"demo","version":"2.4.0"}}
+    openapi.yaml: |
+      openapi: 3.1.0
+      info:
+        title: demo
+        version: "2.4.0"
+  CHANGELOG.md: |
+    # Changelog
+
+    ## [Unreleased]
+
+    ## [2.4.0] - 2026-10-01

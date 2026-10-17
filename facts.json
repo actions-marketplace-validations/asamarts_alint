@@ -5,7 +5,7 @@
     "rule_kinds": 102,
     "rule_aliases": 11,
     "families": 13,
-    "bundled_rulesets": 22,
+    "bundled_rulesets": 24,
     "auto_fix_ops": 26,
     "output_formats": 8,
     "subcommands": 12
@@ -4942,7 +4942,7 @@
     "S1": 16,
     "S2": 20,
     "S3": 16,
-    "S4": 50
+    "S4": 85
   },
   "bundled_rulesets": [
     "agent-context",
@@ -4966,7 +4966,9 @@
     "php",
     "python",
     "rust",
-    "tooling/editorconfig"
+    "toolchain-pins",
+    "tooling/editorconfig",
+    "versioning"
   ],
   "bundled_ruleset_sizes": {
     "agent-context": 4,
@@ -4990,7 +4992,9 @@
     "php": 6,
     "python": 8,
     "rust": 10,
-    "tooling/editorconfig": 3
+    "toolchain-pins": 24,
+    "tooling/editorconfig": 3,
+    "versioning": 11
   },
   "output_formats": [
     "agent",

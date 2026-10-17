@@ -662,6 +662,14 @@
         "file": {
           "description": "A single target file.",
           "type": "string"
+        },
+        "matches": {
+          "default": null,
+          "description": "Optional regex selecting which extracted target strings participate in the relation.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -709,6 +717,14 @@
             },
             "files": {
               "type": "string"
+            },
+            "matches": {
+              "default": null,
+              "description": "Optional regex selecting which extracted target strings participate in the relation. A parsed but non-matching value is treated as an absent optional target value.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
@@ -937,11 +953,14 @@
             "file_content_matches": {
               "additionalProperties": false,
               "properties": {
+                "extract": {
+                  "$ref": "#/$defs/fact_structured_extract"
+                },
                 "paths": {
                   "$ref": "#/$defs/string_or_string_array"
                 },
                 "pattern": {
-                  "description": "Rust-regex pattern matched against the content of every file in `paths`. The fact is true iff at least one file contains a match. Non-UTF-8 files are skipped.",
+                  "description": "Rust-regex pattern matched against each file's content, or against each string selected by `extract` when set. The fact is true iff at least one match exists. Parse failures, non-string values, and non-UTF-8 files are non-matches.",
                   "type": "string"
                 }
               },
@@ -1004,6 +1023,39 @@
       ],
       "type": "object",
       "unevaluatedProperties": false
+    },
+    "fact_structured_extract": {
+      "additionalProperties": false,
+      "description": "Parse each candidate file and extract strings at one RFC 9535 JSONPath before applying the fact's pattern. Parse failures and non-string values are non-matches.",
+      "maxProperties": 1,
+      "minProperties": 1,
+      "properties": {
+        "dotenv": {
+          "type": "string"
+        },
+        "hcl": {
+          "type": "string"
+        },
+        "ini": {
+          "type": "string"
+        },
+        "json": {
+          "type": "string"
+        },
+        "properties": {
+          "type": "string"
+        },
+        "toml": {
+          "type": "string"
+        },
+        "xml": {
+          "type": "string"
+        },
+        "yaml": {
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "fix": {
       "description": "Automatic-fix strategy applied by `alint fix`. Each rule kind accepts a specific op - alint errors at load time when the op and kind are incompatible.",

@@ -1072,47 +1072,90 @@ pub fn extract_values(
     extract: &Extract,
     text: &str,
 ) -> std::result::Result<ExtractedValues, String> {
-    Ok(match extract {
-        Extract::Structured(extract) => structured(extract, text)?,
-        Extract::Lines(opts) => ExtractedValues {
-            strings: text
-                .lines()
-                .map(str::trim)
-                .filter(|l| {
-                    if l.is_empty() {
-                        return false;
-                    }
-                    if opts.comment.is_empty() {
-                        return true;
-                    }
-                    !l.starts_with(opts.comment.as_str())
-                })
-                .map(ToString::to_string)
-                .collect(),
-            non_strings: Vec::new(),
-        },
-        Extract::Regex(pat) => ExtractedValues {
-            strings: Regex::new(pat)
-                .map_err(|e| format!("bad regex: {e}"))?
+    extract_values_with_limit(extract, text, None)
+}
+
+/// Extract at most `max_values` values, failing before allocating the value
+/// that would exceed the bound. Callers that turn every extracted value into a
+/// finding use this to keep a bounded input from amplifying into unbounded
+/// report state.
+pub fn extract_values_bounded(
+    extract: &Extract,
+    text: &str,
+    max_values: usize,
+) -> std::result::Result<ExtractedValues, String> {
+    extract_values_with_limit(extract, text, Some(max_values))
+}
+
+fn extract_values_with_limit(
+    extract: &Extract,
+    text: &str,
+    max_values: Option<usize>,
+) -> std::result::Result<ExtractedValues, String> {
+    let values = match extract {
+        Extract::Structured(extract) => structured(extract, text, max_values)?,
+        Extract::Lines(opts) => {
+            let mut values = ExtractedValues::default();
+            for line in text.lines().map(str::trim).filter(|line| {
+                !line.is_empty()
+                    && (opts.comment.is_empty() || !line.starts_with(opts.comment.as_str()))
+            }) {
+                ensure_extract_capacity(&values, max_values)?;
+                values.strings.push(line.to_string());
+            }
+            values
+        }
+        Extract::Regex(pattern) => {
+            let regex = Regex::new(pattern).map_err(|error| format!("bad regex: {error}"))?;
+            let mut values = ExtractedValues::default();
+            for matched in regex
                 .captures_iter(text)
-                .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
-                .collect(),
-            non_strings: Vec::new(),
-        },
-        Extract::WholeFile => ExtractedValues {
-            strings: vec![text.to_string()],
-            non_strings: Vec::new(),
-        },
-    })
+                .filter_map(|captures| captures.get(1))
+            {
+                ensure_extract_capacity(&values, max_values)?;
+                values.strings.push(matched.as_str().to_string());
+            }
+            values
+        }
+        Extract::WholeFile => {
+            if max_values == Some(0) {
+                return Err(extract_limit_error(0));
+            }
+            ExtractedValues {
+                strings: vec![text.to_string()],
+                non_strings: Vec::new(),
+            }
+        }
+    };
+    if max_values.is_some_and(|max| values.strings.len() + values.non_strings.len() > max) {
+        return Err(extract_limit_error(max_values.unwrap_or_default()));
+    }
+    Ok(values)
+}
+
+fn ensure_extract_capacity(
+    values: &ExtractedValues,
+    max_values: Option<usize>,
+) -> std::result::Result<(), String> {
+    if max_values.is_some_and(|max| values.strings.len() + values.non_strings.len() >= max) {
+        return Err(extract_limit_error(max_values.unwrap_or_default()));
+    }
+    Ok(())
+}
+
+fn extract_limit_error(max_values: usize) -> String {
+    format!("extract selected more than the {max_values}-value safety limit")
 }
 
 fn structured(
     extract: &StructuredExtract,
     text: &str,
+    max_values: Option<usize>,
 ) -> std::result::Result<ExtractedValues, String> {
     let value = extract.format.parse(text)?;
     let mut values = ExtractedValues::default();
     for value in extract.path.query(&value).iter() {
+        ensure_extract_capacity(&values, max_values)?;
         match value {
             serde_json::Value::String(value) => values.strings.push(value.clone()),
             serde_json::Value::Null => values.non_strings.push(NonStringValueKind::Null),
@@ -1127,8 +1170,23 @@ fn structured(
 
 #[cfg(test)]
 mod tests {
-    use super::{EntryPathSegment, EntryRowsError, extract_entry_rows, is_non_literal};
+    use super::{
+        EntryPathSegment, EntryRowsError, Extract, extract_entry_rows, extract_values_bounded,
+        is_non_literal,
+    };
     use crate::structured_format::Format;
+
+    #[test]
+    fn bounded_extraction_fails_before_returning_excess_values() {
+        let regex = Extract::Regex(r"(?m)^v=(.*)$".to_string());
+        let error = extract_values_bounded(&regex, "v=1\nv=2\nv=3\n", 2).unwrap_err();
+        assert!(error.contains("2-value safety limit"), "{error}");
+
+        let structured = Extract::structured(Format::Json, "$.values[*]").unwrap();
+        let error =
+            extract_values_bounded(&structured, r#"{"values":["1","2","3"]}"#, 2).unwrap_err();
+        assert!(error.contains("2-value safety limit"), "{error}");
+    }
 
     #[test]
     fn genuine_interpolation_is_non_literal() {

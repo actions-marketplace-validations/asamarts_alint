@@ -159,12 +159,13 @@ pub enum Scenario {
     /// `.v012_editions` / `graph/` overlay (see `setup_overlay`). Absorbs
     /// the old S7/S11/S13/S14.
     S3,
-    /// Axis D — workspace bundle (realistic; release anchor). The six
+    /// Axis D — workspace bundle (realistic; release anchor). The eight
     /// bundled rulesets (`oss-baseline` + `rust` + `node` + `python` +
-    /// `monorepo` + `cargo-workspace`) over a POLYGLOT + GIT tree, with
-    /// `nested_configs` on and the two git-aware rules inline. Absorbs the
-    /// old S3/S8/S9. `requires_polyglot_tree` + `requires_git_repo` route
-    /// it to the git-aware polyglot generator.
+    /// `monorepo` + `cargo-workspace` + `versioning` + `toolchain-pins`) over
+    /// a POLYGLOT + GIT tree, with `nested_configs` on and the two git-aware
+    /// rules inline. Absorbs the old S3/S8/S9.
+    /// `requires_polyglot_tree` + `requires_git_repo` route it to the
+    /// git-aware polyglot generator.
     S4,
     /// Axis E — auto-fix (dedicated). `alint fix --unsafe-fixes --dry-run`
     /// exercising all 24 non-spawn fix ops over the planted `sfix/` fixture
@@ -208,7 +209,7 @@ impl Scenario {
                 "Cross-file, relational & graph — pair / unique_by / for_each_* / registry / cross_file / pair_hash / file_graph / single-shot spawn"
             }
             Self::S4 => {
-                "Workspace bundle — oss-baseline + rust + node + python + monorepo + cargo-workspace over a polyglot git tree + git-aware rules"
+                "Workspace bundle — oss-baseline + rust + node + python + monorepo + cargo-workspace + versioning + toolchain-pins over a polyglot git tree + git-aware rules"
             }
             Self::Sfix => {
                 "Auto-fix — fix --unsafe-fixes --dry-run over all 24 non-spawn fix ops on the planted sfix/ fixture"

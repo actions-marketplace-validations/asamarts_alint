@@ -111,6 +111,7 @@ CrossFileRule {
                     "$.dependencies.*",
                 ),
             ),
+            matches: None,
         },
     ),
     relation: Subset,
@@ -139,14 +140,15 @@ CrossFileRule {
     targets: Some(
         List(
             [
-                (
-                    "src/highlight.c",
-                    Some(
+                Target {
+                    file: "src/highlight.c",
+                    extract: Some(
                         Regex(
                             "default link (\\w+)",
                         ),
                     ),
-                ),
+                    matches: None,
+                },
             ],
         ),
     ),
@@ -175,6 +177,7 @@ CrossFileRule {
             extract: Some(
                 WholeFile,
             ),
+            matches: None,
         },
     ),
     relation: Equals,
@@ -208,6 +211,7 @@ CrossFileRule {
                     "$.package.version",
                 ),
             ),
+            matches: None,
         },
     ),
     relation: Equals,

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use alint_core::located_fix::{LocatedEdit, LocatedOutcome, apply_file_edits};
 use alint_core::{
     Applicability, Error, Extract, FixContext, FixEdit, FixOutcome, Fixer, Format, ReadForFix,
-    Result, Violation, extract_values, is_non_literal, read_for_fix,
+    Result, Violation, extract_values_bounded, is_non_literal, read_for_fix,
 };
 
 use crate::cross_file::{Normalize, apply_normalize};
@@ -174,6 +174,25 @@ pub enum ValueTargets {
     Glob(Extract),
     List(Vec<(PathBuf, Extract)>),
 }
+/// Optional target-value predicates from the host `cross_file` rule. Kept
+/// alongside [`ValueTargets`] so the fixer can apply the same selection as the
+/// checker without changing the registration fixer's target model.
+#[derive(Debug)]
+pub(crate) enum ValueTargetMatches {
+    Glob(Option<regex::Regex>),
+    List(Vec<(PathBuf, Option<regex::Regex>)>),
+}
+/// Hard ceilings remain active when users disable `fix_size_limit`: a bounded
+/// checker must not expand one small target into unbounded edit metadata/output.
+const MAX_PROPAGATED_FIX_BYTES: usize = 32 * 1024 * 1024;
+
+fn propagated_output_limit(configured: Option<u64>) -> usize {
+    configured
+        .map_or(MAX_PROPAGATED_FIX_BYTES, |limit| {
+            usize::try_from(limit).unwrap_or(usize::MAX)
+        })
+        .min(MAX_PROPAGATED_FIX_BYTES)
+}
 
 /// Propagates the host `cross_file` `relation: equals` source's single extracted
 /// scalar into each drifting target's node, per format. A whole-file `apply`
@@ -192,6 +211,7 @@ pub struct CrossFileValueFixer {
     source_file: PathBuf,
     source_extract: Extract,
     targets: ValueTargets,
+    target_matches: Option<ValueTargetMatches>,
     /// The host rule's `normalize` transforms. The fixer MUST correlate to the
     /// check: only rewrite a target value the check flagged as drift, i.e. one
     /// whose NORMALIZED form differs from the normalized source (a `2.5.7` capture
@@ -216,31 +236,41 @@ impl CrossFileValueFixer {
             source_file,
             source_extract,
             targets,
+            target_matches: None,
             normalize,
             applicability,
         }
     }
 
-    /// Whether the target value `current` is DRIFT the check would flag: a LITERAL
-    /// value (the check skips interpolated `${...}` values as notes) whose
-    /// normalized form differs from the normalized source. The fixer rewrites only
-    /// these -- never a non-literal template (would clobber it) or a normalize-equal
-    /// value the check deemed correct (audit: located-fixer correlation).
-    fn is_drift(&self, current: &str, source_norm: &str) -> bool {
-        !is_non_literal(current) && apply_normalize(&self.normalize, current) != *source_norm
+    /// Attach the host rule's resolved target predicates. Builders call this
+    /// for `sync_from`; direct unit-test constructors default to no predicate.
+    #[must_use]
+    pub(crate) fn with_target_matches(mut self, matches: ValueTargetMatches) -> Self {
+        self.target_matches = Some(matches);
+        self
     }
 
-    /// The `extract` for `target_rel`: the shared glob extract, or the matching
-    /// list entry's. `None` when the violation path is not a configured target
-    /// (should not happen -- the violation came from this rule).
-    fn target_extract(&self, target_rel: &Path) -> Option<&Extract> {
-        match &self.targets {
-            ValueTargets::Glob(ex) => Some(ex),
+    /// The `extract` and optional value predicate for `target_rel`: the shared
+    /// glob settings, or the matching list entry's. `None` when the violation
+    /// path is not a configured target (should not happen -- the violation came
+    /// from this rule).
+    fn target_config(&self, target_rel: &Path) -> Option<(&Extract, Option<&regex::Regex>)> {
+        let extract = match &self.targets {
+            ValueTargets::Glob(extract) => extract,
             ValueTargets::List(entries) => entries
                 .iter()
-                .find(|(p, _)| p == target_rel)
-                .map(|(_, ex)| ex),
-        }
+                .find(|(path, _)| path == target_rel)
+                .map(|(_, extract)| extract)?,
+        };
+        let matches = match self.target_matches.as_ref() {
+            Some(ValueTargetMatches::Glob(matches)) => matches.as_ref(),
+            Some(ValueTargetMatches::List(entries)) => entries
+                .iter()
+                .find(|(path, _)| path == target_rel)
+                .and_then(|(_, matches)| matches.as_ref()),
+            None => None,
+        };
+        Some((extract, matches))
     }
 
     /// Read the source file and extract its single literal scalar (the value to
@@ -262,8 +292,12 @@ impl CrossFileValueFixer {
             }
         };
         let text = String::from_utf8_lossy(&source_bytes);
-        let values = extract_values(&self.source_extract, &text)
-            .map_err(|e| format!("source extract failed: {e}"))?;
+        let values = extract_values_bounded(
+            &self.source_extract,
+            &text,
+            crate::cross_file::MAX_EXTRACTED_VALUES,
+        )
+        .map_err(|e| format!("source extract failed: {e}"))?;
         if !values.non_strings.is_empty() {
             return Err("source extract matched a non-string value".to_string());
         }
@@ -286,138 +320,213 @@ impl CrossFileValueFixer {
     ///
     /// Dispatches on the target's `extract`: a `Structured` node (rewrite the
     /// located node) or a `Regex` (rewrite each match's capture group 1).
+    // The dispatcher carries one immutable view of each input needed by both
+    // extraction regimes; wrapping them in a temporary context would add a
+    // second name for every field without reducing the call contract.
+    #[allow(clippy::too_many_arguments)]
     fn propagated_bytes(
         &self,
         violation: &Violation,
         extract: &Extract,
+        matches: Option<&regex::Regex>,
         source_value: &str,
         target_bytes: &[u8],
         root: &Path,
+        output_limit: usize,
     ) -> std::result::Result<Vec<u8>, String> {
-        match extract {
-            Extract::Structured(extract) => {
-                self.propagate_structured(violation, extract, source_value, target_bytes, root)
-            }
-            Extract::Regex(pattern) => {
-                self.propagate_regex(violation, pattern, source_value, target_bytes)
-            }
+        if target_bytes.len() > output_limit || source_value.len() > output_limit {
+            return Err(format!(
+                "value propagation would exceed the {output_limit}-byte output safety limit"
+            ));
+        }
+        if let Some(matches) = matches
+            && !matches.is_match(source_value)
+        {
+            return Err(format!(
+                "canonical source value {source_value:?} does not satisfy the target `matches` filter"
+            ));
+        }
+        let new_bytes = match extract {
+            Extract::Structured(extract) => self.propagate_structured(
+                violation,
+                extract,
+                matches,
+                source_value,
+                target_bytes,
+                root,
+            )?,
+            Extract::Regex(pattern) => self.propagate_regex(
+                violation,
+                pattern,
+                matches,
+                source_value,
+                target_bytes,
+                output_limit,
+            )?,
             // build_value_targets rejects every other extract, so this is unreachable
             // for a built rule.
-            _ => Err("unsupported target extract for value propagation".to_string()),
+            _ => return Err("unsupported target extract for value propagation".to_string()),
+        };
+        if new_bytes.len() > output_limit {
+            return Err(format!(
+                "value propagation would produce {} bytes; safety limit is {output_limit}",
+                new_bytes.len()
+            ));
         }
+        Ok(new_bytes)
     }
 
-    /// Regex-extract target (Phase 2): rewrite EACH match's capture group 1 to the
-    /// source value, then re-extract to verify the whole file still yields exactly
-    /// the source value at that pattern (a source value carrying a char that breaks
-    /// the surrounding pattern -- e.g. a `"` inside a `"([^"]+)"` capture -- fails
-    /// this and declines, never writing a value the check would still reject).
+    /// Return the exact raw target value that identified this live `equals`
+    /// finding. Baseline suppression operates on the same key, so limiting a
+    /// regex repair to this value prevents one live finding from rewriting
+    /// separately-baselined captures in the same file.
+    fn violation_target_value(violation: &Violation) -> Option<&str> {
+        let mut parts = violation.baseline_key.as_deref()?.splitn(3, '\0');
+        if parts.next()? != "equals" {
+            return None;
+        }
+        parts.next()?;
+        parts.next()
+    }
+
+    fn violation_target_occurrence(violation: &Violation) -> Option<usize> {
+        let mut parts = violation.fix_key.as_deref()?.splitn(2, '\0');
+        if parts.next()? != "cross_file_equals" {
+            return None;
+        }
+        parts.next()?.parse().ok()
+    }
+
+    /// Regex-extract target: rewrite only captures represented by the triggering
+    /// live finding, then re-extract to verify those captures still resolve to the
+    /// source. Distinct captures remain for their own findings/fix passes.
+    // Selection, splice construction, and re-extraction verification share the
+    // same capture accounting; keeping them together makes the safety invariant
+    // reviewable in one place.
+    #[allow(clippy::too_many_lines)]
     fn propagate_regex(
         &self,
         violation: &Violation,
         pattern: &str,
+        matches: Option<&regex::Regex>,
         source_value: &str,
         target_bytes: &[u8],
+        output_limit: usize,
     ) -> std::result::Result<Vec<u8>, String> {
         let target_rel = violation.path.as_deref().unwrap_or_else(|| Path::new(""));
+        let target_value = Self::violation_target_value(violation).ok_or_else(|| {
+            format!(
+                "{}: regex propagation requires the live finding's exact target-value identity",
+                target_rel.display()
+            )
+        })?;
+        let occurrence = Self::violation_target_occurrence(violation).ok_or_else(|| {
+            format!(
+                "{}: regex propagation requires the live finding's occurrence identity",
+                target_rel.display()
+            )
+        })?;
         // A capture rewrite needs byte offsets into the real bytes; a lossy decode
-        // would shift them, so require valid UTF-8 (decline otherwise -- the check
-        // reads lossily, but a fix must not splice at a shifted offset).
+        // would shift them, so require valid UTF-8.
         let text = std::str::from_utf8(target_bytes).map_err(|_| {
             format!(
                 "{} is not valid UTF-8; cannot rewrite a regex capture",
                 target_rel.display()
             )
         })?;
-        let re = regex::Regex::new(pattern)
-            .map_err(|e| format!("invalid target regex `{pattern}`: {e}"))?;
-        let source_norm = apply_normalize(&self.normalize, source_value);
-        // A `ReplaceRange` over each DRIFTING match's group-1 span. Disjoint +
-        // left-to-right (captures_iter is non-overlapping, leftmost), so
-        // `apply_file_edits` splices them in one pass. Rewrite a capture ONLY if the
-        // check flagged it as drift (`is_drift`): SKIP a non-literal `${...}`
-        // template (clobbering it would hardcode a computed value the check leaves
-        // alone) and a normalize-equal capture (one the check deemed correct).
-        let mut collected = Vec::new();
-        let mut any_match = false;
-        let mut had_group = false;
-        for cap in re.captures_iter(text) {
-            any_match = true;
-            let Some(g1) = cap.get(1) else { continue };
-            had_group = true;
-            if !self.is_drift(g1.as_str(), &source_norm) {
-                continue;
-            }
-            collected.push(alint_core::CollectedEdit {
-                edit: FixEdit::ReplaceRange {
-                    path: target_rel.to_path_buf(),
-                    range: g1.start()..g1.end(),
-                    content: source_value.as_bytes().to_vec(),
-                },
-                applicability: self.applicability,
-                verify: alint_core::EditVerifier::None,
-                isolation_group: None,
-            });
-        }
-        if !any_match {
+        let captures = crate::cross_file::target_regex_capture_ranges(target_rel, text, pattern)?;
+        if !captures.any_match {
             return Err(format!(
                 "the target regex `{pattern}` matched nothing in {}",
                 target_rel.display()
             ));
         }
-        if !had_group {
+        if !captures.had_group {
             return Err(format!(
                 "the target regex `{pattern}` has no capture group 1 to set on {}",
                 target_rel.display()
             ));
         }
-        if collected.is_empty() {
+        let source_norm = apply_normalize(&self.normalize, source_value);
+        let mut source_equal_before = 0usize;
+        let mut selected_drift = 0usize;
+        for capture in &captures.ranges {
+            let current = &text[capture.clone()];
+            if matches.is_some_and(|matches| !matches.is_match(current)) || is_non_literal(current)
+            {
+                continue;
+            }
+            if apply_normalize(&self.normalize, current) == source_norm {
+                source_equal_before += 1;
+            } else if current == target_value {
+                selected_drift += 1;
+            }
+        }
+        if selected_drift == 0 {
             return Err(format!(
-                "{}: nothing to propagate at regex `{pattern}` (every capture already \
-                 matches {source_value:?}, is a non-literal template, or is normalize-equal)",
+                "{}: nothing to propagate for target value {target_value:?} at regex `{pattern}`",
                 target_rel.display()
             ));
         }
-        let batch: Vec<LocatedEdit> = collected
-            .into_iter()
-            .enumerate()
-            .map(|(i, collected)| LocatedEdit {
-                rule_index: 0,
-                violation_index: i,
-                sensitive: false,
-                collected,
+        // Fix passes are applied sequentially. Earlier live siblings may already
+        // have removed lower ordinals from this value's candidate set; clamping
+        // retains the baseline-suppressed prefix while selecting one remaining
+        // live occurrence.
+        let selected = occurrence.min(selected_drift - 1);
+        let capture = captures
+            .ranges
+            .iter()
+            .filter(|capture| {
+                let current = &text[(*capture).clone()];
+                matches.is_none_or(|matches| matches.is_match(current))
+                    && !is_non_literal(current)
+                    && current == target_value
             })
-            .collect();
-        let (new_bytes, outcomes) = apply_file_edits(target_bytes, batch, self.applicability);
-        if !outcomes
-            .iter()
-            .any(|(_, o)| matches!(o, LocatedOutcome::Applied))
-        {
+            .nth(selected)
+            .cloned()
+            .ok_or_else(|| "regex propagation occurrence disappeared".to_string())?;
+        let projected_bytes = target_bytes
+            .len()
+            .checked_sub(capture.len())
+            .and_then(|size| size.checked_add(source_value.len()))
+            .ok_or_else(|| "regex propagation output size overflowed".to_string())?;
+        if source_value.len() > output_limit || projected_bytes > output_limit {
             return Err(format!(
-                "the target regex `{pattern}` capture could not be set on {}",
-                target_rel.display()
+                "regex propagation would exceed the {output_limit}-byte output safety limit"
             ));
         }
-        // Re-extract verify, mirroring the check: after the splice, every LITERAL
-        // capture must NORMALIZE-EQUAL the source (non-literal captures are skipped
-        // by the check, so ignore them here too), and at least one literal must
-        // remain. A source value carrying a char that truncates the surrounding
-        // pattern fails this -> decline (never write a value the check still flags).
-        let re_new = extract_values(
-            &Extract::Regex(pattern.to_string()),
-            &String::from_utf8_lossy(&new_bytes),
-        )
-        .map_err(|e| format!("regex re-extract failed: {e}"))?;
-        let literal_new: Vec<&String> = re_new
-            .strings
+        let ranges = vec![capture];
+
+        let expected_source_values = source_equal_before
+            .checked_add(ranges.len())
+            .ok_or_else(|| "regex propagation match count overflowed".to_string())?;
+        let mut new_bytes = Vec::with_capacity(projected_bytes);
+        let mut cursor = 0usize;
+        for range in &ranges {
+            new_bytes.extend_from_slice(&target_bytes[cursor..range.start]);
+            new_bytes.extend_from_slice(source_value.as_bytes());
+            cursor = range.end;
+        }
+        new_bytes.extend_from_slice(&target_bytes[cursor..]);
+
+        // Re-extract verify: every rewritten capture must remain selected and
+        // normalize-equal after the splice. Other live or baselined values are
+        // deliberately left for their own finding identity.
+        let updated_text = String::from_utf8_lossy(&new_bytes);
+        let re_new =
+            crate::cross_file::target_regex_capture_ranges(target_rel, &updated_text, pattern)
+                .map_err(|error| format!("regex re-extract failed: {error}"))?;
+        let source_values_after = re_new
+            .ranges
             .iter()
-            .filter(|v| !is_non_literal(v))
-            .collect();
-        if literal_new.is_empty()
-            || !literal_new
-                .iter()
-                .all(|v| apply_normalize(&self.normalize, v) == source_norm)
-        {
+            .map(|range| &updated_text[range.clone()])
+            .filter(|value| {
+                !is_non_literal(value)
+                    && matches.is_none_or(|matches| matches.is_match(value))
+                    && apply_normalize(&self.normalize, value) == source_norm
+            })
+            .count();
+        if source_values_after < expected_source_values {
             return Err(format!(
                 "setting {} to {source_value:?} would not satisfy the regex `{pattern}` \
                  (the value likely contains a char the pattern's capture cannot hold)",
@@ -429,70 +538,103 @@ impl CrossFileValueFixer {
 
     /// Structured-extract target (Phase 1): rewrite the located node via
     /// `StructuredFixer::set`.
+    // Query selection, delegated edit application, and post-edit verification
+    // deliberately form one transaction over the parsed document.
+    #[allow(clippy::too_many_lines)]
     fn propagate_structured(
         &self,
         violation: &Violation,
         extract: &alint_core::StructuredExtract,
+        matches: Option<&regex::Regex>,
         source_value: &str,
         target_bytes: &[u8],
         root: &Path,
     ) -> std::result::Result<Vec<u8>, String> {
         let target_rel = violation.path.as_deref().unwrap_or_else(|| Path::new(""));
+        let target_value = Self::violation_target_value(violation).ok_or_else(|| {
+            format!(
+                "{}: structured propagation requires the live finding's exact target-value identity",
+                target_rel.display()
+            )
+        })?;
+        let occurrence = Self::violation_target_occurrence(violation).ok_or_else(|| {
+            format!(
+                "{}: structured propagation requires the live finding's occurrence identity",
+                target_rel.display()
+            )
+        })?;
         let format = extract.format;
         let query = extract.query.as_str();
         let path_expr = &extract.path;
         let target_text = String::from_utf8_lossy(target_bytes);
-        // TYPE-PRESERVATION GUARD (audit F1): the propagated value is always a
-        // STRING (cross-file extraction yields text), so setting a NUMBER / BOOL
-        // node in a typed format (json/toml/yaml/hcl) would silently change its
-        // type to a quoted string. Worse, the `equals` check compares only string
-        // leaves, so a same-typed node would keep firing anyway -- a string
-        // coercion is the only thing that "converges", masking the mismatch as a
-        // fix. Decline instead; a numeric/bool pin belongs in a same-file
-        // `set_value` with a typed `equals:`. (String-leaf formats -- xml / dotenv /
-        // ini / properties -- parse every leaf as a string, so this never fires
-        // there.)
-        if let Ok(parsed) = format.parse(&target_text) {
-            let located = path_expr.query_located(&parsed);
-            if located.len() == 1
-                && let Some(node) = located.iter().next()
+        let parsed = format.parse(&target_text).map_err(|error| {
+            format!(
+                "could not parse {} as {format:?} for `{query}`: {error}",
+                target_rel.display()
+            )
+        })?;
+        let source_norm = apply_normalize(&self.normalize, source_value);
+        let queried = path_expr.query(&parsed);
+        if queried.len() == 1
+            && let Some(node) = queried.first()
+            && (node.is_number() || node.is_boolean())
+        {
+            return Err(format!(
+                "{} `{query}` is a {} node; `sync_from` on `equals` would change it \
+                 to a string (the propagated value is text). Pin a numeric/bool value \
+                 with a same-file `set_value` (typed `equals:`) instead.",
+                target_rel.display(),
+                if node.is_number() {
+                    "numeric"
+                } else {
+                    "boolean"
+                }
+            ));
+        }
+        let mut source_equal_before = 0usize;
+        let mut selected_drift = 0usize;
+        for node in queried.iter() {
+            let Some(current) = node.as_str() else {
+                continue;
+            };
+            if matches.is_some_and(|matches| !matches.is_match(current)) || is_non_literal(current)
             {
-                let n = node.node();
-                if n.is_number() || n.is_boolean() {
-                    return Err(format!(
-                        "{} `{query}` is a {} node; `sync_from` on `equals` would change it \
-                             to a string (the propagated value is text). Pin a numeric/bool value \
-                             with a same-file `set_value` (typed `equals:`) instead.",
-                        target_rel.display(),
-                        if n.is_number() { "numeric" } else { "boolean" }
-                    ));
-                }
-                // Correlate to the check (audit): NEVER clobber a non-literal
-                // `${...}` template node (the check skips it as a note), and skip
-                // a node the check deemed correct under `normalize`.
-                if let Some(s) = n.as_str() {
-                    if is_non_literal(s) {
-                        return Err(format!(
-                            "{} `{query}` is a non-literal template ({s:?}); `sync_from` \
-                                 leaves interpolated values alone",
-                            target_rel.display()
-                        ));
-                    }
-                    let source_norm = apply_normalize(&self.normalize, source_value);
-                    if apply_normalize(&self.normalize, s) == source_norm {
-                        return Err(format!(
-                            "{} `{query}` already equals {source_value:?} (under normalize)",
-                            target_rel.display()
-                        ));
-                    }
-                }
+                continue;
+            }
+            if apply_normalize(&self.normalize, current) == source_norm {
+                source_equal_before += 1;
+            } else if current == target_value {
+                selected_drift += 1;
             }
         }
-        let delegate = StructuredFixer::set(
+        if selected_drift == 0 {
+            return Err(if is_non_literal(target_value) {
+                format!(
+                    "{} `{query}` is a non-literal template ({target_value:?}); `sync_from` \
+                     leaves interpolated values alone",
+                    target_rel.display()
+                )
+            } else if source_equal_before > 0 {
+                format!(
+                    "{} already equals {source_value:?} at `{query}`",
+                    target_rel.display()
+                )
+            } else {
+                format!(
+                    "{}: nothing to propagate for target value {target_value:?} at `{query}`",
+                    target_rel.display()
+                )
+            });
+        }
+
+        let selected = occurrence.min(selected_drift - 1);
+        let delegate = StructuredFixer::set_selected_string(
             format,
             path_expr.clone(),
             query.to_string(),
-            serde_json::Value::String(source_value.to_string()),
+            source_value.to_string(),
+            target_value.to_string(),
+            selected,
             self.applicability,
         );
         let collected = delegate.collect_edits(
@@ -502,29 +644,11 @@ impl CrossFileValueFixer {
             root,
         );
         if collected.is_empty() {
-            // An empty edit set is EITHER an already-equal target (setting it to the
-            // same value reserializes byte-identical -> a no-op edit) OR a genuine
-            // locate/serialize failure (no single scalar node, or the value is not
-            // representable in this format). Re-extract the target to tell them apart
-            // so the skip reason is honest (and idempotence reads clearly).
-            let already = format.parse(&target_text).is_ok_and(|value| {
-                path_expr
-                    .query(&value)
-                    .iter()
-                    .any(|value| value.as_str() == Some(source_value))
-            });
-            return Err(if already {
-                format!(
-                    "{} already equals {source_value:?} at `{query}`",
-                    target_rel.display()
-                )
-            } else {
-                format!(
-                    "could not set {} at `{query}` to {source_value:?} (no single scalar node, \
-                     or the value is not representable in {format:?})",
-                    target_rel.display()
-                )
-            });
+            return Err(format!(
+                "could not set {} at `{query}` to {source_value:?} \
+                 (the selected string node was not writable in {format:?})",
+                target_rel.display()
+            ));
         }
         let batch: Vec<LocatedEdit> = collected
             .into_iter()
@@ -539,10 +663,8 @@ impl CrossFileValueFixer {
         let (new_bytes, outcomes) = apply_file_edits(target_bytes, batch, self.applicability);
         if !outcomes
             .iter()
-            .any(|(_, o)| matches!(o, LocatedOutcome::Applied))
+            .any(|(_, outcome)| matches!(outcome, LocatedOutcome::Applied))
         {
-            // Every edit was demoted (post-edit verify declined) or dropped: do NOT
-            // write. Consistent with `check` -- the violation stands.
             return Err(format!(
                 "the target value at `{query}` could not be set (post-edit verify declined)"
             ));
@@ -550,6 +672,30 @@ impl CrossFileValueFixer {
         if new_bytes.as_slice() == target_bytes {
             return Err(format!(
                 "{} already equals {source_value:?} at `{query}`",
+                target_rel.display()
+            ));
+        }
+
+        let expected_source_values = source_equal_before
+            .checked_add(1)
+            .ok_or_else(|| "structured propagation match count overflowed".to_string())?;
+        let updated_text = String::from_utf8_lossy(&new_bytes);
+        let updated = format
+            .parse(&updated_text)
+            .map_err(|error| format!("post-edit {format:?} parse failed: {error}"))?;
+        let source_values_after = path_expr
+            .query(&updated)
+            .iter()
+            .filter_map(|value| value.as_str())
+            .filter(|value| {
+                !is_non_literal(value)
+                    && matches.is_none_or(|matches| matches.is_match(value))
+                    && apply_normalize(&self.normalize, value) == source_norm
+            })
+            .count();
+        if source_values_after < expected_source_values {
+            return Err(format!(
+                "setting {} to {source_value:?} would not satisfy `{query}`",
                 target_rel.display()
             ));
         }
@@ -576,7 +722,7 @@ impl Fixer for CrossFileValueFixer {
             ));
         };
         let target_rel: &Path = target;
-        let Some(extract) = self.target_extract(target_rel) else {
+        let Some((extract, matches)) = self.target_config(target_rel) else {
             return Ok(FixOutcome::Skipped(format!(
                 "{} is not a configured value-propagation target",
                 target_rel.display()
@@ -594,12 +740,18 @@ impl Fixer for CrossFileValueFixer {
             ReadForFix::Bytes(b) => b,
             ReadForFix::Skipped(outcome) => return Ok(outcome),
         };
-        let new_bytes =
-            match self.propagated_bytes(violation, extract, &source_value, &target_bytes, ctx.root)
-            {
-                Ok(b) => b,
-                Err(reason) => return Ok(FixOutcome::Skipped(reason)),
-            };
+        let new_bytes = match self.propagated_bytes(
+            violation,
+            extract,
+            matches,
+            &source_value,
+            &target_bytes,
+            ctx.root,
+            propagated_output_limit(ctx.fix_size_limit),
+        ) {
+            Ok(b) => b,
+            Err(reason) => return Ok(FixOutcome::Skipped(reason)),
+        };
         let at = locator(extract);
         if ctx.dry_run {
             return Ok(FixOutcome::Applied(format!(
@@ -632,12 +784,17 @@ impl Fixer for CrossFileValueFixer {
     /// re-parse fails and it declines (`None`) -- the LSP passes the real buffer.
     fn fix_edit(&self, violation: &Violation, bytes: &[u8], root: &Path) -> Option<FixEdit> {
         let target_rel = violation.path.as_deref()?;
-        let extract = self.target_extract(target_rel)?;
+        let (extract, matches) = self.target_config(target_rel)?;
         let source_abs = confine_fix_path(&self.source_file, root, false).ok()?;
         let source_text = crate::io::read_capped(&source_abs)
             .ok()
             .map(|b| String::from_utf8_lossy(&b).into_owned())?;
-        let values = extract_values(&self.source_extract, &source_text).ok()?;
+        let values = extract_values_bounded(
+            &self.source_extract,
+            &source_text,
+            crate::cross_file::MAX_EXTRACTED_VALUES,
+        )
+        .ok()?;
         if !values.non_strings.is_empty() {
             return None;
         }
@@ -646,7 +803,15 @@ impl Fixer for CrossFileValueFixer {
             return None;
         };
         let content = self
-            .propagated_bytes(violation, extract, &source_value, bytes, root)
+            .propagated_bytes(
+                violation,
+                extract,
+                matches,
+                &source_value,
+                bytes,
+                root,
+                MAX_PROPAGATED_FIX_BYTES,
+            )
             .ok()?;
         Some(FixEdit::SetContent {
             path: target_rel.to_path_buf(),
@@ -1048,6 +1213,17 @@ mod tests {
         Violation::new("x").with_path(PathBuf::from(target))
     }
 
+    fn equals_viol(target: &str, value: &str) -> Violation {
+        equals_viol_occurrence(target, value, 0)
+    }
+
+    fn equals_viol_occurrence(target: &str, value: &str, occurrence: usize) -> Violation {
+        Violation::new("x")
+            .with_path(PathBuf::from(target))
+            .with_baseline_key(format!("equals\0{target}\0{value}"))
+            .with_fix_key(format!("cross_file_equals\0{occurrence}"))
+    }
+
     #[test]
     fn overwrites_a_drifted_target_with_the_source() {
         let tmp = TempDir::new().unwrap();
@@ -1378,7 +1554,7 @@ mod tests {
             Format::Toml,
             "$.package.version",
         )
-        .apply(&viol("crate/Cargo.toml"), &ctx(&tmp, false))
+        .apply(&equals_viol("crate/Cargo.toml", "1.0.0"), &ctx(&tmp, false))
         .unwrap();
         assert!(matches!(out, FixOutcome::Applied(_)), "got {out:?}");
         let after = String::from_utf8(read(&tmp, "crate/Cargo.toml")).unwrap();
@@ -1408,7 +1584,7 @@ mod tests {
             Format::Toml,
             "$.package.version",
         )
-        .apply(&viol("crate/Cargo.toml"), &ctx(&tmp, false))
+        .apply(&equals_viol("crate/Cargo.toml", "2.0.0"), &ctx(&tmp, false))
         .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("already equals")),
@@ -1480,7 +1656,7 @@ mod tests {
             Format::Toml,
             "$.package.version",
         )
-        .apply(&viol("crate/Cargo.toml"), &ctx(&tmp, true))
+        .apply(&equals_viol("crate/Cargo.toml", "1.0.0"), &ctx(&tmp, true))
         .unwrap();
         assert!(
             matches!(out, FixOutcome::Applied(ref s) if s.starts_with("would set")),
@@ -1546,7 +1722,7 @@ mod tests {
         write(&tmp, "src.json", br#"{"port":"8080"}"#);
         write(&tmp, "svc.json", br#"{"port": 9090, "host": "x"}"#);
         let out = value_fixer("src.json", "$.port", Format::Json, "$.port")
-            .apply(&viol("svc.json"), &ctx(&tmp, false))
+            .apply(&equals_viol("svc.json", "9090"), &ctx(&tmp, false))
             .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("numeric node")),
@@ -1565,7 +1741,7 @@ mod tests {
         write(&tmp, "src.json", br#"{"flag":"true"}"#);
         write(&tmp, "t.json", br#"{"flag": false}"#);
         let out = value_fixer("src.json", "$.flag", Format::Json, "$.flag")
-            .apply(&viol("t.json"), &ctx(&tmp, false))
+            .apply(&equals_viol("t.json", "false"), &ctx(&tmp, false))
             .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("boolean node")),
@@ -1582,7 +1758,7 @@ mod tests {
         write(&tmp, "src.json", br#"{"v":"3.0"}"#);
         write(&tmp, "obj.json", br#"{"v": {"nested": 1}}"#);
         let out = value_fixer("src.json", "$.v", Format::Json, "$.v")
-            .apply(&viol("obj.json"), &ctx(&tmp, false))
+            .apply(&equals_viol("obj.json", "object"), &ctx(&tmp, false))
             .unwrap();
         assert!(matches!(out, FixOutcome::Skipped(_)), "got {out:?}");
         assert_eq!(
@@ -1602,7 +1778,7 @@ mod tests {
         let buffer = br#"{"name":"x","v":"1.0"}"#;
         write(&tmp, "t.json", buffer);
         let edit = value_fixer("src.json", "$.v", Format::Json, "$.v")
-            .fix_edit(&viol("t.json"), buffer, tmp.path())
+            .fix_edit(&equals_viol("t.json", "1.0"), buffer, tmp.path())
             .expect("a proposed edit");
         match edit {
             FixEdit::SetContent { path, content } => {
@@ -1626,6 +1802,70 @@ mod tests {
                 .fix_edit(&viol("t.json"), &[], tmp.path())
                 .is_none(),
             "empty bytes -> no proposed edit"
+        );
+    }
+
+    #[test]
+    fn value_structured_fix_filters_union_nodes_and_correlates_the_finding() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp, "VERSION", b"22.14.0\n");
+        write(
+            &tmp,
+            "package.json",
+            br#"{"engines":{"node":">=20 <23"},"volta":{"node":"22.13.1"}}"#,
+        );
+        let exact = regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
+        let fixer = CrossFileValueFixer::new(
+            PathBuf::from("VERSION"),
+            Extract::Regex(r"^([0-9.]+)".to_string()),
+            ValueTargets::Glob(
+                Extract::structured(Format::Json, "$['engines','volta'].node".to_string()).unwrap(),
+            ),
+            Vec::new(),
+            Applicability::Unsafe,
+        )
+        .with_target_matches(ValueTargetMatches::Glob(Some(exact)));
+
+        let out = fixer
+            .apply(&equals_viol("package.json", "22.13.1"), &ctx(&tmp, false))
+            .unwrap();
+        assert!(matches!(out, FixOutcome::Applied(_)), "got {out:?}");
+        assert_eq!(
+            read(&tmp, "package.json"),
+            br#"{"engines":{"node":">=20 <23"},"volta":{"node":"22.14.0"}}"#,
+            "the excluded range stays untouched while the exact live value is repaired"
+        );
+    }
+
+    #[test]
+    fn value_structured_fix_leaves_a_same_value_baselined_sibling_untouched() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp, "VERSION", b"22.14.0\n");
+        write(
+            &tmp,
+            "package.json",
+            br#"{"engines":{"node":"22.13.1"},"volta":{"node":"22.13.1"}}"#,
+        );
+        let fixer = CrossFileValueFixer::new(
+            PathBuf::from("VERSION"),
+            Extract::Regex(r"^([0-9.]+)".to_string()),
+            ValueTargets::Glob(
+                Extract::structured(Format::Json, "$['engines','volta'].node".to_string()).unwrap(),
+            ),
+            Vec::new(),
+            Applicability::Unsafe,
+        );
+
+        let out = fixer
+            .apply(
+                &equals_viol_occurrence("package.json", "22.13.1", 1),
+                &ctx(&tmp, false),
+            )
+            .unwrap();
+        assert!(matches!(out, FixOutcome::Applied(_)), "got {out:?}");
+        assert_eq!(
+            read(&tmp, "package.json"),
+            br#"{"engines":{"node":"22.13.1"},"volta":{"node":"22.14.0"}}"#,
         );
     }
 
@@ -1653,7 +1893,7 @@ mod tests {
             b"# Proj\n![v](https://x/badge/version-1.0.0-blue)\n",
         );
         let out = value_fixer_regex("^([0-9.]+)", "version-([0-9.]+)-")
-            .apply(&viol("README.md"), &ctx(&tmp, false))
+            .apply(&equals_viol("README.md", "1.0.0"), &ctx(&tmp, false))
             .unwrap();
         assert!(matches!(out, FixOutcome::Applied(_)), "got {out:?}");
         let after = String::from_utf8(read(&tmp, "README.md")).unwrap();
@@ -1665,6 +1905,105 @@ mod tests {
             after.contains("# Proj") && after.contains("![v]"),
             "rest preserved: {after}"
         );
+    }
+
+    #[test]
+    fn value_regex_fix_honors_the_target_match_filter() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp, "VERSION", b"2.5.0\n");
+        write(&tmp, "pins.txt", b"range=>=2 <3\nexact=1.0.0\n");
+        let exact = regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
+        let fixer = value_fixer_regex(r"^([0-9.]+)", r"(?m)^(?:range|exact)=([^\r\n]+)$")
+            .with_target_matches(ValueTargetMatches::Glob(Some(exact)));
+
+        let out = fixer
+            .apply(&equals_viol("pins.txt", "1.0.0"), &ctx(&tmp, false))
+            .unwrap();
+        assert!(matches!(out, FixOutcome::Applied(_)), "got {out:?}");
+        assert_eq!(
+            read(&tmp, "pins.txt"),
+            b"range=>=2 <3\nexact=2.5.0\n",
+            "excluded captures must remain byte-identical"
+        );
+    }
+
+    #[test]
+    fn value_regex_fix_leaves_a_same_value_baselined_sibling_untouched() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp, "VERSION", b"2.5.0\n");
+        write(
+            &tmp,
+            "Dockerfile",
+            b"FROM node:1.0.0\nFROM node:1.5.0\nFROM node:1.5.0\n",
+        );
+        let fixer = value_fixer_regex(r"^([0-9.]+)", r"(?m)^FROM node:([0-9.]+)$");
+
+        let out = fixer
+            .apply(
+                &equals_viol_occurrence("Dockerfile", "1.5.0", 1),
+                &ctx(&tmp, false),
+            )
+            .unwrap();
+        assert!(matches!(out, FixOutcome::Applied(_)), "got {out:?}");
+        assert_eq!(
+            read(&tmp, "Dockerfile"),
+            b"FROM node:1.0.0\nFROM node:1.5.0\nFROM node:2.5.0\n",
+            "the suppressed same-value occurrence must remain byte-identical"
+        );
+    }
+
+    #[test]
+    fn value_regex_fix_declines_projected_output_over_the_limit() {
+        let tmp = TempDir::new().unwrap();
+        let source = format!("{}\n", "y".repeat(100));
+        write(&tmp, "VERSION", source.as_bytes());
+        let target = "v=x\n".repeat(20);
+        write(&tmp, "pins.txt", target.as_bytes());
+        let mut limited = ctx(&tmp, false);
+        limited.fix_size_limit = Some(128);
+
+        let out = value_fixer_regex(r"^([a-z]+)", r"(?m)^v=([a-z]+)$")
+            .apply(&equals_viol("pins.txt", "x"), &limited)
+            .unwrap();
+        assert!(
+            matches!(out, FixOutcome::Skipped(ref reason) if reason.contains("output safety limit")),
+            "got {out:?}"
+        );
+        assert_eq!(read(&tmp, "pins.txt"), target.as_bytes());
+    }
+
+    #[test]
+    fn value_regex_fix_declines_excessive_capture_count() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp, "VERSION", b"y\n");
+        let target = "v=x\n".repeat(crate::cross_file::MAX_EXTRACTED_VALUES + 1);
+        write(&tmp, "pins.txt", target.as_bytes());
+
+        let out = value_fixer_regex(r"^([a-z])", r"(?m)^v=([a-z])$")
+            .apply(&equals_viol("pins.txt", "x"), &ctx(&tmp, false))
+            .unwrap();
+        assert!(
+            matches!(out, FixOutcome::Skipped(ref reason) if reason.contains("value safety limit")),
+            "got {out:?}"
+        );
+        assert_eq!(read(&tmp, "pins.txt"), target.as_bytes());
+    }
+
+    #[test]
+    fn value_fix_declines_a_source_outside_the_target_match_filter() {
+        let tmp = TempDir::new().unwrap();
+        write(&tmp, "VERSION", b"latest\n");
+        write(&tmp, "pins.txt", b"exact=1.0.0\n");
+        let exact = regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
+        let fixer = value_fixer_regex(r"^([a-z]+)", r"exact=([^\r\n]+)")
+            .with_target_matches(ValueTargetMatches::Glob(Some(exact)));
+
+        let out = fixer.apply(&viol("pins.txt"), &ctx(&tmp, false)).unwrap();
+        assert!(
+            matches!(out, FixOutcome::Skipped(ref reason) if reason.contains("does not satisfy")),
+            "got {out:?}"
+        );
+        assert_eq!(read(&tmp, "pins.txt"), b"exact=1.0.0\n");
     }
 
     #[test]
@@ -1682,7 +2021,9 @@ mod tests {
             Vec::new(),
             Applicability::Unsafe,
         );
-        let out = fixer.apply(&viol("f.txt"), &ctx(&tmp, false)).unwrap();
+        let out = fixer
+            .apply(&equals_viol("f.txt", "old"), &ctx(&tmp, false))
+            .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("would not satisfy the regex")),
             "a value that breaks the pattern must decline, got {out:?}"
@@ -1702,7 +2043,9 @@ mod tests {
             Vec::new(),
             Applicability::Unsafe,
         );
-        let out = fixer.apply(&viol("t.txt"), &ctx(&tmp, false)).unwrap();
+        let out = fixer
+            .apply(&equals_viol("t.txt", "9.9"), &ctx(&tmp, false))
+            .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("nothing to propagate")),
             "an already-equal capture must Skip, got {out:?}"
@@ -1722,7 +2065,9 @@ mod tests {
             Vec::new(),
             Applicability::Unsafe,
         );
-        let out = fixer.apply(&viol("t.txt"), &ctx(&tmp, false)).unwrap();
+        let out = fixer
+            .apply(&equals_viol("t.txt", "1.0"), &ctx(&tmp, false))
+            .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("no capture group 1")),
             "got {out:?}"
@@ -1737,7 +2082,7 @@ mod tests {
         write(&tmp, "VERSION", b"tag: 9.9\n");
         write(&tmp, "t.txt", b"unrelated content\n");
         let out = value_fixer_regex("tag: ([0-9.]+)", "v=([0-9.]+)")
-            .apply(&viol("t.txt"), &ctx(&tmp, false))
+            .apply(&equals_viol("t.txt", "1.0"), &ctx(&tmp, false))
             .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("matched nothing")),
@@ -1754,7 +2099,7 @@ mod tests {
         write(&tmp, "VERSION", b"2.5.0\n");
         write(&tmp, "t.txt", b"image: myapp:${VERSION}\n");
         let out = value_fixer_regex("([0-9.]+)", "myapp:(\\S+)")
-            .apply(&viol("t.txt"), &ctx(&tmp, false))
+            .apply(&equals_viol("t.txt", "${VERSION}"), &ctx(&tmp, false))
             .unwrap();
         assert!(matches!(out, FixOutcome::Skipped(_)), "got {out:?}");
         assert_eq!(
@@ -1776,7 +2121,7 @@ mod tests {
             b"badge/version-1.0.0-blue and badge/version-${VERSION}-green\n",
         );
         let out = value_fixer_regex("([0-9.]+)", "version-(\\S+?)-")
-            .apply(&viol("t.md"), &ctx(&tmp, false))
+            .apply(&equals_viol("t.md", "1.0.0"), &ctx(&tmp, false))
             .unwrap();
         assert!(matches!(out, FixOutcome::Applied(_)), "got {out:?}");
         let after = String::from_utf8(read(&tmp, "t.md")).unwrap();
@@ -1805,7 +2150,9 @@ mod tests {
             vec![Normalize::SemverMinor],
             Applicability::Unsafe,
         );
-        let out = fixer.apply(&viol("t.txt"), &ctx(&tmp, false)).unwrap();
+        let out = fixer
+            .apply(&equals_viol("t.txt", "2.4.0"), &ctx(&tmp, false))
+            .unwrap();
         assert!(matches!(out, FixOutcome::Applied(_)), "got {out:?}");
         let after = String::from_utf8(read(&tmp, "t.txt")).unwrap();
         assert!(
@@ -1826,7 +2173,7 @@ mod tests {
         write(&tmp, "VERSION", b"9\n");
         write(&tmp, "t.txt", b"v=1 \xff\xfe raw\n");
         let out = value_fixer_regex("([0-9]+)", "v=([0-9]+)")
-            .apply(&viol("t.txt"), &ctx(&tmp, false))
+            .apply(&equals_viol("t.txt", "1"), &ctx(&tmp, false))
             .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("not valid UTF-8")),
@@ -1843,7 +2190,7 @@ mod tests {
         write(&tmp, "src.json", br#"{"v":"2.5.0"}"#);
         write(&tmp, "t.json", br#"{"v":"${VERSION}"}"#);
         let out = value_fixer("src.json", "$.v", Format::Json, "$.v")
-            .apply(&viol("t.json"), &ctx(&tmp, false))
+            .apply(&equals_viol("t.json", "${VERSION}"), &ctx(&tmp, false))
             .unwrap();
         assert!(
             matches!(out, FixOutcome::Skipped(ref r) if r.contains("non-literal template")),

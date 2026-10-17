@@ -1,0 +1,29 @@
+name: toolchain-pins bundle rejects non-exact authoritative pins once per ecosystem
+tags: [check, extends, bundled, toolchain_pins, validation]
+
+given:
+  tree:
+    .nvmrc: "lts/*\n"
+    rust-toolchain.toml: |
+      [toolchain]
+      channel = "stable"
+    .python-version: "3.13\n"
+    .ruby-version: "head\n"
+    .java-version: "21\n"
+    global.json: |
+      {"sdk":{"version":"v9.0.306"}}
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/toolchain-pins@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: toolchain-node-anchor-exact, level: warning, path: .nvmrc}
+      - {rule: toolchain-rust-anchor-exact, level: warning, path: rust-toolchain.toml}
+      - {rule: toolchain-python-anchor-exact, level: warning, path: .python-version}
+      - {rule: toolchain-ruby-anchor-exact, level: warning, path: .ruby-version}
+      - {rule: toolchain-jvm-anchor-exact, level: warning, path: .java-version}
+      - {rule: toolchain-dotnet-anchor-exact, level: warning, path: global.json}

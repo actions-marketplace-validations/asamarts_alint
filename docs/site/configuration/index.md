@@ -120,6 +120,11 @@ facts:
     count_files: "**/*.rs"
   - id: has_src_dir
     all_files_exist: ["src/.keep"]
+  - id: has_exact_sdk
+    file_content_matches:
+      paths: global.json
+      extract: { json: "$.sdk.version" }
+      pattern: '^[0-9]+\.[0-9]+\.[0-9]+$'
 
 rules:
   - id: rust-snake-case
@@ -131,6 +136,11 @@ rules:
 ```
 
 Available fact kinds: `any_file_exists`, `all_files_exist`, `count_files`, `file_content_matches`, `git_branch`, `custom`.
+
+`file_content_matches` normally applies `pattern` to raw file content. Its optional `extract`
+map accepts exactly one RFC 9535 JSONPath for `json`, `yaml`, `toml`, `xml`, `dotenv`,
+`properties`, `ini`, or `hcl`, and applies the pattern to each selected string instead.
+Non-string selections, malformed input, and missing paths are non-matches.
 
 `custom` (which spawns a subprocess) is a security boundary: it's only allowed in your own top-level config. Any `extends:` ancestor that declares one is rejected at load time, so a malicious or compromised ruleset can't execute arbitrary code merely by being fetched.
 

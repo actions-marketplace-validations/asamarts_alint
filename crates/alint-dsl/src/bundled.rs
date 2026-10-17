@@ -11,10 +11,10 @@
 //! ```
 //!
 //! Bundled rulesets are deliberately limited: no `extends:` of
-//! their own (same rule as HTTPS extends), no `facts:` that read
-//! from the user repo's state, no `custom:` program execution.
-//! They're pure static rule catalogs that users layer on top of
-//! their own config.
+//! their own (same rule as HTTPS extends), only built-in repository
+//! facts, and no `custom:` program execution. They are static,
+//! offline policy catalogs that users layer on top of their own
+//! config.
 //!
 //! ## Versioning
 //!
@@ -48,6 +48,16 @@ const REGISTRY: &[(&str, &str, &str)] = &[
     ("java", "v1", include_str!("../rulesets/v1/java.yml")),
     ("dotnet", "v1", include_str!("../rulesets/v1/dotnet.yml")),
     ("php", "v1", include_str!("../rulesets/v1/php.yml")),
+    (
+        "versioning",
+        "v1",
+        include_str!("../rulesets/v1/versioning.yml"),
+    ),
+    (
+        "toolchain-pins",
+        "v1",
+        include_str!("../rulesets/v1/toolchain-pins.yml"),
+    ),
     // Namespaced utility rulesets. Slash-separated names are
     // resolved through the usual `alint://bundled/<name>@<rev>`
     // URI — the `@` separator splits name from rev, so slashes
@@ -154,8 +164,8 @@ pub fn resolve(spec: &str) -> Option<&'static str> {
         .map(|(_, _, body)| *body)
 }
 
-/// The list of every bundled ruleset this build ships — used by
-/// `alint list bundled` and by test assertions.
+/// The list of every bundled ruleset this build ships, used for
+/// unknown-URI diagnostics and test assertions.
 pub fn catalog() -> impl Iterator<Item = (&'static str, &'static str)> {
     REGISTRY.iter().map(|(name, rev, _)| (*name, *rev))
 }

@@ -190,6 +190,7 @@ fn fact_kind_name_covers_every_variant() {
         FactKind::FileContentMatches {
             file_content_matches: alint_core::facts::FileContentMatchesFact {
                 paths: OneOrMany::One("X".into()),
+                extract: None,
                 pattern: ".".into(),
             },
         }

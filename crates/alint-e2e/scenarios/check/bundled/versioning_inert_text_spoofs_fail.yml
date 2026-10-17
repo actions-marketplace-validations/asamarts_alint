@@ -1,0 +1,31 @@
+name: versioning bundle does not accept Python docstrings or fenced changelog examples as declarations
+tags: [check, extends, bundled, versioning, cross_file, boundary]
+
+given:
+  tree:
+    VERSION: "2.4.0\n"
+    src:
+      version.py: |
+        """Example only:
+        __version__ = "2.4.0"
+        """
+        __version__ = "2.3.0"
+    CHANGELOG.md: |
+      # Changelog
+
+      ```text
+      ## 2.4.0
+      ```
+
+      ## 2.3.0 - 2026-10-01
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/versioning@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: versioning-python-module, level: error, path: src/version.py}
+      - {rule: versioning-changelog, level: error, path: CHANGELOG.md}

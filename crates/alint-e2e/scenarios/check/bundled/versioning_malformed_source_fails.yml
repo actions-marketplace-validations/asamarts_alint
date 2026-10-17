@@ -1,0 +1,18 @@
+name: versioning bundle rejects a non-literal multi-token VERSION source once
+tags: [check, extends, bundled, versioning, validation]
+
+given:
+  tree:
+    VERSION: "2.4.0 next\n"
+    package.json: |
+      {"name":"demo","version":"2.3.0"}
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/versioning@v1
+
+when: [check]
+
+expect:
+  - violations:
+      - {rule: versioning-version-file-one-line, level: error, path: VERSION}

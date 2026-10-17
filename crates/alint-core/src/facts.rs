@@ -26,6 +26,7 @@ use regex::Regex;
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::extract::{Extract, ExtractSpec, extract_values};
 use crate::scope::Scope;
 use crate::walker::FileIndex;
 
@@ -201,13 +202,17 @@ pub struct CustomFact {
     pub argv: Vec<String>,
 }
 
-/// Fact-kind body for `file_content_matches`. Fact evaluates
-/// truthy when at least one file in `paths` contains a regex
-/// match for `pattern`. Files that aren't valid UTF-8 are skipped.
+/// Fact-kind body for `file_content_matches`. Without `extract`, the fact is
+/// truthy when at least one file in `paths` contains a regex match for
+/// `pattern`. With a structured `extract`, the file is parsed and the fact is
+/// truthy when at least one extracted string matches. Parse failures,
+/// non-string query results, and non-UTF-8 files make that file a non-match.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileContentMatchesFact {
     pub paths: OneOrMany,
+    #[serde(default)]
+    pub extract: Option<Box<ExtractSpec>>,
     pub pattern: String,
 }
 
@@ -298,6 +303,21 @@ fn evaluate_one(spec: &FactSpec, root: &Path, index: &FileIndex) -> Result<FactV
             let scope = Scope::from_patterns(&spec.paths.to_vec())?;
             let regex = Regex::new(&spec.pattern)
                 .map_err(|e| Error::Other(format!("fact pattern /{}/: {e}", spec.pattern)))?;
+            let extract = spec
+                .extract
+                .as_deref()
+                .cloned()
+                .map(ExtractSpec::resolve)
+                .transpose()
+                .map_err(|e| Error::Other(format!("fact extract: {e}")))?
+                .map(|extract| match extract {
+                    Extract::Structured(_) => Ok(extract),
+                    _ => Err(Error::Other(
+                        "fact extract must use one of json/yaml/toml/xml/dotenv/properties/ini/hcl"
+                            .to_string(),
+                    )),
+                })
+                .transpose()?;
             let any = index.files().any(|entry| {
                 if !scope.matches(&entry.path, index) {
                     return false;
@@ -313,7 +333,11 @@ fn evaluate_one(spec: &FactSpec, root: &Path, index: &FileIndex) -> Result<FactV
                 let Ok(text) = std::str::from_utf8(&bytes) else {
                     return false;
                 };
-                regex.is_match(text)
+                let Some(extract) = extract.as_ref() else {
+                    return regex.is_match(text);
+                };
+                extract_values(extract, text)
+                    .is_ok_and(|values| values.strings.iter().any(|value| regex.is_match(value)))
             });
             Ok(FactValue::Bool(any))
         }
@@ -581,6 +605,77 @@ mod tests {
         assert_eq!(v.get("uses_tokio"), Some(&FactValue::Bool(false)));
     }
 
+    #[test]
+    fn file_content_matches_can_match_a_structured_root_value() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("global.json");
+        let facts = parse(
+            "- id: exact_sdk\n  file_content_matches:\n    paths: global.json\n    extract: { json: \"$.sdk.version\" }\n    pattern: '^9[.]0[.]306$'\n",
+        );
+        let index = idx(&["global.json"]);
+
+        std::fs::write(
+            &path,
+            r#"{"metadata":{"sdk":{"version":"9.0.306"}},"sdk":{"version":"latest"}}"#,
+        )
+        .unwrap();
+        let values = evaluate_facts(&facts, tmp.path(), &index).unwrap();
+        assert_eq!(values.get("exact_sdk"), Some(&FactValue::Bool(false)));
+
+        std::fs::write(
+            &path,
+            r#"{"metadata":{"sdk":{"version":"latest"}},"sdk":{"version":"9.0.306"}}"#,
+        )
+        .unwrap();
+        let values = evaluate_facts(&facts, tmp.path(), &index).unwrap();
+        assert_eq!(values.get("exact_sdk"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
+    fn file_content_matches_structured_parse_failure_is_false() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.90.0\"\nnot toml\n",
+        )
+        .unwrap();
+        let facts = parse(
+            "- id: exact_rust\n  file_content_matches:\n    paths: rust-toolchain.toml\n    extract: { toml: \"$.toolchain.channel\" }\n    pattern: '^1[.]90[.]0$'\n",
+        );
+        let values = evaluate_facts(&facts, tmp.path(), &idx(&["rust-toolchain.toml"])).unwrap();
+        assert_eq!(values.get("exact_rust"), Some(&FactValue::Bool(false)));
+    }
+
+    #[test]
+    fn file_content_matches_supports_xml_structured_extract() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("value.xml"), "<root><v>1</v></root>").unwrap();
+        let facts = parse(
+            "- id: exact\n  file_content_matches:\n    paths: value.xml\n    extract: { xml: \"$.root.v\" }\n    pattern: '^1$'\n",
+        );
+
+        let values = evaluate_facts(&facts, tmp.path(), &idx(&["value.xml"])).unwrap();
+        assert_eq!(values.get("exact"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
+    fn file_content_matches_rejects_non_structured_extracts() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("value.txt"), "v=1\n").unwrap();
+        let facts = parse(
+            "- id: exact\n  file_content_matches:\n    paths: value.txt\n    extract: { regex: 'v=(.*)' }\n    pattern: '^1$'\n",
+        );
+
+        let error = evaluate_facts(&facts, tmp.path(), &idx(&["value.txt"])).unwrap_err();
+        assert!(
+            error.to_string().contains("extract must use one of"),
+            "{error}"
+        );
+    }
     #[test]
     fn file_content_matches_skips_non_utf8_files() {
         use tempfile::tempdir;

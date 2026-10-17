@@ -113,15 +113,23 @@ moves.
   related-location paths before any CLI, SARIF, baseline, fix, or LSP boundary. Targeted
   regressions, direct CLI and LSP leak smokes, the full workspace suite, preflight, shell,
   packaging, example, advisory, and benchmark-smoke gates passed.
-- **The first two W9 increments are complete.** Six standalone kinds enforce repository
-  EditorConfig policy, Markdown image alt text, required and duplicate headings, Markdown
-  fragment targets, and SPDX license expressions. H1 `pinned_references` now checks immutable
-  executable references across GitHub Actions, pre-commit, CircleCI, GitLab CI, Cloud Build, and
-  Dockerfiles; the shipped GitHub Actions ruleset retains its rule id and existing workflow-step
-  fingerprint while gaining reusable-workflow, composite-action, and image coverage. All seven
-  kinds have the normal metadata, schema, generated documentation, declarative scenarios, and
-  compatibility gates. **W9 remains active: the C1 version-SSOT and C2 toolchain-pin bundled
-  rulesets are next.**
+- **W9 is complete.** Six standalone kinds enforce repository EditorConfig policy, Markdown
+  image alt text, required and duplicate headings, Markdown fragment targets, and SPDX license
+  expressions. H1 `pinned_references` checks immutable executable references across GitHub
+  Actions, pre-commit, CircleCI, GitLab CI, Cloud Build, and Dockerfiles; the shipped GitHub
+  Actions ruleset retains its rule id and existing workflow-step fingerprint while gaining
+  reusable-workflow, composite-action, and image coverage. C1 now ships as the opt-in
+  `alint://bundled/versioning@v1` policy with a root `VERSION` authority and exact checks for ten
+  manifest/release surfaces. C2 ships as `alint://bundled/toolchain-pins@v1`: 24 source-validation
+  and consistency rules for exact Node, Rust, Python, Ruby, JVM, and .NET pins across local
+  declarations, supported Docker images, and GitHub Actions. Both bundles use existing built-in
+  facts, extraction, `cross_file equals`, optional targets, and Unsafe `sync_from`; they add no
+  kind or execution capability. Their accepted designs, full-surface drift/pass/boundary
+  scenarios, public docs, generated facts, and S4 benchmark coverage are in place. Final review
+  made the selectors syntax-aware for inert TOML, Python, Ruby, Markdown, and Dockerfile text;
+  made duplicate same-value repairs occurrence-specific so baseline-suppressed siblings remain
+  untouched; and bounded extraction, syntax scanning, edit counts, and projected repair output.
+  **W10 and the release gates are next.**
 
 ### Completed release item: the v0.18.4 benchmark record
 
@@ -147,8 +155,7 @@ release-by-release row.
 
 ### Next work, in order
 
-1. **W9** standalone detection kinds, as capacity allows.
-2. **W10** documentation, recipes, roadmap, and stale-comment cleanup.
+1. **W10** documentation, recipes, roadmap, and stale-comment cleanup.
 
 Each item gets its design document in this directory before code, per the rule at the top. The
 release gates are listed at the end of this file.
@@ -366,7 +373,7 @@ semantics, format support, and compatibility boundary decided).
 
 ### W9. Standalone detection kinds, as capacity allows
 
-**A1, E2, E3, E5, E7, F2, and H1 completed 2026-10-17. C1 and C2 are next.**
+**Completed 2026-10-17: A1, E2, E3, E5, E7, F2, H1, C1, and C2.**
 
 From the "ship now" bucket of [`../general-linter.md`](../general-linter.md) section 11.8, in
 value order:
@@ -377,10 +384,18 @@ value order:
 3. the SPDX id table with F2 `spdx_identifier_valid`;
 4. H1 `pinned_references`, which also closes the reusable-workflow and composite-action holes in
    `ci/github-actions@v1`;
-5. the C1 version-SSOT and C2 toolchain-pin bundled rulesets.
+5. the C1 version-SSOT ([`version-ssot-ruleset.md`](version-ssot-ruleset.md),
+   `versioning@v1`) and C2 exact toolchain-pin
+   ([`toolchain-pins-ruleset.md`](toolchain-pins-ruleset.md), `toolchain-pins@v1`) bundled rulesets.
 
-Each kind follows the normal cascade (rules.md section, schema, firing and silent scenarios,
-rule-page fixtures, facts) and declares its `KindMeta`.
+The seven standalone kinds follow the normal cascade (rules.md section, schema, firing and silent
+scenarios, rule-page fixtures, facts) and declare `KindMeta`. C1 and C2 use the documented
+existing-primitive bundle path: accepted design, canonical bundle YAML, embedded registry entry,
+firing/silent/fix/boundary scenarios, bundle documentation, generated facts, and benchmark
+coverage. Final review added two narrow reusable options—structured extraction for
+`file_content_matches` facts and per-target `matches` filtering in `cross_file`—plus
+syntax-aware selectors, occurrence-specific fix correlation, and resource ceilings. It added no
+rule kind, fix operation, dependency, subprocess, or network access.
 
 ### W10. Documentation, recipes, and roadmap
 

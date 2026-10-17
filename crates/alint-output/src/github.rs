@@ -178,6 +178,7 @@ mod tests {
                     related_locations_omitted: 0,
                     disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    fix_key: None,
                     sensitive: false,
                     is_fixable: false,
                     not_fixable: false,

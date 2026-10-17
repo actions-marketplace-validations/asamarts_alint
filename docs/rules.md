@@ -739,6 +739,18 @@ A manifest file enumerates path entries; each must resolve to an on-disk artefac
 
 A `source` must hold a `relation` to one or more `targets` (or, for `resolves`, the filesystem). The `source` is a single `{ file, extract }` (for `registered`, a `file` or `files` with no `extract`) — **or**, for the set relations only (`subset` / `superset` / `set_equals`), `{ files: <glob>, extract }`, whose matches are read and whose extracted values are **unioned into one set** (the "every `*hl-X*` across `runtime/doc/*.txt` must equal the `default link X` set in `highlight.c`" shape — symbol-set / cross-language parity). For the value relations, `targets` is either a `{ files: <glob>, extract }` map (one query applied per glob match) or a sequence of `{ file, extract }` (heterogeneous pins); `extract` is the same one-of as `registry_paths_resolve` (`toml`/`json`/`yaml`/`xml` JSONPath, `lines`, `regex` group 1) plus `whole_file: {}` (the entire file content as one value — for byte-level content equality without `identical`'s no-`extract`/no-`normalize` constraint). `relation` (default `equals`) selects the assertion, checked independently per target; the *shape* (which of `source.file`/`source.files`, `source.extract`, `targets` is present) follows the relation and is validated at load:
 
+Each target glob map or fixed-list entry may add `matches: <regex>`. The predicate runs on each extracted string before the relation and before fixer correlation; non-matching values behave like absent optional values and are never rewritten. This narrows syntactically broad structured queries without changing their source spans.
+
+A regex target whose path is `Dockerfile` / `Dockerfile.*` and whose pattern selects `FROM`
+is constrained to top-level `FROM` lines accepted by alint's Dockerfile parser; heredoc payloads
+and continuation bodies do not become extracted values. The versioning/toolchain selectors apply
+equivalent syntax-aware guards to Python, Rust toolchain TOML, Gemfile, and changelog targets.
+Every cross-file extraction fails analysis above 10,000 values, and a syntax-aware scanner fails
+above 100,000 physical lines. `sync_from` rewrites only the exact target-value occurrence carried
+by the live finding, so a baseline-suppressed duplicate in the same file is untouched. Regex
+propagation declines more than 10,000 edits or output above the lower of `fix_size_limit` and the
+32 MiB hard ceiling.
+
 | `relation` | source ⇒ | asserts (per target) |
 |---|---|---|
 | `equals` | exactly one value `v` | every target value `== v` |
@@ -1265,6 +1277,60 @@ Cross-editor standardization at the root: `.editorconfig` + `.gitattributes` (wi
 ### `alint://bundled/docs/adr@v1`
 
 Architecture Decision Records following [MADR](https://adr.github.io/madr/) conventions. Files under `docs/adr/` match `NNNN-kebab-case-title.md`; each ADR has `## Status`, `## Context`, and `## Decision` sections. Gap-free numbering is a planned addition once the `numeric_sequence` primitive lands.
+
+
+### `alint://bundled/versioning@v1`
+
+Exact release-version consistency from one explicit root authority. A root `VERSION` file activates the bundle; without it, every rule is silent. The source must be one literal token. Target files and fields are optional, so this ruleset reports drift without requiring every supported ecosystem.
+
+| Rule id | Target | Default level | Fix |
+|---|---|---|---|
+| `versioning-version-file-one-line` | root `VERSION` source shape | error | — |
+| `versioning-package-json` | `package.json` `version` | error | `sync_from` (Unsafe) |
+| `versioning-cargo-package` | Cargo `[package].version` | error | `sync_from` (Unsafe) |
+| `versioning-cargo-workspace` | Cargo `[workspace.package].version` | error | `sync_from` (Unsafe) |
+| `versioning-pyproject-project` | pyproject `[project].version` | error | `sync_from` (Unsafe) |
+| `versioning-pyproject-poetry` | pyproject `[tool.poetry].version` | error | `sync_from` (Unsafe) |
+| `versioning-python-module` | Python `__version__` | error | `sync_from` (Unsafe) |
+| `versioning-helm-chart` | Helm `appVersion` | error | `sync_from` (Unsafe) |
+| `versioning-openapi-json` | JSON OpenAPI/Swagger `info.version` | error | `sync_from` (Unsafe) |
+| `versioning-openapi-yaml` | YAML OpenAPI/Swagger `info.version` | error | `sync_from` (Unsafe) |
+| `versioning-changelog` | first released `##` changelog heading | error | `sync_from` (Unsafe) |
+
+Comparison is literal and preserves a leading `v`; this bundle does not impose SemVer. Git-tag consistency remains the separate C6 capability. Bare `alint fix` only suggests target updates; pass `--unsafe-fixes` to copy `VERSION` into existing extracted values.
+
+### `alint://bundled/toolchain-pins@v1`
+
+Exact toolchain consistency for Node.js, Rust, Python, Ruby, JVM, and .NET. Each ecosystem activates only when its explicit root authority exists: `.nvmrc`, `rust-toolchain.toml`, `.python-version`, `.ruby-version`, `.java-version`, or `global.json`, respectively. Missing targets are silent. Ranges, moving aliases, matrices, and computed values are outside this exact-pin bundle.
+
+| Rule id | Target class | Default level | Fix |
+|---|---|---|---|
+| `toolchain-node-anchor-exact` | `.nvmrc` source shape | warning | — |
+| `toolchain-node-declarations-coherent` | `.node-version`, `.tool-versions`, `package.json` | warning | `sync_from` (Unsafe) |
+| `toolchain-node-dockerfiles-coherent` | Node Docker images | warning | `sync_from` (Unsafe) |
+| `toolchain-node-github-actions-coherent` | `actions/setup-node` | warning | `sync_from` (Unsafe) |
+| `toolchain-rust-anchor-exact` | `rust-toolchain.toml` source shape | warning | — |
+| `toolchain-rust-declarations-coherent` | `rust-toolchain`, `.tool-versions` | warning | `sync_from` (Unsafe) |
+| `toolchain-rust-dockerfiles-coherent` | Rust Docker images | warning | `sync_from` (Unsafe) |
+| `toolchain-rust-github-actions-coherent` | Rust setup actions | warning | `sync_from` (Unsafe) |
+| `toolchain-python-anchor-exact` | `.python-version` source shape | warning | — |
+| `toolchain-python-declarations-coherent` | `.tool-versions`, `runtime.txt`, `Pipfile` | warning | `sync_from` (Unsafe) |
+| `toolchain-python-dockerfiles-coherent` | Python Docker images | warning | `sync_from` (Unsafe) |
+| `toolchain-python-github-actions-coherent` | `actions/setup-python` | warning | `sync_from` (Unsafe) |
+| `toolchain-ruby-anchor-exact` | `.ruby-version` source shape | warning | — |
+| `toolchain-ruby-declarations-coherent` | `.tool-versions`, `Gemfile`, `Gemfile.lock` | warning | `sync_from` (Unsafe) |
+| `toolchain-ruby-dockerfiles-coherent` | Ruby Docker images | warning | `sync_from` (Unsafe) |
+| `toolchain-ruby-github-actions-coherent` | `ruby/setup-ruby` | warning | `sync_from` (Unsafe) |
+| `toolchain-jvm-anchor-exact` | `.java-version` source shape | warning | — |
+| `toolchain-jvm-declarations-coherent` | `.tool-versions`, `.sdkmanrc` | warning | `sync_from` (Unsafe) |
+| `toolchain-jvm-dockerfiles-coherent` | supported JVM Docker images | warning | `sync_from` (Unsafe) |
+| `toolchain-jvm-github-actions-coherent` | `actions/setup-java` | warning | `sync_from` (Unsafe) |
+| `toolchain-dotnet-anchor-exact` | `global.json` SDK source shape | warning | — |
+| `toolchain-dotnet-declarations-coherent` | `.tool-versions`, `global.json` tools | warning | `sync_from` (Unsafe) |
+| `toolchain-dotnet-dockerfiles-coherent` | .NET SDK Docker images | warning | `sync_from` (Unsafe) |
+| `toolchain-dotnet-github-actions-coherent` | `actions/setup-dotnet` | warning | `sync_from` (Unsafe) |
+
+The declaration, Dockerfile, and GitHub Actions rules select only literal exact versions. JVM targets compare the three-component release core across vendor-specific encodings. Bare `alint fix` suggests drift repairs; `--unsafe-fixes` applies them.
 
 ## Nested `.alint.yml` (monorepo layering)
 

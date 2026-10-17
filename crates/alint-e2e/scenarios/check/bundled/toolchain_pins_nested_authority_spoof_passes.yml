@@ -1,0 +1,41 @@
+name: toolchain-pins bundle ignores nested lookalikes and non-exact optional declarations
+# Only root structured authority/target nodes participate. Nested TOML lookalikes
+# and a moving optional tools.dotnet declaration remain outside exact-pin C2.
+tags: [check, extends, bundled, toolchain_pins, boundary]
+
+given:
+  tree:
+    global.json: |
+      {"sdk":{"version":"9.0.306"},"config":{"sdk":{"version":"8.0.408"}},"tools":{"dotnet":"latest"}}
+    rust-toolchain.toml: |
+      [toolchain]
+      channel = "1.90.0"
+    rust-toolchain: |
+      [toolchain]
+      channel = "1.90.0"
+      [other]
+      channel = "1.89.0"
+    .tool-versions: |
+      dotnet-core 9.0.306
+      rust 1.90.0
+    .github:
+      workflows:
+        ci.yml: |
+          name: CI
+          on: push
+          jobs:
+            test:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/setup-dotnet@v4
+                  with:
+                    dotnet-version: '9.0.306'
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/toolchain-pins@v1
+
+when: [check]
+
+expect:
+  - violations: []

@@ -4,13 +4,13 @@
 //! The config schema lives in [`super::spec`]; assembly + `build` in
 //! [`super`](super).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use alint_core::template::{PathTokens, render_path};
 use alint_core::{
-    AnalysisFailureKind, Context, Extract, RelatedLocation, Result, Violation, extract_values,
-    is_non_literal, unreadable_file_violation,
+    AnalysisFailureKind, Context, Extract, ExtractedValues, RelatedLocation, Result, Violation,
+    extract_values_bounded, is_non_literal, unreadable_file_violation,
 };
 
 use super::CrossFileRule;
@@ -264,7 +264,7 @@ impl CrossFileRule {
                 return None;
             }
         };
-        let values = match extract_values(extract, &text) {
+        let values = match extract_values_bounded(extract, &text, super::MAX_EXTRACTED_VALUES) {
             Ok(v) => v,
             Err(e) => {
                 let mut finding = Self::analysis_failure(
@@ -377,21 +377,26 @@ impl CrossFileRule {
                 }
                 return;
             }
+            let mut occurrences = HashMap::<&str, usize>::new();
             for value in values {
+                let occurrence = occurrences.entry(value.as_str()).or_default();
                 let target_norm = apply_normalize(&self.normalize, value);
                 if target_norm != source_norm {
-                    let mut finding = self.mismatch(
-                        target,
-                        source_extract,
-                        target_extract,
-                        &source,
-                        &source_norm,
-                        value,
-                        &target_norm,
-                    );
+                    let mut finding = self
+                        .mismatch(
+                            target,
+                            source_extract,
+                            target_extract,
+                            &source,
+                            &source_norm,
+                            value,
+                            &target_norm,
+                        )
+                        .with_fix_key(format!("cross_file_equals\u{0}{occurrence}"));
                     self.add_source_locations(ctx, &mut finding, "canonical source");
                     out.push(finding);
                 }
+                *occurrence += 1;
             }
         });
     }
@@ -571,7 +576,10 @@ impl CrossFileRule {
                 .filter(|e| scope.matches(&e.path, ctx.index))
                 .map(|e| e.path.to_path_buf())
                 .collect(),
-            Some(Targets::List(list)) => list.iter().map(|(f, _)| PathBuf::from(f)).collect(),
+            Some(Targets::List(list)) => list
+                .iter()
+                .map(|target| PathBuf::from(&target.file))
+                .collect(),
             None => Vec::new(),
         }
     }
@@ -634,6 +642,7 @@ impl CrossFileRule {
             Some(Targets::Glob {
                 scope,
                 extract: Some(extract),
+                matches,
             }) => {
                 let mut matched = 0usize;
                 for e in ctx.index.files() {
@@ -641,7 +650,13 @@ impl CrossFileRule {
                         continue;
                     }
                     matched += 1;
-                    if let Some(values) = self.target_values(ctx, &e.path, extract, out) {
+                    if let Some(mut values) = self.target_values(ctx, &e.path, extract, out) {
+                        if let Some(regex) = matches {
+                            values.retain(|value| regex.is_match(value));
+                        }
+                        if values.is_empty() && self.allow_missing {
+                            continue;
+                        }
                         f(&e.path, extract, &values, out);
                     }
                 }
@@ -653,13 +668,21 @@ impl CrossFileRule {
                 }
             }
             Some(Targets::List(list)) => {
-                for (file, extract) in list {
-                    let Some(extract) = extract else { continue };
+                for target_spec in list {
+                    let Some(extract) = &target_spec.extract else {
+                        continue;
+                    };
                     // `file` is already normalized at resolution (`resolve_targets`),
                     // so the violation path matches git's canonical diff spelling and
                     // the value fixer's stored target path (audit F2).
-                    let target = Path::new(file);
-                    if let Some(values) = self.target_values(ctx, target, extract, out) {
+                    let target = Path::new(&target_spec.file);
+                    if let Some(mut values) = self.target_values(ctx, target, extract, out) {
+                        if let Some(regex) = &target_spec.matches {
+                            values.retain(|value| regex.is_match(value));
+                        }
+                        if values.is_empty() && self.allow_missing {
+                            continue;
+                        }
                         f(target, extract, &values, out);
                     }
                 }
@@ -695,13 +718,25 @@ impl CrossFileRule {
                 return None;
             }
         };
-        let values = match extract_values(extract, &text) {
-            Ok(v) => v,
-            Err(e) => {
+        let values = match extract {
+            Extract::Regex(pattern) => super::target_regex_capture_ranges(target, &text, pattern)
+                .map(|captures| ExtractedValues {
+                    strings: captures
+                        .ranges
+                        .into_iter()
+                        .map(|range| text[range].to_string())
+                        .collect(),
+                    non_strings: Vec::new(),
+                }),
+            _ => extract_values_bounded(extract, &text, super::MAX_EXTRACTED_VALUES),
+        };
+        let values = match values {
+            Ok(values) => values,
+            Err(error) => {
                 let mut finding = Self::analysis_failure(
                     target,
                     AnalysisFailureKind::ResourceParse,
-                    &format!("target extract failed: {e}"),
+                    &format!("target extract failed: {error}"),
                 );
                 if extract.redacts_by_default() {
                     finding.redact_message(&self.id);
@@ -900,9 +935,17 @@ fn read_rel(ctx: &Context<'_>, rel: &Path) -> Result<String, crate::io::ReadCapE
 
 #[cfg(test)]
 mod tests {
-    use super::super::spec::{Normalize, NormalizeSpec};
+    use super::super::spec::{Normalize, NormalizeSpec, Target};
     use super::*;
     use alint_core::{FileEntry, FileIndex, Format, Level, Rule, Scope};
+
+    fn target(file: impl Into<String>, extract: Option<Extract>) -> Target {
+        Target {
+            file: file.into(),
+            extract,
+            matches: None,
+        }
+    }
 
     fn index(files: &[&str]) -> FileIndex {
         FileIndex::from_entries(
@@ -970,8 +1013,8 @@ mod tests {
         let source_rule = value_rule(
             ".env",
             Extract::structured(Format::Dotenv, "$.TOKEN").unwrap(),
-            Targets::List(vec![(
-                "target.json".into(),
+            Targets::List(vec![target(
+                "target.json",
                 Some(Extract::structured(Format::Json, "$.v").unwrap()),
             )]),
             Relation::Equals,
@@ -1001,8 +1044,8 @@ mod tests {
         let target_rule = value_rule(
             "source.json",
             Extract::structured(Format::Json, "$.v").unwrap(),
-            Targets::List(vec![(
-                "target.properties".into(),
+            Targets::List(vec![target(
+                "target.properties",
                 Some(Extract::structured(Format::Properties, "$.TOKEN").unwrap()),
             )]),
             Relation::Equals,
@@ -1031,7 +1074,7 @@ mod tests {
         let rule = value_rule(
             "source.json",
             all_values(),
-            Targets::List(vec![("target.json".into(), Some(all_values()))]),
+            Targets::List(vec![target("target.json", Some(all_values()))]),
             Relation::Equals,
             Normalize::None,
         );
@@ -1078,8 +1121,8 @@ mod tests {
         let set_rule = value_rule(
             ".env",
             Extract::structured(Format::Dotenv, "$.VALUES").unwrap(),
-            Targets::List(vec![(
-                "target.properties".into(),
+            Targets::List(vec![target(
+                "target.properties",
                 Some(Extract::structured(Format::Properties, "$.VALUES").unwrap()),
             )]),
             Relation::SetEquals,
@@ -1093,8 +1136,8 @@ mod tests {
         let skipped_rule = value_rule(
             ".env",
             Extract::structured(Format::Dotenv, "$.SKIP").unwrap(),
-            Targets::List(vec![(
-                "target.properties".into(),
+            Targets::List(vec![target(
+                "target.properties",
                 Some(Extract::structured(Format::Properties, "$.SKIP").unwrap()),
             )]),
             Relation::Equals,
@@ -1126,8 +1169,8 @@ mod tests {
         let source_missing = value_rule(
             ".env",
             Extract::structured(Format::Dotenv, "$.MISSING").unwrap(),
-            Targets::List(vec![(
-                "target.properties".into(),
+            Targets::List(vec![target(
+                "target.properties",
                 Some(Extract::structured(Format::Properties, "$.TOKEN").unwrap()),
             )]),
             Relation::Equals,
@@ -1140,8 +1183,8 @@ mod tests {
         let target_missing = value_rule(
             ".env",
             Extract::structured(Format::Dotenv, "$.TOKEN").unwrap(),
-            Targets::List(vec![(
-                "target.properties".into(),
+            Targets::List(vec![target(
+                "target.properties",
                 Some(Extract::structured(Format::Properties, "$.MISSING").unwrap()),
             )]),
             Relation::Equals,
@@ -1172,8 +1215,8 @@ mod tests {
             let source_rule = value_rule(
                 file,
                 Extract::structured(format, "$.TOKEN").unwrap(),
-                Targets::List(vec![(
-                    "target.json".into(),
+                Targets::List(vec![target(
+                    "target.json",
                     Some(Extract::structured(Format::Json, "$.v").unwrap()),
                 )]),
                 Relation::Equals,
@@ -1198,8 +1241,8 @@ mod tests {
             let target_rule = value_rule(
                 "source.json",
                 Extract::structured(Format::Json, "$.v").unwrap(),
-                Targets::List(vec![(
-                    file.into(),
+                Targets::List(vec![target(
+                    file,
                     Some(Extract::structured(format, "$.TOKEN").unwrap()),
                 )]),
                 Relation::Equals,
@@ -1250,6 +1293,7 @@ mod tests {
             Targets::Glob {
                 scope: Scope::from_patterns(&["crates/*/Cargo.toml".to_string()]).unwrap(),
                 extract: Some(Extract::structured(Format::Toml, "$.package.version").unwrap()),
+                matches: None,
             },
             Relation::Equals,
             Normalize::None,
@@ -1281,6 +1325,7 @@ mod tests {
                 Targets::Glob {
                     scope: Scope::from_patterns(&["target.toml".to_string()]).unwrap(),
                     extract: Some(Extract::structured(Format::Toml, "$.missing").unwrap()),
+                    matches: None,
                 },
                 Relation::Equals,
                 Normalize::None,
@@ -1318,6 +1363,7 @@ mod tests {
             Targets::Glob {
                 scope: Scope::from_patterns(&["LICENSE-*".to_string()]).unwrap(),
                 extract: Some(Extract::WholeFile),
+                matches: None,
             },
             Relation::Equals,
             Normalize::None,
@@ -1336,8 +1382,8 @@ mod tests {
         let r = value_rule(
             "m.json",
             Extract::structured(Format::Json, "$.v[*]").unwrap(),
-            Targets::List(vec![(
-                "m.json".into(),
+            Targets::List(vec![target(
+                "m.json",
                 Some(Extract::structured(Format::Json, "$.v[0]").unwrap()),
             )]),
             Relation::Equals,
@@ -1362,8 +1408,8 @@ mod tests {
         let r = value_rule(
             "global.json",
             Extract::structured(Format::Json, "$.sdk.version").unwrap(),
-            Targets::List(vec![(
-                "Directory.Build.props".into(),
+            Targets::List(vec![target(
+                "Directory.Build.props",
                 Some(Extract::Lines(alint_core::LinesOpts::default())),
             )]),
             Relation::Equals,
@@ -1383,8 +1429,8 @@ mod tests {
         let r = value_rule(
             "version.json",
             Extract::structured(Format::Json, "$.v").unwrap(),
-            Targets::List(vec![(
-                "protobuf_version.bzl".into(),
+            Targets::List(vec![target(
+                "protobuf_version.bzl",
                 Some(Extract::Lines(alint_core::LinesOpts::default())),
             )]),
             Relation::Equals,
@@ -1409,10 +1455,49 @@ mod tests {
     }
 
     fn set_targets() -> Targets {
-        Targets::List(vec![(
-            "tgt.json".into(),
+        Targets::List(vec![target(
+            "tgt.json",
             Some(Extract::structured(Format::Json, "$.have[*]").unwrap()),
         )])
+    }
+
+    #[test]
+    fn optional_targets_filtered_to_empty_are_absent_for_set_relations() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_sets(
+            root,
+            "{\"need\":[\"22.14.0\"]}",
+            "{\"have\":[\">=20 <23\"]}",
+        );
+        let idx = index(&["src.json", "tgt.json"]);
+        let exact = regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+$").unwrap();
+
+        for relation in [Relation::Subset, Relation::SetEquals] {
+            for targets in [
+                Targets::List(vec![Target {
+                    file: "tgt.json".into(),
+                    extract: Some(Extract::structured(Format::Json, "$.have[*]").unwrap()),
+                    matches: Some(exact.clone()),
+                }]),
+                Targets::Glob {
+                    scope: Scope::from_patterns(&["tgt.json".to_string()]).unwrap(),
+                    extract: Some(Extract::structured(Format::Json, "$.have[*]").unwrap()),
+                    matches: Some(exact.clone()),
+                },
+            ] {
+                let mut rule = set_rule(
+                    Extract::structured(Format::Json, "$.need[*]").unwrap(),
+                    targets,
+                    relation,
+                );
+                rule.allow_missing = true;
+                assert!(
+                    eval(&rule, root, &idx).is_empty(),
+                    "{relation:?} must treat a fully filtered optional target as absent"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1528,8 +1613,8 @@ mod tests {
             source_file: "doc/*.txt".into(),
             source_glob: Some(Scope::from_patterns(&["doc/*.txt".to_string()]).unwrap()),
             source_extract: Some(Extract::Regex(r"\*hl-(\w+)\*".into())),
-            targets: Some(Targets::List(vec![(
-                "highlight.c".into(),
+            targets: Some(Targets::List(vec![target(
+                "highlight.c",
                 Some(Extract::Regex(r"default link (\w+)".into())),
             )])),
             relation: Relation::SetEquals,
@@ -1564,8 +1649,8 @@ mod tests {
             source_file: "doc/*.txt".into(),
             source_glob: Some(Scope::from_patterns(&["doc/*.txt".to_string()]).unwrap()),
             source_extract: Some(Extract::Regex(r"\*hl-(\w+)\*".into())),
-            targets: Some(Targets::List(vec![(
-                "highlight.c".into(),
+            targets: Some(Targets::List(vec![target(
+                "highlight.c",
                 Some(Extract::Regex(r"default link (\w+)".into())),
             )])),
             relation: Relation::Subset,
@@ -1637,6 +1722,7 @@ mod tests {
             Targets::Glob {
                 scope: Scope::from_patterns(&["crates/*/README.md".to_string()]).unwrap(),
                 extract: None,
+                matches: None,
             },
             0,
         );
@@ -1655,7 +1741,7 @@ mod tests {
         let root = dir.path();
         std::fs::write(root.join("README.md"), "# Project\n").unwrap();
         let idx = index(&["README.md"]);
-        let r = identical_rule(Targets::List(vec![("/etc/hostname".into(), None)]), 0);
+        let r = identical_rule(Targets::List(vec![target("/etc/hostname", None)]), 0);
         let v = eval(&r, root, &idx);
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(
@@ -1673,7 +1759,7 @@ mod tests {
         std::fs::write(root.join("README.md"), "// 2024 Acme\n// gen\nBODY\n").unwrap();
         std::fs::write(root.join("mirror.md"), "// 2025 Acme\n// gen2\nBODY\n").unwrap();
         let idx = index(&["README.md", "mirror.md"]);
-        let mk = |skip| identical_rule(Targets::List(vec![("mirror.md".into(), None)]), skip);
+        let mk = |skip| identical_rule(Targets::List(vec![target("mirror.md", None)]), skip);
         // skip 2 -> bodies match.
         assert!(eval(&mk(2), root, &idx).is_empty());
         // skip 0 -> headers differ -> fires.
@@ -1703,8 +1789,8 @@ mod tests {
             source_file: "crates/*/Cargo.toml".into(),
             source_glob: Some(Scope::from_patterns(&["crates/*/Cargo.toml".to_string()]).unwrap()),
             source_extract: None,
-            targets: Some(Targets::List(vec![(
-                "Cargo.toml".into(),
+            targets: Some(Targets::List(vec![target(
+                "Cargo.toml",
                 Some(Extract::structured(Format::Toml, "$.workspace.members[*]").unwrap()),
             )])),
             relation: Relation::Registered,

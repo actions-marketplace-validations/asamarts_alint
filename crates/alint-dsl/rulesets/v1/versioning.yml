@@ -1,0 +1,194 @@
+# alint://bundled/versioning@v1
+#
+# One repository release version, declared in root VERSION and synchronized into
+# common package, language, chart, API, and changelog surfaces. Presence of a
+# valid root VERSION activates the policy; repositories without it are silent.
+# Target fields are optional. Unsafe sync_from fixes update existing values only.
+# Git tags remain the separate C6 local-Git gap.
+
+version: 1
+
+facts:
+  - id: versioning_has_version_file
+    any_file_exists: VERSION
+  - id: versioning_has_valid_version
+    file_content_matches:
+      paths: VERSION
+      pattern: '\A[ \t]*[vV]?[0-9][0-9A-Za-z._+!~-]{0,255}[ \t]*(?:\r?\n)?\z'
+  - id: versioning_has_changelog_file
+    any_file_exists: CHANGELOG.md
+
+rules:
+  # Report a malformed source once. The ten relation rules run only after this
+  # exact-token gate passes, so bad source text does not fan out into ten errors.
+  - id: versioning-version-file-one-line
+    when: facts.versioning_has_version_file
+    kind: file_content_matches
+    paths: VERSION
+    pattern: '\A[ \t]*[vV]?[0-9][0-9A-Za-z._+!~-]{0,255}[ \t]*(?:\r?\n)?\z'
+    level: error
+    message: "`VERSION` must contain exactly one portable literal version token."
+
+  - id: versioning-package-json
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/package.json"
+      extract: { json: "$.version" }
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "package.json version differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-cargo-package
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/Cargo.toml"
+      extract: { toml: "$.package.version" }
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "Cargo package version differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-cargo-workspace
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/Cargo.toml"
+      extract: { toml: "$.workspace.package.version" }
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "Cargo workspace version differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-pyproject-project
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/pyproject.toml"
+      extract: { toml: "$.project.version" }
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "pyproject.toml project.version differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-pyproject-poetry
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/pyproject.toml"
+      extract: { toml: "$.tool.poetry.version" }
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "Poetry package version differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-python-module
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/{__init__,version,_version}.py"
+      extract:
+        regex: >-
+          (?m)^__version__[ \t]*(?::[ \t]*[^=\r\n]+)?=[ \t]*["']([^"'\r\n]{1,256})["']
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "Python __version__ differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-helm-chart
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/Chart.yaml"
+      extract: { yaml: "$.appVersion" }
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "Helm Chart appVersion differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-openapi-json
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/{openapi,swagger}.json"
+      extract: { json: "$.info.version" }
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "OpenAPI info.version differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-openapi-yaml
+    when: facts.versioning_has_valid_version
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      files: "**/{openapi,swagger}.{yml,yaml}"
+      extract: { yaml: "$.info.version" }
+    relation: equals
+    allow_missing_target: true
+    level: error
+    message: "OpenAPI info.version differs from VERSION."
+    fix: { sync_from: {} }
+
+  - id: versioning-changelog
+    when: facts.versioning_has_valid_version and facts.versioning_has_changelog_file
+    kind: cross_file
+    source:
+      file: VERSION
+      extract:
+        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+    targets:
+      - file: CHANGELOG.md
+        extract:
+          regex: >-
+            (?m)\A[^`~<]*?^##[ \t]+(?:Version[ \t]+)?(?:\[[ \t]*)?([vV]?[0-9][-0-9A-Za-z._+!~]{0,255})(?:[ \t]*\])?(?:[ \t]+|$)
+    relation: equals
+    allow_missing_target: false
+    level: error
+    message: "The top released CHANGELOG entry differs from VERSION."
+    fix: { sync_from: {} }

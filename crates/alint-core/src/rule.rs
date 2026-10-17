@@ -177,6 +177,11 @@ pub struct Violation {
     /// content" (see [`crate::baseline::violation_fingerprint`]). It
     /// never affects rendering or pass/fail.
     pub baseline_key: Option<Cow<'static, str>>,
+    /// Opaque check-to-fix correlation data. Unlike `baseline_key`, this never
+    /// contributes to fingerprinting or output; it identifies one concrete
+    /// extracted occurrence when equal values share a path.
+    #[doc(hidden)]
+    pub fix_key: Option<Cow<'static, str>>,
     /// Whether dynamic evidence has been redacted from this finding. Producers
     /// set this only through [`Self::redact_evidence`] or
     /// [`Self::redact_message`], which also remove reportable replacement bytes.
@@ -225,6 +230,7 @@ impl Violation {
             related_locations_omitted: 0,
             disposition: FindingDisposition::Violation,
             baseline_key: None,
+            fix_key: None,
             sensitive: false,
             is_fixable: false,
             not_fixable: false,
@@ -266,6 +272,7 @@ impl Violation {
     pub fn as_analysis_failure(mut self, kind: AnalysisFailureKind) -> Self {
         self.disposition = FindingDisposition::AnalysisFailure(kind);
         self.baseline_key = None;
+        self.fix_key = None;
         self.is_fixable = false;
         self.not_fixable = true;
         self.proposed_edits.clear();
@@ -464,6 +471,13 @@ impl Violation {
     #[must_use]
     pub fn with_baseline_key(mut self, key: impl Into<Cow<'static, str>>) -> Self {
         self.baseline_key = Some(key.into());
+        self
+    }
+
+    /// Attach opaque occurrence identity for the owning fixer.
+    #[must_use]
+    pub fn with_fix_key(mut self, key: impl Into<Cow<'static, str>>) -> Self {
+        self.fix_key = Some(key.into());
         self
     }
 }
