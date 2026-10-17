@@ -1963,6 +1963,16 @@ PairHashRule {
     allow_out_of_root: false,
 }
 
+=== kind: pinned_references | id: immutable-build-inputs ===
+PinnedReferencesRule {
+    id: "immutable-build-inputs",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    format: GithubActions,
+}
+
 === kind: properties_path_absent | id: properties-no-debug ===
 StructuredPathRule {
     id: "properties-no-debug",

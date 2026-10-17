@@ -40,7 +40,7 @@ use xml_scan::xml_within_parse_limits;
 /// (XML), far above any real config / manifest (they are KB-MB; even a large
 /// `OpenAPI` spec or SBOM is well under 32 MiB) yet 8x tighter than the read cap. An
 /// oversize structured file is one per-file parse-error violation. HCL keeps its own
-/// tighter [`MAX_HCL_BYTES`] (64 KiB), and dotenv has a 4 MiB cap plus a physical-line
+/// tighter `MAX_HCL_BYTES` (64 KiB), and dotenv has a 4 MiB cap plus a physical-line
 /// budget; this is the ceiling for the rest. (Aggregate
 /// concurrent parse memory -- this cap times the `par_iter` fan-out -- is a separate,
 /// coarser bound tracked in `docs/design/format-coverage.md`.)

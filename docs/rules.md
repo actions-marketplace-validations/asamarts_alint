@@ -207,6 +207,18 @@ The rule discovers only `.editorconfig` files between each selected file and the
 
 Supported properties are `indent_style` (plus numeric `indent_size` / `tab_width`), `end_of_line` (`lf`, `crlf`, or `cr`), `charset` (`latin1`, `utf-8`, `utf-8-bom`, `utf-16be`, or `utf-16le`), `trim_trailing_whitespace`, `insert_final_newline`, and positive-integer `max_line_length` (`off` disables it). A false `trim_trailing_whitespace` imposes no prohibition; `insert_final_newline: false` requires a non-empty file not to end in a line break. Unknown properties remain available to other EditorConfig plugins and are ignored. Check-only: a policy-derived multi-operation repair needs the later transactional edit-plan surface.
 
+### `pinned_references`
+
+**Categories:** Content, Security / Unicode sanity
+
+Require executable references in supported CI and container files to identify immutable artifacts rather than mutable tags or branches.
+
+With `format: auto` (the default), the repository-relative filename selects GitHub Actions workflows and `action.yml`, pre-commit, CircleCI, GitLab CI, Cloud Build, or Dockerfile semantics. Set `format:` explicitly for a nonstandard filename. The rule checks GitHub `steps[*].uses`, reusable-workflow `jobs.*.uses`, composite-action steps, job/service images, pre-commit `rev`, CircleCI orbs and images, GitLab images and services, Cloud Build step images, Dockerfile `FROM`, and HTTP(S) `ADD`.
+
+GitHub and pre-commit references must end in a full 40- or 64-hex Git object id. Container references must carry `@sha256:` plus 64 lowercase hexadecimal characters; a readable tag may remain before the digest. CircleCI registry orbs accept an exact `major.minor.patch` version because published orb versions are immutable. Local GitHub `./…` actions, pre-commit `local`/`meta` repositories, `FROM scratch`, and local Dockerfile `ADD` sources are exempt. Remote `ADD` requires `--checksum=sha256:<64-hex>`.
+
+YAML aliases and merge keys are resolved with explicit-key precedence, while findings retain navigable source ranges. Unknown auto-detected paths and malformed/non-UTF-8 inputs fail as analysis failures instead of passing silently. Variable references fire because the checked file does not prove an immutable value. Check-only and offline: resolving a tag to a SHA/digest is a network-gated suggestion, not a deterministic edit.
+
 ### `markdown_images_have_alt`
 
 **Categories:** Content
@@ -1106,12 +1118,12 @@ Baseline conventions for PHP / Composer projects. Tree-level gate: `when: facts.
 
 ### `alint://bundled/ci/github-actions@v1`
 
-Hardening for `.github/workflows/*.y{,a}ml`, guided by the two OpenSSF Scorecard checks with the strongest supply-chain signal (Token-Permissions + Pinned-Dependencies) plus a readability nudge. Scoped to workflow files, so the ruleset is a safe no-op in repos that don't use GitHub Actions.
+Hardening for GitHub workflow and composite-action manifests, guided by the two OpenSSF Scorecard checks with the strongest supply-chain signal (Token-Permissions + Pinned-Dependencies) plus a readability nudge. Workflow permission/name checks stay scoped to `.github/workflows/*.y{,a}ml`; pinning also covers `action.y{,a}ml`. The ruleset is a safe no-op in repos that use neither surface.
 
 | Rule id | Kind | Default level | Fix |
 |---|---|---|---|
 | `gha-workflow-contents-read` | `yaml_path_absent` (fires on `write-all`, `contents: write`, or no permissions declared anywhere) | warning | — |
-| `gha-pin-actions-to-sha` | `yaml_path_matches` (40-hex SHA on third-party `uses:`; local `./` and digest-pinned `docker://` refs exempt) | warning | — |
+| `gha-pin-actions-to-sha` | `pinned_references` (full Git commit for external actions/reusable workflows; sha256 digest for Docker actions and workflow images; local `./` refs exempt) | warning | — |
 | `gha-workflow-has-name` | `yaml_path_matches` (`$.name`) | info | — |
 
 ### `alint://bundled/agent-hygiene@v1`

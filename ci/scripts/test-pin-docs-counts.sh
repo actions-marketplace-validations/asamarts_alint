@@ -28,6 +28,7 @@ for kind in [
     "markdown_no_duplicate_headings",
     "markdown_required_headings",
     "spdx_identifier_valid",
+    "pinned_references",
 ]:
     facts["rule_kinds"].remove(kind)
     facts["rule_categories"].pop(kind)

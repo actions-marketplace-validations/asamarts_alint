@@ -32,6 +32,7 @@ toml.workspace = true
 roxmltree.workspace = true
 jsonschema.workspace = true
 memchr.workspace = true
+saphyr-parser.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

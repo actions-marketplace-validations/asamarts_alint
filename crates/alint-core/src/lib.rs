@@ -87,6 +87,7 @@ pub use scope_filter::{
     ManifestDeriveTarget, ManifestPathSpec, ResolvedManifestScope, ScopeFilter, ScopeFilterSpec,
     reject_scope_filter_on_cross_file, reject_scope_filter_with_reason,
 };
+pub use structured_format::MAX_STRUCTURED_BYTES;
 pub use structured_format::{Format, MAX_XML_DEPTH};
 pub use walker::{
     AnalysisRead, FileEntry, FileIndex, MAX_ANALYZE_BYTES, WalkOptions, read_capped_or_skip,

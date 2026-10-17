@@ -428,24 +428,40 @@ fn assert_step(
     Ok(())
 }
 
+#[derive(Debug)]
+struct ObservedViolation {
+    rule: String,
+    level: alint_core::Level,
+    path: Option<String>,
+    line: Option<usize>,
+    column: Option<usize>,
+    end_line: Option<usize>,
+    end_column: Option<usize>,
+}
+
 fn assert_violations(
     prefix: &str,
     report: &Report,
     wanted: &[crate::scenario::ExpectViolation],
 ) -> Result<()> {
-    let mut actual: Vec<(String, alint_core::Level, Option<String>)> = Vec::new();
-    for r in &report.results {
-        for v in &r.violations {
-            // Normalise to forward slashes so scenario YAML can
-            // assert `src/main.rs` regardless of host OS.
-            // Windows' Path::display() emits `src\main.rs`.
-            actual.push((
-                r.rule_id.to_string(),
-                r.level,
-                v.path
+    let mut actual = Vec::new();
+    for result in &report.results {
+        for violation in &result.violations {
+            // Normalise to forward slashes so scenario YAML can assert
+            // `src/main.rs` regardless of host OS.
+            let range = violation.range.as_ref();
+            actual.push(ObservedViolation {
+                rule: result.rule_id.to_string(),
+                level: result.level,
+                path: violation
+                    .path
                     .as_ref()
-                    .map(|p| p.display().to_string().replace('\\', "/")),
-            ));
+                    .map(|path| path.display().to_string().replace('\\', "/")),
+                line: range.map_or(violation.line, |range| Some(range.start_line())),
+                column: range.map_or(violation.column, |range| Some(range.start_column())),
+                end_line: range.map(alint_core::SourceRange::end_line),
+                end_column: range.map(alint_core::SourceRange::end_column),
+            });
         }
     }
     if actual.len() != wanted.len() {
@@ -453,29 +469,36 @@ fn assert_violations(
             "{prefix}: expected {} violation(s), got {}: {:?}",
             wanted.len(),
             actual.len(),
-            actual.iter().map(|(r, _, _)| r).collect::<Vec<_>>()
+            actual
+                .iter()
+                .map(|violation| &violation.rule)
+                .collect::<Vec<_>>()
         )));
     }
     // Order-insensitive match: every wanted must find one actual
     // that hasn't been claimed yet.
     let mut claimed = vec![false; actual.len()];
     for w in wanted {
-        let found = actual.iter().enumerate().position(|(i, a)| {
-            !claimed[i]
-                && a.0 == w.rule
-                && w.level.is_none_or(|lv| lv.matches(a.1))
-                && match (&w.path, &a.2) {
-                    (Some(p), Some(ap)) => p == ap,
-                    (None, _) => true,
-                    (Some(_), None) => false,
-                }
+        let found = actual.iter().enumerate().position(|(index, observed)| {
+            !claimed[index]
+                && observed.rule == w.rule
+                && w.level.is_none_or(|level| level.matches(observed.level))
+                && w.path
+                    .as_ref()
+                    .is_none_or(|path| observed.path.as_ref() == Some(path))
+                && w.line.is_none_or(|line| observed.line == Some(line))
+                && w.column
+                    .is_none_or(|column| observed.column == Some(column))
+                && w.end_line
+                    .is_none_or(|end_line| observed.end_line == Some(end_line))
+                && w.end_column
+                    .is_none_or(|end_column| observed.end_column == Some(end_column))
         });
         match found {
             Some(i) => claimed[i] = true,
             None => {
                 return Err(Error::scenario(format!(
-                    "{prefix}: no violation matching rule={:?} level={:?} path={:?}. Actual: {actual:?}",
-                    w.rule, w.level, w.path,
+                    "{prefix}: no violation matching {w:?}. Actual: {actual:?}",
                 )));
             }
         }

@@ -158,6 +158,24 @@
   {
     "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
     "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/actions/demo/action.yml",
+    "fingerprint": "1ba549b70c7106011ee178824ebee4c6bcc257cf7755986448bf72aa3e2e5492"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "8481128804c94bcd44c465ff8a8589002d24b7b510ca3dfb24d71dcce21c2735"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "de97c74963b73d8deae1f789158923881c8612651cee900b42c78a85c6108b06"
+  },
+  {
+    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-pin-actions-to-sha",
     "path": ".github/workflows/bad.yml",
     "fingerprint": "f2107de9fea10ef6110510af3c77d1e3796134ef54127764ebb19cc9c882e942"
   },
@@ -742,6 +760,60 @@
     "rule_id": "dictionary-sorted",
     "path": "dictionary.txt",
     "fingerprint": "2e7c2e822a6c3b5ca7e56b084770932f1762bc9c77400508c168c4302c0bcf46"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": ".circleci/config.yml",
+    "fingerprint": "b0bce495d7ab142804396ef023f070e8f30a7bd4b1663fd9fd1b26238948dfa4"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "e2f1faaf134dc905d1392048d14aa23c79a754097b6abe8eff3b3258737d8e01"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": ".gitlab-ci.yml",
+    "fingerprint": "dfc080586b9aaf8a9ce744e41a53c0f69357fe7baa64fdc30eefaaf156e23d97"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": ".pre-commit-config.yaml",
+    "fingerprint": "04c03e8a8ae07286869d3e6f345bdfd360d9c3503e9bcd7811435e28b793925d"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": ".pre-commit-config.yaml",
+    "fingerprint": "ff533006bdc50d97c447b7b764e82d4607f00825b55e5f35f9a97f016f75af60"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": "Dockerfile",
+    "fingerprint": "6995ad552dae2cd85c7709424f05308263d4a135ca3784b2f7320eeddb0bc5db"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": "Dockerfile",
+    "fingerprint": "7da5784ec3fa70c734512f108ddb1670a34c2d0c132f4ad185a96dbe9b2bd14c"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": "actions/demo/action.yml",
+    "fingerprint": "ac6ccef34f8cf83addc94392672500cad1118c920f9abdd3de7dad501eab9ac9"
+  },
+  {
+    "scenario": "check/content/pinned_references_fail.yml",
+    "rule_id": "immutable-build-inputs",
+    "path": "cloudbuild.yaml",
+    "fingerprint": "ee450fdc5bfb45d2e4bbf4260bdec16b9c16047b4cbe484430fde272d04f2905"
   },
   {
     "scenario": "check/content/spdx_identifier_valid_fail.yml",

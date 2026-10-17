@@ -55,6 +55,43 @@ fn bench_rule(c: &mut Criterion, group_name: &str, yaml: &str) {
     group.finish();
 }
 
+fn pinned_references(c: &mut Criterion) {
+    let mut group = c.benchmark_group("single_file/pinned_references");
+    for &references in &[1_000usize, 10_000] {
+        let tmp = tempfile::Builder::new()
+            .prefix("alint-bench-pinned-references-")
+            .tempdir()
+            .expect("tempdir");
+        let path = tmp.path().join(".github/workflows/ci.yml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut source = String::with_capacity(64 + references * 72);
+        source.push_str("jobs:\n  build:\n    steps:\n");
+        for _ in 0..references {
+            source.push_str("      - uses: owner/repo@0123456789abcdef0123456789abcdef01234567\n");
+        }
+        std::fs::write(&path, source).unwrap();
+        let index = walk(tmp.path(), &WalkOptions::default()).expect("walk");
+        let engine = build_engine(
+            r#"
+version: 1
+rules:
+  - id: immutable-build-inputs
+    kind: pinned_references
+    paths: ".github/workflows/*.yml"
+    format: github_actions
+    level: warning
+"#,
+        );
+        group.throughput(Throughput::Elements(references as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(references),
+            &index,
+            |b, index| b.iter(|| engine.run(tmp.path(), index).unwrap()),
+        );
+    }
+    group.finish();
+}
+
 fn file_content_matches(c: &mut Criterion) {
     bench_rule(
         c,
@@ -247,5 +284,6 @@ criterion_group!(
     no_trailing_whitespace,
     final_newline,
     reeval_vs_full,
+    pinned_references,
 );
 criterion_main!(benches);

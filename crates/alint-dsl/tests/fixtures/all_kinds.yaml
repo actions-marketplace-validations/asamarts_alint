@@ -588,6 +588,11 @@ rules:
     kind: editorconfig_conforms
     paths: "**/*"
     level: warning
+  - id: immutable-build-inputs
+    kind: pinned_references
+    paths: ".github/workflows/*.yml"
+    format: github_actions
+    level: warning
   - id: markdown-image-alt
     kind: markdown_images_have_alt
     paths: "docs/**/*.md"

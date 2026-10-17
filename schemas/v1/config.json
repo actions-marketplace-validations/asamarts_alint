@@ -335,6 +335,45 @@
         }
       ]
     },
+    "InputFormat": {
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "Infer the consumer from the repository-relative filename.",
+          "type": "string"
+        },
+        {
+          "const": "github_actions",
+          "description": "GitHub Actions workflow or action-manifest semantics.",
+          "type": "string"
+        },
+        {
+          "const": "pre_commit",
+          "description": "pre-commit configuration semantics.",
+          "type": "string"
+        },
+        {
+          "const": "circleci",
+          "description": "`CircleCI` configuration semantics.",
+          "type": "string"
+        },
+        {
+          "const": "gitlab_ci",
+          "description": "GitLab CI configuration semantics.",
+          "type": "string"
+        },
+        {
+          "const": "cloud_build",
+          "description": "Google Cloud Build configuration semantics.",
+          "type": "string"
+        },
+        {
+          "const": "dockerfile",
+          "description": "Dockerfile instruction semantics.",
+          "type": "string"
+        }
+      ]
+    },
     "Language": {
       "enum": [
         "auto",
@@ -5085,6 +5124,9 @@
           "$ref": "#/$defs/rule_markdown_required_headings"
         },
         {
+          "$ref": "#/$defs/rule_pinned_references"
+        },
+        {
           "$ref": "#/$defs/rule_markdown_no_duplicate_headings"
         },
         {
@@ -6256,6 +6298,43 @@
       "required": [
         "source",
         "target"
+      ],
+      "type": "object"
+    },
+    "rule_pinned_references": {
+      "description": "Require executable references in supported CI and container files to identify immutable artifacts rather than mutable tags or branches.",
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "fix"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "expect_matches": {
+          "default": false,
+          "description": "Require the rule's effective file scope (`paths:` plus `scope_filter:`) to match at least one file. Checked after `when:` and against the full repository even under `--changed`. Unsupported for existence and selector rules, whose empty sets have kind-specific meaning.",
+          "type": "boolean"
+        },
+        "format": {
+          "$ref": "#/$defs/InputFormat",
+          "default": "auto",
+          "description": "Parser and semantic selector set. `auto` infers it from the path."
+        },
+        "kind": {
+          "const": "pinned_references"
+        },
+        "paths": {
+          "$ref": "#/$defs/paths_spec"
+        },
+        "scope_filter": {
+          "$ref": "#/$defs/scope_filter"
+        }
+      },
+      "required": [
+        "paths"
       ],
       "type": "object"
     },

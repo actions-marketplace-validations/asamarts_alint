@@ -8,7 +8,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **All 95 canonical rule kinds now declare serializable capability metadata.** Each built-in
+- **All 102 canonical rule kinds now declare serializable capability metadata.** Each built-in
   registration carries its dispatch class, accepted selectors, conditional host capabilities,
   content access, formats, changed dependencies, fix operations, and nested-rule support; all 11
   aliases resolve the exact canonical record. Completeness, transition-list parity, subprocess
@@ -25,7 +25,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   adds a `kind_meta` record for every canonical kind; aliases resolve through `rule_aliases`.
   `alint rules show <kind>` and `alint explain <id>` now print capabilities, accepted selectors,
   and fix operations in human output and expose the structured lists in JSON. The config JSON
-  Schema now derives all 95 kinds' option surfaces from Rust option models and applies each kind's
+  Schema now derives all 102 kinds' option surfaces from Rust option models and applies each kind's
   metadata-described `paths`, `scope_filter`, `fix`, and `expect_matches` contract to top-level
   and nested rules; generation fails on registry, metadata, or schema drift.
 - **Structured extraction now has a duplicate-preserving, source-spanned row API.**
@@ -45,6 +45,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   strict license expressions against the bundled offline SPDX License List 3.29.0 data. All six
   are check-only, expose precise source ranges, and declare their dispatch, selector, content,
   and dependency capabilities through `KindMeta`.
+- **`pinned_references` enforces immutable build inputs across six consumers.** The check-only,
+  offline kind validates GitHub Action and reusable-workflow commits, composite-action steps,
+  workflow/container service images, pre-commit revisions, CircleCI orbs and images, GitLab
+  images/services, Cloud Build step images, Dockerfile base images, and remote `ADD` checksums.
+  Findings carry exact YAML scalar or Dockerfile instruction ranges; YAML aliases/merge keys,
+  Dockerfile continuations/heredocs, local references, and `scratch` are handled without network
+  resolution. `ci/github-actions@v1` keeps its existing `gha-pin-actions-to-sha` rule id, warning
+  level, and workflow-step finding identity while migrating to the new kind. Existing users may
+  now see warnings for mutable reusable workflows, composite-action steps, and workflow
+  container/service images: pin them to a full commit SHA or sha256 digest, or narrow/disable the
+  inherited rule when that mutable input is intentional.
 
 
 ### Changed

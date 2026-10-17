@@ -207,6 +207,7 @@ pub mod pair;
 pub mod pair_changed_together;
 pub mod pair_hash;
 mod pathsafe;
+pub mod pinned_references;
 pub mod registry_paths_resolve;
 pub mod shebang_has_executable;
 mod spawn;
@@ -300,6 +301,10 @@ pub fn rule_option_schemas() -> Vec<(&'static str, serde_json::Value)> {
         (
             "rule_markdown_paths_resolve",
             markdown_paths_resolve::options_schema(),
+        ),
+        (
+            "rule_pinned_references",
+            pinned_references::options_schema(),
         ),
         (
             "rule_git_commit_message",
@@ -698,6 +703,11 @@ pub fn register_builtin(registry: &mut RuleRegistry) {
         &markdown_required_headings::META,
         markdown_required_headings::build,
     );
+    registry.register(
+        "pinned_references",
+        &pinned_references::META,
+        pinned_references::build,
+    );
     registry.register_optionless(
         "editorconfig_conforms",
         &editorconfig_conforms::META,
@@ -999,7 +1009,7 @@ mod registry_tests {
             metadata, canonical,
             "every canonical builder must share its registration with one metadata record"
         );
-        assert_eq!(metadata.len(), 101, "the v0.19 inventory covers 101 kinds");
+        assert_eq!(metadata.len(), 102, "the v0.19 inventory covers 102 kinds");
 
         for (alias, canonical) in registry.aliases() {
             let alias_meta = registry.meta(alias).expect("registered alias has metadata");
@@ -1035,7 +1045,7 @@ mod registry_tests {
                 count(&|m| matches!(m.dispatch, DispatchClass::RuleMajorScoped)),
                 count(&|m| matches!(m.dispatch, DispatchClass::SingleShot)),
             ],
-            [55, 22, 14, 10],
+            [56, 22, 14, 10],
             "dispatch-class inventory drifted"
         );
         assert_eq!(
@@ -1044,7 +1054,7 @@ mod registry_tests {
                 count(&|m| m.paths == PathsSupport::Optional),
                 count(&|m| m.paths == PathsSupport::Forbidden),
             ],
-            [78, 0, 23],
+            [79, 0, 23],
             "paths support inventory drifted"
         );
         assert_eq!(
@@ -1053,7 +1063,7 @@ mod registry_tests {
                 count(&|m| matches!(m.scope_filter, ScopeFilterSupport::AncestorOnly)),
                 count(&|m| matches!(m.scope_filter, ScopeFilterSupport::Rejected { .. })),
             ],
-            [72, 1, 28],
+            [73, 1, 28],
             "scope-filter inventory drifted"
         );
         assert_eq!(
@@ -1062,7 +1072,7 @@ mod registry_tests {
                 count(&|m| m.git_tracked_only == GitTrackedSupport::FileOnly),
                 count(&|m| m.git_tracked_only == GitTrackedSupport::DirAware),
             ],
-            [97, 2, 2],
+            [98, 2, 2],
             "git-tracked support inventory drifted"
         );
         assert_eq!(
@@ -1071,10 +1081,10 @@ mod registry_tests {
                 count(&|m| m.since == SinceSupport::Optional),
                 count(&|m| m.since == SinceSupport::Required),
             ],
-            [92, 7, 2],
+            [93, 7, 2],
             "since support inventory drifted"
         );
-        assert_eq!(count(&|m| m.expect_matches), 74);
+        assert_eq!(count(&|m| m.expect_matches), 75);
         assert_eq!(count(&|m| m.nested_rules), 3);
         assert_eq!(
             [
@@ -1087,7 +1097,7 @@ mod registry_tests {
                 count(&|m| m.content == ContentAccess::Blame),
                 count(&|m| m.content == ContentAccess::Delegated),
             ],
-            [23, 5, 6, 1, 53, 6, 1, 6],
+            [23, 5, 6, 1, 54, 6, 1, 6],
             "content-access inventory drifted"
         );
 

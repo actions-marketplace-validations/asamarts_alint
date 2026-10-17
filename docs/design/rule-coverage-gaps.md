@@ -217,13 +217,12 @@ a reader does not re-propose them):
   `License` / `Dependency-Update-Tool` reduce to this.
 - **REUSE and Apache license headers** via `compliance/reuse@v1`, `compliance/apache-2@v1`,
   `apache/governance@v1`.
-- **GitHub Actions pinning and workflow `permissions:`, partially,** via `ci/github-actions@v1`.
-  `gha-pin-actions-to-sha` checks step-level `jobs.*.steps[*].uses` only (reusable-workflow
-  `jobs.*.uses` and composite `action.yml` steps are unchecked), and
-  `gha-workflow-contents-read` rejects missing permissions, `write-all`, and `contents: write`,
-  but lets other write scopes through, which is not least privilege. Scorecard's
-  `Token-Permissions` and the Actions slice of `Pinned-Dependencies` are therefore covered in
-  part; H1 below closes the pinning holes.
+- **GitHub Actions pinning and workflow `permissions:`** via `ci/github-actions@v1`.
+  `gha-pin-actions-to-sha` now uses the consumer-aware `pinned_references` kind for ordinary and
+  Docker action steps, reusable-workflow `jobs.*.uses`, composite `action.yml` steps, and workflow
+  container/service images. `gha-workflow-contents-read` still rejects missing permissions,
+  `write-all`, and `contents: write`, but lets other write scopes through, so Scorecard's
+  `Token-Permissions` coverage remains partial.
 - **Most of the structural pre-commit-hooks battery** (trailing whitespace, final newline,
   mixed line ending, BOM, merge-conflict, case conflict, illegal Windows names, large files,
   submodules, shebang/executable pairing, a symlink ban) maps onto existing hygiene, unicode,
@@ -455,15 +454,15 @@ applies to front matter (E6) and Dockerfiles (H2).
 
 | ID | Gap | Detects | Scope | Expr | Fix |
 |---|---|---|---|---|---|
-| H1 | `pinned_references` | one cross-system unpinned-ref rule: Actions `@tag`, CircleCI orbs/images, GitLab/Cloud-Build `image:`, pre-commit `rev`, Dockerfile `FROM tag` (want `@sha256:`), `ADD http(s)://` | IN (detect); fix network-gated | P+K | Suggestion / class 7 |
+| H1 | `pinned_references` *(added 2026-10-17)* | one cross-system unpinned-ref rule: Actions `@tag`, CircleCI orbs/images, GitLab/Cloud-Build `image:`, pre-commit `rev`, Dockerfile `FROM tag` (want `@sha256:`), `ADD http(s)://` | IN (detect); fix network-gated | P+K | Suggestion / class 7 |
 | H2 | `dockerfile_structural` | hadolint's non-shell subset: base image tagged and digest-pinned, `COPY` not `ADD`, unique `FROM` aliases, JSON `CMD`/`ENTRYPOINT`, last `USER` not root, absolute `WORKDIR` | IN (structural); RUN-shell rules OUT | P (most) / K (cross-instruction state) | Unsafe / Suggestion |
 
-`pinned_references` generalizes the pinning discipline alint already ships for GitHub Actions
-to Dockerfile digests and pre-commit `rev:` (both clean gaps; hadolint has no base-image
+`pinned_references` generalizes the pinning discipline alint ships for GitHub Actions to
+Dockerfile digests and pre-commit `rev:` (both clean gaps; hadolint has no base-image
 **digest**-pin rule), motivated by the March 2025 `tj-actions/changed-files` supply-chain
-incident. The tag-to-SHA fix is network-gated (auto-fix class 7). It should also close the two
-holes in the shipped Actions rule (section 3): reusable-workflow `jobs.*.uses` and composite
-`action.yml` steps.
+incident. The shipped check is deliberately detection-only because tag-to-SHA repair needs
+network access (auto-fix class 7). The bundled Actions migration also closes the former
+reusable-workflow `jobs.*.uses` and composite `action.yml` holes.
 
 ### Family I: portability (extend the portable-metadata family)
 

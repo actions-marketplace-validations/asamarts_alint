@@ -2,7 +2,7 @@
   "format_version": 4,
   "alint_version": "0.18.4",
   "counts": {
-    "rule_kinds": 101,
+    "rule_kinds": 102,
     "rule_aliases": 11,
     "families": 13,
     "bundled_rulesets": 22,
@@ -106,6 +106,7 @@
     "pair",
     "pair_changed_together",
     "pair_hash",
+    "pinned_references",
     "properties_path_absent",
     "properties_path_equals",
     "properties_path_matches",
@@ -496,6 +497,10 @@
     ],
     "pair_hash": [
       "cross-file",
+      "security-unicode-sanity"
+    ],
+    "pinned_references": [
+      "content",
       "security-unicode-sanity"
     ],
     "properties_path_absent": [
@@ -4060,6 +4065,43 @@
       "expect_matches": false,
       "nested_rules": false
     },
+    "pinned_references": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "nested_rules": false
+    },
     "properties_path_absent": {
       "dispatch": {
         "kind": "per_file",
@@ -4845,6 +4887,7 @@
     "pair": "pair",
     "pair_changed_together": "pair_changed_together",
     "pair_hash": "pair_hash",
+    "pinned_references": "pinned_references",
     "properties_path_absent": "structured_path",
     "properties_path_equals": "structured_path",
     "properties_path_matches": "structured_path",

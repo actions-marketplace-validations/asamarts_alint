@@ -45,11 +45,13 @@ I/O. The v0.9.5 path-index fix shows up at the 100k size as a
 mostly-flat delta — the engine is no longer the bottleneck.
 
 ### `single_file_rules.rs`
-Per-file rule throughput (filesystem-touching) for 8 representative
+Per-file rule throughput (filesystem-touching) for 9 representative
 rules: `file_content_matches`, `file_content_forbidden`, `file_header`,
 `file_starts_with`, `file_hash`, `file_is_text`, `no_trailing_whitespace`,
-`final_newline`. Each at 100 / 1000 file sizes. Headline source for
-the v0.9.3 dispatch flip's 80-85 % single-rule wins.
+`final_newline`, and `pinned_references`. The first eight use 100 / 1000
+files; `pinned_references` uses one file containing 1000 / 10000 references
+to expose parser and selector scaling. Headline source for the v0.9.3
+dispatch flip's 80-85 % single-rule wins.
 
 ### `cross_file_rules.rs`
 Cross-file rule throughput for `pair`, `unique_by`,

@@ -225,8 +225,9 @@ impl From<ExpectTreeMode> for VerifyMode {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ExpectStep {
-    /// Expected violations for a `check` step. Each item matches by
-    /// `rule` id; `level` and `path` are optional refinements.
+    /// Expected violations for a `check` step. Each item matches by `rule` id;
+    /// `level`, `path`, and the four one-based source-range coordinates are
+    /// optional refinements.
     pub violations: Option<Vec<ExpectViolation>>,
     /// Expected non-policy analysis failures. Each item matches by rule id;
     /// `kind` and `path` are optional refinements.
@@ -250,6 +251,14 @@ pub struct ExpectViolation {
     pub level: Option<LevelName>,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default)]
+    pub line: Option<usize>,
+    #[serde(default)]
+    pub column: Option<usize>,
+    #[serde(default)]
+    pub end_line: Option<usize>,
+    #[serde(default)]
+    pub end_column: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

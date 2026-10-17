@@ -201,6 +201,7 @@ dependencies = [
  "pulldown-cmark",
  "regex",
  "roxmltree",
+ "saphyr-parser",
  "schemars",
  "serde",
  "serde_json",

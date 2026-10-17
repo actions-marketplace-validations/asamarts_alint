@@ -7,9 +7,10 @@
 //! differ. When they drift, external users who `extends:` the bundled ruleset get
 //! behavior the maintainers never see on their own dogfooded repo.
 //!
-//! This is the gate issue #208 lacked: the bundled `gha-pin-actions-to-sha` regex
-//! had drifted from the already-fixed dogfood copy, shipping a false positive on
-//! local `./` action references. This test fails on exactly that kind of drift.
+//! This is the gate issue #208 lacked: the bundled `gha-pin-actions-to-sha`
+//! implementation had drifted from the already-fixed dogfood copy, shipping a
+//! false positive on local `./` action references. This test catches that class
+//! of semantic drift regardless of the backing rule kind.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

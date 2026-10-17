@@ -94,6 +94,7 @@ pub static KIND_CATEGORIES: &[(&str, &[Category])] = &[
     ("pair", &[Category::CrossFile]),
     ("pair_changed_together", &[Category::GitHygiene, Category::CrossFile]),
     ("pair_hash", &[Category::CrossFile, Category::SecurityUnicodeSanity]),
+    ("pinned_references", &[Category::Content, Category::SecurityUnicodeSanity]),
     ("properties_path_absent", &[Category::StructuredQuery]),
     ("properties_path_equals", &[Category::StructuredQuery]),
     ("properties_path_matches", &[Category::StructuredQuery]),

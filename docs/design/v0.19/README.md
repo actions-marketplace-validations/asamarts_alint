@@ -113,11 +113,15 @@ moves.
   related-location paths before any CLI, SARIF, baseline, fix, or LSP boundary. Targeted
   regressions, direct CLI and LSP leak smokes, the full workspace suite, preflight, shell,
   packaging, example, advisory, and benchmark-smoke gates passed.
-- **The first W9 increment is complete.** Six standalone kinds now enforce repository
+- **The first two W9 increments are complete.** Six standalone kinds enforce repository
   EditorConfig policy, Markdown image alt text, required and duplicate headings, Markdown
-  fragment targets, and SPDX license expressions. Each has the normal metadata, schema,
-  generated documentation, declarative scenarios, and compatibility gates. **W9 remains active:
-  H1 `pinned_references` is next.**
+  fragment targets, and SPDX license expressions. H1 `pinned_references` now checks immutable
+  executable references across GitHub Actions, pre-commit, CircleCI, GitLab CI, Cloud Build, and
+  Dockerfiles; the shipped GitHub Actions ruleset retains its rule id and existing workflow-step
+  fingerprint while gaining reusable-workflow, composite-action, and image coverage. All seven
+  kinds have the normal metadata, schema, generated documentation, declarative scenarios, and
+  compatibility gates. **W9 remains active: the C1 version-SSOT and C2 toolchain-pin bundled
+  rulesets are next.**
 
 ### Completed release item: the v0.18.4 benchmark record
 
@@ -362,7 +366,7 @@ semantics, format support, and compatibility boundary decided).
 
 ### W9. Standalone detection kinds, as capacity allows
 
-**A1, E2, E3, E5, E7, and F2 completed 2026-10-17. H1 is next.**
+**A1, E2, E3, E5, E7, F2, and H1 completed 2026-10-17. C1 and C2 are next.**
 
 From the "ship now" bucket of [`../general-linter.md`](../general-linter.md) section 11.8, in
 value order:

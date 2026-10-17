@@ -1,0 +1,22 @@
+name: pinned_references accepts an explicit format for a nonstandard filename
+
+tags: [check, pinned_references, content, security, passing]
+
+given:
+  tree:
+    custom-build.yml: |
+      steps:
+        - name: gcr.io/cloud-builders/docker:latest@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  config: |
+    version: 1
+    rules:
+      - id: immutable-custom-cloud-build
+        kind: pinned_references
+        paths: custom-build.yml
+        format: cloud_build
+        level: error
+
+when: [check]
+
+expect:
+  - violations: []
