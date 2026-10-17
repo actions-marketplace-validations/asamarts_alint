@@ -129,6 +129,9 @@ moves.
   made the selectors syntax-aware for inert TOML, Python, Ruby, Markdown, and Dockerfile text;
   made duplicate same-value repairs occurrence-specific so baseline-suppressed siblings remain
   untouched; and bounded extraction, syntax scanning, edit counts, and projected repair output.
+  The completion audit also moved seven large inline test modules into focused companion files;
+  every source file that crossed the repository's 2,000-line maintainability limit during the
+  increment is back below it without changing production code or test coverage.
   **W10 and the release gates are next.**
 
 ### Completed release item: the v0.18.4 benchmark record
