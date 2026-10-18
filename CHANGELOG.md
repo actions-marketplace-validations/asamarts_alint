@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The published GitHub Actions guide now follows the post-release immutable pin.** The docs bundle
+  overlays that guide from `main` after a tag is published and rejects generated output whose
+  Action examples do not match `ci/action-doc-pin.env`, instead of leaving alint.org's copy-paste
+  snippets one release behind.
+
 ## [0.19.0] - 2026-10-18
 
 General-linter phase 0/1a makes the rule registry authoritative for capabilities and generated

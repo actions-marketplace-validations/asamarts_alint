@@ -81,7 +81,7 @@ jobs:
         with:
           key: docs-bundle
 
-      - name: Overlay main-tracked docs (reference + design)
+      - name: Overlay main-tracked release-safe docs
         run: |
           set -euo pipefail
           # docs-export (next step) builds from the release TAG checked out
@@ -93,7 +93,9 @@ jobs:
           # docs/site/concepts/ tree is overlaid from main (the Phase 6 redesign
           # restructured concepts into grouped subdirs and renamed/folded the old
           # flat pages), so the concepts ship without a release; getting-started/
-          # installation is overlaid for the same presentation-fix reason. Like
+          # installation is overlaid for the same presentation-fix reason. The
+          # GitHub Actions guide is also main-tracked because its immutable
+          # release-commit pin can only be written after the tag exists. Like
           # reference docs these are release-gated below (strip-since). The one
           # count-bearing concepts page is also rendered from the release tag's
           # facts.json, because main's rule counts can legitimately move ahead
@@ -122,7 +124,8 @@ jobs:
           # they stay overlaid for released-doc fixes.
           git fetch --quiet origin main
           git checkout origin/main -- docs/site/reference docs/design/ARCHITECTURE.md docs/design/ROADMAP.md roadmap.json \
-            docs/site/about/architecture-diagrams.md docs/site/getting-started/installation.md
+            docs/site/about/architecture-diagrams.md docs/site/getting-started/installation.md \
+            docs/site/integrations/github-actions.md
           # Concepts: overlay the whole tree from main. `git checkout` adds and
           # overwrites but never DELETES, so remove the tag's obsolete flat
           # concept pages first (Phase 6 renamed/folded/relocated all of them);
@@ -138,12 +141,13 @@ jobs:
           # prose, just moved.
           git checkout origin/main -- docs/site/configuration/templates.md \
             docs/site/configuration/variable-interpolation.md docs/site/cookbook/suggest.md
-          echo "Overlaid reference + design + full concepts/ + relocated pages from origin/main ($(git rev-parse --short origin/main))."
+          echo "Overlaid reference + Action guide + design + full concepts/ + relocated pages from origin/main ($(git rev-parse --short origin/main))."
 
       - name: Release-gate the overlaid docs (strip unreleased since-blocks)
-        # The overlay above brings main's reference + design prose into the
-        # tag-built tree, and that prose may carry `<!-- alint:since=X -->` blocks
-        # staged for a FUTURE release (e.g. a v0.14 baseline note). The release
+        # The overlay above brings main's reference, Action-guide, and design
+        # prose into the tag-built tree, and that prose may carry
+        # `<!-- alint:since=X -->` blocks staged for a FUTURE release (e.g. a
+        # v0.14 baseline note). The release
         # TAG's docs-export (next step) predates the P-REF stripper, so it cannot
         # gate them — without this step an unreleased block reaches the bundle
         # AND the live site, and a link inside it to a not-yet-shipped page (a
@@ -172,6 +176,7 @@ jobs:
             docs/site/configuration/variable-interpolation.md \
             docs/site/cookbook/suggest.md \
             docs/site/getting-started/installation.md \
+            docs/site/integrations/github-actions.md \
             docs/design/ARCHITECTURE.md \
             docs/design/ROADMAP.md
           # This page states concrete catalogue counts in prose and an SVG.
@@ -183,13 +188,42 @@ jobs:
 
       - name: Generate docs-bundle/
         # This runs the RELEASE TAG's docs-export, so it must NOT pass a flag the
-        # tag's xtask lacks — the main-overlaid reference/design docs were already
-        # release-gated by the standalone stripper step above (the tag's
-        # copy_site_tree has no stripper of its own). The rule-page bridge below
-        # gates separately, because it runs MAIN's docs-export from a worktree
-        # where `--released-version` exists.
+        # tag's xtask lacks — the main-overlaid reference, Action-guide, and
+        # design docs were already release-gated by the standalone stripper
+        # step above (the tag's copy_site_tree has no stripper of its own). The
+        # rule-page bridge below gates separately, because it runs MAIN's xtask
+        # from a worktree where `--released-version` exists.
         run: cargo run -q -p xtask -- docs-export
         # Output lives at target/docs-bundle/.
+
+      - name: Verify published Action documentation pin
+        run: |
+          set -euo pipefail
+          # The release commit cannot name its own SHA. The post-release main
+          # commit records it in action-doc-pin.env and updates the overlaid
+          # guide above; assert the generated bundle carries that exact pin so a
+          # successful docs build cannot leave the live copy-paste snippet one
+          # release behind.
+          pin_file="$(mktemp)"
+          trap 'rm -f "$pin_file"' EXIT
+          git show origin/main:ci/action-doc-pin.env > "$pin_file"
+          # shellcheck disable=SC1090
+          source "$pin_file"
+          doc=target/docs-bundle/integrations/github-actions.md
+          expected="asamarts/alint@${ACTION_DOC_SHA} # v${ACTION_DOC_VERSION}"
+          uses_count="$(grep -cE 'uses:[[:space:]]*asamarts/alint@' "$doc" || true)"
+          if [[ "$uses_count" -eq 0 ]]; then
+            echo "::error file=$doc::No alint Action examples found in the generated guide."
+            exit 1
+          fi
+          mismatched="$(grep -nE 'uses:[[:space:]]*asamarts/alint@' "$doc" |
+            grep -vF "$expected" || true)"
+          if [[ -n "$mismatched" ]]; then
+            echo "::error file=$doc::Generated Action examples do not match $expected"
+            printf '%s\n' "$mismatched"
+            exit 1
+          fi
+          echo "Published Action guide has $uses_count example(s) pinned to $expected."
 
       - name: Ensure roadmap.json is in the bundle (main-tracked)
         run: |

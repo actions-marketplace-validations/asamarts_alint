@@ -161,6 +161,11 @@ checklist so the release-gated pieces land and nothing drifts:
    bash ci/scripts/check-version-pins.sh --verify-action-tag
    ```
 
+   The docs-bundle workflow overlays the GitHub Actions guide from `main` and
+   rejects generated output that does not match this metadata, so pushing the
+   follow-up also refreshes alint.org's published snippets without waiting for
+   another release.
+
 5. **Reconcile the trackers.** Bump `alint.org`'s pins (four install sites plus
    prose claims), and reconcile `alint.org` `marketing/STATE.md` to the new
    version and counts so it never drifts weeks behind again (P5.2).
