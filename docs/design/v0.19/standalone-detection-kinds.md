@@ -132,7 +132,9 @@ because a changed target heading can invalidate an unchanged source link.
 
 `editorconfig_conforms` owns a bounded parser that retains declaration line numbers and compiles
 EditorConfig globs to Rust `regex`; it does not invoke a host EditorConfig library that can walk
-above the lint root. `spdx_identifier_valid` uses the pinned, offline SPDX 3.29 data and strict
+above the lint root. Discovery caches each encountered policy once and retains only one selected
+file's ancestor chain at a time, so auxiliary chain memory is bounded by maximum path depth rather
+than selected-file count. `spdx_identifier_valid` uses the pinned, offline SPDX 3.29 data and strict
 expression parser in `spdx` 0.13.6; it performs no network or runtime data loading.
 
 Every kind declares `KindMeta`, participates in schema/facts/category/doc generation, has firing

@@ -339,21 +339,18 @@ impl Rule for EditorconfigConformsRule {
             .collect();
         let mut policies = HashMap::new();
         let mut failures = BTreeMap::new();
-        let mut chains = Vec::with_capacity(selected.len());
         for entry in &selected {
             // Search from the target outward and stop at the nearest `root =
             // true`. Besides matching EditorConfig discovery semantics, this
             // avoids reading or diagnosing an outer policy that the nearer
             // root deliberately hides.
-            let mut chain = Vec::new();
             for path in ancestor_configs(&entry.path).into_iter().rev() {
                 if !ctx.index.contains_file(&path) {
                     continue;
                 }
                 let state = policies
-                    .entry(path.clone())
-                    .or_insert_with(|| load_policy(ctx, &path, &mut failures));
-                chain.push(path.clone());
+                    .entry(path)
+                    .or_insert_with_key(|path| load_policy(ctx, path, &mut failures));
                 match state {
                     PolicyState::Ready(policy) if policy.root => break,
                     PolicyState::Failed => {
@@ -365,13 +362,12 @@ impl Rule for EditorconfigConformsRule {
                     PolicyState::Ready(_) => {}
                 }
             }
-            chain.reverse();
-            chains.push(chain);
         }
 
         let mut violations = failures.into_values().collect::<Vec<_>>();
         let mut invalid_declarations = HashSet::new();
-        for (entry, chain) in selected.into_iter().zip(chains) {
+        for entry in selected {
+            let chain = applicable_policy_chain(&entry.path, &policies);
             if chain
                 .iter()
                 .any(|path| matches!(policies.get(path), Some(PolicyState::Failed)))
@@ -856,6 +852,23 @@ fn is_supported_property(key: &str) -> bool {
             | "insert_final_newline"
             | "max_line_length"
     )
+}
+
+fn applicable_policy_chain(path: &Path, policies: &HashMap<PathBuf, PolicyState>) -> Vec<PathBuf> {
+    let mut chain = Vec::new();
+    for candidate in ancestor_configs(path).into_iter().rev() {
+        let Some(state) = policies.get(&candidate) else {
+            continue;
+        };
+        let stop = matches!(state, PolicyState::Ready(policy) if policy.root)
+            || matches!(state, PolicyState::Failed);
+        chain.push(candidate);
+        if stop {
+            break;
+        }
+    }
+    chain.reverse();
+    chain
 }
 
 fn effective_policy(

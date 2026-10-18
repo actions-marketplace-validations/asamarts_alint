@@ -221,7 +221,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   target files are split into physical lines for indentation, trailing-whitespace, width, and
   final-newline locations. Tab indentation accepts the specification's canonical sub-tab-width
   space remainder instead of rejecting every space. Unsupported extension properties are discarded
-  while parsing instead of being cloned into every target's effective policy.
+  while parsing instead of being cloned into every target's effective policy, and ancestor
+  discovery builds only one target's policy chain at a time instead of retaining every selected
+  file's chain.
 
 - **Source locations and line-oriented extraction now agree across LF, CRLF, CR, and BOM-prefixed
   text.** A shared zero-allocation physical-line iterator backs EditorConfig and SPDX checks,
