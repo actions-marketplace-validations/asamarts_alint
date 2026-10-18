@@ -160,6 +160,70 @@ fn ranged_locations_use_utf16_and_related_information_respects_capability() {
     );
 }
 
+#[test]
+fn bom_marked_disk_and_overlay_locations_use_logical_text_coordinates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let primary = root.join("primary.txt");
+    let text = "a😀x\r\nb";
+    let mut utf8_bytes = b"\xef\xbb\xbf".to_vec();
+    utf8_bytes.extend_from_slice(text.as_bytes());
+    let mut little_endian_bytes = b"\xff\xfe".to_vec();
+    let mut big_endian_bytes = b"\xfe\xff".to_vec();
+    for unit in text.encode_utf16() {
+        little_endian_bytes.extend_from_slice(&unit.to_le_bytes());
+        big_endian_bytes.extend_from_slice(&unit.to_be_bytes());
+    }
+
+    for (name, bytes) in [
+        ("utf8.txt", utf8_bytes),
+        ("utf16le.txt", little_endian_bytes),
+        ("utf16be.txt", big_endian_bytes),
+    ] {
+        std::fs::write(root.join(name), bytes).unwrap();
+        let violation = Violation::new("boom").with_related_location(
+            RelatedLocation::new(name, "secondary")
+                .with_range(SourceRange::new(1, 2, 1, 3).unwrap()),
+        );
+        let mut texts = TextSource::default();
+        let information = related_information(
+            root,
+            &primary,
+            Range::new(Position::new(0, 0), Position::new(0, 1)),
+            &violation,
+            &mut texts,
+        );
+        assert_eq!(information.len(), 1, "{name}");
+        assert_eq!(
+            information[0].location.range,
+            Range::new(Position::new(0, 1), Position::new(0, 3)),
+            "{name}"
+        );
+    }
+
+    let overlay = root.join("overlay.txt");
+    let violation = Violation::new("boom").with_related_location(
+        RelatedLocation::new("overlay.txt", "secondary")
+            .with_range(SourceRange::new(1, 2, 1, 3).unwrap()),
+    );
+    let mut texts = TextSource::with_overlays(std::collections::HashMap::from([(
+        overlay,
+        format!("\u{feff}{text}"),
+    )]));
+    let information = related_information(
+        root,
+        &primary,
+        Range::new(Position::new(0, 0), Position::new(0, 1)),
+        &violation,
+        &mut texts,
+    );
+    assert_eq!(
+        information[0].location.range,
+        Range::new(Position::new(0, 1), Position::new(0, 3)),
+        "UTF-8 BOM in an editor overlay"
+    );
+}
+
 #[tokio::test]
 async fn initialize_records_related_information_capability() {
     use tower_lsp::lsp_types::{

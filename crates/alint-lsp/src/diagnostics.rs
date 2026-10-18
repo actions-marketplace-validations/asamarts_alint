@@ -13,8 +13,8 @@ use alint_core::{Engine, Level, RuleResult, Violation};
 use crate::render::{kind_description, rule_docs_url};
 use crate::{Finding, FindingsByPath};
 
-/// Document text for UTF-16 column conversion: the editor's buffer for
-/// open documents (what was linted), else the file on disk (cached).
+/// Logical document text for UTF-16 column conversion: the editor's buffer for
+/// open documents (what was linted), else the BOM-decoded file on disk (cached).
 #[derive(Debug, Default)]
 pub(crate) struct TextSource {
     overlays: HashMap<PathBuf, String>,
@@ -30,18 +30,54 @@ impl TextSource {
     }
 
     fn get(&mut self, abs: &Path) -> Option<&str> {
-        if self.overlays.contains_key(abs) {
-            return self.overlays.get(abs).map(String::as_str);
+        if let Some(text) = self.overlays.get(abs) {
+            return Some(without_utf8_bom(text));
         }
         self.disk
             .entry(abs.to_path_buf())
             .or_insert_with(|| {
                 let size = std::fs::metadata(abs).ok()?.len();
                 let bytes = alint_core::read_capped_or_skip(abs, size)?;
-                Some(String::from_utf8_lossy(&bytes).into_owned())
+                Some(decode_disk_text(&bytes))
             })
             .as_deref()
     }
+}
+
+fn without_utf8_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
+fn decode_disk_text(bytes: &[u8]) -> String {
+    if let Some(text) = bytes.strip_prefix(b"\xef\xbb\xbf") {
+        return String::from_utf8_lossy(text).into_owned();
+    }
+    if let Some(text) = bytes.strip_prefix(b"\xff\xfe") {
+        return decode_utf16(text, false);
+    }
+    if let Some(text) = bytes.strip_prefix(b"\xfe\xff") {
+        return decode_utf16(text, true);
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
+    let units = (0..bytes.len() / 2).map(|index| {
+        let offset = index * 2;
+        let pair = [bytes[offset], bytes[offset + 1]];
+        if big_endian {
+            u16::from_be_bytes(pair)
+        } else {
+            u16::from_le_bytes(pair)
+        }
+    });
+    let mut text: String = char::decode_utf16(units)
+        .map(|scalar| scalar.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect();
+    if !bytes.len().is_multiple_of(2) {
+        text.push(char::REPLACEMENT_CHARACTER);
+    }
+    text
 }
 
 /// What [`group_findings`] needs from a session.

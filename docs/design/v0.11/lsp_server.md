@@ -27,7 +27,10 @@ surfaced as a diagnostic on `.alint.yml` rather than only logged; the
 change hot path preserves cached cross-file findings (only per-file
 ones are replaced) so cross-file markers don't flicker while typing;
 facts are cached on the index so per-keystroke re-eval doesn't re-scan
-the tree; `code_action` honors the client's `only` filter. Still
+the tree; `code_action` honors the client's `only` filter; diagnostic
+coordinate conversion treats a leading UTF-8 BOM as metadata in both
+editor overlays and disk fallback text, and decodes BOM-marked UTF-16LE
+and UTF-16BE disk files before computing LSP UTF-16 columns. Still
 deferred: the **"Add rule to ignore"** code action (it edits
 `.alint.yml`, a separate decision), debounce/cancellation of in-flight
 runs, surfacing live diagnostics for unsaved brand-new files (lint is

@@ -1,7 +1,7 @@
 //! `editorconfig_conforms` — enforce formatting policy directly from confined
 //! repository `.editorconfig` files, retaining declaration provenance.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -337,25 +337,41 @@ impl Rule for EditorconfigConformsRule {
             .files()
             .filter(|entry| self.scope.matches(&entry.path, ctx.index))
             .collect();
-        let mut config_paths = BTreeSet::new();
+        let mut policies = HashMap::new();
+        let mut failures = BTreeMap::new();
+        let mut chains = Vec::with_capacity(selected.len());
         for entry in &selected {
-            for path in ancestor_configs(&entry.path) {
-                if ctx.index.contains_file(&path) {
-                    config_paths.insert(path);
+            // Search from the target outward and stop at the nearest `root =
+            // true`. Besides matching EditorConfig discovery semantics, this
+            // avoids reading or diagnosing an outer policy that the nearer
+            // root deliberately hides.
+            let mut chain = Vec::new();
+            for path in ancestor_configs(&entry.path).into_iter().rev() {
+                if !ctx.index.contains_file(&path) {
+                    continue;
+                }
+                let state = policies
+                    .entry(path.clone())
+                    .or_insert_with(|| load_policy(ctx, &path, &mut failures));
+                chain.push(path.clone());
+                match state {
+                    PolicyState::Ready(policy) if policy.root => break,
+                    PolicyState::Failed => {
+                        // This target has no policy verdict. Do not inspect
+                        // farther-out files whose visibility depends on the
+                        // malformed policy's unavailable `root` value.
+                        break;
+                    }
+                    PolicyState::Ready(_) => {}
                 }
             }
+            chain.reverse();
+            chains.push(chain);
         }
 
-        let mut violations = Vec::new();
-        let mut policies = HashMap::with_capacity(config_paths.len());
-        for path in config_paths {
-            let state = load_policy(ctx, &path, &mut violations);
-            policies.insert(path, state);
-        }
-
+        let mut violations = failures.into_values().collect::<Vec<_>>();
         let mut invalid_declarations = HashSet::new();
-        for entry in selected {
-            let chain = applicable_policy_chain(&entry.path, &policies);
+        for (entry, chain) in selected.into_iter().zip(chains) {
             if chain
                 .iter()
                 .any(|path| matches!(policies.get(path), Some(PolicyState::Failed)))
@@ -700,37 +716,39 @@ fn ancestor_configs(path: &Path) -> Vec<PathBuf> {
     configs
 }
 
-fn load_policy(ctx: &Context<'_>, path: &Path, violations: &mut Vec<Violation>) -> PolicyState {
-    let bytes = match crate::io::read_capped(&ctx.root.join(path)) {
-        Ok(bytes) => bytes,
-        Err(crate::io::ReadCapError::TooLarge(size)) => {
-            violations.push(too_large_file_violation(path, size));
-            return PolicyState::Failed;
+fn load_policy(
+    ctx: &Context<'_>,
+    path: &Path,
+    failures: &mut BTreeMap<PathBuf, Violation>,
+) -> PolicyState {
+    let failure = match crate::io::read_capped(&ctx.root.join(path)) {
+        Ok(bytes) => {
+            let Ok(text) = std::str::from_utf8(&bytes) else {
+                failures.insert(
+                    path.to_path_buf(),
+                    policy_parse_failure(path, 1, "EditorConfig file is not valid UTF-8"),
+                );
+                return PolicyState::Failed;
+            };
+            return match parse_policy(path, text) {
+                Ok(policy) => PolicyState::Ready(policy),
+                Err((line, message)) => {
+                    failures.insert(
+                        path.to_path_buf(),
+                        policy_parse_failure(path, line, message),
+                    );
+                    PolicyState::Failed
+                }
+            };
         }
+        Err(crate::io::ReadCapError::TooLarge(size)) => too_large_file_violation(path, size),
         Err(crate::io::ReadCapError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-            violations.push(missing_file_violation(path));
-            return PolicyState::Failed;
+            missing_file_violation(path)
         }
-        Err(crate::io::ReadCapError::Io(error)) => {
-            violations.push(unreadable_file_violation(path, &error));
-            return PolicyState::Failed;
-        }
+        Err(crate::io::ReadCapError::Io(error)) => unreadable_file_violation(path, &error),
     };
-    let Ok(text) = std::str::from_utf8(&bytes) else {
-        violations.push(policy_parse_failure(
-            path,
-            1,
-            "EditorConfig file is not valid UTF-8",
-        ));
-        return PolicyState::Failed;
-    };
-    match parse_policy(path, text) {
-        Ok(policy) => PolicyState::Ready(policy),
-        Err((line, message)) => {
-            violations.push(policy_parse_failure(path, line, message));
-            PolicyState::Failed
-        }
-    }
+    failures.insert(path.to_path_buf(), failure);
+    PolicyState::Failed
 }
 
 fn parse_policy(path: &Path, text: &str) -> std::result::Result<PolicyDocument, (usize, String)> {
@@ -798,6 +816,9 @@ fn parse_policy(path: &Path, text: &str) -> std::result::Result<PolicyDocument, 
             }
             continue;
         }
+        if !is_supported_property(&key) {
+            continue;
+        }
         let declaration = Declaration {
             value: value.to_string(),
             path: path.to_path_buf(),
@@ -823,17 +844,18 @@ fn split_property(line: &str) -> Option<(&str, &str)> {
     (!key.is_empty()).then_some((key, value))
 }
 
-fn applicable_policy_chain(path: &Path, policies: &HashMap<PathBuf, PolicyState>) -> Vec<PathBuf> {
-    let mut chain: Vec<_> = ancestor_configs(path)
-        .into_iter()
-        .filter(|candidate| policies.contains_key(candidate))
-        .collect();
-    if let Some(index) = chain.iter().rposition(|candidate| {
-        matches!(policies.get(candidate), Some(PolicyState::Ready(policy)) if policy.root)
-    }) {
-        chain.drain(..index);
-    }
-    chain
+fn is_supported_property(key: &str) -> bool {
+    matches!(
+        key,
+        "indent_style"
+            | "indent_size"
+            | "tab_width"
+            | "end_of_line"
+            | "charset"
+            | "trim_trailing_whitespace"
+            | "insert_final_newline"
+            | "max_line_length"
+    )
 }
 
 fn effective_policy(
@@ -1259,6 +1281,10 @@ mod tests {
             ("[!a-c].txt", "b.txt", true),
             ("[!a-c].txt", "-.txt", false),
             ("[!a-c].txt", "also.txt", false),
+            (r"[\]ab].txt", "].txt", true),
+            (r"[\]ab].txt", r"\.txt", false),
+            (r"[\!a].txt", "!.txt", true),
+            (r"[\!a].txt", r"\.txt", false),
             (r"literal\*.txt", "literal*.txt", true),
             (r"literal\*.txt", "literalx.txt", false),
             ("ab[e/]cd.i", "ab[e/]cd.i", true),
@@ -1326,6 +1352,34 @@ mod tests {
                 PathBuf::from("ab[e/]cd.txt"),
                 PathBuf::from("nested/ab[e/]cd.txt"),
             ]
+        );
+    }
+
+    #[test]
+    fn nearer_root_policy_hides_malformed_or_oversized_outer_policy() {
+        let outer = "root = true\n[*.txt\ninsert_final_newline = false\n";
+        let nested = "root = true\n[*.txt]\ninsert_final_newline = true\n";
+        let (tmp, index) = tempdir_with_files(&[
+            (".editorconfig", outer.as_bytes()),
+            ("nested/.editorconfig", nested.as_bytes()),
+            ("nested/one.txt", b"one\n"),
+        ]);
+
+        let violations = rule().evaluate(&ctx(tmp.path(), &index)).unwrap();
+        assert!(
+            violations.is_empty(),
+            "a nearer `root = true` policy must hide malformed outer policy: {violations:#?}"
+        );
+
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(tmp.path().join(".editorconfig"))
+            .unwrap();
+        file.set_len(crate::io::MAX_ANALYZE_BYTES + 1).unwrap();
+        let violations = rule().evaluate(&ctx(tmp.path(), &index)).unwrap();
+        assert!(
+            violations.is_empty(),
+            "a nearer `root = true` policy must hide oversized outer policy: {violations:#?}"
         );
     }
 

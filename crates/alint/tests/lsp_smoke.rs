@@ -150,7 +150,5 @@ fn lsp_open_hover_codeaction_change_save_e2e() {
         "expected diagnostics cleared after saving clean content, got {after_save:?}"
     );
 
-    // Graceful shutdown.
-    server.send(&json!({ "jsonrpc": "2.0", "id": 4, "method": "shutdown", "params": null }));
-    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
+    server.shutdown();
 }

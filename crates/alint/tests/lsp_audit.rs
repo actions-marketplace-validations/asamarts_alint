@@ -95,12 +95,6 @@ fn codes(diags: &[Value]) -> Vec<String> {
         .collect()
 }
 
-fn shutdown(server: &mut Server) {
-    server.send(&json!({ "jsonrpc": "2.0", "id": 99, "method": "shutdown", "params": null }));
-    recv_response(&server.rx, 99);
-    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
-}
-
 const NO_TODO: &str = "version: 1\nrules:\n  \
      - id: no-todo\n    kind: file_content_forbidden\n    \
      paths: \"**/*.txt\"\n    pattern: 'TODO'\n    level: error\n";
@@ -133,7 +127,7 @@ fn lsp_diagnostic_columns_are_utf16() {
         "two emoji = 4 UTF-16 units, then 'x': the ZWSP is at character 5: {range}"
     );
     assert_eq!(range["end"]["character"], 6, "{range}");
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// (2) A path-less finding is anchored on the config file. The full check
@@ -157,7 +151,7 @@ fn lsp_config_file_findings_are_not_wiped() {
         vec!["need-license"],
         "the anchored finding must be the config file's final state: {last:?}"
     );
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// (3) An unsaved buffer that trips a rule keeps its diagnostic when a
@@ -189,7 +183,7 @@ fn lsp_full_check_does_not_clobber_unsaved_buffer() {
         vec!["no-todo"],
         "a full check must not paint the clean on-disk a.txt over its unsaved buffer"
     );
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// (4a) Per-document discovery: a file under `pkg/` is linted by
@@ -218,7 +212,7 @@ fn lsp_uses_nearest_config_per_document() {
         vec!["pkg-no-fixme"],
         "pkg/a.txt is governed by pkg/.alint.yml: {diags:?}"
     );
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// (4a') `nested_configs: true` on the workspace config: like the CLI,
@@ -268,7 +262,7 @@ fn lsp_honors_nested_configs_like_the_cli() {
     let mut got = codes(&wait_for_diagnostics(&server.rx, &file_uri));
     got.sort();
     assert_eq!(got, vec!["pkg-no-fixme", "root-no-todo"]);
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// (4b) Once the config becomes invalid, the stale engine must not keep
@@ -316,7 +310,7 @@ fn lsp_broken_config_disables_stale_engine() {
             "no diagnostics from the stale engine: {diags:?}"
         );
     }
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// (4c) `baseline:` is honored: a grandfathered finding `alint check`
@@ -353,7 +347,7 @@ fn lsp_honors_config_baseline() {
     change(&mut server, &a, 2, "old TODO\nnew FIXME\n");
     let diags = wait_for_diagnostics(&server.rx, &a);
     assert_eq!(codes(&diags), vec!["no-fixme"], "{diags:?}");
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// (4d) Multi-root: a document in the SECOND workspace folder is linted
@@ -385,7 +379,7 @@ fn lsp_lints_every_workspace_folder() {
         Some(vec!["no-todo".to_string()]),
         "{last:?}"
     );
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// Wait for the next `publishDiagnostics` for `uri`, returning its
@@ -450,7 +444,7 @@ fn lsp_stale_reeval_result_is_dropped() {
     let last = last.expect("the current buffer is published");
     assert_eq!(last["params"]["version"].as_i64(), Some(5), "{last}");
     assert_eq!(last["params"]["diagnostics"], json!([]), "{last}");
-    shutdown(&mut server);
+    server.shutdown();
 }
 
 /// Wait up to `limit` for the child to exit on its own (stdin stays open).
@@ -471,7 +465,7 @@ fn wait_exit(server: &mut Server, limit: Duration) -> Option<i32> {
 fn lsp_exits_zero_after_shutdown_and_exit() {
     let tmp = tempfile::tempdir().unwrap();
     let mut server = start(tmp.path());
-    shutdown(&mut server);
+    server.shutdown();
     assert_eq!(wait_exit(&mut server, Duration::from_secs(10)), Some(0));
 }
 

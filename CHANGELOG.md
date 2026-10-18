@@ -211,21 +211,30 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **EditorConfig conformance now follows the declared grammar and every supported target line
-  ending.** Policy files require `=` with LF/CRLF separators while valid extension pairs in the
-  preamble remain accepted. Glob character classes treat hyphens literally, a slash inside a
-  complete class does not incorrectly anchor the section to one directory level, and descending
-  numeric ranges no longer match as reversed ranges. CR-only target files are split into physical
-  lines for indentation, trailing-whitespace, width, and final-newline locations. Tab indentation
-  accepts the specification's canonical sub-tab-width space remainder instead of rejecting every
-  space.
+- **EditorConfig conformance now follows the declared grammar, discovery boundary, and every
+  supported target line ending.** Policy files require `=` with LF/CRLF separators while valid
+  extension pairs in the preamble remain accepted. A nearer `root = true` policy stops discovery
+  before hidden outer policies are read or diagnosed, so a malformed or oversized outer file
+  cannot fail a target governed by the nearer root. Glob character classes treat hyphens
+  literally, a slash inside a complete class does not incorrectly anchor the section to one
+  directory level, and descending numeric ranges no longer match as reversed ranges. CR-only
+  target files are split into physical lines for indentation, trailing-whitespace, width, and
+  final-newline locations. Tab indentation accepts the specification's canonical sub-tab-width
+  space remainder instead of rejecting every space. Unsupported extension properties are discarded
+  while parsing instead of being cloned into every target's effective policy.
 
 - **Source locations and line-oriented extraction now agree across LF, CRLF, CR, and BOM-prefixed
   text.** A shared zero-allocation physical-line iterator backs EditorConfig and SPDX checks,
   `lines` extraction, and INI parsing. Half-open source ranges, LSP diagnostic and edit positions,
   and Unicode security scans count CRLF once, recognize lone CR, and do not count a leading UTF-8
-  BOM as a visible column. SPDX validation consequently checks every tag in a CR-only file and
-  reports its actual physical line.
+  BOM as a visible column. The LSP text cache strips that signature from editor overlays and disk
+  text and decodes BOM-marked UTF-16LE/UTF-16BE files before converting scalar columns to UTF-16
+  code units. SPDX validation consequently checks every tag in a CR-only file and reports its
+  actual physical line.
+
+- **LSP integration teardown now completes the protocol shutdown before its kill fallback.** The
+  shared real-server harness waits for the `shutdown` response and gives `exit` time to terminate
+  the child, preventing truncated LLVM profiles from making otherwise-passing coverage runs fail.
 
 - **Compact human output remains one physical line per finding for untrusted input.** Embedded
   newlines in paths, rule IDs, violation messages, and analysis failures render as inert `\x0a`

@@ -141,8 +141,9 @@ its metadata.
 
 ## 6. Tests
 
-- Unit tests cover EditorConfig inheritance, `root`, `unset`, all glob constructs, all supported
-  properties, invalid declarations, encoding boundaries, and policy provenance.
+- Unit tests cover EditorConfig inheritance, `root` (including hidden malformed or oversized
+  outer policies), `unset`, all glob constructs, all supported properties, invalid declarations,
+  encoding boundaries, and policy provenance.
 - CommonMark tests cover code/comment exclusion, BOM offsets, formatted alt text, wildcard heading
   templates, Unicode/punctuation anchors, collision suffixes, explicit IDs, encoded fragments,
   relative targets, rendered routes, and target failures.
