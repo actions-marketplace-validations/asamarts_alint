@@ -626,6 +626,10 @@ fn byte_offset_to_position_counts_utf16_code_units() {
     let crlf = "ab\r\ncd";
     assert_eq!(byte_offset_to_position(crlf, 2), Position::new(0, 2)); // end of line-0 text
     assert_eq!(byte_offset_to_position(crlf, 4), Position::new(1, 0)); // 'c' after \r\n
+    // Lone CR is also a physical line ending, matching SourceRange.
+    let cr = "ab\r\u{1F600}x";
+    assert_eq!(byte_offset_to_position(cr, 3), Position::new(1, 0));
+    assert_eq!(byte_offset_to_position(cr, 7), Position::new(1, 2));
     // Empty text: only the origin is reachable.
     assert_eq!(byte_offset_to_position("", 0), Position::new(0, 0));
 }
@@ -1264,6 +1268,15 @@ fn violation_range_converts_char_columns_to_utf16() {
     let r = violation_range(&violation(Some(2), Some(3)), Some("ab\n\u{1F600}"));
     assert_eq!(r.start, Position::new(1, 3));
     assert_eq!(utf16_column("ab", 5), (4, 1));
+
+    // SourceRange treats lone CR as a physical separator. The second-line
+    // emoji occupies two UTF-16 units, so scalar-column fallback is incorrect.
+    let cr = "a\r\u{1F600}x";
+    let x = cr.find('x').unwrap();
+    let ranged =
+        Violation::new("boom").with_range(SourceRange::from_byte_range(cr, x..x + 1).unwrap());
+    let r = violation_range(&ranged, Some(cr));
+    assert_eq!((r.start, r.end), (Position::new(1, 2), Position::new(1, 3)));
 }
 
 #[test]

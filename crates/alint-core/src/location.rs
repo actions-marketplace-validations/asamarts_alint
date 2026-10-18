@@ -7,6 +7,34 @@ use serde::Serialize;
 /// Maximum number of navigable secondary locations retained on one finding.
 pub const MAX_RELATED_LOCATIONS: usize = 20;
 
+/// Iterate physical lines separated by LF, CRLF, or lone CR without allocating.
+///
+/// Each item contains the byte offset of the line's first character and the
+/// line body without its terminator. As with [`str::lines`], a terminal line
+/// ending does not produce an additional empty item.
+pub fn physical_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let bytes = text.as_bytes();
+    let mut cursor = 0usize;
+    std::iter::from_fn(move || {
+        if cursor >= bytes.len() {
+            return None;
+        }
+        let start = cursor;
+        while cursor < bytes.len() && !matches!(bytes[cursor], b'\r' | b'\n') {
+            cursor += 1;
+        }
+        let end = cursor;
+        if cursor < bytes.len() {
+            cursor += if bytes[cursor] == b'\r' && bytes.get(cursor + 1) == Some(&b'\n') {
+                2
+            } else {
+                1
+            };
+        }
+        Some((start, &text[start..end]))
+    })
+}
+
 /// A half-open location in original UTF-8 source text.
 ///
 /// Lines and columns are 1-based Unicode-scalar positions. `end_*` identifies
@@ -307,6 +335,16 @@ mod tests {
         let range = SourceRange::from_byte_range(text, 3..text.len()).unwrap();
         assert_eq!(range.start_column(), 1);
         assert_eq!(range.end_column(), 2);
+    }
+
+    #[test]
+    fn physical_lines_recognize_mixed_terminators_and_byte_offsets() {
+        let text = "a\rbb\r\n\nç\r";
+        assert_eq!(
+            physical_lines(text).collect::<Vec<_>>(),
+            [(0, "a"), (2, "bb"), (6, ""), (7, "ç")]
+        );
+        assert_eq!(physical_lines("").next(), None);
     }
     #[test]
     fn byte_range_rejects_non_character_boundaries() {

@@ -18,9 +18,9 @@
 //! - **Section names and keys are case-preserving** (the reason to hand-roll
 //!   rather than use `configparser`, which lowercases keys).
 //!
-//! ## Supported subset
-//! - `key = value` or `key : value`, one per line; split on the EARLIEST `=`/`:`
-//!   (so `url = http://h` keeps `http://h`, and `dsn : k=v` keeps `k=v`).
+//! - `key = value` or `key : value`, one per physical line (LF, CRLF, or lone
+//!   CR); split on the EARLIEST `=`/`:` (so `url = http://h` keeps `http://h`,
+//!   and `dsn : k=v` keeps `k=v`).
 //! - Values are stringly-typed and **literal**: surrounding quotes, if any, are
 //!   part of the value; `${...}` placeholders are kept verbatim; an inline `;`/`#`
 //!   is part of the value (only a FULL-LINE `;`/`#`, after optional leading
@@ -77,7 +77,7 @@ pub(crate) fn parse(text: &str) -> Result<Value, String> {
     // continues across a section boundary).
     let mut cur_key: Option<String> = None;
     let mut cur_indent = 0usize;
-    for (i, raw) in text.lines().enumerate() {
+    for (i, (_, raw)) in crate::physical_lines(text).enumerate() {
         let lineno = i + 1;
         let indent = raw.chars().take_while(|&c| c == ' ' || c == '\t').count();
         let line = raw.trim();
@@ -234,6 +234,14 @@ mod tests {
             v["Server"].get("maxconnections").is_none(),
             "key case preserved"
         );
+    }
+
+    #[test]
+    fn recognizes_lf_crlf_and_lone_cr_physical_lines() {
+        let v = obj("root=true\r[server]\r\nhost=localhost\nport=8080");
+        assert_eq!(v["root"], json!("true"));
+        assert_eq!(v["server"]["host"], json!("localhost"));
+        assert_eq!(v["server"]["port"], json!("8080"));
     }
 
     #[test]

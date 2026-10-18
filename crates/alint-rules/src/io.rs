@@ -168,26 +168,7 @@ pub(crate) fn without_leading_bom(text: &str) -> &str {
 /// Iterate physical lines separated by LF, CRLF, or CR without allocating.
 /// Each item carries the byte offset of its first character in `text`.
 pub(crate) fn physical_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
-    let bytes = text.as_bytes();
-    let mut cursor = 0usize;
-    std::iter::from_fn(move || {
-        if cursor >= bytes.len() {
-            return None;
-        }
-        let start = cursor;
-        while cursor < bytes.len() && !matches!(bytes[cursor], b'\r' | b'\n') {
-            cursor += 1;
-        }
-        let end = cursor;
-        if cursor < bytes.len() {
-            cursor += if bytes[cursor] == b'\r' && bytes.get(cursor + 1) == Some(&b'\n') {
-                2
-            } else {
-                1
-            };
-        }
-        Some((start, &text[start..end]))
-    })
+    alint_core::physical_lines(text)
 }
 
 /// Find the first char of `bytes` (decoded as UTF-8, lossily) for which

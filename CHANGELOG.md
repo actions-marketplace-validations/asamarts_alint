@@ -213,15 +213,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **EditorConfig conformance now follows the declared grammar and every supported target line
   ending.** Policy files require `=` with LF/CRLF separators while valid extension pairs in the
-  preamble remain accepted. Glob character classes treat hyphens literally and descending numeric
-  ranges no longer match as reversed ranges. CR-only target files are split into physical lines for
-  indentation, trailing-whitespace, width, and final-newline locations. Tab indentation accepts the
-  specification's canonical sub-tab-width space remainder instead of rejecting every space.
+  preamble remain accepted. Glob character classes treat hyphens literally, a slash inside a
+  complete class does not incorrectly anchor the section to one directory level, and descending
+  numeric ranges no longer match as reversed ranges. CR-only target files are split into physical
+  lines for indentation, trailing-whitespace, width, and final-newline locations. Tab indentation
+  accepts the specification's canonical sub-tab-width space remainder instead of rejecting every
+  space.
 
-- **Source locations now agree across LF, CRLF, CR, and BOM-prefixed text.** Half-open source
-  ranges and Unicode security scans count CRLF once, recognize lone CR, and do not count a leading
-  UTF-8 BOM as a visible column. SPDX validation consequently checks every tag in a CR-only file
-  and reports its actual physical line.
+- **Source locations and line-oriented extraction now agree across LF, CRLF, CR, and BOM-prefixed
+  text.** A shared zero-allocation physical-line iterator backs EditorConfig and SPDX checks,
+  `lines` extraction, and INI parsing. Half-open source ranges, LSP diagnostic and edit positions,
+  and Unicode security scans count CRLF once, recognize lone CR, and do not count a leading UTF-8
+  BOM as a visible column. SPDX validation consequently checks every tag in a CR-only file and
+  reports its actual physical line.
 
 - **Compact human output remains one physical line per finding for untrusted input.** Embedded
   newlines in paths, rule IDs, violation messages, and analysis failures render as inert `\x0a`
@@ -234,9 +238,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   target extractors; boundary end-to-end scenarios cover 256-byte acceptance and 257-byte
   rejection.
 
-- **The VS Code extension toolchain no longer carries known npm vulnerabilities.** Updated Mocha
-  and Open VSX publishing dependencies remove the affected transitive packages, and both editor CI
-  and the Marketplace/Open VSX release job now block on moderate-or-higher `npm audit` findings.
+- **The VS Code extension toolchain no longer carries known npm vulnerabilities.** Open VSX
+  publishing dependencies were updated, while the VS Code 1.91-compatible Mocha 11 runner retains
+  patched `diff` and `serialize-javascript` transitive versions through exact overrides. Both
+  editor CI and the Marketplace/Open VSX release job now block on moderate-or-higher `npm audit`
+  findings.
 
 - **Sensitive findings no longer expose internal fix-correlation keys.** Public check, fix, and
   staged-diff reports now clear `fix_key` alongside proposed edits and related evidence, preventing

@@ -64,7 +64,7 @@ pub use kind_meta::{
     PathsSupport, ScopeFilterSupport, SelectorMeta, SelectorType, SinceSupport,
 };
 pub use level::Level;
-pub use location::{MAX_RELATED_LOCATIONS, RelatedLocation, SourceRange};
+pub use location::{MAX_RELATED_LOCATIONS, RelatedLocation, SourceRange, physical_lines};
 pub use pathsafe::{derive_target, normalize_confined};
 pub use proposed_fix::{EditRegion, ProposedEdit, attach_proposed_edits, byte_to_line_col};
 pub use redaction::{redact_evidence, redaction_marker};

@@ -174,10 +174,16 @@ fn source_range(range: &alint_core::SourceRange, text: Option<&str>) -> Range {
     )
 }
 
+fn physical_line(text: &str, line_index: usize) -> Option<&str> {
+    alint_core::physical_lines(text)
+        .nth(line_index)
+        .map(|(_, line)| line)
+}
+
 fn source_position(line: usize, column: usize, text: Option<&str>) -> Position {
     let line_idx = line.saturating_sub(1);
     let character = text
-        .and_then(|text| text.split('\n').nth(line_idx))
+        .and_then(|text| physical_line(text, line_idx))
         .map_or_else(
             || u32::try_from(column.saturating_sub(1)).unwrap_or(u32::MAX),
             |line_text| utf16_column(line_text, column).0,
@@ -190,7 +196,7 @@ fn finding_range(line: Option<usize>, column: Option<usize>, text: Option<&str>)
     let line = u32::try_from(line_idx).unwrap_or(0);
     let (col, width) = match column {
         None => (0, 1),
-        Some(column) => match text.and_then(|text| text.split('\n').nth(line_idx)) {
+        Some(column) => match text.and_then(|text| physical_line(text, line_idx)) {
             Some(line_text) => utf16_column(line_text, column),
             None => (u32::try_from(column.saturating_sub(1)).unwrap_or(0), 1),
         },
@@ -316,23 +322,34 @@ pub(crate) fn whole_document() -> Range {
 /// Convert a byte offset into `text` (valid UTF-8) to an LSP [`Position`]:
 /// 0-indexed line, and a character column counted in UTF-16 code units (the LSP
 /// default position encoding). A non-BMP scalar (e.g. an emoji) is two UTF-16
-/// units, so a byte or `char` count would misplace the edit. `'\n'` ends a line and
-/// resets the column; a lone `'\r'` counts as an ordinary character. A range that
-/// spans several lines (a multi-line `replace` pattern, e.g. `(?s)foo.bar`) is
-/// handled -- start and end are converted independently. An offset at or past the
-/// end of `text` clamps to the final position.
+/// units, so a byte or `char` count would misplace the edit. LF, CRLF, and lone
+/// CR end physical lines; an offset between the two bytes of CRLF maps to the
+/// following line's start, matching [`alint_core::SourceRange`]. A range that
+/// spans several lines is handled by converting its endpoints independently.
+/// An offset at or past the end of `text` clamps to the final position.
 pub(crate) fn byte_offset_to_position(text: &str, byte_offset: usize) -> Position {
     let mut line: u32 = 0;
     let mut character: u32 = 0;
+    let mut previous_was_cr = false;
     for (idx, ch) in text.char_indices() {
         if idx >= byte_offset {
             return Position::new(line, character);
         }
-        if ch == '\n' {
-            line += 1;
-            character = 0;
-        } else {
-            character += u32::try_from(ch.len_utf16()).unwrap_or(0);
+        match ch {
+            '\r' => {
+                line = line.saturating_add(1);
+                character = 0;
+                previous_was_cr = true;
+            }
+            '\n' if previous_was_cr => previous_was_cr = false,
+            '\n' => {
+                line = line.saturating_add(1);
+                character = 0;
+            }
+            _ => {
+                character = character.saturating_add(u32::try_from(ch.len_utf16()).unwrap_or(0));
+                previous_was_cr = false;
+            }
         }
     }
     Position::new(line, character)

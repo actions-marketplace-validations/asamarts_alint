@@ -54,7 +54,7 @@ impl EditorConfigGlob {
             return Err("EditorConfig section pattern exceeds 4096 bytes".into());
         }
         let directory = crate::slash(directory);
-        let has_separator = pattern.contains('/');
+        let has_separator = glob_has_path_separator(pattern);
         let starts_with_separator = pattern.starts_with('/');
         let pattern = pattern.strip_prefix('/').unwrap_or(pattern);
         let mut body = String::new();
@@ -96,6 +96,38 @@ impl EditorConfigGlob {
             })
         })
     }
+}
+
+/// A slash inside a complete character class is literal glob text, not a path
+/// separator. This distinction controls whether the section may match at any
+/// depth below its `.editorconfig` directory.
+fn glob_has_path_separator(pattern: &str) -> bool {
+    let mut cursor = 0usize;
+    while cursor < pattern.len() {
+        let rest = &pattern[cursor..];
+        let ch = rest.chars().next().expect("cursor is in bounds");
+        match ch {
+            '[' => {
+                cursor += find_unescaped(rest, ']').map_or(1, |end| end + 1);
+            }
+            '/' => return true,
+            '\\' => {
+                cursor += 1;
+                if cursor < pattern.len() {
+                    let escaped = pattern[cursor..]
+                        .chars()
+                        .next()
+                        .expect("cursor is in bounds");
+                    if escaped == '/' {
+                        return true;
+                    }
+                    cursor += escaped.len_utf8();
+                }
+            }
+            _ => cursor += ch.len_utf8(),
+        }
+    }
+    false
 }
 
 fn translate_glob(
@@ -1229,6 +1261,8 @@ mod tests {
             ("[!a-c].txt", "also.txt", false),
             (r"literal\*.txt", "literal*.txt", true),
             (r"literal\*.txt", "literalx.txt", false),
+            ("ab[e/]cd.i", "ab[e/]cd.i", true),
+            ("ab[e/]cd.i", "nested/ab[e/]cd.i", true),
         ];
         for (pattern, path, expected) in cases {
             let glob = EditorConfigGlob::new(Path::new(""), pattern).unwrap();
@@ -1264,6 +1298,35 @@ mod tests {
         .unwrap_err();
         assert_eq!(lone_cr.0, 1);
         assert!(lone_cr.1.contains("LF or CRLF"));
+    }
+
+    #[test]
+    fn slash_inside_character_class_does_not_anchor_policy_section() {
+        let policy = concat!(
+            "root = true\n",
+            "[ab[e/]cd.txt]\n",
+            "insert_final_newline = true\n",
+        );
+        let (tmp, index) = tempdir_with_files(&[
+            (".editorconfig", policy.as_bytes()),
+            ("ab[e/]cd.txt", b"root"),
+            ("nested/ab[e/]cd.txt", b"nested"),
+        ]);
+
+        let mut paths = rule()
+            .evaluate(&ctx(tmp.path(), &index))
+            .unwrap()
+            .into_iter()
+            .map(|finding| finding.path.unwrap().to_path_buf())
+            .collect::<Vec<_>>();
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("ab[e/]cd.txt"),
+                PathBuf::from("nested/ab[e/]cd.txt"),
+            ]
+        );
     }
 
     #[test]

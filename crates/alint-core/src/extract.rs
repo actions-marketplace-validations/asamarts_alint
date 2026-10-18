@@ -21,7 +21,7 @@ pub enum Extract {
     /// Structured-query (RFC 9535 `JSONPath` over the parsed tree) against any
     /// [`Format`]. The query is compiled once at config load, not once per file.
     Structured(StructuredExtract),
-    /// One path per non-blank, non-comment line.
+    /// One path per non-blank, non-comment physical line (LF, CRLF, or CR).
     Lines(LinesOpts),
     /// Capture group 1 of each match is the value.
     Regex(String),
@@ -1096,10 +1096,13 @@ fn extract_values_with_limit(
         Extract::Structured(extract) => structured(extract, text, max_values)?,
         Extract::Lines(opts) => {
             let mut values = ExtractedValues::default();
-            for line in text.lines().map(str::trim).filter(|line| {
-                !line.is_empty()
-                    && (opts.comment.is_empty() || !line.starts_with(opts.comment.as_str()))
-            }) {
+            for line in crate::physical_lines(text)
+                .map(|(_, line)| line.trim())
+                .filter(|line| {
+                    !line.is_empty()
+                        && (opts.comment.is_empty() || !line.starts_with(opts.comment.as_str()))
+                })
+            {
                 ensure_extract_capacity(&values, max_values)?;
                 values.strings.push(line.to_string());
             }
@@ -1225,6 +1228,14 @@ mod tests {
         let text = "line one\nline two\n";
         let got = super::extract_values(&extract, text).expect("extract whole file");
         assert_eq!(got.strings, vec![text.to_string()]);
+    }
+
+    #[test]
+    fn lines_extractor_recognizes_all_physical_line_endings() {
+        let extract = super::Extract::Lines(super::LinesOpts::default());
+        let got = super::extract_values(&extract, "alpha\r# ignored\r\n beta \ngamma")
+            .expect("extract physical lines");
+        assert_eq!(got.strings, ["alpha", "beta", "gamma"]);
     }
 
     #[test]
