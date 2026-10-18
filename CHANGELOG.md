@@ -13,6 +13,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Action examples do not match `ci/action-doc-pin.env`, instead of leaving alint.org's copy-paste
   snippets one release behind.
 
+- **Benchmark regressions now compare like workloads.** Macro reports record a semantic revision
+  for every scenario, `bench-gate` skips cross-version timing comparisons across an intentional
+  revision change while retaining the new run's quality gate, and a contract test pins each
+  revision's resolved rule count. The v0.19.0 S4 expansion from 50 to 85 rules is now explicit
+  instead of being misreported as an engine regression. The bench workflow also no longer passes
+  an unsupported input to its pinned Rust toolchain action.
+
 ## [0.19.0] - 2026-10-18
 
 General-linter phase 0/1a makes the rule registry authoritative for capabilities and generated

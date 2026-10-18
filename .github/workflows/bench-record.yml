@@ -143,8 +143,6 @@ jobs:
       # that re-based the series onto the bench host. Bump deliberately (and re-baseline)
       # when the fleet moves, never implicitly via `stable` drift.
       - uses: dtolnay/rust-toolchain@35a842e360814583e976785eeda0bd0655cb8e83 # 1.97.0
-        with:
-          toolchain: ${{ env.BENCH_RUST }}
       # dtolnay/rust-toolchain only sets the rustup default, and rust-toolchain.toml
       # (`stable`) wins over that inside the checkout. Export RUSTUP_TOOLCHAIN and fail
       # unless rustc really is BENCH_RUST; otherwise the bench silently builds with
@@ -531,7 +529,9 @@ jobs:
             (1k/10k advisory); \`min_ms\` regression ≤ +15 % on
             full/fix cells at ≥10k and every 100k/1m cell. Small
             changed cells are advisory per METHODOLOGY.md. New cells
-            with no baseline mate are skipped from the regression check.
+            with no baseline mate are skipped. A scenario whose semantic
+            workload revision changed is quality-gated but not compared
+            against the unlike prior workload; review every \`RESET\` line.
           - [ ] Eyeball the HISTORY.md headline row for
             \`${OUT_LABEL}\` — if the auto-extracted first sentence
             from CHANGELOG.md isn't a good one-row blurb, edit

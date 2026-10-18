@@ -504,6 +504,14 @@ when its run completes. Review checklist:
      A gating failure is a real perf regression: open an investigation
      (step 4) before merging.
 
+   Every new report carries `args.scenario_revisions`. If both reports
+   declare different revisions for a scenario, `bench-gate` prints a
+   `RESET` line and skips only that scenario's cross-version regression
+   comparison while retaining its within-run quality gate. Confirm that
+   the revision bump corresponds to an intentional resolved-rule or
+   fixture-semantics change; the scenario contract test pins the expected
+   rule count for each revision.
+
    Non-zero exit means do not merge. Advisory lines never block.
    The published `HISTORY.md` table still shows `mean +/- stddev`
    (the gate uses `min_ms`; the table keeps the full distribution
@@ -515,6 +523,10 @@ when its run completes. Review checklist:
    the retired 3900X series is at `results/linux-x86_64-ryzen-3900x/`), and
    `fingerprint.os` is `linux`. A bench run on the wrong machine voids
    cross-version comparability.
+
+   Verify `args.scenario_revisions` is present. A `RESET` is valid only
+   when the scenario workload intentionally changed and `HISTORY.md`
+   explains the old and new workloads.
 
 3. **HISTORY.md review.** The workflow rebases the result branch onto current
    `main`, runs `xtask/scripts/render-history.py`, and includes the refreshed

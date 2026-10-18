@@ -207,7 +207,7 @@ SCENARIOS = [
     ),
     (
         "S4", "Workspace bundle",
-        "The realistic mixed workload and the release anchor: `extends:` six bundled rulesets (oss-baseline + rust + node + python + monorepo + cargo-workspace) over a POLYGLOT + GIT tree (`crates/` + `packages/` + `apps/`, initialised as a real repo) with `nested_configs` on and two inline git-aware rules. Consolidates the old realistic-monorepo, git-overlay, and nested-polyglot scenarios. The `s4_1m_full` cell is the trajectory anchor every publish captures.",
+        "The realistic mixed workload and the release anchor: `extends:` eight bundled rulesets (oss-baseline + rust + node + python + monorepo + cargo-workspace + versioning + toolchain-pins) over a POLYGLOT + GIT tree (`crates/` + `packages/` + `apps/`, initialised as a real repo) with `nested_configs` on and two inline git-aware rules. Consolidates the old realistic-monorepo, git-overlay, and nested-polyglot scenarios. Workload revision 1 through v0.18.4 resolved 50 rules; revision 2 from v0.19.0 adds the final two bundles and resolves 85. Compare S4 timings only within one revision. The `s4_1m_full` cell is the trajectory anchor every publish captures.",
     ),
     (
         "SFIX", "Auto-fix",
@@ -367,9 +367,10 @@ def render(
         "## Cross-version headline trajectory",
         "",
         "1M/full cells across all four check scenarios. S4 (workspace bundle) is the",
-        "realistic-monorepo release anchor every publish captures; S3 (cross-file,",
-        "relational & graph) is the heaviest, graph-dominated scenario; S1/S2 track",
-        "the walk-bound and per-file-content paths.",
+        "realistic-monorepo release anchor every publish captures; its workload revision",
+        "changed from 50 to 85 resolved rules in v0.19.0, so its timings are comparable",
+        "only within one revision. S3 is the heaviest, graph-dominated scenario; S1/S2",
+        "track the walk-bound and per-file-content paths.",
         "",
         "| Version | Date | 1M S1 full | 1M S2 full | 1M S3 full | 1M S4 full | Headline change |",
         "|---|---|---:|---:|---:|---:|---|",

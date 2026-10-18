@@ -243,6 +243,11 @@ pub fn bench_scale(mut args: ScaleArgs) -> Result<()> {
                 .iter()
                 .map(|s| s.label().to_string())
                 .collect(),
+            scenario_revisions: args
+                .scenarios
+                .iter()
+                .map(|scenario| (scenario.label().to_string(), scenario.workload_revision()))
+                .collect(),
             modes: args.modes.iter().map(|m| m.label().to_string()).collect(),
             tools: args.tools.iter().map(|t| t.name().to_string()).collect(),
         },

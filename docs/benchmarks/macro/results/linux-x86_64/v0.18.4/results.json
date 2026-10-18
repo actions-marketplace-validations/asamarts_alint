@@ -35,6 +35,13 @@
       "S4",
       "SFIX"
     ],
+    "scenario_revisions": {
+      "S1": 1,
+      "S2": 1,
+      "S3": 1,
+      "S4": 1,
+      "SFIX": 1
+    },
     "modes": [
       "full",
       "changed",

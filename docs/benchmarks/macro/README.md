@@ -38,7 +38,7 @@ counts come from `facts.json`'s `bench_scenario_rule_counts`.
 | **S1** | 16 | Layout and path (walk-bound): filename class, existence / absence, path metadata, and a `scope_filter` shape. Walker + `GlobSet` with little or no content read, the cheapest path. | `ls-lint`, `shell` | old S1 / S10 + the layout half of S2 / S4 |
 | **S2** | 20 | Per-file content: the 13 content kinds + forbidden-content patterns + `ordered_block` / `import_gate` / `xml_path_*` over `**/*.rs` (plus one `.csproj` overlay). The per-file dispatch fan-out. | `shell`, `repolinter` | old S2 / S5 / S6 / S12 |
 | **S3** | 16 | Cross-file, relational and graph: `pair` / `unique_by` / the `for_each_*` family / registry / `cross_file` / `pair_hash`, three `file_graph` build-and-traverse passes, and one single-shot command spawn. The heaviest scenario. | — | old S7 / S11 / S13 / S14 |
-| **S4** | 50 | Workspace bundle (realistic; release anchor): `extends` the `oss-baseline` + `rust` + `node` + `python` + `monorepo` + `cargo-workspace` rulesets over a POLYGLOT + GIT tree, `nested_configs` on, with the two git-aware rules inline. | — | old S3 / S8 / S9 |
+| **S4** | 85 (r2) | Workspace bundle (realistic; release anchor): `extends` the `oss-baseline` + `rust` + `node` + `python` + `monorepo` + `cargo-workspace` + `versioning` + `toolchain-pins` rulesets over a POLYGLOT + GIT tree, `nested_configs` on, with the two git-aware rules inline. Revision 1 through v0.18.4 had 50 rules and omitted the final two bundles; compare timings only within one workload revision. | — | old S3 / S8 / S9 |
 | **SFIX** | 24 fix ops | Auto-fix (dedicated): `alint fix --unsafe-fixes --dry-run` over all 24 non-spawn fix ops (`FixSpec::ALL_OP_NAMES` minus the spawning ops) on the planted `sfix/` fixture. Runs under `fix` mode only. | — | old S5 (4-op fix pass) + the deterministic `sfix_trim` |
 
 S2 / S3 / SFIX each plant a deterministic fixture overlay
@@ -167,8 +167,10 @@ results/
 Each per-version `results.json` is the output of one `xtask bench-scale`
 run with the publication-grade flags (`--warmup 3 --runs 10`, auto-reduced
 to `--warmup 1 --runs 3` at the 1M size). Its `fingerprint` header carries
-the full hardware and tool-version provenance; the cross-version headline
-table is rendered into [`../HISTORY.md`](../HISTORY.md) by
+the full hardware and tool-version provenance, while
+`args.scenario_revisions` identifies the semantic workload being timed so
+the gate never compares unlike scenario definitions. The cross-version
+headline table is rendered into [`../HISTORY.md`](../HISTORY.md) by
 `xtask/scripts/render-history.py`.
 
 ## Adding a new scenario

@@ -111,7 +111,14 @@ measurement-floor noise) and gates cross-version regression on
 `min_ms` at a **+15 % ceiling vs the prior release** for `full`/`fix`
 cells at `>= 10k` and every 100k/1m cell. `changed`/1k and
 `changed`/10k are the documented exception below; `1k` is otherwise
-unreliable at every statistic.
+unreliable at every statistic. Each result also records a semantic
+workload revision per scenario. When both reports declare different
+revisions, the gate still applies the new run's within-run quality check
+but skips that scenario's cross-version regression comparison: different
+resolved rules or fixture semantics are different work, not evidence of
+an engine regression. The scenario contract test anchors each revision's
+resolved rule count.
+
 The published `HISTORY.md` tables and the alint.org trajectory
 deliberately stay `mean +/- stddev`: every historical row and the
 hardcoded v0.5.6 baseline are mean-based, and restating the
@@ -119,7 +126,8 @@ public corpus on `min_ms` is a separable, externally-visible
 change held out of scope. Standard split: gate on the robust
 statistic, publish the full distribution. Cross-machine and
 cross-hyperfine-version comparisons still require a like-for-like
-fingerprint.
+fingerprint, and cross-version comparisons require the same scenario
+workload revision.
 
 **Caveat on the small `changed`-mode cells (added 2026-09).** The `changed`/1k and
 `changed`/10k cells are unreliable for the `min_ms` REGRESSION gate too, not just for

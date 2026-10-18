@@ -26,12 +26,14 @@
 //!   delta as an advisory instead: they are dominated by the
 //!   multi-core wakeup cost of a tiny parallel burst and drift
 //!   with the host's C-state / power state independent of code
-//!   (see the 2026-09 v0.16 investigation).
+//!   (see the 2026-09 v0.16 investigation). If both reports declare
+//!   different semantic revisions for a scenario, its cells are
+//!   intentionally incomparable and the regression check skips them.
 //!
 //! Exit is non-zero iff a *gating* check fails; advisory notices
 //! never affect it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -94,10 +96,48 @@ pub struct Outcome {
     pub lines: Vec<String>,
 }
 
+fn workload_revision_change(
+    scenario: &str,
+    revisions: &BTreeMap<String, u32>,
+    baseline_revisions: &BTreeMap<String, u32>,
+) -> Option<(u32, u32)> {
+    let revision = *revisions.get(scenario)?;
+    let baseline_revision = *baseline_revisions.get(scenario)?;
+    (baseline_revision != revision).then_some((baseline_revision, revision))
+}
+
+fn report_workload_resets(
+    outcome: &mut Outcome,
+    revisions: &BTreeMap<String, u32>,
+    baseline_revisions: &BTreeMap<String, u32>,
+) {
+    for scenario in revisions.keys() {
+        if let Some((baseline_revision, revision)) =
+            workload_revision_change(scenario, revisions, baseline_revisions)
+        {
+            outcome.lines.push(format!(
+                "  RESET    {scenario}: workload r{baseline_revision} → r{revision}; \
+                 regression comparison skipped"
+            ));
+        }
+    }
+}
+
 /// The gate policy as a pure function over rows. `baseline` is
 /// the prior release's rows for the regression check (skipped
-/// when `None`).
-pub fn evaluate(rows: &[Row], baseline: Option<&[Row]>) -> Outcome {
+/// when `None`). Legacy callers do not provide workload revisions,
+/// so they retain the historical like-named-cell comparison.
+#[cfg(test)]
+fn evaluate(rows: &[Row], baseline: Option<&[Row]>) -> Outcome {
+    evaluate_with_revisions(rows, baseline, &BTreeMap::new(), &BTreeMap::new())
+}
+
+fn evaluate_with_revisions(
+    rows: &[Row],
+    baseline: Option<&[Row]>,
+    revisions: &BTreeMap<String, u32>,
+    baseline_revisions: &BTreeMap<String, u32>,
+) -> Outcome {
     let mut o = Outcome::default();
 
     // ── Quality: within-run CV, gated on 100k/1m only ──
@@ -153,9 +193,13 @@ pub fn evaluate(rows: &[Row], baseline: Option<&[Row]>) -> Outcome {
                 "[regression] min_ms vs baseline (gate: full/fix ≥10k and all 100k/1m, +{:.0}%; changed 1k/10k advisory)",
                 REGRESSION_MAX * 100.0
             ));
+            report_workload_resets(&mut o, revisions, baseline_revisions);
             let mut deltas: Vec<(f64, String, bool)> = Vec::new();
             let mut r_fail = 0usize;
             for r in rows {
+                if workload_revision_change(&r.scenario, revisions, baseline_revisions).is_some() {
+                    continue;
+                }
                 let advisory = regression_advisory_only(r);
                 if !REGRESSION_SIZES.contains(&r.size_label.as_str()) && !advisory {
                     continue;
@@ -219,7 +263,14 @@ pub fn run(results: &Path, baseline: Option<&Path>) -> Result<()> {
         rep.fingerprint.cpu_model, rep.fingerprint.os, rep.fingerprint.hyperfine_version
     );
 
-    let outcome = evaluate(&rep.rows, base.as_ref().map(|b| b.rows.as_slice()));
+    let empty_revisions = BTreeMap::new();
+    let outcome = evaluate_with_revisions(
+        &rep.rows,
+        base.as_ref().map(|report| report.rows.as_slice()),
+        &rep.args.scenario_revisions,
+        base.as_ref()
+            .map_or(&empty_revisions, |report| &report.args.scenario_revisions),
+    );
     for l in &outcome.lines {
         println!("{l}");
     }
@@ -293,6 +344,40 @@ mod tests {
         let after = vec![row("S3", "1m", "full", 14_000.0, 200.0, 14_000.0)]; // +21.7% min
         let o = evaluate(&after, Some(&base));
         assert_eq!(o.gating_failures, 1);
+    }
+
+    #[test]
+    fn workload_revision_change_skips_only_that_scenario_regression() {
+        let base = vec![
+            row("S3", "100k", "full", 100.0, 1.0, 100.0),
+            row("S4", "100k", "full", 100.0, 1.0, 100.0),
+        ];
+        let after = vec![
+            row("S3", "100k", "full", 110.0, 1.0, 110.0),
+            row("S4", "100k", "full", 140.0, 1.0, 140.0),
+        ];
+        let revisions = BTreeMap::from([("S3".to_string(), 1), ("S4".to_string(), 2)]);
+        let baseline_revisions = BTreeMap::from([("S3".to_string(), 1), ("S4".to_string(), 1)]);
+
+        let outcome = evaluate_with_revisions(&after, Some(&base), &revisions, &baseline_revisions);
+
+        assert_eq!(outcome.gating_failures, 0, "{:#?}", outcome.lines);
+        assert!(
+            outcome
+                .lines
+                .iter()
+                .any(|line| line.contains("S4: workload r1 → r2")),
+            "{:#?}",
+            outcome.lines
+        );
+        assert!(
+            outcome
+                .lines
+                .iter()
+                .any(|line| line.contains("S3 100k full")),
+            "unchanged workloads must still be compared: {:#?}",
+            outcome.lines
+        );
     }
 
     #[test]

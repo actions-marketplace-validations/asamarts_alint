@@ -210,6 +210,15 @@ fn write_fingerprint_block(out: &mut String, fp: &fingerprint::Fingerprint, args
     }
     let _ = writeln!(out, "**Seed:** `{}`<br>", args.seed);
     let _ = writeln!(out, "**Warmup/runs:** {} / {}<br>", args.warmup, args.runs);
+    if !args.scenario_revisions.is_empty() {
+        let revisions = args
+            .scenario_revisions
+            .iter()
+            .map(|(scenario, revision)| format!("{scenario}=r{revision}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(out, "**Scenario workloads:** {revisions}<br>");
+    }
     let _ = writeln!(out, "**Generated:** `{}`<br>", fp.timestamp);
     let _ = writeln!(out);
     let _ = writeln!(

@@ -25,6 +25,7 @@
 //! walk per-version dirs; see `docs/benchmarks/HISTORY.md` for
 //! the headline cross-release table.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -194,6 +195,19 @@ impl Scenario {
             Self::S3 => "S3",
             Self::S4 => "S4",
             Self::Sfix => "SFIX",
+        }
+    }
+
+    /// Semantic workload revision for cross-release comparisons.
+    ///
+    /// Bump a scenario's revision whenever its resolved rule set or fixture
+    /// semantics change. `bench-gate` compares timings only when both reports
+    /// carry the same revision, so an intentional workload expansion cannot be
+    /// misreported as an engine regression.
+    pub fn workload_revision(self) -> u32 {
+        match self {
+            Self::S4 => 2,
+            Self::S1 | Self::S2 | Self::S3 | Self::Sfix => 1,
         }
     }
 
@@ -551,6 +565,11 @@ pub struct ReportArgs {
     pub runs: u32,
     pub sizes: Vec<String>,
     pub scenarios: Vec<String>,
+    /// Semantic revision per selected scenario. Older reports omit this
+    /// additive field; the gate preserves legacy comparisons unless both
+    /// reports declare different revisions for the same scenario.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scenario_revisions: BTreeMap<String, u32>,
     pub modes: Vec<String>,
     pub tools: Vec<String>,
 }
@@ -646,6 +665,47 @@ mod tests {
                     )
                 });
             }
+        }
+    }
+
+    /// Resolved rule counts anchor each workload revision. A scenario may grow,
+    /// but that is a new benchmark workload and MUST bump `workload_revision`
+    /// so the cross-release gate does not compare unlike work.
+    #[test]
+    fn scenario_workload_revisions_match_resolved_rule_counts() {
+        let expected = [
+            (Scenario::S1, 1, 16),
+            (Scenario::S2, 1, 20),
+            (Scenario::S3, 1, 16),
+            (Scenario::S4, 2, 85),
+            (Scenario::Sfix, 1, 24),
+        ];
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let registry = alint_rules::builtin_registry();
+
+        for (scenario, revision, rule_count) in expected {
+            let path = tmp.path().join(format!("{}.alint.yml", scenario.label()));
+            std::fs::write(&path, scenario.config_yaml())
+                .unwrap_or_else(|error| panic!("write {}: {error}", scenario.label()));
+            let config = alint_dsl::load_with(
+                &path,
+                &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+            )
+            .unwrap_or_else(|error| panic!("load {}: {error}", scenario.label()));
+
+            assert_eq!(
+                scenario.workload_revision(),
+                revision,
+                "{} workload revision changed unexpectedly",
+                scenario.label()
+            );
+            assert_eq!(
+                config.rules.len(),
+                rule_count,
+                "{} resolved workload changed; restore it or bump its workload revision and \
+                 update this reviewed contract",
+                scenario.label()
+            );
         }
     }
 
