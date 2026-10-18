@@ -147,7 +147,7 @@ fn translate_glob(
                 };
                 let whole = &rest[..=end];
                 let inner = &rest[1..end];
-                if inner.contains('/') || inner.is_empty() {
+                if inner.contains('/') || inner.is_empty() || inner == "!" {
                     output.push_str(&regex::escape(whole));
                 } else {
                     output.push('[');
@@ -157,7 +157,7 @@ fn translate_glob(
                         chars.next();
                     }
                     for class_ch in chars {
-                        if matches!(class_ch, '\\' | ']' | '^') {
+                        if matches!(class_ch, '\\' | '[' | ']' | '-' | '^' | '&' | '~') {
                             output.push('\\');
                         }
                         output.push(class_ch);
@@ -268,7 +268,8 @@ fn parse_numeric_range(text: &str) -> Option<(i64, i64)> {
     if end.contains("..") {
         return None;
     }
-    Some((start.parse().ok()?, end.parse().ok()?))
+    let (start, end) = (start.parse().ok()?, end.parse().ok()?);
+    (start < end).then_some((start, end))
 }
 
 #[derive(Debug)]
@@ -419,13 +420,13 @@ impl EditorconfigConformsRule {
         invalid_declarations: &mut HashSet<(PathBuf, usize, String)>,
         violations: &mut Vec<Violation>,
     ) {
-        let width = indent_width(policy, invalid_declarations, violations);
+        let widths = indentation_widths(policy, invalid_declarations, violations);
         let Some(declaration) = policy.get("indent_style") else {
             return;
         };
         let (expected, detail) = match declaration.value.to_ascii_lowercase().as_str() {
-            "tab" => (IndentPolicy::Tabs, "tab"),
-            "space" => (IndentPolicy::Spaces(width), "space"),
+            "tab" => (IndentPolicy::Tabs(widths.tab_width), "tab"),
+            "space" => (IndentPolicy::Spaces(widths.indent_size), "space"),
             _ => {
                 invalid_policy_value(
                     "indent_style",
@@ -701,6 +702,19 @@ fn load_policy(ctx: &Context<'_>, path: &Path, violations: &mut Vec<Violation>) 
 }
 
 fn parse_policy(path: &Path, text: &str) -> std::result::Result<PolicyDocument, (usize, String)> {
+    let bytes = text.as_bytes();
+    let mut line = 1;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'\r' && bytes.get(index + 1) != Some(&b'\n') {
+            return Err((
+                line,
+                "EditorConfig files must use LF or CRLF line separators".into(),
+            ));
+        }
+        if *byte == b'\n' {
+            line += 1;
+        }
+    }
     let directory = path.parent().unwrap_or_else(|| Path::new(""));
     let mut root = false;
     let mut sections = Vec::new();
@@ -742,18 +756,14 @@ fn parse_policy(path: &Path, text: &str) -> std::result::Result<PolicyDocument, 
         };
         let key = key.to_ascii_lowercase();
         if current.is_none() {
-            if key != "root" {
-                return Err((
-                    line_number,
-                    "only `root` is allowed before the first EditorConfig section".into(),
-                ));
+            if key == "root" {
+                root = parse_bool(value).ok_or_else(|| {
+                    (
+                        line_number,
+                        "EditorConfig `root` must be `true` or `false`".into(),
+                    )
+                })?;
             }
-            root = parse_bool(value).ok_or_else(|| {
-                (
-                    line_number,
-                    "EditorConfig `root` must be `true` or `false`".into(),
-                )
-            })?;
             continue;
         }
         let declaration = Declaration {
@@ -775,15 +785,9 @@ fn parse_policy(path: &Path, text: &str) -> std::result::Result<PolicyDocument, 
 }
 
 fn split_property(line: &str) -> Option<(&str, &str)> {
-    let equals = line.find('=');
-    let colon = line.find(':');
-    let separator = match (equals, colon) {
-        (Some(left), Some(right)) => left.min(right),
-        (Some(index), None) | (None, Some(index)) => index,
-        (None, None) => return None,
-    };
-    let key = line[..separator].trim();
-    let value = line[separator + 1..].trim();
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    let value = value.trim();
     (!key.is_empty()).then_some((key, value))
 }
 
@@ -971,19 +975,31 @@ fn parse_bool(value: &str) -> Option<bool> {
     }
 }
 
-fn indent_width(
+#[derive(Debug, Clone, Copy, Default)]
+struct IndentationWidths {
+    indent_size: Option<usize>,
+    tab_width: Option<usize>,
+}
+
+fn indentation_widths(
     policy: &HashMap<String, Declaration>,
     seen: &mut HashSet<(PathBuf, usize, String)>,
     violations: &mut Vec<Violation>,
-) -> Option<usize> {
-    let tab_width = policy
+) -> IndentationWidths {
+    let explicit_tab_width = policy
         .get("tab_width")
         .and_then(|declaration| parse_positive("tab_width", declaration, seen, violations));
-    let declaration = policy.get("indent_size")?;
-    if declaration.value.eq_ignore_ascii_case("tab") {
-        return tab_width;
+    let indent_size = policy.get("indent_size").and_then(|declaration| {
+        if declaration.value.eq_ignore_ascii_case("tab") {
+            explicit_tab_width
+        } else {
+            parse_positive("indent_size", declaration, seen, violations)
+        }
+    });
+    IndentationWidths {
+        indent_size,
+        tab_width: explicit_tab_width.or(indent_size),
     }
-    parse_positive("indent_size", declaration, seen, violations)
 }
 
 fn parse_positive(
@@ -1009,13 +1025,33 @@ fn parse_positive(
 
 #[derive(Debug, Clone, Copy)]
 enum IndentPolicy {
-    Tabs,
+    Tabs(Option<usize>),
     Spaces(Option<usize>),
 }
 
+fn first_bad_tab_indent(lead: &str, width: Option<usize>) -> Option<(usize, usize)> {
+    let mut first_space = None;
+    for (offset, byte) in lead.bytes().enumerate() {
+        match byte {
+            b' ' => {
+                first_space.get_or_insert(offset);
+            }
+            b'\t' if first_space.is_some() => {
+                let column = first_space.expect("space position recorded") + 1;
+                return Some((column, column + 1));
+            }
+            b'\t' => {}
+            _ => unreachable!("indent prefix contains only spaces and tabs"),
+        }
+    }
+    let first_space = first_space?;
+    width
+        .filter(|width| lead.len() - first_space >= *width)
+        .map(|_| (first_space + 1, lead.len() + 1))
+}
+
 fn first_bad_indent(text: &str, policy: IndentPolicy) -> Option<(usize, usize, usize)> {
-    for (index, line) in text.split('\n').enumerate() {
-        let line = line.strip_suffix('\r').unwrap_or(line);
+    for (index, (_, line)) in crate::io::physical_lines(text).enumerate() {
         let lead = line
             .char_indices()
             .find(|(_, ch)| *ch != ' ' && *ch != '\t')
@@ -1024,10 +1060,7 @@ fn first_bad_indent(text: &str, policy: IndentPolicy) -> Option<(usize, usize, u
             continue;
         }
         let bad = match policy {
-            IndentPolicy::Tabs => lead.bytes().position(|byte| byte == b' ').map(|offset| {
-                let column = offset + 1;
-                (column, column + 1)
-            }),
+            IndentPolicy::Tabs(width) => first_bad_tab_indent(lead, width),
             IndentPolicy::Spaces(width) => lead.bytes().position(|byte| byte == b'\t').map_or_else(
                 || {
                     width
@@ -1067,11 +1100,7 @@ fn first_bad_line_ending(text: &str, expected: LineEnding) -> Option<SourceRange
                     || matches!(expected, LineEnding::Cr) && !crlf;
                 if !valid {
                     let column = text[line_start..index].chars().count() + 1;
-                    return if crlf {
-                        SourceRange::new(line, column, line + 1, 1)
-                    } else {
-                        SourceRange::new(line, column, line, column + 1)
-                    };
+                    return SourceRange::new(line, column, line + 1, 1);
                 }
                 index += usize::from(crlf);
                 line += 1;
@@ -1093,8 +1122,7 @@ fn first_bad_line_ending(text: &str, expected: LineEnding) -> Option<SourceRange
 }
 
 fn first_trailing_whitespace(text: &str) -> Option<(usize, usize, usize)> {
-    for (index, line) in text.split('\n').enumerate() {
-        let line = line.strip_suffix('\r').unwrap_or(line);
+    for (index, (_, line)) in crate::io::physical_lines(text).enumerate() {
         let trimmed = line.trim_end_matches([' ', '\t']);
         if trimmed.len() != line.len() {
             return Some((
@@ -1108,8 +1136,7 @@ fn first_trailing_whitespace(text: &str) -> Option<(usize, usize, usize)> {
 }
 
 fn first_overlong_line(text: &str, maximum: usize) -> Option<(usize, usize)> {
-    for (index, line) in text.split('\n').enumerate() {
-        let line = line.strip_suffix('\r').unwrap_or(line);
+    for (index, (_, line)) in crate::io::physical_lines(text).enumerate() {
         let width = line.chars().count();
         if width > maximum {
             return Some((index + 1, width));
@@ -1119,12 +1146,9 @@ fn first_overlong_line(text: &str, maximum: usize) -> Option<(usize, usize)> {
 }
 
 fn end_coordinates(text: &str) -> (usize, usize) {
-    let line = text.bytes().filter(|byte| *byte == b'\n').count() + 1;
-    let column = text
-        .rsplit('\n')
-        .next()
-        .map_or(1, |tail| tail.chars().count() + 1);
-    (line, column)
+    let point = SourceRange::from_byte_range(text, text.len()..text.len())
+        .expect("end of valid UTF-8 is a valid source position");
+    (point.start_line(), point.start_column())
 }
 
 fn end_point(text: &str) -> Option<SourceRange> {
@@ -1135,14 +1159,10 @@ fn end_point(text: &str) -> Option<SourceRange> {
 fn final_newline_range(text: &str) -> Option<SourceRange> {
     if let Some(prefix) = text
         .strip_suffix("\r\n")
-        .or_else(|| text.strip_suffix('\n'))
+        .or_else(|| text.strip_suffix(['\n', '\r']))
     {
         let (line, column) = end_coordinates(prefix);
         return SourceRange::new(line, column, line + 1, 1);
-    }
-    if let Some(prefix) = text.strip_suffix('\r') {
-        let (line, column) = end_coordinates(prefix);
-        return SourceRange::new(line, column, line, column + 1);
     }
     end_point(text)
 }
@@ -1194,14 +1214,19 @@ mod tests {
     }
 
     #[test]
-    fn glob_supports_alternation_ranges_double_star_and_classes() {
+    fn glob_supports_alternation_ranges_double_star_and_literal_classes() {
         let cases = [
             ("*.{js,ts}", "src/a.ts", true),
             ("/src/**/test?.[ch]", "src/unit/test1.c", true),
             ("file{1..3}.txt", "file2.txt", true),
             ("file{1..3}.txt", "file4.txt", false),
-            ("[!a]*.rs", "best.rs", true),
-            ("[!a]*.rs", "also.rs", false),
+            ("file{3..1}.txt", "file2.txt", false),
+            ("[a-c].txt", "a.txt", true),
+            ("[a-c].txt", "-.txt", true),
+            ("[a-c].txt", "b.txt", false),
+            ("[!a-c].txt", "b.txt", true),
+            ("[!a-c].txt", "-.txt", false),
+            ("[!a-c].txt", "also.txt", false),
             (r"literal\*.txt", "literal*.txt", true),
             (r"literal\*.txt", "literalx.txt", false),
         ];
@@ -1213,6 +1238,32 @@ mod tests {
                 "{pattern} / {path}"
             );
         }
+    }
+
+    #[test]
+    fn parser_accepts_valid_preamble_pairs_and_rejects_nonstandard_syntax() {
+        let policy = parse_policy(
+            Path::new(".editorconfig"),
+            "vendor_extension = enabled\nroot = true\n[*.txt]\nmax_line_length = off\n",
+        )
+        .unwrap();
+        assert!(policy.root);
+        assert_eq!(policy.sections.len(), 1);
+
+        let colon = parse_policy(
+            Path::new(".editorconfig"),
+            "root = true\n[*.txt]\nmax_line_length: 80\n",
+        )
+        .unwrap_err();
+        assert_eq!(colon.0, 3);
+
+        let lone_cr = parse_policy(
+            Path::new(".editorconfig"),
+            "vendor_extension = enabled\rroot = true\n[*.txt]\n",
+        )
+        .unwrap_err();
+        assert_eq!(lone_cr.0, 1);
+        assert!(lone_cr.1.contains("LF or CRLF"));
     }
 
     #[test]
@@ -1276,6 +1327,84 @@ mod tests {
                 .all(|finding| { finding.related_locations[0].path == Path::new(".editorconfig") })
         );
         assert!(violations.iter().all(|finding| finding.range.is_some()));
+    }
+
+    #[test]
+    fn cr_files_use_physical_lines_for_all_text_checks() {
+        let policy = concat!(
+            "root = true\n",
+            "[trim.txt]\n",
+            "end_of_line = cr\n",
+            "trim_trailing_whitespace = true\n",
+            "[indent.txt]\n",
+            "end_of_line = cr\n",
+            "indent_style = space\n",
+            "[width.txt]\n",
+            "end_of_line = cr\n",
+            "max_line_length = 3\n",
+        );
+        let (tmp, index) = tempdir_with_files(&[
+            (".editorconfig", policy.as_bytes()),
+            ("trim.txt", b"bad \rok\r"),
+            ("indent.txt", b"ok\r\tbad\r"),
+            ("width.txt", b"abc\rdef\r"),
+        ]);
+        let violations = rule().evaluate(&ctx(tmp.path(), &index)).unwrap();
+        assert_eq!(violations.len(), 2);
+
+        let trim = violations
+            .iter()
+            .find(|finding| finding.path.as_deref() == Some(Path::new("trim.txt")))
+            .unwrap();
+        let trim_range = trim.range.as_ref().unwrap();
+        assert_eq!(
+            (
+                trim_range.start_line(),
+                trim_range.start_column(),
+                trim_range.end_line(),
+                trim_range.end_column(),
+            ),
+            (1, 4, 1, 5)
+        );
+
+        let indent = violations
+            .iter()
+            .find(|finding| finding.path.as_deref() == Some(Path::new("indent.txt")))
+            .unwrap();
+        let indent_range = indent.range.as_ref().unwrap();
+        assert_eq!(
+            (
+                indent_range.start_line(),
+                indent_range.start_column(),
+                indent_range.end_line(),
+                indent_range.end_column(),
+            ),
+            (2, 1, 2, 2)
+        );
+    }
+
+    #[test]
+    fn tab_indentation_allows_only_a_sub_tab_width_space_remainder() {
+        let policy = concat!(
+            "root = true\n",
+            "[*.txt]\n",
+            "indent_style = tab\n",
+            "indent_size = 4\n",
+            "tab_width = 4\n",
+        );
+        let (tmp, index) = tempdir_with_files(&[
+            (".editorconfig", policy.as_bytes()),
+            ("good.txt", b"\t  aligned\n"),
+            ("space-before-tab.txt", b"  \tbad\n"),
+            ("full-space-tab.txt", b"\t    bad\n"),
+        ]);
+        let violations = rule().evaluate(&ctx(tmp.path(), &index)).unwrap();
+        assert_eq!(violations.len(), 2);
+        assert!(
+            violations
+                .iter()
+                .all(|finding| finding.path.as_deref() != Some(Path::new("good.txt")))
+        );
     }
 
     #[test]

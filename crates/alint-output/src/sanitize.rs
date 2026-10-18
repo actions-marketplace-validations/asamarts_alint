@@ -19,37 +19,40 @@ use std::borrow::Cow;
 
 use alint_core::invisible::is_deceptive_on_display;
 
-/// A control char alint emits on purpose and must preserve: the newline that
-/// [`crate::wrap_message`] treats as a paragraph break in a wrapped message.
-const fn is_intentional(c: char) -> bool {
-    c == '\n'
+fn is_unsafe(c: char, preserve_newlines: bool) -> bool {
+    (c.is_control() && !(preserve_newlines && c == '\n')) || is_deceptive_on_display(c)
 }
 
-/// Whether `c` must be neutralized before reaching a terminal.
-fn is_unsafe(c: char) -> bool {
-    (c.is_control() && !is_intentional(c)) || is_deceptive_on_display(c)
-}
-
-/// Render untrusted `s` safe to write to a terminal: every control character
-/// (C0, `DEL`, C1) except the intentional newline is replaced with a visible,
-/// inert `\xNN` escape — so an embedded `ESC` becomes the four literal
-/// characters `\x1b`, carrying no control byte for the terminal to act on.
+/// Render untrusted `s` safe on one terminal line. Every control character
+/// (C0, `DEL`, and C1) becomes a visible, inert `\xNN` escape, so an embedded
+/// `ESC` cannot execute and an embedded newline cannot inject another record.
 /// Characters that reorder or hide displayed text become a visible
 /// `\u{XXXX}` escape: everything `no_bidi_controls` and `no_zero_width_chars`
 /// flag (one shared definition, [`alint_core::invisible`]) plus other
 /// display-invisible characters such as the tag characters and U+2028/U+2029.
 ///
-/// Returns the input borrowed unchanged when there is nothing to strip (the
-/// overwhelming common case), so clean output pays no allocation.
+/// Returns the input borrowed unchanged when no escaping is needed.
 #[must_use]
 pub fn sanitize_terminal(s: &str) -> Cow<'_, str> {
-    if !s.chars().any(is_unsafe) {
+    sanitize_terminal_impl(s, false)
+}
+
+/// Terminal sanitizer for block renderers that deliberately re-indent
+/// newline-separated message paragraphs before writing them. Callers MUST
+/// place each preserved newline at a trusted indentation boundary.
+#[must_use]
+pub fn sanitize_terminal_multiline(s: &str) -> Cow<'_, str> {
+    sanitize_terminal_impl(s, true)
+}
+
+fn sanitize_terminal_impl(s: &str, preserve_newlines: bool) -> Cow<'_, str> {
+    if !s.chars().any(|c| is_unsafe(c, preserve_newlines)) {
         return Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len() + 8);
     for c in s.chars() {
         use std::fmt::Write as _;
-        if c.is_control() && !is_intentional(c) {
+        if c.is_control() && !(preserve_newlines && c == '\n') {
             // Control chars are Unicode category Cc: U+0000–U+001F and
             // U+007F–U+009F, all ≤ 0x9f, so a 2-digit hex escape suffices.
             let _ = write!(out, "\\x{:02x}", c as u32);
@@ -91,17 +94,17 @@ mod tests {
     }
 
     #[test]
-    fn newline_is_preserved_as_paragraph_break() {
+    fn multiline_messages_preserve_paragraph_breaks() {
         // `command` rule messages embed subprocess output with `\n`
-        // separators that wrap_message renders as paragraph breaks.
-        let out = sanitize_terminal("failed (1):\nline one\nline two");
-        assert_eq!(out, "failed (1):\nline one\nline two");
+        // separators that wrap_message renders as re-indented paragraphs.
+        let input = "failed (1):\nline one\nline two";
+        assert_eq!(sanitize_terminal_multiline(input), input);
     }
 
     #[test]
-    fn tab_is_neutralized_but_newline_kept() {
+    fn single_line_output_escapes_newlines_and_tabs() {
         let out = sanitize_terminal("a\tb\nc");
-        assert_eq!(out, "a\\x09b\nc");
+        assert_eq!(out, "a\\x09b\\x0ac");
     }
 
     #[test]

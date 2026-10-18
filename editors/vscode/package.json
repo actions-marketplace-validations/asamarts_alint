@@ -78,6 +78,7 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "node esbuild.js --production",
+    "audit": "npm audit --audit-level=moderate",
     "watch": "node esbuild.js --watch",
     "check-types": "tsc --noEmit",
     "test": "tsc --noEmit",
@@ -100,7 +101,11 @@
     "esbuild": "^0.28.2",
     "glob": "^13.0.6",
     "mocha": "^11.8.0",
-    "ovsx": "^1.2.0",
+    "ovsx": "^1.3.0",
     "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "diff": "8.0.3",
+    "serialize-javascript": "7.0.5"
   }
 }

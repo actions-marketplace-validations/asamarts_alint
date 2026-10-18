@@ -71,6 +71,7 @@ impl SourceRange {
     }
 
     /// Convert a valid UTF-8 byte range to 1-based line/column coordinates.
+    /// A leading UTF-8 BOM is an encoding signature and occupies no column.
     /// Returns `None` for reversed, out-of-bounds, or non-character-boundary
     /// offsets.
     #[must_use]
@@ -85,6 +86,7 @@ impl SourceRange {
 
         let mut line = 1;
         let mut column = 1;
+        let mut previous_was_cr = false;
         let mut start = None;
         let mut end = None;
         for (offset, ch) in text.char_indices() {
@@ -95,11 +97,23 @@ impl SourceRange {
                 end = Some((line, column));
                 break;
             }
-            if ch == '\n' {
-                line += 1;
-                column = 1;
-            } else {
-                column += 1;
+            match ch {
+                '\r' => {
+                    line += 1;
+                    column = 1;
+                    previous_was_cr = true;
+                }
+                '\n' if previous_was_cr => previous_was_cr = false,
+                '\n' => {
+                    line += 1;
+                    column = 1;
+                }
+                _ => {
+                    if offset != 0 || ch != '\u{feff}' {
+                        column += 1;
+                    }
+                    previous_was_cr = false;
+                }
             }
         }
         if range.start == text.len() {
@@ -271,6 +285,29 @@ mod tests {
         assert_eq!(range.end_column(), 2);
     }
 
+    #[test]
+    fn byte_range_treats_cr_and_crlf_as_line_endings() {
+        let text = "a\rb\r\nc";
+        let range = SourceRange::from_byte_range(text, 2..text.len()).unwrap();
+        assert_eq!(range.start_line(), 2);
+        assert_eq!(range.start_column(), 1);
+        assert_eq!(range.end_line(), 3);
+        assert_eq!(range.end_column(), 2);
+
+        let crlf = SourceRange::from_byte_range(text, 3..5).unwrap();
+        assert_eq!(crlf.start_line(), 2);
+        assert_eq!(crlf.start_column(), 2);
+        assert_eq!(crlf.end_line(), 3);
+        assert_eq!(crlf.end_column(), 1);
+    }
+
+    #[test]
+    fn byte_range_does_not_count_a_leading_bom_as_a_column() {
+        let text = "\u{feff}x";
+        let range = SourceRange::from_byte_range(text, 3..text.len()).unwrap();
+        assert_eq!(range.start_column(), 1);
+        assert_eq!(range.end_column(), 2);
+    }
     #[test]
     fn byte_range_rejects_non_character_boundaries() {
         assert!(SourceRange::from_byte_range("é", 1..2).is_none());

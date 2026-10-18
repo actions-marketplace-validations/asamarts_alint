@@ -14,7 +14,7 @@ facts:
   - id: versioning_has_valid_version
     file_content_matches:
       paths: VERSION
-      pattern: '\A[ \t]*[vV]?[0-9][0-9A-Za-z._+!~-]{0,255}[ \t]*(?:\r?\n)?\z'
+      pattern: '\A[ \t]*(?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254})[ \t]*(?:\r?\n)?\z'
   - id: versioning_has_changelog_file
     any_file_exists: CHANGELOG.md
 
@@ -25,7 +25,7 @@ rules:
     when: facts.versioning_has_version_file
     kind: file_content_matches
     paths: VERSION
-    pattern: '\A[ \t]*[vV]?[0-9][0-9A-Za-z._+!~-]{0,255}[ \t]*(?:\r?\n)?\z'
+    pattern: '\A[ \t]*(?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254})[ \t]*(?:\r?\n)?\z'
     level: error
     message: "`VERSION` must contain exactly one portable literal version token."
 
@@ -35,7 +35,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/package.json"
       extract: { json: "$.version" }
@@ -51,7 +51,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/Cargo.toml"
       extract: { toml: "$.package.version" }
@@ -67,7 +67,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/Cargo.toml"
       extract: { toml: "$.workspace.package.version" }
@@ -83,7 +83,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/pyproject.toml"
       extract: { toml: "$.project.version" }
@@ -99,7 +99,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/pyproject.toml"
       extract: { toml: "$.tool.poetry.version" }
@@ -115,7 +115,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/{__init__,version,_version}.py"
       extract:
@@ -133,7 +133,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/Chart.yaml"
       extract: { yaml: "$.appVersion" }
@@ -149,7 +149,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/{openapi,swagger}.json"
       extract: { json: "$.info.version" }
@@ -165,7 +165,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       files: "**/{openapi,swagger}.{yml,yaml}"
       extract: { yaml: "$.info.version" }
@@ -181,7 +181,7 @@ rules:
     source:
       file: VERSION
       extract:
-        regex: '\A[ \t]*([vV]?[0-9][0-9A-Za-z._+!~-]{0,255})[ \t]*(?:\r?\n)?\z'
+        regex: '\A[ \t]*((?:[0-9][0-9A-Za-z._+!~-]{0,255}|[vV][0-9][0-9A-Za-z._+!~-]{0,254}))[ \t]*(?:\r?\n)?\z'
     targets:
       - file: CHANGELOG.md
         extract:

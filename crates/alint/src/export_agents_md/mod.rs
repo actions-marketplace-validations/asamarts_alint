@@ -208,7 +208,7 @@ fn write_output(body: &str, opts: &RunOptions) -> Result<()> {
             let body = if opts.format == OutputFormat::Json || !std::io::stdout().is_terminal() {
                 std::borrow::Cow::Borrowed(body)
             } else {
-                alint_output::sanitize_terminal(body)
+                alint_output::sanitize_terminal_multiline(body)
             };
             std::io::stdout()
                 .write_all(body.as_bytes())

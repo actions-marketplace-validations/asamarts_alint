@@ -8,7 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use alint_core::{Engine, FixReport, FixRuleResult, FixStatus, RuleRegistry, WalkOptions, walk};
-use alint_output::{ColorChoice, Format, GlyphSet, HumanOptions, sanitize_terminal as term};
+use alint_output::{
+    ColorChoice, Format, GlyphSet, HumanOptions, sanitize_terminal as term,
+    sanitize_terminal_multiline as term_multiline,
+};
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 
@@ -47,7 +50,7 @@ fn main() -> ExitCode {
         // alint error. Exit quietly, as if the output had been consumed.
         Err(e) if is_broken_pipe(&e) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("alint: {}", term(&format!("{e:#}")));
+            eprintln!("alint: {}", terminal_error(&format!("{e:#}")));
             // Exit 3 for an internal alint error (a bug), 2 for a config /
             // CLI-usage error the user can fix (M11).
             if error_is_internal(&e) {
@@ -68,6 +71,27 @@ fn error_is_internal(err: &anyhow::Error) -> bool {
             .downcast_ref::<alint_core::Error>()
             .is_some_and(alint_core::Error::is_internal)
     })
+}
+
+/// Render a multi-line top-level error without letting an untrusted newline
+/// escape the CLI's `alint:` record prefix.
+fn terminal_error(message: &str) -> impl std::fmt::Display + '_ {
+    struct Prefixed<'a>(&'a str);
+
+    impl std::fmt::Display for Prefixed<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let safe = term_multiline(self.0);
+            for (index, line) in safe.split('\n').enumerate() {
+                if index > 0 {
+                    formatter.write_str("\nalint: ")?;
+                }
+                formatter.write_str(line)?;
+            }
+            Ok(())
+        }
+    }
+
+    Prefixed(message)
 }
 
 /// Whether the error chain carries an EPIPE: stdout's reader went away.
@@ -1027,8 +1051,8 @@ fn cmd_baseline(
                         None => path.display().to_string(),
                     },
                 );
-                let message =
-                    alint_output::sanitize_terminal(&failure.message).replace('\n', "\n    ");
+                let message = alint_output::sanitize_terminal_multiline(&failure.message)
+                    .replace('\n', "\n    ");
                 eprintln!(
                     "  {}: {}: {}: {message}",
                     alint_output::sanitize_terminal(&location),
@@ -1297,7 +1321,7 @@ fn cmd_fix(
                     let location = failure.path.as_ref().map_or_else(String::new, |path| {
                         format!("{}: ", term(&path.display().to_string()))
                     });
-                    let message = term(&failure.message).replace('\n', "\nalint:   ");
+                    let message = term_multiline(&failure.message).replace('\n', "\nalint:   ");
                     writeln!(
                         err,
                         "alint: {location}{}: analysis failure ({}): {message}",
@@ -1910,7 +1934,7 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     if let Some(msg) = entry.message() {
         let msg = msg.trim_end_matches('\n');
         if !msg.trim().is_empty() {
-            let msg = term(msg).replace('\n', &format!("\n{}", " ".repeat(12)));
+            let msg = term_multiline(msg).replace('\n', &format!("\n{}", " ".repeat(12)));
             writeln!(out, "{dim}message:   {dim:#} {msg}")?;
         }
     }
@@ -2284,7 +2308,7 @@ fn emit_validate_failure(
         // Human format prints to stderr to stay out of the way of
         // stdout consumers, then a one-line summary on stdout so
         // terminals show something either way.
-        eprintln!("alint: {}", term(&format!("{err:#}")));
+        eprintln!("alint: {}", terminal_error(&format!("{err:#}")));
         print_stdout_line("✗ Config invalid")?;
     }
     // An internal error (an alint bug — e.g. a shipped bundled ruleset that

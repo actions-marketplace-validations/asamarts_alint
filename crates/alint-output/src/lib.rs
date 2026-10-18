@@ -83,7 +83,7 @@ pub use human::{wrap_message, write_fix_human, write_human};
 pub use json::{write_fix_json, write_fix_json_with_mode, write_json, write_json_with_baseline};
 pub use junit::write_junit;
 pub use markdown::{write_fix_markdown, write_markdown};
-pub use sanitize::sanitize_terminal;
+pub use sanitize::{sanitize_terminal, sanitize_terminal_multiline};
 pub use sarif::{
     DEFAULT_CONFIG_URI, write_sarif, write_sarif_for_config, write_sarif_with_baseline,
     write_sarif_with_fingerprints,

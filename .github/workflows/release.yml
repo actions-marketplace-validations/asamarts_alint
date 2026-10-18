@@ -913,6 +913,7 @@ jobs:
           "
           echo "==> extension version set to $ver"
           npm ci
+          npm run audit
           npm run check-types
           npm run build
           # vsce/ovsx read VSCE_PAT/OVSX_PAT from the environment.

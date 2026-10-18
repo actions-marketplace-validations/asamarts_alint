@@ -165,6 +165,31 @@ pub(crate) fn without_leading_bom(text: &str) -> &str {
     text.strip_prefix('\u{FEFF}').unwrap_or(text)
 }
 
+/// Iterate physical lines separated by LF, CRLF, or CR without allocating.
+/// Each item carries the byte offset of its first character in `text`.
+pub(crate) fn physical_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let bytes = text.as_bytes();
+    let mut cursor = 0usize;
+    std::iter::from_fn(move || {
+        if cursor >= bytes.len() {
+            return None;
+        }
+        let start = cursor;
+        while cursor < bytes.len() && !matches!(bytes[cursor], b'\r' | b'\n') {
+            cursor += 1;
+        }
+        let end = cursor;
+        if cursor < bytes.len() {
+            cursor += if bytes[cursor] == b'\r' && bytes.get(cursor + 1) == Some(&b'\n') {
+                2
+            } else {
+                1
+            };
+        }
+        Some((start, &text[start..end]))
+    })
+}
+
 /// Find the first char of `bytes` (decoded as UTF-8, lossily) for which
 /// `pred(char, is_first_char)` holds, returning `(1-based line, 1-based
 /// column in chars, char)`. Each maximal invalid byte sequence counts as ONE
@@ -177,6 +202,7 @@ pub(crate) fn first_char_where(
     let mut line = 1usize;
     let mut col = 1usize;
     let mut first = true;
+    let mut previous_was_cr = false;
     for chunk in bytes.utf8_chunks() {
         let invalid = (!chunk.invalid().is_empty()).then_some('\u{FFFD}');
         for c in chunk.valid().chars().chain(invalid) {
@@ -186,11 +212,23 @@ pub(crate) fn first_char_where(
             // A leading BOM is invisible in every editor, so it takes no column.
             let leading_bom = first && c == '\u{FEFF}';
             first = false;
-            if c == '\n' {
-                line += 1;
-                col = 1;
-            } else if !leading_bom {
-                col += 1;
+            match c {
+                '\r' => {
+                    line += 1;
+                    col = 1;
+                    previous_was_cr = true;
+                }
+                '\n' if previous_was_cr => previous_was_cr = false,
+                '\n' => {
+                    line += 1;
+                    col = 1;
+                }
+                _ => {
+                    if !leading_bom {
+                        col += 1;
+                    }
+                    previous_was_cr = false;
+                }
             }
         }
     }
@@ -464,5 +502,11 @@ mod tests {
         assert_eq!(find(b"\xEF\xBB\xBFabx"), Some((1, 3, 'x')));
         // Only at the very start: a BOM mid-line is a real character.
         assert_eq!(find(b"a\xEF\xBB\xBFx"), Some((1, 3, 'x')));
+    }
+
+    #[test]
+    fn character_locations_recognize_cr_and_crlf_line_endings() {
+        let find = |b: &[u8]| first_char_where(b, |c, _| c == 'x');
+        assert_eq!(find(b"a\rb\r\nx"), Some((3, 1, 'x')));
     }
 }

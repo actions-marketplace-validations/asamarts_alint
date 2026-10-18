@@ -834,6 +834,12 @@
     "fingerprint": "e7301ebb6485d11b3276596e28d1b7348cf419a3b6e827b54792d4fd41ddd474"
   },
   {
+    "scenario": "check/bundled/versioning_oversized_source_fails.yml",
+    "rule_id": "versioning-version-file-one-line",
+    "path": "VERSION",
+    "fingerprint": "e7301ebb6485d11b3276596e28d1b7348cf419a3b6e827b54792d4fd41ddd474"
+  },
+  {
     "scenario": "check/bundled/versioning_unsafe_token_never_propagates.yml",
     "rule_id": "versioning-version-file-one-line",
     "path": "VERSION",

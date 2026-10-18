@@ -481,6 +481,7 @@ jobs:
         working-directory: editors/vscode
         run: |
           npm ci
+          npm run audit
           npm run check-types
           npm run build
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable

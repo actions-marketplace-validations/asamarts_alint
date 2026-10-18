@@ -107,15 +107,8 @@ struct Tag<'a> {
 
 fn tags(text: &str) -> Vec<Tag<'_>> {
     let mut found = Vec::new();
-    let mut line_start = 0usize;
-    for (line_index, raw_line) in text.split_inclusive('\n').enumerate() {
-        let line = raw_line
-            .strip_suffix('\n')
-            .unwrap_or(raw_line)
-            .strip_suffix('\r')
-            .unwrap_or_else(|| raw_line.strip_suffix('\n').unwrap_or(raw_line));
+    for (line_index, (line_start, line)) in crate::io::physical_lines(text).enumerate() {
         let Some(marker_start) = line.find(MARKER) else {
-            line_start += raw_line.len();
             continue;
         };
         let after_marker = marker_start + MARKER.len();
@@ -146,7 +139,6 @@ fn tags(text: &str) -> Vec<Tag<'_>> {
             line: line_index + 1,
             column: line[..expression_start].chars().count() + 1,
         });
-        line_start += raw_line.len();
     }
     found
 }
@@ -236,6 +228,22 @@ mod tests {
                 .iter()
                 .any(|violation| violation.message.contains("deprecated"))
         );
+    }
+
+    #[test]
+    fn cr_line_endings_keep_tags_and_ranges_on_their_physical_lines() {
+        let rule = build(&spec_yaml(
+            "id: spdx\nkind: spdx_identifier_valid\npaths: '**/*'\nlevel: error\n",
+        ))
+        .unwrap();
+        let (tmp, index) = tempdir_with_files(&[(
+            "license.txt",
+            b"SPDX-License-Identifier: MIT\rSPDX-License-Identifier: M1T\r",
+        )]);
+        let violations = rule.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        assert_eq!(violations.len(), 1);
+        let range = violations[0].range.as_ref().unwrap();
+        assert_eq!((range.start_line(), range.start_column()), (2, 26));
     }
 
     #[test]

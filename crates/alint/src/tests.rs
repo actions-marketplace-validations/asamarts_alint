@@ -29,6 +29,15 @@ fn error_is_internal_classifies_the_exit_code() {
 }
 
 #[test]
+fn terminal_errors_prefix_every_physical_line() {
+    assert_eq!(
+        terminal_error("first\nforged: all rules passed").to_string(),
+        "first\nalint: forged: all rules passed"
+    );
+    assert_eq!(terminal_error("bad\rclear").to_string(), "bad\\x0dclear");
+}
+
+#[test]
 fn url_encode_passes_through_unreserved_chars() {
     assert_eq!(url_encode("abcXYZ012-_.~"), "abcXYZ012-_.~");
 }

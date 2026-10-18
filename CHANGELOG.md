@@ -211,6 +211,33 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **EditorConfig conformance now follows the declared grammar and every supported target line
+  ending.** Policy files require `=` with LF/CRLF separators while valid extension pairs in the
+  preamble remain accepted. Glob character classes treat hyphens literally and descending numeric
+  ranges no longer match as reversed ranges. CR-only target files are split into physical lines for
+  indentation, trailing-whitespace, width, and final-newline locations. Tab indentation accepts the
+  specification's canonical sub-tab-width space remainder instead of rejecting every space.
+
+- **Source locations now agree across LF, CRLF, CR, and BOM-prefixed text.** Half-open source
+  ranges and Unicode security scans count CRLF once, recognize lone CR, and do not count a leading
+  UTF-8 BOM as a visible column. SPDX validation consequently checks every tag in a CR-only file
+  and reports its actual physical line.
+
+- **Compact human output remains one physical line per finding for untrusted input.** Embedded
+  newlines in paths, rule IDs, violation messages, and analysis failures render as inert `\x0a`
+  text instead of injecting forged compact records. Grouped output still preserves and re-indents
+  intentional message paragraphs, and every line of a top-level CLI error retains an `alint:`
+  prefix.
+
+- **The versioning bundle enforces its documented 256-byte source-token ceiling.** A leading
+  `v`/`V` now counts toward the limit in the activation fact, source validation rule, and all ten
+  target extractors; boundary end-to-end scenarios cover 256-byte acceptance and 257-byte
+  rejection.
+
+- **The VS Code extension toolchain no longer carries known npm vulnerabilities.** Updated Mocha
+  and Open VSX publishing dependencies remove the affected transitive packages, and both editor CI
+  and the Marketplace/Open VSX release job now block on moderate-or-higher `npm audit` findings.
+
 - **Sensitive findings no longer expose internal fix-correlation keys.** Public check, fix, and
   staged-diff reports now clear `fix_key` alongside proposed edits and related evidence, preventing
   extracted secret values from crossing the engine API boundary.

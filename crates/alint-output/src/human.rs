@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use alint_core::{AnalysisFailure, FixReport, FixStatus, Level, Report, RuleResult, Violation};
 
-use crate::sanitize::sanitize_terminal;
+use crate::sanitize::{sanitize_terminal, sanitize_terminal_multiline};
 use crate::style::{self, GlyphSet, HumanOptions, write_hyperlink};
 
 // ---------------------------------------------------------------
@@ -185,7 +185,7 @@ fn write_violation(
     // The message can embed a matched value or a `kind: command` rule's
     // subprocess output — neutralize terminal escapes before wrapping, while
     // preserving the intentional `\n` paragraph breaks wrap_message honors (M8).
-    let safe_message = sanitize_terminal(&violation.message);
+    let safe_message = sanitize_terminal_multiline(&violation.message);
     let lines = wrap_message(&safe_message, MSG_INDENT.len(), total_width);
     let (first_line, rest) = lines
         .split_first()
@@ -280,7 +280,7 @@ fn write_analysis_failure(
         opts.glyphs.error,
     )?;
 
-    let safe_message = sanitize_terminal(&failure.message);
+    let safe_message = sanitize_terminal_multiline(&failure.message);
     let kind = failure.kind.as_str();
     let message = match (failure.line, failure.column) {
         (Some(line), Some(column)) => format!("{kind}, {line}:{column}: {safe_message}"),
@@ -647,7 +647,7 @@ pub fn write_fix_human(
             // `content` embeds the attacker-controlled path + message (alint's
             // own status prose is clean ASCII); styling is applied separately
             // below, so sanitizing the whole string is safe (M8).
-            let content = sanitize_terminal(&content);
+            let content = sanitize_terminal_multiline(&content);
             let lines = wrap_message(&content, FIX_INDENT.len(), total_width);
             let (first_line, rest) = lines
                 .split_first()
@@ -671,7 +671,7 @@ pub fn write_fix_human(
                 failure.kind.as_str(),
                 failure.message
             );
-            let content = sanitize_terminal(&content);
+            let content = sanitize_terminal_multiline(&content);
             let lines = wrap_message(&content, FIX_INDENT.len(), total_width);
             let (first_line, rest) = lines
                 .split_first()
@@ -943,6 +943,30 @@ mod tests {
         };
         write_human(&evil_report(), &mut buf, opts).unwrap();
         assert_neutralized(&String::from_utf8(buf).unwrap());
+    }
+
+    #[test]
+    fn compact_format_keeps_each_finding_on_one_physical_line() {
+        let violation = Violation::new("first\nforged:0:0: error: fake")
+            .with_path(std::path::PathBuf::from("bad\npath"));
+        let report = Report {
+            results: vec![RuleResult::new(
+                "rule\ninjection".into(),
+                Level::Error,
+                None,
+                vec![violation],
+                false,
+            )],
+        };
+        let mut buf = Vec::new();
+        let opts = HumanOptions {
+            compact: true,
+            ..HumanOptions::default()
+        };
+        write_human(&report, &mut buf, opts).unwrap();
+        let rendered = strip_sgr(&String::from_utf8(buf).unwrap());
+        assert_eq!(rendered.lines().count(), 2, "{rendered:?}");
+        assert_eq!(rendered.matches("\\x0a").count(), 3, "{rendered:?}");
     }
 
     #[test]

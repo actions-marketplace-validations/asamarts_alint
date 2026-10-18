@@ -56,19 +56,21 @@ sections merge top to bottom; `unset` removes an inherited property.
 
 The v0.19 property set is:
 
-- `indent_style = tab|space`, with numeric `indent_size` enforced for spaces;
-- `end_of_line = lf|crlf|cr`;
+- `indent_style = tab|space`, with numeric `indent_size` enforced for spaces and canonical
+  tab-first indentation plus a sub-`tab_width` space remainder for tabs;
+- `end_of_line = lf|crlf|cr`, with every text check recognizing all three physical separators;
 - `charset = latin1|utf-8|utf-8-bom|utf-16be|utf-16le`;
 - `trim_trailing_whitespace = true` (`false` imposes no prohibition);
 - `insert_final_newline = true|false` (empty files satisfy either value);
 - positive integer `max_line_length`, with `off` disabling the limit.
 
 The last effective declaration of each property is retained as provenance. Findings point to the
-selected file and attach that declaration as a related location. Invalid syntax, invalid values
-for this supported set, unreadable policy files, and over-limit policy files are typed analysis
-failures. Unknown properties are ignored because EditorConfig permits plugin-specific keys.
-Binary files are checked only for `charset`; text-layout properties do not reinterpret binary
-bytes as lines.
+selected file and attach that declaration as a related location. Policy files accept only the
+specified UTF-8 LF/CRLF grammar and `=` delimiter; unknown non-`root` preamble pairs are valid but
+have no effect. Invalid syntax, invalid values for this supported set, unreadable policy files, and
+over-limit policy files are typed analysis failures. Unknown section properties are ignored because
+EditorConfig permits plugin-specific keys. Binary files are checked only for `charset`; text-layout
+properties do not reinterpret binary bytes as lines.
 
 ### 3.2 CommonMark structure
 

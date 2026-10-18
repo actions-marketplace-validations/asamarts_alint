@@ -12,7 +12,9 @@
 
 use std::io::Write;
 
-use alint_output::{HumanOptions, sanitize_terminal, style, wrap_message};
+use alint_output::{
+    HumanOptions, sanitize_terminal, sanitize_terminal_multiline, style, wrap_message,
+};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
@@ -79,13 +81,14 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
             // authors: neutralise terminal escapes before printing.
             label = sanitize_terminal(&headline_for(p)),
         )?;
-        let summary_lines = wrap_message(&sanitize_terminal(&p.summary), 4, total_width);
+        let summary_lines = wrap_message(&sanitize_terminal_multiline(&p.summary), 4, total_width);
         for line in &summary_lines {
             writeln!(out, "    {line}")?;
         }
         if opts.explain {
             for e in &p.evidence {
-                let ev_lines = wrap_message(&sanitize_terminal(&e.message), 9, total_width);
+                let ev_lines =
+                    wrap_message(&sanitize_terminal_multiline(&e.message), 9, total_width);
                 let (first, rest) = ev_lines
                     .split_first()
                     .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
