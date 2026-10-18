@@ -232,9 +232,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   code units. SPDX validation consequently checks every tag in a CR-only file and reports its
   actual physical line.
 
-- **LSP integration teardown now completes the protocol shutdown before its kill fallback.** The
-  shared real-server harness waits for the `shutdown` response and gives `exit` time to terminate
-  the child, preventing truncated LLVM profiles from making otherwise-passing coverage runs fail.
+- **LSP integration teardown and hosted editor coverage no longer leave audit gaps.** The shared
+  real-server harness waits for the `shutdown` response and gives `exit` time to terminate the
+  child, preventing truncated LLVM profiles from making otherwise-passing coverage runs fail.
+  Real-client editor checks now also run on direct `main` pushes that touch an editor, the LSP
+  server, the binary, or their workflow—not only on pull requests.
 
 - **Compact human output remains one physical line per finding for untrusted input.** Embedded
   newlines in paths, rule IDs, violation messages, and analysis failures render as inert `\x0a`

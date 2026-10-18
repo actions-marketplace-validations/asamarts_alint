@@ -9,11 +9,19 @@ name: editors e2e (LSP integration)
 #
 # Runs on GitHub-hosted ubuntu-latest (ships the GUI libs + xvfb that
 # @vscode/test-electron needs; the self-hosted bench runner is
-# headless-minimal). Gated on the editors, the LSP server, or the binary
-# so a server<->client contract change re-runs the real-client checks.
+# headless-minimal). Pull requests and direct main pushes are gated on the
+# editors, the LSP server, or the binary so a server<->client contract change
+# re-runs the real-client checks.
 
 on:
   pull_request:
+    branches: [main]
+    paths:
+      - "editors/**"
+      - "crates/alint-lsp/**"
+      - "crates/alint/**"
+      - ".github/workflows/editors-e2e.yml"
+  push:
     branches: [main]
     paths:
       - "editors/**"
