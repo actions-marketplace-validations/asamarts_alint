@@ -70,8 +70,8 @@ environment file that exists in that job, or omit the rule there.
 
 Counts remain generated-contract facts, not estimates. W10 removes the duplicated count from the
 getting-started page instead of adding another synchronization mechanism, and it does not edit a
-correct root README count. The roadmap's `Latest release` stays at v0.18.4 until the v0.19 release
-commit, when the normal release procedure updates it.
+correct root README count. The v0.19 release commit updated the roadmap's `Latest release` from
+v0.18.4 to v0.19.0 through the normal release procedure.
 
 ## 4. Implementation notes
 

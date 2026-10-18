@@ -120,7 +120,7 @@ aarch64), so the floor no longer tracks rustc's per-target default. It had drift
 (`x86_64-apple-darwin` is also slated for a Rust support-tier demotion to Tier 2.) The
 **source-build** channels
 (`cargo install`, the binstall source fallback, `cargo install --git`, and the
-`language: rust` pre-commit hook) require **rustc ≥ 1.85** (`Cargo.toml:21`);
+`language: rust` pre-commit hook) require **rustc ≥ 1.88** (`Cargo.toml:21`);
 prebuilt-binary channels impose no toolchain requirement.
 
 ### 2.2 Live channels (nine auto-published on the `v*` tag, plus three manual/docs-only)

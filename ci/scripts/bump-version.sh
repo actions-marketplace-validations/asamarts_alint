@@ -53,11 +53,20 @@ fi
 echo "==> bump: $CUR -> $NEW"
 
 # 1. Workspace version (single line under [workspace.package]).
-#    We anchor on the literal old version to avoid bumping the
-#    [workspace.dependencies] internal-crate pins (those are the
-#    inter-crate API compat floor — bumped separately when an
-#    inter-crate API breaks).
+#    The workspace dependencies use Cargo caret requirements. Before 1.0, a
+#    new minor is a new compatibility line (`0.18` does not accept `0.19`), and
+#    a new major is always a new compatibility line. Advance the internal-crate
+#    floors in those cases before asking Cargo to resolve the bumped workspace.
 sed -i "s|^version = \"$CUR\"$|version = \"$NEW\"|" Cargo.toml
+
+IFS=. read -r CUR_MAJOR CUR_MINOR _ <<<"$CUR"
+IFS=. read -r NEW_MAJOR NEW_MINOR _ <<<"$NEW"
+if [[ "$CUR_MAJOR" != "$NEW_MAJOR" || ( "$CUR_MAJOR" == "0" && "$CUR_MINOR" != "$NEW_MINOR" ) ]]; then
+  NEW_FLOOR="${NEW_MAJOR}.${NEW_MINOR}.0"
+  sed -i -E \
+    "s#^(alint-[a-z-]+ = \\{ path = \"[^\"]+\", version = \")[0-9]+\\.[0-9]+\\.[0-9]+(\" \\})\$#\\1${NEW_FLOOR}\\2#" \
+    Cargo.toml
+fi
 
 # 1b. Refresh Cargo.lock workspace-crate version entries to match
 #     the new workspace.package.version. Without this explicit
@@ -74,6 +83,11 @@ sed -i "s|^version = \"$CUR\"$|version = \"$NEW\"|" Cargo.toml
 #     compiling. `--offline` keeps it from hitting the network.
 echo "==> refreshing Cargo.lock (cargo metadata --offline)"
 cargo metadata --offline --format-version 1 > /dev/null
+
+# 1c. `facts.json` embeds the workspace version and is generated source. Refresh
+#     it here so the release commit cannot carry a stale discovery contract.
+echo "==> refreshing facts.json (xtask gen-facts)"
+cargo run -q -p xtask -- gen-facts
 
 # 2. Install snippets across user-facing files, plus action.yml's private
 #    ALINT_BAKED_VERSION. Keeping the baked value on the release commit lets a

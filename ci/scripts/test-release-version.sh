@@ -12,18 +12,23 @@ TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 git clone -q --no-local "$REPO_ROOT" "$TMP_ROOT/repo"
+# The release-preparation command and this test run before the bump is
+# committed, while `git clone` sees HEAD only. Overlay every contract/input the
+# test exercises so the fixture represents the actual working tree.
+cp "$REPO_ROOT/Cargo.toml" "$TMP_ROOT/repo/Cargo.toml"
 cp "$REPO_ROOT/ci/scripts/check-release-version.sh" "$TMP_ROOT/repo/ci/scripts/check-release-version.sh"
 cp "$REPO_ROOT/ci/scripts/bump-version.sh" "$TMP_ROOT/repo/ci/scripts/bump-version.sh"
 cp "$REPO_ROOT/action.yml" "$TMP_ROOT/repo/action.yml"
 cd "$TMP_ROOT/repo"
 
-# Derive the release under test from the workspace, so the test does not break
-# on every version bump: CUR is the current version, NEXT a patch bump of it,
-# and PREV a version that is guaranteed to differ for the stale-baked case.
+# Derive releases under test from the workspace, so the test does not break on
+# every version bump: NEXT is a patch bump, NEXT_MINOR crosses the pre-1.0 Cargo
+# compatibility boundary, and PREV differs for the stale-baked case.
 CUR=$(sed -n 's/^version = "\([0-9][0-9.]*\)"$/\1/p' Cargo.toml | head -n1)
 [[ -n "$CUR" ]] || { echo "could not read workspace version" >&2; exit 1; }
 IFS=. read -r cur_major cur_minor cur_patch <<<"$CUR"
 NEXT="$cur_major.$cur_minor.$((cur_patch + 1))"
+NEXT_MINOR="$cur_major.$((cur_minor + 1)).0"
 PREV="0.0.1"
 [[ "$CUR" != "$PREV" ]] || PREV="0.0.2"
 CUR_RE=${CUR//./\\.}
@@ -77,11 +82,42 @@ expect_rejected "missing public Action version default" "v$CUR"
 cp "$REPO_ROOT/action.yml" action.yml
 
 # Prove the normal release-preparation command updates both sides of the
-# contract. Stub only cargo metadata: dependency availability is unrelated to
-# this shell test, while the real bump script still performs every file edit.
+# contract. Stub Cargo resolution and generation: dependency availability is
+# unrelated to this shell test, while the real bump script still performs every
+# file edit and the fake records which generated contracts it requested.
 mkdir -p "$TMP_ROOT/fake-bin"
-printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP_ROOT/fake-bin/cargo"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  '[[ -n "${CARGO_CALL_LOG:-}" ]] && printf "%s\n" "$*" >> "$CARGO_CALL_LOG"' \
+  'exit 0' > "$TMP_ROOT/fake-bin/cargo"
 chmod +x "$TMP_ROOT/fake-bin/cargo"
+
+# A pre-1.0 minor release must advance every internal dependency floor before
+# `cargo metadata`: Cargo's caret semantics reject a 0.18 requirement paired
+# with a local 0.19 crate even when their APIs remain compatible.
+CARGO_CALL_LOG="$TMP_ROOT/cargo-calls" PATH="$TMP_ROOT/fake-bin:$PATH" \
+  bash ci/scripts/bump-version.sh "$NEXT_MINOR" >/dev/null
+expected_floor="${cur_major}.$((cur_minor + 1)).0"
+floor_count=$(grep -Ec "^alint-[a-z-]+ = \\{ path = \"[^\"]+\", version = \"${expected_floor//./\\.}\" \\}$" Cargo.toml)
+if [[ "$floor_count" -eq 7 ]]; then
+  echo "  ok: minor bump advances every internal dependency compatibility floor"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: minor bump advanced $floor_count of 7 internal dependency floors" >&2
+  fail=$((fail + 1))
+fi
+if grep -Fxq 'run -q -p xtask -- gen-facts' "$TMP_ROOT/cargo-calls"; then
+  echo "  ok: bump-version refreshes the generated facts contract"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: bump-version did not request facts regeneration" >&2
+  fail=$((fail + 1))
+fi
+
+git reset --hard -q HEAD
+cp "$REPO_ROOT/Cargo.toml" Cargo.toml
+cp "$REPO_ROOT/action.yml" action.yml
+cp "$REPO_ROOT/ci/scripts/bump-version.sh" ci/scripts/bump-version.sh
 PATH="$TMP_ROOT/fake-bin:$PATH" bash ci/scripts/bump-version.sh "$NEXT" >/dev/null
 expect_ok "bump-version updates workspace and Action together" "v$NEXT"
 

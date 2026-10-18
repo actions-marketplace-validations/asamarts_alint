@@ -16,9 +16,10 @@ points are explicit.
    `ALINT_BAKED_VERSION` in `action.yml`, every workspace-version-coupled
    install snippet (README, SECURITY, and the installation, Docker, and
    pre-commit guides), the npm and Zed manifests, and the npm README. It also
-   inserts a CHANGELOG stub and refreshes `Cargo.lock` via
+   inserts a CHANGELOG stub, refreshes `Cargo.lock` via
    `cargo metadata --offline` (so the workspace internal-crate
-   version entries in the lockfile track the bump).
+   version entries in the lockfile track the bump), and regenerates the
+   version-bearing `facts.json` discovery contract.
 
    The baked Action value is deliberately separate from the public `version`
    input's empty default. This lets an explicit `with: version:` override every
@@ -27,13 +28,15 @@ points are explicit.
    `ci/scripts/check-release-version.sh` and blocks publishing unless the tag,
    workspace version, and baked Action version all agree.
 
-   Deliberately **not** touched:
    - `Cargo.toml [workspace.dependencies].alint-* version`,
-     the intra-workspace API-compat floor. Bump by hand only when an
-     inter-crate API actually breaks. Preflight asserts each floor
-     is `<= workspace.package.version` via
-     `ci/scripts/check-workspace-dep-floors.sh`; an over-pinned floor
-     would publish-fail, so the check catches it before push.
+     the intra-workspace API-compat floor, on a patch release or a post-1.0
+     same-major release. The script advances every floor automatically when
+     Cargo's caret compatibility line changes (every pre-1.0 minor and every
+     major); otherwise bump a floor by hand only when an inter-crate API break
+     requires it. Preflight asserts each floor is
+     `<= workspace.package.version` via
+     `ci/scripts/check-workspace-dep-floors.sh`; an over-pinned floor would
+     publish-fail, so the check catches it before push.
 
    `npm/package.json` version was previously left lagging
    (rewritten by `release.yml` at publish time). As of v0.9.22 the
@@ -86,7 +89,7 @@ points are explicit.
 4. **Commit and tag.**
 
    ```sh
-   git add Cargo.toml Cargo.lock action.yml README.md SECURITY.md CHANGELOG.md \
+   git add Cargo.toml Cargo.lock facts.json action.yml README.md SECURITY.md CHANGELOG.md \
      npm/package.json npm/README.md editors/zed/Cargo.toml \
      editors/zed/extension.toml docs/site/getting-started/installation.md \
      docs/site/integrations/docker.md docs/site/integrations/pre-commit.md

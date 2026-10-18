@@ -1,7 +1,7 @@
 # v0.19: Fail-loud findings and the capability inventory
 
-Status: Implementation complete; release gates pending (2026-10-17). See
-[Status and next steps](#status-and-next-steps-as-of-2026-10-17). This is the first release of the
+Status: Released as v0.19.0 (2026-10-18). See
+[Status and next steps](#status-and-next-steps-as-of-2026-10-18). This is the first release of the
 general-linter program: Phase 0 and Phase 1a of
 [`../general-linter.md`](../general-linter.md) section 11, decided in
 [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md). Each work item
@@ -15,7 +15,7 @@ redacts sensitive evidence; W6 adds ranges and related locations to human, SARIF
 and W7 makes analysis time reproducible. Every behaviour change is listed in the changelog with
 its migration note.
 
-## Status and next steps (as of 2026-10-17)
+## Status and next steps (as of 2026-10-18)
 
 This section is the hand-off point for whoever picks the program up next. Update it when an item
 moves.
@@ -47,7 +47,7 @@ moves.
   accepted selectors, and fix operations in human and JSON output. Completeness,
   typed-selector transition parity, spawn-source parity, rule-instance conformance,
   field-enforcement, schema parity, facts, and ADR-0012 output-completeness gates are in place.
-  The Unreleased changelog contains the exhaustive migration matrix for all 57 formerly
+  The v0.19.0 changelog contains the exhaustive migration matrix for all 57 formerly
   ignored canonical kind/field pairs. All bundled rulesets, shipped examples, documentation
   examples, and scenarios pass under enforcement.
 - **W2, fail-loud analysis failures, is complete.** `RuleResult` and `FixRuleResult` now carry
@@ -165,8 +165,13 @@ release-by-release row.
 
 ### Next work, in order
 
-1. **Run the v0.19 release gates and release flow** listed at the end of this file, including the
-   release-time `Latest release` update and alint.org pin bump.
+1. **Design Phase 1b for v0.20:** `alint test` (DEC-6) and `explain --trace` (Q14), preserving the
+   capability-catalog and fail-loud contracts delivered here.
+2. **Resolve the remaining YAML supply-chain warning:** evaluate a safe-Rust replacement for
+   `unsafe-libyaml`/`serde_yaml_ng`, including the compatibility and adversarial corpus, or scope a
+   purpose-built parser ([#334](https://github.com/asamarts/alint/issues/334)).
+3. **Select the next rule-gap slice** from `rule-coverage-gaps.md` only after Phase 1b's contracts
+   are decided, so new kinds do not create a second metadata or test convention.
 
 Every implementation item W1-W10 has its design document in this directory. No v0.19 code or
 documentation work item remains open.
@@ -261,8 +266,8 @@ the instance-conformance, facts, and all-kinds output-completeness gates pass.
 Acceptance: complete. A warning-level rule over malformed configured input exits 1 while a
 successfully parsed policy mismatch remains a warning violation; baseline generation refuses
 incomplete analysis; every former engine wrapper and continued-scan producer has structural
-coverage; all check and fix projections preserve failures; the schemas validate; and the
-Unreleased changelog carries migration guidance.
+coverage; all check and fix projections preserve failures; the schemas validate; and the v0.19.0
+changelog carries migration guidance.
 
 ### W3. Close the remaining fail-open sites
 
@@ -284,7 +289,7 @@ From [`../general-linter.md`](../general-linter.md) section 4.12:
 Acceptance: complete. Firing scenarios cover missing and malformed manifest inputs, native
 non-string manifest members, every structured extraction consumer, an unavailable repository,
 effective conditional Git options, unrelated-rule continuation, nested ownership, and fix mode.
-The Unreleased changelog carries migration guidance.
+The v0.19.0 changelog carries migration guidance.
 
 ### W4. Notes in every output format
 
@@ -371,8 +376,8 @@ semantics decided). Decision: [ADR-0020](../../adr/0020-explicit-analysis-time.m
   (dotenv through `adotenv`; JSON through the `jsonc-parser` AST; YAML, INI, and properties
   through the fix bridge's locators), instead of flattening to a last-wins object.
 - This is the substrate for B1 `no_duplicate_keys` and B3 `structured_key_sort`
-  ([`../rule-coverage-gaps.md`](../rule-coverage-gaps.md)); the kinds themselves may land in
-  v0.19 or v0.20 depending on capacity.
+  ([`../rule-coverage-gaps.md`](../rule-coverage-gaps.md)); the kinds themselves are deferred to
+  v0.20 or later.
 - Question Q5 (how keys and duplicates are represented across the eight formats) is decided in
   this item's design document.
 

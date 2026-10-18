@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-18
+
+General-linter phase 0/1a makes the rule registry authoritative for capabilities and generated
+schemas, fails incomplete analysis loudly, preserves source relationships and duplicate structured
+rows, and adds seven standalone policy kinds plus opt-in versioning and toolchain bundles. It also
+makes time-dependent checks reproducible, redacts sensitive evidence, and hardens EditorConfig,
+LSP encoding and teardown, dotenv editing, installers, and release tooling.
+
 ### Added
 
 - **All 102 canonical rule kinds now declare serializable capability metadata.** Each built-in
@@ -76,8 +84,6 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Migration: this is additive and affects only repositories that explicitly extend either new URI
   or adopt the new optional fields. Semver-range policy remains C4 and Git-tag consistency remains
   C6.
-
-
 
 ### Changed
 - **Incomplete analysis is now a typed, fail-loud result instead of a policy violation.**
@@ -325,6 +331,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The benchmark regression report now includes changed-mode 1k cells as advisories, as
   documented.** Those floor-level cells still never block publication; previously an outer size
   filter silently omitted their deltas despite the gate classifying them as advisory.
+
+- **Minor release preparation now refreshes every version-coupled workspace artifact before
+  resolving the workspace.** Cargo's caret semantics do not allow a pre-1.0 `0.18` requirement to
+  select a local `0.19` crate, so `bump-version.sh` updates all seven workspace dependency
+  requirements when a pre-1.0 minor or any major release crosses a compatibility line. It also
+  regenerates the version-bearing `facts.json` contract. Shell regressions cover both omissions
+  that previously made the documented release command fail preflight.
 
 ## [0.18.4] - 2026-10-15
 
@@ -7929,7 +7942,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.18.4...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/asamarts/alint/compare/v0.18.4...v0.19.0
 [0.18.4]: https://github.com/asamarts/alint/compare/v0.18.3...v0.18.4
 [0.18.3]: https://github.com/asamarts/alint/compare/v0.18.2...v0.18.3
 [0.18.2]: https://github.com/asamarts/alint/compare/v0.18.1...v0.18.2
