@@ -16,7 +16,6 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
 
 use alint_core::{AnalysisFailure, FixReport, FixStatus, Level, Report, RuleResult, Violation};
 
@@ -48,21 +47,20 @@ pub fn write_human(report: &Report, w: &mut dyn Write, opts: HumanOptions) -> st
         return Ok(());
     }
 
-    // Bucket violations by path. `Option<Arc<Path>>` sorts `None`
-    // before `Some`, which we want — repository-level gaps lead.
-    // Cloning the Arc is an atomic refcount bump, not a path-byte
-    // copy.
-    let mut by_bucket: BTreeMap<Option<Arc<Path>>, Vec<HumanFinding<'_>>> = BTreeMap::new();
+    // Bucket violations by public path. `Option<&Path>` sorts `None` before
+    // `Some`, which we want — repository-level gaps lead. Borrowing avoids a
+    // path copy or refcount operation.
+    let mut by_bucket: BTreeMap<Option<&Path>, Vec<HumanFinding<'_>>> = BTreeMap::new();
     for result in &report.results {
         for violation in &result.violations {
             by_bucket
-                .entry(violation.path.clone())
+                .entry(violation.report_path())
                 .or_default()
                 .push(HumanFinding::Violation(result, violation));
         }
         for failure in &result.analysis_failures {
             by_bucket
-                .entry(failure.path.clone())
+                .entry(failure.report_path())
                 .or_default()
                 .push(HumanFinding::AnalysisFailure(result, failure));
         }
@@ -440,7 +438,7 @@ fn write_human_compact(
         for v in &result.violations {
             // Path + message are attacker-controlled; neutralize terminal
             // escapes for this single-line format (M8).
-            let path = v.path.as_ref().map_or_else(
+            let path = v.report_path().map_or_else(
                 || "<repo>".to_string(),
                 |p| sanitize_terminal(&p.display().to_string()).into_owned(),
             );
@@ -491,7 +489,7 @@ fn write_human_compact(
         }
         for failure in &result.analysis_failures {
             analysis_failures += 1;
-            let path = failure.path.as_ref().map_or_else(
+            let path = failure.report_path().map_or_else(
                 || "<repo>".to_string(),
                 |p| sanitize_terminal(&p.display().to_string()).into_owned(),
             );
@@ -601,8 +599,7 @@ pub fn write_fix_human(
             // lines below, where the file would otherwise go unnamed.
             let path_prefix = item
                 .violation
-                .path
-                .as_ref()
+                .report_path()
                 .map(|p| format!("{} - ", p.display()))
                 .unwrap_or_default();
             let (glyph, line_style_open, line_style_close, content) = match &item.status {
@@ -662,8 +659,7 @@ pub fn write_fix_human(
         }
         for failure in &rule.analysis_failures {
             let path_prefix = failure
-                .path
-                .as_ref()
+                .report_path()
                 .map(|p| format!("{} - ", p.display()))
                 .unwrap_or_default();
             let content = format!(

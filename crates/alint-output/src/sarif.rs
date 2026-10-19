@@ -341,15 +341,19 @@ fn base_result(rule_id: &str, level: Level, v: &Violation, config_uri: &str) -> 
 }
 
 fn finding_locations(v: &Violation, config_uri: &str) -> Vec<SarifLocation> {
-    let region = v.range.as_ref().map(source_range_to_sarif).or_else(|| {
-        (v.line.is_some() || v.column.is_some()).then_some(SarifRegion {
-            start_line: v.line,
-            start_column: v.column,
-            end_line: None,
-            end_column: None,
+    let region = (!v.path_is_sensitive())
+        .then(|| {
+            v.range.as_ref().map(source_range_to_sarif).or_else(|| {
+                (v.line.is_some() || v.column.is_some()).then_some(SarifRegion {
+                    start_line: v.line,
+                    start_column: v.column,
+                    end_line: None,
+                    end_column: None,
+                })
+            })
         })
-    });
-    let (uri, region) = if let Some(path) = &v.path {
+        .flatten();
+    let (uri, region) = if let Some(path) = v.report_path() {
         (path_to_uri(path), region)
     } else {
         // GitHub Code Scanning drops a location-less result/notification.
@@ -374,6 +378,9 @@ fn finding_locations(v: &Violation, config_uri: &str) -> Vec<SarifLocation> {
 }
 
 fn finding_related_locations(v: &Violation, config_uri: &str) -> Vec<SarifRelatedLocation> {
+    if v.path_is_sensitive() {
+        return Vec::new();
+    }
     let mut locations = Vec::with_capacity(
         v.related_locations.len() + usize::from(v.related_locations_omitted > 0),
     );
@@ -420,20 +427,23 @@ fn analysis_failure_locations(
     failure: &alint_core::AnalysisFailure,
     config_uri: &str,
 ) -> Vec<SarifLocation> {
-    let pathless = failure.path.is_none();
-    let uri = failure
-        .path
-        .as_deref()
-        .map_or_else(|| config_uri.to_string(), path_to_uri);
-    let region =
-        (pathless || failure.line.is_some() || failure.column.is_some()).then_some(SarifRegion {
-            start_line: failure
-                .line
-                .or((pathless || failure.column.is_some()).then_some(1)),
-            start_column: failure.column,
-            end_line: None,
-            end_column: None,
-        });
+    let path = failure.report_path();
+    let pathless = path.is_none();
+    let uri = path.map_or_else(|| config_uri.to_string(), path_to_uri);
+    let region = (!failure.path_is_sensitive())
+        .then(|| {
+            (pathless || failure.line.is_some() || failure.column.is_some()).then_some(
+                SarifRegion {
+                    start_line: failure
+                        .line
+                        .or((pathless || failure.column.is_some()).then_some(1)),
+                    start_column: failure.column,
+                    end_line: None,
+                    end_column: None,
+                },
+            )
+        })
+        .flatten();
     vec![SarifLocation {
         physical_location: SarifPhysicalLocation {
             artifact_location: SarifArtifactLocation { uri },
@@ -979,6 +989,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
                 notes: Vec::new(),
                 is_fixable: false,

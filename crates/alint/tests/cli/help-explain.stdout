@@ -20,7 +20,7 @@ Options:
           without either, time-dependent rules use the current HEAD commit time
 
       --preview
-          Include bounded, redacted extraction evidence in the trace
+          Include bounded, redacted extraction or nested-child evidence in the trace
 
   -f, --format <FORMAT>
           Output format

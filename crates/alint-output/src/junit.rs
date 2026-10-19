@@ -98,7 +98,7 @@ fn write_failure_case(
     result: &RuleResult,
     violation: &Violation,
 ) -> std::io::Result<()> {
-    let case_name = match &violation.path {
+    let case_name = match violation.report_path() {
         Some(p) => crate::slash_path(p),
         None => "(repository)".to_string(),
     };
@@ -133,11 +133,11 @@ fn write_error_case(
     result: &RuleResult,
     failure: &AnalysisFailure,
 ) -> std::io::Result<()> {
-    let case_name = match &failure.path {
+    let case_name = match failure.report_path() {
         Some(path) => crate::slash_path(path),
         None => "(repository)".to_string(),
     };
-    let body = match (&failure.path, failure.line, failure.column) {
+    let body = match (failure.report_path(), failure.line, failure.column) {
         (Some(path), Some(line), Some(column)) => format!(
             "{}:{line}:{column}: {}: {}",
             crate::slash_path(path),
@@ -180,7 +180,7 @@ fn write_error_case(
 /// still get the full picture.
 fn format_failure_body(result: &RuleResult, violation: &Violation) -> String {
     let mut s = String::new();
-    if let Some(p) = &violation.path {
+    if let Some(p) = violation.report_path() {
         s.push_str(&crate::slash_path(p));
         if let Some(line) = violation.line {
             s.push(':');
@@ -321,6 +321,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -387,6 +388,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -418,6 +420,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -447,6 +450,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };

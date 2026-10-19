@@ -132,15 +132,17 @@ A preview row can carry:
 - value type and display value;
 - `redacted` and `value_truncated` flags.
 
-Repository source paths are retained. Paths computed from sensitive extracted evidence are replaced
-with a structural redacted marker, matching the W5 related-location policy. Sensitive values are
-replaced before they enter the recorder; no raw value, reversible hash, prefix, length, or equality
-class is retained. Dotenv and Java-properties values are sensitive by default, and explicit
-`sensitive: true` applies to every stage, nested child, failure detail, command-derived row, and
-kind-specific option/message/condition evidence of the rule. Config interpolation returns
-field-level sensitive provenance; evidence-bearing uses make the resulting finding/failure and
-static/trace payload redacted across all consumers. Configured rule ids and repository paths remain
-visible structural identity under the W5 contract and must not contain secrets.
+Repository source paths are retained unless the effective selector that supplied the path is
+environment-derived. Protected selector paths are replaced with a structural redacted marker in
+static explain, results, diagnostics, and previews while their internal identity remains available
+to baseline and remediation logic. Paths computed from sensitive extracted evidence use the same
+marker, matching the W5 related-location policy. Sensitive values are replaced before they enter
+the recorder; no raw value, reversible hash, prefix, length, or equality class is retained. Dotenv
+and Java-properties values are sensitive by default, and explicit `sensitive: true` applies to
+every stage, nested child, failure detail, command-derived row, and field-level sensitive
+provenance; evidence-bearing uses make the resulting finding/failure and static/trace payload
+redacted across all consumers. Configured rule ids and literal repository paths remain visible
+structural identity under the W5 contract and must not contain secrets.
 
 A non-sensitive displayed value is at most 256 UTF-8 bytes, cut at a character boundary and marked
 `value_truncated: true`. Human output escapes control characters; JSON carries the sanitized string.
@@ -267,9 +269,10 @@ defaults unknown provenance to public. Unknown provenance is redacted. The confi
 retains which effective field fragments came from environment interpolation, including through
 merge/template expansion. Evidence-bearing use applies the existing explicit-sensitive result
 policy before check/fix/LSP/test/trace output; static options/conditions/messages and unstructured
-config error detail remove the interpolated bytes. Structural rule ids and repository paths keep
-their existing visible identity. Assertion and failure text passes through the existing result
-redactor before the trace copies it.
+config error detail remove the interpolated bytes. Structural rule ids and literal repository
+paths keep their existing visible identity; environment-derived selectors use the public
+`<redacted>` path projection while retaining private baseline/fix identity. Assertion and failure
+text passes through the existing result redactor before the trace copies it.
 
 A parser error, unavailable resource, failed command spawn/wait, failed runtime condition, or nested
 build error produces the same typed `AnalysisFailure` as check and a matching trace stage. A
@@ -367,8 +370,9 @@ Permanent coverage includes:
   clipping; nested child bounds; million-row synthetic extraction with retained memory proportional
   to the limit;
 - planted sensitive canaries from dotenv, properties, explicit sensitivity, env interpolation,
-  explicitly sensitive command output, parser errors, nested rules, evidence-derived paths,
-  findings, notes, and related locations, scanned across human and JSON output;
+  explicitly sensitive command output, parser errors, nested rules, environment-derived selectors,
+  evidence-derived paths, findings, notes, and related locations, scanned across human and JSON
+  output;
 - terminal control/bidi text, non-UTF-8 filesystem names where supported, Windows separator
   normalization, case-sensitive ordering, and width/no-color behavior;
 - positive human/JSON output completeness for satisfied, violated, skipped, analysis-failure,

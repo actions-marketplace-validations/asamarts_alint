@@ -109,20 +109,30 @@ pub(crate) fn group_findings(
         let docs_url = kind.and_then(|k| rule_docs_url(k));
         if let Some(severity) = severity {
             for violation in &result.violations {
-                // Anchor path-less (tree/file-level) findings to the config
-                // file so a "missing required file" still shows somewhere.
-                let abs = match &violation.path {
-                    Some(rel) => ctx.root.join(rel.as_ref()),
-                    None => ctx.config_path.to_path_buf(),
+                // Findings whose selector path came from protected configuration
+                // are anchored to the config; exposing a URI would reveal it.
+                let path_sensitive = violation.path_is_sensitive();
+                let abs = if path_sensitive {
+                    ctx.config_path.to_path_buf()
+                } else {
+                    violation
+                        .path
+                        .as_deref()
+                        .map_or_else(|| ctx.config_path.to_path_buf(), |rel| ctx.root.join(rel))
                 };
-                let text = if violation.path.is_some()
+                let text = if !path_sensitive
+                    && violation.path.is_some()
                     && (violation.column.is_some() || violation.range.is_some())
                 {
                     texts.get(&abs)
                 } else {
                     None
                 };
-                let range = violation_range(violation, text);
+                let range = if path_sensitive {
+                    finding_range(None, None, None)
+                } else {
+                    violation_range(violation, text)
+                };
                 let related_information =
                     related_information(ctx.root, &abs, range, violation, texts);
                 by_path.entry(abs).or_default().push(Finding {
@@ -130,8 +140,8 @@ pub(crate) fn group_findings(
                     severity,
                     rule_id: result.rule_id.to_string(),
                     message: violation.message.to_string(),
-                    line: violation.line,
-                    column: violation.column,
+                    line: (!path_sensitive).then_some(violation.line).flatten(),
+                    column: (!path_sensitive).then_some(violation.column).flatten(),
                     policy_url: policy_url.clone(),
                     fixable: result.is_fixable,
                     sensitive: violation.is_sensitive(),
@@ -143,17 +153,26 @@ pub(crate) fn group_findings(
             }
         }
         for failure in &result.analysis_failures {
-            let abs = failure
-                .path
-                .as_ref()
-                .map_or_else(|| ctx.config_path.to_path_buf(), |rel| ctx.root.join(rel));
-            let text = if failure.path.is_some() && failure.column.is_some() {
+            let path_sensitive = failure.path_is_sensitive();
+            let abs = if path_sensitive {
+                ctx.config_path.to_path_buf()
+            } else {
+                failure
+                    .path
+                    .as_deref()
+                    .map_or_else(|| ctx.config_path.to_path_buf(), |rel| ctx.root.join(rel))
+            };
+            let text = if !path_sensitive && failure.path.is_some() && failure.column.is_some() {
                 texts.get(&abs)
             } else {
                 None
             };
             by_path.entry(abs).or_default().push(Finding {
-                range: finding_range(failure.line, failure.column, text),
+                range: if path_sensitive {
+                    finding_range(None, None, None)
+                } else {
+                    finding_range(failure.line, failure.column, text)
+                },
                 severity: DiagnosticSeverity::ERROR,
                 rule_id: result.rule_id.to_string(),
                 message: format!(
@@ -161,8 +180,8 @@ pub(crate) fn group_findings(
                     failure.kind.as_str(),
                     failure.message
                 ),
-                line: failure.line,
-                column: failure.column,
+                line: (!path_sensitive).then_some(failure.line).flatten(),
+                column: (!path_sensitive).then_some(failure.column).flatten(),
                 policy_url: None,
                 fixable: false,
                 sensitive: false,
@@ -250,6 +269,9 @@ pub(crate) fn related_information(
     violation: &Violation,
     texts: &mut TextSource,
 ) -> Vec<DiagnosticRelatedInformation> {
+    if violation.path_is_sensitive() {
+        return Vec::new();
+    }
     let mut information = Vec::with_capacity(
         violation.related_locations.len() + usize::from(violation.related_locations_omitted > 0),
     );

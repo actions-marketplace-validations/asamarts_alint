@@ -1198,6 +1198,14 @@ impl RuleSpec {
         self.sensitive || self.sensitive_fields.contains(field)
     }
 
+    /// Whether the effective field's winning value came from environment
+    /// interpolation, directly or through a template variable.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn field_is_environment_derived(&self, field: &str) -> bool {
+        self.sensitive_fields.contains(field)
+    }
+
     /// Whether dynamic evidence from this rule must use the sensitive-result policy.
     #[must_use]
     pub fn has_sensitive_evidence(&self) -> bool {

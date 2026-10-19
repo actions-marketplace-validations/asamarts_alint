@@ -232,7 +232,7 @@ pub(crate) enum Command {
         /// are diagnostic and exit 0, including violations and skips.
         #[arg(long)]
         trace: bool,
-        /// Include bounded, redacted extraction evidence in the trace.
+        /// Include bounded, redacted extraction or nested-child evidence in the trace.
         #[arg(long, requires = "trace")]
         preview: bool,
         /// Maximum retained preview rows (1..=100; default 20).

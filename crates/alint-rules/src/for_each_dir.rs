@@ -942,7 +942,7 @@ fn record_nested_child_preview(
     };
     preview.push(alint_core::TracePreviewRow::new(
         path,
-        alint_core::TracePathOrigin::RepositorySource,
+        ctx.trace_path_origin(),
         None,
         Some(format!("/require/{index}")),
         u64::try_from(index)

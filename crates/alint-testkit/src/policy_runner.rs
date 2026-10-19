@@ -616,27 +616,34 @@ fn observe_check(report: Report, repository: &Path) -> StepObservation {
             ));
         }
         for failure in result.analysis_failures {
+            let path_sensitive = failure.path_is_sensitive();
             analysis_failures.push(ObservedAnalysisFailure {
                 rule: result.rule_id.to_string(),
                 kind: failure.kind.as_str().to_string(),
-                path: failure.path.as_deref().map(normalized_path),
-                line: failure.line,
-                column: failure.column,
+                path: failure.report_path().map(normalized_path),
+                line: (!path_sensitive).then_some(failure.line).flatten(),
+                column: (!path_sensitive).then_some(failure.column).flatten(),
                 end_line: None,
                 end_column: None,
                 message: failure.message.into_owned(),
             });
         }
         for note in result.notes {
-            let range = note.range.as_ref();
+            let path_sensitive = note.path_is_sensitive();
+            let range = (!path_sensitive).then_some(note.range.as_ref()).flatten();
             notes.push(ObservedNote {
                 kind: note
                     .note_kind()
                     .map_or("informational", |kind| kind.as_str())
                     .to_string(),
-                path: note.path.as_deref().map(normalized_path),
-                line: range.map_or(note.line, |value| Some(value.start_line())),
-                column: range.map_or(note.column, |value| Some(value.start_column())),
+                path: note.report_path().map(normalized_path),
+                line: range.map_or((!path_sensitive).then_some(note.line).flatten(), |value| {
+                    Some(value.start_line())
+                }),
+                column: range.map_or(
+                    (!path_sensitive).then_some(note.column).flatten(),
+                    |value| Some(value.start_column()),
+                ),
                 end_line: range.map(alint_core::SourceRange::end_line),
                 end_column: range.map(alint_core::SourceRange::end_column),
                 message: note.message.into_owned(),
@@ -702,12 +709,13 @@ fn observe_fix(report: &FixReport, diff: Option<String>) -> StepObservation {
             unfixable.push(result.rule_id.to_string());
         }
         for failure in &result.analysis_failures {
+            let path_sensitive = failure.path_is_sensitive();
             analysis_failures.push(ObservedAnalysisFailure {
                 rule: result.rule_id.to_string(),
                 kind: failure.kind.as_str().to_string(),
-                path: failure.path.as_deref().map(normalized_path),
-                line: failure.line,
-                column: failure.column,
+                path: failure.report_path().map(normalized_path),
+                line: (!path_sensitive).then_some(failure.line).flatten(),
+                column: (!path_sensitive).then_some(failure.column).flatten(),
                 end_line: None,
                 end_column: None,
                 message: failure.message.to_string(),
@@ -740,22 +748,29 @@ fn observed_violation(
     repository: &Path,
     content_cache: &mut BTreeMap<PathBuf, Option<Vec<u8>>>,
 ) -> ObservedViolation {
-    let range = violation.range.as_ref();
-    let mut related: Vec<_> = violation
-        .related_locations
-        .iter()
-        .map(|location| {
-            let range = location.range.as_ref();
-            ObservedRelatedLocation {
-                label: location.label.clone(),
-                path: normalized_path(&location.path),
-                line: range.map(alint_core::SourceRange::start_line),
-                column: range.map(alint_core::SourceRange::start_column),
-                end_line: range.map(alint_core::SourceRange::end_line),
-                end_column: range.map(alint_core::SourceRange::end_column),
-            }
-        })
-        .collect();
+    let path_sensitive = violation.path_is_sensitive();
+    let range = (!path_sensitive)
+        .then_some(violation.range.as_ref())
+        .flatten();
+    let mut related: Vec<_> = if path_sensitive {
+        Vec::new()
+    } else {
+        violation
+            .related_locations
+            .iter()
+            .map(|location| {
+                let range = location.range.as_ref();
+                ObservedRelatedLocation {
+                    label: location.label.clone(),
+                    path: normalized_path(&location.path),
+                    line: range.map(alint_core::SourceRange::start_line),
+                    column: range.map(alint_core::SourceRange::start_column),
+                    end_line: range.map(alint_core::SourceRange::end_line),
+                    end_column: range.map(alint_core::SourceRange::end_column),
+                }
+            })
+            .collect()
+    };
     related.sort_by(|left, right| {
         (&left.path, left.line, left.column, &left.label).cmp(&(
             &right.path,
@@ -773,9 +788,15 @@ fn observed_violation(
     ObservedViolation {
         rule: rule.to_string(),
         level: level.as_str().to_string(),
-        path: violation.path.as_deref().map(normalized_path),
-        line: range.map_or(violation.line, |value| Some(value.start_line())),
-        column: range.map_or(violation.column, |value| Some(value.start_column())),
+        path: violation.report_path().map(normalized_path),
+        line: range.map_or(
+            (!path_sensitive).then_some(violation.line).flatten(),
+            |value| Some(value.start_line()),
+        ),
+        column: range.map_or(
+            (!path_sensitive).then_some(violation.column).flatten(),
+            |value| Some(value.start_column()),
+        ),
         end_line: range.map(alint_core::SourceRange::end_line),
         end_column: range.map(alint_core::SourceRange::end_column),
         is_fixable: violation.is_fixable,
@@ -1913,6 +1934,52 @@ fn normalized_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observations_use_public_paths_without_changing_fingerprint_inputs() {
+        let repository = tempfile::tempdir().unwrap();
+        let secret_path = Path::new("secret-selector.txt");
+        std::fs::write(repository.path().join(secret_path), "bad\n").unwrap();
+        let mut violation = alint_core::Violation::new("redacted")
+            .with_path(secret_path)
+            .with_location(2, 3);
+        violation.path_sensitive = true;
+        let mut note = alint_core::Violation::new("redacted")
+            .with_path(secret_path)
+            .with_location(4, 5)
+            .as_note();
+        note.path_sensitive = true;
+        let mut failure = alint_core::Violation::new("redacted")
+            .with_path(secret_path)
+            .with_location(6, 7)
+            .as_analysis_failure(alint_core::AnalysisFailureKind::Evaluation);
+        failure.path_sensitive = true;
+        let report = Report {
+            results: vec![alint_core::RuleResult::new(
+                "protected".into(),
+                Level::Error,
+                None,
+                vec![violation, note, failure],
+                false,
+            )],
+        };
+
+        let observation = observe_check(report, repository.path());
+
+        assert_eq!(
+            observation.violations[0].path.as_deref(),
+            Some("<redacted>")
+        );
+        assert_eq!(observation.violations[0].line, None);
+        assert_ne!(observation.violations[0].fingerprint, "");
+        assert_eq!(observation.notes[0].path.as_deref(), Some("<redacted>"));
+        assert_eq!(observation.notes[0].line, None);
+        assert_eq!(
+            observation.analysis_failures[0].path.as_deref(),
+            Some("<redacted>")
+        );
+        assert_eq!(observation.analysis_failures[0].line, None);
+    }
 
     #[test]
     fn maximum_matching_handles_overlapping_matchers() {

@@ -38,6 +38,7 @@ fn violation(line: Option<usize>, column: Option<usize>) -> Violation {
         is_fixable: false,
         not_fixable: false,
         proposed_edits: Vec::new(),
+        path_sensitive: false,
     }
 }
 
@@ -471,6 +472,42 @@ fn group_findings_anchors_pathless_to_config() {
     // A path-less finding has no source location.
     assert_eq!(finding.line, None);
     assert_eq!(finding.column, None);
+}
+
+#[test]
+fn group_findings_anchors_protected_paths_to_config_without_locations() {
+    use alint_core::{Engine, RuleResult};
+
+    let engine = Engine::new(vec![], alint_core::RuleRegistry::new());
+    let root = repo_root();
+    let config = root.join(".alint.yml");
+    let mut violation = Violation::new("redacted")
+        .with_path(std::path::PathBuf::from("secret-selector.rs"))
+        .with_location(12, 3);
+    violation.path_sensitive = true;
+    let results = vec![RuleResult::new(
+        "protected-path".into(),
+        Level::Error,
+        None,
+        vec![violation],
+        false,
+    )];
+    let kinds = HashMap::new();
+    let ctx = GroupCtx {
+        root: &root,
+        engine: &engine,
+        config_path: &config,
+        kinds: &kinds,
+    };
+
+    let by_path = group_findings(&ctx, &results, &mut TextSource::default());
+
+    assert_eq!(by_path.len(), 1);
+    assert!(by_path.contains_key(&config), "{by_path:?}");
+    let finding = &by_path[&config][0];
+    assert_eq!(finding.line, None);
+    assert_eq!(finding.column, None);
+    assert_eq!(finding.related_information, Vec::new());
 }
 
 #[test]

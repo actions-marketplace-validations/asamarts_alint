@@ -112,18 +112,40 @@ fn collect_directives(config: &alint_core::Config, include_info: bool) -> Vec<Di
         .iter()
         .filter(|spec| !matches!(spec.level, Level::Off))
         .filter(|spec| include_info || !matches!(spec.level, Level::Info))
-        .map(|spec| Directive {
-            rule_id: spec.id.clone(),
-            severity: spec.level,
-            directive: spec.message.clone().unwrap_or_else(|| match &spec.paths {
-                // No author message: fall back to the kind AND the scope it
-                // applies to, so a generated AGENTS.md directive stays
-                // actionable ("file_exists rule on README.md", not just the
-                // bare "file_exists rule").
-                Some(p) => format!("{} rule on {}", spec.kind, p.render_scope()),
-                None => format!("{} rule", spec.kind),
-            }),
-            policy_url: spec.policy_url.clone(),
+        .map(|spec| {
+            let directive = spec.message.as_ref().map_or_else(
+                || match &spec.paths {
+                    // No author message: fall back to the kind AND the scope it
+                    // applies to, so a generated AGENTS.md directive stays
+                    // actionable ("file_exists rule on README.md", not just the
+                    // bare "file_exists rule").
+                    Some(_) if spec.field_is_sensitive("paths") => {
+                        format!("{} rule on <redacted>", spec.kind)
+                    }
+                    Some(paths) => format!("{} rule on {}", spec.kind, paths.render_scope()),
+                    None => format!("{} rule", spec.kind),
+                },
+                |message| {
+                    if spec.field_is_sensitive("message") {
+                        "<redacted>".to_string()
+                    } else {
+                        message.clone()
+                    }
+                },
+            );
+            let policy_url = spec.policy_url.as_ref().map(|url| {
+                if spec.field_is_sensitive("policy_url") {
+                    "<redacted>".to_string()
+                } else {
+                    url.clone()
+                }
+            });
+            Directive {
+                rule_id: spec.id.clone(),
+                severity: spec.level,
+                directive,
+                policy_url,
+            }
         })
         .collect();
     out.sort_by(|a, b| {
@@ -354,6 +376,27 @@ mod tests {
         let dirs = collect_directives(&config_with(vec![s]), false);
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].directive, "file_exists rule on README.md");
+    }
+
+    #[test]
+    fn protected_directive_fields_never_export_raw_values() {
+        let mut path = spec("path", Level::Error, None);
+        path.paths = Some(alint_core::PathsSpec::Single("selector-secret.rs".into()));
+        path.sensitive_fields.insert("paths".to_string());
+        let mut message = spec("message", Level::Warning, Some("message-secret"));
+        message.policy_url = Some("https://example.test/url-secret".to_string());
+        message.sensitive_fields.insert("message".to_string());
+        message.sensitive_fields.insert("policy_url".to_string());
+
+        let directives = collect_directives(&config_with(vec![path, message]), false);
+        let rendered = format!("{directives:?}");
+
+        assert!(!rendered.contains("selector-secret"), "{rendered}");
+        assert!(!rendered.contains("message-secret"), "{rendered}");
+        assert!(!rendered.contains("url-secret"), "{rendered}");
+        assert_eq!(directives[0].directive, "file_exists rule on <redacted>");
+        assert_eq!(directives[1].directive, "<redacted>");
+        assert_eq!(directives[1].policy_url.as_deref(), Some("<redacted>"));
     }
 
     #[test]

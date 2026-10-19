@@ -152,7 +152,7 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
             violations.push(AgentViolation {
                 rule_id: r.rule_id.as_ref(),
                 severity: severity_str(r.level),
-                file: v.path.as_deref().map(Path::to_string_lossy),
+                file: v.report_path().map(Path::to_string_lossy),
                 line: v.line,
                 column: v.column,
                 human_message: v.message.as_ref(),
@@ -171,7 +171,7 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
                 .map(|failure| AgentAnalysisFailure {
                     rule_id: r.rule_id.as_ref(),
                     kind: failure.kind.as_str(),
-                    file: failure.path.as_deref().map(Path::to_string_lossy),
+                    file: failure.report_path().map(Path::to_string_lossy),
                     line: failure.line,
                     column: failure.column,
                     human_message: failure.message.as_ref(),
@@ -241,7 +241,7 @@ fn build_agent_instruction(rule: &RuleResult, violation: &Violation) -> String {
     }
 
     out.push_str(" To resolve: ");
-    match &violation.path {
+    match violation.report_path() {
         Some(path) => {
             out.push_str("edit ");
             out.push_str(&path.display().to_string());

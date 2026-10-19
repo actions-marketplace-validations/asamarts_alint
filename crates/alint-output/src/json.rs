@@ -158,7 +158,7 @@ pub fn write_json_with_baseline(
                 .violations
                 .iter()
                 .map(|v| JsonViolation {
-                    path: lossy_path(v.path.as_deref()),
+                    path: lossy_path(v.report_path()),
                     message: v.message.as_ref(),
                     line: v.line,
                     column: v.column,
@@ -170,7 +170,7 @@ pub fn write_json_with_baseline(
                 .notes
                 .iter()
                 .map(|v| JsonNote {
-                    path: lossy_path(v.path.as_deref()),
+                    path: lossy_path(v.report_path()),
                     message: v.message.as_ref(),
                     line: v.line,
                     column: v.column,
@@ -197,7 +197,7 @@ pub fn write_json_with_baseline(
                 .flat_map(|(rr, m)| {
                     m.suppressed.iter().map(move |sf| JsonBaselined {
                         id: rr.rule_id.as_ref(),
-                        path: lossy_path(sf.violation.path.as_deref()),
+                        path: lossy_path(sf.violation.report_path()),
                         message: sf.violation.message.as_ref(),
                         line: sf.violation.line,
                         column: sf.violation.column,
@@ -311,7 +311,7 @@ pub fn write_fix_json_with_mode(
                         FixStatus::Unfixable => ("unfixable", None, None),
                     };
                     JsonFixItem {
-                        path: lossy_path(it.violation.path.as_deref()),
+                        path: lossy_path(it.violation.report_path()),
                         message: it.violation.message.as_ref(),
                         line: it.violation.line,
                         column: it.violation.column,
@@ -349,7 +349,7 @@ pub fn write_fix_json_with_mode(
 fn json_analysis_failure(failure: &AnalysisFailure) -> JsonAnalysisFailure<'_> {
     JsonAnalysisFailure {
         kind: failure.kind.as_str(),
-        path: lossy_path(failure.path.as_deref()),
+        path: lossy_path(failure.report_path()),
         message: failure.message.as_ref(),
         line: failure.line,
         column: failure.column,

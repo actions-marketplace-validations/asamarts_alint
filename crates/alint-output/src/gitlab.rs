@@ -123,9 +123,8 @@ fn build_issue(
     seen: &mut std::collections::HashMap<String, u32>,
 ) -> Issue {
     let path = violation
-        .path
-        .as_ref()
-        .map_or_else(|| ".".to_string(), |p| crate::slash_path(p));
+        .report_path()
+        .map_or_else(|| ".".to_string(), crate::slash_path);
 
     // Base identity: the canonical `violation_fingerprint` when `alint` supplies
     // it (so a unique finding matches SARIF + baseline), else the self-contained
@@ -165,9 +164,8 @@ fn build_analysis_failure_issue(
     seen: &mut std::collections::HashMap<String, u32>,
 ) -> Issue {
     let path = failure
-        .path
-        .as_ref()
-        .map_or_else(|| ".".to_string(), |p| crate::slash_path(p));
+        .report_path()
+        .map_or_else(|| ".".to_string(), crate::slash_path);
     let description = format!(
         "analysis failure ({}): {}",
         failure.kind.as_str(),
@@ -327,6 +325,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -423,6 +422,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -451,6 +451,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -488,6 +489,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -517,6 +519,7 @@ mod tests {
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
+            path_sensitive: false,
         };
         let report = Report {
             results: vec![rule("no-pat", Level::Error, vec![mk_v(3), mk_v(9)])],
@@ -553,6 +556,7 @@ mod tests {
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
+            path_sensitive: false,
         };
         let report = Report {
             results: vec![rule("r", Level::Error, vec![mk_v(1), mk_v(2)])],
@@ -644,6 +648,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };

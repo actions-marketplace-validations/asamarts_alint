@@ -560,6 +560,89 @@ rules:
     }
 }
 
+#[test]
+fn environment_derived_selector_paths_are_redacted_from_static_and_trace_explain() {
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path().join(".alint.yml"),
+        r#"version: 1
+rules:
+  - id: env-path
+    kind: json_path_equals
+    paths: "{{env.SECRET_CANARY}}.json"
+    path: $.token
+    equals: expected
+    level: warning
+  - id: nested-env-path
+    kind: for_each_file
+    select: "{{env.SECRET_CANARY}}.json"
+    require:
+      - kind: file_content_forbidden
+        paths: "{path}"
+        pattern: actual
+    level: warning
+"#,
+    );
+    write(
+        root.path().join("trace-canary-value.json"),
+        r#"{"token":"actual"}"#,
+    );
+
+    for args in [
+        vec!["explain", "env-path"],
+        vec!["explain", "env-path", "--format", "json"],
+        vec!["explain", "env-path", "--trace", "--preview"],
+        vec![
+            "explain",
+            "env-path",
+            "--trace",
+            "--preview",
+            "--format",
+            "json",
+        ],
+    ] {
+        let output = run(root.path(), &args);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut rendered = output.stdout;
+        rendered.extend_from_slice(&output.stderr);
+        let rendered = String::from_utf8_lossy(&rendered);
+        assert!(
+            !rendered.contains("trace-canary-value"),
+            "{args:?} leaked the environment-derived path:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("<redacted>"),
+            "{args:?} omitted the redaction marker:\n{rendered}"
+        );
+    }
+
+    for format in ["human", "json"] {
+        let output = run(
+            root.path(),
+            &[
+                "explain",
+                "nested-env-path",
+                "--trace",
+                "--preview",
+                "--format",
+                format,
+            ],
+        );
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !rendered.contains("trace-canary-value"),
+            "nested {format} trace leaked the selector path:\n{rendered}"
+        );
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn trace_evaluates_custom_facts_required_by_the_production_check_context() {

@@ -29,7 +29,7 @@ pub fn write_github(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
         if let Some(keyword) = keyword {
             for v in &rr.violations {
                 let mut props: Vec<String> = vec![format!("title={}", escape_prop(&rr.rule_id))];
-                if let Some(path) = &v.path {
+                if let Some(path) = v.report_path() {
                     props.push(format!("file={}", escape_prop(&crate::slash_path(path))));
                 }
                 if let Some(line) = v.line {
@@ -47,7 +47,7 @@ pub fn write_github(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
                 "title={}",
                 escape_prop(&format!("{} analysis failure", rr.rule_id))
             )];
-            if let Some(path) = &failure.path {
+            if let Some(path) = failure.report_path() {
                 props.push(format!("file={}", escape_prop(&crate::slash_path(path))));
             }
             if let Some(line) = failure.line {
@@ -183,6 +183,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
                 notes: Vec::new(),
                 is_fixable: false,

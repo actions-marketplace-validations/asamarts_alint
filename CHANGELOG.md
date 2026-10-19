@@ -63,6 +63,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Environment-derived selector paths no longer leak through diagnostics.** Static and traced
+  `explain`, bounded previews, check/fix formats, baselines, `export-agents-md`, SARIF annotations,
+  agent output, policy-test observations, and LSP diagnostics now project protected `paths:`,
+  kind-specific selectors, manifest scopes, and nested selectors as `<redacted>` while preserving
+  the original path internally for baseline identity and remediation.
+
 - **The published `alint-testkit` crate now includes the repository's Apache 2.0 license, MIT
   license, and NOTICE files.** Release packaging no longer omits the attribution files required of
   every published workspace crate.

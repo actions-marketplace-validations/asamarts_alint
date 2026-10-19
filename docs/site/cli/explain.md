@@ -124,9 +124,9 @@ not whichever parallel worker finishes first. Display values are bounded to
 Environment-derived and explicitly sensitive option, message, policy URL,
 condition, result, and configuration-error evidence is replaced with
 `<redacted>` before trace storage or rendering. Dotenv and Java-properties
-extracted values are sensitive by default. Rule ids and repository source paths
-remain visible structural identity; evidence-derived paths fail closed to
-`<redacted>`.
+extracted values are sensitive by default. Rule ids and literal repository
+source paths remain visible structural identity; environment-derived selector
+paths and evidence-derived paths fail closed to `<redacted>`.
 
 ## Examples
 

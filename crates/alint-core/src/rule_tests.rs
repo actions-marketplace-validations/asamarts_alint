@@ -85,6 +85,40 @@ fn public_sensitive_metadata_excludes_value_bearing_fields() {
 }
 
 #[test]
+fn sensitive_path_projection_preserves_internal_identity() {
+    let path = Path::new("environment-derived-secret.txt");
+    let violation = Violation::new("redacted").with_path(path);
+    let note = Violation::new("redacted").with_path(path).as_note();
+    let failure = Violation::new("redacted")
+        .with_path(path)
+        .as_analysis_failure(AnalysisFailureKind::Evaluation);
+    let before = crate::baseline::fingerprint("rule", &violation, None);
+    let mut result = RuleResult::new(
+        "rule".into(),
+        Level::Error,
+        None,
+        vec![violation, note, failure],
+        false,
+    );
+
+    result.redact_sensitive_paths();
+
+    let finding = &result.violations[0];
+    assert_eq!(finding.path.as_deref(), Some(path));
+    assert_eq!(finding.report_path(), Some(Path::new("<redacted>")));
+    assert_eq!(
+        crate::baseline::fingerprint("rule", finding, None),
+        before,
+        "public path redaction must not change baseline identity"
+    );
+    assert_eq!(result.notes[0].report_path(), Some(Path::new("<redacted>")));
+    assert_eq!(
+        result.analysis_failures[0].report_path(),
+        Some(Path::new("<redacted>"))
+    );
+}
+
+#[test]
 fn evidence_redaction_removes_raw_and_debug_escaped_values() {
     const SECRET: &str = "line one\n\"line two\"";
     let rendered = format!("source value {SECRET:?}; raw value {SECRET} does not match");

@@ -246,6 +246,7 @@ struct TraceSession {
     preview_limit: Option<usize>,
     extraction_preview: Option<TracePreviewAggregate>,
     sensitive_evidence: bool,
+    sensitive_paths: bool,
 }
 
 fn checked_atomic_add(counter: &AtomicU64, value: u64) -> bool {
@@ -266,6 +267,7 @@ impl TraceSession {
         meta: crate::TraceMeta,
         options: TraceOptions,
         sensitive_evidence: bool,
+        sensitive_paths: bool,
     ) -> Self {
         let preview_limit = options.preview_limit();
         let extraction_preview = preview_limit
@@ -279,6 +281,7 @@ impl TraceSession {
             preview_limit,
             extraction_preview,
             sensitive_evidence,
+            sensitive_paths,
         }
     }
 
@@ -460,10 +463,20 @@ impl TraceSink for TraceSession {
         }
     }
 
+    fn paths_are_sensitive(&self) -> bool {
+        self.sensitive_paths
+    }
+
     fn record_preview(&self, row: Result<TracePreviewRow>) {
         if self.error.lock().is_some() {
             return;
         }
+        let row = row.map(|mut row| {
+            if self.sensitive_paths {
+                row.redact_path();
+            }
+            row
+        });
         let result = match (&self.extraction_preview, row) {
             (_, Err(error)) => Err(error),
             (Some(preview), Ok(row)) => preview.push(row),
@@ -1236,7 +1249,13 @@ impl Engine {
             .spec
             .as_deref()
             .is_some_and(crate::RuleSpec::has_sensitive_evidence);
-        let trace = TraceSession::with_options(meta.trace.clone(), options, sensitive_evidence);
+        let sensitive_paths = self.has_sensitive_path_selection(entry);
+        let trace = TraceSession::with_options(
+            meta.trace.clone(),
+            options,
+            sensitive_evidence,
+            sensitive_paths,
+        );
         let mut report = selected.run_internal(root, index, Some(&trace))?;
         if report.results.len() > 1 {
             return Err(Error::internal(format!(
@@ -2597,6 +2616,25 @@ impl Engine {
             .is_some_and(|scope| scope.sensitive_manifest_sources().next().is_some())
     }
 
+    fn has_sensitive_path_selection(&self, entry: &RuleEntry) -> bool {
+        if Self::has_sensitive_manifest_scope(entry.rule.as_ref()) {
+            return true;
+        }
+        let Some(spec) = entry.spec.as_deref() else {
+            return false;
+        };
+        let Some(meta) = self.registry.meta(&spec.kind) else {
+            return false;
+        };
+        spec.field_is_environment_derived("paths")
+            || spec.field_is_environment_derived("scope_filter")
+            || (meta.nested_rules && spec.field_is_environment_derived("require"))
+            || meta
+                .selectors
+                .iter()
+                .any(|selector| spec.field_is_environment_derived(&selector.name))
+    }
+
     fn redact_result_for_entry(&self, index: usize, result: &mut RuleResult) {
         let entry = &self.entries[index];
         if Self::has_sensitive_manifest_scope(entry.rule.as_ref()) {
@@ -2615,6 +2653,9 @@ impl Engine {
             .is_some_and(crate::RuleSpec::has_sensitive_evidence)
         {
             result.redact_sensitive();
+        }
+        if self.has_sensitive_path_selection(entry) {
+            result.redact_sensitive_paths();
         }
         result.sanitize_sensitive_metadata();
     }
@@ -3528,22 +3569,33 @@ impl Engine {
             }
         }
         // Redact only after all fixers have run: remediation needs the original
-        // evidence, while every public fix report must be safe. Explicit
-        // sensitivity applies to the whole owning result; implicit sensitivity
-        // is carried by each finding.
+        // evidence, while every public fix report must be safe. Explicit and
+        // environment-derived configuration apply to the whole owning result;
+        // producer-detected implicit sensitivity remains carried per finding.
         for result in &mut results {
-            let explicit = self.entries.iter().any(|entry| {
-                entry.rule.id() == result.rule_id.as_ref()
-                    && entry.spec.as_deref().is_some_and(|spec| spec.sensitive)
-            });
+            let entry = self
+                .entries
+                .iter()
+                .find(|entry| entry.rule.id() == result.rule_id.as_ref());
+            let result_sensitive = entry
+                .and_then(|entry| entry.spec.as_deref())
+                .is_some_and(crate::RuleSpec::has_sensitive_evidence);
+            let sensitive_paths =
+                entry.is_some_and(|entry| self.has_sensitive_path_selection(entry));
             for failure in &mut result.analysis_failures {
-                if explicit {
+                if result_sensitive {
                     failure.redact_message(&result.rule_id);
+                }
+                if sensitive_paths {
+                    failure.mark_path_sensitive();
                 }
             }
             for item in &mut result.items {
-                if explicit {
+                if result_sensitive {
                     item.violation.redact_message(&result.rule_id);
+                }
+                if sensitive_paths {
+                    item.violation.mark_path_sensitive();
                 }
                 if item.violation.is_sensitive() {
                     let path = item
@@ -7566,6 +7618,7 @@ mod tests {
             );
             assert_eq!(actual.disposition, expected.disposition);
             assert_eq!(actual.sensitive, expected.sensitive);
+            assert_eq!(actual.path_sensitive, expected.path_sensitive);
             assert_eq!(actual.is_fixable, expected.is_fixable);
             assert_eq!(actual.not_fixable, expected.not_fixable);
             assert_eq!(actual.proposed_edits, expected.proposed_edits);
@@ -7870,6 +7923,7 @@ mod tests {
             let trace = TraceSession::with_options(
                 crate::TraceMeta::ASSERTION,
                 TraceOptions::counts_only(),
+                false,
                 false,
             );
             let (name, reason) = match class {

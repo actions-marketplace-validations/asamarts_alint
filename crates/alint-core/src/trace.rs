@@ -404,6 +404,13 @@ impl TracePreviewRow {
         })
     }
 
+    pub(crate) fn redact_path(&mut self) {
+        self.path = PathBuf::from("<redacted>");
+        self.range = None;
+        self.pointer = None;
+        self.redacted = true;
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -682,6 +689,8 @@ pub trait TraceSink: Sync + std::fmt::Debug {
 
     fn evidence_sensitivity(&self, producer_sensitive: bool) -> TraceSensitivity;
 
+    fn paths_are_sensitive(&self) -> bool;
+
     fn record_preview(&self, row: Result<TracePreviewRow>);
 }
 
@@ -864,22 +873,33 @@ pub struct TraceViolation {
 
 impl TraceViolation {
     fn from_finding(finding: &crate::Violation, repository_root: &Path) -> Self {
+        let path_sensitive = finding.path_is_sensitive();
         Self {
-            path: finding.path.as_deref().map(trace_result_path),
+            path: finding.report_path().map(trace_result_path),
             message: trace_result_message(&finding.message, repository_root),
-            line: finding.line,
-            column: finding.column,
-            range: finding.range.as_ref().map(TraceResultRange::from),
-            related_locations: finding
-                .related_locations
-                .iter()
-                .map(|location| TraceRelatedLocation {
-                    path: trace_result_path(&location.path),
-                    range: location.range.as_ref().map(TraceResultRange::from),
-                    label: trace_result_message(&location.label, repository_root),
-                })
-                .collect(),
-            related_locations_omitted: finding.related_locations_omitted,
+            line: (!path_sensitive).then_some(finding.line).flatten(),
+            column: (!path_sensitive).then_some(finding.column).flatten(),
+            range: (!path_sensitive)
+                .then(|| finding.range.as_ref().map(TraceResultRange::from))
+                .flatten(),
+            related_locations: if path_sensitive {
+                Vec::new()
+            } else {
+                finding
+                    .related_locations
+                    .iter()
+                    .map(|location| TraceRelatedLocation {
+                        path: trace_result_path(&location.path),
+                        range: location.range.as_ref().map(TraceResultRange::from),
+                        label: trace_result_message(&location.label, repository_root),
+                    })
+                    .collect()
+            },
+            related_locations_omitted: if path_sensitive {
+                0
+            } else {
+                finding.related_locations_omitted
+            },
             sensitive: finding.is_sensitive(),
             fixable: finding.is_fixable,
         }
@@ -1042,10 +1062,14 @@ impl RuleTrace {
                     .flat_map(|result| &result.analysis_failures)
                     .map(|failure| TraceAnalysisFailure {
                         kind: failure.kind.as_str().to_string(),
-                        path: failure.path.as_deref().map(trace_result_path),
+                        path: failure.report_path().map(trace_result_path),
                         message: trace_result_message(&failure.message, repository_root),
-                        line: failure.line,
-                        column: failure.column,
+                        line: (!failure.path_is_sensitive())
+                            .then_some(failure.line)
+                            .flatten(),
+                        column: (!failure.path_is_sensitive())
+                            .then_some(failure.column)
+                            .flatten(),
                         sensitive: failure.is_sensitive(),
                     })
                     .collect(),

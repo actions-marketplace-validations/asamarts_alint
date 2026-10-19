@@ -8,12 +8,14 @@ const DOTENV_SECRET: &str = "DOTENV_TOKEN_VALUE_DO_NOT_REPORT";
 const PROPERTIES_SECRET: &str = "PROPERTIES_TOKEN_VALUE_DO_NOT_REPORT";
 const EXPLICIT_SECRET: &str = "EXPLICIT_TOKEN_VALUE_DO_NOT_REPORT";
 const RELATED_PATH_SECRET: &str = "RELATED_PATH_VALUE_DO_NOT_REPORT";
+const ENV_PATH_SECRET: &str = "ENV_SELECTOR_PATH_DO_NOT_REPORT";
 
 fn run(root: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_alint"))
         .args(args)
         .current_dir(root)
         .env("NO_COLOR", "1")
+        .env("ENV_PATH_SECRET", ENV_PATH_SECRET)
         .output()
         .unwrap()
 }
@@ -31,6 +33,7 @@ fn assert_redacted(surface: &str, bytes: &[u8]) {
         PROPERTIES_SECRET,
         EXPLICIT_SECRET,
         RELATED_PATH_SECRET,
+        ENV_PATH_SECRET,
     ] {
         assert!(
             !rendered.contains(secret),
@@ -59,6 +62,16 @@ fn fixture() -> tempfile::TempDir {
     .unwrap();
     std::fs::write(dir.path().join("plain.txt"), EXPLICIT_SECRET).unwrap();
     std::fs::write(
+        dir.path().join(format!("{ENV_PATH_SECRET}.txt")),
+        "forbidden \n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join(".scope.env"),
+        format!("FILES={ENV_PATH_SECRET}.txt\n"),
+    )
+    .unwrap();
+    std::fs::write(
         dir.path().join(".alint.yml"),
         format!(
             r#"version: 1
@@ -83,6 +96,20 @@ rules:
     extract: {{ dotenv: $.PATH }}
     base: lint_root
     level: error
+  - id: env-selector-path
+    kind: file_content_forbidden
+    paths: "{{{{env.ENV_PATH_SECRET}}}}.txt"
+    pattern: forbidden
+    level: error
+    fix: {{ replace: {{ replacement: allowed }} }}
+  - id: sensitive-manifest-path
+    kind: no_trailing_whitespace
+    paths: "**/*.txt"
+    scope_filter:
+      include_manifest_paths:
+        source: .scope.env
+        extract: {{ dotenv: $.FILES }}
+    level: error
   - id: explicit-secret
     kind: file_content_forbidden
     paths: plain.txt
@@ -90,7 +117,7 @@ rules:
     message: "explicit evidence: {EXPLICIT_SECRET}"
     sensitive: true
     level: error
-"#
+"#,
         ),
     )
     .unwrap();
@@ -106,6 +133,17 @@ fn every_report_baseline_and_fix_surface_is_secret_free() {
         let output = run(dir.path(), &["check", ".", "--format", format]);
         assert_eq!(output.status.code(), Some(1), "{format}: {output:?}");
         assert_redacted(format, &all_output(&output));
+    }
+
+    for format in ["markdown", "json"] {
+        let output = run(dir.path(), &["export-agents-md", "--format", format]);
+        assert!(output.status.success(), "{format}: {output:?}");
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !rendered.contains(ENV_PATH_SECRET),
+            "export-agents-md {format} leaked the selector path:\n{rendered}"
+        );
+        assert!(rendered.contains("<redacted>"), "{rendered}");
     }
 
     let baseline = run(
@@ -124,7 +162,10 @@ fn every_report_baseline_and_fix_surface_is_secret_free() {
 
     for format in ["human", "json"] {
         let fix_dir = fixture();
-        let output = run(fix_dir.path(), &["fix", "--format", format, "."]);
+        let output = run(
+            fix_dir.path(),
+            &["fix", "--unsafe-fixes", "--format", format, "."],
+        );
         assert_eq!(output.status.code(), Some(1), "fix {format}: {output:?}");
         assert_redacted(&format!("fix {format}"), &all_output(&output));
         assert!(
@@ -136,6 +177,12 @@ fn every_report_baseline_and_fix_surface_is_secret_free() {
             !std::fs::read_to_string(fix_dir.path().join("app.properties"))
                 .unwrap()
                 .contains(PROPERTIES_SECRET)
+        );
+        assert!(
+            !std::fs::read_to_string(fix_dir.path().join(format!("{ENV_PATH_SECRET}.txt")))
+                .unwrap()
+                .contains("forbidden"),
+            "path redaction must not change the fix target"
         );
     }
 }
@@ -151,7 +198,12 @@ fn sensitive_fix_diff_omits_secret_bearing_file_edits() {
         rendered.is_empty(),
         "all previewable edits in this fixture are sensitive and must be omitted:\n{rendered}"
     );
-    for secret in [DOTENV_SECRET, PROPERTIES_SECRET, EXPLICIT_SECRET] {
+    for secret in [
+        DOTENV_SECRET,
+        PROPERTIES_SECRET,
+        EXPLICIT_SECRET,
+        ENV_PATH_SECRET,
+    ] {
         assert!(
             !all_output(&output)
                 .windows(secret.len())

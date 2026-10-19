@@ -81,6 +81,7 @@ pub struct AnalysisFailure {
     pub line: Option<usize>,
     pub column: Option<usize>,
     sensitive: bool,
+    path_sensitive: bool,
 }
 
 impl AnalysisFailure {
@@ -93,6 +94,7 @@ impl AnalysisFailure {
             line: None,
             column: None,
             sensitive: false,
+            path_sensitive: false,
         }
     }
 
@@ -100,6 +102,28 @@ impl AnalysisFailure {
     #[must_use]
     pub fn is_sensitive(&self) -> bool {
         self.sensitive
+    }
+
+    /// Path safe for public reporters and diagnostics.
+    #[must_use]
+    pub fn report_path(&self) -> Option<&Path> {
+        self.path.as_deref().map(|path| {
+            if self.path_sensitive {
+                Path::new("<redacted>")
+            } else {
+                path
+            }
+        })
+    }
+
+    pub(crate) fn mark_path_sensitive(&mut self) {
+        self.path_sensitive = true;
+    }
+
+    /// Whether public consumers must suppress the primary path.
+    #[must_use]
+    pub const fn path_is_sensitive(&self) -> bool {
+        self.path_sensitive
     }
 
     #[must_use]
@@ -137,6 +161,7 @@ impl AnalysisFailure {
             line: finding.line,
             column: finding.column,
             sensitive: finding.sensitive,
+            path_sensitive: finding.path_sensitive,
         }
     }
 }
@@ -153,6 +178,7 @@ impl AnalysisFailure {
 /// while fixed messages can live as `Cow::Borrowed("…")` if a
 /// rule chooses to construct them that way. Renderers consume the inner
 /// `&str`, so the ownership choice does not alter report bytes.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone)]
 pub struct Violation {
     pub path: Option<Arc<Path>>,
@@ -188,6 +214,11 @@ pub struct Violation {
     /// The original baseline key remains available to remediation internals;
     /// fingerprinting ignores it whenever this flag is set.
     pub sensitive: bool,
+    /// Whether the primary path came from protected configuration. Internal
+    /// remediation and baseline logic retain [`Self::path`]; public consumers
+    /// MUST use [`Self::report_path`] instead.
+    #[doc(hidden)]
+    pub path_sensitive: bool,
     /// Engine-computed: whether a bare `alint fix` would resolve *this*
     /// violation. A rule sets this to `false` at construction (rules do not know
     /// about fixers); the engine overwrites it at result-assembly time as
@@ -232,6 +263,7 @@ impl Violation {
             baseline_key: None,
             fix_key: None,
             sensitive: false,
+            path_sensitive: false,
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
@@ -347,6 +379,30 @@ impl Violation {
     #[must_use]
     pub fn is_sensitive(&self) -> bool {
         self.sensitive
+    }
+
+    /// Primary path safe for public reporters and diagnostics. Baseline and
+    /// remediation internals use [`Self::path`] so redaction never changes
+    /// identity or a write target.
+    #[must_use]
+    pub fn report_path(&self) -> Option<&Path> {
+        self.path.as_deref().map(|path| {
+            if self.path_sensitive {
+                Path::new("<redacted>")
+            } else {
+                path
+            }
+        })
+    }
+
+    /// Whether public consumers must suppress the primary and related paths.
+    #[must_use]
+    pub const fn path_is_sensitive(&self) -> bool {
+        self.path_sensitive
+    }
+
+    pub(crate) fn mark_path_sensitive(&mut self) {
+        self.path_sensitive = true;
     }
 
     /// Remove internal-only evidence from a sensitive finding before an engine
@@ -565,6 +621,17 @@ impl RuleResult {
         }
     }
 
+    /// Hide primary paths derived from protected selector configuration while
+    /// preserving their internal identity for baselines and remediation.
+    pub(crate) fn redact_sensitive_paths(&mut self) {
+        for finding in self.violations.iter_mut().chain(&mut self.notes) {
+            finding.mark_path_sensitive();
+        }
+        for failure in &mut self.analysis_failures {
+            failure.mark_path_sensitive();
+        }
+    }
+
     /// Hide a configured policy URL whose winning value came from protected
     /// configuration while preserving that documentation was configured.
     pub(crate) fn redact_policy_url(&mut self) {
@@ -706,6 +773,20 @@ impl Context<'_> {
         self.trace
             .expect("trace-specific evaluation requires a trace sink")
             .evidence_sensitivity(producer_sensitive)
+    }
+
+    /// Path origin adjusted for protected selector configuration.
+    #[doc(hidden)]
+    pub fn trace_path_origin(&self) -> crate::TracePathOrigin {
+        if self
+            .trace
+            .expect("trace-specific evaluation requires a trace sink")
+            .paths_are_sensitive()
+        {
+            crate::TracePathOrigin::DerivedSensitive
+        } else {
+            crate::TracePathOrigin::RepositorySource
+        }
     }
 
     /// Retain one already bounded/redacted preview candidate.

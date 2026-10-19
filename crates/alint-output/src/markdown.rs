@@ -71,7 +71,7 @@ pub fn write_markdown(report: &Report, w: &mut dyn Write) -> std::io::Result<()>
         writeln!(w)?;
         for result in &report.results {
             for failure in &result.analysis_failures {
-                let location = failure.path.as_ref().map_or_else(
+                let location = failure.report_path().map_or_else(
                     || "repository".to_string(),
                     |path| match (failure.line, failure.column) {
                         (Some(line), Some(column)) => format!(
@@ -156,8 +156,7 @@ pub fn write_fix_markdown(report: &FixReport, w: &mut dyn Write) -> std::io::Res
             };
             let path_part = if show_path {
                 item.violation
-                    .path
-                    .as_ref()
+                    .report_path()
                     .map(|p| format!("`{}` - ", md_inline_code(&p.display().to_string())))
                     .unwrap_or_default()
             } else {
@@ -171,8 +170,7 @@ pub fn write_fix_markdown(report: &FixReport, w: &mut dyn Write) -> std::io::Res
         }
         for failure in &r.analysis_failures {
             let path_part = failure
-                .path
-                .as_ref()
+                .report_path()
                 .map(|p| format!("`{}` - ", md_inline_code(&p.display().to_string())))
                 .unwrap_or_default();
             writeln!(
@@ -306,10 +304,10 @@ fn file_bucket_count(report: &Report) -> usize {
             continue;
         }
         for v in &r.violations {
-            paths.insert(v.path.as_deref());
+            paths.insert(v.report_path());
         }
         for failure in &r.analysis_failures {
-            paths.insert(failure.path.as_deref());
+            paths.insert(failure.report_path());
         }
     }
     paths.len()
@@ -328,11 +326,8 @@ fn bucket_violations(report: &Report) -> BucketedViolations<'_> {
             continue;
         }
         for violation in &result.violations {
-            match &violation.path {
-                Some(p) => by_file
-                    .entry(p.as_ref())
-                    .or_default()
-                    .push((result, violation)),
+            match violation.report_path() {
+                Some(path) => by_file.entry(path).or_default().push((result, violation)),
                 None => cross_file.push((result, violation)),
             }
         }
@@ -521,6 +516,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -552,6 +548,7 @@ mod tests {
                         is_fixable: false,
                         not_fixable: false,
                         proposed_edits: Vec::new(),
+                        path_sensitive: false,
                     }],
                 ),
                 rule(
@@ -572,6 +569,7 @@ mod tests {
                         is_fixable: false,
                         not_fixable: false,
                         proposed_edits: Vec::new(),
+                        path_sensitive: false,
                     }],
                 ),
             ],
@@ -709,6 +707,7 @@ mod tests {
                     is_fixable: false,
                     not_fixable: false,
                     proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
@@ -734,6 +733,7 @@ mod tests {
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
+            path_sensitive: false,
         };
         let v2 = Violation {
             range: None,
@@ -750,6 +750,7 @@ mod tests {
             is_fixable: false,
             not_fixable: false,
             proposed_edits: Vec::new(),
+            path_sensitive: false,
         };
         let r1 = Report {
             results: vec![rule("r1", Level::Error, vec![v1.clone(), v2.clone()])],
@@ -803,6 +804,7 @@ mod tests {
                         is_fixable: false,
                         not_fixable: false,
                         proposed_edits: Vec::new(),
+                        path_sensitive: false,
                     },
                     status: FixStatus::Suggested {
                         summary: "would set $.debug to false".into(),
@@ -852,6 +854,7 @@ mod tests {
                             is_fixable: false,
                             not_fixable: false,
                             proposed_edits: Vec::new(),
+                            path_sensitive: false,
                         },
                         status: FixStatus::Applied("trimmed trailing whitespace in a.rs".into()),
                     },
@@ -871,6 +874,7 @@ mod tests {
                             is_fixable: false,
                             not_fixable: false,
                             proposed_edits: Vec::new(),
+                            path_sensitive: false,
                         },
                         status: FixStatus::Unfixable,
                     },

@@ -990,7 +990,7 @@ fn report_baseline_summary(
     }
     if cli.show_baselined {
         for s in &applied.suppressed {
-            match &s.violation.path {
+            match s.violation.report_path() {
                 Some(p) => eprintln!(
                     "  baselined: {}: [{}] {}",
                     term(&p.display().to_string()),
@@ -1087,7 +1087,7 @@ fn cmd_baseline(
         );
         for result in &report.results {
             for failure in &result.analysis_failures {
-                let location = failure.path.as_ref().map_or_else(
+                let location = failure.report_path().map_or_else(
                     || "<repo>".to_string(),
                     |path| match failure.line {
                         Some(line) => format!("{}:{line}", path.display()),
@@ -1114,8 +1114,7 @@ fn cmd_baseline(
             items.push(FingerprintedViolation {
                 rule_id: result.rule_id.to_string(),
                 path: v
-                    .path
-                    .as_ref()
+                    .report_path()
                     .map(|p| p.to_string_lossy().replace('\\', "/")),
                 fingerprint: reader.fingerprint(&result.rule_id, v),
                 message: Some(v.message.to_string()),
@@ -1213,7 +1212,7 @@ fn write_report_notes(
                 alint_core::NoteKind::Informational => "note",
                 alint_core::NoteKind::AnalysisTruncated => "analysis truncated",
             };
-            match &note.path {
+            match note.report_path() {
                 Some(p) => writeln!(
                     w,
                     "  {label}: {}: {}",
@@ -1361,7 +1360,7 @@ fn cmd_fix(
             let mut err = io::stderr().lock();
             for result in &report.results {
                 for failure in &result.analysis_failures {
-                    let location = failure.path.as_ref().map_or_else(String::new, |path| {
+                    let location = failure.report_path().map_or_else(String::new, |path| {
                         format!("{}: ", term(&path.display().to_string()))
                     });
                     let message = term_multiline(&failure.message).replace('\n', "\nalint:   ");
@@ -2233,11 +2232,12 @@ fn cmd_explain(rule_id: &str, options: &ExplainOptions, cli: &Cli) -> Result<Exi
         rule.level().as_str(),
     )?;
     if let Some(paths) = entry.paths() {
-        writeln!(
-            out,
-            "{dim}paths:     {dim:#} {}",
-            term(&paths.render_scope())
-        )?;
+        let rendered = if explain_field_is_sensitive(entry, "paths") {
+            "<redacted>".to_string()
+        } else {
+            paths.render_scope()
+        };
+        writeln!(out, "{dim}paths:     {dim:#} {}", term(&rendered))?;
     }
     if entry.expect_matches() {
         writeln!(out, "{dim}expect_matches:{dim:#} true")?;
@@ -2368,8 +2368,8 @@ fn explain_scope_filter_json(
 }
 
 /// Machine-readable rule body shared by stable static explain and the
-/// experimental trace envelope. Structural ids and repository paths remain
-/// visible; environment-derived or explicitly sensitive evidence is redacted.
+/// experimental trace envelope. Structural ids remain visible; protected
+/// fields, including environment-derived selectors, are redacted.
 fn explain_rule_json_payload(
     entry: &alint_core::RuleEntry,
     kind_meta: &alint_core::KindMeta,
@@ -2386,8 +2386,12 @@ fn explain_rule_json_payload(
     };
     let redacted = || serde_json::Value::String("<redacted>".to_string());
     let paths = entry.paths().map(|paths| {
-        let (include, exclude) = paths.include_exclude();
-        serde_json::json!({ "include": include, "exclude": exclude })
+        if sensitive("paths") {
+            serde_json::json!({ "include": ["<redacted>"], "exclude": [] })
+        } else {
+            let (include, exclude) = paths.include_exclude();
+            serde_json::json!({ "include": include, "exclude": exclude })
+        }
     });
     let options = match entry.extra() {
         Some(extra) if !extra.is_empty() => {
