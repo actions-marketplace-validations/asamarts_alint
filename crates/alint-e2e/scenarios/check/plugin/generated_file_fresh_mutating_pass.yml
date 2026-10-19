@@ -1,9 +1,13 @@
+test_version: 1
 name: generated_file_fresh mutating mode is silent when the in-place output is fresh
 tags: [check, generated_file_fresh, plugin, passing]
 
 # The generator rewrites gen/list.txt with the SAME content it already
 # holds → no change → silent. The snapshot/restore leaves the tree
 # untouched either way.
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -21,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

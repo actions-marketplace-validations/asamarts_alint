@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file superset is silent when the source contains every target value
 
 docs:
@@ -28,4 +29,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,3 +1,4 @@
+test_version: 1
 name: ini_path_matches is silent when the JDBC url is postgres
 tags: [check, ini_path_matches, structured, passing]
 
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

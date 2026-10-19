@@ -417,6 +417,7 @@ mod tests {
                 allow_out_of_root: false,
                 compose: None,
                 stage_ops: None,
+                process_environment: None,
             };
             let outcome = fixer.apply(&viol, &ctx).unwrap();
             assert!(

@@ -1,3 +1,4 @@
+test_version: 1
 name: create_and_register creates a missing named member then registers it
 # The two-postcondition model (Phase 2): a NAMED source member's file does not
 # exist, so `check` emits the EXISTENCE finding (registration is gated on existence
@@ -30,10 +31,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: docs-crate, level: error, path: crates/docs/Cargo.toml}
-  - applied: [docs-crate]
-  - violations: []
+  - exit: success
+    applied: [docs-crate]
+  - exit: success
+    violations: []
 
 expect_tree:
   Cargo.toml: "[workspace]\nmembers = [\"crates/docs\"]\n"

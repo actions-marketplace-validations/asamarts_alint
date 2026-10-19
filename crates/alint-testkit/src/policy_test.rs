@@ -1,9 +1,8 @@
 //! Versioned public policy-test document model.
 //!
-//! This module freezes the v1 serialized vocabulary independently from the
-//! repository-internal [`crate::Scenario`] runner. The runner migrates to this
-//! model in the P2/P3 vertical slice; keeping the types separate during P1 lets
-//! schema and validation changes land without a partially capable public runner.
+//! The serialized vocabulary is deliberately independent from the engine's
+//! internal Rust types so the public document contract can evolve only through
+//! explicit `test_version` changes.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -25,7 +24,7 @@ pub const MAX_MATCHER_REGEX_BYTES: usize = 8 * 1024;
 pub struct PolicyTest {
     /// Policy-test schema discriminator. Must be exactly `1`.
     pub test_version: u32,
-    /// Human-readable scenario name.
+    /// Human-readable policy-test name.
     #[schemars(length(min = 1))]
     pub name: String,
     /// Selection and explicit platform tags.
@@ -68,7 +67,7 @@ pub struct TestCapabilities {
     pub host_keyring: bool,
 }
 
-/// Inputs owned by one policy-test scenario.
+/// Inputs owned by one policy test.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GivenV1 {
@@ -811,7 +810,7 @@ fn validate_step_expectation_contract(
                 out,
                 ValidationCode::InvalidStepExpectation,
                 field,
-                "`configuration_error` requires a one-step scenario and a message matcher",
+                "`configuration_error` requires a one-step policy test and a message matcher",
             );
         }
         if has_evaluation_channels(expectation) {

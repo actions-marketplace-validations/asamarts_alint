@@ -11,6 +11,7 @@ fn ctx(tmp: &TempDir, dry_run: bool) -> FixContext<'_> {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     }
 }
 
@@ -232,6 +233,7 @@ fn stage_mode_composes_without_writing() {
         allow_out_of_root: false,
         compose: Some(&compose),
         stage_ops: Some(&sink),
+        process_environment: None,
     };
     let out = SyncFromFixer::new(PathBuf::from("canon.txt"), Applicability::Unsafe)
         .apply(&viol("copy.txt"), &fix_ctx)
@@ -276,6 +278,7 @@ fn allow_out_of_root_permits_an_out_of_root_source() {
         allow_out_of_root: true,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let out = SyncFromFixer::new(src, Applicability::Unsafe)
         .apply(&viol("copy.txt"), &fix_ctx)

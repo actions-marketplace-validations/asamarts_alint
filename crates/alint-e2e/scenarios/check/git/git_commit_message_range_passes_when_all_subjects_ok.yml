@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_message range passes when every commit in the range matches
 tags: [check, git_commit_message, git, passing]
 
@@ -27,4 +28,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

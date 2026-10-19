@@ -306,6 +306,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let mut bytes = vec![0xFFu8];
         bytes.extend_from_slice("a\u{200B}b".as_bytes());
@@ -339,6 +340,7 @@ mod binary_evasion_tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let rule = NoZeroWidthCharsRule {
             id: "no-zw".to_string(),
@@ -386,6 +388,7 @@ mod binary_evasion_tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         rule().evaluate_file(&ctx, Path::new("f"), bytes).unwrap()
     }

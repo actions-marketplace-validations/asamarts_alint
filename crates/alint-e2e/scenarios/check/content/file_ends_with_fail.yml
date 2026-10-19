@@ -1,3 +1,4 @@
+test_version: 1
 name: file_ends_with flags files missing the required suffix
 tags: [check, file_ends_with, content]
 
@@ -24,6 +25,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: gen-sentinel, level: error, path: build/stripped.generated.md}
       - {rule: gen-sentinel, level: error, path: build/wrong_tail.generated.md}

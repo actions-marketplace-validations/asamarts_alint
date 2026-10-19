@@ -1,3 +1,4 @@
+test_version: 1
 name: pinned_references accepts immutable and local build inputs
 
 tags: [check, pinned_references, content, security, passing]
@@ -61,4 +62,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

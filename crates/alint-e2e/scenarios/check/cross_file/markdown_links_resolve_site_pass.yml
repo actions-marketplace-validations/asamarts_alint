@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_links_resolve validates root-absolute rendered-site routes
 tags: [check, markdown_links_resolve, cross_file, passing]
 
@@ -25,4 +26,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

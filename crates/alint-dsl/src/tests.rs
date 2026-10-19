@@ -47,7 +47,10 @@ fn collect_drop_ins_handles_missing_dir() {
     // Missing `.alint.d/` is the common case (drop-ins
     // are opt-in by mkdir); should be silent.
     let dir = std::path::Path::new("/nonexistent/.alint.d");
-    assert_eq!(collect_drop_ins(dir).unwrap(), Vec::<PathBuf>::new());
+    assert_eq!(
+        collect_drop_ins(dir, &FilesystemConfigSource).unwrap(),
+        Vec::<PathBuf>::new()
+    );
 }
 
 #[test]
@@ -59,7 +62,7 @@ fn collect_drop_ins_yaml_files_only_alphabetical() {
     // Non-yaml files in the same dir should be skipped.
     std::fs::write(tmp.path().join("README.md"), "ignored\n").unwrap();
     std::fs::write(tmp.path().join(".gitkeep"), "").unwrap();
-    let entries = collect_drop_ins(tmp.path()).unwrap();
+    let entries = collect_drop_ins(tmp.path(), &FilesystemConfigSource).unwrap();
     let names: Vec<&str> = entries
         .iter()
         .map(|p| p.file_name().unwrap().to_str().unwrap())

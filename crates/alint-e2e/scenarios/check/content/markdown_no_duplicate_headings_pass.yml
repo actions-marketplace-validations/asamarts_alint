@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_no_duplicate_headings honors explicit ids
 
 tags: [check, markdown_no_duplicate_headings, content, passing]
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,3 +1,4 @@
+test_version: 1
 name: file_trim_trailing_whitespace converges when a CR sits inside the ws run
 tags: [fix, no_trailing_whitespace, file_trim_trailing_whitespace, idempotence]
 
@@ -26,10 +27,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-ws, level: error, path: src/a.txt}
-  - applied: [no-ws]
-  - violations: []
+  - exit: success
+    applied: [no-ws]
+  - exit: success
+    violations: []
 
 expect_tree:
   src:

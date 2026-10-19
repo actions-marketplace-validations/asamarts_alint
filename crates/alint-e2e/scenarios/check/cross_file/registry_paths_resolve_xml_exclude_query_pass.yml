@@ -1,3 +1,4 @@
+test_version: 1
 name: registry_paths_resolve over xml extract, with an xml exclude_query
 tags: [check, registry_paths_resolve, cross_file, xml, passing]
 
@@ -31,4 +32,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

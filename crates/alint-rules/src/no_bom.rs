@@ -349,6 +349,7 @@ mod utf16_tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: None,
+            process_environment: None,
         };
         let outcome = fixer.apply(&vs[0], &fctx).unwrap();
         assert!(

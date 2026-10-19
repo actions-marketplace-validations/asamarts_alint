@@ -1,7 +1,11 @@
+test_version: 1
 name: git_commit_gpg_signed fails closed outside a Git repository
 tags: [check, git_commit_gpg_signed, git]
 
 # The unconditional commit-history capability must be available before dispatch.
+
+capabilities:
+  host_keyring: true
 
 given:
   tree:
@@ -16,6 +20,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: signed-commits, kind: resource_read}

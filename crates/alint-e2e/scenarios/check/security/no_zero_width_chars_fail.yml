@@ -1,3 +1,4 @@
+test_version: 1
 name: no_zero_width_chars flags hidden zero-width characters
 tags: [check, no_zero_width_chars, security]
 
@@ -23,5 +24,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-zwsp, level: error, path: src/obfuscated.rs}

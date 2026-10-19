@@ -1,3 +1,4 @@
+test_version: 1
 name: no_submodules + file_remove deletes .gitmodules
 tags: [fix, no_submodules, file_remove, git]
 
@@ -20,10 +21,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-submods, level: error, path: .gitmodules}
-  - applied: [no-submods]
-  - violations: []
+  - exit: success
+    applied: [no-submods]
+  - exit: success
+    violations: []
 
 expect_tree:
   README.md: "# demo"

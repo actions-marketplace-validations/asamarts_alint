@@ -1,21 +1,20 @@
-//! Proptest strategies for generating [`Scenario`]-shaped inputs.
+//! Proptest strategies for generating [`PolicyTest`]-shaped inputs.
 //!
-//! The strategies here are intentionally small and focused — just
-//! enough variety to shake invariants (panic-freedom, dry-run
-//! purity, fix idempotence, fix→check convergence) without blowing
-//! up the state space. Tune via the [`ScenarioTreeParams`] knobs.
+//! The strategies are intentionally small and focused: enough variety to shake
+//! panic-freedom, dry-run purity, fix idempotence, and convergence invariants
+//! without blowing up the state space. Tune via [`PolicyTestParams`].
 //!
 //! Three factories are provided:
 //!
-//! - [`any_scenario_tree`] — tree + config drawn from a broad
+//! - [`any_policy_test`] — tree + config drawn from a broad
 //!   catalogue. Covers non-fixable rule kinds too; use for
 //!   invariants that only require alint to not panic.
-//! - [`fixable_scenario_tree`] — multi-rule; restricts the rule
+//! - [`fixable_policy_test`] — multi-rule; restricts the rule
 //!   catalogue to four whole-file-ish fixers (`file_create`,
 //!   `file_remove`, `file_rename`, `file_append`) whose combination
 //!   stays well-behaved for dry-run purity. Use for invariants that
 //!   exercise `alint fix` with several rules at once.
-//! - [`single_fixable_scenario_tree`] — EXACTLY ONE rule, drawn from
+//! - [`single_fixable_policy_test`] — EXACTLY ONE rule, drawn from
 //!   the full fixer catalogue (adds the content-hygiene, strip, and
 //!   located `replace` fixers). Use for the idempotence / convergence invariants:
 //!   Phase-0 guarantees a per-fixer fixed point, not multi-rule
@@ -28,20 +27,23 @@ use proptest::prelude::*;
 use proptest::sample::select;
 use proptest::string::string_regex;
 
-use crate::scenario::{Given, Scenario, Step};
+use crate::policy_test::{
+    ExpectedExit, GivenV1, PolicyTest, StepExpectation, TestCapabilities, TestStep,
+    TreeExpectationMode,
+};
 use crate::treespec::{TreeNode, TreeSpec};
 
 #[derive(Debug, Clone)]
-pub struct ScenarioTreeParams {
+pub struct PolicyTestParams {
     /// Max number of files in the tree. The generator draws 0..=max.
     pub max_files: usize,
     /// Max depth of directories. 0 = files at the root only.
     pub max_depth: usize,
-    /// Max number of rules per scenario. Drawn 0..=max.
+    /// Max number of rules per policy test. Drawn 0..=max.
     pub max_rules: usize,
 }
 
-impl Default for ScenarioTreeParams {
+impl Default for PolicyTestParams {
     fn default() -> Self {
         Self {
             max_files: 8,
@@ -53,74 +55,48 @@ impl Default for ScenarioTreeParams {
 
 /// Any combination of tree + config. Rules span both fixable and
 /// non-fixable kinds; use for invariants like panic-freedom.
-pub fn any_scenario_tree() -> impl Strategy<Value = Scenario> {
-    any_scenario_tree_with(ScenarioTreeParams::default())
+pub fn any_policy_test() -> impl Strategy<Value = PolicyTest> {
+    any_policy_test_with(PolicyTestParams::default())
 }
 
 // Params is copied into the closures that build each sub-strategy;
 // taking by value keeps `impl Trait` from capturing a caller lifetime.
 #[allow(clippy::needless_pass_by_value)]
-pub fn any_scenario_tree_with(params: ScenarioTreeParams) -> impl Strategy<Value = Scenario> {
+pub fn any_policy_test_with(params: PolicyTestParams) -> impl Strategy<Value = PolicyTest> {
     let tree_strategy = any_tree(params.max_files, params.max_depth);
     let rules_strategy = any_rules(params.max_rules);
     (tree_strategy, rules_strategy).prop_map(|(tree, rules_yaml)| {
         let config = compose_config(&rules_yaml);
-        Scenario {
-            name: "property-any".into(),
-            tags: vec!["proptest".into()],
-            given: Given {
-                tree,
-                config,
-                git: None,
-            },
-            when: vec![],
-            expect: vec![],
-            expect_tree: None,
-            expect_tree_mode: crate::scenario::ExpectTreeMode::default(),
-            docs: None,
-        }
+        policy_test("property-any", tree, config)
     })
 }
 
 /// Restricted variant: every emitted rule has a declared fixer, so
 /// `fix` reports can be asserted against without `Unfixable` noise.
-pub fn fixable_scenario_tree() -> impl Strategy<Value = Scenario> {
-    fixable_scenario_tree_with(ScenarioTreeParams::default())
+pub fn fixable_policy_test() -> impl Strategy<Value = PolicyTest> {
+    fixable_policy_test_with(PolicyTestParams::default())
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub fn fixable_scenario_tree_with(params: ScenarioTreeParams) -> impl Strategy<Value = Scenario> {
+pub fn fixable_policy_test_with(params: PolicyTestParams) -> impl Strategy<Value = PolicyTest> {
     let tree_strategy = any_tree(params.max_files, params.max_depth);
     let rules_strategy = fixable_rules(params.max_rules);
     (tree_strategy, rules_strategy).prop_map(|(tree, rules_yaml)| {
         let config = compose_config(&rules_yaml);
-        Scenario {
-            name: "property-fixable".into(),
-            tags: vec!["proptest".into()],
-            given: Given {
-                tree,
-                config,
-                git: None,
-            },
-            when: vec![],
-            expect: vec![],
-            expect_tree: None,
-            expect_tree_mode: crate::scenario::ExpectTreeMode::default(),
-            docs: None,
-        }
+        policy_test("property-fixable", tree, config)
     })
 }
 
-/// A scenario with EXACTLY ONE fixable rule, drawn from the full
+/// A policy test with EXACTLY ONE fixable rule, drawn from the full
 /// catalogue (including the content-hygiene, strip, and located `replace` fixers the multi-rule
-/// [`fixable_scenario_tree`] omits). Single-rule by design: with one rule there
+/// [`fixable_policy_test`] omits). Single-rule by design: with one rule there
 /// is no cross-rule, single-pass ordering interaction, so the fix→check
 /// convergence law ("a fully-applied fix leaves the check clean") holds per
 /// fixer and can be asserted without false positives from Phase-0's known
 /// order-dependence limitation. This is the strategy that makes the convergence
 /// invariant non-vacuous and actually exercises every fixer.
-pub fn single_fixable_scenario_tree() -> impl Strategy<Value = Scenario> {
-    let params = ScenarioTreeParams::default();
+pub fn single_fixable_policy_test() -> impl Strategy<Value = PolicyTest> {
+    let params = PolicyTestParams::default();
     let tree_strategy = any_tree(params.max_files, params.max_depth);
     (tree_strategy, one_fixable_rule_yaml()).prop_map(|(mut tree, rule_yaml)| {
         // Plant guaranteed triggers so the drawn fixer is ACTUALLY exercised.
@@ -131,29 +107,62 @@ pub fn single_fixable_scenario_tree() -> impl Strategy<Value = Scenario> {
         // the property is a reliable standalone gate at the default case count.
         plant_fixable_triggers(&mut tree.root);
         let config = compose_config(std::slice::from_ref(&rule_yaml));
-        Scenario {
-            name: "property-single-fixable".into(),
-            tags: vec!["proptest".into()],
-            given: Given {
-                tree,
-                config,
-                git: None,
-            },
-            when: vec![],
-            expect: vec![],
-            expect_tree: None,
-            expect_tree_mode: crate::scenario::ExpectTreeMode::default(),
-            docs: None,
-        }
+        policy_test("property-single-fixable", tree, config)
     })
 }
 
-/// Attach `steps` to a scenario produced by one of the strategies.
-/// The `expect:` list is left empty — invariant tests inspect the
-/// [`crate::ScenarioRun`] directly rather than scripted assertions.
-pub fn with_steps(mut s: Scenario, steps: Vec<Step>) -> Scenario {
-    s.when = steps;
-    s
+/// Attach steps and permissive expectations to a generated policy test.
+///
+/// Invariant tests inspect observations directly. The expectations only satisfy
+/// the validating runner's authoring contract; mismatches do not stop execution.
+pub fn with_steps(mut test: PolicyTest, steps: Vec<TestStep>) -> PolicyTest {
+    test.expect = steps.iter().copied().map(permissive_expectation).collect();
+    test.when = steps;
+    test
+}
+
+fn policy_test(name: &str, tree: TreeSpec, config: String) -> PolicyTest {
+    PolicyTest {
+        test_version: crate::POLICY_TEST_VERSION,
+        name: name.to_string(),
+        tags: vec!["proptest".to_string()],
+        capabilities: TestCapabilities::default(),
+        given: GivenV1 {
+            tree: Some(tree),
+            fixture: None,
+            config: Some(config),
+            config_file: None,
+            env: BTreeMap::new(),
+            as_of: None,
+            git: None,
+        },
+        when: Vec::new(),
+        expect: Vec::new(),
+        expect_tree: None,
+        expect_tree_mode: TreeExpectationMode::Strict,
+        snapshot: None,
+        docs: None,
+    }
+}
+
+fn permissive_expectation(step: TestStep) -> StepExpectation {
+    let is_fix = matches!(
+        step,
+        TestStep::Fix | TestStep::FixUnsafe | TestStep::FixDryRun
+    );
+    StepExpectation {
+        exit: ExpectedExit::Success,
+        violations: (!is_fix).then(Vec::new),
+        analysis_failures: None,
+        notes: None,
+        applied: is_fix.then(Vec::new),
+        skipped: None,
+        suggested: None,
+        unfixable: None,
+        non_convergent: None,
+        diff: None,
+        configuration_error: None,
+    }
 }
 
 // ─── tree generation ─────────────────────────────────────────────
@@ -249,7 +258,7 @@ fn content_blob() -> impl Strategy<Value = String> {
 /// Plant files under `_trig/` that trigger every fixer in the single-rule
 /// catalogue, so whichever rule is drawn has a matching violation to fix. The
 /// random dir names never include `_trig`, so these don't collide. Only ONE rule
-/// is active per single-rule scenario, so the several flaws in the kitchen-sink
+/// is active per single-rule policy test, so the several flaws in the kitchen-sink
 /// file never interact.
 fn plant_fixable_triggers(root: &mut BTreeMap<String, TreeNode>) {
     let dir = "_trig".to_string();
@@ -470,7 +479,7 @@ fn fixable_rules(max_rules: usize) -> impl Strategy<Value = Vec<String>> {
 /// proptest harness panic on `parse(...).unwrap()`.
 ///
 /// Prepend each rule's id with an index marker so every emitted
-/// scenario is collision-free regardless of how unlucky the
+/// policy test is collision-free regardless of how unlucky the
 /// underlying letter-draw was. We splice into the leading
 /// `  - id: ` prefix once per entry, leaving every other field
 /// untouched.
@@ -799,7 +808,7 @@ fn rule_yaml_path_absent_remove_value() -> impl Strategy<Value = String> {
 //
 // These generators each emit ONE fixable rule covering a fix op that the
 // multi-rule `fixable_rule_yaml` deliberately omits. They are drawn one at a
-// time by `single_fixable_scenario_tree`: with exactly one rule there is no
+// time by `single_fixable_policy_test`: with exactly one rule there is no
 // cross-rule, single-pass ordering interaction (two content fixers racing on
 // the same file via the compose buffer -- a known Phase-0 limitation, tracked
 // for Phase 1), so "a fully-applied fix leaves the check clean" is a sound
@@ -808,11 +817,11 @@ fn rule_yaml_path_absent_remove_value() -> impl Strategy<Value = String> {
 // the `content_blob` fixtures added for them.
 //
 // The glob is `**/*.{md,rs,txt,toml,json,tsx}` -- every extension the tree
-// generator emits EXCEPT `.yml` -- rather than `**/*`, because the scenario
+// generator emits EXCEPT `.yml` -- rather than `**/*`, because the policy-test
 // runner writes the config to `.alint.yml` *inside* the linted tree. A `**/*`
 // rule would match the config and a structural fixer (e.g. `file_prepend`)
 // would rewrite it into invalid YAML, breaking the between-steps re-walk. Real
-// corpus scenarios avoid this the same way (scoped globs).
+// corpus policy tests avoid this the same way (scoped globs).
 
 fn rule_no_trailing_whitespace() -> impl Strategy<Value = String> {
     rule_id("ntw").prop_map(|id| {
@@ -883,7 +892,7 @@ fn rule_file_header_prepend() -> impl Strategy<Value = String> {
 /// A `shebang_has_executable` rule fixed via the `chmod` op (Phase 3): sets +x on
 /// the planted shebang script `_trig/needsx.sh` (materialized WITHOUT the exec
 /// bit, so on Unix the rule fires). Safe, so a bare `Fix` applies it. Unix-only:
-/// on a non-Unix target the host rule no-ops, so the scenario converges trivially
+/// on a non-Unix target the host rule no-ops, so the policy test converges trivially
 /// (nothing to fix, nothing to converge). Scoped to `**/needsx.sh` so it matches
 /// ONLY its own trigger; `.sh` is outside every other single-rule glob.
 fn rule_shebang_chmod() -> impl Strategy<Value = String> {
@@ -899,8 +908,8 @@ fn rule_shebang_chmod() -> impl Strategy<Value = String> {
 /// `git_tracked_only: true`, so on the property net's NON-git trees the host rule
 /// is a silent no-op (the tracked set is `None`) -- it produces no violation, and
 /// the fix laws early-return (nothing to apply / converge / stage). Its value here
-/// is purely the fix-op coverage gate (`single_fixable_scenario_tree_covers_all_fix_ops`);
-/// real apply/convergence lives in `scenarios/fix/git_untrack_*` and the fixer
+/// is purely the fix-op coverage gate (`single_fixable_policy_test_covers_all_fix_ops`);
+/// real apply/convergence lives in `ruleset-tests/v1/fix/git_untrack_*` and the fixer
 /// units. Scoped to `**/*.trackjunk` so it never collides with a generated name.
 fn rule_git_untrack() -> impl Strategy<Value = String> {
     rule_id("gu").prop_map(|id| {
@@ -1029,7 +1038,7 @@ fn rule_file_header_insert_header() -> impl Strategy<Value = String> {
 /// The full fixable catalogue: every fix op, one rule at a time.
 /// The four whole-file-ish ops reuse the multi-rule generators (at
 /// `level: warning`); the eight content/header ops come from the single-rule
-/// generators above. Drives `single_fixable_scenario_tree`.
+/// generators above. Drives `single_fixable_policy_test`.
 fn one_fixable_rule_yaml() -> impl Strategy<Value = String> {
     prop_oneof![
         // file_create, file_remove, file_rename, file_append.
@@ -1118,31 +1127,32 @@ mod tests {
     use proptest::test_runner::TestRunner;
 
     #[test]
-    fn any_scenario_tree_produces_well_formed_scenarios() {
+    fn any_policy_test_produces_well_formed_tests() {
         let mut runner = TestRunner::default();
         for _ in 0..50 {
-            let tree = any_scenario_tree().new_tree(&mut runner).unwrap().current();
+            let tree = any_policy_test().new_tree(&mut runner).unwrap().current();
             // Config must be valid YAML that alint-dsl accepts
             // (empty rules is OK).
-            let parsed = alint_dsl::parse(&tree.given.config);
+            let config = tree.given.config.as_deref().unwrap();
+            let parsed = alint_dsl::parse(config);
             assert!(
                 parsed.is_ok(),
                 "generated invalid config: {}\n---\n{}",
                 parsed.unwrap_err(),
-                tree.given.config,
+                config,
             );
         }
     }
 
     #[test]
-    fn fixable_scenario_tree_every_rule_has_a_fix_block() {
+    fn fixable_policy_test_every_rule_has_a_fix_block() {
         let mut runner = TestRunner::default();
         for _ in 0..50 {
-            let scenario = fixable_scenario_tree()
+            let policy_test = fixable_policy_test()
                 .new_tree(&mut runner)
                 .unwrap()
                 .current();
-            let cfg = alint_dsl::parse(&scenario.given.config).unwrap();
+            let cfg = alint_dsl::parse(policy_test.given.config.as_deref().unwrap()).unwrap();
             for r in &cfg.rules {
                 // file_content_forbidden is specifically excluded
                 // from the fixable catalogue because it has no fix.
@@ -1161,14 +1171,14 @@ mod tests {
     }
 
     #[test]
-    fn single_fixable_scenario_tree_emits_exactly_one_fixable_rule() {
+    fn single_fixable_policy_test_emits_exactly_one_fixable_rule() {
         let mut runner = TestRunner::default();
         for _ in 0..50 {
-            let scenario = single_fixable_scenario_tree()
+            let policy_test = single_fixable_policy_test()
                 .new_tree(&mut runner)
                 .unwrap()
                 .current();
-            let cfg = alint_dsl::parse(&scenario.given.config).unwrap();
+            let cfg = alint_dsl::parse(policy_test.given.config.as_deref().unwrap()).unwrap();
             assert_eq!(
                 cfg.rules.len(),
                 1,
@@ -1185,9 +1195,9 @@ mod tests {
     }
 
     #[test]
-    fn single_fixable_scenario_tree_covers_all_fix_ops() {
+    fn single_fixable_policy_test_covers_all_fix_ops() {
         // The whole point of the single-rule strategy is that it exercises EVERY
-        // fixer (the multi-rule catalogue covers only 4). Draw enough scenarios that
+        // fixer (the multi-rule catalogue covers only 4). Draw enough policy tests that
         // each of the ~17 uniform arms is overwhelmingly likely to appear (P(miss) ~
         // 17 * (16/17)^1500 ~ 1e-38), and assert we saw the whole, dynamically-read
         // `FixSpec::ALL_OP_NAMES` set (so the count stays correct as ops are added).
@@ -1195,11 +1205,11 @@ mod tests {
         let mut runner = TestRunner::default();
         let mut seen: BTreeSet<&'static str> = BTreeSet::new();
         for _ in 0..1500 {
-            let scenario = single_fixable_scenario_tree()
+            let policy_test = single_fixable_policy_test()
                 .new_tree(&mut runner)
                 .unwrap()
                 .current();
-            let cfg = alint_dsl::parse(&scenario.given.config).unwrap();
+            let cfg = alint_dsl::parse(policy_test.given.config.as_deref().unwrap()).unwrap();
             if let Some(fix) = &cfg.rules[0].fix {
                 seen.insert(fix.op_name());
             }
@@ -1209,7 +1219,7 @@ mod tests {
         // so it is not drawn here (the convergence + idempotence laws would be
         // ill-defined). It is covered instead by `command_ops.rs`/`command.rs` unit
         // tests and by its own fire (`command_runs_the_user_fix_command.yml`) +
-        // silent (`command_is_silent_when_check_passes.yml`) e2e scenarios
+        // silent (`command_is_silent_when_check_passes.yml`) e2e policy tests
         // (auto-fix.md 5.6). Every OTHER op must appear.
         let expected: BTreeSet<&'static str> = alint_core::FixSpec::ALL_OP_NAMES
             .iter()

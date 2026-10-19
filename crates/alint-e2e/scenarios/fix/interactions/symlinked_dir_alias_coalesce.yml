@@ -1,3 +1,4 @@
+test_version: 1
 name: a file reached through a symlinked directory coalesces into one fix
 tags: [fix, interactions, unix-only]
 
@@ -30,9 +31,11 @@ given:
 when: [fix, check]
 
 expect:
-  - applied: [no-ws]
+  - exit: success
+    applied: [no-ws]
     skipped: []
-  - violations: []
+  - exit: success
+    violations: []
 
 expect_tree_mode: contains
 expect_tree:

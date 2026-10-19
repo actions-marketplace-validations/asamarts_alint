@@ -1,3 +1,4 @@
+test_version: 1
 name: file_append_final_newline adds a trailing LF when missing
 tags: [fix, final_newline, file_append_final_newline]
 
@@ -18,10 +19,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: eof, level: error, path: docs/a.md}
-  - applied: [eof]
-  - violations: []
+  - exit: success
+    applied: [eof]
+  - exit: success
+    violations: []
 
 expect_tree:
   docs:

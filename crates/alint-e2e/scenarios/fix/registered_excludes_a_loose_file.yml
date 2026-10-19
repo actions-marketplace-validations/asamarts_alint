@@ -1,3 +1,4 @@
+test_version: 1
 name: create_and_register with a manifest-anchored source excludes loose files
 # Audit A#1 regression: a BARE directory glob (`crates/*`) matches loose files
 # (a README, a .gitkeep) and would append them as invalid workspace members. The
@@ -30,8 +31,10 @@ given:
 when: [fix_unsafe, check]
 
 expect:
-  - applied: [reg]
-  - violations: []
+  - exit: success
+    applied: [reg]
+  - exit: success
+    violations: []
 
 expect_tree:
   # Only crates/foo registered; the loose crates/README.md is NOT a member.

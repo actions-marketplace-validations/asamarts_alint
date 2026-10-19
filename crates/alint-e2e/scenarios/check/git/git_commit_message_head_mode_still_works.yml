@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_message without since:still validates HEAD only
 tags: [check, git_commit_message, git, failing]
 
@@ -25,5 +26,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: short-subjects, level: error}

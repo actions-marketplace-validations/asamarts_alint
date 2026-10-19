@@ -1,3 +1,4 @@
+test_version: 1
 name: a symlink and its target coalesce into one fix, not two
 tags: [fix, interactions, unix-only]
 
@@ -32,10 +33,12 @@ when: [fix, check]
 
 expect:
   # One fix applied; the coalesced alias is clean, not a phantom skip.
-  - applied: [no-ws]
+  - exit: success
+    applied: [no-ws]
     skipped: []
   # Clean afterward through both spellings -- the fix and check agree.
-  - violations: []
+  - exit: success
+    violations: []
 
 expect_tree_mode: contains
 expect_tree:

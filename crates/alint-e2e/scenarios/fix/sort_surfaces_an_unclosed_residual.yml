@@ -1,3 +1,4 @@
+test_version: 1
 name: sort surfaces an unclosed residual instead of suppressing it
 tags: [fix, ordered_block, sort, fixpoint, verify]
 
@@ -27,11 +28,14 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: ks, level: error, path: f.txt}
       - {rule: ks, level: error, path: f.txt}
-  - applied: [ks]
-  - violations:
+  - exit: policy_failure
+    applied: [ks]
+  - exit: policy_failure
+    violations:
       - {rule: ks, level: error, path: f.txt}
 
 expect_tree:

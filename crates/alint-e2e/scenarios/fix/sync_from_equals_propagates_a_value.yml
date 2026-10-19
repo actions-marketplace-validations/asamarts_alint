@@ -1,3 +1,4 @@
+test_version: 1
 name: sync_from on relation equals propagates the source value into each target
 # cross_file(relation: equals) declares a source-of-truth value that N targets
 # must match. On `equals`, sync_from PROPAGATES: it rewrites each drifting target's
@@ -36,10 +37,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: crate-versions-match-workspace, level: error, path: crates/drifted/Cargo.toml}
-  - applied: [crate-versions-match-workspace]
-  - violations: []
+  - exit: success
+    applied: [crate-versions-match-workspace]
+  - exit: success
+    violations: []
 
 expect_tree:
   Cargo.toml: |

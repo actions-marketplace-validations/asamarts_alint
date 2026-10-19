@@ -1,3 +1,4 @@
+test_version: 1
 name: command plugin fires when the wrapped checker reports a problem
 # linux-only: the wrapped command is a POSIX `sh` one-liner, and the
 # command rule's macOS behaviour is tracked separately (see the pass scenario).
@@ -13,6 +14,9 @@ docs:
 # Here a `grep` one-liner fails the file when it still carries a `TODO` marker,
 # so `src/a.rs` fires (carrying the grep hit) while the clean `src/b.rs` stays
 # silent.
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -31,5 +35,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-todo-markers, level: error, path: src/a.rs}

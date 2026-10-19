@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file registered maps a matched file to its list value via register_as
 # The source globs the crate MANIFESTS (crates/*/Cargo.toml, files), and
 # `register_as: "{dir}"` maps each match to its parent directory -- the value that
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: manifests-registered, level: error, path: Cargo.toml}

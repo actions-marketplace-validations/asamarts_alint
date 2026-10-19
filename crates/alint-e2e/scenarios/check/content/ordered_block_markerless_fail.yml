@@ -1,3 +1,4 @@
+test_version: 1
 name: ordered_block with no markers sorts the whole file
 tags: [check, ordered_block, content]
 
@@ -19,5 +20,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: dictionary-sorted, level: error, path: dictionary.txt}

@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes auto-detects a .csproj as XML and flags a schema violation
 tags: [check, json_schema_passes, structured, xml, failing]
 
@@ -49,5 +50,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: csproj-conforms, level: error, path: App.csproj}

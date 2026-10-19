@@ -1,3 +1,4 @@
+test_version: 1
 name: set_value declines a YAML alias reference -- never silently de-aliases
 tags: [fix, yaml_path_equals, set_value, yaml, safety]
 
@@ -31,10 +32,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: use-nine, level: error, path: app.yaml}
-  - skipped: [use-nine]
-  - violations:
+  - exit: policy_failure
+    skipped: [use-nine]
+  - exit: policy_failure
+    violations:
       - {rule: use-nine, level: error, path: app.yaml}
 
 expect_tree:

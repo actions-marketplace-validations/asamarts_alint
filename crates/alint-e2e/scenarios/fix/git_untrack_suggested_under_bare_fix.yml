@@ -1,3 +1,4 @@
+test_version: 1
 name: git_untrack is a suggestion (requires --unsafe-fixes) under a bare fix
 # git_untrack is Unsafe, so a bare `alint fix` must SUGGEST it -- consistent with
 # its sibling file_remove -- not report it as a "not applicable" skip. It is an
@@ -6,6 +7,9 @@ name: git_untrack is a suggestion (requires --unsafe-fixes) under a bare fix
 # fix]` shape asserts the bare fix step SUGGESTS (does not untrack); the file stays
 # tracked.
 tags: [fix, file_absent, git_untrack, applicability]
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -28,6 +32,8 @@ given:
 when: [check, fix]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-tracked-build, level: error, path: build/out.o}
-  - suggested: [no-tracked-build]
+  - exit: policy_failure
+    suggested: [no-tracked-build]

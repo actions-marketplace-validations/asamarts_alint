@@ -220,6 +220,7 @@ version = "0.19.0"
 dependencies = [
  "alint-core",
  "alint-dsl",
+ "alint-output",
  "alint-rules",
  "jsonschema",
  "proptest",

@@ -1,3 +1,4 @@
+test_version: 1
 name: sort converges a file with two ordered_blocks (F4 regression)
 tags: [fix, ordered_block, sort, fixpoint]
 
@@ -37,11 +38,14 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: keep-sorted, level: error, path: deps.txt}
       - {rule: keep-sorted, level: error, path: deps.txt}
-  - applied: [keep-sorted]
-  - violations: []
+  - exit: success
+    applied: [keep-sorted]
+  - exit: success
+    violations: []
 
 expect_tree:
   deps.txt: |

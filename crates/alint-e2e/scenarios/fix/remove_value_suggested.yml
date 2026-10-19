@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value is Unsafe by default -- a bare fix suggests, does not delete
 tags: [fix, hcl_path_absent, remove_value, applicability]
 
@@ -27,9 +28,11 @@ given:
 when: [check, fix]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-secret, level: error, path: main.tf}
-  - suggested: [no-secret]
+  - exit: policy_failure
+    suggested: [no-secret]
 
 expect_tree:
   main.tf: |

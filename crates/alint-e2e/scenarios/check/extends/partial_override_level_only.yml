@@ -1,3 +1,4 @@
+test_version: 1
 name: child overrides only level; kind/paths inherit via field-merge
 tags: [check, extends, composition]
 
@@ -8,24 +9,13 @@ tags: [check, extends, composition]
 
 given:
   tree:
-    base.yml: |
-      version: 1
-      rules:
-        - id: no-bak
-          kind: file_absent
-          paths: "**/*.bak"
-          level: error
-        - id: no-swap
-          kind: file_absent
-          paths: "**/*.swp"
-          level: error
-
+    # The inherited config is a package asset, separate from the repository.
     stale.bak: ""
     stale.swp: ""
 
   config: |
     version: 1
-    extends: [./base.yml]
+    extends: [./support/partial_override_level_only.yaml]
     rules:
       # Partial override: keep kind + paths from parent, just change level.
       - id: no-bak
@@ -38,6 +28,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-bak, level: warning, path: stale.bak}
       - {rule: no-swap, level: error, path: stale.swp}

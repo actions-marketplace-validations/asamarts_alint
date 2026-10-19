@@ -1,3 +1,4 @@
+test_version: 1
 name: check reports only the rules that actually violate when many are configured
 tags: [check, interactions]
 
@@ -39,6 +40,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-target, level: error}
       - {rule: rust-snake, level: warning, path: src/BadCase.rs}

@@ -1,19 +1,9 @@
-//! Coverage-rot audit: every bundled ruleset under
-//! `crates/alint-dsl/rulesets/v1/**/*.yml` must be referenced by
-//! at least one well-formed scenario (no violations) AND at least
-//! one ill-formed scenario (≥1 violation). Without this, a
-//! bundled ruleset can land or evolve without exercising both
-//! its happy path and its flagging path through e2e.
+//! Ownership and behavior parity audit for bundled rulesets.
 //!
-//! Mechanics: each bundled YAML's path → ruleset URI mapping
-//! follows `alint-dsl/rulesets/v1/<...>.yml` →
-//! `alint://bundled/<...>@v1` (without the file extension).
-//! Each scenario YAML carries `given.config:` (a YAML string with
-//! `extends: [<uri>, …]`) and `expect.violations:`. We classify
-//! each scenario as "well-formed" (every expect.violations entry
-//! is empty) or "ill-formed" (at least one non-empty), then
-//! cross-reference: each bundled URI needs at least one of each
-//! shape.
+//! Every YAML under `crates/alint-dsl/rulesets/v1/` maps to exactly one sibling
+//! directory under `crates/alint-dsl/ruleset-tests/v1/`. Tests in that directory
+//! must extend the matching packaged `alint://bundled/...@v1` URI. Every bundle
+//! requires at least one passing fixture and one fixture with findings.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -113,18 +103,60 @@ fn walk_yaml_paths(root: &Path) -> Vec<PathBuf> {
     out
 }
 
+fn assert_complete_coverage(coverage: &HashMap<String, Coverage>, all_uris: &[String]) {
+    let mut missing_well_formed = Vec::new();
+    let mut missing_ill_formed = Vec::new();
+    for uri in all_uris {
+        let item = coverage.get(uri).expect("coverage seeded above");
+        if item.well_formed_in.is_empty() {
+            missing_well_formed.push(uri);
+        }
+        if item.ill_formed_in.is_empty() {
+            missing_ill_formed.push(uri);
+        }
+    }
+    if missing_well_formed.is_empty() && missing_ill_formed.is_empty() {
+        return;
+    }
+
+    let mut report = String::new();
+    if !missing_well_formed.is_empty() {
+        let _ = writeln!(
+            report,
+            "{} of {} bundled rulesets have no WELL-FORMED policy test \
+             (expect: [{{ violations: [] }}]):",
+            missing_well_formed.len(),
+            all_uris.len(),
+        );
+        for uri in missing_well_formed {
+            let _ = writeln!(report, "  - {uri}");
+        }
+    }
+    if !missing_ill_formed.is_empty() {
+        let _ = writeln!(
+            report,
+            "{} of {} bundled rulesets have no ILL-FORMED policy test \
+             (expect: with at least one non-empty violations entry):",
+            missing_ill_formed.len(),
+            all_uris.len(),
+        );
+        for uri in missing_ill_formed {
+            let _ = writeln!(report, "  - {uri}");
+        }
+    }
+    panic!("\n{report}");
+}
+
 #[test]
 fn every_bundled_ruleset_has_well_formed_and_ill_formed_scenarios() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let rulesets_dir = manifest
+    let workspace = manifest
         .ancestors()
         .nth(2)
-        .expect("workspace root from alint-e2e CARGO_MANIFEST_DIR")
-        .join("crates")
-        .join("alint-dsl")
-        .join("rulesets")
-        .join("v1");
-    let scenarios_dir = manifest.join("scenarios");
+        .expect("workspace root from alint-e2e CARGO_MANIFEST_DIR");
+    let dsl = workspace.join("crates").join("alint-dsl");
+    let rulesets_dir = dsl.join("rulesets").join("v1");
+    let ruleset_tests_dir = dsl.join("ruleset-tests").join("v1");
 
     // Map bundled URI → coverage status.
     let mut coverage: HashMap<String, Coverage> = HashMap::new();
@@ -140,23 +172,36 @@ fn every_bundled_ruleset_has_well_formed_and_ill_formed_scenarios() {
     }
     all_uris.sort();
 
-    for path in walk_yaml_paths(&scenarios_dir) {
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            continue;
-        };
+    for path in walk_yaml_paths(&ruleset_tests_dir) {
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read policy test {}: {error}", path.display()));
         let extends = scenario_extends_set(&text);
-        if extends.is_empty() {
-            continue;
-        }
-        let Ok(scenario) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text) else {
-            continue;
-        };
+        let relative = path
+            .strip_prefix(&ruleset_tests_dir)
+            .expect("ruleset test is below test root");
+        let bundle = relative
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| panic!("ruleset test {} has no bundle directory", path.display()));
+        let expected_uri = format!(
+            "alint://bundled/{}@v1",
+            bundle.to_string_lossy().replace('\\', "/")
+        );
+        assert!(
+            coverage.contains_key(&expected_uri),
+            "orphaned ruleset-test directory {} has no bundled ruleset",
+            bundle.display()
+        );
+        assert_eq!(
+            extends,
+            HashSet::from([expected_uri.clone()]),
+            "{} must extend exactly its owning bundle",
+            path.display()
+        );
+        let scenario: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
+            .unwrap_or_else(|error| panic!("parse policy test {}: {error}", path.display()));
         let well_formed = is_well_formed(&scenario);
-        let scenario_name = path
-            .strip_prefix(&scenarios_dir)
-            .unwrap_or(&path)
-            .display()
-            .to_string();
+        let scenario_name = relative.display().to_string();
         for uri in &extends {
             if let Some(c) = coverage.get_mut(uri) {
                 if well_formed {
@@ -168,56 +213,5 @@ fn every_bundled_ruleset_has_well_formed_and_ill_formed_scenarios() {
         }
     }
 
-    let mut missing_well_formed: Vec<&String> = Vec::new();
-    let mut missing_ill_formed: Vec<&String> = Vec::new();
-    for uri in &all_uris {
-        let c = coverage.get(uri).expect("coverage seeded above");
-        if c.well_formed_in.is_empty() {
-            missing_well_formed.push(uri);
-        }
-        if c.ill_formed_in.is_empty() {
-            missing_ill_formed.push(uri);
-        }
-    }
-
-    if missing_well_formed.is_empty() && missing_ill_formed.is_empty() {
-        return;
-    }
-
-    let mut report = String::new();
-    if !missing_well_formed.is_empty() {
-        let _ = writeln!(
-            report,
-            "{} of {} bundled rulesets have no WELL-FORMED scenario \
-             (expect: [{{ violations: [] }}]):",
-            missing_well_formed.len(),
-            all_uris.len(),
-        );
-        for uri in missing_well_formed {
-            let _ = writeln!(report, "  - {uri}");
-        }
-        let _ = writeln!(
-            report,
-            "  (add a scenario with given.config.extends: [<uri>] and \
-             a tree shape that satisfies the bundled rules)",
-        );
-    }
-    if !missing_ill_formed.is_empty() {
-        let _ = writeln!(
-            report,
-            "{} of {} bundled rulesets have no ILL-FORMED scenario \
-             (expect: with at least one non-empty violations entry):",
-            missing_ill_formed.len(),
-            all_uris.len(),
-        );
-        for uri in missing_ill_formed {
-            let _ = writeln!(report, "  - {uri}");
-        }
-        let _ = writeln!(
-            report,
-            "  (add a scenario where the bundled ruleset flags a missing \
-             or malformed file with concrete expected violations)",
-        );
-    }
-    panic!("\n{report}");
+    assert_complete_coverage(&coverage, &all_uris);
 }

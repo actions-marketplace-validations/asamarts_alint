@@ -1,3 +1,4 @@
+test_version: 1
 name: sync_from on equals propagates a JSON value (a second format, end-to-end)
 # The value-propagation fixer reuses the per-format structured resolver, so every
 # structured format works from one code path. The TOML case is covered elsewhere;
@@ -27,10 +28,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: pkg-version-matches-manifest, level: error, path: web/package.json}
-  - applied: [pkg-version-matches-manifest]
-  - violations: []
+  - exit: success
+    applied: [pkg-version-matches-manifest]
+  - exit: success
+    violations: []
 
 expect_tree:
   manifest.json: |

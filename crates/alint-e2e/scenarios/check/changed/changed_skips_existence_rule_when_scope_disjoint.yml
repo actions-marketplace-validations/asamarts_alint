@@ -1,3 +1,4 @@
+test_version: 1
 name: --changed skips existence rule whose scope misses the diff
 tags: [check, check_changed, changed, file_absent]
 
@@ -29,6 +30,8 @@ given:
 when: [check, check_changed]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-env, level: error, path: ".env"}
-  - violations: []
+  - exit: success
+    violations: []

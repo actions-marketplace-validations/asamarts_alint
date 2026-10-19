@@ -1,3 +1,4 @@
+test_version: 1
 name: filename_regex flags test stems that don't match the required pattern
 tags: [check, filename_regex]
 
@@ -25,5 +26,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: tests-named-test-prefix, level: error, path: tests/BadNamingHere.rs}

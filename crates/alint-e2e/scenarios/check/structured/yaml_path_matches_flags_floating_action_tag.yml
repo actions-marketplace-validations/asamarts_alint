@@ -1,3 +1,4 @@
+test_version: 1
 name: yaml_path_matches flags workflow action refs that aren't pinned to SHAs
 tags: [check, yaml_path_matches, structured]
 
@@ -49,5 +50,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: pin-actions-to-sha, level: warning, path: .github/workflows/bad.yml}

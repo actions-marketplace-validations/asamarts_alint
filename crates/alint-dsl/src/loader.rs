@@ -3,7 +3,6 @@
 //! focused on the public surface (discover / load / parse) and
 //! the typed config shape.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use alint_core::{
@@ -110,13 +109,21 @@ impl MemoKey {
 /// loses span info) AND skips a redundant second parse. An interp
 /// failure is reported with the `source` path; a typed/YAML error
 /// propagates bare so the existing diagnostics are unchanged.
-pub(crate) fn parse_config_interpolated(contents: &str, source: &Path) -> Result<RawConfig> {
+pub(crate) fn parse_config_interpolated_with_environment(
+    contents: &str,
+    source: &Path,
+    environment: &dyn crate::EnvironmentProvider,
+) -> Result<RawConfig> {
     // Name the file in a YAML/typed error: in an `extends:` chain or a
     // `.alint.d/` drop-in, a bare "at line 2 column 1" reads as if the
     // top-level config were at fault.
-    parse_config_interpolated_inner(contents, source).map_err(|e| match e {
-        Error::Yaml(e) => Error::Other(format!("{}: YAML parse error: {e}", display_path(source))),
-        other => other,
+    parse_config_interpolated_inner_with_environment(contents, source, environment).map_err(|e| {
+        match e {
+            Error::Yaml(e) => {
+                Error::Other(format!("{}: YAML parse error: {e}", display_path(source)))
+            }
+            other => other,
+        }
     })
 }
 
@@ -299,8 +306,16 @@ fn deserialize_raw_config(contents: &str, source: &str) -> Result<RawConfig> {
     }
 }
 
+#[cfg(test)]
 fn parse_config_interpolated_inner(contents: &str, source: &Path) -> Result<RawConfig> {
-    // Reject a deeply-nested-flow config before `serde_yaml_ng` (libyaml) chews
+    parse_config_interpolated_inner_with_environment(contents, source, &crate::HostEnvironment)
+}
+
+fn parse_config_interpolated_inner_with_environment(
+    contents: &str,
+    source: &Path,
+    environment: &dyn crate::EnvironmentProvider,
+) -> Result<RawConfig> {
     // on it super-linearly — a DoS reachable through an `extends:`'d ruleset.
     if !alint_core::yaml_depth::flow_depth_within_limit(contents) {
         return Err(Error::Other(format!(
@@ -339,7 +354,7 @@ fn parse_config_interpolated_inner(contents: &str, source: &Path) -> Result<RawC
                     .collect()
             })
             .unwrap_or_default();
-        crate::interp::interpolate_value(&mut value, &|n| std::env::var(n).ok())
+        crate::interp::interpolate_value(&mut value, &|name| environment.get(name))
             .map_err(|e| Error::Other(format!("{source}: interpolation error: {e}")))?;
         let mut config: RawConfig = serde_yaml_ng::from_value(value)?;
         // Reject user-authored private markers before adding the loader's own
@@ -397,10 +412,13 @@ pub(crate) fn load_recursive(
     trusted: &[String],
     context: SourceContext,
 ) -> Result<RawConfig> {
-    let canonical = path.canonicalize().map_err(|source| Error::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let canonical = opts
+        .config_source
+        .canonicalize(path)
+        .map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
     // Diamond chains reload a shared file once per DAG path (2^depth); a
     // non-top-level load is a pure function of its `MemoKey`, so reuse it.
     let memo_key = (!is_top).then(|| {
@@ -436,11 +454,18 @@ pub(crate) fn load_recursive(
         )));
     }
 
-    let contents = fs::read_to_string(&canonical).map_err(|source| Error::Io {
-        path: canonical.clone(),
-        source,
-    })?;
-    let mut config = parse_config_interpolated(&contents, &canonical)?;
+    let contents = opts
+        .config_source
+        .read_to_string(&canonical)
+        .map_err(|source| Error::Io {
+            path: canonical.clone(),
+            source,
+        })?;
+    let mut config = parse_config_interpolated_with_environment(
+        &contents,
+        &canonical,
+        opts.environment.as_ref(),
+    )?;
     validate_source_compatibility(
         &mut config,
         &local_source_display(&canonical, confine),
@@ -542,6 +567,11 @@ fn load_extended_source(
              use https:// with an SRI hash instead"
         )));
     } else if url.starts_with("https://") {
+        if opts.remote_policy == crate::RemotePolicy::Deny {
+            return Err(Error::Other(format!(
+                "remote `extends` is disabled for this load (entry {source_display:?})"
+            )));
+        }
         let mut remote = load_remote(url, opts, &mut state.visiting)?;
         validate_source_compatibility(
             &mut remote,
@@ -575,7 +605,7 @@ fn load_extended_source(
         bundled
     } else {
         let target = resolve_relative(source_dir, url);
-        confine_extends_target(&target, url, confine)?;
+        confine_extends_target(&target, url, confine, opts.config_source.as_ref())?;
         load_recursive(
             &target,
             state,
@@ -841,9 +871,17 @@ fn load_bundled(spec: &str) -> Result<RawConfig> {
 /// canonicalize failure (most often a missing target) is deliberately *not*
 /// treated as an escape — there is nothing to read, so it is left for
 /// [`load_recursive`] to surface with its existing not-found error.
-fn confine_extends_target(target: &Path, entry: &str, confine: Option<&Path>) -> Result<()> {
+fn confine_extends_target(
+    target: &Path,
+    entry: &str,
+    confine: Option<&Path>,
+    source_provider: &dyn crate::ConfigSourceProvider,
+) -> Result<()> {
     let Some(root) = confine else { return Ok(()) };
-    let (Ok(canon_root), Ok(canon_target)) = (root.canonicalize(), target.canonicalize()) else {
+    let (Ok(canon_root), Ok(canon_target)) = (
+        source_provider.canonicalize(root),
+        source_provider.canonicalize(target),
+    ) else {
         return Ok(());
     };
     if !canon_target.starts_with(&canon_root) {
@@ -1058,7 +1096,15 @@ mod tests {
     fn confine_none_disables_the_check() {
         // A programmatic caller (or `allow_out_of_root: true`) hands `None`:
         // even a blatant escape target is permitted.
-        assert!(confine_extends_target(Path::new("/etc/shadow"), "/etc/shadow", None).is_ok());
+        assert!(
+            confine_extends_target(
+                Path::new("/etc/shadow"),
+                "/etc/shadow",
+                None,
+                &crate::FilesystemConfigSource,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1070,6 +1116,7 @@ mod tests {
             &tmp.path().join("nope.yml"),
             "../nope.yml",
             Some(tmp.path()),
+            &crate::FilesystemConfigSource,
         );
         assert!(
             res.is_ok(),
@@ -1084,9 +1131,14 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let outside = tmp.path().join("outside.yml");
         std::fs::write(&outside, "x").unwrap();
-        let err = confine_extends_target(&outside, "../outside.yml", Some(&root))
-            .unwrap_err()
-            .to_string();
+        let err = confine_extends_target(
+            &outside,
+            "../outside.yml",
+            Some(&root),
+            &crate::FilesystemConfigSource,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("outside the lint root"), "{err}");
     }
 
@@ -1095,7 +1147,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let inside = tmp.path().join("base.yml");
         std::fs::write(&inside, "x").unwrap();
-        assert!(confine_extends_target(&inside, "./base.yml", Some(tmp.path())).is_ok());
+        assert!(
+            confine_extends_target(
+                &inside,
+                "./base.yml",
+                Some(tmp.path()),
+                &crate::FilesystemConfigSource,
+            )
+            .is_ok()
+        );
     }
 
     #[test]

@@ -47,7 +47,7 @@
       "$ref": "#/$defs/GivenV1"
     },
     "name": {
-      "description": "Human-readable scenario name.",
+      "description": "Human-readable policy-test name.",
       "type": "string",
       "minLength": 1,
       "pattern": "\\S"
@@ -225,7 +225,7 @@
       ]
     },
     "GivenV1": {
-      "description": "Inputs owned by one policy-test scenario.",
+      "description": "Inputs owned by one policy test.",
       "type": "object",
       "properties": {
         "as_of": {

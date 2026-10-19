@@ -92,9 +92,10 @@ pub(crate) fn run_in_workdir(
     workdir: &str,
     env: &[(&str, String)],
     timeout: Duration,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
 ) -> SpawnOutcome {
     match confined_workdir(root, workdir) {
-        Ok(cwd) => run_capturing(argv, &cwd, env, timeout),
+        Ok(cwd) => run_capturing(argv, &cwd, env, timeout, process_environment),
         Err(reason) => SpawnOutcome::SpawnError(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             reason,
@@ -115,6 +116,7 @@ pub(crate) fn run_capturing(
     cwd: &Path,
     env: &[(&str, String)],
     timeout: Duration,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
 ) -> SpawnOutcome {
     let Some((program, rest)) = argv.split_first() else {
         return SpawnOutcome::SpawnError(std::io::Error::other(
@@ -123,6 +125,9 @@ pub(crate) fn run_capturing(
     };
     let mut cmd = StdCommand::new(program);
     cmd.args(rest).current_dir(cwd).stdin(Stdio::null());
+    if let Some(environment) = process_environment {
+        cmd.env_clear().envs(environment);
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -172,6 +177,7 @@ mod tests {
             Path::new("."),
             &[],
             Duration::from_secs(1),
+            None,
         );
         assert!(matches!(out, SpawnOutcome::TimedOut { secs: 1 }));
         assert!(
@@ -188,6 +194,7 @@ mod tests {
             Path::new("."),
             &[],
             Duration::from_secs(10),
+            None,
         ) else {
             panic!("expected exit");
         };
@@ -226,6 +233,7 @@ mod workdir_tests {
             "..",
             &[],
             Duration::from_secs(5),
+            None,
         );
         assert!(
             matches!(&out, SpawnOutcome::SpawnError(e) if e.to_string().contains("escapes")),

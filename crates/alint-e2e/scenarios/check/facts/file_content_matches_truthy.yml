@@ -1,3 +1,4 @@
+test_version: 1
 name: file_content_matches fact fires a gated rule when the pattern is present
 tags: [check, facts, file_content_matches]
 
@@ -24,5 +25,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: needs-tokio-util, level: warning, path: Cargo.toml}

@@ -50,13 +50,14 @@ fn repo_root() -> PathBuf {
         .join("..")
 }
 
-/// Every documented scenario's `given.config` — the post-ADR-0014 home of the
-/// rule-config examples that used to live inline in docs/rules.md. Harvested so
-/// the two doc-example gates keep covering every migrated kind (the rendered
-/// pages now pull their config from these fixtures). Returns `(source, config)`.
+/// Every documented policy test's `given.config` from both public corpora.
+/// Returns `(source, config)`.
 fn fixture_configs(root: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let mut stack = vec![root.join("crates/alint-e2e/scenarios")];
+    let mut stack = vec![
+        root.join("crates/alint-e2e/scenarios"),
+        root.join("crates/alint-dsl/ruleset-tests/v1"),
+    ];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;

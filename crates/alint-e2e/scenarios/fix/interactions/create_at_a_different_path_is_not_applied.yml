@@ -1,3 +1,4 @@
+test_version: 1
 name: a file_create whose path differs from the rule's paths is reported unresolved, not applied
 tags: [fix, interactions, file_exists, file_create]
 
@@ -22,11 +23,13 @@ given:
 when: [fix, check]
 
 expect:
-  - applied: []
+  - exit: policy_failure
+    applied: []
     skipped: [has-license]
     suggested: []
     unfixable: []
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: has-license, level: error}
 
 expect_tree:

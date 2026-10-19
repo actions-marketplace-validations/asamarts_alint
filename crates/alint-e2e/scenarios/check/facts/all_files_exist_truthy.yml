@@ -1,3 +1,4 @@
+test_version: 1
 name: all_files_exist fact evaluates true only when every listed file is present
 tags: [check, facts, all_files_exist]
 
@@ -21,5 +22,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: when-ready-require-changelog, level: warning}

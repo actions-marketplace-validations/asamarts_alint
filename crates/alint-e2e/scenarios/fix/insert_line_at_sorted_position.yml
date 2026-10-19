@@ -1,3 +1,4 @@
+test_version: 1
 name: insert_line splices a missing required line at its sorted position
 tags: [fix, ordered_block, insert_line, require]
 
@@ -24,10 +25,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: codeowners-required, level: error, path: CODEOWNERS}
-  - applied: [codeowners-required]
-  - violations: []
+  - exit: success
+    applied: [codeowners-required]
+  - exit: success
+    violations: []
 
 expect_tree:
   CODEOWNERS: "*.md @docs\n*.py @py-team\n*.rs @rust\n"

@@ -1,3 +1,4 @@
+test_version: 1
 name: extends entry with `only:` keeps only the listed rules from a bundled ruleset
 tags: [check, extends, bundled, only_except]
 
@@ -19,5 +20,6 @@ when: [check]
 
 expect:
   # Only the one rule we opted in to should fire.
-  - violations:
+  - exit: success
+    violations:
       - {rule: oss-readme-exists}

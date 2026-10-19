@@ -1,3 +1,4 @@
+test_version: 1
 name: replace on a wildcard json_path_matches rewrites only the violating nodes
 tags: [fix, json_path_matches, replace, json, safety]
 
@@ -36,10 +37,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: v-pins, level: error, path: app.json}
-  - applied: [v-pins]
-  - violations: []
+  - exit: success
+    applied: [v-pins]
+  - exit: success
+    violations: []
 
 expect_tree:
   app.json: |

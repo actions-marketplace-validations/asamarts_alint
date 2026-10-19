@@ -1,3 +1,4 @@
+test_version: 1
 name: no_bom flags files with a UTF-8 BOM
 tags: [check, no_bom, encoding]
 
@@ -22,5 +23,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: no-bom, level: warning, path: docs/with_bom.md}

@@ -117,19 +117,27 @@ pub fn load_with(path: &Path, opts: &LoadOptions<'_>) -> Result<Config> {
     // rules to their directory, and appends them to the root's
     // rule list.
     if raw.nested_configs == Some(true) {
-        let root_dir = path
-            .parent()
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        let canonical_root_cfg = path.canonicalize().map_err(|source| Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        let root_dir = opts.repository_root.as_deref().map_or_else(
+            || {
+                path.parent()
+                    .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+            },
+            Path::to_path_buf,
+        );
+        let canonical_root_cfg =
+            opts.config_source
+                .canonicalize(path)
+                .map_err(|source| Error::Io {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
         let (discovered_rules, discovered_compatibility) = nested::discover_nested(
             &root_dir,
             &canonical_root_cfg,
             &raw,
             opts.kind_catalog,
             RunningVersion::current(),
+            opts.environment.as_ref(),
         )?;
         raw.rules.extend(discovered_rules);
         extend_compatibility(&mut raw.compatibility, discovered_compatibility);
@@ -203,7 +211,7 @@ fn load_top_level_raw(path: &Path, opts: &LoadOptions<'_>) -> Result<RawConfig> 
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(".alint.d");
-    for drop_in_path in collect_drop_ins(&drop_in_dir)? {
+    for drop_in_path in collect_drop_ins(&drop_in_dir, opts.config_source.as_ref())? {
         // Drop-ins are trust-equivalent to the top-level config (local,
         // user-controlled), so `is_top: true` — they may open the escape hatch.
         let drop_in = loader::load_recursive(
@@ -221,40 +229,16 @@ fn load_top_level_raw(path: &Path, opts: &LoadOptions<'_>) -> Result<RawConfig> 
     Ok(raw)
 }
 
-/// List `.alint.d/*.{yml,yaml}` files alphabetically. Returns
-/// an empty Vec when the directory doesn't exist (drop-ins are
-/// purely opt-in by mkdir). Non-YAML files are silently
-/// skipped so a stray `.gitkeep` or `README.md` in the dir
-/// doesn't break loading. Sort order is fixed (lexicographic
-/// over the file name) so the merge result is deterministic
-/// across filesystems whose readdir order isn't.
-fn collect_drop_ins(dir: &Path) -> Result<Vec<PathBuf>> {
-    if !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut entries: Vec<PathBuf> = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|source| Error::Io {
+/// List `.alint.d/*.{yml,yaml}` files alphabetically through the injected
+/// config source provider.
+fn collect_drop_ins(
+    dir: &Path,
+    source_provider: &dyn ConfigSourceProvider,
+) -> Result<Vec<PathBuf>> {
+    source_provider.yaml_files(dir).map_err(|source| Error::Io {
         path: dir.to_path_buf(),
         source,
-    })? {
-        let entry = entry.map_err(|source| Error::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let is_yaml = matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("yml" | "yaml")
-        );
-        if is_yaml {
-            entries.push(path);
-        }
-    }
-    entries.sort();
-    Ok(entries)
+    })
 }
 
 /// Intermediate form used during `extends:` resolution. Identical
@@ -881,12 +865,90 @@ fn substitute_template_vars_value(
     }
 }
 
+/// Lookup used by config interpolation.
+///
+/// Production loads use [`HostEnvironment`]. Embedders that need reproducible
+/// evaluation can inject a closed map instead; unknown names must return
+/// `None`.
+pub trait EnvironmentProvider: std::fmt::Debug + Send + Sync {
+    fn get(&self, name: &str) -> Option<String>;
+}
+
+/// Environment provider backed by the current process.
+#[derive(Debug, Default)]
+pub struct HostEnvironment;
+
+impl EnvironmentProvider for HostEnvironment {
+    fn get(&self, name: &str) -> Option<String> {
+        std::env::var(name).ok()
+    }
+}
+
+/// Read-only source abstraction used for root configs, local `extends`, and
+/// top-level `.alint.d` files.
+///
+/// Nested repository configs intentionally remain repository reads: callers
+/// can provide a separate [`LoadOptions::repository_root`] while keeping the
+/// policy package and repository roots distinct.
+pub trait ConfigSourceProvider: std::fmt::Debug + Send + Sync {
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+    fn read_to_string(&self, path: &Path) -> std::io::Result<String>;
+    /// Return direct regular YAML files in `dir`. A missing directory is an
+    /// empty list; all other I/O failures are errors.
+    fn yaml_files(&self, dir: &Path) -> std::io::Result<Vec<PathBuf>>;
+}
+
+/// Normal filesystem-backed config source provider.
+#[derive(Debug, Default)]
+pub struct FilesystemConfigSource;
+
+impl ConfigSourceProvider for FilesystemConfigSource {
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        path.canonicalize()
+    }
+
+    fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
+        fs::read_to_string(path)
+    }
+
+    fn yaml_files(&self, dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let mut paths = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_file()
+                && matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("yml" | "yaml")
+                )
+            {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
+}
+
+/// Whether HTTPS `extends:` resolution is permitted for this load.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RemotePolicy {
+    #[default]
+    Allow,
+    Deny,
+}
+
 /// Configuration for [`load_with`].
 ///
-/// Cache and fetcher defaults retain the normal HTTPS behavior. A kind catalog
-/// is deliberately optional for the public parser surface, but every
-/// trust-sensitive path fails closed when it is absent.
-#[derive(Debug, Default, Clone)]
+/// Defaults retain normal production behavior. Policy runners can inject
+/// deterministic environment and package-source providers, deny remote
+/// resolution before cache access, and point nested-config discovery at a
+/// separate repository root.
+#[derive(Debug, Clone)]
 pub struct LoadOptions<'catalog> {
     /// Rule-kind and fix-operation capability inventory. Production callers
     /// should always inject the registry they will use to build the config.
@@ -896,6 +958,29 @@ pub struct LoadOptions<'catalog> {
     pub cache: Option<extends::Cache>,
     /// Explicit fetcher. When `None`, `Fetcher::default()` is used.
     pub fetcher: Option<extends::Fetcher>,
+    /// Environment consulted by `{{env.NAME}}` interpolation.
+    pub environment: std::sync::Arc<dyn EnvironmentProvider>,
+    /// Provider for the root config, local extends, and drop-ins.
+    pub config_source: std::sync::Arc<dyn ConfigSourceProvider>,
+    /// HTTPS policy checked before cache construction or fetch.
+    pub remote_policy: RemotePolicy,
+    /// Repository root used by nested-config discovery. When absent, the
+    /// top-level config directory remains the repository root.
+    pub repository_root: Option<PathBuf>,
+}
+
+impl Default for LoadOptions<'_> {
+    fn default() -> Self {
+        Self {
+            kind_catalog: None,
+            cache: None,
+            fetcher: None,
+            environment: std::sync::Arc::new(HostEnvironment),
+            config_source: std::sync::Arc::new(FilesystemConfigSource),
+            remote_policy: RemotePolicy::Allow,
+            repository_root: None,
+        }
+    }
 }
 
 impl<'catalog> LoadOptions<'catalog> {
@@ -904,8 +989,7 @@ impl<'catalog> LoadOptions<'catalog> {
     pub fn with_catalog(catalog: alint_core::KindCatalog<'catalog>) -> Self {
         Self {
             kind_catalog: Some(catalog),
-            cache: None,
-            fetcher: None,
+            ..Self::default()
         }
     }
 

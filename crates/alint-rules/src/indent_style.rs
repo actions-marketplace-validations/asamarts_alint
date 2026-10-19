@@ -687,6 +687,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         rule.as_per_file()
             .unwrap()
@@ -792,6 +793,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: None,
+            process_environment: None,
         };
         let outcome = reindent_fixer(Applicability::Safe)
             .apply(
@@ -826,6 +828,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: None,
+            process_environment: None,
         };
         let outcome = reindent_fixer(Applicability::Safe)
             .apply(
@@ -864,6 +867,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let after = rule
             .as_per_file()

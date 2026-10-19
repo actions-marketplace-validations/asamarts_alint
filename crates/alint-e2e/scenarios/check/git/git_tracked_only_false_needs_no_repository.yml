@@ -1,3 +1,4 @@
+test_version: 1
 name: explicit false git_tracked_only needs no Git repository
 tags: [check, dir_absent, git_tracked_only, git]
 
@@ -18,6 +19,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-target, level: error, path: target}
     analysis_failures: []

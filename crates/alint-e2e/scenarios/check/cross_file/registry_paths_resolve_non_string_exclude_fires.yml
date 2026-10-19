@@ -1,3 +1,4 @@
+test_version: 1
 name: registry_paths_resolve reports a non-string exclusion query
 
 tags: [check, registry_paths_resolve, cross_file, structured, failing]
@@ -24,5 +25,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: members-resolve, level: error, path: registry.json}

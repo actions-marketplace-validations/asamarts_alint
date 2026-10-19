@@ -1,3 +1,4 @@
+test_version: 1
 name: nested Git dependency fails once at its owning top-level rule
 tags: [check, for_each_dir, nested, git]
 
@@ -22,6 +23,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: package-required-file, kind: resource_read}

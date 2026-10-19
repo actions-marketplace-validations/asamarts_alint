@@ -1,3 +1,4 @@
+test_version: 1
 name: file_absent fires for each forbidden match
 tags: [check, file_absent]
 
@@ -23,6 +24,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-bak-files, level: error, path: Cargo.lock.bak}
       - {rule: no-bak-files, level: error, path: src/main.rs.bak}

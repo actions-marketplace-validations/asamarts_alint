@@ -1,3 +1,4 @@
+test_version: 1
 name: no_case_conflicts flags pairs that differ only by case
 # Note: this scenario only materializes faithfully on case-
 # sensitive filesystems. The `requires-case-sensitive-fs` tag
@@ -28,6 +29,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-case, level: error, path: README.md}
       - {rule: no-case, level: error, path: readme.md}

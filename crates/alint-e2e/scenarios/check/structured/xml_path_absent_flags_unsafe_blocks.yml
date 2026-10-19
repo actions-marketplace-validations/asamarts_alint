@@ -1,3 +1,4 @@
+test_version: 1
 name: xml_path_absent flags a csproj that enables unsafe blocks
 tags: [check, xml_path_absent]
 
@@ -30,5 +31,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-unsafe-blocks, level: error, path: App.csproj}

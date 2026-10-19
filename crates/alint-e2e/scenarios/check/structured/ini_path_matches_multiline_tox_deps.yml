@@ -1,3 +1,4 @@
+test_version: 1
 name: ini_path_matches handles a multi-line tox.ini deps continuation
 tags: [check, ini_path_matches, structured, ini, passing]
 
@@ -32,4 +33,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

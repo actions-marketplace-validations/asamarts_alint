@@ -630,6 +630,10 @@ pub struct Context<'a> {
     pub git_tracked: Option<&'a std::collections::HashSet<std::path::PathBuf>>,
     pub git_blame: Option<&'a crate::git::BlameCache>,
     pub analysis_time: Option<&'a crate::AnalysisTimeResolution>,
+    /// Complete child-process environment. `None` inherits the host (normal
+    /// production behavior); `Some` means callers must clear the inherited
+    /// environment before applying this map.
+    pub process_environment: Option<&'a std::collections::BTreeMap<String, String>>,
 }
 
 impl Context<'_> {
@@ -1175,6 +1179,8 @@ pub struct FixContext<'a> {
     /// fix writes directly; a dry run reports only). Interior mutability for the
     /// same reason as `compose`.
     pub stage_ops: Option<&'a RefCell<Vec<FixEdit>>>,
+    /// Complete child-process environment; see [`Context::process_environment`].
+    pub process_environment: Option<&'a std::collections::BTreeMap<String, String>>,
 }
 
 impl FixContext<'_> {

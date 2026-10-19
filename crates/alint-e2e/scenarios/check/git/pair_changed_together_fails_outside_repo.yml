@@ -1,3 +1,4 @@
+test_version: 1
 name: pair_changed_together fails closed outside a Git repository
 tags: [check, pair_changed_together, git]
 
@@ -19,6 +20,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: format-version-bumped, kind: resource_read}

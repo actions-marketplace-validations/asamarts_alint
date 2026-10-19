@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value on XML is all-or-nothing -- a partial match writes nothing
 tags: [fix, xml_path_absent, remove_value, xml, safety]
 
@@ -29,10 +30,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-node, level: error, path: n.xml}
-  - suggested: [no-node]
-  - violations:
+  - exit: policy_failure
+    suggested: [no-node]
+  - exit: policy_failure
+    violations:
       - {rule: no-node, level: error, path: n.xml}
 
 expect_tree:

@@ -1,3 +1,4 @@
+test_version: 1
 name: indent_style reindents tab-indented lines to spaces
 tags: [fix, indent_style]
 
@@ -24,10 +25,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: spaces-4, level: error, path: app.py}
-  - applied: [spaces-4]
-  - violations: []
+  - exit: success
+    applied: [spaces-4]
+  - exit: success
+    violations: []
 
 expect_tree:
   app.py: "def f():\n    if True:\n        return 1\n"

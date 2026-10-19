@@ -1,3 +1,4 @@
+test_version: 1
 name: include_manifest_paths in a nested config reads the nested package's own manifest
 tags: [check, scope_filter, no_trailing_whitespace, nested]
 
@@ -35,5 +36,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: nws, level: warning, path: packages/foo/lib/a.ts}

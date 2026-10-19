@@ -696,6 +696,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: None,
+            process_environment: None,
         }
     }
 
@@ -947,6 +948,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: Some(&sink),
+            process_environment: None,
         };
         let outcome = fixer.apply(&Violation::new("missing"), &ctx).unwrap();
         assert!(matches!(outcome, FixOutcome::Applied(_)));

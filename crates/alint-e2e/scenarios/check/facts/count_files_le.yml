@@ -1,3 +1,4 @@
+test_version: 1
 name: count_files fact skips rule when the comparison is false
 tags: [check, facts, count_files]
 
@@ -20,4 +21,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

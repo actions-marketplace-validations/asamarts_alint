@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_paths_resolve flags backticked paths that don't resolve
 tags: [check, markdown_paths_resolve]
 
@@ -38,7 +39,8 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: agents-paths-resolve, level: warning, path: AGENTS.md}
       - {rule: agents-paths-resolve, level: warning, path: AGENTS.md}
       - {rule: agents-paths-resolve, level: warning, path: AGENTS.md}

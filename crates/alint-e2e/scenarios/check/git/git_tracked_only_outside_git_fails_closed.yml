@@ -1,3 +1,4 @@
+test_version: 1
 name: git_tracked_only fails closed outside Git while unrelated rules continue
 tags: [check, dir_absent, git_tracked_only, git]
 
@@ -28,7 +29,8 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: clean-readme, level: warning, path: README.md}
     analysis_failures:
       - {rule: no-tracked-target, kind: resource_read}

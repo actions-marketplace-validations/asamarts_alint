@@ -189,6 +189,7 @@ impl GeneratedFileFreshRule {
             &self.workdir,
             &env,
             Duration::from_secs(self.timeout),
+            ctx.process_environment,
         )
     }
 
@@ -729,6 +730,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         r.evaluate(&ctx).unwrap()
     }

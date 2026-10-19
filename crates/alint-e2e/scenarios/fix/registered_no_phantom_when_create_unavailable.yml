@@ -1,3 +1,4 @@
+test_version: 1
 name: create_and_register never registers a member it cannot create (no phantom)
 # Audit round-2 HIGH regression: a NAMED source whose member is MISSING and has NO
 # `content`/`content_from` to create it must NOT be appended to the manifest -- a
@@ -27,14 +28,17 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: r, level: error, path: crates/docs/Cargo.toml}
   # The create is skipped (no content); NO registration finding fires (gated on
   # existence), so nothing is appended.
-  - unfixable: [r]
+  - exit: policy_failure
+    unfixable: [r]
     applied: []
   # The missing member still stands -- honest, no false convergence.
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: r, level: error, path: crates/docs/Cargo.toml}
 
 expect_tree:

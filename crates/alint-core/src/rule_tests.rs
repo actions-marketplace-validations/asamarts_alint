@@ -341,6 +341,7 @@ fn per_file_fallback_reports_a_discovered_file_that_vanished() {
         git_tracked: None,
         git_blame: None,
         analysis_time: None,
+        process_environment: None,
     };
     let rule = MissingReadRule {
         scope: Scope::from_patterns(&["**".to_string()]).unwrap(),
@@ -367,6 +368,7 @@ fn context_is_git_tracked_returns_false_outside_repo() {
         git_tracked: None, // outside-a-repo / no rule opted in
         git_blame: None,
         analysis_time: None,
+        process_environment: None,
     };
     assert!(!ctx.is_git_tracked(Path::new("anything.rs")));
     assert!(!ctx.dir_has_tracked_files(Path::new("src")));
@@ -387,6 +389,7 @@ fn context_is_git_tracked_consults_set_when_present() {
         git_tracked: Some(&tracked),
         git_blame: None,
         analysis_time: None,
+        process_environment: None,
     };
     assert!(ctx.is_git_tracked(Path::new("src/main.rs")));
     assert!(!ctx.is_git_tracked(Path::new("README.md")));
@@ -434,6 +437,7 @@ fn check_fix_size_returns_none_when_limit_disabled() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = check_fix_size(&f, Path::new("a.txt"), &ctx).unwrap();
     assert!(outcome.is_none());
@@ -451,6 +455,7 @@ fn check_fix_size_skips_over_limit_files() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = check_fix_size(&f, Path::new("big.txt"), &ctx).unwrap();
     match outcome {
@@ -474,6 +479,7 @@ fn read_for_fix_returns_bytes_when_in_limit() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     match read_for_fix(&f, Path::new("a.txt"), &ctx).unwrap() {
         ReadForFix::Bytes(b) => assert_eq!(b, b"hello"),
@@ -493,6 +499,7 @@ fn read_for_fix_returns_skipped_when_over_limit() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     match read_for_fix(&f, Path::new("big.txt"), &ctx).unwrap() {
         ReadForFix::Skipped(FixOutcome::Skipped(_)) => {}
@@ -522,6 +529,7 @@ fn read_for_fix_refuses_a_non_regular_file() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     match read_for_fix(&subdir, Path::new("adir"), &ctx).unwrap() {
         ReadForFix::Skipped(FixOutcome::Skipped(r)) => {
@@ -553,6 +561,7 @@ fn commit_write_asserts_against_a_dry_run_write() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let _ = ctx.commit_write(&dir.path().join("x"), b"nope");
 }
@@ -570,6 +579,7 @@ fn compose_buffer_captures_writes_and_reads_them_back() {
         allow_out_of_root: false,
         compose: Some(&buf),
         stage_ops: None,
+        process_environment: None,
     };
     let rel = Path::new("a.txt");
     // Compose mode: commit_write buffers; disk stays untouched.
@@ -606,6 +616,7 @@ fn commit_write_direct_mode_writes_through_to_disk() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     // No compose buffer: commit_write is a direct atomic write, identical
     // to calling write_atomic.
@@ -635,6 +646,7 @@ fn compose_buffer_coalesces_symlink_and_target() {
         allow_out_of_root: false,
         compose: Some(&buf),
         stage_ops: None,
+        process_environment: None,
     };
     // Write through the LINK; read through the TARGET must see the write.
     ctx.commit_write(&link, b"composed").unwrap();
@@ -665,6 +677,7 @@ fn compose_buffer_coalesces_through_a_symlinked_dir() {
         allow_out_of_root: false,
         compose: Some(&buf),
         stage_ops: None,
+        process_environment: None,
     };
     // Write through the symlinked dir; read through the real dir -> hit.
     ctx.commit_write(&dir.path().join("link/file.txt"), b"composed")

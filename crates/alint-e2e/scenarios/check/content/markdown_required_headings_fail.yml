@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_required_headings catches an incomplete document shape
 
 tags: [check, markdown_required_headings, content, failing]
@@ -27,5 +28,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: adr-shape, level: error, path: docs/adr/0001-choice.md}

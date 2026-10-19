@@ -1,3 +1,4 @@
+test_version: 1
 name: xml_path_matches queries a namespaced Maven pom.xml (silent when satisfied)
 tags: [check, xml_path_matches, structured, passing]
 
@@ -33,4 +34,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

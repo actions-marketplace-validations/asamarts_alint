@@ -21,6 +21,7 @@ model {
   alint.cli.rules -> alint.cli.core
   alint.tooling.testkit -> alint.cli.core
   alint.tooling.testkit -> alint.cli.dsl
+  alint.tooling.testkit -> alint.cli.output
   alint.tooling.testkit -> alint.cli.rules
   alint.tooling.xtask -> alint.tooling.bench
   alint.tooling.xtask -> alint.cli.core

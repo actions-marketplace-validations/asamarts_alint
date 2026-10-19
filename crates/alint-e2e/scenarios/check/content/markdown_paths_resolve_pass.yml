@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_paths_resolve passes when every backticked path resolves
 tags: [check, markdown_paths_resolve]
 
@@ -41,4 +42,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

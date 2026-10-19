@@ -1,5 +1,6 @@
+test_version: 1
 name: cross_file set_equals is silent when the source and target sets match
-tags: [check, cross_file, cross_file, passing]
+tags: [check, cross_file, passing]
 
 given:
   tree:
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

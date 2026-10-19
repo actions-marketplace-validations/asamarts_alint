@@ -1,3 +1,4 @@
+test_version: 1
 name: no_merge_conflict_markers flags unresolved git markers
 tags: [check, no_merge_conflict_markers, security]
 
@@ -22,5 +23,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-conflict, level: error, path: src/half_merged.rs}

@@ -1,3 +1,4 @@
+test_version: 1
 name: toml_path_absent flags a Cargo.toml with a [patch] table
 tags: [check, toml_path_absent]
 
@@ -30,5 +31,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-cargo-patch, level: error, path: Cargo.toml}

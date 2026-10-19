@@ -1,3 +1,4 @@
+test_version: 1
 name: hcl_path_matches flags a required_version that is not pessimistically pinned
 tags: [check, hcl_path_matches]
 
@@ -25,5 +26,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: pin-terraform, level: error, path: main.tf}

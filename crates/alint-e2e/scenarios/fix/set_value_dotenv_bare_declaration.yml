@@ -1,3 +1,4 @@
+test_version: 1
 name: set_value assigns a dotenv bare declaration
 tags: [fix, dotenv_path_equals, set_value, dotenv]
 
@@ -22,10 +23,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: port, level: error, path: .env}
-  - applied: [port]
-  - violations: []
+  - exit: success
+    applied: [port]
+  - exit: success
+    violations: []
 
 expect_tree:
   .env: "PORT=8080\nKEEP=x\n"

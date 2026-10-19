@@ -1,3 +1,4 @@
+test_version: 1
 name: file_footer fix appends the footer and converges
 tags: [fix, file_footer, content]
 
@@ -29,10 +30,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: license-footer, level: warning, path: src/missing.rs}
-  - applied: [license-footer]
-  - violations: []
+  - exit: success
+    applied: [license-footer]
+  - exit: success
+    violations: []
 
 expect_tree:
   src:

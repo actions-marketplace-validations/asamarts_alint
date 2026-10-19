@@ -1,3 +1,4 @@
+test_version: 1
 name: git_blame_age fires on a long-stale TODO
 tags: [check, git_blame_age]
 
@@ -29,5 +30,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: stale-todos, level: warning}

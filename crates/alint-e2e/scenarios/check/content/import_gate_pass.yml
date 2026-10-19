@@ -1,3 +1,4 @@
+test_version: 1
 name: import_gate is silent when no forbidden import is present
 tags: [check, import_gate, content, passing]
 
@@ -28,4 +29,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

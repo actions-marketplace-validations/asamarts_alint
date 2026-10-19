@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file over xml extract fires when a .csproj version drifts
 tags: [check, cross_file, xml]
 
@@ -46,5 +47,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: csproj-versions-coherent, level: error, path: src/B/B.csproj}

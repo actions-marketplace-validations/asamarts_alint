@@ -1,3 +1,4 @@
+test_version: 1
 name: ini_path_absent is silent when the debug flag is absent
 tags: [check, ini_path_absent, structured, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

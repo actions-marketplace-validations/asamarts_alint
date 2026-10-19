@@ -1,3 +1,4 @@
+test_version: 1
 name: file_content_matches fires when the required pattern is absent
 tags: [check, file_content_matches]
 
@@ -21,5 +22,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: spdx-in-readme, level: warning, path: README.md}

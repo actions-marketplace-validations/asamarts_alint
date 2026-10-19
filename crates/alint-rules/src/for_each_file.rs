@@ -222,6 +222,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "unexpected: {v:?}");
@@ -258,6 +259,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert_eq!(v.len(), 2);

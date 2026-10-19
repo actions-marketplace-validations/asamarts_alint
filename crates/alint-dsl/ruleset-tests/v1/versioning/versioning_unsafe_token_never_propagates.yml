@@ -1,0 +1,39 @@
+test_version: 1
+name: versioning bundle rejects unsafe VERSION bytes without propagation
+# A literal backslash is not a portable version-token character. The source
+# validator must be the only finding, and even Unsafe mode must not copy it.
+tags: [check, fix, extends, bundled, versioning, validation, security]
+
+given:
+  tree:
+    VERSION: |
+      2.4.0\t
+    package.json: |
+      {"name":"demo","version":"2.3.0"}
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/versioning@v1
+
+when: [check, fix, fix_unsafe]
+
+expect:
+  - exit: policy_failure
+    violations:
+      - {rule: versioning-version-file-one-line, level: error, path: VERSION}
+  - exit: policy_failure
+    applied: []
+    skipped: []
+    suggested: []
+    unfixable: [versioning-version-file-one-line]
+  - exit: policy_failure
+    applied: []
+    skipped: []
+    suggested: []
+    unfixable: [versioning-version-file-one-line]
+
+expect_tree:
+  VERSION: |
+    2.4.0\t
+  package.json: |
+    {"name":"demo","version":"2.3.0"}

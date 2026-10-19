@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_message fails closed outside a Git repository
 tags: [check, git_commit_message, git]
 
@@ -17,6 +18,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: conventional-commit, kind: resource_read}

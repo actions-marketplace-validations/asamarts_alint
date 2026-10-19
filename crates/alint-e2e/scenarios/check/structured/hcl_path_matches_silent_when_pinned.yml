@@ -1,3 +1,4 @@
+test_version: 1
 name: hcl_path_matches is silent when required_version is pessimistically pinned
 tags: [check, hcl_path_matches, structured, hcl, passing]
 
@@ -25,4 +26,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

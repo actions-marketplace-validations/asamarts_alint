@@ -1,3 +1,4 @@
+test_version: 1
 name: file_remove applies (and converges) under --unsafe-fixes
 tags: [fix, file_absent, file_remove, applicability]
 
@@ -23,9 +24,12 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-bak, level: error, path: stale.bak}
-  - applied: [no-bak]
-  - violations: []
+  - exit: success
+    applied: [no-bak]
+  - exit: success
+    violations: []
 
 expect_tree: {}

@@ -1,3 +1,4 @@
+test_version: 1
 name: file_starts_with is silent when every file begins with the prefix
 tags: [check, file_starts_with, content, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

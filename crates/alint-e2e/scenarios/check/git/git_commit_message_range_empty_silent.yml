@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_message range stays silent when the range is empty
 tags: [check, git_commit_message, git, passing]
 
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

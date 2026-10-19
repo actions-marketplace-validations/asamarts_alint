@@ -1,4 +1,4 @@
-//! Scenario-package path and fixture confinement validation.
+//! Policy-test package path and fixture confinement validation.
 //!
 //! P1 validates package-owned inputs without copying or opening them for execution.
 //! P2 performs descriptor-relative reads/copies after this preflight; lexical or
@@ -17,7 +17,7 @@ pub enum PackageEntryKind {
     Directory,
 }
 
-/// A canonical scenario package root.
+/// A canonical policy-test package root.
 #[derive(Debug, Clone)]
 pub struct PackageRoot {
     root: PathBuf,
@@ -35,9 +35,9 @@ pub enum ConfinementError {
         #[source]
         source: std::io::Error,
     },
-    #[error("scenario source must be a regular non-symlink file: {0}")]
-    InvalidScenarioSource(PathBuf),
-    #[error("package path {path:?} resolves outside the scenario package root")]
+    #[error("policy-test source must be a regular non-symlink file: {0}")]
+    InvalidPolicyTestSource(PathBuf),
+    #[error("package path {path:?} resolves outside the policy-test package root")]
     Escape { path: String },
     #[error("package path {path:?} is not an existing {expected}")]
     WrongKind {
@@ -49,15 +49,15 @@ pub enum ConfinementError {
 }
 
 impl PackageRoot {
-    /// Establish a package from a regular, non-symlink scenario document.
-    pub fn for_scenario_file(source: &Path) -> Result<Self, ConfinementError> {
+    /// Establish a package from a regular, non-symlink policy-test document.
+    pub fn for_policy_test(source: &Path) -> Result<Self, ConfinementError> {
         let metadata =
             std::fs::symlink_metadata(source).map_err(|source_error| ConfinementError::Io {
                 path: source.to_path_buf(),
                 source: source_error,
             })?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(ConfinementError::InvalidScenarioSource(
+            return Err(ConfinementError::InvalidPolicyTestSource(
                 source.to_path_buf(),
             ));
         }
@@ -119,26 +119,73 @@ impl PackageRoot {
         Ok(canonical)
     }
 
-    /// Resolve a snapshot target through its existing parent. Existing symlink targets are refused.
+    /// Resolve a snapshot target through existing package directories.
+    ///
+    /// Missing parent directories are allowed for update mode. Every existing
+    /// component is checked without following symlinks before the lexical,
+    /// already-validated remainder is appended.
     pub fn resolve_snapshot_target(&self, relative: &str) -> Result<PathBuf, ConfinementError> {
         validate_package_path(relative).map_err(|reason| ConfinementError::InvalidPath {
             path: relative.to_string(),
             reason,
         })?;
-        let candidate = self.root.join(relative);
-        let parent = candidate.parent().unwrap_or(&self.root);
-        let canonical_parent = parent
-            .canonicalize()
-            .map_err(|source| ConfinementError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        if !canonical_parent.starts_with(&self.root) {
-            return Err(ConfinementError::Escape {
-                path: relative.to_string(),
-            });
+        let components: Vec<_> = Path::new(relative)
+            .components()
+            .map(|component| component.as_os_str().to_owned())
+            .collect();
+        let (file_name, parents) =
+            components
+                .split_last()
+                .ok_or_else(|| ConfinementError::InvalidPath {
+                    path: relative.to_string(),
+                    reason: "must name a file".to_string(),
+                })?;
+        let mut current = self.root.clone();
+        let mut missing = false;
+        for component in parents {
+            current.push(component);
+            if missing {
+                continue;
+            }
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(ConfinementError::InvalidPath {
+                        path: relative.to_string(),
+                        reason: "snapshot parent must not be a symlink".to_string(),
+                    });
+                }
+                Ok(metadata) if !metadata.is_dir() => {
+                    return Err(ConfinementError::WrongKind {
+                        path: relative.to_string(),
+                        expected: "directory parent",
+                    });
+                }
+                Ok(_) => {
+                    let canonical =
+                        current
+                            .canonicalize()
+                            .map_err(|source| ConfinementError::Io {
+                                path: current.clone(),
+                                source,
+                            })?;
+                    if !canonical.starts_with(&self.root) {
+                        return Err(ConfinementError::Escape {
+                            path: relative.to_string(),
+                        });
+                    }
+                    current = canonical;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing = true,
+                Err(source) => {
+                    return Err(ConfinementError::Io {
+                        path: current,
+                        source,
+                    });
+                }
+            }
         }
-        match std::fs::symlink_metadata(&candidate) {
+        let target = current.join(file_name);
+        match std::fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(ConfinementError::InvalidPath {
                     path: relative.to_string(),
@@ -155,18 +202,12 @@ impl PackageRoot {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => {
                 return Err(ConfinementError::Io {
-                    path: candidate,
+                    path: target,
                     source,
                 });
             }
         }
-        let file_name = candidate
-            .file_name()
-            .ok_or_else(|| ConfinementError::InvalidPath {
-                path: relative.to_string(),
-                reason: "must name a file".to_string(),
-            })?;
-        Ok(canonical_parent.join(file_name))
+        Ok(target)
     }
 
     /// Validate every entry in a directory fixture, including symlink targets and special files.
@@ -231,7 +272,7 @@ pub(crate) struct TreeSpecIssue {
 }
 
 /// Validate the entry names in a declarative tree and, for a tree that will be
-/// materialized, prove that every symlink resolves to a regular in-tree file.
+/// materialized, prove that every symlink resolves to an in-tree entry.
 pub(crate) fn validate_tree_spec(
     tree: &TreeSpec,
     validate_symlink_targets: bool,
@@ -266,36 +307,47 @@ fn collect_tree_entries<'a>(
         } else {
             format!("{prefix}/{name}")
         };
-        let reason = if name.is_empty() {
-            Some("entry name must not be empty")
-        } else if name == "." || name == ".." {
-            Some("entry name must not be `.` or `..`")
-        } else if name.contains('/') || name.contains('\\') {
-            Some("entry name must be one path component")
-        } else if name.contains('\0') {
-            Some("entry name must not contain NUL")
-        } else if name.eq_ignore_ascii_case(".git") {
-            Some("`.git` entries are runner-owned")
-        } else if name.len() >= 2
-            && name.as_bytes()[0].is_ascii_alphabetic()
-            && name.as_bytes()[1] == b':'
-        {
-            Some("entry name must not be a Windows drive prefix")
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            issues.push(TreeSpecIssue {
-                path,
-                reason: reason.to_string(),
-            });
+        if let Some(reason) = validate_tree_entry_name(name) {
+            issues.push(TreeSpecIssue { path, reason });
             continue;
         }
-        entries.insert(path.clone(), node);
+        if entries.insert(path.clone(), node).is_some() {
+            issues.push(TreeSpecIssue {
+                path: path.clone(),
+                reason: "entry path is defined more than once".to_string(),
+            });
+        }
         if let TreeNode::Dir(nested) = node {
             collect_tree_entries(nested, &path, entries, issues);
         }
     }
+}
+
+fn validate_tree_entry_name(name: &str) -> Option<String> {
+    if name.is_empty() {
+        return Some("entry name must not be empty".to_string());
+    }
+    if name.contains('\\') {
+        return Some("entry paths must use forward slashes".to_string());
+    }
+    if name.contains('\0') {
+        return Some("entry name must not contain NUL".to_string());
+    }
+    if name.len() >= 2 && name.as_bytes()[0].is_ascii_alphabetic() && name.as_bytes()[1] == b':' {
+        return Some("entry name must not be a Windows drive prefix".to_string());
+    }
+    for component in name.split('/') {
+        if component.is_empty() {
+            return Some("entry path must not contain empty components".to_string());
+        }
+        if component == "." || component == ".." {
+            return Some("entry path must not contain `.` or `..` components".to_string());
+        }
+        if component.eq_ignore_ascii_case(".git") {
+            return Some("`.git` entries are runner-owned".to_string());
+        }
+    }
+    None
 }
 
 fn validate_tree_symlink(
@@ -312,10 +364,7 @@ fn validate_tree_symlink(
             return Err("symlink target must exist in the inline tree".to_string());
         };
         match node {
-            TreeNode::File(_) | TreeNode::Exec(_) => return Ok(()),
-            TreeNode::Dir(_) => {
-                return Err("only symlinks to regular files are supported".to_string());
-            }
+            TreeNode::File(_) | TreeNode::Exec(_) | TreeNode::Dir(_) => return Ok(()),
             TreeNode::Symlink(link) => {
                 current = normalize_tree_link_target(&current, &link.target)?;
             }
@@ -505,9 +554,10 @@ mod tests {
 
     #[test]
     fn inline_tree_paths_and_symlinks_are_confined_before_materialization() {
-        let valid =
-            TreeSpec::from_yaml("target: x\ndir:\n  link: { \"$symlink\": \"../target\" }\n")
-                .unwrap();
+        let valid = TreeSpec::from_yaml(
+            "target: x\nflat/path.txt: y\ndirectory: {}\ndir:\n  link: { \"$symlink\": \"../target\" }\ndirectory-link: { \"$symlink\": \"directory\" }\n",
+        )
+        .unwrap();
         assert_eq!(validate_tree_spec(&valid, true), Vec::new());
 
         let invalid = TreeSpec::from_yaml(
@@ -524,12 +574,11 @@ mod tests {
         .unwrap();
         let issues = validate_tree_spec(&invalid, true);
         for expected in [
-            "one path component",
+            "components",
             "Windows drive prefix",
             "runner-owned",
             "outside the inline tree",
             "must exist in the inline tree",
-            "regular files",
             "cycle",
         ] {
             assert!(
@@ -546,7 +595,7 @@ mod tests {
         std::fs::create_dir_all(package.join("fixtures/repo")).unwrap();
         std::fs::write(package.join("case.yml"), "x").unwrap();
         std::fs::write(package.join("config.yml"), "version: 1\nrules: []\n").unwrap();
-        let root = PackageRoot::for_scenario_file(&package.join("case.yml")).unwrap();
+        let root = PackageRoot::for_policy_test(&package.join("case.yml")).unwrap();
         assert!(
             root.resolve_existing("fixtures/repo", PackageEntryKind::Directory)
                 .is_ok()
@@ -569,7 +618,7 @@ mod tests {
         std::fs::write(package.join("case.yml"), "x").unwrap();
         std::fs::write(fixture.join("target"), "x").unwrap();
         symlink("target", fixture.join("link")).unwrap();
-        let root = PackageRoot::for_scenario_file(&package.join("case.yml")).unwrap();
+        let root = PackageRoot::for_policy_test(&package.join("case.yml")).unwrap();
         assert!(root.validate_fixture("fixtures/repo").is_ok());
 
         symlink("../../case.yml", fixture.join("escape")).unwrap();
@@ -587,7 +636,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn scenario_and_snapshot_symlinks_are_rejected() {
+    fn policy_test_and_snapshot_symlinks_are_rejected() {
         use std::os::unix::fs::symlink;
 
         let temp = tempfile::tempdir().unwrap();
@@ -596,10 +645,10 @@ mod tests {
         std::fs::write(package.join("real.yml"), "x").unwrap();
         symlink("real.yml", package.join("case.yml")).unwrap();
         assert!(matches!(
-            PackageRoot::for_scenario_file(&package.join("case.yml")),
-            Err(ConfinementError::InvalidScenarioSource(_))
+            PackageRoot::for_policy_test(&package.join("case.yml")),
+            Err(ConfinementError::InvalidPolicyTestSource(_))
         ));
-        let root = PackageRoot::for_scenario_file(&package.join("real.yml")).unwrap();
+        let root = PackageRoot::for_policy_test(&package.join("real.yml")).unwrap();
         std::fs::write(package.join("target"), "x").unwrap();
         symlink("../target", package.join("snapshots/result.json")).unwrap();
         assert!(

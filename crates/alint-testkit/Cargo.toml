@@ -1,19 +1,24 @@
 [package]
 name = "alint-testkit"
-description = "Internal: end-to-end scenario fixtures + tree-spec utilities for alint's own tests. Not a stable public API."
+description = "Versioned policy-test models, hermetic runner, and repository fixture tools for alint rulesets."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-publish = false
+readme = "README.md"
+
+[features]
+default = []
+strategies = ["dep:proptest"]
 
 [dependencies]
 alint-core.workspace = true
+alint-output.workspace = true
 alint-dsl.workspace = true
 alint-rules.workspace = true
-proptest.workspace = true
+proptest = { workspace = true, optional = true }
 regex.workspace = true
 schemars.workspace = true
 serde.workspace = true

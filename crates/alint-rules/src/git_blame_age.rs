@@ -250,6 +250,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: Some(&analysis_time),
+            process_environment: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "expected silent no-op, got {v:?}");
@@ -273,6 +274,7 @@ mod tests {
             git_tracked: None,
             git_blame: Some(&cache),
             analysis_time: Some(&analysis_time),
+            process_environment: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty());
@@ -384,6 +386,7 @@ level: warning
             git_tracked: None,
             git_blame: Some(&cache),
             analysis_time: Some(&analysis_time),
+            process_environment: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "no blame data → no violations: {v:?}");

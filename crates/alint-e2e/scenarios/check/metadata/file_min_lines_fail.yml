@@ -1,3 +1,4 @@
+test_version: 1
 name: file_min_lines flags files with too few lines
 tags: [check, file_min_lines, metadata]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: min-3-lines, level: info, path: stub.md}

@@ -1,3 +1,4 @@
+test_version: 1
 name: git_no_denied_paths is silent when no tracked path matches the denylist
 tags: [check, git_no_denied_paths, git, passing]
 
@@ -29,4 +30,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

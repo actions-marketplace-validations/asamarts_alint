@@ -1,3 +1,4 @@
+test_version: 1
 name: fix on literal paths honours scope_filter (only the in-scope file is edited)
 tags: [fix, set_value, json, scope_filter]
 
@@ -36,10 +37,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: port, level: error, path: pkg/app.json}
-  - applied: [port]
-  - violations: []
+  - exit: success
+    applied: [port]
+  - exit: success
+    violations: []
 
 expect_tree:
   pkg:

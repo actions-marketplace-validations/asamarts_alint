@@ -1,3 +1,4 @@
+test_version: 1
 name: insert_header inserts a required header AFTER a shebang
 tags: [fix, file_header, insert_header]
 
@@ -26,10 +27,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: license, level: error, path: run.sh}
-  - applied: [license]
-  - violations: []
+  - exit: success
+    applied: [license]
+  - exit: success
+    violations: []
 
 expect_tree:
   run.sh: "#!/bin/bash\n# Copyright 2026 acme\necho hi\n"

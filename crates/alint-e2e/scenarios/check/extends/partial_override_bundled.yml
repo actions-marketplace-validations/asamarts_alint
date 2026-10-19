@@ -1,3 +1,4 @@
+test_version: 1
 name: partial override of a bundled ruleset rule
 tags: [check, extends, composition, bundled, passing]
 
@@ -44,4 +45,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

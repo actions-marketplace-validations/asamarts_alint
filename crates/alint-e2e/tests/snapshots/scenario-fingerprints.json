@@ -1,849 +1,63 @@
 [
   {
-    "scenario": "check/bundled-compliance/apache_2_missing_notice.yml",
-    "rule_id": "apache-2-notice-file-exists",
-    "path": null,
-    "fingerprint": "223b07c5247cc518b60265492ad5940dd3e282e1cb35dcc80900ec8d93ea649c"
-  },
-  {
-    "scenario": "check/bundled-compliance/apache_2_missing_source_header.yml",
-    "rule_id": "apache-2-source-has-license-header",
-    "path": "src/util.py",
-    "fingerprint": "a97ddee5436d00ec03454f2a849b6a3f30808b73fc45d2c7d3ad5d3b08381d08"
-  },
-  {
-    "scenario": "check/bundled-compliance/reuse_missing_licenses_dir.yml",
-    "rule_id": "reuse-licenses-dir-exists",
-    "path": null,
-    "fingerprint": "064b4e7d0b91118b70caefe9ce014f7351e3f40551a53733b728f0a8670fc5b0"
-  },
-  {
-    "scenario": "check/bundled-compliance/reuse_missing_source_spdx.yml",
-    "rule_id": "reuse-source-has-copyright-text",
-    "path": "src/lib.rs",
-    "fingerprint": "d220e2ba7ff5f6d3adcdcaf924ce6aca3a57306a2cb43f2989bca18b6041d746"
-  },
-  {
-    "scenario": "check/bundled-compliance/reuse_missing_source_spdx.yml",
-    "rule_id": "reuse-source-has-spdx-identifier",
-    "path": "src/lib.rs",
-    "fingerprint": "656a0cb51ee2e3e7145cefdf888ae02a6c82f8a57b79c10094d7733fd4648374"
-  },
-  {
-    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
-    "rule_id": "dotnet-csproj-nullable-enabled",
-    "path": "src/App.csproj",
-    "fingerprint": "f2b0baf754d04079306ef6dbe695d8b6134cffb95118c01114df0c81273a69f9"
-  },
-  {
-    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
-    "rule_id": "dotnet-csproj-sdk-style",
-    "path": "src/App.csproj",
-    "fingerprint": "d4f1c3bdc5ac2b4210e9198994e473e53a2f0e74a2683636a1a67a114ee5f43e"
-  },
-  {
-    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
-    "rule_id": "dotnet-editorconfig-exists",
-    "path": null,
-    "fingerprint": "f6da42aa701c08fb4e0eb9fe89840862f38698db6149d9bcf17a78088d4934e0"
-  },
-  {
-    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
-    "rule_id": "dotnet-global-json-exists",
-    "path": null,
-    "fingerprint": "9691aa55b5b99483922a2f4e7c09c58e3f07028d59eb4a611d1d66bdc6e7c23a"
-  },
-  {
-    "scenario": "check/bundled-dotnet/dotnet_flags_misconfigured_project.yml",
-    "rule_id": "dotnet-no-build-output-committed",
-    "path": "src/obj",
-    "fingerprint": "41cd2b0f7a82c012bd5f5700b82a1fcec124625fe5ac35dd3b2523be74d99818"
-  },
-  {
-    "scenario": "check/bundled-dotnet/dotnet_global_json_and_cpm_misconfigured_fire.yml",
-    "rule_id": "dotnet-central-package-management",
-    "path": "Directory.Packages.props",
-    "fingerprint": "65fe7551da05a31fc35b7dd7119c62d76449bdae8424d2d0a322c4a28e912094"
-  },
-  {
-    "scenario": "check/bundled-dotnet/dotnet_global_json_and_cpm_misconfigured_fire.yml",
-    "rule_id": "dotnet-global-json-pins-sdk",
-    "path": "global.json",
-    "fingerprint": "e4c47eab54f7d33c5316710dfa9aeee9fdb4252787782f4b6b3263e013dcb66c"
-  },
-  {
-    "scenario": "check/bundled-go/go_flags_malformed_go_mod.yml",
-    "rule_id": "go-mod-declares-go-version",
-    "path": "go.mod",
-    "fingerprint": "828b35009f31ac06a1c2d4450e528f0f839218084d79c8fe3a8f27e9967375f8"
-  },
-  {
-    "scenario": "check/bundled-go/go_flags_malformed_go_mod.yml",
-    "rule_id": "go-mod-declares-module-path",
-    "path": "go.mod",
-    "fingerprint": "275876c0daa8c40a42ea43030fcb168b262e033c12766372d7de78624bf7cf25"
-  },
-  {
-    "scenario": "check/bundled-go/go_flags_malformed_go_mod.yml",
-    "rule_id": "go-sum-exists",
-    "path": null,
-    "fingerprint": "a51b9b6fc52021fb6c41a9b41f66e8f899ceceed6c21b1d24b73203bcab86cfc"
-  },
-  {
-    "scenario": "check/bundled-go/go_flags_missing_go_sum.yml",
-    "rule_id": "go-sum-exists",
-    "path": null,
-    "fingerprint": "a51b9b6fc52021fb6c41a9b41f66e8f899ceceed6c21b1d24b73203bcab86cfc"
-  },
-  {
-    "scenario": "check/bundled-java/java_fires_on_committed_target.yml",
-    "rule_id": "java-no-class-files",
-    "path": "target/classes/com/example/Demo.class",
-    "fingerprint": "b8089e6bb45ca967eb6e6f79614cd9e6ae83a8a8c9c44d057d013a6be82012dc"
-  },
-  {
-    "scenario": "check/bundled-java/java_fires_on_committed_target.yml",
-    "rule_id": "java-no-tracked-target",
-    "path": "target",
-    "fingerprint": "313125ac4fa2e43059e4b4a75ebaab479611ab57ae1acfb5d40e4c2fec8e2f30"
-  },
-  {
-    "scenario": "check/bundled-monorepo/cargo_workspace_fires_on_missing_members.yml",
-    "rule_id": "cargo-workspace-members-declared",
-    "path": "Cargo.toml",
-    "fingerprint": "1f8d5b8b9a401b985adb6bb153680e71c7f50ea98446e095074409e04dde3756"
-  },
-  {
-    "scenario": "check/bundled-monorepo/cargo_workspace_non_canonical_layout_override.yml",
-    "rule_id": "cargo-workspace-member-has-readme",
-    "path": "cli",
-    "fingerprint": "de2f32aeabc24a4c51b50a5c05e74880a33dfb412b4dec37485806fe4e2c158b"
-  },
-  {
-    "scenario": "check/bundled-monorepo/cargo_workspace_non_canonical_layout_override.yml",
-    "rule_id": "cargo-workspace-member-has-readme",
-    "path": "runtime",
-    "fingerprint": "cd7d5133fbae60bc870758539b1d2df04b3dc2d3d26f9ccdd2c25151a1bc2b93"
-  },
-  {
-    "scenario": "check/bundled-monorepo/cargo_workspace_skips_non_member_dirs.yml",
-    "rule_id": "cargo-workspace-member-declares-name",
-    "path": "crates/beta/Cargo.toml",
-    "fingerprint": "fe2c0c67b8a52927e1daa79b28fd5976cc4b4e9786336660996d9d7784db3f25"
-  },
-  {
-    "scenario": "check/bundled-monorepo/cargo_workspace_skips_non_member_dirs.yml",
-    "rule_id": "cargo-workspace-member-has-readme",
-    "path": "crates/alpha",
-    "fingerprint": "b4b246ccbc02755385ae8b7dce36f8d5c236d1d14942f50a9cbea70ca11741ba"
-  },
-  {
-    "scenario": "check/bundled-monorepo/pnpm_workspace_filter_and_member_checks.yml",
-    "rule_id": "pnpm-workspace-member-has-readme",
-    "path": "packages/alpha",
-    "fingerprint": "c49386216ec63abbd5d1d2b467cd82800f10154f6a9cee8e538e9ff8270cb106"
-  },
-  {
-    "scenario": "check/bundled-monorepo/yarn_workspace_filter_and_member_checks.yml",
-    "rule_id": "yarn-workspace-member-has-readme",
-    "path": "apps/web",
-    "fingerprint": "c129b7c19b2a0fffe2ebaa34408c73aaf991e46621b0cfb42ba93b497056bbed"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_tag_pinned_docker.yml",
-    "rule_id": "gha-pin-actions-to-sha",
-    "path": ".github/workflows/ci.yml",
-    "fingerprint": "b269c534c55f47444696c0c55fc1aed653565ab7f4f760504ef9dfc9f379fa2c"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
-    "rule_id": "gha-pin-actions-to-sha",
-    "path": ".github/actions/demo/action.yml",
-    "fingerprint": "1ba549b70c7106011ee178824ebee4c6bcc257cf7755986448bf72aa3e2e5492"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
-    "rule_id": "gha-pin-actions-to-sha",
-    "path": ".github/workflows/bad.yml",
-    "fingerprint": "8481128804c94bcd44c465ff8a8589002d24b7b510ca3dfb24d71dcce21c2735"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
-    "rule_id": "gha-pin-actions-to-sha",
-    "path": ".github/workflows/bad.yml",
-    "fingerprint": "de97c74963b73d8deae1f789158923881c8612651cee900b42c78a85c6108b06"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
-    "rule_id": "gha-pin-actions-to-sha",
-    "path": ".github/workflows/bad.yml",
-    "fingerprint": "f2107de9fea10ef6110510af3c77d1e3796134ef54127764ebb19cc9c882e942"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
-    "rule_id": "gha-workflow-contents-read",
-    "path": ".github/workflows/bad.yml",
-    "fingerprint": "46873b6cf48c49bd35803e0d1d9d16eeb0987d9e8a7c480485c19d874f07b913"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
-    "rule_id": "gha-workflow-has-name",
-    "path": ".github/workflows/bad.yml",
-    "fingerprint": "b238126378145c8bdd57112ac6ac985b430f8c4d276c05a03855c8a36b39c912"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_write_permissions.yml",
-    "rule_id": "gha-workflow-contents-read",
-    "path": ".github/workflows/contents-write.yml",
-    "fingerprint": "a9eab90fed565856ac0b2852469401405f09f7395651674f7db5de1e76113dab"
-  },
-  {
-    "scenario": "check/bundled-phase-a/ci_github_actions_flags_write_permissions.yml",
-    "rule_id": "gha-workflow-contents-read",
-    "path": ".github/workflows/write-all.yml",
-    "fingerprint": "291f73eea155831c2932a1de6cb546bff8a807a26d9f3946a77bec8ddc2142b9"
-  },
-  {
-    "scenario": "check/bundled-phase-a/docs_adr_flags_filename_and_missing_sections.yml",
-    "rule_id": "adr-filename-pattern",
-    "path": "docs/adr/pick-framework.md",
-    "fingerprint": "ea22ee5dab3dd857e3a0ae225f94b6c93a2beebed86a6dffce4180bc85e176fc"
-  },
-  {
-    "scenario": "check/bundled-phase-a/docs_adr_flags_filename_and_missing_sections.yml",
-    "rule_id": "adr-has-decision-section",
-    "path": "docs/adr/0001-use-typescript.md",
-    "fingerprint": "7b3991469cc8033d8cda59e3be9df1fc5b163ef5aa65c433a3b1dc0776b6d6de"
-  },
-  {
-    "scenario": "check/bundled-phase-a/hygiene_lockfiles_flags_nested_yarn_lock.yml",
-    "rule_id": "lockfiles-no-nested-yarn",
-    "path": "packages/sub/yarn.lock",
-    "fingerprint": "4d37deea676d680be8c57c613b9883a90331146c78f4ca1f01103600f02d5e9b"
-  },
-  {
-    "scenario": "check/bundled-phase-a/hygiene_no_js_build_outputs_scoped_to_package_json.yml",
-    "rule_id": "hygiene-no-js-build-outputs",
-    "path": "frontend/dist",
-    "fingerprint": "4067961124ca33bac8996a1d75b9439ed73731c5cb4194a3fe5e9d486a1392ff"
-  },
-  {
-    "scenario": "check/bundled-phase-a/hygiene_no_macos_junk_verifies_content_signature.yml",
-    "rule_id": "hygiene-no-macos-junk",
-    "path": ".DS_Store",
-    "fingerprint": "395c169607876d1a32d8e5f9415bb15219da1bad6c81b23d7e7a2fac3abdbc06"
-  },
-  {
-    "scenario": "check/bundled-phase-a/hygiene_no_macos_junk_verifies_content_signature.yml",
-    "rule_id": "hygiene-no-macos-junk",
-    "path": "src/._Main.java",
-    "fingerprint": "724adfc54be63840ff333ad41f65cc2379d2f0576e777e074fc83bc6e770923f"
-  },
-  {
-    "scenario": "check/bundled-phase-a/hygiene_no_tracked_artifacts_flags_common_junk.yml",
-    "rule_id": "hygiene-no-env-files",
-    "path": ".env",
-    "fingerprint": "5cfa82360b951344874386db1cb072ca5b2940878d975c07849ec3200c31d269"
-  },
-  {
-    "scenario": "check/bundled-phase-a/hygiene_no_tracked_artifacts_flags_common_junk.yml",
-    "rule_id": "hygiene-no-macos-junk",
-    "path": ".DS_Store",
-    "fingerprint": "395c169607876d1a32d8e5f9415bb15219da1bad6c81b23d7e7a2fac3abdbc06"
-  },
-  {
-    "scenario": "check/bundled-phase-a/hygiene_no_tracked_artifacts_flags_common_junk.yml",
-    "rule_id": "hygiene-no-node-modules",
-    "path": "node_modules",
-    "fingerprint": "4e3b75bdc234507d2f6e29a731d9985abf3a6f34352e5d15e288def6873115b0"
-  },
-  {
-    "scenario": "check/bundled-phase-a/tooling_editorconfig_flags_missing_root_files.yml",
-    "rule_id": "tooling-editorconfig-exists",
-    "path": null,
-    "fingerprint": "99e1e365ca6516bfd059ff901ff73e35a8b8faf35bd271b4b71bde6ff3103084"
-  },
-  {
-    "scenario": "check/bundled-phase-a/tooling_editorconfig_flags_missing_root_files.yml",
-    "rule_id": "tooling-gitattributes-exists",
-    "path": null,
-    "fingerprint": "0cca6fd77d83c8e90505ea0b0def9aa610156023b4092bc1d04b14b0695d43c1"
-  },
-  {
-    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
-    "rule_id": "php-composer-autoload-files-resolve",
-    "path": "composer.json",
-    "fingerprint": "164a2155a26fb6797c4864b922821460fd03f4efffdb55df51bd873cd538b836"
-  },
-  {
-    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
-    "rule_id": "php-composer-bin-resolve",
-    "path": "composer.json",
-    "fingerprint": "6d2d6611e63db170c06919f0b596ef427fe92ae8ae515f01471336d61d4f146c"
-  },
-  {
-    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
-    "rule_id": "php-composer-name-format",
-    "path": "composer.json",
-    "fingerprint": "1646330cab40bb340340d8c49a25ecb18eba7622cdcfb8e419793d30adf36a8e"
-  },
-  {
-    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
-    "rule_id": "php-composer-psr4-dirs-resolve",
-    "path": "composer.json",
-    "fingerprint": "6df27c151b393119e4ba487a49d31325f5aaf421393ac8f6f497f4f8d753eb60"
-  },
-  {
-    "scenario": "check/bundled-php/php_flags_misconfigured_project.yml",
-    "rule_id": "php-no-vendor-committed",
-    "path": "vendor",
-    "fingerprint": "e8d37f945c2ffc0c83fdf5a5b9a06911b8a3b0359cf54e5b137be05417120acd"
-  },
-  {
-    "scenario": "check/bundled-python/python_excludes_test_fixture_paths.yml",
-    "rule_id": "python-sources-final-newline",
-    "path": "src/demo/core.py",
-    "fingerprint": "4614963f7e217679ea7cf1cc0b72136f29f9e9aff30ea7dac3ba2a456f067078"
-  },
-  {
-    "scenario": "check/bundled-python/python_excludes_test_fixture_paths.yml",
-    "rule_id": "python-sources-no-trailing-whitespace",
-    "path": "src/demo/core.py",
-    "fingerprint": "6c04aa941bb1eb6e30cb017ec10ab87e34b1a6f61387935d9416bb8eab36daad"
-  },
-  {
-    "scenario": "check/bundled-python/python_flags_incomplete_pyproject.yml",
-    "rule_id": "python-has-lockfile",
-    "path": null,
-    "fingerprint": "2efbab531152b3fc255787e39b5ca80d0fcebffc9c9225d8b18c7e5efbc37e07"
-  },
-  {
-    "scenario": "check/bundled-python/python_flags_incomplete_pyproject.yml",
-    "rule_id": "python-pyproject-declares-name",
-    "path": "pyproject.toml",
-    "fingerprint": "8f03b1872a1bb1fdf27892814445f0bb7d4d71c82e27edc4534e8a6acf366c2b"
-  },
-  {
-    "scenario": "check/bundled-python/python_flags_incomplete_pyproject.yml",
-    "rule_id": "python-pyproject-declares-requires-python",
-    "path": "pyproject.toml",
-    "fingerprint": "6ed171d5d65c4f8d817f12e66958718f61e9dae81a3a700f56aec79b8afa3127"
-  },
-  {
-    "scenario": "check/bundled-python/python_flags_missing_manifest.yml",
-    "rule_id": "python-has-lockfile",
-    "path": null,
-    "fingerprint": "2efbab531152b3fc255787e39b5ca80d0fcebffc9c9225d8b18c7e5efbc37e07"
-  },
-  {
-    "scenario": "check/bundled-python/python_flags_missing_manifest.yml",
-    "rule_id": "python-manifest-exists",
-    "path": null,
-    "fingerprint": "a647f38cc22dd0a45202855b8cc5b6da094fe1a82aceb7d562f4b5767aff5637"
-  },
-  {
-    "scenario": "check/bundled/agent_context_stub_flagged.yml",
+    "scenario": "agent-context/agent_context_stub_flagged.yml",
     "rule_id": "agent-context-non-stub",
     "path": "AGENTS.md",
     "fingerprint": "4d09c42569ab6797a8cf56d7e55b31966852910dab42550d0e9fff2f09004f1c"
   },
   {
-    "scenario": "check/bundled/agent_hygiene_scratch_doc_flagged.yml",
+    "scenario": "agent-hygiene/agent_hygiene_scratch_doc_flagged.yml",
     "rule_id": "agent-no-scratch-docs-at-root",
     "path": "PLAN.md",
     "fingerprint": "b9b2cd2da1cced477295de213648f222260177d5a0ce696b380450011f88e726"
   },
   {
-    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "scenario": "apache/governance/apache_governance_flags_gaps.yml",
     "rule_id": "apache-gov-changelog-exists",
     "path": null,
     "fingerprint": "0b1bb58b053635ce3097161863a9fbc7a7283ad82a7a51319ba689b005f52eea"
   },
   {
-    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "scenario": "apache/governance/apache_governance_flags_gaps.yml",
     "rule_id": "apache-gov-keys-exists",
     "path": null,
     "fingerprint": "c52503708d8c57f74b997693a644df9f6a8a4244e70afaf8e9a348008c05a46e"
   },
   {
-    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "scenario": "apache/governance/apache_governance_flags_gaps.yml",
     "rule_id": "apache-gov-license-exists",
     "path": null,
     "fingerprint": "bf8f9fc16481b23b7831c5709b339bd435904b9c488e21cdeced20e8611461f4"
   },
   {
-    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "scenario": "apache/governance/apache_governance_flags_gaps.yml",
     "rule_id": "apache-gov-notice-asf-attribution",
     "path": "NOTICE",
     "fingerprint": "f73b587235f7a815c7d1c37d459e07b0b7baaadf90f93adbe6ef8cc669cdf85c"
   },
   {
-    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "scenario": "apache/governance/apache_governance_flags_gaps.yml",
     "rule_id": "apache-gov-readme-exists",
     "path": null,
     "fingerprint": "8ccc40bdd1747f51e9ff2ebfbad56836e38028368f25784064261383db7eb305"
   },
   {
-    "scenario": "check/bundled/apache_governance_flags_gaps.yml",
+    "scenario": "apache/governance/apache_governance_flags_gaps.yml",
     "rule_id": "apache-gov-source-license-header",
     "path": "src/Main.java",
     "fingerprint": "28c6e5878cb534335814a0d5e4627292e85da419be6de4bc9c002776ca2ad980"
   },
   {
-    "scenario": "check/bundled/apache_governance_no_binaries_and_no_notice_fire.yml",
+    "scenario": "apache/governance/apache_governance_no_binaries_and_no_notice_fire.yml",
     "rule_id": "apache-gov-no-binaries-in-source",
     "path": "lib/foo.jar",
     "fingerprint": "e7af33b6115e0ca02b9a6ef406baf95051946b42e9177d33fd8badfc3f81038e"
   },
   {
-    "scenario": "check/bundled/apache_governance_no_binaries_and_no_notice_fire.yml",
+    "scenario": "apache/governance/apache_governance_no_binaries_and_no_notice_fire.yml",
     "rule_id": "apache-gov-notice-exists",
     "path": null,
     "fingerprint": "9940aa9ec1a4d3657ea1695c7983c1a3aaf79e64c4a7028eccc832e27f44fe97"
-  },
-  {
-    "scenario": "check/bundled/monorepo_missing_readme_flagged.yml",
-    "rule_id": "monorepo-packages-have-package-json",
-    "path": "packages/stripped",
-    "fingerprint": "ec59db93b30f40706f7509a9f202bf1d9a122e2e88418711c0fe79ee88179310"
-  },
-  {
-    "scenario": "check/bundled/monorepo_missing_readme_flagged.yml",
-    "rule_id": "monorepo-packages-have-readme",
-    "path": "packages/stripped",
-    "fingerprint": "63f3ef001203ea8bcf868f54a15c90682290865656cb68e0ab4213bd20b952a0"
-  },
-  {
-    "scenario": "check/bundled/node_missing_lockfile_and_version_pin.yml",
-    "rule_id": "node-engine-or-nvmrc",
-    "path": null,
-    "fingerprint": "0d0593464f8dea58e135c4919d8ad9f558d7d246a65eb7976b622d4258708c02"
-  },
-  {
-    "scenario": "check/bundled/node_missing_lockfile_and_version_pin.yml",
-    "rule_id": "node-has-lockfile",
-    "path": null,
-    "fingerprint": "b92beca7e840ad7abc17c6a199a5f65b6ae08a34b0a9365d360c2fc4868f586e"
-  },
-  {
-    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
-    "rule_id": "oss-code-of-conduct-exists",
-    "path": null,
-    "fingerprint": "acd49e620016c6d8c2e562cf5cfaae16dc90003e515cf8164011b279769b2b6a"
-  },
-  {
-    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
-    "rule_id": "oss-codeowners-exists",
-    "path": null,
-    "fingerprint": "e69f0e4dae12424c916f6ee2fef2e8c41c90fb3cb9d079d187c54c5ef9d4eda8"
-  },
-  {
-    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
-    "rule_id": "oss-dependency-update-tool",
-    "path": null,
-    "fingerprint": "8db6e5504be55bc52e4ce8894b90c8a6833f31fc9290c70c23b71d229c1d19bd"
-  },
-  {
-    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
-    "rule_id": "oss-gitignore-exists",
-    "path": null,
-    "fingerprint": "ea97769972d5555a6fcaca450b817231eddb7a576844ada993ae3726ba613232"
-  },
-  {
-    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
-    "rule_id": "oss-license-exists",
-    "path": null,
-    "fingerprint": "7b04d6ea718ad61cbae77fba95ceb5aae6c9cc9b09b6df2eb31b52fc80228306"
-  },
-  {
-    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
-    "rule_id": "oss-readme-exists",
-    "path": null,
-    "fingerprint": "e3836626d4ebc2c743471fc3a1c60df01e18e32cf670d078c0193f716097eb87"
-  },
-  {
-    "scenario": "check/bundled/oss_baseline_minimal_repo_flags_gaps.yml",
-    "rule_id": "oss-security-policy-exists",
-    "path": null,
-    "fingerprint": "43ca91ae4ef2da8d565c512941927a947758d24976f51c4957ecdbde136c66bf"
-  },
-  {
-    "scenario": "check/bundled/rust_gaps_flagged.yml",
-    "rule_id": "rust-cargo-lock-exists",
-    "path": null,
-    "fingerprint": "4d0b407bd9305073370a98281a21ed98f7d41cfab1761662b87dd619ddfd16e8"
-  },
-  {
-    "scenario": "check/bundled/rust_gaps_flagged.yml",
-    "rule_id": "rust-sources-snake-case",
-    "path": "src/LibRoot.rs",
-    "fingerprint": "e8141e3501069e690c99fd15cc3217c8030564c6d7bc4daaec45d9c15294bee3"
-  },
-  {
-    "scenario": "check/bundled/rust_gaps_flagged.yml",
-    "rule_id": "rust-toolchain-pinned",
-    "path": null,
-    "fingerprint": "8b7a9c2dbd026bee8e8876768e83c557bc38bf85a7aeadc999e8649ab6abb13d"
-  },
-  {
-    "scenario": "check/bundled/rust_snake_case_excludes_compiler_internals.yml",
-    "rule_id": "rust-sources-snake-case",
-    "path": "library/foo/src/RealName.rs",
-    "fingerprint": "9c45ed2f4609065e8a46212044d8a46af0db0e05d350b3987ee160c8a1ba8f01"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-dotnet-declarations-coherent",
-    "path": ".tool-versions",
-    "fingerprint": "51e4d3582f2fc830c568b045f76771d161b100e69261b9221bbdc612be79dbef"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-dotnet-declarations-coherent",
-    "path": "global.json",
-    "fingerprint": "eb35e2a32f283b14fa265067d493a21b6ea2738f07d018ad4542136c9c7e8c93"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-dotnet-dockerfiles-coherent",
-    "path": "Dockerfile",
-    "fingerprint": "d690cebcd956f8678a0d2cba488b07480d378fe08aec97900e0d8ab3289c3570"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-dotnet-github-actions-coherent",
-    "path": ".github/workflows/ci.yml",
-    "fingerprint": "05ddad8d05ac7b8dc3061b3cd19745584715f91611a26e95a775b768528cd0ed"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-jvm-declarations-coherent",
-    "path": ".sdkmanrc",
-    "fingerprint": "98b2fbb29ec7725d2287ed41ee8571c68c8ed3116b4c423e0b50be88b9f6c20e"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-jvm-declarations-coherent",
-    "path": ".tool-versions",
-    "fingerprint": "e9573781b104ab141c27f5b751642ff1032e6e9703254f6552acc0e820e2ac92"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-jvm-dockerfiles-coherent",
-    "path": "Dockerfile",
-    "fingerprint": "bfb5f7cac29b3a527ceac2567610d8b4744843990593f8f9c427b6eaf46946e4"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-jvm-github-actions-coherent",
-    "path": ".github/workflows/ci.yml",
-    "fingerprint": "171d7be129ef2028ae05c5e97875f6dc7d06a5450864ceaac483c0de8295fca4"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-node-declarations-coherent",
-    "path": ".node-version",
-    "fingerprint": "ba59cd34e1bef2a71e785dc8e4d6423cf3c4bf735a0dc2dec4d805e3958cf55a"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-node-declarations-coherent",
-    "path": ".tool-versions",
-    "fingerprint": "39f6eddc6fcd836abd00f03b067ed047ba3333eca7657824e37ff34ad872cbd5"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-node-declarations-coherent",
-    "path": "package.json",
-    "fingerprint": "ed3a72a4a11cf76b8ded1b32da4a95f81151ed5ef4cd7a98eae6c3e603795bf8"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-node-dockerfiles-coherent",
-    "path": "Dockerfile",
-    "fingerprint": "a8dfc5c5252ba18234b2c8ee1944149a744b981faf211400c7f9961b7d4631f2"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-node-github-actions-coherent",
-    "path": ".github/workflows/ci.yml",
-    "fingerprint": "84ffd632fb33bde450ec733118aac4f11aa7c00a2208568113e68bc5e2730769"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-python-declarations-coherent",
-    "path": ".tool-versions",
-    "fingerprint": "b6f7d75852bbb42346f12c51ebd370819039f14d294e15bd8b755e6e88cd0d2c"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-python-declarations-coherent",
-    "path": "Pipfile",
-    "fingerprint": "e0b9e3752f63d1184301579861d40b50636f9508d6b46d7909d7accb7a7dc6ec"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-python-declarations-coherent",
-    "path": "runtime.txt",
-    "fingerprint": "5065eddd7b5eb88c19e4f364fe2456278bdc42d5b43ff0fd1664bf4ed4e6f6d4"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-python-dockerfiles-coherent",
-    "path": "Dockerfile",
-    "fingerprint": "8705ea0abe548a4d65c585a2af541cc910adb01ed3dae3f6aa28f9a250e6164f"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-python-github-actions-coherent",
-    "path": ".github/workflows/ci.yml",
-    "fingerprint": "0d4f658f62589ec67273dc2e45ef701c37c72aae093b3d2b063eb19042d77121"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-ruby-declarations-coherent",
-    "path": ".tool-versions",
-    "fingerprint": "0b22839a9c2c941ff6bb9c0398e66c8b268af083311074c78ba999eccf8e3485"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-ruby-declarations-coherent",
-    "path": "Gemfile",
-    "fingerprint": "b37912da329b021ef29e6f08dd782cfba27cfdc09a75b30eadb6bf48efffd331"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-ruby-declarations-coherent",
-    "path": "Gemfile.lock",
-    "fingerprint": "e402355d326361a328a76f7271269f7d0ea60d5695ba1971de172262c2c531a3"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-ruby-dockerfiles-coherent",
-    "path": "Dockerfile",
-    "fingerprint": "893b682081e780113a4da2b089db11584b286edea288b6d02d0fb85c1a02d26f"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-ruby-github-actions-coherent",
-    "path": ".github/workflows/ci.yml",
-    "fingerprint": "7c105de385dccbe37528bac67c70f291eb7b6accdb0f0a46045ce7cd9aef8fc4"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-rust-declarations-coherent",
-    "path": ".tool-versions",
-    "fingerprint": "6a1bed57b08a85c713fa1bff749472702e14c155ac52a79a46bbba63dc527729"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-rust-declarations-coherent",
-    "path": "rust-toolchain",
-    "fingerprint": "9c20a7fee00914916d97a1c533c329a3bee6bce14cc048737e4aa487b0f4f8bf"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-rust-dockerfiles-coherent",
-    "path": "Dockerfile",
-    "fingerprint": "97d5e1cc4ef83d3f1de47a4cd5042019f7ea9cc0271f46736b1bb256ac27f0e5"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_all_target_classes_drift.yml",
-    "rule_id": "toolchain-rust-github-actions-coherent",
-    "path": ".github/workflows/ci.yml",
-    "fingerprint": "f391eaf58d822e813a81b7b2c6f65e788d6831faa697ff57fdcdbb4e85624e2c"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_docker_heredoc_ignored.yml",
-    "rule_id": "toolchain-node-dockerfiles-coherent",
-    "path": "Dockerfile",
-    "fingerprint": "a8dfc5c5252ba18234b2c8ee1944149a744b981faf211400c7f9961b7d4631f2"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_inert_text_spoofs_fail.yml",
-    "rule_id": "toolchain-node-dockerfiles-coherent",
-    "path": "Dockerfile-prod",
-    "fingerprint": "056f29f9e7cc1c75c27cbf8df7209139800f366a835b884fc3283ae9db4deec4"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_inert_text_spoofs_fail.yml",
-    "rule_id": "toolchain-python-declarations-coherent",
-    "path": "Pipfile",
-    "fingerprint": "29e9eac380f7a083c28de24e792fdc72cdaf03f152fe5021ccb4b2cd26418b68"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_inert_text_spoofs_fail.yml",
-    "rule_id": "toolchain-ruby-declarations-coherent",
-    "path": "Gemfile",
-    "fingerprint": "17de324546c08ffe228e057305085920d1a54b477080045d304337d1a05d4b54"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_inert_text_spoofs_fail.yml",
-    "rule_id": "toolchain-rust-declarations-coherent",
-    "path": "rust-toolchain",
-    "fingerprint": "9c20a7fee00914916d97a1c533c329a3bee6bce14cc048737e4aa487b0f4f8bf"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_malformed_anchors_fail.yml",
-    "rule_id": "toolchain-dotnet-anchor-exact",
-    "path": "global.json",
-    "fingerprint": "95d08eabe075da3516a149aa50ccff959c32c329f8879567033f36233c738f30"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_malformed_anchors_fail.yml",
-    "rule_id": "toolchain-jvm-anchor-exact",
-    "path": ".java-version",
-    "fingerprint": "1d445fe5d10303f22565c90814136407b7fe521da25268c6672c16d835d4dd58"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_malformed_anchors_fail.yml",
-    "rule_id": "toolchain-node-anchor-exact",
-    "path": ".nvmrc",
-    "fingerprint": "0bba79d9c9be1f67d7f41fc094284aacd8181dad4f22ce7f76ecc8bd46578139"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_malformed_anchors_fail.yml",
-    "rule_id": "toolchain-python-anchor-exact",
-    "path": ".python-version",
-    "fingerprint": "438c72b602808bf6e6f2dc3f9d8a46b0c1366585e1510d03566fe07e774953a0"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_malformed_anchors_fail.yml",
-    "rule_id": "toolchain-ruby-anchor-exact",
-    "path": ".ruby-version",
-    "fingerprint": "bc49c0e11b7b53699c40c65336ea2726020982270c1f3a61486e7be9de6d7c4d"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_malformed_anchors_fail.yml",
-    "rule_id": "toolchain-rust-anchor-exact",
-    "path": "rust-toolchain.toml",
-    "fingerprint": "2d4c7c259140c2716759e8b199981e9228e84ed45999e3c81fb1392499e5bb6f"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_node_drift_fixed.yml",
-    "rule_id": "toolchain-node-declarations-coherent",
-    "path": ".node-version",
-    "fingerprint": "ba59cd34e1bef2a71e785dc8e4d6423cf3c4bf735a0dc2dec4d805e3958cf55a"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_node_drift_fixed.yml",
-    "rule_id": "toolchain-node-declarations-coherent",
-    "path": ".tool-versions",
-    "fingerprint": "39f6eddc6fcd836abd00f03b067ed047ba3333eca7657824e37ff34ad872cbd5"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_node_drift_fixed.yml",
-    "rule_id": "toolchain-node-declarations-coherent",
-    "path": "package.json",
-    "fingerprint": "ed3a72a4a11cf76b8ded1b32da4a95f81151ed5ef4cd7a98eae6c3e603795bf8"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_node_drift_fixed.yml",
-    "rule_id": "toolchain-node-declarations-coherent",
-    "path": "package.json",
-    "fingerprint": "ed3a72a4a11cf76b8ded1b32da4a95f81151ed5ef4cd7a98eae6c3e603795bf8"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_node_drift_fixed.yml",
-    "rule_id": "toolchain-node-dockerfiles-coherent",
-    "path": "Dockerfile",
-    "fingerprint": "a8dfc5c5252ba18234b2c8ee1944149a744b981faf211400c7f9961b7d4631f2"
-  },
-  {
-    "scenario": "check/bundled/toolchain_pins_node_drift_fixed.yml",
-    "rule_id": "toolchain-node-github-actions-coherent",
-    "path": ".github/workflows/ci.yml",
-    "fingerprint": "84ffd632fb33bde450ec733118aac4f11aa7c00a2208568113e68bc5e2730769"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-cargo-package",
-    "path": "Cargo.toml",
-    "fingerprint": "53d0e760c570c2292df966786847cec5231283093ddd0a4195c23b97a875321c"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-cargo-workspace",
-    "path": "Cargo.toml",
-    "fingerprint": "1b3f1047337dec916af5a376401b7c70f720131c4024d191feb340462961f0e9"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-changelog",
-    "path": "CHANGELOG.md",
-    "fingerprint": "fce3586a11e1a9175b3543779cc9ce549c3734bb015de4e31afd10463e00d2fd"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-helm-chart",
-    "path": "chart/Chart.yaml",
-    "fingerprint": "51858b4bae04db08506cfdfafee40b62f68f7dfebc5d6ce07cb67b43ddf69d52"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-openapi-json",
-    "path": "api/swagger.json",
-    "fingerprint": "43f0c5c1128ec6abc10fa6decc7e8f5daef77e3c9fcd958276e94e5909d821c8"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-openapi-yaml",
-    "path": "api/openapi.yaml",
-    "fingerprint": "137fd4dd75635412984fcea69c6b6b7d5ab6a05a2f306625583d459bb52d3284"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-package-json",
-    "path": "package.json",
-    "fingerprint": "5e23b53be554c03757d7c8357037c2fd455518c5120123bc59452e0ddec875d6"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-pyproject-poetry",
-    "path": "pyproject.toml",
-    "fingerprint": "7081b667f79ef10cb57c5d8eda383765e9f8f122dc9435fb8c8428d48f3bc8bc"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-pyproject-project",
-    "path": "pyproject.toml",
-    "fingerprint": "738b750b4517a75900bbe2070e870ae4a11d125716b5080f999174fa562e7708"
-  },
-  {
-    "scenario": "check/bundled/versioning_drift_fixed.yml",
-    "rule_id": "versioning-python-module",
-    "path": "src/__init__.py",
-    "fingerprint": "2c2ff8756650536d744044c97e7f26d76c93fab09abcf23ce44733b5658da8de"
-  },
-  {
-    "scenario": "check/bundled/versioning_inert_text_spoofs_fail.yml",
-    "rule_id": "versioning-changelog",
-    "path": "CHANGELOG.md",
-    "fingerprint": "b217b6a395e034e83e05b0f457c690b367e662aa4da05608c856413d52832f41"
-  },
-  {
-    "scenario": "check/bundled/versioning_inert_text_spoofs_fail.yml",
-    "rule_id": "versioning-python-module",
-    "path": "src/version.py",
-    "fingerprint": "d1fcb7edc7985d2d5510f0d33ea37a61cd1b91b6cbdf47a234d14d864d98c97a"
-  },
-  {
-    "scenario": "check/bundled/versioning_malformed_source_fails.yml",
-    "rule_id": "versioning-version-file-one-line",
-    "path": "VERSION",
-    "fingerprint": "e7301ebb6485d11b3276596e28d1b7348cf419a3b6e827b54792d4fd41ddd474"
-  },
-  {
-    "scenario": "check/bundled/versioning_oversized_source_fails.yml",
-    "rule_id": "versioning-version-file-one-line",
-    "path": "VERSION",
-    "fingerprint": "e7301ebb6485d11b3276596e28d1b7348cf419a3b6e827b54792d4fd41ddd474"
-  },
-  {
-    "scenario": "check/bundled/versioning_unsafe_token_never_propagates.yml",
-    "rule_id": "versioning-version-file-one-line",
-    "path": "VERSION",
-    "fingerprint": "e7301ebb6485d11b3276596e28d1b7348cf419a3b6e827b54792d4fd41ddd474"
   },
   {
     "scenario": "check/changed/changed_empty_diff_yields_empty_report.yml",
@@ -1629,13 +843,13 @@
     "scenario": "check/git/git_commit_author_allowlist_flags_outside_domain.yml",
     "rule_id": "org-authors",
     "path": null,
-    "fingerprint": "72d56327107151210746b87c4cd272f4edde463571f9846076ea39793b7503bb"
+    "fingerprint": "9e942ce7a034d94cf1e946f74dc28e3ff5616109f2f7c61db8ffc74c84eaa4ec"
   },
   {
     "scenario": "check/git/git_commit_gpg_signed_flags_unsigned.yml",
     "rule_id": "signed-commits",
     "path": null,
-    "fingerprint": "4573a60916091560a3a79a8e12b910a244962ba29ca53a1c66c1ecfe2a227e87"
+    "fingerprint": "fac8c9425e5569a73cf7f0985deda5ea0cab9fe3bfef73b9f3f9392ee2361747"
   },
   {
     "scenario": "check/git/git_commit_message_convention_fail.yml",
@@ -1653,37 +867,37 @@
     "scenario": "check/git/git_commit_message_range_flags_multiple_commits.yml",
     "rule_id": "conventional-prefix",
     "path": null,
-    "fingerprint": "461488b944ac1fa83017cdd91a8c0fdcfff4746ecbd1a7a1929f96d8df3d646a"
+    "fingerprint": "97a17cba46d188a6279cccb455f5e411666f6d2c97c162262cc27d3aa01bff34"
   },
   {
     "scenario": "check/git/git_commit_message_range_flags_multiple_commits.yml",
     "rule_id": "conventional-prefix",
     "path": null,
-    "fingerprint": "98c500cf5c9042a3ff5381d29df8c6d61c6a2c453af01d39f7057a301cb6e9fe"
+    "fingerprint": "d5e1650f9e9fd286d13f09b6d473a433f86f8f0fe93e3d99a46ee11aac877497"
   },
   {
     "scenario": "check/git/git_commit_message_range_flags_one_bad_subject.yml",
     "rule_id": "short-subjects",
     "path": null,
-    "fingerprint": "7a76604f6a707208f984243ba5713ccaeb15a110ecd06f3e2015a1184d297bac"
+    "fingerprint": "ad1f8da4a05a3ec775908ee9c999242b1ab7c2f87eee956a0e4e923bdd565572"
   },
   {
     "scenario": "check/git/git_commit_no_fixup_flags_leftover.yml",
     "rule_id": "no-fixup",
     "path": null,
-    "fingerprint": "6c2cac6b852edb8420419dbf53fa92965a150df8937282019ce3e2f7ed975fb8"
+    "fingerprint": "063443fdd2e756399f0316dd5b32c6da9d68624658b2c01c4132187655d08a59"
   },
   {
     "scenario": "check/git/git_commit_signed_off_head_lacks_trailer.yml",
     "rule_id": "dco",
     "path": null,
-    "fingerprint": "1c9339e65ca8dcc9bd6f625cd010153bb03def9a7b453993f8b664aaf5783a1a"
+    "fingerprint": "2910c7e3992e7910e0c280ebaa9b54cfdee6054414d9deb63adc3b311bbc8549"
   },
   {
     "scenario": "check/git/git_commit_subject_matches_flags_bad_grammar.yml",
     "rule_id": "subject-grammar",
     "path": null,
-    "fingerprint": "a1a7379263573b0d30d4fae0c056f674cec292cf91a4f5c2742243276e8650af"
+    "fingerprint": "4c87f2525dc6570cabb9f6289a870b97c04ba3ec47401e09099d0738ff2e5faa"
   },
   {
     "scenario": "check/git/git_no_denied_paths_fires_on_nested_secret.yml",
@@ -2280,6 +1494,90 @@
     "fingerprint": "4554525d70f4b8e7cff25496da7c51f57fc6061fb2805dd3e5fc5f105b0e4ae6"
   },
   {
+    "scenario": "ci/github-actions/ci_github_actions_flags_tag_pinned_docker.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "b269c534c55f47444696c0c55fc1aed653565ab7f4f760504ef9dfc9f379fa2c"
+  },
+  {
+    "scenario": "ci/github-actions/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/actions/demo/action.yml",
+    "fingerprint": "1ba549b70c7106011ee178824ebee4c6bcc257cf7755986448bf72aa3e2e5492"
+  },
+  {
+    "scenario": "ci/github-actions/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "8481128804c94bcd44c465ff8a8589002d24b7b510ca3dfb24d71dcce21c2735"
+  },
+  {
+    "scenario": "ci/github-actions/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "de97c74963b73d8deae1f789158923881c8612651cee900b42c78a85c6108b06"
+  },
+  {
+    "scenario": "ci/github-actions/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-pin-actions-to-sha",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "f2107de9fea10ef6110510af3c77d1e3796134ef54127764ebb19cc9c882e942"
+  },
+  {
+    "scenario": "ci/github-actions/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-workflow-contents-read",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "46873b6cf48c49bd35803e0d1d9d16eeb0987d9e8a7c480485c19d874f07b913"
+  },
+  {
+    "scenario": "ci/github-actions/ci_github_actions_flags_unpinned_and_permissive_workflows.yml",
+    "rule_id": "gha-workflow-has-name",
+    "path": ".github/workflows/bad.yml",
+    "fingerprint": "b238126378145c8bdd57112ac6ac985b430f8c4d276c05a03855c8a36b39c912"
+  },
+  {
+    "scenario": "ci/github-actions/ci_github_actions_flags_write_permissions.yml",
+    "rule_id": "gha-workflow-contents-read",
+    "path": ".github/workflows/contents-write.yml",
+    "fingerprint": "a9eab90fed565856ac0b2852469401405f09f7395651674f7db5de1e76113dab"
+  },
+  {
+    "scenario": "ci/github-actions/ci_github_actions_flags_write_permissions.yml",
+    "rule_id": "gha-workflow-contents-read",
+    "path": ".github/workflows/write-all.yml",
+    "fingerprint": "291f73eea155831c2932a1de6cb546bff8a807a26d9f3946a77bec8ddc2142b9"
+  },
+  {
+    "scenario": "compliance/apache-2/apache_2_missing_notice.yml",
+    "rule_id": "apache-2-notice-file-exists",
+    "path": null,
+    "fingerprint": "223b07c5247cc518b60265492ad5940dd3e282e1cb35dcc80900ec8d93ea649c"
+  },
+  {
+    "scenario": "compliance/apache-2/apache_2_missing_source_header.yml",
+    "rule_id": "apache-2-source-has-license-header",
+    "path": "src/util.py",
+    "fingerprint": "a97ddee5436d00ec03454f2a849b6a3f30808b73fc45d2c7d3ad5d3b08381d08"
+  },
+  {
+    "scenario": "compliance/reuse/reuse_missing_licenses_dir.yml",
+    "rule_id": "reuse-licenses-dir-exists",
+    "path": null,
+    "fingerprint": "064b4e7d0b91118b70caefe9ce014f7351e3f40551a53733b728f0a8670fc5b0"
+  },
+  {
+    "scenario": "compliance/reuse/reuse_missing_source_spdx.yml",
+    "rule_id": "reuse-source-has-copyright-text",
+    "path": "src/lib.rs",
+    "fingerprint": "d220e2ba7ff5f6d3adcdcaf924ce6aca3a57306a2cb43f2989bca18b6041d746"
+  },
+  {
+    "scenario": "compliance/reuse/reuse_missing_source_spdx.yml",
+    "rule_id": "reuse-source-has-spdx-identifier",
+    "path": "src/lib.rs",
+    "fingerprint": "656a0cb51ee2e3e7145cefdf888ae02a6c82f8a57b79c10094d7733fd4648374"
+  },
+  {
     "scenario": "cross_file/registered_flags_an_unregistered_member.yml",
     "rule_id": "members-registered",
     "path": "Cargo.toml",
@@ -2290,6 +1588,60 @@
     "rule_id": "manifests-registered",
     "path": "Cargo.toml",
     "fingerprint": "7db83eb1d2db8d6ac35aaa32d18a864018d742bae891f486ad3d7cc3b530a6f1"
+  },
+  {
+    "scenario": "docs/adr/docs_adr_flags_filename_and_missing_sections.yml",
+    "rule_id": "adr-filename-pattern",
+    "path": "docs/adr/pick-framework.md",
+    "fingerprint": "ea22ee5dab3dd857e3a0ae225f94b6c93a2beebed86a6dffce4180bc85e176fc"
+  },
+  {
+    "scenario": "docs/adr/docs_adr_flags_filename_and_missing_sections.yml",
+    "rule_id": "adr-has-decision-section",
+    "path": "docs/adr/0001-use-typescript.md",
+    "fingerprint": "7b3991469cc8033d8cda59e3be9df1fc5b163ef5aa65c433a3b1dc0776b6d6de"
+  },
+  {
+    "scenario": "dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-csproj-nullable-enabled",
+    "path": "src/App.csproj",
+    "fingerprint": "f2b0baf754d04079306ef6dbe695d8b6134cffb95118c01114df0c81273a69f9"
+  },
+  {
+    "scenario": "dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-csproj-sdk-style",
+    "path": "src/App.csproj",
+    "fingerprint": "d4f1c3bdc5ac2b4210e9198994e473e53a2f0e74a2683636a1a67a114ee5f43e"
+  },
+  {
+    "scenario": "dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-editorconfig-exists",
+    "path": null,
+    "fingerprint": "f6da42aa701c08fb4e0eb9fe89840862f38698db6149d9bcf17a78088d4934e0"
+  },
+  {
+    "scenario": "dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-global-json-exists",
+    "path": null,
+    "fingerprint": "9691aa55b5b99483922a2f4e7c09c58e3f07028d59eb4a611d1d66bdc6e7c23a"
+  },
+  {
+    "scenario": "dotnet/dotnet_flags_misconfigured_project.yml",
+    "rule_id": "dotnet-no-build-output-committed",
+    "path": "src/obj",
+    "fingerprint": "41cd2b0f7a82c012bd5f5700b82a1fcec124625fe5ac35dd3b2523be74d99818"
+  },
+  {
+    "scenario": "dotnet/dotnet_global_json_and_cpm_misconfigured_fire.yml",
+    "rule_id": "dotnet-central-package-management",
+    "path": "Directory.Packages.props",
+    "fingerprint": "65fe7551da05a31fc35b7dd7119c62d76449bdae8424d2d0a322c4a28e912094"
+  },
+  {
+    "scenario": "dotnet/dotnet_global_json_and_cpm_misconfigured_fire.yml",
+    "rule_id": "dotnet-global-json-pins-sdk",
+    "path": "global.json",
+    "fingerprint": "e4c47eab54f7d33c5316710dfa9aeee9fdb4252787782f4b6b3263e013dcb66c"
   },
   {
     "scenario": "fix/chmod_executable_bit_clear.yml",
@@ -3154,5 +2506,653 @@
     "rule_id": "license-mirror",
     "path": "crates/widget/LICENSE",
     "fingerprint": "2b5cc47c02d70f3c88b7b916cf27dc7189ee7b9779940770212d4fe0401254ee"
+  },
+  {
+    "scenario": "go/go_flags_malformed_go_mod.yml",
+    "rule_id": "go-mod-declares-go-version",
+    "path": "go.mod",
+    "fingerprint": "828b35009f31ac06a1c2d4450e528f0f839218084d79c8fe3a8f27e9967375f8"
+  },
+  {
+    "scenario": "go/go_flags_malformed_go_mod.yml",
+    "rule_id": "go-mod-declares-module-path",
+    "path": "go.mod",
+    "fingerprint": "275876c0daa8c40a42ea43030fcb168b262e033c12766372d7de78624bf7cf25"
+  },
+  {
+    "scenario": "go/go_flags_malformed_go_mod.yml",
+    "rule_id": "go-sum-exists",
+    "path": null,
+    "fingerprint": "a51b9b6fc52021fb6c41a9b41f66e8f899ceceed6c21b1d24b73203bcab86cfc"
+  },
+  {
+    "scenario": "go/go_flags_missing_go_sum.yml",
+    "rule_id": "go-sum-exists",
+    "path": null,
+    "fingerprint": "a51b9b6fc52021fb6c41a9b41f66e8f899ceceed6c21b1d24b73203bcab86cfc"
+  },
+  {
+    "scenario": "hygiene/lockfiles/hygiene_lockfiles_flags_nested_yarn_lock.yml",
+    "rule_id": "lockfiles-no-nested-yarn",
+    "path": "packages/sub/yarn.lock",
+    "fingerprint": "4d37deea676d680be8c57c613b9883a90331146c78f4ca1f01103600f02d5e9b"
+  },
+  {
+    "scenario": "hygiene/no-tracked-artifacts/hygiene_no_js_build_outputs_scoped_to_package_json.yml",
+    "rule_id": "hygiene-no-js-build-outputs",
+    "path": "frontend/dist",
+    "fingerprint": "4067961124ca33bac8996a1d75b9439ed73731c5cb4194a3fe5e9d486a1392ff"
+  },
+  {
+    "scenario": "hygiene/no-tracked-artifacts/hygiene_no_macos_junk_verifies_content_signature.yml",
+    "rule_id": "hygiene-no-macos-junk",
+    "path": ".DS_Store",
+    "fingerprint": "395c169607876d1a32d8e5f9415bb15219da1bad6c81b23d7e7a2fac3abdbc06"
+  },
+  {
+    "scenario": "hygiene/no-tracked-artifacts/hygiene_no_macos_junk_verifies_content_signature.yml",
+    "rule_id": "hygiene-no-macos-junk",
+    "path": "src/._Main.java",
+    "fingerprint": "724adfc54be63840ff333ad41f65cc2379d2f0576e777e074fc83bc6e770923f"
+  },
+  {
+    "scenario": "hygiene/no-tracked-artifacts/hygiene_no_tracked_artifacts_flags_common_junk.yml",
+    "rule_id": "hygiene-no-env-files",
+    "path": ".env",
+    "fingerprint": "5cfa82360b951344874386db1cb072ca5b2940878d975c07849ec3200c31d269"
+  },
+  {
+    "scenario": "hygiene/no-tracked-artifacts/hygiene_no_tracked_artifacts_flags_common_junk.yml",
+    "rule_id": "hygiene-no-macos-junk",
+    "path": ".DS_Store",
+    "fingerprint": "395c169607876d1a32d8e5f9415bb15219da1bad6c81b23d7e7a2fac3abdbc06"
+  },
+  {
+    "scenario": "hygiene/no-tracked-artifacts/hygiene_no_tracked_artifacts_flags_common_junk.yml",
+    "rule_id": "hygiene-no-node-modules",
+    "path": "node_modules",
+    "fingerprint": "4e3b75bdc234507d2f6e29a731d9985abf3a6f34352e5d15e288def6873115b0"
+  },
+  {
+    "scenario": "java/java_fires_on_committed_target.yml",
+    "rule_id": "java-no-class-files",
+    "path": "target/classes/com/example/Demo.class",
+    "fingerprint": "b8089e6bb45ca967eb6e6f79614cd9e6ae83a8a8c9c44d057d013a6be82012dc"
+  },
+  {
+    "scenario": "java/java_fires_on_committed_target.yml",
+    "rule_id": "java-no-tracked-target",
+    "path": "target",
+    "fingerprint": "313125ac4fa2e43059e4b4a75ebaab479611ab57ae1acfb5d40e4c2fec8e2f30"
+  },
+  {
+    "scenario": "monorepo/cargo-workspace/cargo_workspace_fires_on_missing_members.yml",
+    "rule_id": "cargo-workspace-members-declared",
+    "path": "Cargo.toml",
+    "fingerprint": "1f8d5b8b9a401b985adb6bb153680e71c7f50ea98446e095074409e04dde3756"
+  },
+  {
+    "scenario": "monorepo/cargo-workspace/cargo_workspace_non_canonical_layout_override.yml",
+    "rule_id": "cargo-workspace-member-has-readme",
+    "path": "cli",
+    "fingerprint": "de2f32aeabc24a4c51b50a5c05e74880a33dfb412b4dec37485806fe4e2c158b"
+  },
+  {
+    "scenario": "monorepo/cargo-workspace/cargo_workspace_non_canonical_layout_override.yml",
+    "rule_id": "cargo-workspace-member-has-readme",
+    "path": "runtime",
+    "fingerprint": "cd7d5133fbae60bc870758539b1d2df04b3dc2d3d26f9ccdd2c25151a1bc2b93"
+  },
+  {
+    "scenario": "monorepo/cargo-workspace/cargo_workspace_skips_non_member_dirs.yml",
+    "rule_id": "cargo-workspace-member-declares-name",
+    "path": "crates/beta/Cargo.toml",
+    "fingerprint": "fe2c0c67b8a52927e1daa79b28fd5976cc4b4e9786336660996d9d7784db3f25"
+  },
+  {
+    "scenario": "monorepo/cargo-workspace/cargo_workspace_skips_non_member_dirs.yml",
+    "rule_id": "cargo-workspace-member-has-readme",
+    "path": "crates/alpha",
+    "fingerprint": "b4b246ccbc02755385ae8b7dce36f8d5c236d1d14942f50a9cbea70ca11741ba"
+  },
+  {
+    "scenario": "monorepo/monorepo_missing_readme_flagged.yml",
+    "rule_id": "monorepo-packages-have-package-json",
+    "path": "packages/stripped",
+    "fingerprint": "ec59db93b30f40706f7509a9f202bf1d9a122e2e88418711c0fe79ee88179310"
+  },
+  {
+    "scenario": "monorepo/monorepo_missing_readme_flagged.yml",
+    "rule_id": "monorepo-packages-have-readme",
+    "path": "packages/stripped",
+    "fingerprint": "63f3ef001203ea8bcf868f54a15c90682290865656cb68e0ab4213bd20b952a0"
+  },
+  {
+    "scenario": "monorepo/pnpm-workspace/pnpm_workspace_filter_and_member_checks.yml",
+    "rule_id": "pnpm-workspace-member-has-readme",
+    "path": "packages/alpha",
+    "fingerprint": "c49386216ec63abbd5d1d2b467cd82800f10154f6a9cee8e538e9ff8270cb106"
+  },
+  {
+    "scenario": "monorepo/yarn-workspace/yarn_workspace_filter_and_member_checks.yml",
+    "rule_id": "yarn-workspace-member-has-readme",
+    "path": "apps/web",
+    "fingerprint": "c129b7c19b2a0fffe2ebaa34408c73aaf991e46621b0cfb42ba93b497056bbed"
+  },
+  {
+    "scenario": "node/node_missing_lockfile_and_version_pin.yml",
+    "rule_id": "node-engine-or-nvmrc",
+    "path": null,
+    "fingerprint": "0d0593464f8dea58e135c4919d8ad9f558d7d246a65eb7976b622d4258708c02"
+  },
+  {
+    "scenario": "node/node_missing_lockfile_and_version_pin.yml",
+    "rule_id": "node-has-lockfile",
+    "path": null,
+    "fingerprint": "b92beca7e840ad7abc17c6a199a5f65b6ae08a34b0a9365d360c2fc4868f586e"
+  },
+  {
+    "scenario": "oss-baseline/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-code-of-conduct-exists",
+    "path": null,
+    "fingerprint": "acd49e620016c6d8c2e562cf5cfaae16dc90003e515cf8164011b279769b2b6a"
+  },
+  {
+    "scenario": "oss-baseline/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-codeowners-exists",
+    "path": null,
+    "fingerprint": "e69f0e4dae12424c916f6ee2fef2e8c41c90fb3cb9d079d187c54c5ef9d4eda8"
+  },
+  {
+    "scenario": "oss-baseline/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-dependency-update-tool",
+    "path": null,
+    "fingerprint": "8db6e5504be55bc52e4ce8894b90c8a6833f31fc9290c70c23b71d229c1d19bd"
+  },
+  {
+    "scenario": "oss-baseline/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-gitignore-exists",
+    "path": null,
+    "fingerprint": "ea97769972d5555a6fcaca450b817231eddb7a576844ada993ae3726ba613232"
+  },
+  {
+    "scenario": "oss-baseline/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-license-exists",
+    "path": null,
+    "fingerprint": "7b04d6ea718ad61cbae77fba95ceb5aae6c9cc9b09b6df2eb31b52fc80228306"
+  },
+  {
+    "scenario": "oss-baseline/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-readme-exists",
+    "path": null,
+    "fingerprint": "e3836626d4ebc2c743471fc3a1c60df01e18e32cf670d078c0193f716097eb87"
+  },
+  {
+    "scenario": "oss-baseline/oss_baseline_minimal_repo_flags_gaps.yml",
+    "rule_id": "oss-security-policy-exists",
+    "path": null,
+    "fingerprint": "43ca91ae4ef2da8d565c512941927a947758d24976f51c4957ecdbde136c66bf"
+  },
+  {
+    "scenario": "php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-composer-autoload-files-resolve",
+    "path": "composer.json",
+    "fingerprint": "164a2155a26fb6797c4864b922821460fd03f4efffdb55df51bd873cd538b836"
+  },
+  {
+    "scenario": "php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-composer-bin-resolve",
+    "path": "composer.json",
+    "fingerprint": "6d2d6611e63db170c06919f0b596ef427fe92ae8ae515f01471336d61d4f146c"
+  },
+  {
+    "scenario": "php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-composer-name-format",
+    "path": "composer.json",
+    "fingerprint": "1646330cab40bb340340d8c49a25ecb18eba7622cdcfb8e419793d30adf36a8e"
+  },
+  {
+    "scenario": "php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-composer-psr4-dirs-resolve",
+    "path": "composer.json",
+    "fingerprint": "6df27c151b393119e4ba487a49d31325f5aaf421393ac8f6f497f4f8d753eb60"
+  },
+  {
+    "scenario": "php/php_flags_misconfigured_project.yml",
+    "rule_id": "php-no-vendor-committed",
+    "path": "vendor",
+    "fingerprint": "e8d37f945c2ffc0c83fdf5a5b9a06911b8a3b0359cf54e5b137be05417120acd"
+  },
+  {
+    "scenario": "python/python_excludes_test_fixture_paths.yml",
+    "rule_id": "python-sources-final-newline",
+    "path": "src/demo/core.py",
+    "fingerprint": "4614963f7e217679ea7cf1cc0b72136f29f9e9aff30ea7dac3ba2a456f067078"
+  },
+  {
+    "scenario": "python/python_excludes_test_fixture_paths.yml",
+    "rule_id": "python-sources-no-trailing-whitespace",
+    "path": "src/demo/core.py",
+    "fingerprint": "6c04aa941bb1eb6e30cb017ec10ab87e34b1a6f61387935d9416bb8eab36daad"
+  },
+  {
+    "scenario": "python/python_flags_incomplete_pyproject.yml",
+    "rule_id": "python-has-lockfile",
+    "path": null,
+    "fingerprint": "2efbab531152b3fc255787e39b5ca80d0fcebffc9c9225d8b18c7e5efbc37e07"
+  },
+  {
+    "scenario": "python/python_flags_incomplete_pyproject.yml",
+    "rule_id": "python-pyproject-declares-name",
+    "path": "pyproject.toml",
+    "fingerprint": "8f03b1872a1bb1fdf27892814445f0bb7d4d71c82e27edc4534e8a6acf366c2b"
+  },
+  {
+    "scenario": "python/python_flags_incomplete_pyproject.yml",
+    "rule_id": "python-pyproject-declares-requires-python",
+    "path": "pyproject.toml",
+    "fingerprint": "6ed171d5d65c4f8d817f12e66958718f61e9dae81a3a700f56aec79b8afa3127"
+  },
+  {
+    "scenario": "python/python_flags_missing_manifest.yml",
+    "rule_id": "python-has-lockfile",
+    "path": null,
+    "fingerprint": "2efbab531152b3fc255787e39b5ca80d0fcebffc9c9225d8b18c7e5efbc37e07"
+  },
+  {
+    "scenario": "python/python_flags_missing_manifest.yml",
+    "rule_id": "python-manifest-exists",
+    "path": null,
+    "fingerprint": "a647f38cc22dd0a45202855b8cc5b6da094fe1a82aceb7d562f4b5767aff5637"
+  },
+  {
+    "scenario": "rust/rust_gaps_flagged.yml",
+    "rule_id": "rust-cargo-lock-exists",
+    "path": null,
+    "fingerprint": "4d0b407bd9305073370a98281a21ed98f7d41cfab1761662b87dd619ddfd16e8"
+  },
+  {
+    "scenario": "rust/rust_gaps_flagged.yml",
+    "rule_id": "rust-sources-snake-case",
+    "path": "src/LibRoot.rs",
+    "fingerprint": "e8141e3501069e690c99fd15cc3217c8030564c6d7bc4daaec45d9c15294bee3"
+  },
+  {
+    "scenario": "rust/rust_gaps_flagged.yml",
+    "rule_id": "rust-toolchain-pinned",
+    "path": null,
+    "fingerprint": "8b7a9c2dbd026bee8e8876768e83c557bc38bf85a7aeadc999e8649ab6abb13d"
+  },
+  {
+    "scenario": "rust/rust_snake_case_excludes_compiler_internals.yml",
+    "rule_id": "rust-sources-snake-case",
+    "path": "library/foo/src/RealName.rs",
+    "fingerprint": "9c45ed2f4609065e8a46212044d8a46af0db0e05d350b3987ee160c8a1ba8f01"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-dotnet-declarations-coherent",
+    "path": ".tool-versions",
+    "fingerprint": "51e4d3582f2fc830c568b045f76771d161b100e69261b9221bbdc612be79dbef"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-dotnet-declarations-coherent",
+    "path": "global.json",
+    "fingerprint": "eb35e2a32f283b14fa265067d493a21b6ea2738f07d018ad4542136c9c7e8c93"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-dotnet-dockerfiles-coherent",
+    "path": "Dockerfile",
+    "fingerprint": "d690cebcd956f8678a0d2cba488b07480d378fe08aec97900e0d8ab3289c3570"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-dotnet-github-actions-coherent",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "05ddad8d05ac7b8dc3061b3cd19745584715f91611a26e95a775b768528cd0ed"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-jvm-declarations-coherent",
+    "path": ".sdkmanrc",
+    "fingerprint": "98b2fbb29ec7725d2287ed41ee8571c68c8ed3116b4c423e0b50be88b9f6c20e"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-jvm-declarations-coherent",
+    "path": ".tool-versions",
+    "fingerprint": "e9573781b104ab141c27f5b751642ff1032e6e9703254f6552acc0e820e2ac92"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-jvm-dockerfiles-coherent",
+    "path": "Dockerfile",
+    "fingerprint": "bfb5f7cac29b3a527ceac2567610d8b4744843990593f8f9c427b6eaf46946e4"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-jvm-github-actions-coherent",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "171d7be129ef2028ae05c5e97875f6dc7d06a5450864ceaac483c0de8295fca4"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-node-declarations-coherent",
+    "path": ".node-version",
+    "fingerprint": "ba59cd34e1bef2a71e785dc8e4d6423cf3c4bf735a0dc2dec4d805e3958cf55a"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-node-declarations-coherent",
+    "path": ".tool-versions",
+    "fingerprint": "39f6eddc6fcd836abd00f03b067ed047ba3333eca7657824e37ff34ad872cbd5"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-node-declarations-coherent",
+    "path": "package.json",
+    "fingerprint": "ed3a72a4a11cf76b8ded1b32da4a95f81151ed5ef4cd7a98eae6c3e603795bf8"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-node-dockerfiles-coherent",
+    "path": "Dockerfile",
+    "fingerprint": "a8dfc5c5252ba18234b2c8ee1944149a744b981faf211400c7f9961b7d4631f2"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-node-github-actions-coherent",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "84ffd632fb33bde450ec733118aac4f11aa7c00a2208568113e68bc5e2730769"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-python-declarations-coherent",
+    "path": ".tool-versions",
+    "fingerprint": "b6f7d75852bbb42346f12c51ebd370819039f14d294e15bd8b755e6e88cd0d2c"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-python-declarations-coherent",
+    "path": "Pipfile",
+    "fingerprint": "e0b9e3752f63d1184301579861d40b50636f9508d6b46d7909d7accb7a7dc6ec"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-python-declarations-coherent",
+    "path": "runtime.txt",
+    "fingerprint": "5065eddd7b5eb88c19e4f364fe2456278bdc42d5b43ff0fd1664bf4ed4e6f6d4"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-python-dockerfiles-coherent",
+    "path": "Dockerfile",
+    "fingerprint": "8705ea0abe548a4d65c585a2af541cc910adb01ed3dae3f6aa28f9a250e6164f"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-python-github-actions-coherent",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "0d4f658f62589ec67273dc2e45ef701c37c72aae093b3d2b063eb19042d77121"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-ruby-declarations-coherent",
+    "path": ".tool-versions",
+    "fingerprint": "0b22839a9c2c941ff6bb9c0398e66c8b268af083311074c78ba999eccf8e3485"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-ruby-declarations-coherent",
+    "path": "Gemfile",
+    "fingerprint": "b37912da329b021ef29e6f08dd782cfba27cfdc09a75b30eadb6bf48efffd331"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-ruby-declarations-coherent",
+    "path": "Gemfile.lock",
+    "fingerprint": "e402355d326361a328a76f7271269f7d0ea60d5695ba1971de172262c2c531a3"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-ruby-dockerfiles-coherent",
+    "path": "Dockerfile",
+    "fingerprint": "893b682081e780113a4da2b089db11584b286edea288b6d02d0fb85c1a02d26f"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-ruby-github-actions-coherent",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "7c105de385dccbe37528bac67c70f291eb7b6accdb0f0a46045ce7cd9aef8fc4"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-rust-declarations-coherent",
+    "path": ".tool-versions",
+    "fingerprint": "6a1bed57b08a85c713fa1bff749472702e14c155ac52a79a46bbba63dc527729"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-rust-declarations-coherent",
+    "path": "rust-toolchain",
+    "fingerprint": "9c20a7fee00914916d97a1c533c329a3bee6bce14cc048737e4aa487b0f4f8bf"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-rust-dockerfiles-coherent",
+    "path": "Dockerfile",
+    "fingerprint": "97d5e1cc4ef83d3f1de47a4cd5042019f7ea9cc0271f46736b1bb256ac27f0e5"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_all_target_classes_drift.yml",
+    "rule_id": "toolchain-rust-github-actions-coherent",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "f391eaf58d822e813a81b7b2c6f65e788d6831faa697ff57fdcdbb4e85624e2c"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_docker_heredoc_ignored.yml",
+    "rule_id": "toolchain-node-dockerfiles-coherent",
+    "path": "Dockerfile",
+    "fingerprint": "a8dfc5c5252ba18234b2c8ee1944149a744b981faf211400c7f9961b7d4631f2"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_inert_text_spoofs_fail.yml",
+    "rule_id": "toolchain-node-dockerfiles-coherent",
+    "path": "Dockerfile-prod",
+    "fingerprint": "056f29f9e7cc1c75c27cbf8df7209139800f366a835b884fc3283ae9db4deec4"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_inert_text_spoofs_fail.yml",
+    "rule_id": "toolchain-python-declarations-coherent",
+    "path": "Pipfile",
+    "fingerprint": "29e9eac380f7a083c28de24e792fdc72cdaf03f152fe5021ccb4b2cd26418b68"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_inert_text_spoofs_fail.yml",
+    "rule_id": "toolchain-ruby-declarations-coherent",
+    "path": "Gemfile",
+    "fingerprint": "17de324546c08ffe228e057305085920d1a54b477080045d304337d1a05d4b54"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_inert_text_spoofs_fail.yml",
+    "rule_id": "toolchain-rust-declarations-coherent",
+    "path": "rust-toolchain",
+    "fingerprint": "9c20a7fee00914916d97a1c533c329a3bee6bce14cc048737e4aa487b0f4f8bf"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_malformed_anchors_fail.yml",
+    "rule_id": "toolchain-dotnet-anchor-exact",
+    "path": "global.json",
+    "fingerprint": "95d08eabe075da3516a149aa50ccff959c32c329f8879567033f36233c738f30"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_malformed_anchors_fail.yml",
+    "rule_id": "toolchain-jvm-anchor-exact",
+    "path": ".java-version",
+    "fingerprint": "1d445fe5d10303f22565c90814136407b7fe521da25268c6672c16d835d4dd58"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_malformed_anchors_fail.yml",
+    "rule_id": "toolchain-node-anchor-exact",
+    "path": ".nvmrc",
+    "fingerprint": "0bba79d9c9be1f67d7f41fc094284aacd8181dad4f22ce7f76ecc8bd46578139"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_malformed_anchors_fail.yml",
+    "rule_id": "toolchain-python-anchor-exact",
+    "path": ".python-version",
+    "fingerprint": "438c72b602808bf6e6f2dc3f9d8a46b0c1366585e1510d03566fe07e774953a0"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_malformed_anchors_fail.yml",
+    "rule_id": "toolchain-ruby-anchor-exact",
+    "path": ".ruby-version",
+    "fingerprint": "bc49c0e11b7b53699c40c65336ea2726020982270c1f3a61486e7be9de6d7c4d"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_malformed_anchors_fail.yml",
+    "rule_id": "toolchain-rust-anchor-exact",
+    "path": "rust-toolchain.toml",
+    "fingerprint": "2d4c7c259140c2716759e8b199981e9228e84ed45999e3c81fb1392499e5bb6f"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_node_drift_fixed.yml",
+    "rule_id": "toolchain-node-declarations-coherent",
+    "path": ".node-version",
+    "fingerprint": "ba59cd34e1bef2a71e785dc8e4d6423cf3c4bf735a0dc2dec4d805e3958cf55a"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_node_drift_fixed.yml",
+    "rule_id": "toolchain-node-declarations-coherent",
+    "path": ".tool-versions",
+    "fingerprint": "39f6eddc6fcd836abd00f03b067ed047ba3333eca7657824e37ff34ad872cbd5"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_node_drift_fixed.yml",
+    "rule_id": "toolchain-node-declarations-coherent",
+    "path": "package.json",
+    "fingerprint": "ed3a72a4a11cf76b8ded1b32da4a95f81151ed5ef4cd7a98eae6c3e603795bf8"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_node_drift_fixed.yml",
+    "rule_id": "toolchain-node-declarations-coherent",
+    "path": "package.json",
+    "fingerprint": "ed3a72a4a11cf76b8ded1b32da4a95f81151ed5ef4cd7a98eae6c3e603795bf8"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_node_drift_fixed.yml",
+    "rule_id": "toolchain-node-dockerfiles-coherent",
+    "path": "Dockerfile",
+    "fingerprint": "a8dfc5c5252ba18234b2c8ee1944149a744b981faf211400c7f9961b7d4631f2"
+  },
+  {
+    "scenario": "toolchain-pins/toolchain_pins_node_drift_fixed.yml",
+    "rule_id": "toolchain-node-github-actions-coherent",
+    "path": ".github/workflows/ci.yml",
+    "fingerprint": "84ffd632fb33bde450ec733118aac4f11aa7c00a2208568113e68bc5e2730769"
+  },
+  {
+    "scenario": "tooling/editorconfig/tooling_editorconfig_flags_missing_root_files.yml",
+    "rule_id": "tooling-editorconfig-exists",
+    "path": null,
+    "fingerprint": "99e1e365ca6516bfd059ff901ff73e35a8b8faf35bd271b4b71bde6ff3103084"
+  },
+  {
+    "scenario": "tooling/editorconfig/tooling_editorconfig_flags_missing_root_files.yml",
+    "rule_id": "tooling-gitattributes-exists",
+    "path": null,
+    "fingerprint": "0cca6fd77d83c8e90505ea0b0def9aa610156023b4092bc1d04b14b0695d43c1"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-cargo-package",
+    "path": "Cargo.toml",
+    "fingerprint": "53d0e760c570c2292df966786847cec5231283093ddd0a4195c23b97a875321c"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-cargo-workspace",
+    "path": "Cargo.toml",
+    "fingerprint": "1b3f1047337dec916af5a376401b7c70f720131c4024d191feb340462961f0e9"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-changelog",
+    "path": "CHANGELOG.md",
+    "fingerprint": "fce3586a11e1a9175b3543779cc9ce549c3734bb015de4e31afd10463e00d2fd"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-helm-chart",
+    "path": "chart/Chart.yaml",
+    "fingerprint": "51858b4bae04db08506cfdfafee40b62f68f7dfebc5d6ce07cb67b43ddf69d52"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-openapi-json",
+    "path": "api/swagger.json",
+    "fingerprint": "43f0c5c1128ec6abc10fa6decc7e8f5daef77e3c9fcd958276e94e5909d821c8"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-openapi-yaml",
+    "path": "api/openapi.yaml",
+    "fingerprint": "137fd4dd75635412984fcea69c6b6b7d5ab6a05a2f306625583d459bb52d3284"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-package-json",
+    "path": "package.json",
+    "fingerprint": "5e23b53be554c03757d7c8357037c2fd455518c5120123bc59452e0ddec875d6"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-pyproject-poetry",
+    "path": "pyproject.toml",
+    "fingerprint": "7081b667f79ef10cb57c5d8eda383765e9f8f122dc9435fb8c8428d48f3bc8bc"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-pyproject-project",
+    "path": "pyproject.toml",
+    "fingerprint": "738b750b4517a75900bbe2070e870ae4a11d125716b5080f999174fa562e7708"
+  },
+  {
+    "scenario": "versioning/versioning_drift_fixed.yml",
+    "rule_id": "versioning-python-module",
+    "path": "src/__init__.py",
+    "fingerprint": "2c2ff8756650536d744044c97e7f26d76c93fab09abcf23ce44733b5658da8de"
+  },
+  {
+    "scenario": "versioning/versioning_inert_text_spoofs_fail.yml",
+    "rule_id": "versioning-changelog",
+    "path": "CHANGELOG.md",
+    "fingerprint": "b217b6a395e034e83e05b0f457c690b367e662aa4da05608c856413d52832f41"
+  },
+  {
+    "scenario": "versioning/versioning_inert_text_spoofs_fail.yml",
+    "rule_id": "versioning-python-module",
+    "path": "src/version.py",
+    "fingerprint": "d1fcb7edc7985d2d5510f0d33ea37a61cd1b91b6cbdf47a234d14d864d98c97a"
+  },
+  {
+    "scenario": "versioning/versioning_malformed_source_fails.yml",
+    "rule_id": "versioning-version-file-one-line",
+    "path": "VERSION",
+    "fingerprint": "e7301ebb6485d11b3276596e28d1b7348cf419a3b6e827b54792d4fd41ddd474"
+  },
+  {
+    "scenario": "versioning/versioning_oversized_source_fails.yml",
+    "rule_id": "versioning-version-file-one-line",
+    "path": "VERSION",
+    "fingerprint": "e7301ebb6485d11b3276596e28d1b7348cf419a3b6e827b54792d4fd41ddd474"
+  },
+  {
+    "scenario": "versioning/versioning_unsafe_token_never_propagates.yml",
+    "rule_id": "versioning-version-file-one-line",
+    "path": "VERSION",
+    "fingerprint": "e7301ebb6485d11b3276596e28d1b7348cf419a3b6e827b54792d4fd41ddd474"
   }
 ]

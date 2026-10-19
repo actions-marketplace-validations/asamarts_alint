@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value deletes a forbidden HCL attribute line, keeping its neighbors
 tags: [fix, hcl_path_absent, remove_value]
 
@@ -31,10 +32,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-secret, level: error, path: main.tf}
-  - applied: [no-secret]
-  - violations: []
+  - exit: success
+    applied: [no-secret]
+  - exit: success
+    violations: []
 
 expect_tree:
   main.tf: |

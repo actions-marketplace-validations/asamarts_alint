@@ -786,6 +786,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         rule.evaluate(&ctx).unwrap()
     }
@@ -893,6 +894,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert_eq!(v.len(), 1, "the wrong value must be reported: {v:?}");
@@ -1029,6 +1031,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: Some(&analysis_time),
+            process_environment: None,
         };
         let raw = rule.evaluate(&ctx).unwrap();
         let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);

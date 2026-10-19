@@ -1,3 +1,4 @@
+test_version: 1
 name: chmod +x fixes a shebang script that lacks the executable bit
 # Unix-only: the rule (and the chmod fix) consult the Unix executable bit, absent
 # on Windows, where the rule is a no-op. Tree-spec files are materialized without
@@ -21,7 +22,10 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: shebang-needs-x, level: error, path: scripts/hello.sh}
-  - applied: [shebang-needs-x]
-  - violations: []
+  - exit: success
+    applied: [shebang-needs-x]
+  - exit: success
+    violations: []

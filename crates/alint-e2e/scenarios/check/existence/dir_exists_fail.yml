@@ -1,3 +1,4 @@
+test_version: 1
 name: dir_exists fires when the required directory is missing
 tags: [check, dir_exists]
 
@@ -20,5 +21,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: has-src, level: error}

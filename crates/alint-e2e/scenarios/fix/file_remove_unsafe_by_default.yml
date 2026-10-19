@@ -1,3 +1,4 @@
+test_version: 1
 name: file_remove is Unsafe by default -- a bare fix suggests, does not delete
 tags: [fix, file_absent, file_remove, applicability]
 
@@ -24,9 +25,11 @@ given:
 when: [check, fix]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-bak, level: error, path: stale.bak}
-  - suggested: [no-bak]
+  - exit: policy_failure
+    suggested: [no-bak]
 
 expect_tree:
   stale.bak: "junk\n"

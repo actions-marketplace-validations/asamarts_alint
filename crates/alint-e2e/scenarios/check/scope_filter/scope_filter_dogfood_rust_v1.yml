@@ -1,3 +1,4 @@
+test_version: 1
 name: alint://bundled/rust@v1 per-file content rules respect scope_filter on a polyglot tree
 tags: [check, extends, bundled, rust, scope_filter, polyglot]
 
@@ -58,7 +59,8 @@ expect:
   # rules on the in-scope `crates/api/src/main.rs`. If
   # scope_filter regressed, two more would land on
   # `services/web/script.rs` and the strict count would mismatch.
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: rust-cargo-toml-exists, level: error}
       - {rule: rust-cargo-lock-exists, level: warning}
       - {rule: rust-toolchain-pinned, level: info}

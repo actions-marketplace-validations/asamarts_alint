@@ -1,3 +1,4 @@
+test_version: 1
 name: file_is_text is silent when every file is UTF-8 text
 tags: [check, file_is_text, passing]
 
@@ -22,4 +23,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

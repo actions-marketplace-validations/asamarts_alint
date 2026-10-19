@@ -1,3 +1,4 @@
+test_version: 1
 name: --changed rechecks the complete Markdown link graph
 tags: [check, check_changed, changed, markdown_links_resolve, cross_file]
 
@@ -29,7 +30,9 @@ given:
 when: [check, check_changed]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: docs-links, level: error, path: README.md}
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: docs-links, level: error, path: README.md}

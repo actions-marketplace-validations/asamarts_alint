@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_links_resolve catches a moved repository target
 tags: [check, markdown_links_resolve, cross_file, failing]
 
@@ -30,5 +31,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: repo-links, level: error, path: CHANGELOG.md}

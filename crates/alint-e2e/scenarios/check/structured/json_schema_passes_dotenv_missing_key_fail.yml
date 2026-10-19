@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes with format dotenv flags a .env missing a required key
 tags: [check, json_schema_passes, structured, dotenv, failing]
 
@@ -29,5 +30,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: env-has-db-url, level: error, path: .env}

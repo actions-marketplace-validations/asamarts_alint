@@ -246,6 +246,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         rule.evaluate(&ctx).unwrap()
     }

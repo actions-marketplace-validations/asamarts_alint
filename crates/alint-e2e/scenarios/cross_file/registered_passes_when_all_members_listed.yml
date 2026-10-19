@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file registered passes when every member is listed (no false positive)
 # The convergence / clean case: both crate dirs appear in workspace.members, so
 # the rule is silent. Guards against a false positive that would make the fix
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

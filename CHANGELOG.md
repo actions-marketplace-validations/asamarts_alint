@@ -8,14 +8,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **The public policy-test v1 contract now has a typed Rust model and generated JSON Schema.**
-  `alint-testkit` parses `test_version: 1` documents through YAML complexity, explicit-tag,
-  explicit-null, and duplicate-key guards; returns aggregate structured validation diagnostics;
-  and publishes `schemas/v1/policy-test.json`. Package confinement rejects unsafe inline-tree
-  names and links, lexical/canonical package escapes, unsafe fixture entries and symlinks, special
-  or privileged files, invalid deterministic environment entries, and unsafe snapshot targets.
-  This is the P1 contract foundation; the public runner and `alint test` command remain the next
-  P2/P3 slice.
+- **`alint-testkit` now ships the public, hermetic policy-test v1 runner.** `PolicyTest` documents
+  parse through bounded YAML guards and aggregate validation, while `Runner::run` separates the
+  read-only source package from the temporary repository, denies remote config resolution, injects
+  deterministic environment/time/Git state, reloads config for every step, and enforces two-key
+  grants for process and host-keyring capabilities. Structured observations support counted exact
+  matching, notes, analysis failures, related locations, canonical diffs, redacted diagnostics,
+  final-tree checks, and atomic JSON snapshots. All 578 declarative tests use the public contract;
+  bundled ruleset tests now live beside their owning rulesets under `alint-dsl/ruleset-tests/v1`,
+  and the obsolete internal scenario model and unchecked runner are removed. The crate is
+  publishable with an opt-in `strategies` feature; `alint test` is the remaining CLI slice.
 
 ### Changed
 

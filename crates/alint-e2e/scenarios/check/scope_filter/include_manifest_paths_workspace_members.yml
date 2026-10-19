@@ -1,3 +1,4 @@
+test_version: 1
 name: include_manifest_paths scopes a rule to only the declared Cargo.toml workspace members
 tags: [check, scope_filter, no_trailing_whitespace]
 
@@ -32,5 +33,6 @@ when: [check]
 
 expect:
   # Only the file under the declared member fires; vendor/x.rs is out of scope.
-  - violations:
+  - exit: success
+    violations:
       - {rule: nws, level: warning, path: crates/a/lib.rs}

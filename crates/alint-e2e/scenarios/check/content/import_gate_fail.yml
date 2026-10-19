@@ -1,3 +1,4 @@
+test_version: 1
 name: import_gate fires when a scoped file imports a forbidden module
 tags: [check, import_gate, content]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: staging-no-main-module, level: error, path: staging/src/k8s.io/api/types.go}

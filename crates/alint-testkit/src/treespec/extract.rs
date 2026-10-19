@@ -1,9 +1,9 @@
 //! `disk → spec`. Walk a directory and produce a [`TreeSpec`].
 //!
-//! v0 limitations (see [`TREE_SPEC.md`]):
-//! - Binary / non-UTF-8 files are skipped.
-//! - Symlinks are skipped.
-//! - Metadata (mode, mtime) is not captured.
+//! Extraction intentionally covers only the portable regular-file subset:
+//! - binary, oversized, and non-UTF-8 files are skipped;
+//! - symlinks are skipped;
+//! - metadata, including executable mode, is not captured.
 
 use std::collections::BTreeMap;
 use std::path::Path;

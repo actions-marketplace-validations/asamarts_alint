@@ -1,3 +1,4 @@
+test_version: 1
 name: no_case_conflicts is silent when every path is unique regardless of case
 tags: [check, no_case_conflicts, portable, passing]
 
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use alint_core::baseline::fingerprint;
 use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
-use alint_testkit::{Scenario, StepOutcome, run_scenario};
+use alint_testkit::{PolicyTest, Runner, RunnerOptions, TestStep};
 
 mod support;
 
@@ -141,34 +141,59 @@ fn findings_of(
     }
 }
 
-/// Run every scenario under `dir` and collect findings + which kinds fired.
-fn collect_from_scenarios(dir: &Path, all: &mut Vec<Vec<Finding>>, fired: &mut BTreeSet<String>) {
+/// Run every policy test under `dir` and collect findings + which kinds fired.
+fn collect_from_policy_tests(
+    dir: &Path,
+    all: &mut Vec<Vec<Finding>>,
+    fired: &mut BTreeSet<String>,
+) {
     let registry = builtin_registry();
+    let runner = Runner::new(RunnerOptions {
+        allow_spawn: true,
+        allow_host_keyring: true,
+        update_snapshots: false,
+    });
     for path in yml_files(dir) {
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(yaml) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(scenario) = serde_yaml_ng::from_str::<Scenario>(&text) else {
+        let Ok(policy_test) = serde_yaml_ng::from_str::<PolicyTest>(&yaml) else {
             continue;
         };
-        // Canonicalise the id -> kind map (matching `collect_from_multi_fixtures`)
-        // so an alias-spelled `kind:` resolves to its canonical, keeping `fired`
-        // and the finding labels in a single namespace.
-        let id_kind: BTreeMap<String, String> = id_to_kind(&scenario.given.config)
+        let Some(config) = policy_test.given.config.as_deref() else {
+            continue;
+        };
+        let id_kind: BTreeMap<String, String> = id_to_kind(config)
             .into_iter()
             .map(|(id, kind)| (id, registry.canonical_kind(&kind).to_string()))
             .collect();
-        let Ok(run) = run_scenario(&scenario) else {
+        let Ok(run) = runner.run(&policy_test, &path) else {
             continue;
         };
-        for step in &run.steps {
-            let StepOutcome::Check(report) = step else {
+        for (step, observation) in policy_test.when.iter().zip(&run.observations) {
+            if !matches!(step, TestStep::Check | TestStep::CheckChanged) {
                 continue;
-            };
+            }
             let mut findings = Vec::new();
-            findings_of(report, &id_kind, &run.root, &mut findings);
-            for f in &findings {
-                fired.insert(f.kind.clone());
+            for violation in &observation.violations {
+                let kind = id_kind
+                    .get(&violation.rule)
+                    .cloned()
+                    .unwrap_or_else(|| violation.rule.clone());
+                findings.push(Finding {
+                    kind,
+                    fp: violation.fingerprint.clone(),
+                    message: violation.message.clone(),
+                    line: violation.line,
+                    keyed: violation.baseline_key.is_some(),
+                    message_reliant: violation.path.is_none()
+                        && violation.line.is_none()
+                        && violation.baseline_key.is_none(),
+                    empty_key: violation.baseline_key.as_deref() == Some(""),
+                });
+            }
+            for finding in &findings {
+                fired.insert(finding.kind.clone());
             }
             all.push(findings);
         }
@@ -176,7 +201,7 @@ fn collect_from_scenarios(dir: &Path, all: &mut Vec<Vec<Finding>>, fired: &mut B
 }
 
 /// Run the dedicated multi-finding fixtures (`alint.yml` + `tree/`) — the
-/// shapes a single-finding corpus scenario can't express.
+/// shapes a single-finding policy test can't express.
 fn collect_from_multi_fixtures(
     dir: &Path,
     all: &mut Vec<Vec<Finding>>,
@@ -235,7 +260,15 @@ fn every_kind_emits_baseline_safe_fingerprints() {
     let mut runs: Vec<Vec<Finding>> = Vec::new();
     let mut fired: BTreeSet<String> = BTreeSet::new();
 
-    collect_from_scenarios(&manifest.join("scenarios"), &mut runs, &mut fired);
+    collect_from_policy_tests(&manifest.join("scenarios"), &mut runs, &mut fired);
+    collect_from_policy_tests(
+        &manifest
+            .parent()
+            .expect("crates directory")
+            .join("alint-dsl/ruleset-tests/v1"),
+        &mut runs,
+        &mut fired,
+    );
     collect_from_multi_fixtures(
         &manifest.join("fixtures/baseline_multi"),
         &mut runs,

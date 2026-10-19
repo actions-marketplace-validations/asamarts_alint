@@ -1,3 +1,4 @@
+test_version: 1
 name: for_each_dir treats glob metacharacters in an iterated dir name literally
 tags: [check, for_each_dir, when_iter]
 
@@ -39,5 +40,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: route-has-page, level: error, path: "app/[id]"}

@@ -1,3 +1,4 @@
+test_version: 1
 name: executable_has_shebang fires on an executable file with no shebang
 tags: [check, executable_has_shebang, unix_metadata, unix-only]
 
@@ -22,5 +23,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: exec-shebang, level: error, path: scripts/run}

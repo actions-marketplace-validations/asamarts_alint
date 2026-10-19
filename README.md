@@ -197,12 +197,17 @@ In the repo: [CHANGELOG.md](CHANGELOG.md) for the per-version history, [docs/ben
 ```bash
 git clone https://github.com/asamarts/alint
 cd alint
-cargo test --workspace     # ~2,300 Rust tests, plus ~500 declarative end-to-end scenarios
+cargo test --workspace     # Rust tests plus 578 declarative end-to-end policy tests
 cargo run -- check         # dogfood: alint lints its own repo
 cargo bench -p alint-bench # criterion micro-benches
 ```
 
-alint is a single Cargo workspace of nine crates. Six are published to crates.io: `alint` (the binary) and `alint-core` (the library API), plus `alint-dsl`, `alint-rules`, `alint-output` and `alint-lsp`, which publish only because the binary depends on them and are documented as internal, not a stable public API. End-to-end tests are declarative YAML under `crates/alint-e2e/scenarios/`, so adding one is adding a file, and CLI snapshots run through `trycmd`. CI is per-job bash scripts under `ci/scripts/` that behave the same locally and on GitHub. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+alint is a ten-crate Cargo workspace. Seven crates publish to crates.io: `alint` (the binary),
+`alint-core` (the engine API), `alint-testkit` (the versioned policy-test model and hermetic
+runner), plus the internal implementation crates `alint-dsl`, `alint-rules`, `alint-output`, and
+`alint-lsp`. General policy tests live under `crates/alint-e2e/scenarios/`; bundled ruleset tests
+live beside their owners under `crates/alint-dsl/ruleset-tests/v1/`. CLI snapshots run through
+`trycmd`, and CI jobs use scripts under `ci/scripts/`.
 
 ## License
 

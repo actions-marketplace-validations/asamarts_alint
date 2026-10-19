@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_subject_matches fails closed outside a Git repository
 tags: [check, git_commit_subject_matches, git]
 
@@ -17,6 +18,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: subject-grammar, kind: resource_read}

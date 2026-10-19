@@ -1,3 +1,4 @@
+test_version: 1
 name: ini_path_equals is silent when the server port is canonical
 tags: [check, ini_path_equals, structured, passing]
 
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

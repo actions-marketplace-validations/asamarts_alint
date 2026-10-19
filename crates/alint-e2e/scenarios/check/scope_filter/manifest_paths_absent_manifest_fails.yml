@@ -1,3 +1,4 @@
+test_version: 1
 name: exclude_manifest_paths with an absent manifest fails analysis
 tags: [check, scope_filter, no_trailing_whitespace, failing]
 
@@ -25,6 +26,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: nws, kind: resource_read, path: package.json}

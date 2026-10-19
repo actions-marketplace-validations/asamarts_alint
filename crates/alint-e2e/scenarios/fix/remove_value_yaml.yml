@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value deletes a single-line YAML entry, keeping siblings + comments
 tags: [fix, yaml_path_absent, remove_value, yaml]
 
@@ -32,10 +33,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-debug, level: error, path: app.yaml}
-  - applied: [no-debug]
-  - violations: []
+  - exit: success
+    applied: [no-debug]
+  - exit: success
+    violations: []
 
 expect_tree:
   app.yaml: |

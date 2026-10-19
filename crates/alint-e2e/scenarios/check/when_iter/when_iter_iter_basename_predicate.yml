@@ -1,3 +1,4 @@
+test_version: 1
 name: when_iter filters for_each_dir on iter.basename
 tags: [check, for_each_dir, when_iter]
 
@@ -30,5 +31,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: pkg-needs-readme, level: error, path: "pkg-backend"}

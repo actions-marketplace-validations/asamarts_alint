@@ -1,3 +1,4 @@
+test_version: 1
 name: replace on json_path_matches rewrites the value at the path to satisfy matches
 tags: [fix, json_path_matches, replace, json]
 
@@ -34,10 +35,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: v-prefix, level: error, path: app.json}
-  - applied: [v-prefix]
-  - violations: []
+  - exit: success
+    applied: [v-prefix]
+  - exit: success
+    violations: []
 
 expect_tree:
   app.json: |

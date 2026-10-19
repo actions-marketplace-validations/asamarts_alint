@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_message range emits one violation per failing commit
 tags: [check, git_commit_message, git, failing]
 
@@ -28,6 +29,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: conventional-prefix, level: error}
       - {rule: conventional-prefix, level: error}

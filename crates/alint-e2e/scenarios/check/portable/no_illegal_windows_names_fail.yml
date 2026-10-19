@@ -1,3 +1,4 @@
+test_version: 1
 name: no_illegal_windows_names flags reserved and forbidden names
 # Tagged unix-only because the testkit can't actually materialize
 # `CON`/`NUL`/`COM1`/etc. on Windows — the OS rejects the name at
@@ -31,7 +32,8 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-win-reserved, level: error, path: COM1.md}
       - {rule: no-win-reserved, level: error, path: NUL}
       - {rule: no-win-reserved, level: error, path: con.txt}

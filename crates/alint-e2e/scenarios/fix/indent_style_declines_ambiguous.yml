@@ -1,3 +1,4 @@
+test_version: 1
 name: indent_style declines a width-mismatch it cannot unambiguously reindent
 tags: [fix, indent_style, verify]
 
@@ -24,10 +25,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: spaces-4, level: error, path: app.py}
-  - unfixable: [spaces-4]
-  - violations:
+  - exit: policy_failure
+    unfixable: [spaces-4]
+  - exit: policy_failure
+    violations:
       - {rule: spaces-4, level: error, path: app.py}
 
 expect_tree:

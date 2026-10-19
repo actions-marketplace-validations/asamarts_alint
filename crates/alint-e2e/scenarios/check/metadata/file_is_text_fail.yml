@@ -1,3 +1,4 @@
+test_version: 1
 name: file_is_text flags files whose bytes look binary
 tags: [check, file_is_text]
 
@@ -24,5 +25,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: src-is-text, level: error, path: src/accidental_blob.rs}

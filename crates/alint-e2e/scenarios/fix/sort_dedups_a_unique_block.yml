@@ -1,3 +1,4 @@
+test_version: 1
 name: sort dedups a unique ordered_block under --unsafe-fixes
 tags: [fix, ordered_block, sort, unique, applicability]
 
@@ -32,11 +33,15 @@ given:
 when: [check, fix, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: keep-unique, level: error, path: allow.txt}
-  - suggested: [keep-unique]
-  - applied: [keep-unique]
-  - violations: []
+  - exit: policy_failure
+    suggested: [keep-unique]
+  - exit: success
+    applied: [keep-unique]
+  - exit: success
+    violations: []
 
 expect_tree:
   allow.txt: |

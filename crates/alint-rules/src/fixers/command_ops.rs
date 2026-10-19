@@ -123,7 +123,13 @@ impl Fixer for CommandFixFixer {
         // command that does not touch `{path}` at all) converges in <=2 passes.
         let abs = ctx.root.join(rel);
         let before = std::fs::read(&abs).ok();
-        match run_capturing(&rendered, ctx.root, &env, self.timeout) {
+        match run_capturing(
+            &rendered,
+            ctx.root,
+            &env,
+            self.timeout,
+            ctx.process_environment,
+        ) {
             SpawnOutcome::Exited { status, .. } if status.success() => {
                 if std::fs::read(&abs).ok() == before {
                     Ok(FixOutcome::Skipped(format!(
@@ -194,6 +200,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: None,
+            process_environment: None,
         }
     }
 

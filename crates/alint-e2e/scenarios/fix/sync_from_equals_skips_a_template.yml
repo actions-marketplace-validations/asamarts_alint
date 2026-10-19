@@ -1,3 +1,4 @@
+test_version: 1
 name: sync_from on equals declines a non-literal (interpolated) target, no crash
 # Regression gate: a target whose captured value is an interpolated
 # `${VERSION}` template. The check skips it as a note and fires a keyless
@@ -25,10 +26,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: img-version, level: error, path: deploy.yml}
-  - skipped: [img-version]
-  - violations:
+  - exit: policy_failure
+    skipped: [img-version]
+  - exit: policy_failure
+    violations:
       - {rule: img-version, level: error, path: deploy.yml}
 
 expect_tree:

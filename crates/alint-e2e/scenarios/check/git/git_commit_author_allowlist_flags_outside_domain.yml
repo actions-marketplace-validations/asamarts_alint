@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_author_allowlist fires on an author outside the domain
 tags: [check, git_commit_author_allowlist, git, failing]
 
@@ -30,5 +31,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: org-authors, level: error}

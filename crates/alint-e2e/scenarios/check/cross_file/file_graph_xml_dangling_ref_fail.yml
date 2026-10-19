@@ -1,3 +1,4 @@
+test_version: 1
 name: file_graph over xml extract fires on a dangling ProjectReference
 tags: [check, file_graph, cross_file, xml]
 
@@ -38,5 +39,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: csproj-refs-resolve, level: error, path: A.csproj}

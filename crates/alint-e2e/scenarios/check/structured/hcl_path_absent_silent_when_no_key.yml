@@ -1,3 +1,4 @@
+test_version: 1
 name: hcl_path_absent is silent when the provider has no hardcoded key
 tags: [check, hcl_path_absent, structured, hcl, passing]
 
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

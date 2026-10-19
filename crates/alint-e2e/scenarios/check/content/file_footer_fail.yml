@@ -1,3 +1,4 @@
+test_version: 1
 name: file_footer flags files whose tail doesn't match the required pattern
 tags: [check, file_footer, content]
 
@@ -24,5 +25,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: license-footer, level: warning, path: src/missing.rs}

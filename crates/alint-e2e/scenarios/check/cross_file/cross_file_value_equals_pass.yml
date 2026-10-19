@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file_value_equals is silent when every member version matches
 tags: [check, cross_file_value_equals, cross_file, passing]
 
@@ -31,4 +32,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

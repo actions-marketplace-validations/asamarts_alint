@@ -1,6 +1,6 @@
 //! Property-based invariants for alint.
 //!
-//! Each invariant is a `proptest!` that feeds generated scenarios
+//! Each invariant is a `proptest!` that feeds generated policy tests
 //! into the testkit runner and asserts one global property:
 //!
 //! 1. `check_never_panics` — check tolerates arbitrary tree/config
@@ -27,41 +27,45 @@
 //!    `fix --unsafe-fixes` converges, covering the Unsafe apply path
 //!    (e.g. `file_remove`) that the Safe convergence law skips.
 //!
-//! The single-rule invariants use one fixable rule per scenario on
+//! The single-rule invariants use one fixable rule per policy test on
 //! purpose: they isolate each fixer's OWN fixed-point behaviour (a fixer must
 //! be its own fixed point in a single pass). As of Phase 1 `alint fix` is a
 //! fixpoint (re-walk and re-fix to convergence, docs/design/v0.17/fixpoint.md),
 //! so the CROSS-rule cascades these once excluded -- one rule creating a file
 //! another must then fix, one rule renaming a file out from under another rule's
 //! violation, a content edit and a whole-file op on one file -- now DO converge
-//! in a single `fix`. Those are covered by the dedicated e2e scenarios
+//! in a single `fix`. Those are covered by the dedicated e2e policy tests
 //! (`fix/interactions/create_then_content_fix_cascades`,
 //! `content_edit_and_rename_same_file_no_corruption`,
 //! `append_applies_once_when_not_self_satisfying`), which assert the exact
 //! multi-pass outcome; the single-rule properties here stay single-rule so a
 //! per-fixer regression is not masked by a cascade.
 //!
-//! IMPORTANT: these property invariants build scenarios with an empty
-//! `expect` and assert against the returned `ScenarioRun` directly, so
-//! `run_scenario` must NOT enforce `Scenario::validate` (the
-//! corpus-authoring "assert something" lint) — that would reject every
-//! scenario here and turn all of these vacuous. The corpus loader
-//! (`scenarios.rs`) enforces `validate` instead.
+//! The generated expectations intentionally permit execution while invariant
+//! tests inspect [`alint_testkit::StepObservation`] directly. The public runner
+//! still validates every generated document before executing it.
 //!
 //! Tuning knobs: `PROPTEST_CASES` env var scales case count.
 
-use alint_testkit::scenario::Step;
+use std::path::Path;
+
 use alint_testkit::strategies::{
-    any_scenario_tree, fixable_scenario_tree, single_fixable_scenario_tree, with_steps,
+    any_policy_test, fixable_policy_test, single_fixable_policy_test, with_steps,
 };
-use alint_testkit::treespec::{Discrepancy, VerifyMode, verify};
-use alint_testkit::{ScenarioRun, StepOutcome, run_scenario};
+use alint_testkit::treespec::{VerifyMode, verify};
+use alint_testkit::{PolicyTest, PolicyTestRun, Runner, RunnerOptions, StepObservation, TestStep};
 use proptest::prelude::*;
 
-/// Ignore the runner's own `.alint.yml` bookkeeping file when
-/// comparing the on-disk state to the input tree.
-fn ignore_runner_machinery(discrepancies: &mut Vec<Discrepancy>) {
-    discrepancies.retain(|d| !matches!(d, Discrepancy::Extra { path } if path == ".alint.yml"));
+fn run_policy_test(test: &PolicyTest) -> alint_testkit::Result<PolicyTestRun> {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/invariants.rs");
+    Runner::new(RunnerOptions::default()).run(test, &source)
+}
+
+fn inline_config(test: &PolicyTest) -> &str {
+    test.given
+        .config
+        .as_deref()
+        .expect("strategy uses inline config")
 }
 
 proptest! {
@@ -74,23 +78,20 @@ proptest! {
     })]
 
     #[test]
-    fn check_never_panics(base in any_scenario_tree()) {
-        let scenario = with_steps(base, vec![Step::Check]);
-        // We don't care whether the scenario's config is valid
-        // alint input — only that `run_scenario` never panics.
-        // Dropping the Result swallows legitimate errors.
-        let _ = run_scenario(&scenario);
+    fn check_never_panics(base in any_policy_test()) {
+        let scenario = with_steps(base, vec![TestStep::Check]);
+        // The assertion is panic-freedom; valid config failures are observations.
+        let _ = run_policy_test(&scenario);
     }
 
     #[test]
-    fn fix_dry_run_is_pure(base in fixable_scenario_tree()) {
-        let scenario = with_steps(base, vec![Step::FixDryRun]);
-        let Ok(run) = run_scenario(&scenario) else { return Ok(()); };
-        // After dry-run the disk must equal the input tree.
-        let Ok(mut report) = verify(&scenario.given.tree, &run.root, VerifyMode::Strict) else {
+    fn fix_dry_run_is_pure(base in fixable_policy_test()) {
+        let scenario = with_steps(base, vec![TestStep::FixDryRun]);
+        let Ok(run) = run_policy_test(&scenario) else { return Ok(()); };
+        let Some(expected_tree) = scenario.given.tree.as_ref() else { return Ok(()); };
+        let Ok(report) = verify(expected_tree, &run.root, VerifyMode::Strict) else {
             return Ok(());
         };
-        ignore_runner_machinery(&mut report.discrepancies);
         prop_assert!(
             report.is_match(),
             "dry-run mutated disk state:\n{report}",
@@ -98,7 +99,7 @@ proptest! {
     }
 
     #[test]
-    fn fix_is_idempotent(base in single_fixable_scenario_tree()) {
+    fn fix_is_idempotent(base in single_fixable_policy_test()) {
         // Per-fixer idempotence: with one rule, a second `fix` applies nothing
         // (each fixer is a genuine fixed point). This is the property-level guard
         // for the round-3 non-convergence bugs (F1 doubled-CR, F2 interior-CR, F3
@@ -108,28 +109,27 @@ proptest! {
         // fixpoint, a single `fix` already runs a MULTI-rule cascade to convergence
         // internally (rule A's `file_create` makes a file that rule B then fixes on
         // the next internal pass), so those cascades are asserted by the dedicated
-        // `fix/interactions` scenarios instead. Kept single-rule here so a
+        // `fix/interactions` policy tests instead. Kept single-rule here so a
         // per-fixer non-convergence regression cannot hide behind a cascade. This
         // `[fix, fix]` shape holds because every shipped fixer is normalizing or
         // self-guarding (a second invocation finds nothing to do): the fixpoint
         // keeps no cross-invocation state, so idempotence rests entirely on the
         // fixers' own idempotence, which this asserts.
-        let scenario = with_steps(base, vec![Step::Fix, Step::Fix]);
-        let Ok(run) = run_scenario(&scenario) else { return Ok(()); };
-        let Some(StepOutcome::Fix(second)) = run.steps.get(1) else {
+        let scenario = with_steps(base, vec![TestStep::Fix, TestStep::Fix]);
+        let Ok(run) = run_policy_test(&scenario) else { return Ok(()); };
+        let Some(second) = run.observations.get(1) else {
             return Ok(());
         };
-        prop_assert_eq!(
-            second.applied(),
-            0,
-            "second fix pass applied {} op(s) for a single fixer; expected idempotence; config:\n{}",
-            second.applied(),
-            scenario.given.config,
+        prop_assert!(
+            second.applied.is_empty(),
+            "second fix pass applied {:?} for a single fixer; expected idempotence; config:\n{}",
+            second.applied,
+            inline_config(&scenario),
         );
     }
 
     #[test]
-    fn fix_converges_when_fully_resolved(base in single_fixable_scenario_tree()) {
+    fn fix_converges_when_fully_resolved(base in single_fixable_policy_test()) {
         // Convergence law: after a single, fully-applied `fix` (nothing skipped,
         // nothing unfixable), a subsequent `check` finds NOTHING. Driven by the
         // SINGLE-rule strategy so every fixer is exercised with no
@@ -137,8 +137,8 @@ proptest! {
         // residuals of ANY level. (The old form used the multi-rule strategy --
         // whose fixers were all `level: warning` -- and counted only ERROR-level
         // residuals, so it could never fail: vacuous. Round-3 audit fix.)
-        let scenario = with_steps(base, vec![Step::Fix, Step::Check]);
-        let Ok(run) = run_scenario(&scenario) else { return Ok(()); };
+        let scenario = with_steps(base, vec![TestStep::Fix, TestStep::Check]);
+        let Ok(run) = run_policy_test(&scenario) else { return Ok(()); };
         let Some((fix_report, check_report)) = extract_fix_then_check(&run) else {
             return Ok(());
         };
@@ -152,7 +152,7 @@ proptest! {
         prop_assert!(
             !fix_report.non_convergent,
             "a single-rule fix hit the non-convergence cap; config:\n{}",
-            scenario.given.config,
+            inline_config(&scenario),
         );
         // Only assert convergence when the fix resolved every violation it
         // encountered. A fixer that skipped (binary file, size limit, ...) leaves
@@ -160,34 +160,35 @@ proptest! {
         // fix surfaced as `suggested` was deliberately withheld at this threshold
         // (an Unsafe fixer such as `file_remove` under a bare `fix`), so its
         // violation correctly survives -- also not a convergence failure.
-        if fix_report.skipped() > 0 || fix_report.unfixable() > 0 || fix_report.suggested() > 0 {
+        if !fix_report.skipped.is_empty()
+            || !fix_report.unfixable.is_empty()
+            || !fix_report.suggested.is_empty()
+        {
             return Ok(());
         }
-        let residual: usize = check_report.results.iter()
-            .map(|r| r.violations.len())
-            .sum();
+        let residual = check_report.violations.len();
         prop_assert_eq!(
             residual,
             0,
             "check still reported {} violation(s) after a fully-applied single-rule fix \
              (non-convergent fixer); config:\n{}",
             residual,
-            scenario.given.config,
+            inline_config(&scenario),
         );
     }
 
     #[test]
-    fn fix_dry_run_is_pure_single_rule(base in single_fixable_scenario_tree()) {
+    fn fix_dry_run_is_pure_single_rule(base in single_fixable_policy_test()) {
         // Dry-run purity over the full fixer catalogue: even the content
         // fixers (compose buffer) and the direct-write trio (create/remove/
         // rename, via the stage sink) must leave the tree byte-identical under
         // `fix --dry-run`.
-        let scenario = with_steps(base, vec![Step::FixDryRun]);
-        let Ok(run) = run_scenario(&scenario) else { return Ok(()); };
-        let Ok(mut report) = verify(&scenario.given.tree, &run.root, VerifyMode::Strict) else {
+        let scenario = with_steps(base, vec![TestStep::FixDryRun]);
+        let Ok(run) = run_policy_test(&scenario) else { return Ok(()); };
+        let Some(expected_tree) = scenario.given.tree.as_ref() else { return Ok(()); };
+        let Ok(report) = verify(expected_tree, &run.root, VerifyMode::Strict) else {
             return Ok(());
         };
-        ignore_runner_machinery(&mut report.discrepancies);
         prop_assert!(
             report.is_match(),
             "dry-run mutated disk state:\n{report}",
@@ -195,7 +196,7 @@ proptest! {
     }
 
     #[test]
-    fn check_fixable_never_overlaps_a_suggestion(base in single_fixable_scenario_tree()) {
+    fn check_fixable_never_overlaps_a_suggestion(base in single_fixable_policy_test()) {
         // Honesty law (round-7): `check` tags a violation `is_fixable` only when a
         // bare `alint fix` would RESOLVE it. A single-rule tree shares one fixer
         // tier, so if that bare fix produced ANY `Suggested` (a below-Safe-threshold
@@ -204,21 +205,20 @@ proptest! {
         // resolution the bare `fix` withholds (it needs `--unsafe-fixes`). This is
         // the net that would have caught the pre-fix regression where an Unsafe
         // `file_remove` was still counted "auto-fixable" in `check`.
-        let scenario = with_steps(base, vec![Step::Check, Step::Fix]);
-        let Ok(run) = run_scenario(&scenario) else { return Ok(()); };
-        let (Some(StepOutcome::Check(check)), Some(StepOutcome::Fix(fix))) =
-            (run.steps.first(), run.steps.get(1))
+        let scenario = with_steps(base, vec![TestStep::Check, TestStep::Fix]);
+        let Ok(run) = run_policy_test(&scenario) else { return Ok(()); };
+        let (Some(check), Some(fix)) =
+            (run.observations.first(), run.observations.get(1))
         else {
             return Ok(());
         };
-        if fix.suggested() == 0 {
+        if fix.suggested.is_empty() {
             return Ok(()); // no below-threshold fixer in play; nothing to assert
         }
-        let check_fixable: usize = check
-            .results
+        let check_fixable = check
+            .violations
             .iter()
-            .flat_map(|r| &r.violations)
-            .filter(|v| v.is_fixable)
+            .filter(|violation| violation.is_fixable)
             .count();
         prop_assert_eq!(
             check_fixable,
@@ -226,12 +226,12 @@ proptest! {
             "check tagged {} violation(s) auto-fixable, but a bare fix only SUGGESTED \
              (did not resolve) them; config:\n{}",
             check_fixable,
-            scenario.given.config,
+            inline_config(&scenario),
         );
     }
 
     #[test]
-    fn fix_unsafe_converges_when_fully_resolved(base in single_fixable_scenario_tree()) {
+    fn fix_unsafe_converges_when_fully_resolved(base in single_fixable_policy_test()) {
         // Convergence under `--unsafe-fixes` (round-7): the Safe-threshold
         // convergence law early-returns on a `Suggested` below-threshold fixer, so
         // since `file_remove` became Unsafe that op got ZERO apply/convergence
@@ -239,39 +239,32 @@ proptest! {
         // fixer applies (`Safe <= Unsafe`, `Unsafe == Unsafe`), so a single
         // fully-applied `fix --unsafe-fixes` must leave `check` finding nothing --
         // restoring file_remove's apply + convergence coverage.
-        let scenario = with_steps(base, vec![Step::FixUnsafe, Step::Check]);
-        let Ok(run) = run_scenario(&scenario) else { return Ok(()); };
+        let scenario = with_steps(base, vec![TestStep::FixUnsafe, TestStep::Check]);
+        let Ok(run) = run_policy_test(&scenario) else { return Ok(()); };
         let Some((fix_report, check_report)) = extract_fix_then_check(&run) else {
             return Ok(());
         };
         // Same guard as the Safe law: a genuine skip/unfixable leaves a real
         // violation. No Suggestion-tier fixer is generated, so `suggested` is 0 at
         // the Unsafe threshold; guard it anyway for parity.
-        if fix_report.skipped() > 0 || fix_report.unfixable() > 0 || fix_report.suggested() > 0 {
+        if !fix_report.skipped.is_empty()
+            || !fix_report.unfixable.is_empty()
+            || !fix_report.suggested.is_empty()
+        {
             return Ok(());
         }
-        let residual: usize = check_report.results.iter().map(|r| r.violations.len()).sum();
+        let residual = check_report.violations.len();
         prop_assert_eq!(
             residual,
             0,
             "check still reported {} violation(s) after a fully-applied single-rule \
              `fix --unsafe-fixes` (non-convergent fixer); config:\n{}",
             residual,
-            scenario.given.config,
+            inline_config(&scenario),
         );
     }
 }
 
-fn extract_fix_then_check(
-    run: &ScenarioRun,
-) -> Option<(&alint_core::FixReport, &alint_core::Report)> {
-    let fix = match run.steps.first()? {
-        StepOutcome::Fix(r) => r,
-        StepOutcome::Check(_) => return None,
-    };
-    let check = match run.steps.get(1)? {
-        StepOutcome::Check(r) => r,
-        StepOutcome::Fix(_) => return None,
-    };
-    Some((fix, check))
+fn extract_fix_then_check(run: &PolicyTestRun) -> Option<(&StepObservation, &StepObservation)> {
+    Some((run.observations.first()?, run.observations.get(1)?))
 }

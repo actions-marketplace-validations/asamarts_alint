@@ -48,6 +48,7 @@ fn eval(r: &OrderedBlockRule, text: &str) -> Vec<Violation> {
         git_tracked: None,
         git_blame: None,
         analysis_time: None,
+        process_environment: None,
     };
     r.evaluate_file(&ctx, Path::new("f.txt"), text.as_bytes())
         .unwrap()
@@ -680,6 +681,7 @@ fn apply_sorts_the_file_on_disk() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = sort_fixer(Comparator::Lexical, false)
         .apply(&Violation::new("x").with_path(Path::new("f.txt")), &ctx)
@@ -704,6 +706,7 @@ fn apply_dry_run_leaves_disk_untouched() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = sort_fixer(Comparator::Lexical, false)
         .apply(&Violation::new("x").with_path(Path::new("f.txt")), &ctx)
@@ -728,6 +731,7 @@ fn apply_skips_an_already_sorted_file() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = sort_fixer(Comparator::Lexical, false)
         .apply(&Violation::new("x").with_path(Path::new("f.txt")), &ctx)
@@ -756,6 +760,7 @@ fn apply_declines_an_unclosed_finding_even_with_an_unsorted_block() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = sort_fixer(Comparator::Lexical, false)
         .apply(
@@ -992,6 +997,7 @@ fn insert_line_apply_declines_a_non_require_finding() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = insert_fixer(Comparator::Lexical)
         .apply(
@@ -1023,6 +1029,7 @@ fn insert_line_apply_splices_on_disk() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = insert_fixer(Comparator::Lexical)
         .apply(
@@ -1150,6 +1157,7 @@ fn sort_apply_reports_the_require_specific_skip_reason() {
         allow_out_of_root: false,
         compose: None,
         stage_ops: None,
+        process_environment: None,
     };
     let outcome = sort_fixer(Comparator::Lexical, false)
         .apply(

@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file_value_equals fires when a member version drifts
 tags: [check, cross_file_value_equals, cross_file]
 
@@ -31,5 +32,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: workspace-versions-coherent, level: error, path: crates/b/Cargo.toml}

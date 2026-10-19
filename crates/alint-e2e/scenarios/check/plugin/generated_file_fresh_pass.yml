@@ -1,3 +1,4 @@
+test_version: 1
 name: generated_file_fresh is silent when the committed file matches the generator
 tags: [check, generated_file_fresh, plugin, passing]
 
@@ -5,6 +6,9 @@ docs:
   title: A committed generated file matching its generator
   case: pass
   kind: generated_file_fresh
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -25,4 +29,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

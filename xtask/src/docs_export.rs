@@ -13,7 +13,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use alint_testkit::DocsCase;
+use alint_testkit::PolicyDocsCase;
 
 use crate::rule_options_table::{build_kind_branch_index, load_config_schema, options_section};
 use crate::{build_release_binary, git_sha, now_iso, walkdir_plain, workspace_root};
@@ -655,10 +655,12 @@ fn process_family_h3s(
         for k in &group_kinds {
             let canon = registry.canonical_kind(k);
             let cases = documented.get(canon);
-            let has = |c: DocsCase| cases.is_some_and(|v| v.iter().any(|e| e.case == c));
-            let missing = if !has(DocsCase::Fail) {
+            let has = |case: PolicyDocsCase| {
+                cases.is_some_and(|examples| examples.iter().any(|example| example.case == case))
+            };
+            let missing = if !has(PolicyDocsCase::Fail) {
                 Some("fail")
-            } else if !has(DocsCase::Pass) && !requires_fail_only_docs(registry, canon) {
+            } else if !has(PolicyDocsCase::Pass) && !requires_fail_only_docs(registry, canon) {
                 Some("pass")
             } else {
                 None
@@ -1366,15 +1368,17 @@ fn enforce_fail_only_allowlist_live(
     for kind in derived {
         let canon = registry.canonical_kind(kind);
         let cases = documented.get(canon);
-        let has = |c: DocsCase| cases.is_some_and(|v| v.iter().any(|e| e.case == c));
+        let has = |case: PolicyDocsCase| {
+            cases.is_some_and(|examples| examples.iter().any(|example| example.case == case))
+        };
         let reason = if registry.canonical_kind(kind) != kind {
             Some(format!(
                 "not a canonical kind (resolves to `{}`)",
                 registry.canonical_kind(kind)
             ))
-        } else if !has(DocsCase::Fail) {
+        } else if !has(PolicyDocsCase::Fail) {
             Some("no documented `fail` example".to_string())
-        } else if has(DocsCase::Pass) {
+        } else if has(PolicyDocsCase::Pass) {
             Some("has a `pass` example, so the exemption is unnecessary".to_string())
         } else {
             None

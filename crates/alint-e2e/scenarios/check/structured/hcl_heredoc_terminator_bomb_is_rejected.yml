@@ -1,3 +1,4 @@
+test_version: 1
 name: hcl rejects a bomb hidden after a comment-terminated heredoc, not a crash
 tags: [check, hcl_path_absent, structured, hcl, failing]
 
@@ -28,6 +29,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: probe, kind: resource_parse, path: bomb.tf}

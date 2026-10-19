@@ -1,3 +1,4 @@
+test_version: 1
 name: sync_from is a suggestion (requires --unsafe-fixes) under a bare fix
 # sync_from is Unsafe (a whole-file overwrite can discard target content), so a
 # bare `alint fix` must SUGGEST it, not apply it -- consistent with its
@@ -28,9 +29,11 @@ given:
 when: [check, fix]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: license-mirror, level: error, path: crates/widget/LICENSE}
-  - suggested: [license-mirror]
+  - exit: policy_failure
+    suggested: [license-mirror]
 
 expect_tree:
   LICENSE: "MIT License\n(c) 2026 acme\n"

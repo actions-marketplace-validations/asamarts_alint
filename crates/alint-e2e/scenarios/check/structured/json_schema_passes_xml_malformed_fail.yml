@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes flags malformed XML as one parse analysis failure
 tags: [check, json_schema_passes, structured, xml, failing]
 
@@ -30,6 +31,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: csproj-parses, kind: resource_parse, path: Broken.csproj}

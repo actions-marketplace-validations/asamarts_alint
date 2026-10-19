@@ -1,3 +1,4 @@
+test_version: 1
 name: fix --unsafe-fixes applies the Safe tier too (threshold raised, inert in Phase 0)
 tags: [fix, no_trailing_whitespace, file_trim_trailing_whitespace]
 
@@ -23,10 +24,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-ws, level: error, path: src/bad.rs}
-  - applied: [no-ws]
-  - violations: []
+  - exit: success
+    applied: [no-ws]
+  - exit: success
+    violations: []
 
 expect_tree:
   src:

@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value removes a dotenv bare declaration
 tags: [fix, dotenv_path_absent, remove_value, dotenv]
 
@@ -22,10 +23,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-a, level: error, path: .env}
-  - applied: [no-a]
-  - violations: []
+  - exit: success
+    applied: [no-a]
+  - exit: success
+    violations: []
 
 expect_tree:
   .env: "B=2\n"

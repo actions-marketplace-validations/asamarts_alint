@@ -1,3 +1,4 @@
+test_version: 1
 name: file_content_forbidden is silent when no match is found
 tags: [check, file_content_forbidden, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

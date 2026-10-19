@@ -1,3 +1,4 @@
+test_version: 1
 name: command_idempotent fires per offending file the checker lists
 tags: [check, command_idempotent, plugin]
 
@@ -5,6 +6,9 @@ docs:
   title: A checker that flags an offending file
   case: fail
   kind: command_idempotent
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -22,5 +26,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: fmt-clean, level: error, path: src/main.rs}

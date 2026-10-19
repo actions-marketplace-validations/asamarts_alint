@@ -1,3 +1,4 @@
+test_version: 1
 name: inactive changed_since needs no Git diff
 
 tags: [check, scope_filter, changed_since, when, git, passing]
@@ -34,5 +35,6 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []
     analysis_failures: []

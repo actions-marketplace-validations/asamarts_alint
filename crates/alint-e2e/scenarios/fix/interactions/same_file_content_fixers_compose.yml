@@ -1,3 +1,4 @@
+test_version: 1
 name: two content fixers on one file compose in a single pass (one write)
 tags: [fix, interactions]
 
@@ -32,11 +33,14 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-ws, level: error, path: note.txt}
       - {rule: eof, level: error, path: note.txt}
-  - applied: [no-ws, eof]
-  - violations: []
+  - exit: success
+    applied: [no-ws, eof]
+  - exit: success
+    violations: []
 
 expect_tree:
   note.txt: "alpha\nbeta\n"

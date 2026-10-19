@@ -1,3 +1,4 @@
+test_version: 1
 name: line_max_width flags overlong lines
 tags: [check, line_max_width]
 
@@ -23,5 +24,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: narrow, level: warning, path: src/wide.rs}

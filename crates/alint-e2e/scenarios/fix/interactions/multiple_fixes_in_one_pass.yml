@@ -1,3 +1,4 @@
+test_version: 1
 name: fix applies independent fixers to different rules in a single pass
 tags: [fix, interactions]
 
@@ -38,8 +39,10 @@ given:
 when: [fix, check]
 
 expect:
-  - applied: [has-readme, no-bak, rust-header]
-  - violations: []
+  - exit: success
+    applied: [has-readme, no-bak, rust-header]
+  - exit: success
+    violations: []
 
 expect_tree:
   README.md: "# demo\n"

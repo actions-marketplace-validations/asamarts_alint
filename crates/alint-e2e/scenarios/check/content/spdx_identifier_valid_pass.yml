@@ -1,3 +1,4 @@
+test_version: 1
 name: spdx_identifier_valid accepts strict expressions
 
 tags: [check, spdx_identifier_valid, content, passing]
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

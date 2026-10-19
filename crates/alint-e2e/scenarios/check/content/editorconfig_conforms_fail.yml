@@ -1,3 +1,4 @@
+test_version: 1
 name: editorconfig_conforms applies repository formatting policy
 
 tags: [check, editorconfig_conforms, content, failing]
@@ -29,7 +30,8 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: editor-policy, level: error, path: bad.txt}
       - {rule: editor-policy, level: error, path: bad.txt}
       - {rule: editor-policy, level: error, path: bad.txt}

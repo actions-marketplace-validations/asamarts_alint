@@ -1,3 +1,4 @@
+test_version: 1
 name: no_zero_width_chars ignores a leading BOM (that's no_bom's job)
 tags: [check, no_zero_width_chars, security]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

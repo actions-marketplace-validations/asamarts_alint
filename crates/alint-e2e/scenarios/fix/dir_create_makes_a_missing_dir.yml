@@ -1,3 +1,4 @@
+test_version: 1
 name: dir_create makes a required directory that is missing
 # dir_create is Safe, so a bare `alint fix` applies it. `dir_exists` fires a
 # PATH-LESS violation (no matching directory exists); the fixer creates the
@@ -21,7 +22,10 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: needs-adr-dir, level: error}
-  - applied: [needs-adr-dir]
-  - violations: []
+  - exit: success
+    applied: [needs-adr-dir]
+  - exit: success
+    violations: []

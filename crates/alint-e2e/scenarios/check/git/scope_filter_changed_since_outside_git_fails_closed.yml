@@ -1,3 +1,4 @@
+test_version: 1
 name: scope_filter changed_since fails closed outside Git
 tags: [check, scope_filter, changed_since, git]
 
@@ -18,6 +19,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: changed-lines-clean, kind: resource_read}

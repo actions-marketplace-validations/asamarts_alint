@@ -1,3 +1,4 @@
+test_version: 1
 name: ini_path_matches flags a non-postgres JDBC url
 tags: [check, ini_path_matches]
 
@@ -24,5 +25,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: postgres-only, level: error, path: config.ini}

@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_images_have_alt catches inaccessible images
 
 tags: [check, markdown_images_have_alt, content, failing]
@@ -25,5 +26,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: image-alt, level: error, path: README.md}

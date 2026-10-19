@@ -1,3 +1,4 @@
+test_version: 1
 name: multiple whole-document (TOML) set_value rules on one file co-apply in one fix
 tags: [fix, toml_path_equals, set_value, toml]
 
@@ -46,12 +47,15 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: host, level: error, path: app.toml}
       - {rule: port, level: error, path: app.toml}
       - {rule: debug, level: error, path: app.toml}
-  - applied: [host, port, debug]
-  - violations: []
+  - exit: success
+    applied: [host, port, debug]
+  - exit: success
+    violations: []
 
 expect_tree:
   app.toml: |

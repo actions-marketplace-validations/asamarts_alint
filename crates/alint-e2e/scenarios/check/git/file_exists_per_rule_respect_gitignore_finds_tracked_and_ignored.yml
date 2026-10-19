@@ -1,3 +1,4 @@
+test_version: 1
 name: file_exists per-rule respect_gitignore:false finds a file that's tracked AND .gitignored
 tags: [check, file_exists, respect_gitignore, git]
 
@@ -41,4 +42,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

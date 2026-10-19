@@ -1,3 +1,4 @@
+test_version: 1
 name: line_endings is silent when every line matches the target
 tags: [check, line_endings, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,3 +1,4 @@
+test_version: 1
 name: sync_from overwrites a drifted target with its canonical source
 # cross_file(relation: identical) fires when a target is not byte-identical to the
 # canonical source -- the workspace LICENSE-mirroring case: each crate's LICENSE
@@ -31,10 +32,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: license-mirror, level: error, path: crates/widget/LICENSE}
-  - applied: [license-mirror]
-  - violations: []
+  - exit: success
+    applied: [license-mirror]
+  - exit: success
+    violations: []
 
 expect_tree:
   LICENSE: "MIT License\n(c) 2026 acme\n"

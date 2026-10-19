@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use rayon::prelude::*;
 
 use crate::error::{Error, Result};
-use crate::facts::{FactSpec, FactValues, evaluate_facts};
+use crate::facts::{FactSpec, FactValues, evaluate_facts_with_environment};
 use crate::located_fix::{self, LocatedEdit, LocatedOutcome};
 use crate::registry::RuleRegistry;
 use crate::report::{FIX_ERROR_PREFIX, FixItem, FixReport, FixRuleResult, FixStatus, Report};
@@ -610,6 +610,7 @@ pub struct Engine {
     vars: HashMap<String, String>,
     fix_size_limit: Option<u64>,
     analysis_time: Option<crate::AnalysisTime>,
+    process_environment: Option<BTreeMap<String, String>>,
     analysis_time_required: OnceLock<bool>,
     analysis_time_cache: Mutex<Option<AnalysisTimeCache>>,
     /// In `--changed` mode, the set of paths (relative to root)
@@ -635,6 +636,7 @@ impl Engine {
             vars: HashMap::new(),
             fix_size_limit: Some(1 << 20),
             analysis_time: None,
+            process_environment: None,
             analysis_time_required: OnceLock::new(),
             analysis_time_cache: Mutex::new(None),
             changed_paths: None,
@@ -651,6 +653,7 @@ impl Engine {
             vars: HashMap::new(),
             fix_size_limit: Some(1 << 20),
             analysis_time: None,
+            process_environment: None,
             analysis_time_required: OnceLock::new(),
             analysis_time_cache: Mutex::new(None),
             changed_paths: None,
@@ -695,6 +698,13 @@ impl Engine {
     #[must_use]
     pub fn with_vars(mut self, vars: HashMap<String, String>) -> Self {
         self.vars = vars;
+        self
+    }
+    /// Replace host inheritance for every rule/fixer/custom-fact child process
+    /// with this complete deterministic environment.
+    #[must_use]
+    pub fn with_process_environment(mut self, environment: BTreeMap<String, String>) -> Self {
+        self.process_environment = Some(environment);
         self
     }
 
@@ -759,7 +769,12 @@ impl Engine {
         index: &FileIndex,
         path: &Path,
     ) -> bool {
-        let Ok(fact_values) = evaluate_facts(&self.facts, root, index) else {
+        let Ok(fact_values) = evaluate_facts_with_environment(
+            &self.facts,
+            root,
+            index,
+            self.process_environment.as_ref(),
+        ) else {
             return true;
         };
         let when_env = WhenEnv {
@@ -783,6 +798,7 @@ impl Engine {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: self.process_environment.as_ref(),
         };
         let target = Self::normalized_write_target(root, path);
         self.entries.iter().any(|entry| {
@@ -840,7 +856,12 @@ impl Engine {
         }
 
         let t_facts = Instant::now();
-        let fact_values = evaluate_facts(&self.facts, root, index)?;
+        let fact_values = evaluate_facts_with_environment(
+            &self.facts,
+            root,
+            index,
+            self.process_environment.as_ref(),
+        )?;
         phase!(t_facts, "evaluate_facts", facts = self.facts.len() as u64);
         let when_env = WhenEnv {
             facts: &fact_values,
@@ -882,6 +903,7 @@ impl Engine {
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
             analysis_time: analysis_time.as_ref(),
+            process_environment: self.process_environment.as_ref(),
         };
         let filtered_ctx = filtered_index.as_ref().map(|fi| Context {
             root,
@@ -892,6 +914,7 @@ impl Engine {
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
             analysis_time: analysis_time.as_ref(),
+            process_environment: self.process_environment.as_ref(),
         });
         let git_file_only_ctx = git_tracked_indexes
             .as_ref()
@@ -905,6 +928,7 @@ impl Engine {
                 git_tracked: git_tracked.as_ref(),
                 git_blame: git_blame.as_ref(),
                 analysis_time: analysis_time.as_ref(),
+                process_environment: self.process_environment.as_ref(),
             });
         let git_dir_aware_ctx = git_tracked_indexes
             .as_ref()
@@ -918,6 +942,7 @@ impl Engine {
                 git_tracked: git_tracked.as_ref(),
                 git_blame: git_blame.as_ref(),
                 analysis_time: analysis_time.as_ref(),
+                process_environment: self.process_environment.as_ref(),
             });
 
         // Resolve active `scope_filter.changed_since:` diffs + manifest path
@@ -1426,6 +1451,24 @@ impl Engine {
         (live, gate_results)
     }
 
+    fn cached_or_evaluate_facts<'a>(
+        &self,
+        root: &Path,
+        index: &'a FileIndex,
+    ) -> Result<&'a FactValues> {
+        if let Some(values) = index.cached_facts() {
+            return Ok(values);
+        }
+        let computed = evaluate_facts_with_environment(
+            &self.facts,
+            root,
+            index,
+            self.process_environment.as_ref(),
+        )?;
+        index.set_facts(computed);
+        Ok(index.cached_facts().expect("facts just set on the index"))
+    }
+
     /// Re-evaluate only the per-file rules that apply to a single file,
     /// using caller-supplied `bytes` (the LSP server's in-memory edited
     /// copy is authoritative for unsaved edits — see
@@ -1454,17 +1497,9 @@ impl Engine {
             return Err(Error::file_not_in_index(file_path));
         }
 
-        // Facts are constant for an index's lifetime, so cache them on
-        // the index: the LSP calls `run_for_file` on every keystroke and
-        // re-scanning the tree for facts each time would dominate the
-        // cost. First call computes + caches; the rest reuse.
-        let fact_values: &FactValues = if let Some(values) = index.cached_facts() {
-            values
-        } else {
-            let computed = evaluate_facts(&self.facts, root, index)?;
-            index.set_facts(computed);
-            index.cached_facts().expect("facts just set on the index")
-        };
+        // Facts are constant for an index's lifetime, so cache them: the LSP
+        // calls this path on every keystroke and re-scanning would dominate.
+        let fact_values = self.cached_or_evaluate_facts(root, index)?;
         let when_env = WhenEnv {
             facts: fact_values,
             vars: &self.vars,
@@ -1492,6 +1527,7 @@ impl Engine {
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
             analysis_time: analysis_time.as_ref(),
+            process_environment: self.process_environment.as_ref(),
         };
 
         let manifest_failures = self.manifest_failures_by_entry(index, &when_env)?;
@@ -2315,7 +2351,12 @@ impl Engine {
         flush: Option<&RefCell<HashSet<PathBuf>>>,
         stage_ops: Option<&RefCell<Vec<FixEdit>>>,
     ) -> Result<FixRunOutput> {
-        let fact_values = evaluate_facts(&self.facts, root, index)?;
+        let fact_values = evaluate_facts_with_environment(
+            &self.facts,
+            root,
+            index,
+            self.process_environment.as_ref(),
+        )?;
         let when_env = WhenEnv {
             facts: &fact_values,
             vars: &self.vars,
@@ -2337,6 +2378,7 @@ impl Engine {
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
             analysis_time,
+            process_environment: self.process_environment.as_ref(),
         };
         let filtered_ctx = filtered_index.as_ref().map(|fi| Context {
             root,
@@ -2347,6 +2389,7 @@ impl Engine {
             git_tracked: git_tracked.as_ref(),
             git_blame: git_blame.as_ref(),
             analysis_time,
+            process_environment: self.process_environment.as_ref(),
         });
         let git_file_only_ctx = git_tracked_indexes
             .as_ref()
@@ -2360,6 +2403,7 @@ impl Engine {
                 git_tracked: git_tracked.as_ref(),
                 git_blame: git_blame.as_ref(),
                 analysis_time,
+                process_environment: self.process_environment.as_ref(),
             });
         let git_dir_aware_ctx = git_tracked_indexes
             .as_ref()
@@ -2373,6 +2417,7 @@ impl Engine {
                 git_tracked: git_tracked.as_ref(),
                 git_blame: git_blame.as_ref(),
                 analysis_time,
+                process_environment: self.process_environment.as_ref(),
             });
         // Compose mode for a real (non-dry-run) pass: content fixers route
         // their whole-file writes into this buffer instead of hitting disk, so
@@ -2390,6 +2435,7 @@ impl Engine {
             allow_out_of_root: false,
             compose: compose_buf.as_ref(),
             stage_ops,
+            process_environment: self.process_environment.as_ref(),
         };
 
         // Same dependency resolution as `run`, so a fix pass respects per-rule

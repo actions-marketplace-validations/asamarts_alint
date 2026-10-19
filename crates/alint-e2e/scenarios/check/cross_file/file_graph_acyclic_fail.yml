@@ -1,3 +1,4 @@
+test_version: 1
 name: file_graph flags an import cycle under require acyclic
 tags: [check, file_graph, cross_file]
 
@@ -31,5 +32,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-proto-import-cycles, level: error, path: proto/a.proto}

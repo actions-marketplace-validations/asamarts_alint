@@ -172,6 +172,9 @@ fn run_one(
     };
 
     let mut cmd = StdCommand::new(program);
+    if let Some(environment) = ctx.process_environment {
+        cmd.env_clear().envs(environment);
+    }
     cmd.args(rest)
         .current_dir(root)
         .stdin(Stdio::null())
@@ -380,6 +383,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         }
     }
 

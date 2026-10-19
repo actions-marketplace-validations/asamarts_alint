@@ -261,17 +261,35 @@ impl FactValues {
 }
 
 /// Evaluate a whole fact list against a prebuilt `FileIndex`. Invoked by
-/// `Engine::run` before any rule evaluates.
+/// `Engine::run` before any rule evaluates, inheriting the host process
+/// environment for backward-compatible production behavior.
 pub fn evaluate_facts(facts: &[FactSpec], root: &Path, index: &FileIndex) -> Result<FactValues> {
+    evaluate_facts_with_environment(facts, root, index, None)
+}
+
+/// Evaluate facts with an optional complete child-process environment.
+///
+/// `Some` clears inherited variables before a `custom` fact is spawned.
+pub fn evaluate_facts_with_environment(
+    facts: &[FactSpec],
+    root: &Path,
+    index: &FileIndex,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
+) -> Result<FactValues> {
     let mut out = FactValues::new();
     for spec in facts {
-        let value = evaluate_one(spec, root, index)?;
+        let value = evaluate_one(spec, root, index, process_environment)?;
         out.insert(spec.id.clone(), value);
     }
     Ok(out)
 }
 
-fn evaluate_one(spec: &FactSpec, root: &Path, index: &FileIndex) -> Result<FactValue> {
+fn evaluate_one(
+    spec: &FactSpec,
+    root: &Path,
+    index: &FileIndex,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
+) -> Result<FactValue> {
     match &spec.kind {
         FactKind::AnyFileExists { any_file_exists } => {
             let globs = any_file_exists.to_vec();
@@ -342,7 +360,11 @@ fn evaluate_one(spec: &FactSpec, root: &Path, index: &FileIndex) -> Result<FactV
             Ok(FactValue::Bool(any))
         }
         FactKind::GitBranch { git_branch: _ } => Ok(FactValue::String(read_git_branch(root))),
-        FactKind::Custom { custom } => Ok(FactValue::String(run_custom(custom, root))),
+        FactKind::Custom { custom } => Ok(FactValue::String(run_custom(
+            custom,
+            root,
+            process_environment,
+        ))),
     }
 }
 
@@ -355,13 +377,22 @@ const CUSTOM_FACT_TIMEOUT: Duration = Duration::from_secs(30);
 /// failures / a run past [`CUSTOM_FACT_TIMEOUT`] / unusable output → empty
 /// string. stdout is drained on a thread so a chatty child can't deadlock on a
 /// full pipe while we wait on the deadline.
-fn run_custom(spec: &CustomFact, root: &Path) -> String {
-    run_custom_with_timeout(spec, root, CUSTOM_FACT_TIMEOUT)
+fn run_custom(
+    spec: &CustomFact,
+    root: &Path,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
+) -> String {
+    run_custom_with_timeout(spec, root, CUSTOM_FACT_TIMEOUT, process_environment)
 }
 
 /// [`run_custom`] with an injectable timeout so tests can exercise the
 /// deadline path without sleeping the full 30s.
-fn run_custom_with_timeout(spec: &CustomFact, root: &Path, timeout: Duration) -> String {
+fn run_custom_with_timeout(
+    spec: &CustomFact,
+    root: &Path,
+    timeout: Duration,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
+) -> String {
     let Some((program, args)) = spec.argv.split_first() else {
         return String::new();
     };
@@ -369,6 +400,9 @@ fn run_custom_with_timeout(spec: &CustomFact, root: &Path, timeout: Duration) ->
     cmd.args(args)
         .current_dir(root)
         .stdin(std::process::Stdio::null());
+    if let Some(environment) = process_environment {
+        cmd.env_clear().envs(environment);
+    }
     // Shared bounded runner: concurrent drain, a bounded timeout (the whole
     // process group in a non-interactive run; see `crate::process`), and a
     // backgrounded descendant can't stall the run after the child exits.
@@ -782,7 +816,7 @@ mod tests {
             argv: vec!["sleep".to_string(), "30".to_string()],
         };
         let start = Instant::now();
-        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_millis(150));
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_millis(150), None);
         assert_eq!(got, "", "timed-out fact is empty");
         assert!(
             start.elapsed() < Duration::from_secs(5),
@@ -799,7 +833,7 @@ mod tests {
             argv: vec!["sh".into(), "-c".into(), "sleep 15; echo x".into()],
         };
         let start = Instant::now();
-        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_millis(300));
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_millis(300), None);
         assert_eq!(got, "");
         assert!(
             start.elapsed() < Duration::from_secs(6),
@@ -817,7 +851,7 @@ mod tests {
             argv: vec!["sh".into(), "-c".into(), "sleep 9 & echo hi".into()],
         };
         let start = Instant::now();
-        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_secs(30));
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_secs(30), None);
         assert_eq!(got, "hi");
         assert!(
             start.elapsed() < Duration::from_secs(6),
@@ -833,7 +867,7 @@ mod tests {
         let spec = CustomFact {
             argv: vec!["echo".to_string(), "hi".to_string()],
         };
-        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_secs(5));
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_secs(5), None);
         assert_eq!(got, "hi");
     }
 

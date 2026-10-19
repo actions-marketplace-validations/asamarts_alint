@@ -1,3 +1,4 @@
+test_version: 1
 name: toml_path_absent is silent when Cargo.toml has no [patch]
 tags: [check, toml_path_absent]
 
@@ -27,4 +28,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

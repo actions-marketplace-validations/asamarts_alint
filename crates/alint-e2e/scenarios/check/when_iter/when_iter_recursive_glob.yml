@@ -1,3 +1,4 @@
+test_version: 1
 name: when_iter has_file accepts recursive globs
 tags: [check, for_each_dir, when_iter]
 
@@ -31,5 +32,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: proto-pkg-needs-readme, level: error, path: "services/api"}

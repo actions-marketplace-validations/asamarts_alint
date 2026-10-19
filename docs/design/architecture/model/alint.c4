@@ -68,10 +68,10 @@ model {
       lspd = crate 'alint-lsp' 'Language Server Protocol server (diagnostics, validation) over stdio.'
     }
 
-    tooling = container 'Dev + build tooling' 'Workspace-internal crates: benchmarks, test harness, end-to-end scenarios, cargo-xtask automation.' {
+    tooling = container 'Dev + build tooling' 'Benchmarks, public policy-test support, end-to-end validation, and cargo-xtask automation.' {
       bench   = crate 'alint-bench'   'Criterion micro-benchmarks and the seeded deterministic tree generator.'
-      testkit = crate 'alint-testkit' 'Tree-spec materializer, scenario runner, and proptest strategies for tests.'
-      e2e     = crate 'alint-e2e'     'End-to-end scenarios plus the coverage-audit and invariant tests.'
+      testkit = crate 'alint-testkit' 'Public policy-test v1 model, validating hermetic runner, tree fixtures, and optional proptest strategies.'
+      e2e     = crate 'alint-e2e'     'General policy tests plus coverage audits and cross-cutting invariant tests.'
       xtask   = crate 'xtask'         'Build automation: bench-release, docs-export, gen-schema, gen-facts, gen-arch.'
     }
   }

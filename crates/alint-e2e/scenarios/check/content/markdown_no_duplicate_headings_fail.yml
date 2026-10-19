@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_no_duplicate_headings catches anchor collisions
 
 tags: [check, markdown_no_duplicate_headings, content, failing]
@@ -26,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: unique-headings, level: error, path: README.md}

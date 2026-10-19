@@ -1,3 +1,4 @@
+test_version: 1
 name: set_value rewrites a dotenv value, preserving export + comment + siblings
 tags: [fix, dotenv_path_equals, set_value, dotenv]
 
@@ -26,10 +27,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: node-env, level: error, path: .env}
-  - applied: [node-env]
-  - violations: []
+  - exit: success
+    applied: [node-env]
+  - exit: success
+    violations: []
 
 expect_tree:
   .env: |

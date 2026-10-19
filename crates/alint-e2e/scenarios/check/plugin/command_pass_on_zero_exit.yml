@@ -1,3 +1,4 @@
+test_version: 1
 name: command plugin is silent when the wrapped checker passes every file
 # linux-only: the wrapped command is a POSIX `sh` one-liner; the command rule's
 # macOS runner behaviour (env-var limits / sandboxing) is tracked separately, so
@@ -11,6 +12,9 @@ docs:
 
 # The same wrapped `grep` checker as the fail case, over a tree with no `TODO`
 # markers: every matched file exits 0, so the rule is silent.
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -29,4 +33,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

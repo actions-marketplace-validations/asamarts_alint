@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value deletes a JSON member via the CST, keeping siblings + comments
 tags: [fix, json_path_absent, remove_value, json]
 
@@ -33,10 +34,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-debug, level: error, path: app.json}
-  - applied: [no-debug]
-  - violations: []
+  - exit: success
+    applied: [no-debug]
+  - exit: success
+    violations: []
 
 expect_tree:
   app.json: |

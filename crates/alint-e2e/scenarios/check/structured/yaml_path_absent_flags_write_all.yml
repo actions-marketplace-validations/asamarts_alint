@@ -1,3 +1,4 @@
+test_version: 1
 name: yaml_path_absent flags a workflow that grants write-all
 tags: [check, yaml_path_absent]
 
@@ -37,5 +38,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-write-all-token, level: error, path: .github/workflows/ci.yml}

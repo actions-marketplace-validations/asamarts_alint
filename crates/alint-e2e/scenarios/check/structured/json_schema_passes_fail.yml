@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes flags a JSON document that violates the schema
 tags: [check, json_schema_passes, structured, failing]
 
@@ -36,5 +37,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: package-conforms, level: error, path: package.json}

@@ -333,6 +333,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let mut bytes = vec![0xFFu8]; // invalid UTF-8 lead byte
         bytes.extend_from_slice("code\u{202E}evil".as_bytes());
@@ -367,6 +368,7 @@ mod binary_evasion_tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let rule = NoBidiControlsRule {
             id: "no-bidi".to_string(),
@@ -414,6 +416,7 @@ mod binary_evasion_tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         rule().evaluate_file(&ctx, Path::new("f"), bytes).unwrap()
     }

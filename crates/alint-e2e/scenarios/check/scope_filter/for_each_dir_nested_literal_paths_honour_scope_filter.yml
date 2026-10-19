@@ -1,3 +1,4 @@
+test_version: 1
 name: a nested structured rule with a literal path honours its scope_filter
 tags: [check, for_each_dir, json_path_equals, scope_filter]
 
@@ -34,5 +35,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: ports, level: error, path: crates/a/app.json}

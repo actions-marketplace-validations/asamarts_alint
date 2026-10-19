@@ -1,8 +1,12 @@
+test_version: 1
 name: a default command fix is suggested (not run) under a bare fix
 # The default tier is Unsafe: a BARE `alint fix` must SUGGEST the command, not run
 # it (only `--unsafe-fixes` runs an unpromoted command). The `[check, fix]` shape
 # asserts the bare fix step SUGGESTS. Unix-only (/bin/sh).
 tags: [fix, command, applicability, unix-only]
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -23,6 +27,8 @@ given:
 when: [check, fix]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: js, level: error, path: src/a.js}
-  - suggested: [js]
+  - exit: policy_failure
+    suggested: [js]

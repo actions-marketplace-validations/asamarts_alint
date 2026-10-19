@@ -1,3 +1,4 @@
+test_version: 1
 name: a non-self-satisfying file_append applies once, not once per fixpoint pass
 tags: [fix, interactions, file_content_matches, file_append, fixpoint]
 
@@ -39,12 +40,14 @@ when: [fix, check]
 expect:
   # Appended once (pass 1), but the violation stands, so it is reported as an
   # unresolved skip, not as applied.
-  - applied: []
+  - exit: success
+    applied: []
     skipped: [needs-spdx]
   # The append does not contain the pattern, so the violation legitimately
   # STANDS -- `check` still reports it. That is honest: the config is
   # non-self-satisfying, not silently "fixed".
-  - violations:
+  - exit: success
+    violations:
       - {rule: needs-spdx, level: warning, path: README.md}
 
 expect_tree:

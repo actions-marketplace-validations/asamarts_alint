@@ -1,3 +1,4 @@
+test_version: 1
 name: git_blame_age reports unavailable Git outside a repository
 tags: [check, git_blame_age, git]
 
@@ -20,6 +21,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: stale-todos, kind: resource_read}

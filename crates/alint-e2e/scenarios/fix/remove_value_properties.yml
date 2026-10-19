@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value deletes a properties key line, keeping its siblings
 tags: [fix, properties_path_absent, remove_value, properties]
 
@@ -25,10 +26,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-debug, level: error, path: app.properties}
-  - applied: [no-debug]
-  - violations: []
+  - exit: success
+    applied: [no-debug]
+  - exit: success
+    violations: []
 
 expect_tree:
   app.properties: |

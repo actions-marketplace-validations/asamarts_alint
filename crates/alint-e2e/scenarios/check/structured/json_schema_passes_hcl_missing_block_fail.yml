@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes auto-detects a .tf and flags a missing required block
 tags: [check, json_schema_passes, structured, hcl, failing]
 
@@ -30,5 +31,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: has-terraform-block, level: error, path: main.tf}

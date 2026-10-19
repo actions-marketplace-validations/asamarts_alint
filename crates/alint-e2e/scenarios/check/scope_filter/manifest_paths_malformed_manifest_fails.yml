@@ -1,3 +1,4 @@
+test_version: 1
 name: malformed scope manifest fails every owning rule
 
 tags: [check, scope_filter, no_trailing_whitespace, failing]
@@ -34,7 +35,8 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: first, kind: resource_parse, path: package.json}
       - {rule: second, kind: resource_parse, path: package.json}

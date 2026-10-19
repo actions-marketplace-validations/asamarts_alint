@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes honors an explicit format xml on a non-standard extension
 tags: [check, json_schema_passes, structured, xml, passing]
 
@@ -50,4 +51,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

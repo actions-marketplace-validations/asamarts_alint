@@ -1,3 +1,4 @@
+test_version: 1
 name: pair_changed_together is silent when both files change together
 tags: [check, pair_changed_together, passing]
 
@@ -28,4 +29,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

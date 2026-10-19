@@ -1,3 +1,4 @@
+test_version: 1
 name: file_create synthesizes a missing README
 tags: [fix, file_exists, file_create]
 
@@ -21,10 +22,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: has-readme, level: error}
-  - applied: [has-readme]
-  - violations: []
+  - exit: success
+    applied: [has-readme]
+  - exit: success
+    violations: []
 
 expect_tree:
   README.md: "# demo\n"

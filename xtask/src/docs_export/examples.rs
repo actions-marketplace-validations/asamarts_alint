@@ -15,23 +15,22 @@ use std::process::Command;
 
 use alint_core::RuleRegistry;
 use alint_testkit::{
-    CommitSpec, DocsCase, DocsExample, GivenGit, Scenario, Step, TreeNode, TreeSpec, materialize,
-    setup_git,
+    PolicyCommit, PolicyDocsCase, PolicyDocsExample, PolicyGit, PolicyTest, Runner, RunnerOptions,
+    TestStep, TreeNode, TreeSpec, materialize, setup_git,
 };
 use anyhow::{Context, Result, bail};
 
 /// One rendered documented example: the markdown subsection injected onto the
 /// kind's page, plus the keys used to order fail-before-pass.
 pub(crate) struct RenderedExample {
-    pub(crate) case: DocsCase,
+    pub(crate) case: PolicyDocsCase,
     pub(crate) order: i32,
     pub(crate) markdown: String,
 }
 
-/// Scan `crates/alint-e2e/scenarios/**/*.yml`, render every scenario that
-/// carries a `docs:` block, and group the results by the documented kind
-/// (fail before pass, then by `order`). An empty map means no kind has opted
-/// in yet, so nothing is rendered and the legacy hand-written examples stand.
+/// Scan the general and bundled-ruleset policy-test corpora, render every
+/// document carrying a `docs:` block, and group results by documented kind
+/// (fail before pass, then by `order`).
 ///
 /// `capture_output` controls whether the live `alint check` run is captured.
 /// Both the full export and the `--rules-only` docs-bundle bridge pass `true`,
@@ -42,15 +41,20 @@ pub(crate) fn render_documented(
     workspace: &Path,
     capture_output: bool,
 ) -> Result<BTreeMap<String, Vec<RenderedExample>>> {
-    let dir = workspace.join("crates/alint-e2e/scenarios");
-    let mut documented: Vec<(PathBuf, Scenario, DocsExample)> = Vec::new();
-    for path in yaml_files(&dir) {
-        let text = std::fs::read_to_string(&path)
-            .with_context(|| format!("reading scenario {}", path.display()))?;
-        let scenario = Scenario::from_yaml(&text)
-            .with_context(|| format!("parsing scenario {}", path.display()))?;
-        if let Some(docs) = scenario.docs.clone() {
-            documented.push((path, scenario, docs));
+    let roots = [
+        workspace.join("crates/alint-e2e/scenarios"),
+        workspace.join("crates/alint-dsl/ruleset-tests/v1"),
+    ];
+    let mut documented: Vec<(PathBuf, PolicyTest, PolicyDocsExample)> = Vec::new();
+    for root in roots {
+        for path in yaml_files(&root) {
+            let yaml = std::fs::read_to_string(&path)
+                .with_context(|| format!("reading policy test {}", path.display()))?;
+            let policy_test = PolicyTest::from_yaml(&yaml)
+                .with_context(|| format!("parsing policy test {}", path.display()))?;
+            if let Some(docs) = policy_test.docs.clone() {
+                documented.push((path, policy_test, docs));
+            }
         }
     }
 
@@ -66,8 +70,8 @@ pub(crate) fn render_documented(
         None
     };
     let registry = alint_rules::builtin_registry();
-    for (path, scenario, docs) in &documented {
-        let rendered = render_one(bin.as_deref(), &registry, scenario, docs)
+    for (path, test, docs) in &documented {
+        let rendered = render_one(bin.as_deref(), &registry, path, test, docs)
             .with_context(|| format!("documented example {}", path.display()))?;
         // Key by the CANONICAL kind: the page/H3 lookup and the double-example /
         // page-target gates all use canonical names, so an alias-spelled
@@ -77,7 +81,8 @@ pub(crate) fn render_documented(
             .push(rendered);
     }
     for examples in out.values_mut() {
-        examples.sort_by_key(|e| (matches!(e.case, DocsCase::Pass), e.order));
+        examples
+            .sort_by_key(|example| (matches!(example.case, PolicyDocsCase::Pass), example.order));
     }
     Ok(out)
 }
@@ -87,12 +92,23 @@ pub(crate) fn render_documented(
 fn render_one(
     bin: Option<&Path>,
     registry: &RuleRegistry,
-    scenario: &Scenario,
-    docs: &DocsExample,
+    source: &Path,
+    test: &PolicyTest,
+    docs: &PolicyDocsExample,
 ) -> Result<RenderedExample> {
-    validate_documented(scenario, docs, registry)?;
+    validate_documented(test, docs, registry)?;
+    let run = Runner::new(RunnerOptions {
+        allow_spawn: true,
+        allow_host_keyring: true,
+        update_snapshots: false,
+    })
+    .run(test, source)
+    .context("running the documented policy-test contract")?;
+    if !run.passed() {
+        bail!("documented policy test mismatched: {:#?}", run.mismatches);
+    }
     let output = match bin {
-        Some(bin) => Some(run_and_capture(bin, scenario, docs)?),
+        Some(bin) => Some(run_and_capture(bin, test, docs)?),
         None => None,
     };
     Ok(RenderedExample {
@@ -100,9 +116,15 @@ fn render_one(
         order: docs.order,
         markdown: render_markdown(
             docs,
-            &scenario.given.tree,
-            scenario.given.git.as_ref(),
-            &scenario.given.config,
+            test.given
+                .tree
+                .as_ref()
+                .context("documented examples require `given.tree`")?,
+            test.given.git.as_ref(),
+            test.given
+                .config
+                .as_deref()
+                .context("documented examples require `given.config`")?,
             output.as_deref(),
         ),
     })
@@ -116,12 +138,20 @@ fn render_one(
 /// `docs.kind: cross_file` page (both canonicalise to `cross_file`). A git-rule
 /// example may carry a `given.git` block - the render drives it.
 fn validate_documented(
-    scenario: &Scenario,
-    docs: &DocsExample,
+    test: &PolicyTest,
+    docs: &PolicyDocsExample,
     registry: &RuleRegistry,
 ) -> Result<()> {
-    let config: serde_yaml_ng::Value = serde_yaml_ng::from_str(&scenario.given.config)
-        .context("parsing the documented example config")?;
+    let config_text = test
+        .given
+        .config
+        .as_deref()
+        .context("documented examples require inline `given.config`")?;
+    if test.given.tree.is_none() {
+        bail!("documented examples require inline `given.tree`");
+    }
+    let config: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(config_text).context("parsing the documented example config")?;
 
     if has_remote_extends(&config) {
         bail!(
@@ -129,11 +159,11 @@ fn validate_documented(
              hermetic (inline rules or `alint://bundled/...` only)"
         );
     }
-    if scenario.when.as_slice() != [Step::Check] {
+    if test.when.as_slice() != [TestStep::Check] {
         bail!(
-            "documented examples must be a single `check` scenario (when: [check]), \
+            "documented examples must be a single `check` policy test (when: [check]), \
              so the asserted `expect:` matches the rendered run; found {:?}",
-            scenario.when
+            test.when
         );
     }
 
@@ -158,24 +188,55 @@ fn validate_documented(
 /// Materialise the scenario, run `alint check` under the pinned-invocation
 /// contract, and return its stdout. Rejects an errored run (exit 2) and
 /// cross-checks the case against the scenario's asserted `expect:`.
-fn run_and_capture(bin: &Path, scenario: &Scenario, docs: &DocsExample) -> Result<String> {
+fn run_and_capture(bin: &Path, test: &PolicyTest, docs: &PolicyDocsExample) -> Result<String> {
     let tmp = tempfile::Builder::new()
         .prefix("alint-docs-example-")
         .tempdir()
         .context("creating tempdir")?;
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo)?;
-    materialize(&scenario.given.tree, &repo).context("materialising example tree")?;
+    let tree = test
+        .given
+        .tree
+        .as_ref()
+        .context("documented examples require `given.tree`")?;
+    materialize(tree, &repo).context("materialising example tree")?;
 
-    // Git-rule examples drive a real repo (init + commits) inside the tree.
-    if let Some(git_spec) = &scenario.given.git {
-        setup_git(&repo, git_spec).context("git setup for the documented example")?;
-    }
-
-    // Config OUTSIDE the walked tree, reached via `-c`, so `.alint.yml` is never
-    // itself a rule-matchable file.
+    let config = test
+        .given
+        .config
+        .as_deref()
+        .context("documented examples require `given.config`")?;
     let config_path = tmp.path().join("config.alint.yml");
-    std::fs::write(&config_path, &scenario.given.config)?;
+    std::fs::write(&config_path, config)?;
+
+    let home = tmp.path().join("home");
+    std::fs::create_dir(&home)?;
+    let mut environment = test.given.env.clone();
+    environment.insert(
+        "PATH".to_string(),
+        std::env::var_os("PATH")
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+    );
+    environment.insert("HOME".to_string(), home.to_string_lossy().into_owned());
+    environment.insert(
+        "GNUPGHOME".to_string(),
+        home.join("gnupg").to_string_lossy().into_owned(),
+    );
+    environment.insert("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string());
+    environment.insert(
+        "GIT_CONFIG_GLOBAL".to_string(),
+        if cfg!(windows) { "NUL" } else { "/dev/null" }.to_string(),
+    );
+    environment.insert("GIT_TERMINAL_PROMPT".to_string(), "0".to_string());
+    environment.insert("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string());
+    environment.insert("LC_ALL".to_string(), "C".to_string());
+    environment.insert("TERM".to_string(), "xterm".to_string());
+    if let Some(git_spec) = &test.given.git {
+        setup_git(&repo, git_spec, &environment).context("git setup for the documented example")?;
+    }
 
     // Pinned-invocation contract: run from inside the tree with a `.` target (no
     // absolute path leaks), config via `-c`, ASCII glyphs (the pages keep ASCII
@@ -184,7 +245,6 @@ fn run_and_capture(bin: &Path, scenario: &Scenario, docs: &DocsExample) -> Resul
     // and a fixed allowlisted environment (env_clear so a stray `{{env.X}}` in a
     // config can't leak host state). OSC-8 hyperlinks that `always` re-enables
     // are stripped below - `ansi` highlighting wants SGR colors, not link escapes.
-    let path_var = std::env::var_os("PATH").unwrap_or_default();
     let output = Command::new(bin)
         .current_dir(&repo)
         .arg("check")
@@ -194,9 +254,7 @@ fn run_and_capture(bin: &Path, scenario: &Scenario, docs: &DocsExample) -> Resul
         .arg("--color=always")
         .arg(".")
         .env_clear()
-        .env("PATH", path_var)
-        .env("LC_ALL", "C")
-        .env("TERM", "xterm")
+        .envs(&environment)
         .output()
         .with_context(|| format!("spawning `{} check`", bin.display()))?;
 
@@ -215,20 +273,20 @@ fn run_and_capture(bin: &Path, scenario: &Scenario, docs: &DocsExample) -> Resul
     // scenarios.rs harness verifies against a real run), and a fail must show a
     // finding rather than an empty block.
     match docs.case {
-        DocsCase::Fail => {
-            if !asserts_violations(scenario) {
-                bail!("`docs.case: fail` but the scenario's `expect:` asserts no violations");
+        PolicyDocsCase::Fail => {
+            if !asserts_violations(test) {
+                bail!("`docs.case: fail` but the policy test's `expect:` asserts no violations");
             }
             if stdout.trim().is_empty() {
                 bail!("`docs.case: fail` produced empty output");
             }
         }
-        DocsCase::Pass => {
+        PolicyDocsCase::Pass => {
             if code != Some(0) {
                 bail!("`docs.case: pass` is not clean (exit {code:?})");
             }
-            if asserts_violations(scenario) {
-                bail!("`docs.case: pass` but the scenario's `expect:` asserts violations");
+            if asserts_violations(test) {
+                bail!("`docs.case: pass` but the policy test's `expect:` asserts violations");
             }
         }
     }
@@ -237,12 +295,11 @@ fn run_and_capture(bin: &Path, scenario: &Scenario, docs: &DocsExample) -> Resul
 
 /// Does the scenario's first (only, for a documented example) `expect:` step
 /// assert at least one violation?
-fn asserts_violations(scenario: &Scenario) -> bool {
-    scenario
-        .expect
+fn asserts_violations(test: &PolicyTest) -> bool {
+    test.expect
         .first()
-        .and_then(|e| e.violations.as_ref())
-        .is_some_and(|v| !v.is_empty())
+        .and_then(|expectation| expectation.violations.as_ref())
+        .is_some_and(|violations| !violations.is_empty())
 }
 
 /// The `kind:` of each top-level rule in a config's `rules:` list.
@@ -276,15 +333,15 @@ fn has_remote_extends(config: &serde_yaml_ng::Value) -> bool {
 /// The markdown subsection for one example: heading, example repo, config, and
 /// (when captured) the `alint check` output.
 fn render_markdown(
-    docs: &DocsExample,
+    docs: &PolicyDocsExample,
     tree: &TreeSpec,
-    git: Option<&GivenGit>,
+    git: Option<&PolicyGit>,
     config: &str,
     output: Option<&str>,
 ) -> String {
     let lead = match docs.case {
-        DocsCase::Fail => "The rule fires on this repository:",
-        DocsCase::Pass => "This repository is compliant:",
+        PolicyDocsCase::Fail => "The rule fires on this repository:",
+        PolicyDocsCase::Pass => "This repository is compliant:",
     };
     let mut md = String::new();
     let _ = writeln!(&mut md, "### {}", docs.title);
@@ -504,15 +561,15 @@ fn strip_osc8(s: &str) -> String {
 /// A `git log --oneline`-style summary of the scenario's commits (oldest
 /// first), so a git-rule page shows the message, backdate, and staged files
 /// that drive the example. `None` when there are no commits.
-fn render_git_history(git: &GivenGit) -> Option<String> {
+fn render_git_history(git: &PolicyGit) -> Option<String> {
     if git.commits.is_empty() {
         return None;
     }
     let mut lines = Vec::with_capacity(git.commits.len());
     for commit in &git.commits {
         match commit {
-            CommitSpec::Subject(subject) => lines.push(subject.clone()),
-            CommitSpec::Detailed(d) => {
+            PolicyCommit::Subject(subject) => lines.push(subject.clone()),
+            PolicyCommit::Detailed(d) => {
                 let date = d
                     .date
                     .as_deref()
@@ -738,7 +795,8 @@ mod tests {
         // both canonicalise to `cross_file`.
         let yaml = |config_kind: &str| {
             format!(
-                r#"name: t
+                r#"test_version: 1
+name: t
 docs:
   title: X
   case: fail
@@ -753,12 +811,13 @@ given:
         kind: {config_kind}
 when: [check]
 expect:
-  - violations: []
+  - exit: success
+    violations: []
 "#
             )
         };
 
-        let aliased = Scenario::from_yaml(&yaml("cross_file_value_equals")).unwrap();
+        let aliased = PolicyTest::from_yaml(&yaml("cross_file_value_equals")).unwrap();
         let docs = aliased.docs.clone().unwrap();
         assert!(
             validate_documented(&aliased, &docs, &registry).is_ok(),
@@ -766,7 +825,7 @@ expect:
         );
 
         // A genuinely different rule is still rejected.
-        let mismatch = Scenario::from_yaml(&yaml("file_header")).unwrap();
+        let mismatch = PolicyTest::from_yaml(&yaml("file_header")).unwrap();
         let docs2 = mismatch.docs.clone().unwrap();
         assert!(
             validate_documented(&mismatch, &docs2, &registry).is_err(),
@@ -776,9 +835,9 @@ expect:
 
     #[test]
     fn markdown_omits_output_block_when_not_captured() {
-        let docs = DocsExample {
+        let docs = PolicyDocsExample {
             title: "T".into(),
-            case: DocsCase::Pass,
+            case: PolicyDocsCase::Pass,
             kind: "file_exists".into(),
             order: 0,
         };

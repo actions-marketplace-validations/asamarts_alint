@@ -1,3 +1,4 @@
+test_version: 1
 name: file_exists with a literal path and respect_gitignore false still requires the file be tracked
 tags: [check, file_exists, git_tracked_only]
 
@@ -27,5 +28,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: bazelversion-tracked, level: error}

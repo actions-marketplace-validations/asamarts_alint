@@ -1,3 +1,4 @@
+test_version: 1
 name: inactive manifest scope needs no resource
 
 tags: [check, scope_filter, when, passing]
@@ -27,5 +28,6 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []
     analysis_failures: []

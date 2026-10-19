@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_fragments_resolve catches stale deep links
 
 tags: [check, markdown_fragments_resolve, cross_file, failing]
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: heading-links, level: error, path: README.md}

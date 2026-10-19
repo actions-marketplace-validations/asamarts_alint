@@ -1,3 +1,4 @@
+test_version: 1
 name: a below-threshold suggestion resolved by another rule is not a phantom
 tags: [fix, interactions, file_content_forbidden, replace, file_remove, fixpoint]
 
@@ -39,12 +40,14 @@ when: [fix, check]
 expect:
   # Only the delete applied; a-suggest's suggestion was reconciled away (not a
   # phantom). All clean-outcome fields pinned empty.
-  - applied: [b-drop]
+  - exit: success
+    applied: [b-drop]
     skipped: []
     suggested: []
     unfixable: []
   # x.txt is gone, so neither rule fires -- fix and check agree (both exit 0).
-  - violations: []
+  - exit: success
+    violations: []
 
 expect_tree_mode: contains
 expect_tree: {}

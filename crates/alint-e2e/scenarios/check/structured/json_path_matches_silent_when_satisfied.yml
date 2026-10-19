@@ -1,3 +1,4 @@
+test_version: 1
 name: json_path_matches stays silent when every match satisfies the regex
 tags: [check, json_path_matches, structured, passing]
 
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

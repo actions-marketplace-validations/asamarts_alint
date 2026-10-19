@@ -226,6 +226,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         // `{path}` resolves to "packages/a" (dir) and "packages/x.md" (file).
@@ -289,6 +290,7 @@ scope_filter:
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         let v = rule.evaluate(&ctx).unwrap();
         // packages/a is iterated (a dir, not a file → file_exists

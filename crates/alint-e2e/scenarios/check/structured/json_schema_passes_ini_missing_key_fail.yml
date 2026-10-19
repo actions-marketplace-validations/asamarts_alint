@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes auto-detects an .ini and flags a missing required section
 tags: [check, json_schema_passes, structured, ini, failing]
 
@@ -29,5 +30,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: app-has-server, level: error, path: config.ini}

@@ -1,3 +1,4 @@
+test_version: 1
 name: for_each_file passes when every selected file satisfies the require
 tags: [check, for_each_file, cross_file, passing]
 
@@ -29,4 +30,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_signed_off fails closed outside a Git repository
 tags: [check, git_commit_signed_off, git]
 
@@ -16,6 +17,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: dco, kind: resource_read}

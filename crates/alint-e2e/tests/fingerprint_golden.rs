@@ -9,11 +9,10 @@
 
 #![cfg(target_os = "linux")]
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use alint_core::baseline::fingerprint;
-use alint_testkit::{CommitSpec, DetailedCommit, Scenario, Step, StepOutcome, run_scenario};
+use alint_testkit::strategies::with_steps;
+use alint_testkit::{PolicyTest, Runner, RunnerOptions, TestStep, TreeExpectationMode};
 use serde::Serialize;
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Serialize)]
@@ -46,87 +45,66 @@ fn yml_files(root: &Path) -> Vec<PathBuf> {
 fn slash(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
-fn stabilize_git_dates(scenario: &mut Scenario) {
-    let Some(git) = scenario.given.git.as_mut() else {
-        return;
-    };
-    for commit in &mut git.commits {
-        match commit {
-            CommitSpec::Subject(message) => {
-                *commit = CommitSpec::Detailed(DetailedCommit {
-                    message: std::mem::take(message),
-                    add: Vec::new(),
-                    date: Some("2000-01-01T00:00:00Z".to_string()),
-                });
-            }
-            CommitSpec::Detailed(commit) if commit.date.is_none() => {
-                commit.date = Some("2000-01-01T00:00:00Z".to_string());
-            }
-            CommitSpec::Detailed(_) => {}
-        }
-    }
-}
 
-fn collect_scenario(scenarios_dir: &Path, path: &Path, records: &mut Vec<GoldenFingerprint>) {
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("read scenario {}: {error}", path.display()));
-    let mut scenario: Scenario = serde_yaml_ng::from_str(&text)
-        .unwrap_or_else(|error| panic!("parse scenario {}: {error}", path.display()));
+fn collect_policy_test(corpus_root: &Path, path: &Path, records: &mut Vec<GoldenFingerprint>) {
+    let yaml = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("read policy test {}: {error}", path.display()));
+    let policy_test: PolicyTest = serde_yaml_ng::from_str(&yaml)
+        .unwrap_or_else(|error| panic!("parse policy test {}: {error}", path.display()));
 
     // Evaluate every corpus fixture from its declared initial tree, including
-    // fix-only fixtures. This makes the gate cover the whole corpus rather than
-    // only scenarios whose authored workflow happens to contain `check`.
-    scenario.when = vec![Step::Check];
-    // Range-rule baseline keys include commit SHAs. Pin otherwise-current fixture
-    // timestamps so the same corpus produces the same commit graph on every run.
-    stabilize_git_dates(&mut scenario);
-    scenario.expect.clear();
-    scenario.expect_tree = None;
-
-    let run = run_scenario(&scenario)
-        .unwrap_or_else(|error| panic!("run scenario {}: {error}", path.display()));
-    let [StepOutcome::Check(report)] = run.steps.as_slice() else {
+    // fix-only fixtures. The public runner supplies deterministic Git dates.
+    let mut policy_test = with_steps(policy_test, vec![TestStep::Check]);
+    policy_test.expect_tree = None;
+    policy_test.expect_tree_mode = TreeExpectationMode::default();
+    policy_test.snapshot = None;
+    let runner = Runner::new(RunnerOptions {
+        allow_spawn: true,
+        allow_host_keyring: true,
+        update_snapshots: false,
+    });
+    let run = runner
+        .run(&policy_test, path)
+        .unwrap_or_else(|error| panic!("run policy test {}: {error}", path.display()));
+    let [observation] = run.observations.as_slice() else {
         panic!(
-            "forced check did not return one check report: {}",
+            "forced check did not return one observation: {}",
             path.display()
         );
     };
     let scenario_path = slash(
-        path.strip_prefix(scenarios_dir)
-            .expect("scenario path is below corpus root"),
+        path.strip_prefix(corpus_root)
+            .expect("policy-test path is below corpus root"),
     );
-    let mut file_cache: BTreeMap<PathBuf, Option<Vec<u8>>> = BTreeMap::new();
-
-    for result in &report.results {
-        for violation in &result.violations {
-            let bytes = violation.path.as_ref().and_then(|finding_path| {
-                file_cache
-                    .entry(finding_path.to_path_buf())
-                    .or_insert_with(|| std::fs::read(run.root.join(finding_path)).ok())
-                    .as_deref()
-            });
-            records.push(GoldenFingerprint {
-                scenario: scenario_path.clone(),
-                rule_id: result.rule_id.to_string(),
-                path: violation.path.as_deref().map(slash),
-                fingerprint: fingerprint(result.rule_id.as_ref(), violation, bytes),
-            });
-        }
+    for violation in &observation.violations {
+        records.push(GoldenFingerprint {
+            scenario: scenario_path.clone(),
+            rule_id: violation.rule.clone(),
+            path: violation.path.clone(),
+            fingerprint: violation.fingerprint.clone(),
+        });
     }
 }
 
 #[test]
-fn scenario_fingerprints_match_golden() {
+fn policy_test_fingerprints_match_golden() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scenarios_dir = manifest.join("scenarios");
+    let ruleset_tests_dir = manifest
+        .parent()
+        .expect("crates directory")
+        .join("alint-dsl/ruleset-tests/v1");
     let mut records = Vec::new();
     for path in yml_files(&scenarios_dir) {
-        collect_scenario(&scenarios_dir, &path, &mut records);
+        collect_policy_test(&scenarios_dir, &path, &mut records);
+    }
+    for path in yml_files(&ruleset_tests_dir) {
+        collect_policy_test(&ruleset_tests_dir, &path, &mut records);
     }
     records.sort();
     assert!(
         records.len() >= 100,
-        "fingerprint gate collected only {} findings; the scenario run is probably incomplete",
+        "fingerprint gate collected only {} findings; the policy-test run is probably incomplete",
         records.len(),
     );
 

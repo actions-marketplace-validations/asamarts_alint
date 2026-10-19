@@ -1,3 +1,4 @@
+test_version: 1
 name: when_iter composes with whole-rule facts
 tags: [check, for_each_dir, when_iter]
 
@@ -38,5 +39,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: workspace-member-needs-readme, level: error, path: "crates/alpha"}

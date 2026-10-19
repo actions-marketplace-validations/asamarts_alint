@@ -1,3 +1,4 @@
+test_version: 1
 name: insert_line is Unsafe by default -- a bare fix suggests, does not insert
 tags: [fix, ordered_block, insert_line, require, applicability]
 
@@ -24,9 +25,11 @@ given:
 when: [check, fix]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: keep-negation, level: error, path: .gitignore}
-  - suggested: [keep-negation]
+  - exit: policy_failure
+    suggested: [keep-negation]
 
 expect_tree:
   .gitignore: "*.log\n"

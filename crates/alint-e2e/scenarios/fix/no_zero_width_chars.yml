@@ -1,3 +1,4 @@
+test_version: 1
 name: file_strip_zero_width removes body-internal zero-width chars but preserves leading BOM
 tags: [fix, no_zero_width_chars, file_strip_zero_width, security]
 
@@ -19,10 +20,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-zwsp, level: error, path: src/a.rs}
-  - applied: [no-zwsp]
-  - violations: []
+  - exit: success
+    applied: [no-zwsp]
+  - exit: success
+    violations: []
 
 expect_tree:
   src:

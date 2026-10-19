@@ -1,3 +1,4 @@
+test_version: 1
 name: file_graph is silent when the import graph is acyclic
 tags: [check, file_graph, cross_file, passing]
 
@@ -31,4 +32,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

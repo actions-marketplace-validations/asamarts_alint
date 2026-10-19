@@ -1,3 +1,4 @@
+test_version: 1
 name: indent_style tabs passes tab-indented sources
 tags: [check, indent_style, content, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

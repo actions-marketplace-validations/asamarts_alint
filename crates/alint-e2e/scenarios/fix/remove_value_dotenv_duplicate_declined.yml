@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value declines a duplicate dotenv key -- ambiguous, writes nothing
 tags: [fix, dotenv_path_absent, remove_value, dotenv, safety]
 
@@ -26,10 +27,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-token, level: error, path: .env}
-  - skipped: [no-token]
-  - violations:
+  - exit: policy_failure
+    skipped: [no-token]
+  - exit: policy_failure
+    violations:
       - {rule: no-token, level: error, path: .env}
 
 expect_tree:

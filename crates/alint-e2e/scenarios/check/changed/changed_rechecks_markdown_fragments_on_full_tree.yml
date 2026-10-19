@@ -1,3 +1,4 @@
+test_version: 1
 name: --changed rechecks links when a target heading changes
 tags: [check, check_changed, changed, markdown_fragments_resolve, cross_file]
 
@@ -30,7 +31,9 @@ given:
 when: [check, check_changed]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: heading-links, level: error, path: README.md}
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: heading-links, level: error, path: README.md}

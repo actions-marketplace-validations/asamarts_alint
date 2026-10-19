@@ -1,3 +1,4 @@
+test_version: 1
 name: a nested git_blame_age fires without any top-level blame rule
 tags: [check, git_blame_age, for_each_dir]
 
@@ -31,5 +32,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: per-package, level: warning}

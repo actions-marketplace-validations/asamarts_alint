@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_links_resolve can require its source scope to match
 tags: [check, markdown_links_resolve, cross_file, expect_matches, failing]
 
@@ -16,5 +17,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: docs-links, level: error}

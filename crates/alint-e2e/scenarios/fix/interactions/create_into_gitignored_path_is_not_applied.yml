@@ -1,3 +1,4 @@
+test_version: 1
 name: a file_create whose target the walker never indexes is reported unresolved, not applied
 tags: [fix, interactions, file_exists, file_create]
 
@@ -23,11 +24,13 @@ given:
 when: [fix, check]
 
 expect:
-  - applied: []
+  - exit: policy_failure
+    applied: []
     skipped: [has-env]
     suggested: []
     unfixable: []
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: has-env, level: error}
 
 expect_tree:

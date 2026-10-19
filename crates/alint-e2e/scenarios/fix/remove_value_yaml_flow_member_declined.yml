@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value declines a multi-line YAML flow-mapping member (no sibling over-deletion)
 tags: [fix, yaml_path_absent, remove_value, yaml, safety]
 
@@ -29,10 +30,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-a, level: error, path: app.yaml}
-  - skipped: [no-a]
-  - violations:
+  - exit: policy_failure
+    skipped: [no-a]
+  - exit: policy_failure
+    violations:
       - {rule: no-a, level: error, path: app.yaml}
 
 expect_tree:

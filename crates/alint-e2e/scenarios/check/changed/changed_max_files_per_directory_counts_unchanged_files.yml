@@ -1,3 +1,4 @@
+test_version: 1
 name: --changed max_files_per_directory counts the unchanged files in the directory
 tags: [check, check_changed, changed, max_files_per_directory]
 
@@ -28,7 +29,9 @@ given:
 when: [check, check_changed]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: dir-size, level: error, path: dir}
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: dir-size, level: error, path: dir}

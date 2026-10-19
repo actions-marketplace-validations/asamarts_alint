@@ -1,3 +1,4 @@
+test_version: 1
 name: hcl_path_equals is silent when the instance count is canonical
 tags: [check, hcl_path_equals, structured, hcl, passing]
 
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

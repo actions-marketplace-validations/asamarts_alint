@@ -1,3 +1,4 @@
+test_version: 1
 name: a content fix and a rename on the same file compose safely (no duplication)
 tags: [fix, interactions, no_trailing_whitespace, file_trim_trailing_whitespace, filename_case, file_rename]
 
@@ -41,7 +42,8 @@ expect:
   # One `fix` fixpoints over both internal passes: the content edit lands, then
   # the re-walk lets the rename land against the clean file. Both applied, no
   # corruption, no residual skip stranded from the yielded first-pass rename.
-  - applied: [no-ws, rust-snake]
+  - exit: success
+    applied: [no-ws, rust-snake]
 
 expect_tree:
   # Default (Strict) mode is LOAD-BEARING here: it flags an extra file, so a

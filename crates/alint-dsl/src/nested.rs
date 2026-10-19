@@ -88,6 +88,7 @@ pub(crate) fn discover_nested(
     root: &RawConfig,
     catalog: Option<KindCatalog<'_>>,
     running_version: RunningVersion,
+    environment: &dyn crate::EnvironmentProvider,
 ) -> Result<(Vec<Mapping>, Vec<ConfigCompatibility>)> {
     let walk_opts = alint_core::WalkOptions {
         respect_gitignore: root.respect_gitignore.unwrap_or(true),
@@ -141,6 +142,7 @@ pub(crate) fn discover_nested(
             root.version,
             running_version,
             catalog,
+            environment,
         )?;
         compatibility.extend(nested_compatibility);
         for rule in nested_rules {
@@ -174,6 +176,7 @@ fn load_nested_config(
     consumer_version: Option<u32>,
     running_version: RunningVersion,
     catalog: Option<KindCatalog<'_>>,
+    environment: &dyn crate::EnvironmentProvider,
 ) -> Result<(Vec<Mapping>, Vec<ConfigCompatibility>)> {
     let contents = fs::read_to_string(abs_path).map_err(|source| Error::Io {
         path: abs_path.to_path_buf(),
@@ -182,7 +185,11 @@ fn load_nested_config(
     // Route through the shared parse path so nested configs get the
     // same `{{env.X}}` interpolation as the top-level config and
     // drop-ins. Its errors already name the file.
-    let mut config: RawConfig = crate::loader::parse_config_interpolated(&contents, abs_path)?;
+    let mut config: RawConfig = crate::loader::parse_config_interpolated_with_environment(
+        &contents,
+        abs_path,
+        environment,
+    )?;
     crate::loader::validate_source_compatibility(
         &mut config,
         source,

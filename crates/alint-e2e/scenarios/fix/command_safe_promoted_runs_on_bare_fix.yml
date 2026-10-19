@@ -1,8 +1,12 @@
+test_version: 1
 name: a Safe-promoted command fix runs on a bare alint fix
 # Tier decision (asamarts): the command fix is Unsafe by default but
 # Safe-PROMOTABLE in the user's OWN top-level config. With `applicability: safe`,
 # a BARE `alint fix` (Safe threshold) runs the command. Unix-only (/bin/sh).
 tags: [fix, command, applicability, unix-only]
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -24,7 +28,10 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: js, level: error, path: src/a.js}
-  - applied: [js]
-  - violations: []
+  - exit: success
+    applied: [js]
+  - exit: success
+    violations: []

@@ -1,3 +1,4 @@
+test_version: 1
 name: sort orders a markerless whole-file list
 tags: [fix, ordered_block, sort, markerless]
 
@@ -23,10 +24,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: sorted-file, level: error, path: CODEOWNERS}
-  - applied: [sorted-file]
-  - violations: []
+  - exit: success
+    applied: [sorted-file]
+  - exit: success
+    violations: []
 
 expect_tree:
   CODEOWNERS: |

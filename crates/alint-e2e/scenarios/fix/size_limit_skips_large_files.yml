@@ -1,3 +1,4 @@
+test_version: 1
 name: fix_size_limit skips oversized files with a clear reason
 tags: [fix, fix_size_limit]
 
@@ -26,7 +27,8 @@ expect:
   # "skipped" entries under the same rule — the testkit's
   # applied/skipped matchers look for *any* item in that state,
   # so a rule with a mix matches both lists.
-  - applied: [no-ws]
+  - exit: success
+    applied: [no-ws]
     skipped: [no-ws]
     suggested: []
     unfixable: []

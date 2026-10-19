@@ -1,5 +1,6 @@
+test_version: 1
 name: cross_file identical fires when a mirrored file drifts byte-for-byte
-tags: [check, cross_file, cross_file]
+tags: [check, cross_file]
 
 given:
   tree:
@@ -26,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: readme-mirrors-root, level: error, path: crates/a/README.md}

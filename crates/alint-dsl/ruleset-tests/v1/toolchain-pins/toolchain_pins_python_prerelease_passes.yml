@@ -1,0 +1,37 @@
+test_version: 1
+name: toolchain-pins bundle compares exact Python prerelease pins
+# Prerelease and build suffixes are part of the exact identity. The stable-only
+# Docker target class is intentionally absent from this fixture.
+tags: [check, extends, bundled, toolchain_pins, boundary]
+
+given:
+  tree:
+    .python-version: "v3.14.0rc1\n"
+    runtime.txt: "python-3.14.0rc1\n"
+    Pipfile: |
+      [requires]
+      python_full_version = "3.14.0rc1"
+    .tool-versions: |
+      python 3.14.0rc1
+    .github:
+      workflows:
+        ci.yml: |
+          name: CI
+          on: push
+          jobs:
+            test:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/setup-python@v5
+                  with:
+                    python-version: 'v3.14.0rc1'
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/toolchain-pins@v1
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

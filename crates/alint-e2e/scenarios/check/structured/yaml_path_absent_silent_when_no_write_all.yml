@@ -1,3 +1,4 @@
+test_version: 1
 name: yaml_path_absent is silent when the forbidden path is absent
 tags: [check, yaml_path_absent]
 
@@ -35,4 +36,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

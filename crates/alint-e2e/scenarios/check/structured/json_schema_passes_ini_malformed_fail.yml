@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes flags malformed INI as one parse analysis failure
 tags: [check, json_schema_passes, structured, ini, failing]
 
@@ -28,6 +29,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: ini-parse, kind: resource_parse, path: config.ini}

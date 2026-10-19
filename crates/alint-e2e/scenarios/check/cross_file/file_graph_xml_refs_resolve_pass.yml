@@ -1,3 +1,4 @@
+test_version: 1
 name: file_graph over xml extract is silent when every ProjectReference resolves
 tags: [check, file_graph, cross_file, xml, passing]
 
@@ -36,4 +37,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

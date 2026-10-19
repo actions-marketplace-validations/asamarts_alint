@@ -1,3 +1,4 @@
+test_version: 1
 name: a located fixer and a whole-file fixer compose on one file and converge
 tags: [fix, interactions, set_value, no_trailing_whitespace, json]
 
@@ -34,11 +35,14 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: port, level: error, path: app.json}
       - {rule: no-ws, level: error, path: app.json}
-  - applied: [port, no-ws]
-  - violations: []
+  - exit: success
+    applied: [port, no-ws]
+  - exit: success
+    violations: []
 
 expect_tree:
   app.json: "{\n  \"port\": 9090,\n  \"name\": \"app\"\n}\n"

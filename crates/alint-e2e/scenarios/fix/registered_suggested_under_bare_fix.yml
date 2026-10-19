@@ -1,3 +1,4 @@
+test_version: 1
 name: create_and_register is a suggestion (requires --unsafe-fixes) under a bare fix
 # create_and_register is Unsafe (it mutates a manifest) + content-injecting, so a
 # bare `alint fix` must SUGGEST it, not append -- consistent with sync_from and the
@@ -28,9 +29,11 @@ given:
 when: [check, fix]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: members-registered, level: error, path: Cargo.toml}
-  - suggested: [members-registered]
+  - exit: policy_failure
+    suggested: [members-registered]
 
 expect_tree:
   Cargo.toml: "[workspace]\nmembers = [\"crates/bar\"]\n"

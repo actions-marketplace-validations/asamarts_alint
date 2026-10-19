@@ -1,3 +1,4 @@
+test_version: 1
 name: non-string manifest scope entries fail analysis
 
 tags: [check, scope_filter, no_trailing_whitespace, failing]
@@ -25,6 +26,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: nws, kind: resource_parse, path: package.json}

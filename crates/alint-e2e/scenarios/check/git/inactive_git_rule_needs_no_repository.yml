@@ -1,3 +1,4 @@
+test_version: 1
 name: inactive Git rule needs no repository
 tags: [check, git_commit_message, when, git]
 
@@ -18,5 +19,6 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []
     analysis_failures: []

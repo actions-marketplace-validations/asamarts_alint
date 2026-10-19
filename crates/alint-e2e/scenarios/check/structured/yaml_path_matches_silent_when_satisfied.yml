@@ -1,3 +1,4 @@
+test_version: 1
 name: yaml_path_matches stays silent when every match satisfies the regex
 tags: [check, yaml_path_matches, structured, passing]
 
@@ -33,4 +34,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

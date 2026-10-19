@@ -1,3 +1,4 @@
+test_version: 1
 name: final_newline flags files missing the trailing newline
 tags: [check, final_newline]
 
@@ -22,5 +23,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: eof, level: error, path: docs/missing.md}

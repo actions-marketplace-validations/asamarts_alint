@@ -1,3 +1,4 @@
+test_version: 1
 name: replace is Unsafe by default -- a bare fix suggests, does not rewrite
 tags: [fix, file_content_forbidden, replace, applicability]
 
@@ -23,9 +24,11 @@ given:
 when: [check, fix]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-console, level: error, path: app.js}
-  - suggested: [no-console]
+  - exit: policy_failure
+    suggested: [no-console]
 
 expect_tree:
   app.js: "console.log(1);\n"

@@ -1,3 +1,4 @@
+test_version: 1
 name: a located fixer that declines an edit still reports the standing violation
 tags: [fix, interactions, file_content_forbidden, replace, fixpoint]
 
@@ -31,9 +32,11 @@ when: [fix_unsafe, check]
 expect:
   # The fixer declined (its replacement would re-introduce the pattern), so the
   # violation is reported as skipped -- NOT silently dropped.
-  - skipped: [no-foo]
+  - exit: policy_failure
+    skipped: [no-foo]
   # And it genuinely still stands: `check` reports it. `fix` and `check` agree.
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-foo, level: error, path: a.txt}
 
 expect_tree:

@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_images_have_alt accepts rendered descriptions
 
 tags: [check, markdown_images_have_alt, content, passing]
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

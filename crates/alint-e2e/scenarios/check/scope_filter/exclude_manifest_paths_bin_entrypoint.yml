@@ -1,3 +1,4 @@
+test_version: 1
 name: exclude_manifest_paths exempts the package.json bin entrypoint via derive_target
 tags: [check, scope_filter, file_content_forbidden]
 
@@ -33,5 +34,6 @@ when: [check]
 expect:
   # src/cli.ts is the declared (mapped) entrypoint -> silently exempt.
   # If the exclusion were a no-op, src/cli.ts would also fire and this fails.
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-console, level: error, path: src/lib.ts}

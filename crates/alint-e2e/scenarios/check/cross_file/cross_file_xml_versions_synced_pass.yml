@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file over xml extract is silent when .csproj versions agree
 tags: [check, cross_file, xml, passing]
 
@@ -41,4 +42,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

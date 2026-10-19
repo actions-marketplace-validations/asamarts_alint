@@ -1,3 +1,4 @@
+test_version: 1
 name: shebang_has_executable flags #! scripts that lack the +x bit
 # Tagged unix-only — the rule consults the Unix executable bit,
 # which doesn't exist on Windows. The materialiser still creates
@@ -33,6 +34,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: shebang-needs-x, level: error, path: scripts/hello.sh}
       - {rule: shebang-needs-x, level: error, path: scripts/build.py}

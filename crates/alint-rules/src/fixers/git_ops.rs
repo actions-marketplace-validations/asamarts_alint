@@ -143,6 +143,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: None,
+            process_environment: None,
         }
     }
 
@@ -342,6 +343,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: Some(&sink),
+            process_environment: None,
         };
         let v = Violation::new("x").with_path(Path::new("build.o"));
         let out = GitUntrackFixer::new(Applicability::Unsafe)

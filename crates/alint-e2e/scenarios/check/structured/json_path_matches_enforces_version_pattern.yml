@@ -1,3 +1,4 @@
+test_version: 1
 name: json_path_matches flags a semver that fails the regex
 tags: [check, json_path_matches, structured]
 
@@ -26,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: require-semver-version, level: error, path: packages/bad/package.json}

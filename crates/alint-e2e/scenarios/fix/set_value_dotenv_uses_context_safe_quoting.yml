@@ -1,3 +1,4 @@
+test_version: 1
 name: set_value on a dotenv value chooses context-safe quoting
 tags: [fix, dotenv_path_equals, set_value, dotenv]
 
@@ -23,10 +24,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: b, level: error, path: .env}
-  - applied: [b]
-  - violations: []
+  - exit: success
+    applied: [b]
+  - exit: success
+    violations: []
 
 expect_tree:
   .env: "B = \"#z\" # note\n"

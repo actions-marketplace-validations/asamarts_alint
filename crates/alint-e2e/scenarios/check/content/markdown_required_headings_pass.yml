@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_required_headings accepts wildcard content
 
 tags: [check, markdown_required_headings, content, passing]
@@ -33,4 +34,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

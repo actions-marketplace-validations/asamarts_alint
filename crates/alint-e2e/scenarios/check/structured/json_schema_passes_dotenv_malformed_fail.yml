@@ -1,3 +1,4 @@
+test_version: 1
 name: json_schema_passes auto-detects malformed dotenv as one parse analysis failure
 tags: [check, json_schema_passes, structured, dotenv, failing]
 
@@ -29,6 +30,7 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: policy_failure
+    violations: []
     analysis_failures:
       - {rule: env-parses, kind: resource_parse, path: .env}

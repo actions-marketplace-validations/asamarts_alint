@@ -1,3 +1,4 @@
+test_version: 1
 name: markdown_fragments_resolve accepts generated target anchors
 
 tags: [check, markdown_fragments_resolve, cross_file, passing]
@@ -32,4 +33,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,3 +1,4 @@
+test_version: 1
 name: git_blame_age stays silent on lines committed seconds ago
 tags: [check, git_blame_age, git]
 
@@ -34,4 +35,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

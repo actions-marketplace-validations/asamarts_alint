@@ -8,13 +8,52 @@
 //! `git_tracked_only` filtering reuses the probe's `git ls-files` set through
 //! the rule [`Context`](crate::Context).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{AnalysisTime, AnalysisTimeUnavailable};
+
+type ProcessEnvironment = BTreeMap<String, String>;
+type ScopedEnvironmentRegistry = Mutex<HashMap<PathBuf, Arc<ProcessEnvironment>>>;
+
+static SCOPED_PROCESS_ENVIRONMENTS: LazyLock<ScopedEnvironmentRegistry> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// RAII registration for a complete Git child-process environment at one
+/// repository root.
+///
+/// This is intended for hermetic embedders such as `alint-testkit`: every Git
+/// helper in this module consults the registration before spawning. Distinct
+/// roots can run concurrently. Dropping the guard restores normal host
+/// inheritance for that root.
+#[derive(Debug)]
+pub struct ScopedProcessEnvironment {
+    root: PathBuf,
+}
+
+impl Drop for ScopedProcessEnvironment {
+    fn drop(&mut self) {
+        if let Ok(mut environments) = SCOPED_PROCESS_ENVIRONMENTS.lock() {
+            environments.remove(&self.root);
+        }
+    }
+}
+
+#[must_use]
+pub fn scoped_process_environment(
+    root: &Path,
+    environment: BTreeMap<String, String>,
+) -> ScopedProcessEnvironment {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    SCOPED_PROCESS_ENVIRONMENTS
+        .lock()
+        .expect("Git process-environment registry lock poisoned")
+        .insert(root.clone(), Arc::new(environment));
+    ScopedProcessEnvironment { root }
+}
 
 /// Environment variables that can redirect a Git command away from the
 /// repository selected by `-C`, replace its object/ref view, alter repository
@@ -49,17 +88,20 @@ const GIT_LOCAL_ENV_VARS: &[&str] = &[
 
 fn clear_git_repository_env(command: &mut Command) {
     for name in GIT_LOCAL_ENV_VARS {
-        // `Command::env_remove` records an owned override even when the parent
-        // has no such variable. Avoid building two dozen dead map entries on
-        // every Git query; present redirectors are still removed deterministically.
-        if std::env::var_os(name).is_some() {
-            command.env_remove(name);
-        }
+        command.env_remove(name);
     }
 }
 
-fn git_command() -> Command {
+fn git_command(root: &Path) -> Command {
     let mut command = Command::new("git");
+    let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let environment = SCOPED_PROCESS_ENVIRONMENTS
+        .lock()
+        .ok()
+        .and_then(|environments| environments.get(&key).cloned());
+    if let Some(environment) = environment {
+        command.env_clear().envs(environment.iter());
+    }
     clear_git_repository_env(&mut command);
     // Repository paths are byte-exact inputs, never user-authored pathspecs;
     // replacement refs are clone-local state, never repository history; log
@@ -77,7 +119,7 @@ fn git_command() -> Command {
 /// The command emits only `%ct`; raw Git stderr is deliberately excluded from
 /// the stable error returned to rule evaluation and machine formats.
 pub fn head_commit_time(root: &Path) -> Result<AnalysisTime, AnalysisTimeUnavailable> {
-    let mut command = git_command();
+    let mut command = git_command(root);
     let output = command
         .arg("-C")
         .arg(root)
@@ -147,7 +189,7 @@ pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
     // exotic bytes round-trip correctly. `--full-name` would force
     // repo-root-relative paths, but we want CWD-relative — git's
     // default with `-C <dir>` already gives that.
-    let output = git_command()
+    let output = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["ls-files", "-z"])
@@ -219,7 +261,7 @@ pub fn untrack_path(root: &Path, rel_path: &Path, dry_run: bool) -> UntrackOutco
         Some(tracked) if !tracked.contains(rel_path) => return UntrackOutcome::NotTracked,
         Some(_) => {}
     }
-    let mut cmd = git_command();
+    let mut cmd = git_command(root);
     cmd.arg("-C").arg(root).args(["rm", "--cached", "--quiet"]);
     if dry_run {
         cmd.arg("--dry-run");
@@ -266,7 +308,7 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
         if base.starts_with('-') {
             return None;
         }
-        let output = git_command()
+        let output = git_command(root)
             .arg("-C")
             .arg(root)
             .args(["diff", "--name-only", "--relative", "-z"])
@@ -292,7 +334,7 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
         // `ls-files` to finish, which is no slower than running them in turn.
         // `wait_with_output` then drains both pipes, so the child can't wedge,
         // and it is always reaped, even when `ls-files` fails to spawn.
-        let staged = git_command()
+        let staged = git_command(root)
             .arg("-C")
             .arg(root)
             .args(["diff", "--cached", "--name-only", "--relative", "-z"])
@@ -301,7 +343,7 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
             .stderr(Stdio::piped())
             .spawn()
             .ok()?;
-        let working = git_command()
+        let working = git_command(root)
             .arg("-C")
             .arg(root)
             .args([
@@ -371,7 +413,7 @@ fn diff_name_only(
 ) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
     // Probe: are we in a git repo at all? If not, silent None —
     // matching the advisory posture of the rest of this module.
-    let Ok(probe) = git_command()
+    let Ok(probe) = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -382,7 +424,7 @@ fn diff_name_only(
     if !probe.status.success() {
         return Ok(None);
     }
-    let mut cmd = git_command();
+    let mut cmd = git_command(root);
     cmd.arg("-C")
         .arg(root)
         .args(["diff", "--name-only", "--relative", "-z"]);
@@ -435,7 +477,7 @@ fn diff_name_only(
 /// unavailability before dispatch; `None` remains valid for an unborn HEAD or
 /// an operation-specific failure.
 pub fn head_commit_message(root: &Path) -> Option<String> {
-    let output = git_command()
+    let output = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["log", "-1", "--format=%B"])
@@ -468,7 +510,7 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
 /// [`commit_messages_in_range`] so a single commit round-trips
 /// through the shared commit-log parser.
 pub fn head_commit_record(root: &Path) -> Option<CommitRecord> {
-    let output = git_command()
+    let output = git_command(root)
         .arg("-C")
         .arg(root)
         .args([
@@ -556,7 +598,7 @@ pub fn commit_messages_in_range(
     // First check `git rev-parse` (no range syntax) confirms repository
     // availability. If it fails, return the distinct `Ok(None)` shape that
     // engine capability routing promotes before normal rule dispatch.
-    let probe = git_command()
+    let probe = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -577,7 +619,7 @@ pub fn commit_messages_in_range(
         });
     }
     let range = format!("{since}..HEAD");
-    let mut cmd = git_command();
+    let mut cmd = git_command(root);
     cmd.arg("-C").arg(root).args([
         "log",
         "--reverse",
@@ -665,7 +707,7 @@ fn parse_commit_log(stdout: &[u8]) -> Vec<CommitRecord> {
 /// trust is the user's GPG config / `.git/allowed_signers`, not this
 /// rule's job.
 pub fn verify_commit(root: &Path, sha: &str) -> Option<bool> {
-    let output = git_command()
+    let output = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["verify-commit", sha])
@@ -721,7 +763,7 @@ fn blame_lines_with_ignore_revs(
     rel_path: &Path,
     use_default_ignore_revs: bool,
 ) -> Option<Vec<BlameLine>> {
-    let mut command = git_command();
+    let mut command = git_command(root);
     command
         // Clone-local/global ignore lists are ambient machine state. A command-line
         // empty file name clears their revisions before the repository convention
@@ -864,7 +906,7 @@ fn default_ignore_revs_is_tracked_regular(root: &Path) -> bool {
     {
         return false;
     }
-    git_command()
+    git_command(root)
         .arg("-C")
         .arg(root)
         .args([

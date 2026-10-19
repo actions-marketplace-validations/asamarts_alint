@@ -1,3 +1,4 @@
+test_version: 1
 name: sync_from never edits or suggests a typed non-string target
 
 tags: [fix, cross_file, sync_from, structured, applicability]
@@ -25,15 +26,19 @@ given:
 when: [check, fix, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: versions-match, level: error, path: target.json}
-  - unfixable: [versions-match]
+  - exit: policy_failure
+    unfixable: [versions-match]
     suggested: []
     applied: []
-  - unfixable: [versions-match]
+  - exit: policy_failure
+    unfixable: [versions-match]
     suggested: []
     applied: []
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: versions-match, level: error, path: target.json}
 
 expect_tree:

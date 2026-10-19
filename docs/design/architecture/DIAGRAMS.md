@@ -142,6 +142,7 @@ graph TB
   AlintTooling.E2e -.-> AlintTooling.Testkit
   AlintTooling.Testkit -.-> AlintCli.Core
   AlintTooling.Testkit -.-> AlintCli.Dsl
+  AlintTooling.Testkit -.-> AlintCli.Output
   AlintTooling.Testkit -.-> AlintCli.Rules
   AlintTooling.Xtask -.-> AlintCli.Core
   AlintTooling.Xtask -.-> AlintCli.Dsl

@@ -1,3 +1,4 @@
+test_version: 1
 name: fix --dry-run on a located set_value reports would-apply but writes nothing
 tags: [fix, fix_dry_run, set_value, json]
 
@@ -28,8 +29,10 @@ given:
 when: [fix_dry_run, check]
 
 expect:
-  - applied: [port]
-  - violations:
+  - exit: success
+    applied: [port]
+  - exit: policy_failure
+    violations:
       - {rule: port, level: error, path: app.json}
 
 expect_tree:

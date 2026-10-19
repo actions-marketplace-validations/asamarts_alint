@@ -1,3 +1,4 @@
+test_version: 1
 name: unique_by fires when multiple files share the chosen key
 tags: [check, unique_by, cross_file]
 
@@ -26,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: unique-rs-stems, level: warning}

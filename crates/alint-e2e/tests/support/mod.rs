@@ -20,6 +20,10 @@ pub fn load_with(
         kind_catalog: Some(REGISTRY.catalog()),
         cache: options.cache.clone(),
         fetcher: options.fetcher.clone(),
+        environment: options.environment.clone(),
+        config_source: options.config_source.clone(),
+        remote_policy: options.remote_policy,
+        repository_root: options.repository_root.clone(),
     };
     alint_dsl::load_with(path, &options)
 }

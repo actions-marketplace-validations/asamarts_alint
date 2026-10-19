@@ -1,0 +1,17 @@
+test_version: 1
+name: versioning bundle accepts a 256-byte VERSION token
+tags: [check, extends, bundled, versioning, validation, boundary]
+
+given:
+  tree:
+    VERSION: "v1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/versioning@v1
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

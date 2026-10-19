@@ -1,3 +1,4 @@
+test_version: 1
 name: insert_line appends a required line that sorts last
 tags: [fix, ordered_block, insert_line, require]
 
@@ -22,10 +23,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: allow, level: error, path: allow.txt}
-  - applied: [allow]
-  - violations: []
+  - exit: success
+    applied: [allow]
+  - exit: success
+    violations: []
 
 expect_tree:
   allow.txt: "alpha\nbravo\nzulu\n"

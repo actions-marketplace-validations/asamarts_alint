@@ -1,3 +1,4 @@
+test_version: 1
 name: sync_from on equals propagates into a regex-capture target (Phase 2)
 # A version-of-truth propagated into UNSTRUCTURED files via a regex capture: a
 # README badge and a Dockerfile ARG. The fixer rewrites each match's capture group
@@ -30,11 +31,14 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: pin-version-everywhere, level: error, path: README.md}
       - {rule: pin-version-everywhere, level: error, path: Dockerfile}
-  - applied: [pin-version-everywhere]
-  - violations: []
+  - exit: success
+    applied: [pin-version-everywhere]
+  - exit: success
+    violations: []
 
 expect_tree:
   VERSION: "2.5.0\n"

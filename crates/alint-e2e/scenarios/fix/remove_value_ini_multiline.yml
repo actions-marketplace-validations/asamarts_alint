@@ -1,3 +1,4 @@
+test_version: 1
 name: remove_value deletes an INI key's whole multi-line continuation value
 tags: [fix, ini_path_absent, remove_value, ini, multiline]
 
@@ -34,10 +35,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-deps, level: error, path: tox.ini}
-  - applied: [no-deps]
-  - violations: []
+  - exit: success
+    applied: [no-deps]
+  - exit: success
+    violations: []
 
 expect_tree:
   tox.ini: |

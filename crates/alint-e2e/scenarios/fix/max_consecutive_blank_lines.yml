@@ -1,3 +1,4 @@
+test_version: 1
 name: max_consecutive_blank_lines + file_collapse_blank_lines collapses runs
 tags: [fix, max_consecutive_blank_lines, file_collapse_blank_lines, content]
 
@@ -19,10 +20,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: no-dbl-blank, level: warning, path: gappy.md}
-  - applied: [no-dbl-blank]
-  - violations: []
+  - exit: success
+    applied: [no-dbl-blank]
+  - exit: success
+    violations: []
 
 expect_tree:
   clean.md: "a\n\nb\n"

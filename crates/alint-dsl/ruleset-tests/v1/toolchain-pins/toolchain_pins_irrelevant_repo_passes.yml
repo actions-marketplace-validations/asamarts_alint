@@ -1,0 +1,20 @@
+test_version: 1
+name: toolchain-pins bundle is silent without an explicit ecosystem authority
+tags: [check, extends, bundled, toolchain_pins, applicability]
+
+given:
+  tree:
+    README.md: "# documentation-only repository\n"
+    Dockerfile: "FROM node:22.14.0-alpine\n"
+    package.json: |
+      {"name":"not-an-authority","engines":{"node":"22.14.0"}}
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/toolchain-pins@v1
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

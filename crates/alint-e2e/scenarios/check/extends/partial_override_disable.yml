@@ -1,3 +1,4 @@
+test_version: 1
 name: "disable inherited rule with just id + level off"
 tags: [check, extends, composition, passing]
 
@@ -7,20 +8,13 @@ tags: [check, extends, composition, passing]
 
 given:
   tree:
-    base.yml: |
-      version: 1
-      rules:
-        - id: no-bak
-          kind: file_absent
-          paths: "**/*.bak"
-          level: error
-
+    # The inherited config is a package asset, separate from the repository.
     # Would fail the inherited rule if it were active.
     stale.bak: ""
 
   config: |
     version: 1
-    extends: [./base.yml]
+    extends: [./support/partial_override_disable.yaml]
     rules:
       - id: no-bak
         level: off
@@ -30,4 +24,5 @@ when: [check]
 expect:
   # The rule is disabled, so no violations despite stale.bak
   # being present.
-  - violations: []
+  - exit: success
+    violations: []

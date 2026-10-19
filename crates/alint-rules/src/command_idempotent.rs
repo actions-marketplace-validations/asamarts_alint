@@ -114,6 +114,7 @@ impl Rule for CommandIdempotentRule {
             &self.workdir,
             &env,
             Duration::from_secs(self.timeout),
+            ctx.process_environment,
         ) {
             crate::spawn::SpawnOutcome::Exited {
                 status,
@@ -366,6 +367,7 @@ mod tests {
             git_tracked: None,
             git_blame: None,
             analysis_time: None,
+            process_environment: None,
         };
         r.evaluate(&ctx).unwrap()
     }

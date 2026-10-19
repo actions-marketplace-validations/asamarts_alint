@@ -1,3 +1,4 @@
+test_version: 1
 name: create_and_register appends an unregistered member to workspace.members
 # The register half: crates/foo exists but is absent from workspace.members.
 # create_and_register is Unsafe (it mutates a manifest), so `fix_unsafe` applies
@@ -30,10 +31,13 @@ given:
 when: [check, fix_unsafe, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: members-registered, level: error, path: Cargo.toml}
-  - applied: [members-registered]
-  - violations: []
+  - exit: success
+    applied: [members-registered]
+  - exit: success
+    violations: []
 
 expect_tree:
   Cargo.toml: "[workspace]\nmembers = [\"crates/bar\", \"crates/foo\"]\n"

@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file over ini extract flags an app version out of sync with package.json
 tags: [check, cross_file, ini]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: app-version-synced, level: error, path: package.json}

@@ -1,3 +1,4 @@
+test_version: 1
 name: no_empty_files flags zero-byte files
 tags: [check, no_empty_files, structure]
 
@@ -22,6 +23,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: no-empty, level: warning, path: placeholder.rs}
       - {rule: no-empty, level: warning, path: stray.log}

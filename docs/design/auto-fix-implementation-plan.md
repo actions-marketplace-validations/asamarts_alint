@@ -52,7 +52,7 @@ rebuild it.
 | Located JSONPath | `serde_json_path` 0.7.2 exposes `query_located` -> `LocatedNodeList` -> `NormalizedPath` (`PathElement` = `Name`/`Index`) | present on the **current pin**, no upgrade needed |
 | e2e Layer A (in-process) | `crates/alint-e2e/scenarios/**/*.yml` (recursive glob, `tests/scenarios.rs:45-47`; **17** fix scenarios incl. `fix/interactions/{mixed_fixable_and_unfixable,multiple_fixes_in_one_pass}.yml`), schema `crates/alint-testkit/src/scenario.rs`, runner `runner.rs` (`run_step`'s no-threshold `engine.fix` call at `:245`, `assert_fix_status` `:402`) | `given.tree/config/git`, `when: [check, fix, fix_dry_run]` (`Step` = 4 unit variants, no `--unsafe-fixes`), `expect` + **`expect_tree`** (byte-exact). `ExpectStep` has no `suggested:` field (a gap this plan closes). **14** of 17 use `when: [check, fix, check]` (a 15th, `multiple_fixes_in_one_pass`, uses `[fix, check]`); **zero** use `[fix, fix]` |
 | e2e Layer B (binary) | `crates/alint/tests/cli/*.toml` (trycmd); fix cases `fix-apply`, `fix-file-{append,prepend,remove,rename}`, `fix-trim` | `.in/` -> run -> `.out/` byte tree + `.stdout`; regen `TRYCMD=overwrite`; `[EXE]` placeholder gotcha in `help-*.stdout`. trycmd has **no per-OS skip** so a unix-only case needs `#[cfg(unix)]` wrapping |
-| proptest laws | `crates/alint-e2e/tests/invariants.rs` (**4** laws, `cases: 48`) + generators `crates/alint-testkit/src/strategies.rs` | `check_never_panics`, `fix_dry_run_is_pure`, `fix_is_idempotent`, `fix_converges_when_fully_resolved`. `fixable_scenario_tree` (entry `strategies.rs:81`; rule catalogue `fixable_rule_yaml` `:242-249`) emits only `file_create/remove/rename/append` fixes over ASCII blobs (`file_prepend` and `file_content_forbidden` are NOT in it) |
+| proptest laws | `crates/alint-e2e/tests/invariants.rs` (**4** laws, `cases: 48`) + generators `crates/alint-testkit/src/strategies.rs` | `check_never_panics`, `fix_dry_run_is_pure`, `fix_is_idempotent`, `fix_converges_when_fully_resolved`. `fixable_policy_test` (entry `strategies.rs:81`; rule catalogue `fixable_rule_yaml` `:242-249`) emits only `file_create/remove/rename/append` fixes over ASCII blobs (`file_prepend` and `file_content_forbidden` are NOT in it) |
 | Kani | `crates/alint-core/src/pathsafe.rs:159` (`confine_steps_is_sound`, `#[kani::proof]` `#[kani::unwind(7)]`); CI `.github/workflows/kani.yml` | **LIVE BUG (R-KANI): the workflow runs `-p alint-rules`, which has zero `#[kani::proof]`; the only proof is in `alint-core`, so the weekly job verifies nothing** |
 | Perf gate | `crates/alint-bench/benches/det_check.rs` (gungraun / Callgrind, fixed-path byte-stable `Ir`, `check`-only); criterion `benches/fix_throughput.rs` exists | the deterministic gate is **advisory** (`DET_PERF_ADVISORY=1`, `ci.yml:313`), PR-only, and **I/O-blind** (measures `Ir`, not file reads) |
 | LSP mapping | `crates/alint-lsp/src/lib.rs:771-828` (`fix_edit_to_workspace_edit`, exhaustive match, no wildcard); code actions `:446-520` | `SetContent` arm opens at `:773` and maps to a whole-document `TextEdit` via `whole_document()` (`:763-765`); `Position.character` is **UTF-16** |
@@ -141,7 +141,7 @@ all 17 existing scenarios - plus the threshold parameter on `Engine::fix` and a 
   empty -> remove, D missing -> create), so `|V|` drops by the number of files fixed per pass and no
   two rules interact. (Seeking globally-non-interacting rules on ONE file is the landmine - even
   `file_collapse_blank_lines` + `final_newline` interact at EOF.) Both the descent and termination
-  proptests run over this curated pool, not `fixable_scenario_tree`.
+  proptests run over this curated pool, not `fixable_policy_test`.
 - **Order-independence modulo reproducibility** (**Phase 1**): shuffling independent rule order
   yields the same tree for disjoint edits; overlapping edits are reproducible-not-canonical (5.8, do
   not over-claim confluence).
@@ -667,7 +667,7 @@ set_value/remove_value" over-claimed (those two ops cover 16; the 8 `*_path_matc
 plus the fault-injection seam decided (an injectable engine writer), LSP tests scheduled into Phases
 1-2, `nested_configs` `rule_index` ordering pinned, `sync_from` tier stated (Unsafe), the
 `fixer().is_some()` check-output flag-flip noted, `structured_doc_strategy` scoped per-format, and
-factual fixes (`fixable_scenario_tree` = create/remove/rename/append, `fix_report_schema.rs` is
+factual fixes (`fixable_policy_test` = create/remove/rename/append, `fix_report_schema.rs` is
 schema-validation not round-trip, the LSP `SetContent` arm at :773). Round 3 confirmed convergence
 (all three passes reported the round-2 additions accurate and buildable; no critical or architectural
 findings) and fixed their local residue: (a) the `EditVerifier` stored a borrowed `NormalizedPath`

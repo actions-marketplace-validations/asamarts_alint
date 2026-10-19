@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file reports a non-string source extraction
 
 tags: [check, cross_file, structured, failing]
@@ -23,5 +24,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: versions-match, level: error, path: source.json}

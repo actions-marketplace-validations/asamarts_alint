@@ -757,6 +757,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: None,
+            process_environment: None,
         }
     }
 
@@ -1284,6 +1285,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: Some(sink),
+            process_environment: None,
         }
     }
 
@@ -1444,6 +1446,7 @@ mod tests {
             allow_out_of_root: true,
             compose: None,
             stage_ops: None,
+            process_environment: None,
         };
         let out = DirCreateFixer::new(abs_target.clone(), Applicability::Safe)
             .apply(&Violation::new("x"), &ctx)
@@ -1485,6 +1488,7 @@ mod tests {
             allow_out_of_root: false,
             compose: None,
             stage_ops: Some(&sink),
+            process_environment: None,
         };
         let out = DirCreateFixer::new(PathBuf::from("docs"), Applicability::Safe)
             .apply(&Violation::new("x"), &ctx)
@@ -1821,6 +1825,7 @@ mod tests {
             allow_out_of_root: false,
             compose: Some(&buf),
             stage_ops: None,
+            process_environment: None,
         };
         let out = RelocateFixer::new(Applicability::Unsafe)
             .apply(
