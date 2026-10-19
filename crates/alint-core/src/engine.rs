@@ -229,6 +229,35 @@ impl TraceSession {
         self.meta.allowed_stages.contains(&class)
     }
 
+    fn record(&self, stage: TraceStage) {
+        if self.error.lock().is_some() {
+            return;
+        }
+        let result = self
+            .recorder
+            .lock()
+            .as_mut()
+            .expect("trace recorder is live during evaluation")
+            .record(stage);
+        if let Err(error) = result {
+            *self.error.lock() = Some(error);
+        }
+    }
+
+    fn record_kind_stage(&self, stage: TraceStage) {
+        if matches!(
+            stage.class,
+            TraceStageClass::Gate | TraceStageClass::Outcome
+        ) {
+            *self.error.lock() = Some(Error::internal(format!(
+                "rule producer emitted engine-owned trace stage `{:?}`",
+                stage.class
+            )));
+            return;
+        }
+        self.record(stage);
+    }
+
     fn add_extraction(&self, observation: TraceExtractionObservation) {
         self.extraction.seen.store(true, Ordering::Relaxed);
         for (counter, value, label) in [
@@ -346,19 +375,8 @@ impl TraceSession {
 }
 
 impl TraceSink for TraceSession {
-    fn record(&self, stage: TraceStage) {
-        if self.error.lock().is_some() {
-            return;
-        }
-        let result = self
-            .recorder
-            .lock()
-            .as_mut()
-            .expect("trace recorder is live during evaluation")
-            .record(stage);
-        if let Err(error) = result {
-            *self.error.lock() = Some(error);
-        }
+    fn record_kind(&self, stage: TraceStage) {
+        self.record_kind_stage(stage);
     }
 
     fn record_extraction(&self, observation: TraceExtractionObservation) {
@@ -4459,7 +4477,12 @@ fn nonfixable_rule_result(entry: &RuleEntry, violations: Vec<Violation>) -> Rule
     )
 }
 
-fn trace_gate(trace: Option<&TraceSession>, name: &str, status: TraceStatus, reason: TraceReason) {
+fn trace_gate(
+    trace: Option<&TraceSession>,
+    name: &'static str,
+    status: TraceStatus,
+    reason: TraceReason,
+) {
     if let Some(trace) = trace {
         trace.record(TraceStage::new(TraceStageClass::Gate, name, status, reason));
     }
@@ -7717,5 +7740,25 @@ mod tests {
             before,
             "ordinary check must not construct trace state"
         );
+    }
+
+    #[test]
+    fn rule_producer_cannot_emit_engine_owned_trace_stages() {
+        for class in [TraceStageClass::Gate, TraceStageClass::Outcome] {
+            let trace = TraceSession::new(crate::TraceMeta::ASSERTION);
+            let (name, reason) = match class {
+                TraceStageClass::Gate => ("level", TraceReason::LevelEnabled),
+                TraceStageClass::Outcome => ("outcome", TraceReason::OutcomeSatisfied),
+                _ => unreachable!(),
+            };
+            <TraceSession as TraceSink>::record_kind(
+                &trace,
+                TraceStage::new(class, name, TraceStatus::Satisfied, reason),
+            );
+            let error = trace
+                .finish("id".to_string(), "kind".to_string(), None)
+                .unwrap_err();
+            assert!(error.to_string().contains("engine-owned trace stage"));
+        }
     }
 }

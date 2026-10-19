@@ -32,9 +32,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ordinary checks.** `Engine::trace_rule` evaluates only the requested effective rule through the
   existing common gates, rule-major/file-major paths, nested-rule builder, result partitioning, and
   redaction. Typed deterministic stages carry checked aggregate counts, bounded producer-redacted
-  preview rows, and exactly one terminal outcome; runtime completion rejects undeclared or missing
-  stages against mandatory metadata on all 102 canonical kinds. Ordinary checks construct no trace
-  recorder. `facts.json` format v6 and `alint rules show` expose each kind's trace inventory.
+  preview rows, and exactly one terminal outcome; runtime completion rejects undeclared, missing,
+  malformed, or result-inconsistent stages against mandatory metadata on all 102 canonical kinds.
+  Preview producers cannot inject engine-owned stages or bypass typed value classes, sensitivity,
+  repository-relative path normalization, source-range validation, or non-UTF-8-safe serialization.
+  Ordinary checks construct no trace recorder. `facts.json` format v6 and `alint rules show` expose
+  each kind's trace inventory.
 
 ### Changed
 

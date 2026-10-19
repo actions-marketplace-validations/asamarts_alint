@@ -6,11 +6,10 @@
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, BinaryHeap};
-use std::path::{Path, PathBuf};
-
-use serde::Serialize;
+use std::path::{Component, Path, PathBuf};
 
 use crate::{Error, Result, RuleResult};
+use serde::{Serialize, Serializer};
 
 #[cfg(test)]
 thread_local! {
@@ -41,6 +40,54 @@ pub enum TraceStatus {
     NotEvaluated,
 }
 
+impl TraceStatus {
+    const fn matches_reason(self, reason: TraceReason) -> bool {
+        matches!(
+            (self, reason),
+            (
+                Self::Satisfied,
+                TraceReason::LevelEnabled
+                    | TraceReason::WhenTrue
+                    | TraceReason::ChangedScopeMatched
+                    | TraceReason::GitAvailable
+                    | TraceReason::AnalysisTimeAvailable
+                    | TraceReason::ManifestAvailable
+                    | TraceReason::ExpectMatchesSatisfied
+                    | TraceReason::SelectorMatched
+                    | TraceReason::SelectorNoMatch
+                    | TraceReason::ExtractionSucceeded
+                    | TraceReason::CardinalitySatisfied
+                    | TraceReason::AssertionSatisfied
+                    | TraceReason::NestedSatisfied
+                    | TraceReason::OutcomeSatisfied
+            ) | (
+                Self::Violated,
+                TraceReason::ExpectMatchesViolated
+                    | TraceReason::CardinalityMismatch
+                    | TraceReason::AssertionViolated
+                    | TraceReason::NestedViolated
+                    | TraceReason::OutcomeViolated
+            ) | (
+                Self::Skipped,
+                TraceReason::LevelOff
+                    | TraceReason::WhenFalse
+                    | TraceReason::ChangedScopeEmpty
+                    | TraceReason::OutcomeSkipped
+            ) | (
+                Self::AnalysisFailure,
+                TraceReason::WhenEvaluationFailed
+                    | TraceReason::GitUnavailable
+                    | TraceReason::AnalysisTimeUnavailable
+                    | TraceReason::ManifestUnavailable
+                    | TraceReason::ExpectMatchesFailed
+                    | TraceReason::ParseFailed
+                    | TraceReason::AssertionFailed
+                    | TraceReason::NestedFailed
+                    | TraceReason::OutcomeAnalysisFailure
+            ) | (Self::NotEvaluated, TraceReason::ParseFailed)
+        )
+    }
+}
 /// Stable machine-readable reason for a trace stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,6 +124,57 @@ pub enum TraceReason {
     OutcomeViolated,
     OutcomeSkipped,
     OutcomeAnalysisFailure,
+}
+
+impl TraceReason {
+    const fn belongs_to(self, class: TraceStageClass) -> bool {
+        match class {
+            TraceStageClass::Gate => matches!(
+                self,
+                Self::LevelEnabled
+                    | Self::LevelOff
+                    | Self::WhenTrue
+                    | Self::WhenFalse
+                    | Self::WhenEvaluationFailed
+                    | Self::ChangedScopeMatched
+                    | Self::ChangedScopeEmpty
+                    | Self::GitAvailable
+                    | Self::GitUnavailable
+                    | Self::AnalysisTimeAvailable
+                    | Self::AnalysisTimeUnavailable
+                    | Self::ManifestAvailable
+                    | Self::ManifestUnavailable
+                    | Self::ExpectMatchesSatisfied
+                    | Self::ExpectMatchesViolated
+                    | Self::ExpectMatchesFailed
+            ),
+            TraceStageClass::Selection => {
+                matches!(self, Self::SelectorMatched | Self::SelectorNoMatch)
+            }
+            TraceStageClass::Extraction => {
+                matches!(self, Self::ParseFailed | Self::ExtractionSucceeded)
+            }
+            TraceStageClass::Cardinality => matches!(
+                self,
+                Self::ParseFailed | Self::CardinalitySatisfied | Self::CardinalityMismatch
+            ),
+            TraceStageClass::Assertion => matches!(
+                self,
+                Self::AssertionSatisfied | Self::AssertionViolated | Self::AssertionFailed
+            ),
+            TraceStageClass::Nested => matches!(
+                self,
+                Self::NestedSatisfied | Self::NestedViolated | Self::NestedFailed
+            ),
+            TraceStageClass::Outcome => matches!(
+                self,
+                Self::OutcomeSatisfied
+                    | Self::OutcomeViolated
+                    | Self::OutcomeSkipped
+                    | Self::OutcomeAnalysisFailure
+            ),
+        }
+    }
 }
 
 /// Checked aggregate counters carried by a stage.
@@ -116,13 +214,53 @@ pub struct TraceExtractionObservation {
     pub cardinality_mismatches: u64,
 }
 
-/// Half-open source coordinates retained by a preview row.
+/// Half-open, one-based source coordinates retained by a preview row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct TraceSourceRange {
-    pub start_line: usize,
-    pub start_column: usize,
-    pub end_line: usize,
-    pub end_column: usize,
+    start_line: usize,
+    start_column: usize,
+    end_line: usize,
+    end_column: usize,
+}
+
+impl TraceSourceRange {
+    pub fn new(
+        start_line: usize,
+        start_column: usize,
+        end_line: usize,
+        end_column: usize,
+    ) -> Result<Self> {
+        if start_line == 0
+            || start_column == 0
+            || end_line == 0
+            || end_column == 0
+            || (end_line, end_column) < (start_line, start_column)
+        {
+            return Err(Error::internal("invalid trace preview source range"));
+        }
+        Ok(Self {
+            start_line,
+            start_column,
+            end_line,
+            end_column,
+        })
+    }
+
+    pub const fn start_line(&self) -> usize {
+        self.start_line
+    }
+
+    pub const fn start_column(&self) -> usize {
+        self.start_column
+    }
+
+    pub const fn end_line(&self) -> usize {
+        self.end_line
+    }
+
+    pub const fn end_column(&self) -> usize {
+        self.end_column
+    }
 }
 
 /// Provenance of one extracted value.
@@ -154,18 +292,33 @@ pub enum TracePathOrigin {
     DerivedUnknown,
 }
 
+/// Stable type classification for a preview value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceValueType {
+    String,
+    Number,
+    Boolean,
+    Null,
+    Array,
+    Object,
+    Bytes,
+    Unknown,
+}
+
 /// One bounded extraction-preview row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TracePreviewRow {
-    pub path: PathBuf,
-    pub range: Option<TraceSourceRange>,
-    pub pointer: Option<String>,
-    pub occurrence: u64,
-    pub provenance: TraceProvenance,
-    pub value_type: String,
-    pub display_value: String,
-    pub redacted: bool,
-    pub value_truncated: bool,
+    #[serde(serialize_with = "serialize_path")]
+    path: PathBuf,
+    range: Option<TraceSourceRange>,
+    pointer: Option<String>,
+    occurrence: u64,
+    provenance: TraceProvenance,
+    value_type: TraceValueType,
+    display_value: String,
+    redacted: bool,
+    value_truncated: bool,
 }
 
 impl TracePreviewRow {
@@ -181,9 +334,9 @@ impl TracePreviewRow {
         occurrence: u64,
         provenance: TraceProvenance,
         sensitivity: TraceSensitivity,
-        value_type: impl Into<String>,
+        value_type: TraceValueType,
         value: &str,
-    ) -> Self {
+    ) -> Result<Self> {
         let value_redacted = !matches!(sensitivity, TraceSensitivity::Public)
             || matches!(provenance, TraceProvenance::Unknown);
         let path_redacted = matches!(
@@ -195,11 +348,11 @@ impl TracePreviewRow {
         } else {
             truncate_utf8(value, Self::MAX_DISPLAY_BYTES)
         };
-        Self {
+        Ok(Self {
             path: if path_redacted {
                 PathBuf::from("<redacted>")
             } else {
-                normalize_path(path)
+                normalize_repository_path(path)?
             },
             range: if path_redacted { None } else { range },
             pointer: if value_redacted || path_redacted {
@@ -209,11 +362,47 @@ impl TracePreviewRow {
             },
             occurrence,
             provenance,
-            value_type: value_type.into(),
+            value_type,
             display_value,
             redacted: value_redacted || path_redacted,
             value_truncated,
-        }
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub const fn range(&self) -> Option<TraceSourceRange> {
+        self.range
+    }
+
+    pub fn pointer(&self) -> Option<&str> {
+        self.pointer.as_deref()
+    }
+
+    pub const fn occurrence(&self) -> u64 {
+        self.occurrence
+    }
+
+    pub const fn provenance(&self) -> TraceProvenance {
+        self.provenance
+    }
+
+    pub const fn value_type(&self) -> TraceValueType {
+        self.value_type
+    }
+
+    pub fn display_value(&self) -> &str {
+        &self.display_value
+    }
+
+    pub const fn redacted(&self) -> bool {
+        self.redacted
+    }
+
+    pub const fn value_truncated(&self) -> bool {
+        self.value_truncated
     }
 
     fn compare_order(&self, other: &Self) -> Ordering {
@@ -245,12 +434,38 @@ impl PartialOrd for TracePreviewRow {
 /// Exact preview accounting plus the lexicographically first retained rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TracePreview {
-    pub total: u64,
-    pub shown: u64,
-    pub omitted: u64,
-    pub redacted: u64,
-    pub value_truncated: u64,
-    pub rows: Vec<TracePreviewRow>,
+    total: u64,
+    shown: u64,
+    omitted: u64,
+    redacted: u64,
+    value_truncated: u64,
+    rows: Vec<TracePreviewRow>,
+}
+
+impl TracePreview {
+    pub const fn total(&self) -> u64 {
+        self.total
+    }
+
+    pub const fn shown(&self) -> u64 {
+        self.shown
+    }
+
+    pub const fn omitted(&self) -> u64 {
+        self.omitted
+    }
+
+    pub const fn redacted(&self) -> u64 {
+        self.redacted
+    }
+
+    pub const fn value_truncated(&self) -> u64 {
+        self.value_truncated
+    }
+
+    pub fn rows(&self) -> &[TracePreviewRow] {
+        &self.rows
+    }
 }
 
 /// Bounded deterministic row collector. Memory is `O(limit)`.
@@ -316,29 +531,27 @@ impl TracePreviewCollector {
 pub struct TraceStage {
     pub ordinal: u32,
     pub class: TraceStageClass,
-    pub name: String,
+    name: String,
     pub status: TraceStatus,
     pub reason: TraceReason,
     pub counts: TraceCounts,
-    pub detail: Option<String>,
-    pub preview: Option<TracePreview>,
+    preview: Option<TracePreview>,
 }
 
 impl TraceStage {
     pub fn new(
         class: TraceStageClass,
-        name: impl Into<String>,
+        name: &'static str,
         status: TraceStatus,
         reason: TraceReason,
     ) -> Self {
         Self {
             ordinal: 0,
             class,
-            name: name.into(),
+            name: name.to_string(),
             status,
             reason,
             counts: TraceCounts::default(),
-            detail: None,
             preview: None,
         }
     }
@@ -348,6 +561,42 @@ impl TraceStage {
         self.counts = counts;
         self
     }
+
+    #[must_use]
+    pub fn with_preview(mut self, preview: TracePreview) -> Self {
+        self.preview = Some(preview);
+        self
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub const fn preview(&self) -> Option<&TracePreview> {
+        self.preview.as_ref()
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        if !self.reason.belongs_to(self.class) {
+            return Err(Error::internal(format!(
+                "trace reason `{:?}` is invalid for stage class `{:?}`",
+                self.reason, self.class
+            )));
+        }
+        if !self.status.matches_reason(self.reason) {
+            return Err(Error::internal(format!(
+                "trace status `{:?}` is invalid for reason `{:?}`",
+                self.status, self.reason
+            )));
+        }
+        if self.preview.is_some() && self.class != TraceStageClass::Extraction {
+            return Err(Error::internal(format!(
+                "trace stage `{:?}` cannot carry extraction preview rows",
+                self.class
+            )));
+        }
+        Ok(())
+    }
 }
 /// Trace-only producer boundary carried by an evaluation [`crate::Context`].
 ///
@@ -355,7 +604,7 @@ impl TraceStage {
 /// mutex-backed implementation only for selected-rule tracing; ordinary checks
 /// carry `None` and never construct or call a sink.
 pub trait TraceSink: Sync + std::fmt::Debug {
-    fn record(&self, stage: TraceStage);
+    fn record_kind(&self, stage: TraceStage);
 
     fn record_extraction(&self, observation: TraceExtractionObservation);
 }
@@ -489,6 +738,7 @@ impl TraceRecorder {
     }
 
     pub(crate) fn record(&mut self, mut stage: TraceStage) -> Result<()> {
+        stage.validate_shape()?;
         stage.ordinal = self.next_ordinal;
         self.next_ordinal = self
             .next_ordinal
@@ -498,13 +748,8 @@ impl TraceRecorder {
         Ok(())
     }
 
-    pub(crate) fn finish(
-        mut self,
-        rule_id: String,
-        kind: String,
-        result: Option<RuleResult>,
-    ) -> Result<RuleTrace> {
-        self.meta.validate_for_kind(&kind)?;
+    fn validate_completion(&self, kind: &str, result: Option<&RuleResult>) -> Result<bool> {
+        self.meta.validate_for_kind(kind)?;
         if self
             .stages
             .iter()
@@ -514,10 +759,19 @@ impl TraceRecorder {
                 "rule kind `{kind}` emitted the engine-owned terminal trace stage"
             )));
         }
-        let assertion_completed = self.stages.iter().any(|stage| {
-            stage.class == TraceStageClass::Assertion
-                && matches!(stage.status, TraceStatus::Satisfied | TraceStatus::Violated)
-        });
+        if self
+            .stages
+            .iter()
+            .any(|stage| stage.preview.is_some() && !self.meta.emits_preview_rows)
+        {
+            return Err(Error::internal(format!(
+                "rule kind `{kind}` emitted preview rows without declaring preview capability"
+            )));
+        }
+        let assertion_reached = self
+            .stages
+            .iter()
+            .any(|stage| stage.class == TraceStageClass::Assertion);
         let observed: BTreeSet<TraceStageClass> = self
             .stages
             .iter()
@@ -529,14 +783,15 @@ impl TraceRecorder {
                 .then_some(stage.class)
             })
             .collect();
-        for stage in &observed {
-            if !self.meta.allowed_stages.contains(stage) {
-                return Err(Error::internal(format!(
-                    "rule kind `{kind}` emitted undeclared trace stage `{stage:?}`"
-                )));
-            }
+        if let Some(stage) = observed
+            .iter()
+            .find(|stage| !self.meta.allowed_stages.contains(stage))
+        {
+            return Err(Error::internal(format!(
+                "rule kind `{kind}` emitted undeclared trace stage `{stage:?}`"
+            )));
         }
-        if assertion_completed {
+        if assertion_reached {
             for required in self.meta.required_stages.iter() {
                 if !observed.contains(required) {
                     return Err(Error::internal(format!(
@@ -545,17 +800,47 @@ impl TraceRecorder {
                 }
             }
         }
+        let stage_analysis_failure = self
+            .stages
+            .iter()
+            .any(|stage| stage.status == TraceStatus::AnalysisFailure);
+        let result_analysis_failure =
+            result.is_some_and(|result| !result.analysis_failures.is_empty());
+        if result.is_some() && stage_analysis_failure != result_analysis_failure {
+            return Err(Error::internal(format!(
+                "rule kind `{kind}` trace/result analysis-failure status is inconsistent"
+            )));
+        }
+        let stage_violated = self
+            .stages
+            .iter()
+            .any(|stage| stage.status == TraceStatus::Violated);
+        if let Some(result) = result
+            && !result_analysis_failure
+            && stage_violated == result.violations.is_empty()
+        {
+            return Err(Error::internal(format!(
+                "rule kind `{kind}` trace/result violation status is inconsistent"
+            )));
+        }
+        Ok(stage_analysis_failure)
+    }
+
+    pub(crate) fn finish(
+        mut self,
+        rule_id: String,
+        kind: String,
+        result: Option<RuleResult>,
+    ) -> Result<RuleTrace> {
+        let stage_analysis_failure = self.validate_completion(&kind, result.as_ref())?;
+        let result_analysis_failure = result
+            .as_ref()
+            .is_some_and(|result| !result.analysis_failures.is_empty());
         let outcome = match result.as_ref() {
-            Some(result) if !result.analysis_failures.is_empty() => TraceStatus::AnalysisFailure,
+            Some(_) if result_analysis_failure => TraceStatus::AnalysisFailure,
             Some(result) if !result.violations.is_empty() => TraceStatus::Violated,
             Some(_) => TraceStatus::Satisfied,
-            None if self
-                .stages
-                .iter()
-                .any(|stage| stage.status == TraceStatus::AnalysisFailure) =>
-            {
-                TraceStatus::AnalysisFailure
-            }
+            None if stage_analysis_failure => TraceStatus::AnalysisFailure,
             None if self
                 .stages
                 .iter()
@@ -608,14 +893,42 @@ pub(crate) fn recorders_created_on_current_thread() -> u64 {
     RECORDERS_CREATED.with(std::cell::Cell::get)
 }
 
-#[cfg(windows)]
-fn normalize_path(path: &Path) -> PathBuf {
-    PathBuf::from(path.to_string_lossy().replace('\\', "/"))
+fn serialize_path<S>(path: &Path, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&path.to_string_lossy())
 }
 
-#[cfg(not(windows))]
-fn normalize_path(path: &Path) -> PathBuf {
-    path.to_path_buf()
+fn normalize_repository_path(path: &Path) -> Result<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::internal(format!(
+                    "trace preview path `{}` is not repository-relative",
+                    path.display()
+                )));
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(Error::internal(
+            "trace preview path must identify a repository entry",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        return Ok(PathBuf::from(
+            normalized.to_string_lossy().replace('\\', "/"),
+        ));
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(normalized)
+    }
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> (String, bool) {
@@ -642,9 +955,10 @@ mod tests {
             occurrence,
             TraceProvenance::Structured,
             TraceSensitivity::Public,
-            "string",
+            TraceValueType::String,
             path,
         )
+        .unwrap()
     }
 
     #[test]
@@ -672,16 +986,17 @@ mod tests {
                 0,
                 TraceProvenance::Structured,
                 TraceSensitivity::Public,
-                "string",
+                TraceValueType::String,
                 value,
             )
+            .unwrap()
         };
         for values in [["z", "a"], ["a", "z"]] {
             let mut collector = TracePreviewCollector::new(1).unwrap();
             for value in values {
                 collector.push(make_row(value)).unwrap();
             }
-            assert_eq!(collector.finish().rows[0].display_value, "a");
+            assert_eq!(collector.finish().rows()[0].display_value(), "a");
         }
     }
 
@@ -700,11 +1015,12 @@ mod tests {
                 0,
                 provenance,
                 sensitivity,
-                "string",
+                TraceValueType::String,
                 "secret-canary",
-            );
-            assert!(row.redacted);
-            assert_eq!(row.display_value, "<redacted>");
+            )
+            .unwrap();
+            assert!(row.redacted());
+            assert_eq!(row.display_value(), "<redacted>");
         }
     }
 
@@ -718,13 +1034,14 @@ mod tests {
             0,
             TraceProvenance::Derived,
             TraceSensitivity::Sensitive,
-            "string",
+            TraceValueType::String,
             "secret-canary",
-        );
-        assert_eq!(row.path, Path::new("<redacted>"));
-        assert!(row.pointer.is_none());
-        assert_eq!(row.display_value, "<redacted>");
-        assert!(row.redacted);
+        )
+        .unwrap();
+        assert_eq!(row.path(), Path::new("<redacted>"));
+        assert!(row.pointer().is_none());
+        assert_eq!(row.display_value(), "<redacted>");
+        assert!(row.redacted());
 
         let path_only = TracePreviewRow::new(
             Path::new("secret-canary/result.txt"),
@@ -739,14 +1056,15 @@ mod tests {
             0,
             TraceProvenance::Derived,
             TraceSensitivity::Public,
-            "string",
+            TraceValueType::String,
             "public",
-        );
-        assert_eq!(path_only.path, Path::new("<redacted>"));
-        assert!(path_only.range.is_none());
-        assert!(path_only.pointer.is_none());
-        assert_eq!(path_only.display_value, "public");
-        assert!(path_only.redacted);
+        )
+        .unwrap();
+        assert_eq!(path_only.path(), Path::new("<redacted>"));
+        assert!(path_only.range().is_none());
+        assert!(path_only.pointer().is_none());
+        assert_eq!(path_only.display_value(), "public");
+        assert!(path_only.redacted());
     }
 
     #[test]
@@ -758,8 +1076,11 @@ mod tests {
         collector.push(row("z", 0)).unwrap();
         collector.push(row("a", 0)).unwrap();
         let preview = collector.finish();
-        assert_eq!((preview.total, preview.shown, preview.omitted), (2, 1, 1));
-        assert_eq!(preview.rows[0].path, Path::new("a"));
+        assert_eq!(
+            (preview.total(), preview.shown(), preview.omitted()),
+            (2, 1, 1)
+        );
+        assert_eq!(preview.rows()[0].path(), Path::new("a"));
     }
 
     #[test]
@@ -773,11 +1094,182 @@ mod tests {
             0,
             TraceProvenance::Literal,
             TraceSensitivity::Public,
-            "string",
+            TraceValueType::String,
             &value,
+        )
+        .unwrap();
+        assert_eq!(row.display_value().len(), 255);
+        assert!(row.value_truncated());
+    }
+
+    #[test]
+    fn preview_rejects_absolute_and_parent_paths_before_storage() {
+        for path in [Path::new("/outside"), Path::new("../outside")] {
+            let error = TracePreviewRow::new(
+                path,
+                TracePathOrigin::RepositorySource,
+                None,
+                None,
+                0,
+                TraceProvenance::Structured,
+                TraceSensitivity::Public,
+                TraceValueType::String,
+                "public",
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("repository-relative"));
+        }
+    }
+
+    #[test]
+    fn preview_normalizes_dot_components_and_validates_source_ranges() {
+        let range = TraceSourceRange::new(1, 2, 1, 3).unwrap();
+        let row = TracePreviewRow::new(
+            Path::new("./dir/./file"),
+            TracePathOrigin::RepositorySource,
+            Some(range),
+            None,
+            0,
+            TraceProvenance::Structured,
+            TraceSensitivity::Public,
+            TraceValueType::String,
+            "public",
+        )
+        .unwrap();
+        assert_eq!(row.path(), Path::new("dir/file"));
+        assert_eq!(row.range(), Some(range));
+        assert!(TraceSourceRange::new(0, 1, 1, 1).is_err());
+        assert!(TraceSourceRange::new(2, 1, 1, 1).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_json_handles_non_utf8_repository_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let row = TracePreviewRow::new(
+            Path::new(&OsString::from_vec(b"dir/\xff.txt".to_vec())),
+            TracePathOrigin::RepositorySource,
+            None,
+            None,
+            0,
+            TraceProvenance::Structured,
+            TraceSensitivity::Public,
+            TraceValueType::String,
+            "public",
+        )
+        .unwrap();
+        let json = serde_json::to_string(&row).unwrap();
+        assert!(json.contains("dir/"));
+        assert!(json.contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn recorder_rejects_malformed_stage_shape_and_preview_capability() {
+        let mut malformed = TraceRecorder::new(TraceMeta::ASSERTION);
+        assert!(
+            malformed
+                .record(TraceStage::new(
+                    TraceStageClass::Assertion,
+                    "policy",
+                    TraceStatus::Satisfied,
+                    TraceReason::SelectorMatched,
+                ))
+                .unwrap_err()
+                .to_string()
+                .contains("invalid for stage class")
         );
-        assert_eq!(row.display_value.len(), 255);
-        assert!(row.value_truncated);
+
+        let mut collector = TracePreviewCollector::new(1).unwrap();
+        collector.push(row("a", 0)).unwrap();
+        let mut unexpected_preview = TraceRecorder::new(TraceMeta::ASSERTION);
+        unexpected_preview
+            .record(
+                TraceStage::new(
+                    TraceStageClass::Extraction,
+                    "extract",
+                    TraceStatus::Satisfied,
+                    TraceReason::ExtractionSucceeded,
+                )
+                .with_preview(collector.finish()),
+            )
+            .unwrap();
+        assert!(
+            unexpected_preview
+                .finish("id".into(), "kind".into(), None)
+                .unwrap_err()
+                .to_string()
+                .contains("without declaring preview capability")
+        );
+    }
+
+    #[test]
+    fn recorder_rejects_unrepresented_analysis_failure() {
+        let mut recorder = TraceRecorder::new(TraceMeta::ASSERTION);
+        recorder
+            .record(TraceStage::new(
+                TraceStageClass::Gate,
+                "analysis_time",
+                TraceStatus::AnalysisFailure,
+                TraceReason::AnalysisTimeUnavailable,
+            ))
+            .unwrap();
+        recorder
+            .record(TraceStage::new(
+                TraceStageClass::Assertion,
+                "policy",
+                TraceStatus::Satisfied,
+                TraceReason::AssertionSatisfied,
+            ))
+            .unwrap();
+        assert!(
+            recorder
+                .finish("id".into(), "kind".into(), Some(passing_result()))
+                .unwrap_err()
+                .to_string()
+                .contains("analysis-failure status is inconsistent")
+        );
+    }
+
+    #[test]
+    fn recorder_rejects_unrepresented_policy_violation() {
+        let mut recorder = TraceRecorder::new(TraceMeta::ASSERTION);
+        recorder
+            .record(TraceStage::new(
+                TraceStageClass::Assertion,
+                "policy",
+                TraceStatus::Violated,
+                TraceReason::AssertionViolated,
+            ))
+            .unwrap();
+        assert!(
+            recorder
+                .finish("id".into(), "kind".into(), Some(passing_result()))
+                .unwrap_err()
+                .to_string()
+                .contains("violation status is inconsistent")
+        );
+    }
+
+    #[test]
+    fn failed_assertion_still_enforces_required_stage_inventory() {
+        let mut recorder = TraceRecorder::new(TraceMeta::SELECTION);
+        recorder
+            .record(TraceStage::new(
+                TraceStageClass::Assertion,
+                "policy",
+                TraceStatus::AnalysisFailure,
+                TraceReason::AssertionFailed,
+            ))
+            .unwrap();
+        assert!(
+            recorder
+                .finish("id".into(), "kind".into(), Some(passing_result()))
+                .unwrap_err()
+                .to_string()
+                .contains("required trace stage")
+        );
     }
 
     #[test]

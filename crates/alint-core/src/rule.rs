@@ -662,11 +662,11 @@ impl Context<'_> {
             None => false,
         }
     }
-    /// Emit one already-sanitized diagnostic stage when selected-rule tracing is
-    /// active. The option check compiles to the only ordinary-path trace work.
+    /// Emit one already-sanitized kind-owned stage when selected-rule tracing is
+    /// active. The sink rejects engine-owned gate and outcome stages.
     pub fn record_trace(&self, stage: crate::TraceStage) {
         if let Some(trace) = self.trace {
-            trace.record(stage);
+            trace.record_kind(stage);
         }
     }
 

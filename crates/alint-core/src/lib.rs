@@ -100,7 +100,7 @@ pub use structured_format::{Format, MAX_XML_DEPTH};
 pub use trace::{
     RuleTrace, TraceCounts, TraceExtractionObservation, TraceMeta, TracePathOrigin, TracePreview,
     TracePreviewCollector, TracePreviewRow, TraceProvenance, TraceReason, TraceSensitivity,
-    TraceSink, TraceSourceRange, TraceStage, TraceStageClass, TraceStatus,
+    TraceSink, TraceSourceRange, TraceStage, TraceStageClass, TraceStatus, TraceValueType,
 };
 pub use walker::{
     AnalysisRead, FileEntry, FileIndex, MAX_ANALYZE_BYTES, WalkOptions, read_capped_or_skip,
