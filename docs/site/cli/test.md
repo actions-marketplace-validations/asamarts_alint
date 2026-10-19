@@ -5,9 +5,12 @@ description: 'alint test discovers versioned policy-test YAML, runs each case in
 
 `alint test` is the policy-authoring loop. It runs the real alint loader, walker,
 rules, and fixers against isolated repository fixtures without modifying the
-fixture package. With no path it discovers `alint-tests/**/*.yml` and
-`alint-tests/**/*.yaml` below the current directory. Explicit arguments may be
-files or directories.
+fixture package. With no path it searches `alint-tests/**/*.yml` and
+`alint-tests/**/*.yaml` below the current directory. Recursive discovery treats
+only YAML mappings with a top-level `test_version` discriminator as policy
+tests, so package-local configs and repository fixtures may contain ordinary or
+malformed YAML. An explicit file argument is always validated as a policy test;
+explicit directories use the same discriminator-aware recursion.
 
 ```bash
 alint test

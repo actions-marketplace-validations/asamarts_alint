@@ -124,8 +124,11 @@ Bundled-ruleset tests live under
 
 Downstream rulesets use the same public contract under `alint-tests/`. Run `alint test` from the
 package root, pass files/directories explicitly for another layout, and use
-`alint test --update-snapshots` only after reviewing inline expectation changes. Command-spawning
-tests require both `capabilities: { spawn: true }` and the explicit `--allow-spawn` host grant.
+`alint test --update-snapshots` only after reviewing inline expectation changes. Recursive
+discovery requires a top-level `test_version` discriminator, so YAML owned by `given.fixture` or a
+local config chain is not mistaken for another test; explicitly named files are always validated.
+Command-spawning tests require both `capabilities: { spawn: true }` and the explicit
+`--allow-spawn` host grant.
 
 - `content/` content scanning (`file_content_matches`, `file_content_forbidden`,
   `file_header`, `file_footer`, `no_trailing_whitespace`, `final_newline`,

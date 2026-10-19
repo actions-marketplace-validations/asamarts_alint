@@ -29,6 +29,7 @@ pub(crate) struct RunOptions<'a> {
 struct DiscoveredTest {
     path: PathBuf,
     source: String,
+    yaml: Option<String>,
 }
 
 #[derive(Debug)]
@@ -327,7 +328,7 @@ fn discover(
     } else {
         paths
     };
-    let mut files = BTreeMap::<PathBuf, String>::new();
+    let mut files = BTreeMap::<PathBuf, (String, Option<String>)>::new();
     let mut issues = Vec::new();
     for root in roots {
         let explicit = !paths.is_empty();
@@ -338,7 +339,7 @@ fn discover(
     }
     let mut discovered: Vec<_> = files
         .into_iter()
-        .map(|(path, source)| DiscoveredTest { path, source })
+        .map(|(path, (source, yaml))| DiscoveredTest { path, source, yaml })
         .collect();
     discovered.sort_by(|left, right| left.source.as_bytes().cmp(right.source.as_bytes()));
     Ok(discovered)
@@ -348,7 +349,7 @@ fn collect_path(
     path: &Path,
     explicit: bool,
     current: &Path,
-    files: &mut BTreeMap<PathBuf, String>,
+    files: &mut BTreeMap<PathBuf, (String, Option<String>)>,
     issues: &mut Vec<PolicyTestIssue>,
 ) {
     let metadata = match std::fs::symlink_metadata(path) {
@@ -383,7 +384,27 @@ fn collect_path(
         match path.canonicalize() {
             Ok(canonical) => match normalized_source(&canonical, current) {
                 Ok(source) => {
-                    files.entry(canonical).or_insert(source);
+                    if files.contains_key(&canonical) {
+                        return;
+                    }
+                    let yaml = if explicit {
+                        None
+                    } else {
+                        match std::fs::read_to_string(&canonical) {
+                            Ok(yaml) if implicit_policy_test_candidate(&yaml) => Some(yaml),
+                            Ok(_) => return,
+                            Err(error) if error.kind() == std::io::ErrorKind::InvalidData => return,
+                            Err(error) => {
+                                issues.push(path_issue(
+                                    "discovery_io",
+                                    &canonical,
+                                    &error.to_string(),
+                                ));
+                                return;
+                            }
+                        }
+                    };
+                    files.insert(canonical, (source, yaml));
                 }
                 Err(issue) => issues.push(issue),
             },
@@ -440,19 +461,53 @@ fn is_yaml(path: &Path) -> bool {
     )
 }
 
+fn implicit_policy_test_candidate(yaml: &str) -> bool {
+    let has_top_level_marker = yaml.lines().any(|line| {
+        if line.starts_with([' ', '\t']) {
+            return false;
+        }
+        let line = line.strip_prefix('\u{feff}').unwrap_or(line);
+        line.split_once(':').is_some_and(|(key, _)| {
+            matches!(
+                key.trim(),
+                "test_version" | "'test_version'" | "\"test_version\""
+            )
+        })
+    });
+    if has_top_level_marker {
+        return true;
+    }
+    if !alint_core::yaml_depth::flow_depth_within_limit(yaml)
+        || !alint_core::yaml_depth::expansion_within_limit(yaml)
+    {
+        return false;
+    }
+    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml).is_ok_and(|value| {
+        value
+            .as_mapping()
+            .is_some_and(|mapping| mapping.contains_key("test_version"))
+    })
+}
+
 fn path_issue(code: &str, path: &Path, detail: &str) -> PolicyTestIssue {
     PolicyTestIssue::new(code, format!("{}: {detail}", path.display()))
 }
 
 fn parse_test(source: &DiscoveredTest) -> Result<PolicyTest, Box<PolicyTestRecord>> {
-    let yaml = std::fs::read_to_string(&source.path).map_err(|error| {
-        Box::new(PolicyTestRecord::invalid(
-            source.source.clone(),
-            None,
-            vec![PolicyTestIssue::new("read_error", error.to_string())],
-        ))
-    })?;
-    let test = PolicyTest::from_yaml(&yaml).map_err(|error| {
+    let owned;
+    let yaml = if let Some(yaml) = source.yaml.as_deref() {
+        yaml
+    } else {
+        owned = std::fs::read_to_string(&source.path).map_err(|error| {
+            Box::new(PolicyTestRecord::invalid(
+                source.source.clone(),
+                None,
+                vec![PolicyTestIssue::new("read_error", error.to_string())],
+            ))
+        })?;
+        &owned
+    };
+    let test = PolicyTest::from_yaml(yaml).map_err(|error| {
         Box::new(PolicyTestRecord::invalid(
             source.source.clone(),
             None,
@@ -693,6 +748,26 @@ mod tests {
             Some("named")
         ));
         assert!(!selected(&candidate, &["missing".to_string()], None));
+    }
+
+    #[test]
+    fn implicit_discovery_requires_a_top_level_version_discriminator() {
+        for candidate in [
+            "test_version: 1\n",
+            "'test_version': 1\n",
+            "{\"test_version\": 1}\n",
+            "test_version: [\n",
+        ] {
+            assert!(implicit_policy_test_candidate(candidate), "{candidate:?}");
+        }
+        for support in [
+            "version: 1\nrules: []\n",
+            "name: workflow\non: [push]\n",
+            "fixture:\n  test_version: 1\n",
+            "malformed: [\n",
+        ] {
+            assert!(!implicit_policy_test_candidate(support), "{support:?}");
+        }
     }
 
     #[test]

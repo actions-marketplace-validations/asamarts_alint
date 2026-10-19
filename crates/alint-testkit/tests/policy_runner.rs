@@ -162,10 +162,16 @@ given:
         kind: file_exists
         paths: "{{env.POLICY_PATH}}"
         level: error
+      - id: sensitive-warning
+        kind: file_exists
+        paths: missing.txt
+        level: warning
+        message: "{{env.POLICY_SECRET}}"
 when: [check]
 expect:
   - exit: success
-    violations: []
+    violations:
+      - { rule: sensitive-warning, level: warning }
 snapshot: snapshots/result.json
 "#,
     );
@@ -186,6 +192,7 @@ snapshot: snapshots/result.json
     let snapshot = std::fs::read_to_string(&snapshot_path).unwrap();
     assert!(snapshot.contains("policy-test-snapshot"));
     assert!(!snapshot.contains("never-render-this-value"));
+    assert!(snapshot.contains("<redacted:"), "{snapshot}");
     assert!(!snapshot.contains(&package.path().to_string_lossy().to_string()));
 
     std::fs::remove_file(&snapshot_path).unwrap();

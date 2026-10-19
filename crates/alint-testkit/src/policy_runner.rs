@@ -209,7 +209,8 @@ impl Runner {
             let mut observations = Vec::with_capacity(test.when.len());
             let mut mismatches = Vec::new();
             for (index, (step, expectation)) in test.when.iter().zip(&test.expect).enumerate() {
-                let observation = self.execute_step(*step, expectation, &context)?;
+                let mut observation = self.execute_step(*step, expectation, &context)?;
+                sanitize_observation(&mut observation, &context);
                 mismatches.extend(match_step(index, expectation, &observation));
                 observations.push(observation);
             }
@@ -242,6 +243,9 @@ impl Runner {
             self.options.update_snapshots,
             defer_snapshot_update,
         )?;
+        for mismatch in &mut mismatches {
+            sanitize_field(&mut mismatch.detail, test, repository, package.path());
+        }
 
         let status = if mismatches.is_empty() {
             TestStatus::Passed
@@ -1734,12 +1738,128 @@ fn deterministic_process_environment(
     Ok(environment)
 }
 
+fn sanitize_observation(observation: &mut StepObservation, context: &ExecutionContext<'_>) {
+    for violation in &mut observation.violations {
+        let mut sensitive = sanitize_field(
+            &mut violation.message,
+            context.test,
+            context.repository,
+            context.package.path(),
+        );
+        if let Some(path) = &mut violation.path {
+            sensitive |= sanitize_field(
+                path,
+                context.test,
+                context.repository,
+                context.package.path(),
+            );
+        }
+        if let Some(key) = &mut violation.baseline_key {
+            sensitive |= sanitize_field(
+                key,
+                context.test,
+                context.repository,
+                context.package.path(),
+            );
+        }
+        for related in &mut violation.related {
+            sensitive |= sanitize_field(
+                &mut related.label,
+                context.test,
+                context.repository,
+                context.package.path(),
+            );
+            sensitive |= sanitize_field(
+                &mut related.path,
+                context.test,
+                context.repository,
+                context.package.path(),
+            );
+        }
+        if sensitive {
+            let locator = format!(
+                "policy-test\0observation\0{}\0{}",
+                violation.rule,
+                violation.path.as_deref().unwrap_or("")
+            );
+            violation.baseline_key = None;
+            violation.fingerprint = alint_core::redaction_marker(&locator);
+        }
+    }
+    for failure in &mut observation.analysis_failures {
+        sanitize_field(
+            &mut failure.message,
+            context.test,
+            context.repository,
+            context.package.path(),
+        );
+        if let Some(path) = &mut failure.path {
+            sanitize_field(
+                path,
+                context.test,
+                context.repository,
+                context.package.path(),
+            );
+        }
+    }
+    for note in &mut observation.notes {
+        sanitize_field(
+            &mut note.message,
+            context.test,
+            context.repository,
+            context.package.path(),
+        );
+        if let Some(path) = &mut note.path {
+            sanitize_field(
+                path,
+                context.test,
+                context.repository,
+                context.package.path(),
+            );
+        }
+    }
+    if let Some(diff) = &mut observation.diff {
+        sanitize_field(
+            diff,
+            context.test,
+            context.repository,
+            context.package.path(),
+        );
+    }
+    if let Some(error) = &mut observation.configuration_error {
+        sanitize_field(
+            error,
+            context.test,
+            context.repository,
+            context.package.path(),
+        );
+    }
+}
+
+fn sanitize_field(
+    value: &mut String,
+    test: &PolicyTest,
+    repository: &Path,
+    package: &Path,
+) -> bool {
+    let sanitized = sanitize_text(value, test, repository, package);
+    if sanitized == *value {
+        false
+    } else {
+        *value = sanitized;
+        true
+    }
+}
+
 fn sanitize_text(message: &str, test: &PolicyTest, repository: &Path, package: &Path) -> String {
-    let mut evidence: Vec<&str> = test.given.env.values().map(String::as_str).collect();
     let repository = repository.to_string_lossy();
     let package = package.to_string_lossy();
-    evidence.push(&repository);
-    evidence.push(&package);
+    let evidence = test
+        .given
+        .env
+        .values()
+        .map(String::as_str)
+        .chain([repository.as_ref(), package.as_ref()]);
     alint_core::redact_evidence(message, "policy-test\0diagnostic", evidence)
 }
 

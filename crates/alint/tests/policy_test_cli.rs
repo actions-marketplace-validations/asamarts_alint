@@ -129,6 +129,59 @@ fn default_discovery_filters_and_json_are_deterministic() {
     assert_eq!(none.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&none.stdout).contains("selected no documents"));
 }
+
+#[test]
+fn default_discovery_ignores_yaml_owned_by_fixtures_and_configs() {
+    let root = tempfile::tempdir().unwrap();
+    write(
+        root.path(),
+        "alint-tests/config/base.yml",
+        "version: 1\nrules: []\n",
+    );
+    write(
+        root.path(),
+        "alint-tests/fixtures/repository/.github/workflows/ci.yml",
+        "name: ci\non: [push]\n",
+    );
+    write(
+        root.path(),
+        "alint-tests/fixtures/repository/malformed.yml",
+        "malformed: [\n",
+    );
+    write(
+        root.path(),
+        "alint-tests/case.yml",
+        r"test_version: 1
+name: directory fixture containing YAML
+given:
+  fixture: fixtures/repository
+  config_file: config/base.yml
+when: [check]
+expect:
+  - exit: success
+    violations: []
+",
+    );
+
+    let output = run(root.path(), &["test", "--format", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["summary"]["selected"], 1);
+    assert_eq!(report["summary"]["passed"], 1);
+
+    let explicit = run(
+        root.path(),
+        &["test", "alint-tests/config/base.yml", "--format", "json"],
+    );
+    assert_eq!(explicit.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&explicit.stdout).unwrap();
+    assert_eq!(report["tests"][0]["issues"][0]["code"], "parse_error");
+}
 #[test]
 fn missing_default_directory_is_an_error() {
     let empty = tempfile::tempdir().unwrap();
@@ -154,7 +207,7 @@ fn installed_binary_runs_directory_fixture_local_config_git_and_fix_pipeline() {
     write(
         root.path(),
         "policy/base.yml",
-        "version: 1\nrules:\n  - id: has-readme\n    kind: file_exists\n    paths: README.md\n    root_only: true\n    level: error\n    fix:\n      file_create:\n        content: \"# demo\\n\"\n",
+        "version: 1\nrules:\n  - id: has-readme\n    kind: file_exists\n    paths: README.md\n    root_only: true\n    level: error\n    message: \"{{env.POLICY_SECRET}}\"\n    fix:\n      file_create:\n        content: \"# demo\\n\"\n",
     );
     write(
         root.path(),
@@ -169,6 +222,8 @@ name: downstream package
 given:
   fixture: fixtures/repository
   config_file: policy/root.yml
+  env:
+    POLICY_SECRET: downstream-secret-canary
   git:
     init: true
     add: ['.']
@@ -204,6 +259,11 @@ expect_tree:
     assert_eq!(report["tests"][0]["steps"].as_array().unwrap().len(), 4);
     assert_eq!(report["tests"][0]["steps"][1]["operation"], "fix");
     assert_eq!(report["tests"][0]["steps"][3]["operation"], "check_changed");
+    assert!(!String::from_utf8_lossy(&json.stdout).contains("downstream-secret-canary"));
+    assert_ne!(
+        report["tests"][0]["steps"][0]["observation"]["violations"][0]["message"],
+        "downstream-secret-canary"
+    );
 
     let human = run(root.path(), &["test", "downstream.yml"]);
     assert_eq!(human.status.code(), Some(0));

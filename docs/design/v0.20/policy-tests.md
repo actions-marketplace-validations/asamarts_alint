@@ -39,10 +39,14 @@ alint test [PATH ...]
 
 With no path, discovery searches `alint-tests/**/*.yml` and `alint-tests/**/*.yaml` below the
 current directory. A path may name a YAML file or a directory; directory traversal uses the same
-extensions and does not follow directory symlinks. Explicit paths are de-duplicated after canonical
-confinement and results sort by forward-slash path bytes, then scenario name. Finding no scenario,
-or filtering every discovered scenario out, is a configuration error rather than a successful
-empty run.
+extensions and does not follow directory symlinks. Recursive discovery considers a YAML file a
+scenario only when its top-level mapping carries the `test_version` discriminator. This lets
+package-local config chains and repository fixtures contain YAML, including malformed YAML used as
+lint input, without becoming scenarios themselves. A malformed document carrying a top-level
+discriminator remains an invalid scenario; an explicit file is always validated as a scenario.
+Explicit paths are de-duplicated after canonical confinement and results sort by forward-slash path
+bytes, then scenario name. Finding no scenario, or filtering every discovered scenario out, is a
+configuration error rather than a successful empty run.
 
 `--tag` is an AND filter when repeated. `--filter` is a case-sensitive substring match against the
 scenario name or normalized source path. Filtering changes selection only; it cannot relax schema,

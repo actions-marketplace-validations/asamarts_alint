@@ -42,6 +42,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Policy-test discovery and diagnostics now remain safe around real fixture packages.** Recursive
+  `alint test` discovery ignores YAML without a top-level `test_version`, so config chains,
+  workflows, malformed parser fixtures, and other repository-owned YAML are not misclassified as
+  policy tests; explicitly named files still fail loudly. Policy-test observations, diffs,
+  mismatch details, baseline keys, and fingerprints now redact every declared `given.env` value
+  before reports or snapshots retain them.
+
 - **The published GitHub Actions guide now follows the post-release immutable pin.** The docs bundle
   overlays that guide from `main` after a tag is published and rejects generated output whose
   Action examples do not match `ci/action-doc-pin.env`, instead of leaving alint.org's copy-paste

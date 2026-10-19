@@ -1,8 +1,8 @@
 Run versioned policy tests in isolated temporary repositories.
 
-With no PATH, discovers YAML documents below `alint-tests/`. Explicit paths may be policy-test files
-or directories. Exit 1 means expectation mismatch, 2 means invalid test input, and 3 means the
-runner could not safely operate its sandbox.
+With no PATH, discovers mappings carrying top-level `test_version` below `alint-tests/`; other
+fixture/config YAML is ignored. Explicit files are always validated. Exit 1 means expectation
+mismatch, 2 invalid input, and 3 a runner/sandbox failure.
 
 Usage: alint test [OPTIONS] [PATH]...
 
