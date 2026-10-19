@@ -165,6 +165,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_strip_bidi")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
     nested_rules: false,
 };
 
@@ -334,6 +335,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let mut bytes = vec![0xFFu8]; // invalid UTF-8 lead byte
         bytes.extend_from_slice("code\u{202E}evil".as_bytes());
@@ -369,6 +371,7 @@ mod binary_evasion_tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let rule = NoBidiControlsRule {
             id: "no-bidi".to_string(),
@@ -417,6 +420,7 @@ mod binary_evasion_tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         rule().evaluate_file(&ctx, Path::new("f"), bytes).unwrap()
     }

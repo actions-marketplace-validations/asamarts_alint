@@ -156,6 +156,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
     nested_rules: false,
 };
 
@@ -251,6 +252,7 @@ mod tests {
             git_blame: None,
             analysis_time: Some(&analysis_time),
             process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "expected silent no-op, got {v:?}");
@@ -275,6 +277,7 @@ mod tests {
             git_blame: Some(&cache),
             analysis_time: Some(&analysis_time),
             process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty());
@@ -387,6 +390,7 @@ level: warning
             git_blame: Some(&cache),
             analysis_time: Some(&analysis_time),
             process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "no blame data → no violations: {v:?}");

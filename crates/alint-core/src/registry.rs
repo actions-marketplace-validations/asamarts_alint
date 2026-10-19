@@ -18,12 +18,25 @@ use crate::rule::Rule;
 
 pub type RuleBuilder = fn(&RuleSpec) -> Result<Box<dyn Rule>>;
 
-/// Internal storage form: a boxed builder, so option-less registration can
-/// wrap a plain [`RuleBuilder`] with option validation. `Send + Sync` because
-/// the registry is shared across the engine's worker threads.
-type BoxedBuilder = Box<dyn Fn(&RuleSpec) -> Result<Box<dyn Rule>> + Send + Sync>;
+#[derive(Clone, Copy)]
+enum StoredBuilder {
+    Direct(RuleBuilder),
+    Optionless(RuleBuilder),
+}
 
-#[derive(Debug)]
+impl StoredBuilder {
+    fn build(self, spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+        match self {
+            Self::Direct(builder) => builder(spec),
+            Self::Optionless(builder) => {
+                spec.deny_unknown_options()?;
+                builder(spec)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 enum StoredKindMeta {
     Static(&'static KindMeta),
     Owned(Arc<KindMeta>),
@@ -38,8 +51,9 @@ impl StoredKindMeta {
     }
 }
 
+#[derive(Clone)]
 struct RegisteredKind {
-    builder: BoxedBuilder,
+    builder: StoredBuilder,
     metadata: StoredKindMeta,
 }
 
@@ -49,7 +63,7 @@ struct RegisteredKind {
 /// and making it impossible for them to drift. Aliases store no builder or
 /// metadata: build and metadata lookups both resolve through the canonical
 /// entry.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct RuleRegistry {
     kinds: HashMap<String, RegisteredKind>,
     aliases: HashMap<String, String>,
@@ -118,7 +132,7 @@ impl RuleRegistry {
         self.insert_kind(
             kind,
             RegisteredKind {
-                builder: Box::new(builder),
+                builder: StoredBuilder::Direct(builder),
                 metadata: StoredKindMeta::Static(meta),
             },
         );
@@ -129,7 +143,7 @@ impl RuleRegistry {
         self.insert_kind(
             kind,
             RegisteredKind {
-                builder: Box::new(builder),
+                builder: StoredBuilder::Direct(builder),
                 metadata: StoredKindMeta::Owned(meta),
             },
         );
@@ -145,17 +159,10 @@ impl RuleRegistry {
         self.insert_kind(
             kind,
             RegisteredKind {
-                builder: Self::optionless_builder(builder),
+                builder: StoredBuilder::Optionless(builder),
                 metadata: StoredKindMeta::Static(meta),
             },
         );
-    }
-
-    fn optionless_builder(builder: RuleBuilder) -> BoxedBuilder {
-        Box::new(move |spec: &RuleSpec| {
-            spec.deny_unknown_options()?;
-            builder(spec)
-        })
     }
 
     fn insert_kind(&mut self, kind: &str, registration: RegisteredKind) {
@@ -238,7 +245,10 @@ impl RuleRegistry {
             registration.metadata.as_ref(),
         )
         .map_err(|violation| Error::rule_config(&spec.id, violation.message))?;
-        let rule = (registration.builder)(spec).map_err(|e| enrich_error(e, &spec.kind))?;
+        let rule = registration
+            .builder
+            .build(spec)
+            .map_err(|e| enrich_error(e, &spec.kind))?;
         #[cfg(debug_assertions)]
         assert_instance_conformance(
             canonical,
@@ -787,6 +797,7 @@ mod tests {
         dependencies: Cow::Borrowed(&[]),
         fix_ops: Cow::Borrowed(&[]),
         expect_matches: false,
+        trace: crate::TraceMeta::ASSERTION,
         nested_rules: false,
     };
 

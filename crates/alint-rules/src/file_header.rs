@@ -144,6 +144,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
         std::borrow::Cow::Borrowed("insert_header"),
     ]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
     nested_rules: false,
 };
 

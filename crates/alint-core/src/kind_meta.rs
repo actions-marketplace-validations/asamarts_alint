@@ -217,6 +217,7 @@ pub struct KindMeta {
     pub dependencies: Cow<'static, [DependencyMeta]>,
     pub fix_ops: Cow<'static, [Cow<'static, str>]>,
     pub expect_matches: bool,
+    pub trace: crate::trace::TraceMeta,
     pub nested_rules: bool,
 }
 
@@ -265,7 +266,7 @@ impl Serialize for KindMeta {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("KindMeta", 15)?;
+        let mut state = serializer.serialize_struct("KindMeta", 16)?;
         state.serialize_field("dispatch", &self.dispatch)?;
         state.serialize_field("paths", &self.paths)?;
         state.serialize_field("scope_filter", &self.scope_filter)?;
@@ -280,6 +281,7 @@ impl Serialize for KindMeta {
         state.serialize_field("dependencies", &self.dependencies)?;
         state.serialize_field("fix_ops", &self.fix_ops)?;
         state.serialize_field("expect_matches", &self.expect_matches)?;
+        state.serialize_field("trace", &self.trace)?;
         state.serialize_field("nested_rules", &self.nested_rules)?;
         state.end()
     }
@@ -469,6 +471,7 @@ mod tests {
             dependencies: Cow::Borrowed(&[]),
             fix_ops: Cow::Borrowed(&[]),
             expect_matches: true,
+            trace: crate::TraceMeta::ASSERTION,
             nested_rules: false,
         };
 

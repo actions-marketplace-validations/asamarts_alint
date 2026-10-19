@@ -722,6 +722,7 @@ fn rules_show_and_search_over_summaries() {
         "capabilities: spawn_user_command, env_export",
         "selectors:    workdir (literal_path, rerootable), files_pattern (regex)",
         "fix_ops:      none",
+        "trace:        required=selection,assertion; optional=none; preview=false; nested=false",
     ] {
         assert!(
             capabilities.contains(expected),
@@ -759,6 +760,12 @@ fn rules_show_and_search_over_summaries() {
         serde_json::json!(["file_remove", "git_untrack", "relocate"])
     );
     assert_eq!(v["selectors"], serde_json::json!([]));
+    assert_eq!(
+        v["trace"]["required_stages"],
+        serde_json::json!(["selection", "assertion"])
+    );
+    assert_eq!(v["trace"]["emits_preview_rows"], false);
+    assert_eq!(v["trace"]["nested_evaluation"], false);
 
     // `list --search` matches summary text: "digest" is in file_hash's summary,
     // not its name.

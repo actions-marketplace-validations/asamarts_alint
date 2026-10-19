@@ -106,6 +106,7 @@ fn eval(r: &FileGraphRule, root: &Path, idx: &FileIndex) -> Vec<Violation> {
         git_blame: None,
         analysis_time: None,
         process_environment: None,
+        trace: None,
     };
     r.evaluate(&ctx).expect("evaluate ok")
 }

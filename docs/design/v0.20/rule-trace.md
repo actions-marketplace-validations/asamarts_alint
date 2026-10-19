@@ -1,6 +1,6 @@
 # Design doc: rule trace and extraction preview
 
-Status: Accepted design (2026-10-18); implementation not started.
+Status: Accepted design (2026-10-18); P5 engine model/recorder implemented, P6 CLI projection pending.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 questions Q7/Q14 and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md).
 Demand evidence:

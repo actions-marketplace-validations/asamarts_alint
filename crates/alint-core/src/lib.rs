@@ -34,6 +34,8 @@ mod scope_filter;
 pub mod structured_fix;
 mod structured_format;
 pub mod template;
+#[doc(hidden)]
+pub mod trace;
 mod walker;
 pub mod when;
 pub mod yaml_depth;
@@ -94,6 +96,12 @@ pub use scope_filter::{
 };
 pub use structured_format::MAX_STRUCTURED_BYTES;
 pub use structured_format::{Format, MAX_XML_DEPTH};
+#[doc(hidden)]
+pub use trace::{
+    RuleTrace, TraceCounts, TraceExtractionObservation, TraceMeta, TracePathOrigin, TracePreview,
+    TracePreviewCollector, TracePreviewRow, TraceProvenance, TraceReason, TraceSensitivity,
+    TraceSink, TraceSourceRange, TraceStage, TraceStageClass, TraceStatus,
+};
 pub use walker::{
     AnalysisRead, FileEntry, FileIndex, MAX_ANALYZE_BYTES, WalkOptions, read_capped_or_skip,
     read_for_analysis, walk,

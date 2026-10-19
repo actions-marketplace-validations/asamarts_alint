@@ -107,14 +107,21 @@ model {
     ruleResult = entity 'RuleResult' 'rule_id, level, violations, is_fixable'
     report = entity 'Report' 'results'
     engineContext = entity 'Context' 'root, index, registry, facts, vars, git'
+    traceSink = entity 'TraceSink' 'optional trace-only aggregate stage recorder'
+    traceStage = entity 'TraceStage' 'class, status, reason, checked counts, bounded preview'
+    ruleTrace = entity 'RuleTrace' 'selected rule identity, ordered stages, terminal outcome, result'
   }
   ruleTrait -> perFileTrait 'as_per_file()'
   ruleTrait -> fixerTrait 'fixer()'
   ruleTrait -> engineContext 'evaluate(&Context)'
+  engineContext -> traceSink 'optional stage emission'
   ruleTrait -> violation 'produces'
   perFileTrait -> violation 'produces'
   violation -> ruleResult 'aggregated into'
   ruleResult -> report 'collected into'
+  traceSink -> traceStage 'records aggregate stages'
+  traceStage -> ruleTrace 'collected in execution order'
+  ruleResult -> ruleTrace 'terminal selected-rule result'
 }
 
 views {

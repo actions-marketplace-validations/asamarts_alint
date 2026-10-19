@@ -996,6 +996,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         r.evaluate(&ctx).unwrap()
     }

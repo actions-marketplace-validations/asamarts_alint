@@ -1,6 +1,6 @@
 # v0.20: Policy authoring loop
 
-Status: Accepted design (2026-10-18); P1-P4 implemented, P5/P6 next.
+Status: Accepted design (2026-10-18); P1-P5 implemented, P6 next.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 (DEC-6) and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md)
 (Phase 1b questions Q7, Q11, and Q14).
@@ -140,6 +140,11 @@ Implementation status:
   `version` and literal `requires.alint` before composition. Compatibility provenance survives the
   merge, requirements remain non-policy metadata, and the committed config schema exposes the
   closed requirement map.
+- **P5 complete:** the typed selected-rule trace model executes through production engine
+  dispatch, records engine-owned gates/assertion/outcome plus aggregate nested stages, audits every
+  canonical kind against mandatory `TraceMeta`, retains deterministic bounded redacted preview
+  rows, and constructs no trace recorder on ordinary checks. The inventory is generated into
+  `facts.json` format v6 and exposed by `alint rules show`.
 
 ## Cross-cutting invariants
 
@@ -208,8 +213,9 @@ v0.20 is complete only when all of the following are observed:
 
 ## Implementation handoff
 
-P1-P4 are implemented. P5/P6 are the next vertical slice: add the zero-cost-on-normal-check typed
-trace recorder first, then expose deterministic, redaction-safe `explain --trace` and bounded
-`--preview` projections. The policy-test parser/runner corpus migration portion of P7 landed with
-P2; after P6, complete the trace-dependent bundle coverage audit, then close P8 with release
-packaging, generated artifacts, and the full acceptance matrix.
+P1-P5 are implemented. P6 is the next vertical slice: expose the selected-rule recorder through
+deterministic, redaction-safe `explain --trace` and bounded `--preview` human/JSON projections,
+including the experimental schema and packaged-binary parity smoke. The policy-test parser/runner
+corpus migration portion of P7 landed with P2; after P6, complete the trace-dependent bundle
+coverage audit, then close P8 with release packaging, generated artifacts, and the full acceptance
+matrix.

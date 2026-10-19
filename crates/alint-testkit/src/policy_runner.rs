@@ -1979,4 +1979,147 @@ mod tests {
         );
         assert!(mismatches.is_empty(), "{mismatches:?}");
     }
+    fn policy_scenario_paths(root: &Path) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if matches!(
+                    path.extension().and_then(|extension| extension.to_str()),
+                    Some("yml" | "yaml")
+                ) {
+                    paths.push(path);
+                }
+            }
+        }
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn canonical_pass_fail_corpus_produces_complete_traces() {
+        let scenarios = Path::new(env!("CARGO_MANIFEST_DIR")).join("../alint-e2e/scenarios");
+        let runner = Runner::new(RunnerOptions {
+            allow_spawn: true,
+            allow_host_keyring: true,
+            update_snapshots: false,
+        });
+        // The published crate intentionally excludes the workspace's e2e corpus.
+        if !scenarios.is_dir() {
+            return;
+        }
+        let registry = alint_rules::builtin_registry();
+        let mut outcomes: BTreeMap<String, (bool, bool)> = registry
+            .canonical_kinds()
+            .map(|kind| (kind.to_string(), (false, false)))
+            .collect();
+
+        for source in policy_scenario_paths(&scenarios) {
+            if outcomes
+                .values()
+                .all(|(passing, failing)| *passing && *failing)
+            {
+                break;
+            }
+            let text = std::fs::read_to_string(&source).unwrap();
+            let document: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&text) {
+                Ok(document) => document,
+                Err(_) => continue,
+            };
+            if document.get("test_version").is_none() {
+                continue;
+            }
+            let policy = PolicyTest::from_yaml(&text)
+                .unwrap_or_else(|error| panic!("{}: {error}", source.display()));
+            if let Err(diagnostics) = policy.validate() {
+                panic!("{}: {diagnostics:?}", source.display());
+            }
+            if platform_skip_reason(&policy.tags).is_some() {
+                continue;
+            }
+            let prepared = runner
+                .prepare_policy_test(&policy, &source)
+                .unwrap_or_else(|error| panic!("{}: {error}", source.display()));
+            let context = ExecutionContext {
+                repository: &prepared.repository,
+                sandbox: prepared.sandbox.path(),
+                config_path: &prepared.config_path,
+                source_provider: prepared.source_provider.clone(),
+                environment: prepared.environment.clone(),
+                process_environment: &prepared.process_environment,
+                test: &policy,
+                package: &prepared.package,
+            };
+            let PreparedStep::Ready { engine, index, .. } = runner
+                .prepare_step(TestStep::Check, &context)
+                .unwrap_or_else(|error| panic!("{}: {error}", source.display()))
+            else {
+                continue;
+            };
+            let rules: Vec<(String, String)> = engine
+                .trace_rule_inventory()
+                .map(|(id, kind)| (id.to_string(), kind.to_string()))
+                .collect();
+            for (id, kind) in rules {
+                let Some((passing, failing)) = outcomes.get(&kind).copied() else {
+                    panic!("{}: unregistered kind `{kind}`", source.display());
+                };
+                if passing && failing {
+                    continue;
+                }
+                let trace = engine
+                    .trace_rule(&id, &prepared.repository, &index)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "{}: trace `{id}` ({kind}) failed: {error}",
+                            source.display()
+                        )
+                    });
+                assert_eq!(trace.kind, kind, "{}", source.display());
+                assert_eq!(
+                    trace
+                        .stages
+                        .iter()
+                        .filter(|stage| stage.class == alint_core::TraceStageClass::Outcome)
+                        .count(),
+                    1,
+                    "{}: trace `{id}` must have one terminal outcome",
+                    source.display()
+                );
+                assert!(
+                    trace
+                        .stages
+                        .iter()
+                        .enumerate()
+                        .all(|(index, stage)| stage.ordinal == u32::try_from(index).unwrap()),
+                    "{}: trace `{id}` ordinals are not contiguous",
+                    source.display()
+                );
+                let status = outcomes.get_mut(&kind).unwrap();
+                match trace.outcome {
+                    alint_core::TraceStatus::Satisfied => status.0 = true,
+                    alint_core::TraceStatus::Violated => status.1 = true,
+                    alint_core::TraceStatus::Skipped
+                    | alint_core::TraceStatus::AnalysisFailure
+                    | alint_core::TraceStatus::NotEvaluated => {}
+                }
+            }
+        }
+
+        let missing: Vec<String> = outcomes
+            .into_iter()
+            .filter_map(|(kind, (passing, failing))| {
+                (!passing || !failing).then(|| format!("{kind}: pass={passing}, fail={failing}"))
+            })
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "canonical kinds without completed pass/fail traces:\n{}",
+            missing.join("\n")
+        );
+    }
 }

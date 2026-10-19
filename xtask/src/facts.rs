@@ -25,7 +25,7 @@ use serde::Serialize;
 
 /// Bumped when the `facts.json` shape changes, so a downstream
 /// consumer (alint.org) can pin the schema it understands.
-const FORMAT_VERSION: u32 = 5;
+const FORMAT_VERSION: u32 = 6;
 
 static RULE_REGISTRY: LazyLock<alint_core::RuleRegistry> =
     LazyLock::new(alint_rules::builtin_registry);
@@ -661,7 +661,7 @@ mod tests {
     #[test]
     fn compatibility_inventory_comes_from_runtime_constants() {
         let facts = build_facts().expect("build facts");
-        assert_eq!(facts.format_version, 5);
+        assert_eq!(facts.format_version, 6);
         assert_eq!(
             facts.compatibility.config_versions,
             vec![alint_core::Config::CURRENT_VERSION]

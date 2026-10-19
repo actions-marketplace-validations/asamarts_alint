@@ -856,3 +856,128 @@ fn evaluate_fires_on_malformed_input() {
     let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
     assert_eq!(v.len(), 1, "malformed JSON should fire one violation");
 }
+
+#[test]
+fn selected_trace_aggregates_structured_extraction_and_cardinality_without_reparsing() {
+    let spec = std::sync::Arc::new(spec_yaml(
+        "id: traced\nkind: json_path_equals\npaths: \"**/*.json\"\n\
+         path: \"$.items[*]\"\nequals: 1\nlevel: error\n",
+    ));
+    let registry = crate::builtin_registry();
+    let rule = registry.build(&spec).unwrap();
+    let engine = alint_core::Engine::from_entries(
+        vec![alint_core::RuleEntry::new(rule).with_spec(spec)],
+        registry,
+    );
+    let (tmp, index) = tempdir_with_files(&[
+        ("a.json", br#"{"items":[1,2]}"#),
+        ("b.json", br#"{"other":true}"#),
+    ]);
+
+    let trace = engine.trace_rule("traced", tmp.path(), &index).unwrap();
+    let extraction = trace
+        .stages
+        .iter()
+        .find(|stage| stage.class == alint_core::TraceStageClass::Extraction)
+        .unwrap();
+    assert_eq!(extraction.status, alint_core::TraceStatus::Satisfied);
+    assert_eq!(extraction.counts.inputs, 2);
+    assert_eq!(extraction.counts.values, 2);
+    let cardinality = trace
+        .stages
+        .iter()
+        .find(|stage| stage.class == alint_core::TraceStageClass::Cardinality)
+        .unwrap();
+    assert_eq!(cardinality.status, alint_core::TraceStatus::Violated);
+    assert_eq!(cardinality.counts.inputs, 2);
+    assert_eq!(cardinality.counts.values, 2);
+    assert_eq!(cardinality.counts.violations, 1);
+    assert_eq!(trace.result.as_ref().unwrap().violations.len(), 2);
+}
+
+#[test]
+fn selected_trace_preserves_structured_parse_failure() {
+    let spec = std::sync::Arc::new(spec_yaml(
+        "id: traced\nkind: json_path_equals\npaths: \"bad.json\"\n\
+         path: \"$.name\"\nequals: \"x\"\nlevel: error\n",
+    ));
+    let registry = crate::builtin_registry();
+    let rule = registry.build(&spec).unwrap();
+    let engine = alint_core::Engine::from_entries(
+        vec![alint_core::RuleEntry::new(rule).with_spec(spec)],
+        registry,
+    );
+    let (tmp, index) = tempdir_with_files(&[("bad.json", b"{not json")]);
+
+    let trace = engine.trace_rule("traced", tmp.path(), &index).unwrap();
+    assert_eq!(trace.outcome, alint_core::TraceStatus::AnalysisFailure);
+    assert!(trace.stages.iter().any(|stage| {
+        stage.class == alint_core::TraceStageClass::Extraction
+            && stage.status == alint_core::TraceStatus::AnalysisFailure
+            && stage.reason == alint_core::TraceReason::ParseFailed
+            && stage.counts.analysis_failures == 1
+    }));
+    assert!(trace.stages.iter().any(|stage| {
+        stage.class == alint_core::TraceStageClass::Cardinality
+            && stage.status == alint_core::TraceStatus::NotEvaluated
+            && stage.reason == alint_core::TraceReason::ParseFailed
+            && stage.counts.inputs == 0
+    }));
+    assert_eq!(
+        trace.result.as_ref().unwrap().analysis_failures[0].kind,
+        alint_core::AnalysisFailureKind::ResourceParse
+    );
+}
+
+#[test]
+fn selected_trace_keeps_pre_extraction_read_failure_as_analysis_failure() {
+    let spec = std::sync::Arc::new(spec_yaml(
+        "id: traced\nkind: json_path_equals\npaths: \"gone.json\"\n\
+         path: \"$.name\"\nequals: \"x\"\nlevel: error\n",
+    ));
+    let registry = crate::builtin_registry();
+    let rule = registry.build(&spec).unwrap();
+    let engine = alint_core::Engine::from_entries(
+        vec![alint_core::RuleEntry::new(rule).with_spec(spec)],
+        registry,
+    );
+    let (tmp, index) = tempdir_with_files(&[("gone.json", br#"{"name":"x"}"#)]);
+    std::fs::remove_file(tmp.path().join("gone.json")).unwrap();
+
+    let trace = engine.trace_rule("traced", tmp.path(), &index).unwrap();
+    assert_eq!(trace.outcome, alint_core::TraceStatus::AnalysisFailure);
+    assert!(
+        !trace
+            .stages
+            .iter()
+            .any(|stage| stage.class == alint_core::TraceStageClass::Extraction)
+    );
+    assert_eq!(
+        trace.result.as_ref().unwrap().analysis_failures[0].kind,
+        alint_core::AnalysisFailureKind::ResourceRead
+    );
+}
+
+#[test]
+fn selected_trace_allows_conditional_extraction_to_skip_binary_input() {
+    let spec = std::sync::Arc::new(spec_yaml(
+        "id: traced\nkind: json_path_equals\npaths: \"binary.json\"\n\
+         path: \"$.name\"\nequals: \"x\"\nlevel: error\n",
+    ));
+    let registry = crate::builtin_registry();
+    let rule = registry.build(&spec).unwrap();
+    let engine = alint_core::Engine::from_entries(
+        vec![alint_core::RuleEntry::new(rule).with_spec(spec)],
+        registry,
+    );
+    let (tmp, index) = tempdir_with_files(&[("binary.json", b"{\0}")]);
+
+    let trace = engine.trace_rule("traced", tmp.path(), &index).unwrap();
+    assert_eq!(trace.outcome, alint_core::TraceStatus::Satisfied);
+    assert!(
+        !trace
+            .stages
+            .iter()
+            .any(|stage| stage.class == alint_core::TraceStageClass::Extraction)
+    );
+}

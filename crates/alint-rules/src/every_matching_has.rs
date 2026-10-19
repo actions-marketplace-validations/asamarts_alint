@@ -143,6 +143,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[]),
     expect_matches: false,
+    trace: alint_core::TraceMeta::NESTED,
     nested_rules: true,
 };
 
@@ -227,6 +228,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         // `{path}` resolves to "packages/a" (dir) and "packages/x.md" (file).
@@ -291,6 +293,7 @@ scope_filter:
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let v = rule.evaluate(&ctx).unwrap();
         // packages/a is iterated (a dir, not a file → file_exists

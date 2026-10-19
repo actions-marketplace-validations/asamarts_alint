@@ -324,6 +324,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     }]),
     fix_ops: std::borrow::Cow::Borrowed(&[]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 

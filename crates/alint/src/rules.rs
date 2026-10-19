@@ -35,6 +35,7 @@ pub(crate) struct CapabilitySummary<'a>(&'a KindMeta);
 pub(crate) struct SelectorSummary<'a>(&'a KindMeta);
 
 pub(crate) struct FixOpSummary<'a>(&'a KindMeta);
+pub(crate) struct TraceSummary<'a>(&'a KindMeta);
 
 pub(crate) fn capability_summary(meta: &KindMeta) -> CapabilitySummary<'_> {
     CapabilitySummary(meta)
@@ -46,6 +47,10 @@ pub(crate) fn selector_summary(meta: &KindMeta) -> SelectorSummary<'_> {
 
 pub(crate) fn fix_op_summary(meta: &KindMeta) -> FixOpSummary<'_> {
     FixOpSummary(meta)
+}
+
+pub(crate) fn trace_summary(meta: &KindMeta) -> TraceSummary<'_> {
+    TraceSummary(meta)
 }
 
 impl fmt::Display for CapabilitySummary<'_> {
@@ -142,6 +147,62 @@ impl fmt::Display for FixOpSummary<'_> {
             f.write_str(op)?;
         }
         Ok(())
+    }
+}
+
+impl fmt::Display for TraceSummary<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("required=")?;
+        write_trace_stages(f, self.0.trace.required_stages.as_ref())?;
+        let optional = self
+            .0
+            .trace
+            .allowed_stages
+            .iter()
+            .copied()
+            .filter(|stage| !self.0.trace.required_stages.contains(stage));
+        f.write_str("; optional=")?;
+        let mut optional = optional.peekable();
+        if optional.peek().is_none() {
+            f.write_str("none")?;
+        } else {
+            for (index, stage) in optional.enumerate() {
+                if index != 0 {
+                    f.write_str(",")?;
+                }
+                f.write_str(trace_stage_name(stage))?;
+            }
+        }
+        write!(
+            f,
+            "; preview={}; nested={}",
+            self.0.trace.emits_preview_rows, self.0.trace.nested_evaluation
+        )
+    }
+}
+
+fn write_trace_stages(
+    f: &mut fmt::Formatter<'_>,
+    stages: &[alint_core::TraceStageClass],
+) -> fmt::Result {
+    for (index, stage) in stages.iter().copied().enumerate() {
+        if index != 0 {
+            f.write_str(",")?;
+        }
+        f.write_str(trace_stage_name(stage))?;
+    }
+    Ok(())
+}
+
+const fn trace_stage_name(stage: alint_core::TraceStageClass) -> &'static str {
+    match stage {
+        alint_core::TraceStageClass::Gate => "gate",
+        alint_core::TraceStageClass::Selection => "selection",
+        alint_core::TraceStageClass::Extraction => "extraction",
+        alint_core::TraceStageClass::Cardinality => "cardinality",
+        alint_core::TraceStageClass::Assertion => "assertion",
+        alint_core::TraceStageClass::Nested => "nested",
+        alint_core::TraceStageClass::Outcome => "outcome",
     }
 }
 
@@ -373,6 +434,7 @@ fn show(kind: &str, format: Format, show_docs: bool) -> Result<ExitCode> {
             "capabilities": meta.serialized_capabilities(),
             "selectors": meta.selectors.as_ref(),
             "fix_ops": meta.fix_ops.as_ref(),
+            "trace": &meta.trace,
         });
         writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
     } else {
@@ -392,6 +454,7 @@ fn show(kind: &str, format: Format, show_docs: bool) -> Result<ExitCode> {
         writeln!(out, "  capabilities: {}", capability_summary(meta))?;
         writeln!(out, "  selectors:    {}", selector_summary(meta))?;
         writeln!(out, "  fix_ops:      {}", fix_op_summary(meta))?;
+        writeln!(out, "  trace:        {}", trace_summary(meta))?;
         if show_docs {
             writeln!(out, "  docs:       {docs}")?;
         }

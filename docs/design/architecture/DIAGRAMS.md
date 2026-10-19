@@ -257,8 +257,11 @@ graph TB
     EngineTypes.FixerTrait["Fixer"]
     EngineTypes.EngineContext["Context"]
     EngineTypes.Violation["Violation"]
+    EngineTypes.TraceSink["TraceSink"]
     EngineTypes.RuleResult["RuleResult"]
+    EngineTypes.TraceStage["TraceStage"]
     EngineTypes.Report["Report"]
+    EngineTypes.RuleTrace["RuleTrace"]
   end
   EngineTypes.RuleTrait -. "`as_per_file()`" .-> EngineTypes.PerFileTrait
   EngineTypes.RuleTrait -. "`fixer()`" .-> EngineTypes.FixerTrait
@@ -267,6 +270,10 @@ graph TB
   EngineTypes.PerFileTrait -. "`produces`" .-> EngineTypes.Violation
   EngineTypes.Violation -. "`aggregated into`" .-> EngineTypes.RuleResult
   EngineTypes.RuleResult -. "`collected into`" .-> EngineTypes.Report
+  EngineTypes.RuleResult -. "`terminal selected-rule result`" .-> EngineTypes.RuleTrace
+  EngineTypes.EngineContext -. "`optional stage emission`" .-> EngineTypes.TraceSink
+  EngineTypes.TraceSink -. "`records aggregate stages`" .-> EngineTypes.TraceStage
+  EngineTypes.TraceStage -. "`collected in execution order`" .-> EngineTypes.RuleTrace
 ```
 
 ## Facts and conditional rules

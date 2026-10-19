@@ -620,6 +620,8 @@ impl RuleResult {
 /// - `analysis_time` — one explicit or HEAD-derived reference instant for
 ///   time-dependent rules. Resolution failures stay structural until a rule
 ///   actually asks for the value.
+/// - `trace` — optional selected-rule diagnostic sink. Ordinary check/fix/LSP
+///   contexts always carry `None`.
 #[derive(Debug)]
 pub struct Context<'a> {
     pub root: &'a Path,
@@ -634,6 +636,8 @@ pub struct Context<'a> {
     /// production behavior); `Some` means callers must clear the inherited
     /// environment before applying this map.
     pub process_environment: Option<&'a std::collections::BTreeMap<String, String>>,
+    #[doc(hidden)]
+    pub trace: Option<&'a dyn crate::trace::TraceSink>,
 }
 
 impl Context<'_> {
@@ -657,6 +661,23 @@ impl Context<'_> {
             Some(set) => crate::git::dir_has_tracked_files(rel_path, set),
             None => false,
         }
+    }
+    /// Emit one already-sanitized diagnostic stage when selected-rule tracing is
+    /// active. The option check compiles to the only ordinary-path trace work.
+    pub fn record_trace(&self, stage: crate::TraceStage) {
+        if let Some(trace) = self.trace {
+            trace.record(stage);
+        }
+    }
+
+    /// Add one trace-only extraction observation. Callers invoke this only from
+    /// trace-specific evaluation entry points; ordinary per-file dispatch never
+    /// executes this method.
+    #[doc(hidden)]
+    pub fn record_trace_extraction(&self, observation: crate::TraceExtractionObservation) {
+        self.trace
+            .expect("trace-specific evaluation requires a trace sink")
+            .record_extraction(observation);
     }
 
     /// Return the deterministic reference instant requested by this rule.
@@ -1049,6 +1070,20 @@ pub trait PerFileRule: Send + Sync + std::fmt::Debug {
     /// if it has one in hand) on emitted violations.
     fn evaluate_file(&self, ctx: &Context<'_>, path: &Path, bytes: &[u8])
     -> Result<Vec<Violation>>;
+
+    /// Trace-mode counterpart to [`Self::evaluate_file`]. The engine calls this
+    /// only for selected-rule tracing, so ordinary file-major dispatch has no
+    /// trace branch. Implementations override it to emit from values already
+    /// computed by production evaluation; the default preserves exact behavior.
+    #[doc(hidden)]
+    fn evaluate_file_traced(
+        &self,
+        ctx: &Context<'_>,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<Vec<Violation>> {
+        self.evaluate_file(ctx, path, bytes)
+    }
 
     /// Optional lower bound on the bytes the rule needs to
     /// evaluate. Default `None` means "I need the whole file."

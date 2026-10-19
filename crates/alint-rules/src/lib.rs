@@ -1024,6 +1024,42 @@ mod registry_tests {
     }
 
     #[test]
+    fn every_canonical_kind_has_valid_complete_trace_metadata() {
+        use alint_core::TraceStageClass;
+
+        let registry = builtin_registry();
+        for (kind, meta) in registry.kind_metadata() {
+            meta.trace.validate_for_kind(kind).unwrap();
+            assert!(
+                meta.trace
+                    .required_stages
+                    .contains(&TraceStageClass::Assertion),
+                "`{kind}` must require its terminal policy assertion"
+            );
+            assert_eq!(
+                meta.nested_rules, meta.trace.nested_evaluation,
+                "`{kind}` nested capability and trace inventory drifted"
+            );
+            if meta.trace.emits_preview_rows {
+                assert!(
+                    meta.trace
+                        .allowed_stages
+                        .contains(&TraceStageClass::Extraction),
+                    "`{kind}` advertises preview rows without extraction"
+                );
+            }
+            if !meta.selectors.is_empty() {
+                assert!(
+                    meta.trace
+                        .allowed_stages
+                        .contains(&TraceStageClass::Selection),
+                    "`{kind}` declares selectors without a selection trace stage"
+                );
+            }
+        }
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn metadata_inventory_matches_the_audited_v019_shape() {
         use alint_core::{

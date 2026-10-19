@@ -115,6 +115,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
         "file_trim_trailing_whitespace",
     )]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
     nested_rules: false,
 };
 

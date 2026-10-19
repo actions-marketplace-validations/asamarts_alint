@@ -73,6 +73,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_remove")]),
     expect_matches: false,
+    trace: alint_core::TraceMeta::ASSERTION,
     nested_rules: false,
 };
 

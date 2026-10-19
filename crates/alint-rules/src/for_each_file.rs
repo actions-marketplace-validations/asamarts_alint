@@ -140,6 +140,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[]),
     expect_matches: false,
+    trace: alint_core::TraceMeta::NESTED,
     nested_rules: true,
 };
 
@@ -223,6 +224,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "unexpected: {v:?}");
@@ -260,6 +262,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert_eq!(v.len(), 2);

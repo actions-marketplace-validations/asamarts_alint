@@ -187,6 +187,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[]),
     expect_matches: false,
+    trace: alint_core::TraceMeta::NESTED,
     nested_rules: true,
 };
 
@@ -436,6 +437,22 @@ pub(crate) fn evaluate_for_each(
     ctx: &Context<'_>,
     mode: IterateMode,
 ) -> Result<Vec<Violation>> {
+    if ctx.trace.is_some() {
+        evaluate_for_each_inner::<true>(parent, select_scope, when_iter, require, ctx, mode)
+    } else {
+        evaluate_for_each_inner::<false>(parent, select_scope, when_iter, require, ctx, mode)
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn evaluate_for_each_inner<const TRACE: bool>(
+    parent: ForEachParent<'_>,
+    select_scope: &Scope,
+    when_iter: Option<&WhenExpr>,
+    require: &[CompiledNestedSpec],
+    ctx: &Context<'_>,
+    mode: IterateMode,
+) -> Result<Vec<Violation>> {
     let ForEachParent {
         id: parent_id,
         level,
@@ -455,9 +472,22 @@ pub(crate) fn evaluate_for_each(
     };
 
     let mut violations = Vec::new();
+    let mut trace_counts = alint_core::TraceCounts::default();
     for entry in entries {
+        if TRACE {
+            alint_core::TraceCounts::checked_increment(
+                &mut trace_counts.considered,
+                "nested.selection.considered",
+            )?;
+        }
         if !select_scope.matches(&entry.path, ctx.index) {
             continue;
+        }
+        if TRACE {
+            alint_core::TraceCounts::checked_increment(
+                &mut trace_counts.matched,
+                "nested.selection.matched",
+            )?;
         }
 
         // Per-iteration `when_iter:` filter. Cheap to evaluate
@@ -482,6 +512,12 @@ pub(crate) fn evaluate_for_each(
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(e) => {
+                    if TRACE {
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.analysis_failures,
+                            "nested.analysis_failures",
+                        )?;
+                    }
                     violations.push(
                         Violation::new(format!("{parent_id}: when_iter error: {e}"))
                             .with_path(entry.path.clone())
@@ -515,8 +551,30 @@ pub(crate) fn evaluate_for_each(
                 };
                 match expr.evaluate(&env) {
                     Ok(true) => {}
-                    Ok(false) => continue,
+                    Ok(false) => {
+                        if TRACE {
+                            alint_core::TraceCounts::checked_increment(
+                                &mut trace_counts.children,
+                                "nested.children",
+                            )?;
+                            alint_core::TraceCounts::checked_increment(
+                                &mut trace_counts.skipped_children,
+                                "nested.skipped_children",
+                            )?;
+                        }
+                        continue;
+                    }
                     Err(e) => {
+                        if TRACE {
+                            alint_core::TraceCounts::checked_increment(
+                                &mut trace_counts.children,
+                                "nested.children",
+                            )?;
+                            alint_core::TraceCounts::checked_increment(
+                                &mut trace_counts.failed_children,
+                                "nested.failed_children",
+                            )?;
+                        }
                         let mut violation = Violation::new(format!(
                             "{parent_id}: nested rule #{i} when error: {e}"
                         ))
@@ -532,6 +590,16 @@ pub(crate) fn evaluate_for_each(
             let nested_rule = match registry.build(&nested_spec) {
                 Ok(r) => r,
                 Err(e) => {
+                    if TRACE {
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.children,
+                            "nested.children",
+                        )?;
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.failed_children,
+                            "nested.failed_children",
+                        )?;
+                    }
                     let mut violation = Violation::new(format!(
                         "{parent_id}: failed to build nested rule #{i} for {}: {e}",
                         entry.path.display()
@@ -551,6 +619,16 @@ pub(crate) fn evaluate_for_each(
             ) {
                 Ok(violation) => violation,
                 Err(error) => {
+                    if TRACE {
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.children,
+                            "nested.children",
+                        )?;
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.failed_children,
+                            "nested.failed_children",
+                        )?;
+                    }
                     let mut violation = Violation::new(format!(
                         "{parent_id}: nested rule #{i} scope assertion failed for {}: {error}",
                         entry.path.display(),
@@ -563,6 +641,16 @@ pub(crate) fn evaluate_for_each(
                 }
             };
             if let Some(mut violation) = scope_violation {
+                if TRACE {
+                    alint_core::TraceCounts::checked_increment(
+                        &mut trace_counts.children,
+                        "nested.children",
+                    )?;
+                    alint_core::TraceCounts::checked_increment(
+                        &mut trace_counts.violated_children,
+                        "nested.violated_children",
+                    )?;
+                }
                 // Attribute a pathless scope-assertion failure to the selected
                 // parent entry, like other nested pathless findings.
                 violation.path = Some(entry.path.clone());
@@ -603,6 +691,9 @@ pub(crate) fn evaluate_for_each(
                 && pf.path_scope().matches(&literal, ctx.index)
             {
                 let nested_violations = evaluate_one_per_file_rule(parent_id, i, &literal, pf, ctx);
+                if TRACE {
+                    record_nested_child(&mut trace_counts, &nested_violations)?;
+                }
                 for mut v in nested_violations {
                     if v.path.is_none() {
                         v.path = Some(entry.path.clone());
@@ -629,6 +720,9 @@ pub(crate) fn evaluate_for_each(
                     .as_analysis_failure(AnalysisFailureKind::Evaluation),
                 ],
             };
+            if TRACE {
+                record_nested_child(&mut trace_counts, &nested_violations)?;
+            }
             for mut v in nested_violations {
                 if v.path.is_none() {
                     v.path = Some(entry.path.clone());
@@ -653,7 +747,91 @@ pub(crate) fn evaluate_for_each(
             }
         }
     }
+    if TRACE {
+        let selection_reason = if trace_counts.matched == 0 {
+            alint_core::TraceReason::SelectorNoMatch
+        } else {
+            alint_core::TraceReason::SelectorMatched
+        };
+        ctx.record_trace(
+            alint_core::TraceStage::new(
+                alint_core::TraceStageClass::Selection,
+                "select",
+                alint_core::TraceStatus::Satisfied,
+                selection_reason,
+            )
+            .with_counts(alint_core::TraceCounts {
+                considered: trace_counts.considered,
+                matched: trace_counts.matched,
+                ..alint_core::TraceCounts::default()
+            }),
+        );
+        let (status, reason) =
+            if trace_counts.failed_children > 0 || trace_counts.analysis_failures > 0 {
+                (
+                    alint_core::TraceStatus::AnalysisFailure,
+                    alint_core::TraceReason::NestedFailed,
+                )
+            } else if trace_counts.violated_children > 0 {
+                (
+                    alint_core::TraceStatus::Violated,
+                    alint_core::TraceReason::NestedViolated,
+                )
+            } else {
+                (
+                    alint_core::TraceStatus::Satisfied,
+                    alint_core::TraceReason::NestedSatisfied,
+                )
+            };
+        ctx.record_trace(
+            alint_core::TraceStage::new(
+                alint_core::TraceStageClass::Nested,
+                "require",
+                status,
+                reason,
+            )
+            .with_counts(alint_core::TraceCounts {
+                children: trace_counts.children,
+                satisfied_children: trace_counts.satisfied_children,
+                violated_children: trace_counts.violated_children,
+                failed_children: trace_counts.failed_children,
+                skipped_children: trace_counts.skipped_children,
+                analysis_failures: trace_counts.analysis_failures,
+                ..alint_core::TraceCounts::default()
+            }),
+        );
+    }
     Ok(violations)
+}
+
+fn record_nested_child(counts: &mut alint_core::TraceCounts, findings: &[Violation]) -> Result<()> {
+    alint_core::TraceCounts::checked_increment(&mut counts.children, "nested.children")?;
+    if findings.iter().any(|finding| {
+        matches!(
+            finding.disposition,
+            alint_core::FindingDisposition::AnalysisFailure(_)
+        )
+    }) {
+        alint_core::TraceCounts::checked_increment(
+            &mut counts.failed_children,
+            "nested.failed_children",
+        )
+    } else if findings.iter().any(|finding| {
+        matches!(
+            finding.disposition,
+            alint_core::FindingDisposition::Violation
+        )
+    }) {
+        alint_core::TraceCounts::checked_increment(
+            &mut counts.violated_children,
+            "nested.violated_children",
+        )
+    } else {
+        alint_core::TraceCounts::checked_increment(
+            &mut counts.satisfied_children,
+            "nested.satisfied_children",
+        )
+    }
 }
 
 fn redact_manifest_scoped_finding(rule: &dyn Rule, finding: &mut Violation) {
@@ -787,6 +965,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         rule.evaluate(&ctx).unwrap()
     }
@@ -895,6 +1074,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert_eq!(v.len(), 1, "the wrong value must be reported: {v:?}");
@@ -1032,6 +1212,7 @@ mod tests {
             git_blame: None,
             analysis_time: Some(&analysis_time),
             process_environment: None,
+            trace: None,
         };
         let raw = rule.evaluate(&ctx).unwrap();
         let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
@@ -1143,5 +1324,108 @@ scope_filter:
             err.contains("for_each_dir"),
             "expected message to name the cross-file kind, got: {err}",
         );
+    }
+    #[test]
+    fn nested_trace_aggregates_pass_and_fail_children_from_production_evaluation() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("pkg")).unwrap();
+        let spec: std::sync::Arc<RuleSpec> = std::sync::Arc::new(
+            serde_yaml_ng::from_str(
+                r#"
+id: nested
+kind: for_each_dir
+level: error
+select: pkg
+require:
+  - kind: file_exists
+    paths: "{path}/marker"
+"#,
+            )
+            .unwrap(),
+        );
+        let registry = crate::builtin_registry();
+        let built = registry.build(&spec).unwrap();
+        let engine = alint_core::Engine::from_entries(
+            vec![alint_core::RuleEntry::new(built).with_spec(spec)],
+            registry,
+        );
+
+        let failing_index =
+            alint_core::walk(tmp.path(), &alint_core::WalkOptions::default()).unwrap();
+        let failing = engine
+            .trace_rule("nested", tmp.path(), &failing_index)
+            .unwrap();
+        assert_eq!(failing.outcome, alint_core::TraceStatus::Violated);
+        let nested = failing
+            .stages
+            .iter()
+            .find(|stage| stage.class == alint_core::TraceStageClass::Nested)
+            .unwrap();
+        assert_eq!(nested.counts.children, 1);
+        assert_eq!(nested.counts.violated_children, 1);
+        assert_eq!(nested.reason, alint_core::TraceReason::NestedViolated);
+
+        std::fs::write(tmp.path().join("pkg/marker"), b"ok").unwrap();
+        let passing_index =
+            alint_core::walk(tmp.path(), &alint_core::WalkOptions::default()).unwrap();
+        let passing = engine
+            .trace_rule("nested", tmp.path(), &passing_index)
+            .unwrap();
+        assert_eq!(passing.outcome, alint_core::TraceStatus::Satisfied);
+        let nested = passing
+            .stages
+            .iter()
+            .find(|stage| stage.class == alint_core::TraceStageClass::Nested)
+            .unwrap();
+        assert_eq!(nested.counts.children, 1);
+        assert_eq!(nested.counts.satisfied_children, 1);
+        assert_eq!(nested.reason, alint_core::TraceReason::NestedSatisfied);
+        assert_eq!(
+            passing
+                .stages
+                .iter()
+                .filter(|stage| stage.class == alint_core::TraceStageClass::Outcome)
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn nested_trace_does_not_misclassify_iteration_gate_failures_as_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("pkg")).unwrap();
+        let spec: std::sync::Arc<RuleSpec> = std::sync::Arc::new(
+            serde_yaml_ng::from_str(
+                r#"
+id: nested
+kind: for_each_dir
+level: error
+select: pkg
+when_iter: '1 < "x"'
+require:
+  - kind: file_exists
+    paths: "{path}/marker"
+"#,
+            )
+            .unwrap(),
+        );
+        let registry = crate::builtin_registry();
+        let built = registry.build(&spec).unwrap();
+        let engine = alint_core::Engine::from_entries(
+            vec![alint_core::RuleEntry::new(built).with_spec(spec)],
+            registry,
+        );
+        let index = alint_core::walk(tmp.path(), &alint_core::WalkOptions::default()).unwrap();
+
+        let trace = engine.trace_rule("nested", tmp.path(), &index).unwrap();
+        assert_eq!(trace.outcome, alint_core::TraceStatus::AnalysisFailure);
+        let nested = trace
+            .stages
+            .iter()
+            .find(|stage| stage.class == alint_core::TraceStageClass::Nested)
+            .unwrap();
+        assert_eq!(nested.counts.children, 0);
+        assert_eq!(nested.counts.failed_children, 0);
+        assert_eq!(nested.counts.analysis_failures, 1);
+        assert_eq!(nested.reason, alint_core::TraceReason::NestedFailed);
     }
 }

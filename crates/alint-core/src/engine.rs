@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -18,6 +18,10 @@ use crate::rule::{
     AnalysisFailureKind, Applicability, Context, FindingDisposition, FixContext, FixEdit,
     FixOutcome, Fixer, PerFileRule, ReadForFix, Rule, RuleResult, Violation, read_for_fix,
     write_atomic,
+};
+use crate::trace::{
+    TraceCounts, TraceExtractionObservation, TraceReason, TraceRecorder, TraceSink, TraceStage,
+    TraceStageClass, TraceStatus,
 };
 use crate::walker::FileIndex;
 use crate::when::{WhenEnv, WhenExpr};
@@ -162,11 +166,204 @@ type FixRunOutput = (FixReport, BTreeMap<PathBuf, Vec<u8>>, HashSet<PathBuf>);
 /// Shared inputs for gates that run before a rule evaluates. The aligned slices
 /// are indexed by `Engine::entries`; keeping them together makes that invariant
 /// explicit at every dispatch path.
+#[derive(Default)]
+struct ManifestGate {
+    used: bool,
+    failures: Vec<Violation>,
+}
+
 struct RunGateInputs<'a, 'env> {
     when_env: &'a WhenEnv<'env>,
-    manifest_failures: &'a [Vec<Violation>],
+    manifest_gates: &'a [ManifestGate],
     git_required: &'a [bool],
     git_available: bool,
+    changed_active: bool,
+}
+
+#[derive(Debug, Default)]
+struct TraceExtractionAggregate {
+    seen: AtomicBool,
+    inputs: AtomicU64,
+    values: AtomicU64,
+    parse_failures: AtomicU64,
+    cardinality_checks: AtomicU64,
+    cardinality_mismatches: AtomicU64,
+}
+/// Recorder shared only by one selected-rule trace execution.
+///
+/// Rule evaluation may happen on a rayon worker, so stage insertion is
+/// synchronized. High-cardinality loops never lock this recorder: they emit one
+/// aggregate stage after completing their production work.
+#[derive(Debug)]
+struct TraceSession {
+    meta: crate::TraceMeta,
+    recorder: Mutex<Option<TraceRecorder>>,
+    error: Mutex<Option<Error>>,
+    extraction: TraceExtractionAggregate,
+}
+
+fn checked_atomic_add(counter: &AtomicU64, value: u64) -> bool {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = current.checked_add(value) else {
+            return false;
+        };
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
+impl TraceSession {
+    fn new(meta: crate::TraceMeta) -> Self {
+        Self {
+            recorder: Mutex::new(Some(TraceRecorder::new(meta.clone()))),
+            meta,
+            error: Mutex::new(None),
+            extraction: TraceExtractionAggregate::default(),
+        }
+    }
+
+    fn allows(&self, class: TraceStageClass) -> bool {
+        self.meta.allowed_stages.contains(&class)
+    }
+
+    fn add_extraction(&self, observation: TraceExtractionObservation) {
+        self.extraction.seen.store(true, Ordering::Relaxed);
+        for (counter, value, label) in [
+            (
+                &self.extraction.inputs,
+                observation.inputs,
+                "extraction.inputs",
+            ),
+            (
+                &self.extraction.values,
+                observation.values,
+                "extraction.values",
+            ),
+            (
+                &self.extraction.parse_failures,
+                observation.parse_failures,
+                "extraction.parse_failures",
+            ),
+            (
+                &self.extraction.cardinality_checks,
+                observation.cardinality_checks,
+                "cardinality.checks",
+            ),
+            (
+                &self.extraction.cardinality_mismatches,
+                observation.cardinality_mismatches,
+                "cardinality.mismatches",
+            ),
+        ] {
+            if value == 0 {
+                continue;
+            }
+            if !checked_atomic_add(counter, value) {
+                *self.error.lock() = Some(Error::internal(format!(
+                    "trace counter `{label}` overflowed"
+                )));
+                return;
+            }
+        }
+    }
+
+    fn flush_extraction(&self) {
+        if !self.extraction.seen.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        let inputs = self.extraction.inputs.load(Ordering::Relaxed);
+        let values = self.extraction.values.load(Ordering::Relaxed);
+        let parse_failures = self.extraction.parse_failures.load(Ordering::Relaxed);
+        let cardinality_checks = self.extraction.cardinality_checks.load(Ordering::Relaxed);
+        let cardinality_mismatches = self
+            .extraction
+            .cardinality_mismatches
+            .load(Ordering::Relaxed);
+        let (extraction_status, extraction_reason) = if parse_failures > 0 {
+            (TraceStatus::AnalysisFailure, TraceReason::ParseFailed)
+        } else {
+            (TraceStatus::Satisfied, TraceReason::ExtractionSucceeded)
+        };
+        self.record(
+            TraceStage::new(
+                TraceStageClass::Extraction,
+                "structured_query",
+                extraction_status,
+                extraction_reason,
+            )
+            .with_counts(TraceCounts {
+                inputs,
+                values,
+                analysis_failures: parse_failures,
+                ..TraceCounts::default()
+            }),
+        );
+        let (cardinality_status, cardinality_reason) =
+            if parse_failures > 0 && cardinality_checks == 0 {
+                (TraceStatus::NotEvaluated, TraceReason::ParseFailed)
+            } else if parse_failures > 0 {
+                (TraceStatus::AnalysisFailure, TraceReason::ParseFailed)
+            } else if cardinality_mismatches > 0 {
+                (TraceStatus::Violated, TraceReason::CardinalityMismatch)
+            } else {
+                (TraceStatus::Satisfied, TraceReason::CardinalitySatisfied)
+            };
+        self.record(
+            TraceStage::new(
+                TraceStageClass::Cardinality,
+                "query_matches",
+                cardinality_status,
+                cardinality_reason,
+            )
+            .with_counts(TraceCounts {
+                inputs: cardinality_checks,
+                values,
+                violations: cardinality_mismatches,
+                analysis_failures: parse_failures,
+                ..TraceCounts::default()
+            }),
+        );
+    }
+
+    fn finish(
+        &self,
+        rule_id: String,
+        kind: String,
+        result: Option<RuleResult>,
+    ) -> Result<crate::RuleTrace> {
+        if let Some(error) = self.error.lock().take() {
+            return Err(error);
+        }
+        self.recorder
+            .lock()
+            .take()
+            .ok_or_else(|| Error::internal("trace recorder was already finalized"))?
+            .finish(rule_id, kind, result)
+    }
+}
+
+impl TraceSink for TraceSession {
+    fn record(&self, stage: TraceStage) {
+        if self.error.lock().is_some() {
+            return;
+        }
+        let result = self
+            .recorder
+            .lock()
+            .as_mut()
+            .expect("trace recorder is live during evaluation")
+            .record(stage);
+        if let Err(error) = result {
+            *self.error.lock() = Some(error);
+        }
+    }
+
+    fn record_extraction(&self, observation: TraceExtractionObservation) {
+        self.add_extraction(observation);
+    }
 }
 
 /// Visitor used while walking top-level and recursively nested runtime rules.
@@ -175,9 +372,9 @@ type RuleTreeVisitor<'a> = dyn FnMut(&dyn Rule, Option<&crate::RuleSpec>) -> Res
 /// A rule bundled with an optional `when` expression. Rules with a `when`
 /// that evaluates to false at runtime are skipped (no `RuleResult` is
 /// produced) — same observable effect as `level: off`, but gated on facts.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RuleEntry {
-    pub rule: Box<dyn Rule>,
+    pub rule: Arc<dyn Rule>,
     pub when: Option<WhenExpr>,
     /// The rule's originating [`RuleSpec`](crate::config::RuleSpec), retained so
     /// config-scoped tooling (`alint explain`, `alint list`) can render the
@@ -203,7 +400,7 @@ pub struct RuleEntry {
 impl RuleEntry {
     pub fn new(rule: Box<dyn Rule>) -> Self {
         Self {
-            rule,
+            rule: Arc::from(rule),
             when: None,
             spec: None,
             allow_out_of_root: false,
@@ -737,6 +934,18 @@ impl Engine {
         self.entries.len()
     }
 
+    /// Effective top-level rule ids and canonical kinds available to diagnostic drivers.
+    #[doc(hidden)]
+    pub fn trace_rule_inventory(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.entries.iter().filter_map(|entry| {
+            let spec = entry.spec.as_deref()?;
+            Some((
+                entry.rule.id(),
+                self.registry.canonical_kind(spec.kind.as_str()),
+            ))
+        })
+    }
+
     /// The fixer for the loaded rule with this id, if the rule declares
     /// one. Lets a caller (the LSP server) build an "Apply fix" edit for
     /// a specific violation without re-deriving the rule set.
@@ -799,6 +1008,7 @@ impl Engine {
             git_blame: None,
             analysis_time: None,
             process_environment: self.process_environment.as_ref(),
+            trace: None,
         };
         let target = Self::normalized_write_target(root, path);
         self.entries.iter().any(|entry| {
@@ -834,6 +1044,65 @@ impl Engine {
         })
     }
 
+    /// Evaluate exactly one effective configured rule through production
+    /// dispatch and return its typed execution trace.
+    ///
+    /// The selected engine shares the rule instance and registry builders with
+    /// this engine, copies the immutable run inputs, and never executes an
+    /// unrelated rule. The returned result is unbaselined, matching
+    #[doc(hidden)]
+    /// [`Engine::run`] before report-level baseline filtering.
+    pub fn trace_rule(
+        &self,
+        rule_id: &str,
+        root: &Path,
+        index: &FileIndex,
+    ) -> Result<crate::RuleTrace> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.rule.id() == rule_id)
+            .ok_or_else(|| Error::Other(format!("unknown rule id `{rule_id}`")))?;
+        let configured_kind = entry
+            .spec
+            .as_deref()
+            .map(|spec| spec.kind.as_str())
+            .ok_or_else(|| {
+                Error::internal(format!(
+                    "cannot trace rule `{rule_id}` because its source RuleSpec is unavailable"
+                ))
+            })?;
+        let canonical_kind = self.registry.canonical_kind(configured_kind).to_string();
+        let meta = self.registry.meta(configured_kind).ok_or_else(|| {
+            Error::internal(format!(
+                "cannot trace rule `{rule_id}` because kind `{configured_kind}` has no metadata"
+            ))
+        })?;
+        meta.trace.validate_for_kind(&canonical_kind)?;
+        let selected = Self {
+            entries: vec![entry.clone()],
+            registry: self.registry.clone(),
+            facts: self.facts.clone(),
+            vars: self.vars.clone(),
+            fix_size_limit: self.fix_size_limit,
+            analysis_time: self.analysis_time,
+            process_environment: self.process_environment.clone(),
+            analysis_time_required: OnceLock::new(),
+            analysis_time_cache: Mutex::new(None),
+            changed_paths: self.changed_paths.clone(),
+            fix_baseline: None,
+        };
+        let trace = TraceSession::new(meta.trace.clone());
+        let mut report = selected.run_internal(root, index, Some(&trace))?;
+        if report.results.len() > 1 {
+            return Err(Error::internal(format!(
+                "selected-rule trace for `{rule_id}` produced {} rule results",
+                report.results.len()
+            )));
+        }
+        trace.finish(rule_id.to_string(), canonical_kind, report.results.pop())
+    }
+
     // ~125 lines but each block has its own purpose (changed-set
     // short-circuit, fact eval, git probe, filtered-index build,
     // cross-file partition, per-file partition, assembly). Splitting
@@ -842,6 +1111,40 @@ impl Engine {
     // The function reads top-to-bottom as one phased pipeline.
     #[allow(clippy::too_many_lines)]
     pub fn run(&self, root: &Path, index: &FileIndex) -> Result<Report> {
+        self.run_internal(root, index, None)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn run_internal(
+        &self,
+        root: &Path,
+        index: &FileIndex,
+        trace: Option<&TraceSession>,
+    ) -> Result<Report> {
+        if let Some(trace) = trace {
+            let level = self
+                .entries
+                .first()
+                .ok_or_else(|| Error::internal("selected-rule engine has no entry"))?
+                .rule
+                .level();
+            let (status, reason) = if level == crate::Level::Off {
+                (TraceStatus::Skipped, TraceReason::LevelOff)
+            } else {
+                (TraceStatus::Satisfied, TraceReason::LevelEnabled)
+            };
+            trace.record(TraceStage::new(
+                TraceStageClass::Gate,
+                "level",
+                status,
+                reason,
+            ));
+            if level == crate::Level::Off {
+                return Ok(Report {
+                    results: Vec::new(),
+                });
+            }
+        }
         let t_total = Instant::now();
         self.ensure_manifest_scope_resolvable()?;
         // Empty changed-set fast path: nothing to lint, return
@@ -850,6 +1153,14 @@ impl Engine {
         if self.changed_paths.as_ref().is_some_and(HashSet::is_empty)
             && !self.any_expect_matches()?
         {
+            if let Some(trace) = trace {
+                trace.record(TraceStage::new(
+                    TraceStageClass::Gate,
+                    "changed_scope",
+                    TraceStatus::Skipped,
+                    TraceReason::ChangedScopeEmpty,
+                ));
+            }
             return Ok(Report {
                 results: Vec::new(),
             });
@@ -904,6 +1215,7 @@ impl Engine {
             git_blame: git_blame.as_ref(),
             analysis_time: analysis_time.as_ref(),
             process_environment: self.process_environment.as_ref(),
+            trace: trace.map(|trace| trace as &dyn TraceSink),
         };
         let filtered_ctx = filtered_index.as_ref().map(|fi| Context {
             root,
@@ -915,6 +1227,7 @@ impl Engine {
             git_blame: git_blame.as_ref(),
             analysis_time: analysis_time.as_ref(),
             process_environment: self.process_environment.as_ref(),
+            trace: trace.map(|trace| trace as &dyn TraceSink),
         });
         let git_file_only_ctx = git_tracked_indexes
             .as_ref()
@@ -929,6 +1242,7 @@ impl Engine {
                 git_blame: git_blame.as_ref(),
                 analysis_time: analysis_time.as_ref(),
                 process_environment: self.process_environment.as_ref(),
+                trace: trace.map(|trace| trace as &dyn TraceSink),
             });
         let git_dir_aware_ctx = git_tracked_indexes
             .as_ref()
@@ -943,6 +1257,7 @@ impl Engine {
                 git_blame: git_blame.as_ref(),
                 analysis_time: analysis_time.as_ref(),
                 process_environment: self.process_environment.as_ref(),
+                trace: trace.map(|trace| trace as &dyn TraceSink),
             });
 
         // Resolve active `scope_filter.changed_since:` diffs + manifest path
@@ -983,12 +1298,13 @@ impl Engine {
                 fi.set_changed_paths(map.clone());
             }
         }
-        let manifest_failures = self.manifest_failures_by_entry(index, &when_env)?;
+        let manifest_gates = self.manifest_gates_by_entry(index, &when_env)?;
         let gate_inputs = RunGateInputs {
             when_env: &when_env,
-            manifest_failures: &manifest_failures,
+            manifest_gates: &manifest_gates,
             git_required: &git_required,
             git_available,
+            changed_active: self.changed_paths.is_some(),
         };
         // A `has_ancestor` marker lookup on the `--changed` index must see unchanged
         // files too. Only the changed-set index shares the full tree's file set
@@ -1045,6 +1361,7 @@ impl Engine {
                         full_ctx.index,
                         &gate_inputs,
                         skipped_for_changed,
+                        trace,
                     );
                     // u128 → u64 saturating: same rationale as the
                     // `phase!` macro — elapsed_ns overflows u64 only
@@ -1106,7 +1423,7 @@ impl Engine {
         // sharing it.
         let t_per_file = Instant::now();
         let per_file_results =
-            self.run_per_file(root, &full_ctx, filtered_ctx.as_ref(), &gate_inputs);
+            self.run_per_file(root, &full_ctx, filtered_ctx.as_ref(), &gate_inputs, trace);
         phase!(
             t_per_file,
             "per_file_partition",
@@ -1170,8 +1487,9 @@ impl Engine {
         full_ctx: &'a Context<'a>,
         filtered_ctx: Option<&'a Context<'a>>,
         gate_inputs: &RunGateInputs<'_, '_>,
+        trace: Option<&TraceSession>,
     ) -> Vec<(usize, RuleResult)> {
-        let (live, gate_results) = self.collect_live_per_file_entries(full_ctx, gate_inputs);
+        let (live, gate_results) = self.collect_live_per_file_entries(full_ctx, gate_inputs, trace);
         if live.is_empty() {
             return gate_results;
         }
@@ -1208,130 +1526,41 @@ impl Engine {
         // uses Rayon's work-stealing slabs instead — same
         // observable iteration, no shared lock on the hot
         // path.
-        let by_file: Vec<(usize, Violation)> = with_worker_pool(|| {
-            walk_index
-                .entries
-                .par_iter()
-                .filter(|e| !e.is_dir)
-                .flat_map_iter(|file_entry| {
-                    // Whether this file is in the `--changed` set (always true
-                    // for a full run, or when the walk is already the filtered
-                    // index). Only full-index per-file rules see the others.
-                    let in_changed = !any_full_index
-                        || filtered_ctx.is_none_or(|f| f.index.contains_file(&file_entry.path));
-                    // 1. Decide which per-file rules apply to this
-                    // file. Per-file rules expose their scope via
-                    // `PerFileRule::path_scope`; we filter on it
-                    // before any I/O so files no rule cares about
-                    // never get read. Carrying `entry_idx` through
-                    // here avoids an O(L) `position` lookup per
-                    // applicable rule per file inside the inner
-                    // dispatch loop below.
-                    let applicable: Vec<(usize, &RuleEntry)> = live
-                        .iter()
-                        .filter(|(_, entry)| {
-                            if !in_changed && !entry.rule.requires_full_index() {
-                                return false;
-                            }
-                            // 1a. Path-scope glob — cheap, dropping
-                            // files no rule cares about before any
-                            // further work.
-                            // v0.9.10: `Scope::matches` consults both
-                            // path-glob AND `scope_filter` in one
-                            // call (Scope owns its optional filter
-                            // since the v0.9.10 structural fix). The
-                            // separate v0.9.6 `entry.rule.scope_filter()`
-                            // check this used to do is now folded in.
-                            entry
-                                .rule
-                                .as_per_file()
-                                .expect("live entries are per-file rules by construction")
-                                .path_scope()
-                                .matches(&file_entry.path, per_file_ctx.index)
-                        })
-                        .map(|(idx, entry)| (*idx, *entry))
-                        .collect();
-                    if applicable.is_empty() {
-                        return Vec::new();
-                    }
-                    // 2. Read once for every applicable rule. Every failure after
-                    // repository discovery is a typed `resource_read` analysis
-                    // failure for each owning rule; an unreadable or over-cap
-                    // in-scope file can never look like a policy pass.
-                    let abs = root.join(&file_entry.path);
-                    let bytes = match crate::walker::read_for_analysis(&abs, file_entry.size) {
-                        crate::walker::AnalysisRead::Bytes(b) => b,
-                        crate::walker::AnalysisRead::Missing => {
-                            return applicable
-                                .iter()
-                                .map(|(entry_idx, _)| {
-                                    (
-                                        *entry_idx,
-                                        crate::rule::missing_file_violation(&file_entry.path),
-                                    )
-                                })
-                                .collect();
-                        }
-                        crate::walker::AnalysisRead::TooLarge(size) => {
-                            return applicable
-                                .iter()
-                                .map(|(entry_idx, _)| {
-                                    (
-                                        *entry_idx,
-                                        crate::rule::too_large_file_violation(
-                                            &file_entry.path,
-                                            size,
-                                        ),
-                                    )
-                                })
-                                .collect();
-                        }
-                        crate::walker::AnalysisRead::Unreadable(e) => {
-                            return applicable
-                                .iter()
-                                .map(|(entry_idx, _)| {
-                                    (
-                                        *entry_idx,
-                                        crate::rule::unreadable_file_violation(
-                                            &file_entry.path,
-                                            &e,
-                                        ),
-                                    )
-                                })
-                                .collect();
-                        }
-                    };
-                    // 3. Dispatch. Every applicable rule sees the
-                    // same byte slice; the file is read exactly once
-                    // even though N rules may produce violations
-                    // against it.
-                    let mut out: Vec<(usize, Violation)> = Vec::new();
-                    for (entry_idx, entry) in applicable {
-                        let pf = entry
-                            .rule
-                            .as_per_file()
-                            .expect("live entries are per-file rules by construction");
-                        let result = pf.evaluate_file(per_file_ctx, &file_entry.path, &bytes);
-                        match result {
-                            Ok(vs) => {
-                                for v in vs {
-                                    out.push((entry_idx, v));
-                                }
-                            }
-                            Err(e) => {
-                                out.push((
-                                    entry_idx,
-                                    Violation::new(format!("rule evaluation failed: {e}"))
-                                        .with_path(file_entry.path.clone())
-                                        .as_analysis_failure(AnalysisFailureKind::Evaluation),
-                                ));
-                            }
-                        }
-                    }
-                    out
-                })
-                .collect()
-        });
+        let (by_file, selection_counts) = if trace.is_some() {
+            evaluate_per_file_entries::<true>(
+                root,
+                walk_index,
+                &live,
+                any_full_index,
+                filtered_ctx,
+                per_file_ctx,
+            )
+        } else {
+            evaluate_per_file_entries::<false>(
+                root,
+                walk_index,
+                &live,
+                any_full_index,
+                filtered_ctx,
+                per_file_ctx,
+            )
+        };
+        if let Some(trace) = trace.filter(|trace| trace.allows(TraceStageClass::Selection)) {
+            let reason = if selection_counts.matched == 0 {
+                TraceReason::SelectorNoMatch
+            } else {
+                TraceReason::SelectorMatched
+            };
+            trace.record(
+                TraceStage::new(
+                    TraceStageClass::Selection,
+                    "dispatch_input",
+                    TraceStatus::Satisfied,
+                    reason,
+                )
+                .with_counts(selection_counts),
+            );
+        }
 
         // Bucket violations by entry-index, then rebuild
         // `RuleResult` per live entry preserving each rule's
@@ -1350,16 +1579,15 @@ impl Engine {
             // missing from "All N rule(s) passed" (the count read as 0).
             let violations = bucket.remove(&idx).unwrap_or_default();
             let (violations, is_fixable) = mark_fixability(violations, entry.rule.fixer());
-            results.push((
-                idx,
-                RuleResult::new(
-                    Arc::from(entry.rule.id()),
-                    entry.rule.level(),
-                    entry.rule.policy_url().map(Arc::from),
-                    violations,
-                    is_fixable,
-                ),
-            ));
+            let result = RuleResult::new(
+                Arc::from(entry.rule.id()),
+                entry.rule.level(),
+                entry.rule.policy_url().map(Arc::from),
+                violations,
+                is_fixable,
+            );
+            trace_assertion(trace, &result);
+            results.push((idx, result));
         }
         results
     }
@@ -1379,6 +1607,7 @@ impl Engine {
         &'a self,
         ctx: &Context<'_>,
         gate_inputs: &RunGateInputs<'_, '_>,
+        trace: Option<&TraceSession>,
     ) -> LivePerFileEntries<'a> {
         let index = ctx.index;
         let mut live: Vec<(usize, &RuleEntry)> = Vec::new();
@@ -1392,61 +1621,19 @@ impl Engine {
             // verdict, exactly as for `markdown_links_resolve`.
             let skipped_for_changed = !entry.rule.requires_full_index()
                 && self.skip_for_changed(entry.rule.as_ref(), index, None);
-            if skipped_for_changed && !entry.expect_matches() {
-                continue;
+            match evaluate_entry_gates(
+                idx,
+                entry,
+                ctx,
+                index,
+                gate_inputs,
+                skipped_for_changed,
+                trace,
+            ) {
+                EntryGateOutcome::Evaluate => live.push((idx, entry)),
+                EntryGateOutcome::Skip => {}
+                EntryGateOutcome::Result(result) => gate_results.push((idx, result)),
             }
-            if let Some(expr) = &entry.when {
-                match expr.evaluate(gate_inputs.when_env) {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(e) => {
-                        let failure = Violation::new(format!("when evaluation failed: {e}"))
-                            .as_analysis_failure(AnalysisFailureKind::Condition);
-                        gate_results.push((idx, nonfixable_rule_result(entry, vec![failure])));
-                        continue;
-                    }
-                }
-            }
-            let manifest_failures = &gate_inputs.manifest_failures[idx];
-            if !manifest_failures.is_empty() {
-                gate_results.push((
-                    idx,
-                    nonfixable_rule_result(entry, manifest_failures.clone()),
-                ));
-                continue;
-            }
-            if gate_inputs.git_required[idx] && !gate_inputs.git_available {
-                gate_results.push((
-                    idx,
-                    nonfixable_rule_result(entry, vec![unavailable_git_failure()]),
-                ));
-                continue;
-            }
-            let scope_violation = match entry.spec.as_deref() {
-                Some(spec) => {
-                    match crate::expect_matches_violation(entry.rule.as_ref(), spec, index, ctx) {
-                        Ok(violation) => violation,
-                        Err(e) => {
-                            let failure =
-                                Violation::new(format!("scope assertion evaluation failed: {e}"))
-                                    .as_analysis_failure(AnalysisFailureKind::Evaluation);
-                            gate_results.push((idx, nonfixable_rule_result(entry, vec![failure])));
-                            continue;
-                        }
-                    }
-                }
-                None => None,
-            };
-            if let Some(violation) = scope_violation {
-                // This is a configuration-integrity finding, not a finding the
-                // host rule's fixer can repair (there is no target file).
-                gate_results.push((idx, nonfixable_rule_result(entry, vec![violation])));
-                continue;
-            }
-            if skipped_for_changed {
-                continue;
-            }
-            live.push((idx, entry));
         }
         (live, gate_results)
     }
@@ -1528,16 +1715,18 @@ impl Engine {
             git_blame: git_blame.as_ref(),
             analysis_time: analysis_time.as_ref(),
             process_environment: self.process_environment.as_ref(),
+            trace: None,
         };
 
-        let manifest_failures = self.manifest_failures_by_entry(index, &when_env)?;
+        let manifest_gates = self.manifest_gates_by_entry(index, &when_env)?;
         let gate_inputs = RunGateInputs {
             when_env: &when_env,
-            manifest_failures: &manifest_failures,
+            manifest_gates: &manifest_gates,
             git_required: &git_required,
             git_available,
+            changed_active: self.changed_paths.is_some(),
         };
-        let (live, gate_results) = self.collect_live_per_file_entries(&ctx, &gate_inputs);
+        let (live, gate_results) = self.collect_live_per_file_entries(&ctx, &gate_inputs, None);
 
         // Dispatch each in-scope rule against the supplied bytes. The
         // raw violations (notes included) are bucketed by entry index;
@@ -2379,6 +2568,7 @@ impl Engine {
             git_blame: git_blame.as_ref(),
             analysis_time,
             process_environment: self.process_environment.as_ref(),
+            trace: None,
         };
         let filtered_ctx = filtered_index.as_ref().map(|fi| Context {
             root,
@@ -2390,6 +2580,7 @@ impl Engine {
             git_blame: git_blame.as_ref(),
             analysis_time,
             process_environment: self.process_environment.as_ref(),
+            trace: None,
         });
         let git_file_only_ctx = git_tracked_indexes
             .as_ref()
@@ -2404,6 +2595,7 @@ impl Engine {
                 git_blame: git_blame.as_ref(),
                 analysis_time,
                 process_environment: self.process_environment.as_ref(),
+                trace: None,
             });
         let git_dir_aware_ctx = git_tracked_indexes
             .as_ref()
@@ -2418,6 +2610,7 @@ impl Engine {
                 git_blame: git_blame.as_ref(),
                 analysis_time,
                 process_environment: self.process_environment.as_ref(),
+                trace: None,
             });
         // Compose mode for a real (non-dry-run) pass: content fixers route
         // their whole-file writes into this buffer instead of hitting disk, so
@@ -2467,7 +2660,7 @@ impl Engine {
                 fi.set_changed_paths(map.clone());
             }
         }
-        let manifest_failures = self.manifest_failures_by_entry(index, &when_env)?;
+        let manifest_gates = self.manifest_gates_by_entry(index, &when_env)?;
         // A `has_ancestor` marker lookup on the `--changed` index must see unchanged
         // files too. Only the changed-set index shares the full tree's file set
         // (the git-tracked indexes are deliberately subsets and must not), and only
@@ -2538,13 +2731,13 @@ impl Engine {
                     }
                 }
             }
-            let manifest_failures = &manifest_failures[rule_index];
-            if !manifest_failures.is_empty() {
+            let manifest_gate = &manifest_gates[rule_index];
+            if !manifest_gate.failures.is_empty() {
                 let evaluated = RuleResult::new(
                     Arc::from(entry.rule.id()),
                     entry.rule.level(),
                     None,
-                    manifest_failures.clone(),
+                    manifest_gate.failures.clone(),
                     false,
                 );
                 if stage_ops.is_some() {
@@ -3856,11 +4049,11 @@ impl Engine {
         Ok(())
     }
 
-    fn manifest_failures_by_entry(
+    fn manifest_gates_by_entry(
         &self,
         index: &FileIndex,
         when_env: &WhenEnv<'_>,
-    ) -> Result<Vec<Vec<Violation>>> {
+    ) -> Result<Vec<ManifestGate>> {
         self.entries
             .iter()
             .map(|entry| {
@@ -3869,13 +4062,167 @@ impl Engine {
                     .as_ref()
                     .is_some_and(|expr| !matches!(expr.evaluate(when_env), Ok(true)))
                 {
-                    Ok(Vec::new())
+                    Ok(ManifestGate::default())
                 } else {
                     manifest_scope_failures(entry, &self.registry, index, when_env)
                 }
             })
             .collect()
     }
+}
+#[allow(clippy::too_many_lines)]
+fn evaluate_per_file_entries<const TRACE: bool>(
+    root: &Path,
+    walk_index: &FileIndex,
+    live: &[(usize, &RuleEntry)],
+    any_full_index: bool,
+    filtered_ctx: Option<&Context<'_>>,
+    per_file_ctx: &Context<'_>,
+) -> (Vec<(usize, Violation)>, TraceCounts) {
+    let considered = TRACE.then(|| AtomicU64::new(0));
+    let matched = TRACE.then(|| AtomicU64::new(0));
+    let by_file: Vec<(usize, Violation)> = with_worker_pool(|| {
+        walk_index
+            .entries
+            .par_iter()
+            .filter(|e| !e.is_dir)
+            .flat_map_iter(|file_entry| {
+                if let Some(considered) = &considered {
+                    considered.fetch_add(1, Ordering::Relaxed);
+                }
+                // Whether this file is in the `--changed` set (always true
+                // for a full run, or when the walk is already the filtered
+                // index). Only full-index per-file rules see the others.
+                let in_changed = !any_full_index
+                    || filtered_ctx.is_none_or(|f| f.index.contains_file(&file_entry.path));
+                // 1. Decide which per-file rules apply to this
+                // file. Per-file rules expose their scope via
+                // `PerFileRule::path_scope`; we filter on it
+                // before any I/O so files no rule cares about
+                // never get read. Carrying `entry_idx` through
+                // here avoids an O(L) `position` lookup per
+                // applicable rule per file inside the inner
+                // dispatch loop below.
+                let applicable: Vec<(usize, &RuleEntry)> = live
+                    .iter()
+                    .filter(|(_, entry)| {
+                        if !in_changed && !entry.rule.requires_full_index() {
+                            return false;
+                        }
+                        // 1a. Path-scope glob — cheap, dropping
+                        // files no rule cares about before any
+                        // further work.
+                        // v0.9.10: `Scope::matches` consults both
+                        // path-glob AND `scope_filter` in one
+                        // call (Scope owns its optional filter
+                        // since the v0.9.10 structural fix). The
+                        // separate v0.9.6 `entry.rule.scope_filter()`
+                        // check this used to do is now folded in.
+                        entry
+                            .rule
+                            .as_per_file()
+                            .expect("live entries are per-file rules by construction")
+                            .path_scope()
+                            .matches(&file_entry.path, per_file_ctx.index)
+                    })
+                    .map(|(idx, entry)| (*idx, *entry))
+                    .collect();
+                if let Some(matched) = &matched
+                    && !applicable.is_empty()
+                {
+                    matched.fetch_add(1, Ordering::Relaxed);
+                }
+                if applicable.is_empty() {
+                    return Vec::new();
+                }
+                // 2. Read once for every applicable rule. Every failure after
+                // repository discovery is a typed `resource_read` analysis
+                // failure for each owning rule; an unreadable or over-cap
+                // in-scope file can never look like a policy pass.
+                let abs = root.join(&file_entry.path);
+                let bytes = match crate::walker::read_for_analysis(&abs, file_entry.size) {
+                    crate::walker::AnalysisRead::Bytes(b) => b,
+                    crate::walker::AnalysisRead::Missing => {
+                        return applicable
+                            .iter()
+                            .map(|(entry_idx, _)| {
+                                (
+                                    *entry_idx,
+                                    crate::rule::missing_file_violation(&file_entry.path),
+                                )
+                            })
+                            .collect();
+                    }
+                    crate::walker::AnalysisRead::TooLarge(size) => {
+                        return applicable
+                            .iter()
+                            .map(|(entry_idx, _)| {
+                                (
+                                    *entry_idx,
+                                    crate::rule::too_large_file_violation(&file_entry.path, size),
+                                )
+                            })
+                            .collect();
+                    }
+                    crate::walker::AnalysisRead::Unreadable(e) => {
+                        return applicable
+                            .iter()
+                            .map(|(entry_idx, _)| {
+                                (
+                                    *entry_idx,
+                                    crate::rule::unreadable_file_violation(&file_entry.path, &e),
+                                )
+                            })
+                            .collect();
+                    }
+                };
+                // 3. Dispatch. Every applicable rule sees the
+                // same byte slice; the file is read exactly once
+                // even though N rules may produce violations
+                // against it.
+                let mut out: Vec<(usize, Violation)> = Vec::new();
+                for (entry_idx, entry) in applicable {
+                    let pf = entry
+                        .rule
+                        .as_per_file()
+                        .expect("live entries are per-file rules by construction");
+                    let result = if TRACE {
+                        pf.evaluate_file_traced(per_file_ctx, &file_entry.path, &bytes)
+                    } else {
+                        pf.evaluate_file(per_file_ctx, &file_entry.path, &bytes)
+                    };
+                    match result {
+                        Ok(vs) => {
+                            for v in vs {
+                                out.push((entry_idx, v));
+                            }
+                        }
+                        Err(e) => {
+                            out.push((
+                                entry_idx,
+                                Violation::new(format!("rule evaluation failed: {e}"))
+                                    .with_path(file_entry.path.clone())
+                                    .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                            ));
+                        }
+                    }
+                }
+                out
+            })
+            .collect()
+    });
+    (
+        by_file,
+        if TRACE {
+            TraceCounts {
+                considered: considered.as_ref().unwrap().load(Ordering::Relaxed),
+                matched: matched.as_ref().unwrap().load(Ordering::Relaxed),
+                ..TraceCounts::default()
+            }
+        } else {
+            TraceCounts::default()
+        },
+    )
 }
 
 /// One file a fix pass would change, captured by [`Engine::stage_fixes`] for
@@ -4049,17 +4396,17 @@ fn effective_path_scope(rule: &dyn Rule) -> Option<&crate::Scope> {
         .or_else(|| rule.path_scope())
 }
 
-/// Return each distinct manifest-resolution failure that prevents any active
-/// rule in `entry`'s tree from obtaining its verdict. Failures stay owned by
-/// the top-level entry, and shared predicates are deduplicated by cache key.
+/// Return whether an active rule in `entry`'s tree uses a manifest-derived
+/// scope and each distinct resolution failure that prevents it from obtaining
+/// a verdict. Failures stay owned by
 fn manifest_scope_failures(
     entry: &RuleEntry,
     registry: &RuleRegistry,
     index: &FileIndex,
     when_env: &WhenEnv<'_>,
-) -> Result<Vec<Violation>> {
+) -> Result<ManifestGate> {
+    let mut gate = ManifestGate::default();
     let mut seen: HashMap<String, usize> = HashMap::new();
-    let mut failures = Vec::new();
     visit_active_rule_tree_with_registry(
         registry,
         entry.rule.as_ref(),
@@ -4071,6 +4418,7 @@ fn manifest_scope_failures(
             else {
                 return Ok(());
             };
+            gate.used |= !filter.manifest_predicates().is_empty();
             for predicate in filter.manifest_predicates() {
                 let cache_key = predicate.cache_key();
                 let existing = seen.get(cache_key).copied();
@@ -4080,9 +4428,9 @@ fn manifest_scope_failures(
                 let finding_index = if let Some(index) = existing {
                     index
                 } else {
-                    let index = failures.len();
+                    let index = gate.failures.len();
                     seen.insert(cache_key.to_string(), index);
-                    failures.push(
+                    gate.failures.push(
                         Violation::new(failure.message.clone())
                             .with_path(predicate.source().to_path_buf())
                             .as_analysis_failure(failure.kind),
@@ -4092,13 +4440,13 @@ fn manifest_scope_failures(
                 if predicate.redacts_by_default()
                     || spec.is_some_and(|nested_spec| nested_spec.sensitive)
                 {
-                    failures[finding_index].redact_message(rule.id());
+                    gate.failures[finding_index].redact_message(rule.id());
                 }
             }
             Ok(())
         },
     )?;
-    Ok(failures)
+    Ok(gate)
 }
 
 fn nonfixable_rule_result(entry: &RuleEntry, violations: Vec<Violation>) -> RuleResult {
@@ -4111,6 +4459,240 @@ fn nonfixable_rule_result(entry: &RuleEntry, violations: Vec<Violation>) -> Rule
     )
 }
 
+fn trace_gate(trace: Option<&TraceSession>, name: &str, status: TraceStatus, reason: TraceReason) {
+    if let Some(trace) = trace {
+        trace.record(TraceStage::new(TraceStageClass::Gate, name, status, reason));
+    }
+}
+
+fn trace_analysis_time(trace: Option<&TraceSession>, ctx: &Context<'_>) {
+    let Some(trace) = trace else { return };
+    let Some(resolution) = ctx.analysis_time else {
+        return;
+    };
+    let (status, reason) = if resolution.time().is_some() {
+        (TraceStatus::Satisfied, TraceReason::AnalysisTimeAvailable)
+    } else {
+        (
+            TraceStatus::AnalysisFailure,
+            TraceReason::AnalysisTimeUnavailable,
+        )
+    };
+    trace_gate(Some(trace), "analysis_time", status, reason);
+}
+
+fn trace_selection(trace: Option<&TraceSession>, entry: &RuleEntry, ctx: &Context<'_>) {
+    let Some(trace) = trace
+        .filter(|trace| trace.allows(TraceStageClass::Selection) && !trace.meta.nested_evaluation)
+    else {
+        return;
+    };
+    let considered = u64::try_from(ctx.index.entries.len()).expect("index length fits u64");
+    let matched = if let Some(per_file) = entry.rule.as_per_file() {
+        u64::try_from(
+            ctx.index
+                .files()
+                .filter(|file| per_file.path_scope().matches(&file.path, ctx.index))
+                .count(),
+        )
+        .expect("index length fits u64")
+    } else if let Some(scope) = entry.rule.path_scope() {
+        u64::try_from(
+            ctx.index
+                .entries
+                .iter()
+                .filter(|candidate| scope.matches(&candidate.path, ctx.index))
+                .count(),
+        )
+        .expect("index length fits u64")
+    } else {
+        u64::try_from(ctx.index.entries.len()).expect("index length fits u64")
+    };
+    let reason = if matched == 0 {
+        TraceReason::SelectorNoMatch
+    } else {
+        TraceReason::SelectorMatched
+    };
+    trace.record(
+        TraceStage::new(
+            TraceStageClass::Selection,
+            "dispatch_input",
+            TraceStatus::Satisfied,
+            reason,
+        )
+        .with_counts(TraceCounts {
+            considered,
+            matched,
+            ..TraceCounts::default()
+        }),
+    );
+}
+
+fn trace_assertion(trace: Option<&TraceSession>, result: &RuleResult) {
+    let Some(trace) = trace else { return };
+    trace.flush_extraction();
+    let (status, reason) = if !result.analysis_failures.is_empty() {
+        (TraceStatus::AnalysisFailure, TraceReason::AssertionFailed)
+    } else if !result.violations.is_empty() {
+        (TraceStatus::Violated, TraceReason::AssertionViolated)
+    } else {
+        (TraceStatus::Satisfied, TraceReason::AssertionSatisfied)
+    };
+    trace.record(
+        TraceStage::new(TraceStageClass::Assertion, "policy", status, reason).with_counts(
+            TraceCounts {
+                violations: u64::try_from(result.violations.len()).expect("length fits u64"),
+                notes: u64::try_from(result.notes.len()).expect("length fits u64"),
+                analysis_failures: u64::try_from(result.analysis_failures.len())
+                    .expect("length fits u64"),
+                ..TraceCounts::default()
+            },
+        ),
+    );
+}
+
+enum EntryGateOutcome {
+    Evaluate,
+    Skip,
+    Result(RuleResult),
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn evaluate_entry_gates(
+    entry_idx: usize,
+    entry: &RuleEntry,
+    ctx: &Context<'_>,
+    full_index: &FileIndex,
+    gate_inputs: &RunGateInputs<'_, '_>,
+    skipped_for_changed: bool,
+    trace: Option<&TraceSession>,
+) -> EntryGateOutcome {
+    if skipped_for_changed {
+        trace_gate(
+            trace,
+            "changed_scope",
+            TraceStatus::Skipped,
+            TraceReason::ChangedScopeEmpty,
+        );
+        if !entry.expect_matches() {
+            return EntryGateOutcome::Skip;
+        }
+    }
+    if let Some(expr) = &entry.when {
+        match expr.evaluate(gate_inputs.when_env) {
+            Ok(true) => {
+                trace_gate(trace, "when", TraceStatus::Satisfied, TraceReason::WhenTrue);
+            }
+            Ok(false) => {
+                trace_gate(trace, "when", TraceStatus::Skipped, TraceReason::WhenFalse);
+                return EntryGateOutcome::Skip;
+            }
+            Err(error) => {
+                trace_gate(
+                    trace,
+                    "when",
+                    TraceStatus::AnalysisFailure,
+                    TraceReason::WhenEvaluationFailed,
+                );
+                let failure = Violation::new(format!("when evaluation failed: {error}"))
+                    .as_analysis_failure(AnalysisFailureKind::Condition);
+                return EntryGateOutcome::Result(nonfixable_rule_result(entry, vec![failure]));
+            }
+        }
+    }
+    let manifest_gate = &gate_inputs.manifest_gates[entry_idx];
+    if !manifest_gate.failures.is_empty() {
+        trace_gate(
+            trace,
+            "manifest",
+            TraceStatus::AnalysisFailure,
+            TraceReason::ManifestUnavailable,
+        );
+        return EntryGateOutcome::Result(nonfixable_rule_result(
+            entry,
+            manifest_gate.failures.clone(),
+        ));
+    }
+    if trace.is_some() && manifest_gate.used {
+        trace_gate(
+            trace,
+            "manifest",
+            TraceStatus::Satisfied,
+            TraceReason::ManifestAvailable,
+        );
+    }
+    if gate_inputs.git_required[entry_idx] {
+        if !gate_inputs.git_available {
+            trace_gate(
+                trace,
+                "git",
+                TraceStatus::AnalysisFailure,
+                TraceReason::GitUnavailable,
+            );
+            return EntryGateOutcome::Result(nonfixable_rule_result(
+                entry,
+                vec![unavailable_git_failure()],
+            ));
+        }
+        trace_gate(
+            trace,
+            "git",
+            TraceStatus::Satisfied,
+            TraceReason::GitAvailable,
+        );
+    }
+    let scope_violation = match entry.spec.as_deref() {
+        Some(spec) => {
+            match crate::expect_matches_violation(entry.rule.as_ref(), spec, full_index, ctx) {
+                Ok(violation) => violation,
+                Err(error) => {
+                    trace_gate(
+                        trace,
+                        "expect_matches",
+                        TraceStatus::AnalysisFailure,
+                        TraceReason::ExpectMatchesFailed,
+                    );
+                    let failure =
+                        Violation::new(format!("scope assertion evaluation failed: {error}"))
+                            .as_analysis_failure(AnalysisFailureKind::Evaluation);
+                    return EntryGateOutcome::Result(nonfixable_rule_result(entry, vec![failure]));
+                }
+            }
+        }
+        None => None,
+    };
+    if let Some(violation) = scope_violation {
+        trace_gate(
+            trace,
+            "expect_matches",
+            TraceStatus::Violated,
+            TraceReason::ExpectMatchesViolated,
+        );
+        return EntryGateOutcome::Result(nonfixable_rule_result(entry, vec![violation]));
+    }
+    if entry.expect_matches() {
+        trace_gate(
+            trace,
+            "expect_matches",
+            TraceStatus::Satisfied,
+            TraceReason::ExpectMatchesSatisfied,
+        );
+    }
+    if skipped_for_changed {
+        return EntryGateOutcome::Skip;
+    }
+    if gate_inputs.changed_active {
+        trace_gate(
+            trace,
+            "changed_scope",
+            TraceStatus::Satisfied,
+            TraceReason::ChangedScopeMatched,
+        );
+    }
+    trace_analysis_time(trace, ctx);
+    EntryGateOutcome::Evaluate
+}
+
 fn run_entry(
     entry_idx: usize,
     entry: &RuleEntry,
@@ -4118,52 +4700,22 @@ fn run_entry(
     full_index: &FileIndex,
     gate_inputs: &RunGateInputs<'_, '_>,
     skipped_for_changed: bool,
+    trace: Option<&TraceSession>,
 ) -> Option<RuleResult> {
-    if skipped_for_changed && !entry.expect_matches() {
-        return None;
+    match evaluate_entry_gates(
+        entry_idx,
+        entry,
+        ctx,
+        full_index,
+        gate_inputs,
+        skipped_for_changed,
+        trace,
+    ) {
+        EntryGateOutcome::Evaluate => {}
+        EntryGateOutcome::Skip => return None,
+        EntryGateOutcome::Result(result) => return Some(result),
     }
-    if let Some(expr) = &entry.when {
-        match expr.evaluate(gate_inputs.when_env) {
-            Ok(true) => {} // proceed
-            Ok(false) => return None,
-            Err(e) => {
-                let failure = Violation::new(format!("when evaluation failed: {e}"))
-                    .as_analysis_failure(AnalysisFailureKind::Condition);
-                return Some(nonfixable_rule_result(entry, vec![failure]));
-            }
-        }
-    }
-    let manifest_failures = gate_inputs.manifest_failures[entry_idx].clone();
-    if !manifest_failures.is_empty() {
-        return Some(nonfixable_rule_result(entry, manifest_failures));
-    }
-    if gate_inputs.git_required[entry_idx] && !gate_inputs.git_available {
-        return Some(nonfixable_rule_result(
-            entry,
-            vec![unavailable_git_failure()],
-        ));
-    }
-    let scope_violation = match entry.spec.as_deref() {
-        Some(spec) => {
-            match crate::expect_matches_violation(entry.rule.as_ref(), spec, full_index, ctx) {
-                Ok(violation) => violation,
-                Err(e) => {
-                    let failure = Violation::new(format!("scope assertion evaluation failed: {e}"))
-                        .as_analysis_failure(AnalysisFailureKind::Evaluation);
-                    return Some(nonfixable_rule_result(entry, vec![failure]));
-                }
-            }
-        }
-        None => None,
-    };
-    if let Some(violation) = scope_violation {
-        // This is a configuration-integrity finding, not a finding the host
-        // rule's fixer can repair (there is no target file).
-        return Some(nonfixable_rule_result(entry, vec![violation]));
-    }
-    if skipped_for_changed {
-        return None;
-    }
+    trace_selection(trace, entry, ctx);
     let violations = match entry.rule.evaluate(ctx) {
         Ok(v) => v,
         Err(e) => vec![
@@ -4171,15 +4723,16 @@ fn run_entry(
                 .as_analysis_failure(AnalysisFailureKind::Evaluation),
         ],
     };
-    // `new` partitions any note-flagged violations into `notes`.
     let (violations, is_fixable) = mark_fixability(violations, entry.rule.fixer());
-    Some(RuleResult::new(
+    let result = RuleResult::new(
         Arc::from(entry.rule.id()),
         entry.rule.level(),
         entry.rule.policy_url().map(Arc::from),
         violations,
         is_fixable,
-    ))
+    );
+    trace_assertion(trace, &result);
+    Some(result)
 }
 
 /// Stamp each violation's per-violation fixability ([`Violation::is_fixable`])
@@ -4467,6 +5020,7 @@ mod tests {
         fix_ops: std::borrow::Cow::Borrowed(&[]),
         expect_matches: true,
         nested_rules: false,
+        trace: crate::TraceMeta::SELECTION,
     };
 
     static TEST_NESTED_GIT_META: crate::KindMeta = crate::KindMeta {
@@ -4485,6 +5039,7 @@ mod tests {
         fix_ops: std::borrow::Cow::Borrowed(&[]),
         expect_matches: true,
         nested_rules: false,
+        trace: crate::TraceMeta::SELECTION,
     };
 
     fn nested_registry() -> RuleRegistry {
@@ -6755,5 +7310,412 @@ mod tests {
         // Order follows entry-registration order.
         assert_eq!(&*report.results[0].rule_id, "cross");
         assert_eq!(&*report.results[1].rule_id, "needs-magic");
+    }
+    static UNRELATED_TRACE_EVALUATIONS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    #[derive(Debug)]
+    struct UnrelatedTraceRule;
+
+    impl Rule for UnrelatedTraceRule {
+        fn id(&self) -> &'static str {
+            "unrelated"
+        }
+
+        fn level(&self) -> Level {
+            Level::Error
+        }
+
+        fn evaluate(&self, _ctx: &Context<'_>) -> Result<Vec<Violation>> {
+            UNRELATED_TRACE_EVALUATIONS.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![Violation::new("unrelated executed")])
+        }
+    }
+
+    fn trace_spec(id: &str, level: &str, paths: &str, sensitive: bool) -> Arc<crate::RuleSpec> {
+        Arc::new(
+            serde_yaml_ng::from_str(&format!(
+                "id: {id}\nkind: nested_scope_fixture\nlevel: {level}\npaths: \"{paths}\"\n\
+                 sensitive: {sensitive}\n"
+            ))
+            .unwrap(),
+        )
+    }
+
+    fn traced_entry(spec: Arc<crate::RuleSpec>, rule: Box<dyn Rule>) -> RuleEntry {
+        RuleEntry::new(rule).with_spec(spec)
+    }
+
+    #[test]
+    fn selected_trace_uses_production_dispatch_and_never_runs_unrelated_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let selected_spec = trace_spec("selected", "error", "**/*.txt", true);
+        let unrelated_spec = trace_spec("unrelated", "error", "**/*", false);
+        let engine = Engine::from_entries(
+            vec![
+                traced_entry(
+                    selected_spec.clone(),
+                    nested_leaf_builder(&selected_spec).unwrap(),
+                ),
+                traced_entry(unrelated_spec, Box::new(UnrelatedTraceRule)),
+            ],
+            nested_registry(),
+        );
+
+        UNRELATED_TRACE_EVALUATIONS.store(0, Ordering::SeqCst);
+        let trace = engine.trace_rule("selected", tmp.path(), &index).unwrap();
+        assert_eq!(UNRELATED_TRACE_EVALUATIONS.load(Ordering::SeqCst), 0);
+        assert_eq!(trace.rule_id, "selected");
+        assert_eq!(trace.kind, "nested_scope_fixture");
+        assert_eq!(trace.outcome, TraceStatus::Violated);
+        assert_eq!(
+            trace
+                .stages
+                .iter()
+                .map(|stage| stage.class)
+                .collect::<Vec<_>>(),
+            [
+                TraceStageClass::Gate,
+                TraceStageClass::Selection,
+                TraceStageClass::Assertion,
+                TraceStageClass::Outcome,
+            ]
+        );
+        assert_eq!(
+            trace
+                .stages
+                .iter()
+                .map(|stage| stage.ordinal)
+                .collect::<Vec<_>>(),
+            [0, 1, 2, 3]
+        );
+
+        let full = engine.run(tmp.path(), &index).unwrap();
+        assert_eq!(UNRELATED_TRACE_EVALUATIONS.load(Ordering::SeqCst), 1);
+        let expected = full
+            .results
+            .iter()
+            .find(|result| &*result.rule_id == "selected")
+            .unwrap();
+        let actual = trace.result.as_ref().unwrap();
+        assert_eq!(actual.rule_id, expected.rule_id);
+        assert_eq!(actual.level, expected.level);
+        assert_eq!(actual.policy_url, expected.policy_url);
+        assert_eq!(actual.is_fixable, expected.is_fixable);
+        assert_eq!(actual.violations.len(), expected.violations.len());
+        assert_eq!(
+            actual.analysis_failures.len(),
+            expected.analysis_failures.len()
+        );
+        assert_eq!(actual.notes.len(), expected.notes.len());
+        for (actual, expected) in actual.violations.iter().zip(&expected.violations) {
+            assert_eq!(actual.path, expected.path);
+            assert_eq!(actual.message, expected.message);
+            assert_eq!(actual.range, expected.range);
+            assert_eq!(actual.related_locations, expected.related_locations);
+            assert_eq!(
+                actual.related_locations_omitted,
+                expected.related_locations_omitted
+            );
+            assert_eq!(actual.disposition, expected.disposition);
+            assert_eq!(actual.sensitive, expected.sensitive);
+            assert_eq!(actual.is_fixable, expected.is_fixable);
+            assert_eq!(actual.not_fixable, expected.not_fixable);
+            assert_eq!(actual.proposed_edits, expected.proposed_edits);
+        }
+    }
+
+    #[test]
+    fn per_file_trace_records_exact_dispatch_counts_and_terminal_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"wrong").unwrap();
+        std::fs::write(tmp.path().join("ignore.md"), b"wrong").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let spec = trace_spec("per-file", "error", "**/*.txt", false);
+        let rule = Box::new(PerFileStub {
+            id: "per-file".into(),
+            scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
+            prefix: b"MAGIC".to_vec(),
+        });
+        let engine = Engine::from_entries(vec![traced_entry(spec, rule)], nested_registry());
+
+        let trace = engine.trace_rule("per-file", tmp.path(), &index).unwrap();
+        let selection = trace
+            .stages
+            .iter()
+            .find(|stage| stage.class == TraceStageClass::Selection)
+            .unwrap();
+        assert_eq!(selection.counts.considered, 2);
+        assert_eq!(selection.counts.matched, 1);
+        assert_eq!(trace.outcome, TraceStatus::Violated);
+        assert_eq!(trace.result.as_ref().unwrap().level, Level::Error);
+    }
+
+    #[test]
+    fn trace_represents_common_gate_skips_and_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+
+        let off_spec = trace_spec("off", "off", "**/*.txt", false);
+        let off = Engine::from_entries(
+            vec![traced_entry(
+                off_spec.clone(),
+                nested_leaf_builder(&off_spec).unwrap(),
+            )],
+            nested_registry(),
+        )
+        .trace_rule("off", tmp.path(), &index)
+        .unwrap();
+        assert_eq!(off.outcome, TraceStatus::Skipped);
+        assert!(off.result.is_none());
+        assert_eq!(off.stages[0].reason, TraceReason::LevelOff);
+
+        let false_spec = trace_spec("conditional", "error", "**/*.txt", false);
+        let false_entry = traced_entry(
+            false_spec.clone(),
+            nested_leaf_builder(&false_spec).unwrap(),
+        )
+        .with_when(crate::when::parse("false").unwrap());
+        let skipped = Engine::from_entries(vec![false_entry], nested_registry())
+            .trace_rule("conditional", tmp.path(), &index)
+            .unwrap();
+        assert_eq!(skipped.outcome, TraceStatus::Skipped);
+        assert!(
+            skipped
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::WhenFalse)
+        );
+
+        let error_spec = trace_spec("broken-condition", "error", "**/*.txt", false);
+        let error_entry = traced_entry(
+            error_spec.clone(),
+            nested_leaf_builder(&error_spec).unwrap(),
+        )
+        .with_when(crate::when::parse("1 < \"x\"").unwrap());
+        let failed = Engine::from_entries(vec![error_entry], nested_registry())
+            .trace_rule("broken-condition", tmp.path(), &index)
+            .unwrap();
+        assert_eq!(failed.outcome, TraceStatus::AnalysisFailure);
+        assert_eq!(
+            failed
+                .result
+                .as_ref()
+                .unwrap()
+                .analysis_failures
+                .first()
+                .unwrap()
+                .kind,
+            AnalysisFailureKind::Condition
+        );
+    }
+
+    #[test]
+    fn trace_represents_changed_expect_manifest_git_and_time_gates() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+
+        let changed_spec = trace_spec("changed", "error", "**/*.txt", false);
+        let changed_entry = || {
+            traced_entry(
+                changed_spec.clone(),
+                nested_leaf_builder(&changed_spec).unwrap(),
+            )
+        };
+        let empty_changed = Engine::from_entries(vec![changed_entry()], nested_registry())
+            .with_changed_paths(HashSet::new())
+            .trace_rule("changed", tmp.path(), &index)
+            .unwrap();
+        assert_eq!(empty_changed.outcome, TraceStatus::Skipped);
+        assert!(
+            empty_changed
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::ChangedScopeEmpty)
+        );
+
+        let matched_changed = Engine::from_entries(vec![changed_entry()], nested_registry())
+            .with_changed_paths(HashSet::from([PathBuf::from("a.txt")]))
+            .trace_rule("changed", tmp.path(), &index)
+            .unwrap();
+        assert!(
+            matched_changed
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::ChangedScopeMatched)
+        );
+
+        let expect_spec: Arc<crate::RuleSpec> = Arc::new(
+            serde_yaml_ng::from_str(
+                "id: expect\nkind: nested_scope_fixture\nlevel: error\n\
+                 paths: \"**/*.md\"\nexpect_matches: true\n",
+            )
+            .unwrap(),
+        );
+        let expected = Engine::from_entries(
+            vec![traced_entry(
+                expect_spec.clone(),
+                nested_leaf_builder(&expect_spec).unwrap(),
+            )],
+            nested_registry(),
+        )
+        .with_changed_paths(HashSet::new())
+        .trace_rule("expect", tmp.path(), &index)
+        .unwrap();
+        assert_eq!(expected.outcome, TraceStatus::Violated);
+        assert!(
+            expected
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::ExpectMatchesViolated)
+        );
+        assert!(
+            expected
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::ChangedScopeEmpty)
+        );
+
+        std::fs::write(tmp.path().join("package.json"), br#"{"files":["a.txt"]}"#).unwrap();
+        let manifest_index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let manifest_spec = trace_spec("manifest", "error", "**/*.txt", false);
+        let manifest = Engine::from_entries(
+            vec![traced_entry(
+                manifest_spec.clone(),
+                manifest_stub("manifest"),
+            )],
+            nested_registry(),
+        )
+        .trace_rule("manifest", tmp.path(), &manifest_index)
+        .unwrap();
+        assert!(
+            manifest
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::ManifestAvailable)
+        );
+
+        let owner_spec = trace_spec("owner", "error", "**/*", false);
+        let nested_manifest = Engine::from_entries(
+            vec![traced_entry(
+                owner_spec,
+                nested_parent(
+                    "kind: nested_scope_fixture\nwhen: iter.basename == \"a.txt\"\n\
+                     paths: \"**/*.txt\"\n\
+                     scope_filter:\n  include_manifest_paths:\n    source: package.json\n    \
+                     extract: { json: \"$.files[*]\" }\n",
+                ),
+            )],
+            nested_registry(),
+        )
+        .trace_rule("owner", tmp.path(), &manifest_index)
+        .unwrap();
+        assert!(
+            nested_manifest
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::ManifestAvailable)
+        );
+
+        std::fs::write(tmp.path().join("package.json"), b"{not json").unwrap();
+        let invalid_manifest_index =
+            crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let unavailable_manifest = Engine::from_entries(
+            vec![traced_entry(manifest_spec, manifest_stub("manifest"))],
+            nested_registry(),
+        )
+        .trace_rule("manifest", tmp.path(), &invalid_manifest_index)
+        .unwrap();
+        assert_eq!(unavailable_manifest.outcome, TraceStatus::AnalysisFailure);
+        assert!(
+            unavailable_manifest
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::ManifestUnavailable)
+        );
+
+        let owner_spec = trace_spec("owner", "error", "**/*", false);
+        let nested_git = Engine::from_entries(
+            vec![traced_entry(
+                owner_spec,
+                nested_parent("kind: nested_git_fixture\nwhen: iter.basename == \"a.txt\"\n"),
+            )],
+            nested_registry(),
+        )
+        .trace_rule("owner", tmp.path(), &manifest_index)
+        .unwrap();
+        assert_eq!(nested_git.outcome, TraceStatus::AnalysisFailure);
+        assert!(
+            nested_git
+                .stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::GitUnavailable)
+        );
+        let git_spec: Arc<crate::RuleSpec> = Arc::new(
+            serde_yaml_ng::from_str(
+                "id: git\nkind: nested_git_fixture\nlevel: error\npaths: \"**/*.txt\"\n",
+            )
+            .unwrap(),
+        );
+        let git = Engine::from_entries(
+            vec![traced_entry(
+                git_spec.clone(),
+                nested_leaf_builder(&git_spec).unwrap(),
+            )],
+            nested_registry(),
+        )
+        .trace_rule("git", tmp.path(), &manifest_index)
+        .unwrap();
+        assert_eq!(git.outcome, TraceStatus::AnalysisFailure);
+        assert!(
+            git.stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::GitUnavailable)
+        );
+
+        let time_spec = trace_spec("time", "error", "**/*.txt", false);
+        let time = Engine::from_entries(
+            vec![traced_entry(time_spec, Box::new(TimeRule))],
+            nested_registry(),
+        )
+        .trace_rule("time", tmp.path(), &manifest_index)
+        .unwrap();
+        assert_eq!(time.outcome, TraceStatus::AnalysisFailure);
+        assert!(
+            time.stages
+                .iter()
+                .any(|stage| stage.reason == TraceReason::AnalysisTimeUnavailable)
+        );
+
+        let skipped_time_spec = trace_spec("skipped-time", "error", "**/*.txt", false);
+        let skipped_time_entry = traced_entry(skipped_time_spec, Box::new(TimeRule))
+            .with_when(crate::when::parse("false").unwrap());
+        let skipped_time = Engine::from_entries(vec![skipped_time_entry], nested_registry())
+            .trace_rule("time", tmp.path(), &manifest_index)
+            .unwrap();
+        assert_eq!(skipped_time.outcome, TraceStatus::Skipped);
+        assert!(!skipped_time.stages.iter().any(|stage| matches!(
+            stage.reason,
+            TraceReason::AnalysisTimeAvailable | TraceReason::AnalysisTimeUnavailable
+        )));
+    }
+    #[test]
+    fn ordinary_run_never_constructs_a_trace_recorder() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"payload").unwrap();
+        let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+        let before = crate::trace::recorders_created_on_current_thread();
+        Engine::new(vec![stub("ordinary", "**/*.txt")], RuleRegistry::new())
+            .run(tmp.path(), &index)
+            .unwrap();
+        assert_eq!(
+            crate::trace::recorders_created_on_current_thread(),
+            before,
+            "ordinary check must not construct trace state"
+        );
     }
 }

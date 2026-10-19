@@ -335,10 +335,30 @@ impl PerFileRule for StructuredPathRule {
 
     fn evaluate_file(
         &self,
-        _ctx: &Context<'_>,
+        ctx: &Context<'_>,
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
+        Ok(self.evaluate_file_inner::<false>(ctx, path, bytes))
+    }
+
+    fn evaluate_file_traced(
+        &self,
+        ctx: &Context<'_>,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<Vec<Violation>> {
+        Ok(self.evaluate_file_inner::<true>(ctx, path, bytes))
+    }
+}
+
+impl StructuredPathRule {
+    fn evaluate_file_inner<const TRACE: bool>(
+        &self,
+        ctx: &Context<'_>,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Vec<Violation> {
         // A NUL-bearing / genuinely-binary file caught by a broad glob is skipped
         // (no violation), matching the hygiene fixers' invariant and keeping `check`
         // and `fix` in agreement -- otherwise a PERMISSIVE-format rule (`.properties`
@@ -347,7 +367,7 @@ impl PerFileRule for StructuredPathRule {
         // `looks_binary` triggers on NUL bytes, NOT high bytes, so a legitimate
         // Latin-1 `.properties` (below) is unaffected.
         if looks_binary(bytes) {
-            return Ok(Vec::new());
+            return Vec::new();
         }
         let sensitive = self.format.redacts_by_default();
         let redact = |finding: &mut Violation, category: &str, evidence: &[String]| {
@@ -375,6 +395,13 @@ impl PerFileRule for StructuredPathRule {
         let root_value = match self.format.parse(&text) {
             Ok(v) => v,
             Err(err) => {
+                if TRACE {
+                    ctx.record_trace_extraction(alint_core::TraceExtractionObservation {
+                        inputs: 1,
+                        parse_failures: 1,
+                        ..alint_core::TraceExtractionObservation::default()
+                    });
+                }
                 let mut finding = Violation::new(format!(
                     "not a valid {} document: {err}",
                     self.format.label()
@@ -384,16 +411,30 @@ impl PerFileRule for StructuredPathRule {
                 if sensitive {
                     finding.redact_message(&self.id);
                 }
-                return Ok(vec![finding]);
+                return vec![finding];
             }
         };
         let matches = self.path_expr.query(&root_value);
+        if TRACE {
+            let cardinality_mismatch = if matches!(self.op, Op::Absent) {
+                !matches.is_empty()
+            } else {
+                matches.is_empty() && !self.if_present
+            };
+            ctx.record_trace_extraction(alint_core::TraceExtractionObservation {
+                inputs: 1,
+                values: u64::try_from(matches.len()).expect("query result length fits u64"),
+                cardinality_checks: 1,
+                cardinality_mismatches: u64::from(cardinality_mismatch),
+                ..alint_core::TraceExtractionObservation::default()
+            });
+        }
         // Existence assertion: the query must select nothing. Any match is
         // exactly one file-level violation -- never per-match, so a `$[?...]`
         // filter that fans out over every root key still yields one violation.
         if matches!(self.op, Op::Absent) {
             if matches.is_empty() {
-                return Ok(Vec::new());
+                return Vec::new();
             }
             let msg = self.message.clone().unwrap_or_else(|| {
                 format!(
@@ -408,18 +449,18 @@ impl PerFileRule for StructuredPathRule {
             // message is value-free; mark secret-bearing formats so baseline
             // identity and remediation output stay protected.
             redact(&mut finding, "absent", &[]);
-            return Ok(vec![finding]);
+            return vec![finding];
         }
         if matches.is_empty() {
             if self.if_present {
-                return Ok(Vec::new());
+                return Vec::new();
             }
             let msg = self
                 .message
                 .clone()
                 .unwrap_or_else(|| format!("JSONPath `{}` produced no match", self.path_src));
             let finding = Violation::new(msg).with_path(std::sync::Arc::<Path>::from(path));
-            return Ok(vec![finding]);
+            return vec![finding];
         }
         let mut violations = Vec::new();
         for m in matches.iter() {
@@ -439,7 +480,7 @@ impl PerFileRule for StructuredPathRule {
                 violations.push(finding);
             }
         }
-        Ok(violations)
+        violations
     }
 }
 
@@ -639,6 +680,7 @@ pub static JSON_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -657,6 +699,7 @@ pub static JSON_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -675,6 +718,7 @@ pub static YAML_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -693,6 +737,7 @@ pub static YAML_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -711,6 +756,7 @@ pub static TOML_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -729,6 +775,7 @@ pub static TOML_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -747,6 +794,7 @@ pub static XML_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -765,6 +813,7 @@ pub static XML_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -783,6 +832,7 @@ pub static DOTENV_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta 
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -801,6 +851,7 @@ pub static DOTENV_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -819,6 +870,7 @@ pub static PROPERTIES_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindM
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -837,6 +889,7 @@ pub static PROPERTIES_PATH_MATCHES_META: alint_core::KindMeta = alint_core::Kind
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -855,6 +908,7 @@ pub static INI_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -873,6 +927,7 @@ pub static INI_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -891,6 +946,7 @@ pub static HCL_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -909,6 +965,7 @@ pub static HCL_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -927,6 +984,7 @@ pub static JSON_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -945,6 +1003,7 @@ pub static YAML_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -963,6 +1022,7 @@ pub static TOML_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -981,6 +1041,7 @@ pub static XML_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -999,6 +1060,7 @@ pub static DOTENV_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta 
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -1017,6 +1079,7 @@ pub static PROPERTIES_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindM
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -1035,6 +1098,7 @@ pub static INI_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 
@@ -1053,6 +1117,7 @@ pub static HCL_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
     nested_rules: false,
 };
 

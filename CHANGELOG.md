@@ -28,6 +28,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   test's inline expectations pass. Native process and host-keyring access each require both a
   document declaration and an explicit CLI grant.
 
+- **The v0.20 selected-rule trace engine now executes production dispatch without observing
+  ordinary checks.** `Engine::trace_rule` evaluates only the requested effective rule through the
+  existing common gates, rule-major/file-major paths, nested-rule builder, result partitioning, and
+  redaction. Typed deterministic stages carry checked aggregate counts, bounded producer-redacted
+  preview rows, and exactly one terminal outcome; runtime completion rejects undeclared or missing
+  stages against mandatory metadata on all 102 canonical kinds. Ordinary checks construct no trace
+  recorder. `facts.json` format v6 and `alint rules show` expose each kind's trace inventory.
+
 ### Changed
 
 - **Every configuration source now proves language and binary compatibility before composition.**

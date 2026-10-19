@@ -174,6 +174,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[]),
     expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
     nested_rules: false,
 };
 
@@ -247,6 +248,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         rule.evaluate(&ctx).unwrap()
     }

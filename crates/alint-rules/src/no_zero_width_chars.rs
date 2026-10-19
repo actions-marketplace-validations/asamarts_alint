@@ -147,6 +147,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
     dependencies: std::borrow::Cow::Borrowed(&[]),
     fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_strip_zero_width")]),
     expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
     nested_rules: false,
 };
 
@@ -307,6 +308,7 @@ mod tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let mut bytes = vec![0xFFu8];
         bytes.extend_from_slice("a\u{200B}b".as_bytes());
@@ -341,6 +343,7 @@ mod binary_evasion_tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         let rule = NoZeroWidthCharsRule {
             id: "no-zw".to_string(),
@@ -389,6 +392,7 @@ mod binary_evasion_tests {
             git_blame: None,
             analysis_time: None,
             process_environment: None,
+            trace: None,
         };
         rule().evaluate_file(&ctx, Path::new("f"), bytes).unwrap()
     }
