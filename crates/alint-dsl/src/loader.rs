@@ -316,6 +316,12 @@ fn parse_config_interpolated_inner_with_environment(
     source: &Path,
     environment: &dyn crate::EnvironmentProvider,
 ) -> Result<RawConfig> {
+    fn redact_interpolated_error(source: &str) -> Error {
+        Error::Other(format!(
+            "{source}: could not deserialize interpolated config: <redacted>"
+        ))
+    }
+
     // on it super-linearly — a DoS reachable through an `extends:`'d ruleset.
     if !alint_core::yaml_depth::flow_depth_within_limit(contents) {
         return Err(Error::Other(format!(
@@ -335,10 +341,13 @@ fn parse_config_interpolated_inner_with_environment(
     let source = display_path(source);
     let config: RawConfig = if contents.contains("{{") {
         let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)?;
+        let has_sensitive_interpolation = value_reads_environment(&value);
         reject_nonliteral_requirement_in_value(contents, &source, &value)?;
         // Which vars take their value from the environment, read off the RAW
         // text before interpolation erases the difference.
         let env_vars = env_derived_vars(value.get("vars"));
+        let rule_sensitive_fields = environment_sensitive_fields(value.get("rules"));
+        let template_sensitive_fields = environment_sensitive_fields(value.get("templates"));
         let rule_env_vars: Vec<Mapping> = value
             .get("rules")
             .and_then(serde_yaml_ng::Value::as_sequence)
@@ -355,8 +364,14 @@ fn parse_config_interpolated_inner_with_environment(
             })
             .unwrap_or_default();
         crate::interp::interpolate_value(&mut value, &|name| environment.get(name))
-            .map_err(|e| Error::Other(format!("{source}: interpolation error: {e}")))?;
-        let mut config: RawConfig = serde_yaml_ng::from_value(value)?;
+            .map_err(|error| Error::Other(format!("{source}: interpolation error: {error}")))?;
+        let mut config: RawConfig = serde_yaml_ng::from_value(value).map_err(|error| {
+            if has_sensitive_interpolation {
+                redact_interpolated_error(&source)
+            } else {
+                error.into()
+            }
+        })?;
         // Reject user-authored private markers before adding the loader's own
         // env-provenance marker below.
         crate::reject_ambiguous_yaml_in(&config, &source)?;
@@ -364,6 +379,16 @@ fn parse_config_interpolated_inner_with_environment(
         for (rule, marks) in config.rules.iter_mut().zip(rule_env_vars) {
             if !marks.is_empty() {
                 rule.insert(crate::ENV_VARS_MARKER.into(), marks.into());
+            }
+        }
+        for (rule, marks) in config.rules.iter_mut().zip(rule_sensitive_fields) {
+            if !marks.is_empty() {
+                rule.insert(crate::SENSITIVE_FIELDS_MARKER.into(), marks.into());
+            }
+        }
+        for (template, marks) in config.templates.iter_mut().zip(template_sensitive_fields) {
+            if !marks.is_empty() {
+                template.insert(crate::SENSITIVE_FIELDS_MARKER.into(), marks.into());
             }
         }
         config
@@ -388,6 +413,40 @@ fn env_derived_vars(
         .filter_map(|(k, v)| {
             let (name, raw) = (k.as_str()?, v.as_str()?);
             crate::interp::reads_env(raw).then(|| (name.to_string(), raw.to_string()))
+        })
+        .collect()
+}
+fn value_reads_environment(value: &serde_yaml_ng::Value) -> bool {
+    match value {
+        serde_yaml_ng::Value::String(text) => crate::interp::reads_env(text),
+        serde_yaml_ng::Value::Sequence(values) => values.iter().any(value_reads_environment),
+        serde_yaml_ng::Value::Mapping(mapping) => mapping.values().any(value_reads_environment),
+        _ => false,
+    }
+}
+
+/// Sparse top-level fields containing at least one environment interpolation.
+/// The scan runs on raw YAML because interpolation erases that provenance.
+fn environment_sensitive_fields(entries: Option<&serde_yaml_ng::Value>) -> Vec<Mapping> {
+    fn reads_environment(value: &serde_yaml_ng::Value) -> bool {
+        value_reads_environment(value)
+    }
+
+    entries
+        .and_then(serde_yaml_ng::Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .map(|entry| {
+            entry
+                .as_mapping()
+                .into_iter()
+                .flat_map(|mapping| mapping.iter())
+                .filter(|(field, value)| {
+                    !matches!(field.as_str(), Some("id" | "kind" | "level" | "vars"))
+                        && reads_environment(value)
+                })
+                .map(|(field, _)| (field.clone(), true.into()))
+                .collect()
         })
         .collect()
 }
@@ -1229,5 +1288,152 @@ mod tests {
             depth + 1,
             "diamond references must retain one compatibility record per canonical source/context"
         );
+    }
+    #[derive(Debug)]
+    struct SensitiveFieldEnvironment;
+
+    impl crate::EnvironmentProvider for SensitiveFieldEnvironment {
+        fn get(&self, name: &str) -> Option<String> {
+            (name == "SECRET").then(|| "canary-secret".to_string())
+        }
+    }
+    #[derive(Debug)]
+    struct InvalidRegexEnvironment;
+    impl crate::EnvironmentProvider for InvalidRegexEnvironment {
+        fn get(&self, name: &str) -> Option<String> {
+            (name == "SECRET").then(|| "[builder-canary".to_string())
+        }
+    }
+
+    #[test]
+    fn environment_provenance_survives_templates_and_last_wins_overrides() {
+        let raw = parse_config_interpolated_inner_with_environment(
+            r#"version: 1
+templates:
+  - id: scan
+    kind: file_content_forbidden
+    paths: "**/*.txt"
+    pattern: "{{vars.needle}}"
+    level: warning
+rules:
+  - id: direct
+    kind: file_content_forbidden
+    paths: "**/*.txt"
+    pattern: "{{env.SECRET}}"
+    message: safe prose
+    level: warning
+  - id: through-template
+    extends_template: scan
+    vars: { needle: "{{env.SECRET}}" }
+  - id: literal-override
+    extends_template: scan
+    vars: { needle: "{{env.SECRET}}" }
+    pattern: literal
+  - id: condition
+    kind: file_exists
+    paths: README.md
+    when: "'{{env.SECRET}}' == 'canary-secret'"
+    level: warning
+  - id: url-only
+    kind: file_exists
+    paths: README.md
+    policy_url: "https://example.test/{{env.SECRET}}"
+    level: warning
+"#,
+            Path::new(".alint.yml"),
+            &SensitiveFieldEnvironment,
+        )
+        .unwrap();
+        let registry = alint_rules::builtin_registry();
+        let config = raw.finalize(Some(registry.catalog())).unwrap();
+        let rule = |id: &str| config.rules.iter().find(|rule| rule.id == id).unwrap();
+
+        assert!(rule("direct").field_is_sensitive("pattern"));
+        assert!(!rule("direct").field_is_sensitive("message"));
+        assert!(rule("through-template").field_is_sensitive("pattern"));
+        assert!(!rule("literal-override").field_is_sensitive("pattern"));
+        assert!(rule("condition").field_is_sensitive("when"));
+        assert!(rule("url-only").field_is_sensitive("policy_url"));
+        assert!(!rule("url-only").has_sensitive_evidence());
+    }
+    #[test]
+    fn sensitive_typed_and_builder_errors_never_echo_interpolated_values() {
+        let typed = parse_config_interpolated_inner_with_environment(
+            "version: 1\nrules:\n  - id: typed\n    kind: file_exists\n    paths: README.md\n    expect_matches: '{{env.SECRET}}'\n    level: warning\n",
+            Path::new(".alint.yml"),
+            &SensitiveFieldEnvironment,
+        )
+        .unwrap();
+        let registry = alint_rules::builtin_registry();
+        let error = typed
+            .finalize(Some(registry.catalog()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("<redacted>"), "{error}");
+        assert!(!error.contains("canary-secret"), "{error}");
+
+        let raw = parse_config_interpolated_inner_with_environment(
+            "version: 1\nrules:\n  - id: builder\n    kind: file_content_forbidden\n    paths: '**/*.txt'\n    pattern: '{{env.SECRET}}'\n    level: warning\n",
+            Path::new(".alint.yml"),
+            &InvalidRegexEnvironment,
+        )
+        .unwrap();
+        let config = raw.finalize(Some(registry.catalog())).unwrap();
+        let error = registry.build(&config.rules[0]).unwrap_err().to_string();
+        assert!(error.contains("<redacted>"), "{error}");
+        assert!(!error.contains("builder-canary"), "{error}");
+    }
+
+    #[test]
+    fn raw_config_type_errors_never_echo_interpolated_values() {
+        let error = parse_config_interpolated_inner_with_environment(
+            "version: '{{env.SECRET}}'\nrules: []\n",
+            Path::new(".alint.yml"),
+            &SensitiveFieldEnvironment,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("<redacted>"), "{error}");
+        assert!(!error.contains("canary-secret"), "{error}");
+    }
+    #[test]
+    fn merge_sensitivity_follows_the_winning_field() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("base.yml"),
+            r#"version: 1
+rules:
+  - id: cleared
+    kind: file_content_forbidden
+    paths: "**/*.txt"
+    pattern: "{{env.SECRET}}"
+    level: warning
+  - id: tainted
+    kind: file_content_forbidden
+    paths: "**/*.txt"
+    pattern: literal
+    level: warning
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join(".alint.yml"),
+            r#"version: 1
+extends: [./base.yml]
+rules:
+  - id: cleared
+    pattern: literal
+  - id: tainted
+    pattern: "{{env.SECRET}}"
+"#,
+        )
+        .unwrap();
+        let registry = alint_rules::builtin_registry();
+        let mut options = crate::LoadOptions::with_catalog(registry.catalog());
+        options.environment = std::sync::Arc::new(SensitiveFieldEnvironment);
+        let config = crate::load_with(&root.path().join(".alint.yml"), &options).unwrap();
+        let rule = |id: &str| config.rules.iter().find(|rule| rule.id == id).unwrap();
+        assert!(!rule("cleared").field_is_sensitive("pattern"));
+        assert!(rule("tainted").field_is_sensitive("pattern"));
     }
 }

@@ -1,6 +1,6 @@
 # v0.20: Policy authoring loop
 
-Status: Accepted design (2026-10-18); P1-P5 implemented, P6 next.
+Status: Accepted design (2026-10-18); P1-P6 implemented, P7 next.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 (DEC-6) and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md)
 (Phase 1b questions Q7, Q11, and Q14).
@@ -11,7 +11,7 @@ feedback loop. It ships three contracts together:
 
 1. a public, versioned `alint test` scenario format and runner;
 2. repository-backed `alint explain <rule-id> --trace`, with an explicitly experimental,
-   redaction-safe extraction preview;
+   redaction-safe evidence preview;
 3. per-source configuration compatibility checks, including `requires.alint`.
 
 The detailed contracts are:
@@ -54,7 +54,7 @@ or keyring access are denied. Process and keyring access each require both a dec
 test document and an explicit host CLI grant. Fixtures and fixes remain in a temporary repository;
 config reads and explicitly requested snapshot writes remain confined to the scenario package root.
 
-### Rule trace and extraction preview
+### Rule trace and evidence preview
 
 Plain `alint explain <rule-id>` remains a static, no-walk operation. Adding `--trace` runs only the
 selected effective rule through the same production engine dispatch used by `alint check` and
@@ -67,10 +67,11 @@ reports:
 - assertion outcome, findings, notes, and analysis failures;
 - an explicit skipped or completed terminal outcome.
 
-`--preview` adds bounded extraction rows with path, source range, structural pointer, and
-provenance. Values use the existing sensitivity policy and are never revealed when their source is
-sensitive. Preview output is experimental through the v2 stabilization milestone. Human and JSON
-trace output is deterministic and bounded independently of repository size.
+`--preview` adds bounded structured-extraction and nested-child rows with a repository path,
+structural pointer, provenance, and, where available, a source range. Values use the existing
+sensitivity policy and are never revealed when their source is sensitive. Preview output is
+experimental through the v2 stabilization milestone. Human and JSON trace output is deterministic
+and bounded independently of repository size.
 
 The trace recorder is absent on ordinary checks. The non-trace hot path performs no trace
 allocation, value rendering, synchronization, or duplicate evaluation.
@@ -145,6 +146,12 @@ Implementation status:
   canonical kind against mandatory `TraceMeta`, retains deterministic bounded redacted preview
   rows, and constructs no trace recorder on ordinary checks. The inventory is generated into
   `facts.json` format v6 and exposed by `alint rules show`.
+- **P6 complete:** `alint explain <rule-id> --trace` runs exactly one effective
+  rule, renders pass/violation/skip/analysis-failure stages in human or
+  experimental JSON, supports changed/base scope and deterministic bounded
+  structured-extraction and nested-child previews, and shares field-sensitive
+  redaction between plain and traced explain. The committed schema ships in the
+  binary crate.
 
 ## Cross-cutting invariants
 
@@ -213,9 +220,7 @@ v0.20 is complete only when all of the following are observed:
 
 ## Implementation handoff
 
-P1-P5 are implemented. P6 is the next vertical slice: expose the selected-rule recorder through
-deterministic, redaction-safe `explain --trace` and bounded `--preview` human/JSON projections,
-including the experimental schema and packaged-binary parity smoke. The policy-test parser/runner
-corpus migration portion of P7 landed with P2; after P6, complete the trace-dependent bundle
-coverage audit, then close P8 with release packaging, generated artifacts, and the full acceptance
-matrix.
+P1-P6 are implemented. P7 is next: complete the trace-dependent bundled-ruleset
+ownership and coverage audit on top of the public parser/runner corpus migration
+that landed with P2. Then close P8 with release packaging, generated artifacts,
+and the full acceptance matrix.

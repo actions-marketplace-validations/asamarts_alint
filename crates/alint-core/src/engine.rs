@@ -20,7 +20,8 @@ use crate::rule::{
     write_atomic,
 };
 use crate::trace::{
-    TraceCounts, TraceExtractionObservation, TraceReason, TraceRecorder, TraceSink, TraceStage,
+    TraceCounts, TraceExtractionObservation, TraceOptions, TracePreview, TracePreviewCollector,
+    TracePreviewRow, TraceReason, TraceRecorder, TraceSensitivity, TraceSink, TraceStage,
     TraceStageClass, TraceStatus,
 };
 use crate::walker::FileIndex;
@@ -96,8 +97,7 @@ macro_rules! phase {
         // `try_into().unwrap_or(u64::MAX)` instead of an `as` cast
         // also pegs the rare overflow at u64::MAX rather than
         // silently wrapping, which keeps log readers honest.
-        #[allow(clippy::cast_possible_truncation)]
-        let elapsed_us: u64 = $start.elapsed().as_micros() as u64;
+        let elapsed_us = u64::try_from($start.elapsed().as_micros()).unwrap_or(u64::MAX);
         tracing::info!(
             phase = $phase,
             elapsed_us = elapsed_us,
@@ -189,6 +189,49 @@ struct TraceExtractionAggregate {
     cardinality_checks: AtomicU64,
     cardinality_mismatches: AtomicU64,
 }
+const TRACE_PREVIEW_SHARDS: usize = 64;
+
+#[derive(Debug)]
+struct TracePreviewAggregate {
+    limit: usize,
+    shards: Box<[Mutex<Option<TracePreviewCollector>>]>,
+}
+
+impl TracePreviewAggregate {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            shards: (0..TRACE_PREVIEW_SHARDS)
+                .map(|_| Mutex::new(None))
+                .collect(),
+        }
+    }
+
+    fn push(&self, row: TracePreviewRow) -> Result<()> {
+        let index = rayon::current_thread_index().map_or(TRACE_PREVIEW_SHARDS - 1, |index| {
+            index % (TRACE_PREVIEW_SHARDS - 1)
+        });
+        let mut shard = self.shards[index].lock();
+        if shard.is_none() {
+            *shard = Some(TracePreviewCollector::new(self.limit)?);
+        }
+        shard
+            .as_mut()
+            .expect("preview collector initialized")
+            .push(row)
+    }
+
+    fn finish(&self) -> Result<TracePreview> {
+        let mut merged = TracePreviewCollector::new(self.limit)?;
+        for shard in &self.shards {
+            if let Some(worker) = shard.lock().take() {
+                merged.absorb(worker.finish())?;
+            }
+        }
+        Ok(merged.finish())
+    }
+}
+
 /// Recorder shared only by one selected-rule trace execution.
 ///
 /// Rule evaluation may happen on a rayon worker, so stage insertion is
@@ -200,6 +243,9 @@ struct TraceSession {
     recorder: Mutex<Option<TraceRecorder>>,
     error: Mutex<Option<Error>>,
     extraction: TraceExtractionAggregate,
+    preview_limit: Option<usize>,
+    extraction_preview: Option<TracePreviewAggregate>,
+    sensitive_evidence: bool,
 }
 
 fn checked_atomic_add(counter: &AtomicU64, value: u64) -> bool {
@@ -216,12 +262,23 @@ fn checked_atomic_add(counter: &AtomicU64, value: u64) -> bool {
 }
 
 impl TraceSession {
-    fn new(meta: crate::TraceMeta) -> Self {
+    fn with_options(
+        meta: crate::TraceMeta,
+        options: TraceOptions,
+        sensitive_evidence: bool,
+    ) -> Self {
+        let preview_limit = options.preview_limit();
+        let extraction_preview = preview_limit
+            .filter(|_| meta.allowed_stages.contains(&TraceStageClass::Extraction))
+            .map(TracePreviewAggregate::new);
         Self {
             recorder: Mutex::new(Some(TraceRecorder::new(meta.clone()))),
             meta,
             error: Mutex::new(None),
             extraction: TraceExtractionAggregate::default(),
+            preview_limit,
+            extraction_preview,
+            sensitive_evidence,
         }
     }
 
@@ -316,20 +373,28 @@ impl TraceSession {
         } else {
             (TraceStatus::Satisfied, TraceReason::ExtractionSucceeded)
         };
-        self.record(
-            TraceStage::new(
-                TraceStageClass::Extraction,
-                "structured_query",
-                extraction_status,
-                extraction_reason,
-            )
-            .with_counts(TraceCounts {
-                inputs,
-                values,
-                analysis_failures: parse_failures,
-                ..TraceCounts::default()
-            }),
-        );
+        let mut extraction_stage = TraceStage::new(
+            TraceStageClass::Extraction,
+            "structured_query",
+            extraction_status,
+            extraction_reason,
+        )
+        .with_counts(TraceCounts {
+            inputs,
+            values,
+            analysis_failures: parse_failures,
+            ..TraceCounts::default()
+        });
+        if let Some(preview) = &self.extraction_preview {
+            match preview.finish() {
+                Ok(preview) => extraction_stage = extraction_stage.with_preview(preview),
+                Err(error) => {
+                    *self.error.lock() = Some(error);
+                    return;
+                }
+            }
+        }
+        self.record(extraction_stage);
         let (cardinality_status, cardinality_reason) =
             if parse_failures > 0 && cardinality_checks == 0 {
                 (TraceStatus::NotEvaluated, TraceReason::ParseFailed)
@@ -381,6 +446,34 @@ impl TraceSink for TraceSession {
 
     fn record_extraction(&self, observation: TraceExtractionObservation) {
         self.add_extraction(observation);
+    }
+
+    fn preview_limit(&self) -> Option<usize> {
+        self.preview_limit
+    }
+
+    fn evidence_sensitivity(&self, producer_sensitive: bool) -> TraceSensitivity {
+        if self.sensitive_evidence || producer_sensitive {
+            TraceSensitivity::Sensitive
+        } else {
+            TraceSensitivity::Public
+        }
+    }
+
+    fn record_preview(&self, row: Result<TracePreviewRow>) {
+        if self.error.lock().is_some() {
+            return;
+        }
+        let result = match (&self.extraction_preview, row) {
+            (_, Err(error)) => Err(error),
+            (Some(preview), Ok(row)) => preview.push(row),
+            (None, Ok(_)) => Err(Error::internal(
+                "rule producer emitted an extraction preview row when preview was disabled",
+            )),
+        };
+        if let Err(error) = result {
+            *self.error.lock() = Some(error);
+        }
     }
 }
 
@@ -824,7 +917,7 @@ pub struct Engine {
     facts: Vec<FactSpec>,
     vars: HashMap<String, String>,
     fix_size_limit: Option<u64>,
-    analysis_time: Option<crate::AnalysisTime>,
+    analysis_time: Option<crate::AnalysisTimeResolution>,
     process_environment: Option<BTreeMap<String, String>>,
     analysis_time_required: OnceLock<bool>,
     analysis_time_cache: Mutex<Option<AnalysisTimeCache>>,
@@ -927,7 +1020,21 @@ impl Engine {
     /// Without this, the run resolves the current HEAD committer time.
     #[must_use]
     pub fn with_analysis_time(mut self, analysis_time: crate::AnalysisTime) -> Self {
-        self.analysis_time = Some(analysis_time);
+        self.analysis_time = Some(crate::AnalysisTimeResolution::available(
+            analysis_time,
+            crate::AnalysisTimeSource::Explicit,
+        ));
+        self
+    }
+
+    /// Reuse an already-resolved reference instant for a diagnostic execution.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn with_analysis_time_resolution(
+        mut self,
+        resolution: crate::AnalysisTimeResolution,
+    ) -> Self {
+        self.analysis_time = Some(resolution);
         self
     }
 
@@ -1037,7 +1144,10 @@ impl Engine {
             {
                 return false;
             }
-            let explicit = entry.spec.as_deref().is_some_and(|spec| spec.sensitive);
+            let explicit = entry
+                .spec
+                .as_deref()
+                .is_some_and(crate::RuleSpec::has_sensitive_evidence);
             let scope_path = path.strip_prefix(root).unwrap_or(path);
             let scope = entry
                 .rule
@@ -1076,6 +1186,18 @@ impl Engine {
         root: &Path,
         index: &FileIndex,
     ) -> Result<crate::RuleTrace> {
+        self.trace_rule_with_options(rule_id, root, index, TraceOptions::counts_only())
+    }
+
+    /// Selected-rule trace with optional bounded evidence preview.
+    #[doc(hidden)]
+    pub fn trace_rule_with_options(
+        &self,
+        rule_id: &str,
+        root: &Path,
+        index: &FileIndex,
+        options: TraceOptions,
+    ) -> Result<crate::RuleTrace> {
         let entry = self
             .entries
             .iter()
@@ -1110,7 +1232,11 @@ impl Engine {
             changed_paths: self.changed_paths.clone(),
             fix_baseline: None,
         };
-        let trace = TraceSession::new(meta.trace.clone());
+        let sensitive_evidence = entry
+            .spec
+            .as_deref()
+            .is_some_and(crate::RuleSpec::has_sensitive_evidence);
+        let trace = TraceSession::with_options(meta.trace.clone(), options, sensitive_evidence);
         let mut report = selected.run_internal(root, index, Some(&trace))?;
         if report.results.len() > 1 {
             return Err(Error::internal(format!(
@@ -1381,13 +1507,10 @@ impl Engine {
                         skipped_for_changed,
                         trace,
                     );
-                    // u128 → u64 saturating: same rationale as the
-                    // `phase!` macro — elapsed_ns overflows u64 only
-                    // after ~584 years per rule, and we want lossy
-                    // truncation rather than a runtime panic on the
-                    // hot path.
-                    #[allow(clippy::cast_possible_truncation)]
-                    let elapsed_ns = t_rule.elapsed().as_nanos() as u64;
+                    // u128 → u64 saturation: same rationale as `phase!` —
+                    // elapsed_ns exceeds u64 only after ~584 years per rule;
+                    // clamp rather than panic on the hot path.
+                    let elapsed_ns = u64::try_from(t_rule.elapsed().as_nanos()).unwrap_or(u64::MAX);
                     cross_rule_ns[idx].fetch_add(elapsed_ns, Ordering::Relaxed);
                     result.map(|rr| (idx, rr))
                 })
@@ -1470,17 +1593,7 @@ impl Engine {
                 .remove(&idx)
                 .or_else(|| per_file_by_idx.remove(&idx));
             if let Some(mut result) = result {
-                if Self::has_sensitive_manifest_scope(self.entries[idx].rule.as_ref()) {
-                    result.redact_manifest_scope();
-                }
-                if self.entries[idx]
-                    .spec
-                    .as_deref()
-                    .is_some_and(|spec| spec.sensitive)
-                {
-                    result.redact_sensitive();
-                }
-                result.sanitize_sensitive_metadata();
+                self.redact_result_for_entry(idx, &mut result);
                 results.push(result);
             }
         }
@@ -1794,17 +1907,7 @@ impl Engine {
         let mut results = Vec::with_capacity(by_idx.len());
         for idx in 0..self.entries.len() {
             if let Some(mut result) = by_idx.remove(&idx) {
-                if Self::has_sensitive_manifest_scope(self.entries[idx].rule.as_ref()) {
-                    result.redact_manifest_scope();
-                }
-                if self.entries[idx]
-                    .spec
-                    .as_deref()
-                    .is_some_and(|spec| spec.sensitive)
-                {
-                    result.redact_sensitive();
-                }
-                result.sanitize_sensitive_metadata();
+                self.redact_result_for_entry(idx, &mut result);
                 results.push(result);
             }
         }
@@ -2492,6 +2595,28 @@ impl Engine {
         rule.path_scope()
             .or_else(|| rule.as_per_file().map(PerFileRule::path_scope))
             .is_some_and(|scope| scope.sensitive_manifest_sources().next().is_some())
+    }
+
+    fn redact_result_for_entry(&self, index: usize, result: &mut RuleResult) {
+        let entry = &self.entries[index];
+        if Self::has_sensitive_manifest_scope(entry.rule.as_ref()) {
+            result.redact_manifest_scope();
+        }
+        if entry
+            .spec
+            .as_deref()
+            .is_some_and(|spec| spec.field_is_sensitive("policy_url"))
+        {
+            result.redact_policy_url();
+        }
+        if entry
+            .spec
+            .as_deref()
+            .is_some_and(crate::RuleSpec::has_sensitive_evidence)
+        {
+            result.redact_sensitive();
+        }
+        result.sanitize_sensitive_metadata();
     }
 
     fn record_sensitive_result_paths(
@@ -3513,11 +3638,8 @@ impl Engine {
         if !any_wants {
             return None;
         }
-        if let Some(time) = self.analysis_time {
-            return Some(crate::AnalysisTimeResolution::available(
-                time,
-                crate::AnalysisTimeSource::Explicit,
-            ));
+        if let Some(resolution) = self.analysis_time {
+            return Some(resolution);
         }
         let mut cache = self.analysis_time_cache.lock();
         if let Some(cached) = cache.as_ref() {
@@ -7745,7 +7867,11 @@ mod tests {
     #[test]
     fn rule_producer_cannot_emit_engine_owned_trace_stages() {
         for class in [TraceStageClass::Gate, TraceStageClass::Outcome] {
-            let trace = TraceSession::new(crate::TraceMeta::ASSERTION);
+            let trace = TraceSession::with_options(
+                crate::TraceMeta::ASSERTION,
+                TraceOptions::counts_only(),
+                false,
+            );
             let (name, reason) = match class {
                 TraceStageClass::Gate => ("level", TraceReason::LevelEnabled),
                 TraceStageClass::Outcome => ("outcome", TraceReason::OutcomeSatisfied),

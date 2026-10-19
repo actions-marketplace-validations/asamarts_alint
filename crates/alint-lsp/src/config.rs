@@ -237,7 +237,8 @@ fn build_session_for_config(
         // session construction, not only if a later full run happens to select
         // a parent entry and builds them lazily.
         rule.validate_nested(&registry)
-            .map_err(|e| format!("building rule {:?}: {e}", spec.id))?;
+            .map_err(|error| spec.redact_configuration_error(error))
+            .map_err(|error| format!("building rule {:?}: {error}", spec.id))?;
         // Apply the top-level `allow_out_of_root:` policy (top-level
         // config only; never via `extends:`). No-op for kinds that
         // don't honor the flag.
@@ -247,8 +248,13 @@ fn build_session_for_config(
             .with_spec(std::sync::Arc::new(spec.clone()))
             .with_allow_out_of_root(allow_out_of_root);
         if let Some(when_src) = &spec.when {
-            let expr = alint_core::when::parse(when_src)
-                .map_err(|e| format!("rule {:?}: parsing `when`: {e}", spec.id))?;
+            let expr = alint_core::when::parse(when_src).map_err(|error| {
+                format!(
+                    "rule {:?}: parsing `when`: {}",
+                    spec.id,
+                    spec.redact_configuration_message(error)
+                )
+            })?;
             entry = entry.with_when(expr);
         }
         kinds.insert(spec.id.clone(), spec.kind.clone());

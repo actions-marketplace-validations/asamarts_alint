@@ -1042,10 +1042,11 @@ mod registry_tests {
             );
             if meta.trace.emits_preview_rows {
                 assert!(
-                    meta.trace
-                        .allowed_stages
-                        .contains(&TraceStageClass::Extraction),
-                    "`{kind}` advertises preview rows without extraction"
+                    meta.trace.allowed_stages.iter().any(|stage| matches!(
+                        stage,
+                        TraceStageClass::Extraction | TraceStageClass::Nested
+                    )),
+                    "`{kind}` advertises preview rows without an evidence stage"
                 );
             }
             if !meta.selectors.is_empty() {

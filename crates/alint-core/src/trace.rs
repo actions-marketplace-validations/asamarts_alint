@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, BinaryHeap};
 use std::path::{Component, Path, PathBuf};
 
 use crate::{Error, Result, RuleResult};
+use schemars::JsonSchema;
 use serde::{Serialize, Serializer};
 
 #[cfg(test)]
@@ -17,7 +18,7 @@ thread_local! {
 }
 
 /// A trace stage class. Common gates and the terminal outcome are engine-owned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceStageClass {
     Gate,
@@ -30,7 +31,7 @@ pub enum TraceStageClass {
 }
 
 /// The status of one trace stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceStatus {
     Satisfied,
@@ -89,7 +90,7 @@ impl TraceStatus {
     }
 }
 /// Stable machine-readable reason for a trace stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceReason {
     LevelEnabled,
@@ -178,7 +179,8 @@ impl TraceReason {
 }
 
 /// Checked aggregate counters carried by a stage.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TraceCounts {
     pub considered: u64,
     pub matched: u64,
@@ -213,9 +215,40 @@ pub struct TraceExtractionObservation {
     pub cardinality_checks: u64,
     pub cardinality_mismatches: u64,
 }
+/// Selected-rule trace controls. Counts-only tracing is the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TraceOptions {
+    preview_limit: Option<usize>,
+}
+
+impl TraceOptions {
+    #[must_use]
+    pub const fn counts_only() -> Self {
+        Self {
+            preview_limit: None,
+        }
+    }
+
+    pub fn with_preview(limit: usize) -> Result<Self> {
+        if !(1..=100).contains(&limit) {
+            return Err(Error::Other(format!(
+                "trace preview limit {limit} is outside 1..=100"
+            )));
+        }
+        Ok(Self {
+            preview_limit: Some(limit),
+        })
+    }
+
+    #[must_use]
+    pub const fn preview_limit(self) -> Option<usize> {
+        self.preview_limit
+    }
+}
 
 /// Half-open, one-based source coordinates retained by a preview row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TraceSourceRange {
     start_line: usize,
     start_column: usize,
@@ -263,8 +296,8 @@ impl TraceSourceRange {
     }
 }
 
-/// Provenance of one extracted value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+/// Provenance of one retained trace-evidence value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceProvenance {
     Literal,
@@ -293,7 +326,7 @@ pub enum TracePathOrigin {
 }
 
 /// Stable type classification for a preview value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceValueType {
     String,
@@ -306,10 +339,12 @@ pub enum TraceValueType {
     Unknown,
 }
 
-/// One bounded extraction-preview row.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// One bounded trace-evidence row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TracePreviewRow {
     #[serde(serialize_with = "serialize_path")]
+    #[schemars(with = "String")]
     path: PathBuf,
     range: Option<TraceSourceRange>,
     pointer: Option<String>,
@@ -431,8 +466,9 @@ impl PartialOrd for TracePreviewRow {
     }
 }
 
-/// Exact preview accounting plus the lexicographically first retained rows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Exact trace-evidence accounting plus the lexicographically first retained rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TracePreview {
     total: u64,
     shown: u64,
@@ -468,7 +504,7 @@ impl TracePreview {
     }
 }
 
-/// Bounded deterministic row collector. Memory is `O(limit)`.
+/// Bounded deterministic evidence collector. Memory is `O(limit)`.
 #[derive(Debug)]
 pub struct TracePreviewCollector {
     limit: usize,
@@ -502,11 +538,35 @@ impl TracePreviewCollector {
         if row.value_truncated {
             TraceCounts::checked_increment(&mut self.value_truncated, "preview.value_truncated")?;
         }
+        self.push_retained(row);
+        Ok(())
+    }
+
+    fn push_retained(&mut self, row: TracePreviewRow) {
         if self.rows.len() < self.limit {
             self.rows.push(row);
         } else if self.rows.peek().is_some_and(|largest| row < *largest) {
             let _ = self.rows.pop();
             self.rows.push(row);
+        }
+    }
+
+    /// Merge one bounded worker-local preview without losing exact counters.
+    pub fn absorb(&mut self, preview: TracePreview) -> Result<()> {
+        self.total = self
+            .total
+            .checked_add(preview.total)
+            .ok_or_else(|| Error::internal("trace counter `preview.total` overflowed"))?;
+        self.redacted = self
+            .redacted
+            .checked_add(preview.redacted)
+            .ok_or_else(|| Error::internal("trace counter `preview.redacted` overflowed"))?;
+        self.value_truncated = self
+            .value_truncated
+            .checked_add(preview.value_truncated)
+            .ok_or_else(|| Error::internal("trace counter `preview.value_truncated` overflowed"))?;
+        for row in preview.rows {
+            self.push_retained(row);
         }
         Ok(())
     }
@@ -527,7 +587,8 @@ impl TracePreviewCollector {
 }
 
 /// One typed trace stage.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct TraceStage {
     pub ordinal: u32,
     pub class: TraceStageClass,
@@ -589,9 +650,14 @@ impl TraceStage {
                 self.status, self.reason
             )));
         }
-        if self.preview.is_some() && self.class != TraceStageClass::Extraction {
+        if self.preview.is_some()
+            && !matches!(
+                self.class,
+                TraceStageClass::Extraction | TraceStageClass::Nested
+            )
+        {
             return Err(Error::internal(format!(
-                "trace stage `{:?}` cannot carry extraction preview rows",
+                "trace stage `{:?}` cannot carry preview rows",
                 self.class
             )));
         }
@@ -607,6 +673,16 @@ pub trait TraceSink: Sync + std::fmt::Debug {
     fn record_kind(&self, stage: TraceStage);
 
     fn record_extraction(&self, observation: TraceExtractionObservation);
+
+    fn preview_limit(&self) -> Option<usize>;
+
+    fn preview_enabled(&self) -> bool {
+        self.preview_limit().is_some()
+    }
+
+    fn evidence_sensitivity(&self, producer_sensitive: bool) -> TraceSensitivity;
+
+    fn record_preview(&self, row: Result<TracePreviewRow>);
 }
 
 /// Static trace inventory attached to every canonical rule kind.
@@ -657,7 +733,7 @@ impl TraceMeta {
     pub const NESTED: Self = Self {
         allowed_stages: Cow::Borrowed(NESTED_STAGES),
         required_stages: Cow::Borrowed(NESTED_STAGES),
-        emits_preview_rows: false,
+        emits_preview_rows: true,
         nested_evaluation: true,
     };
 
@@ -694,9 +770,12 @@ impl TraceMeta {
                 "rule kind `{kind}` must require the policy assertion trace stage"
             )));
         }
-        if self.emits_preview_rows && !allowed.contains(&TraceStageClass::Extraction) {
+        if self.emits_preview_rows
+            && !allowed.contains(&TraceStageClass::Extraction)
+            && !allowed.contains(&TraceStageClass::Nested)
+        {
             return Err(Error::internal(format!(
-                "rule kind `{kind}` can emit preview rows without declaring extraction"
+                "rule kind `{kind}` can emit preview rows without declaring an evidence stage"
             )));
         }
         if self.nested_evaluation != required.contains(&TraceStageClass::Nested) {
@@ -716,6 +795,361 @@ pub struct RuleTrace {
     pub stages: Vec<TraceStage>,
     pub outcome: TraceStatus,
     pub result: Option<RuleResult>,
+}
+/// Execution controls recorded in the experimental trace envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceExecution {
+    pub changed: bool,
+    pub base: Option<String>,
+    pub preview: bool,
+    pub preview_limit: usize,
+}
+
+/// Half-open source coordinates in a trace result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceResultRange {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub byte_end: Option<usize>,
+    pub start_line: usize,
+    pub start_column: usize,
+    pub end_line: usize,
+    pub end_column: usize,
+}
+
+impl From<&crate::SourceRange> for TraceResultRange {
+    fn from(range: &crate::SourceRange) -> Self {
+        Self {
+            byte_start: range.byte_start(),
+            byte_end: range.byte_end(),
+            start_line: range.start_line(),
+            start_column: range.start_column(),
+            end_line: range.end_line(),
+            end_column: range.end_column(),
+        }
+    }
+}
+
+/// One secondary location in a trace finding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceRelatedLocation {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<TraceResultRange>,
+    pub label: String,
+}
+
+/// Complete public projection of one violation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceViolation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<TraceResultRange>,
+    pub related_locations: Vec<TraceRelatedLocation>,
+    pub related_locations_omitted: usize,
+    pub sensitive: bool,
+    pub fixable: bool,
+}
+
+impl TraceViolation {
+    fn from_finding(finding: &crate::Violation, repository_root: &Path) -> Self {
+        Self {
+            path: finding.path.as_deref().map(trace_result_path),
+            message: trace_result_message(&finding.message, repository_root),
+            line: finding.line,
+            column: finding.column,
+            range: finding.range.as_ref().map(TraceResultRange::from),
+            related_locations: finding
+                .related_locations
+                .iter()
+                .map(|location| TraceRelatedLocation {
+                    path: trace_result_path(&location.path),
+                    range: location.range.as_ref().map(TraceResultRange::from),
+                    label: trace_result_message(&location.label, repository_root),
+                })
+                .collect(),
+            related_locations_omitted: finding.related_locations_omitted,
+            sensitive: finding.is_sensitive(),
+            fixable: finding.is_fixable,
+        }
+    }
+}
+
+/// Complete public projection of one non-violation note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceNote {
+    #[serde(flatten)]
+    pub finding: TraceViolation,
+    pub kind: String,
+}
+
+/// Complete public projection of one typed analysis failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceAnalysisFailure {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    pub sensitive: bool,
+}
+
+/// Selected rule's complete public result in the trace envelope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceResult {
+    pub status: TraceStatus,
+    pub violations: Vec<TraceViolation>,
+    pub analysis_failures: Vec<TraceAnalysisFailure>,
+    pub notes: Vec<TraceNote>,
+}
+
+fn trace_rule_payload_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "id": { "type": "string" },
+            "rule_kind": { "type": "string" },
+            "categories": { "type": "array", "items": { "type": "string" } },
+            "summary": { "type": "string" },
+            "capabilities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "capability": { "type": "object" },
+                        "condition": { "type": "object" }
+                    },
+                    "required": ["capability", "condition"]
+                }
+            },
+            "selectors": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": { "type": "string" },
+                        "type": { "type": "string" },
+                        "rerootable": { "type": "boolean" }
+                    },
+                    "required": ["name", "type", "rerootable"]
+                }
+            },
+            "fix_ops": { "type": "array", "items": { "type": "string" } },
+            "docs": { "type": ["string", "null"] },
+            "level": { "enum": ["off", "info", "warning", "error"] },
+            "paths": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "include": { "type": "array", "items": { "type": "string" } },
+                            "exclude": { "type": "array", "items": { "type": "string" } }
+                        },
+                        "required": ["include", "exclude"]
+                    },
+                    { "type": "null" }
+                ]
+            },
+            "scope_filter": { "type": ["object", "string", "null"] },
+            "options": { "type": ["object", "null"] },
+            "message": { "type": ["string", "null"] },
+            "policy_url": { "type": ["string", "null"] },
+            "when": { "type": ["string", "null"] },
+            "expect_matches": { "type": "boolean" },
+            "conditional": { "type": "boolean" },
+            "fixable": { "type": "boolean" },
+            "fix": { "type": ["string", "null"] },
+            "analysis_time": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "date": { "type": ["string", "null"] },
+                    "source": { "type": "string" },
+                    "error": { "type": "string" }
+                },
+                "required": ["date", "source"]
+            }
+        },
+        "required": [
+            "id", "rule_kind", "categories", "summary", "capabilities",
+            "selectors", "fix_ops", "docs", "level", "paths", "scope_filter",
+            "options", "message", "policy_url", "when", "expect_matches",
+            "conditional", "fixable", "fix"
+        ]
+    })
+}
+
+/// Versioned, explicitly experimental JSON document for `explain --trace`.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RuleTraceDocument {
+    pub schema_version: u32,
+    pub kind: String,
+    pub stability: String,
+    #[schemars(schema_with = "trace_rule_payload_schema")]
+    pub rule: serde_json::Value,
+    pub execution: TraceExecution,
+    pub stages: Vec<TraceStage>,
+    pub result: TraceResult,
+}
+
+impl RuleTrace {
+    #[must_use]
+    pub fn into_document(
+        self,
+        rule: serde_json::Value,
+        execution: TraceExecution,
+        repository_root: &Path,
+    ) -> RuleTraceDocument {
+        let result = self.result.as_ref();
+        RuleTraceDocument {
+            schema_version: 1,
+            kind: "rule-trace".to_string(),
+            stability: "experimental".to_string(),
+            rule,
+            execution,
+            stages: self.stages,
+            result: TraceResult {
+                status: self.outcome,
+                violations: result
+                    .into_iter()
+                    .flat_map(|result| &result.violations)
+                    .map(|finding| TraceViolation::from_finding(finding, repository_root))
+                    .collect(),
+                analysis_failures: result
+                    .into_iter()
+                    .flat_map(|result| &result.analysis_failures)
+                    .map(|failure| TraceAnalysisFailure {
+                        kind: failure.kind.as_str().to_string(),
+                        path: failure.path.as_deref().map(trace_result_path),
+                        message: trace_result_message(&failure.message, repository_root),
+                        line: failure.line,
+                        column: failure.column,
+                        sensitive: failure.is_sensitive(),
+                    })
+                    .collect(),
+                notes: result
+                    .into_iter()
+                    .flat_map(|result| &result.notes)
+                    .map(|note| TraceNote {
+                        finding: TraceViolation::from_finding(note, repository_root),
+                        kind: note
+                            .note_kind()
+                            .unwrap_or(crate::NoteKind::Informational)
+                            .as_str()
+                            .to_string(),
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
+/// Canonical generated JSON Schema for the experimental trace document.
+#[must_use]
+pub fn rule_trace_schema() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(RuleTraceDocument))
+        .expect("trace schema serializes");
+    let object = schema
+        .as_object_mut()
+        .expect("derived trace schema is an object");
+    object.insert(
+        "$id".to_string(),
+        "https://raw.githubusercontent.com/asamarts/alint/main/schemas/experimental/rule-trace.json"
+            .into(),
+    );
+    object.insert("title".to_string(), "alint experimental rule trace".into());
+    if let Some(properties) = object
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (field, value) in [
+            ("schema_version", serde_json::json!(1)),
+            ("kind", serde_json::json!("rule-trace")),
+            ("stability", serde_json::json!("experimental")),
+        ] {
+            if let Some(property) = properties
+                .get_mut(field)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                property.insert("const".to_string(), value);
+            }
+        }
+    }
+    schema
+}
+
+fn trace_result_message(message: &str, repository_root: &Path) -> String {
+    let mut replacements = Vec::new();
+    for (path, marker) in [
+        (std::path::absolute(repository_root).ok(), "<repository>"),
+        (std::fs::canonicalize(repository_root).ok(), "<repository>"),
+        (Some(std::env::temp_dir()), "<temporary-path>"),
+        (
+            std::fs::canonicalize(std::env::temp_dir()).ok(),
+            "<temporary-path>",
+        ),
+    ] {
+        let Some(path) = path else { continue };
+        let native = path.to_string_lossy().into_owned();
+        if native.len() > 1 {
+            replacements.push((native.clone(), marker));
+            let slash = native.replace('\\', "/");
+            if slash != native {
+                replacements.push((slash, marker));
+            }
+        }
+    }
+    replacements.sort_unstable_by_key(|(path, _)| std::cmp::Reverse(path.len()));
+    replacements.dedup_by(|left, right| left.0 == right.0);
+    let mut sanitized = message.to_string();
+    for (path, marker) in replacements {
+        sanitized = sanitized.replace(&path, marker);
+    }
+    sanitized
+}
+
+fn trace_result_path(path: &Path) -> String {
+    let rendered = path.to_string_lossy().replace('\\', "/");
+    let windows_absolute = rendered.as_bytes().get(1) == Some(&b':')
+        && rendered
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic);
+    if rendered.starts_with('/')
+        || path.is_absolute()
+        || windows_absolute
+        || rendered.split('/').any(|component| component == "..")
+    {
+        "<outside-repository>".to_string()
+    } else {
+        rendered
+            .split('/')
+            .filter(|component| !component.is_empty() && *component != ".")
+            .collect::<Vec<_>>()
+            .join("/")
+    }
 }
 
 /// Trace-only stage recorder. Ordinary checks never construct one.
@@ -962,6 +1396,47 @@ mod tests {
     }
 
     #[test]
+    fn result_paths_never_serialize_absolute_or_parent_locations() {
+        assert_eq!(
+            trace_result_path(Path::new("/tmp/secret-canary")),
+            "<outside-repository>"
+        );
+        assert_eq!(
+            trace_result_path(Path::new(r"C:\checkout\secret-canary")),
+            "<outside-repository>"
+        );
+        assert_eq!(
+            trace_result_path(Path::new("src/../secret-canary")),
+            "<outside-repository>"
+        );
+        assert_eq!(trace_result_path(Path::new("./src/lib.rs")), "src/lib.rs");
+    }
+
+    #[test]
+    fn result_messages_hide_checkout_and_temporary_paths() {
+        let checkout = tempfile::tempdir().unwrap();
+        let temporary = std::env::temp_dir().join("alint-trace-canary");
+        let message = format!(
+            "failed under {} while staging {}",
+            checkout.path().display(),
+            temporary.display()
+        );
+        let sanitized = trace_result_message(&message, checkout.path());
+        assert!(!sanitized.contains(&checkout.path().display().to_string()));
+        assert!(!sanitized.contains(&temporary.display().to_string()));
+        assert!(sanitized.contains("<repository>"), "{sanitized}");
+        assert!(sanitized.contains("<temporary-path>"), "{sanitized}");
+    }
+
+    #[test]
+    fn checked_trace_counters_fail_on_overflow() {
+        let mut counter = u64::MAX;
+        let error = TraceCounts::checked_increment(&mut counter, "test").unwrap_err();
+        assert!(error.is_internal());
+        assert_eq!(counter, u64::MAX);
+    }
+
+    #[test]
     fn preview_retains_lexicographically_first_rows_with_exact_counts() {
         let mut collector = TracePreviewCollector::new(2).unwrap();
         collector.push(row("z", 0)).unwrap();
@@ -998,6 +1473,28 @@ mod tests {
             }
             assert_eq!(collector.finish().rows()[0].display_value(), "a");
         }
+    }
+
+    #[test]
+    fn preview_merge_preserves_global_order_and_exact_accounting() {
+        let mut left = TracePreviewCollector::new(2).unwrap();
+        left.push(row("z", 0)).unwrap();
+        left.push(row("b", 0)).unwrap();
+        let mut right = TracePreviewCollector::new(2).unwrap();
+        right.push(row("a", 0)).unwrap();
+        right.push(row("m", 0)).unwrap();
+
+        let mut merged = TracePreviewCollector::new(2).unwrap();
+        merged.absorb(left.finish()).unwrap();
+        merged.absorb(right.finish()).unwrap();
+        let preview = merged.finish();
+
+        assert_eq!(
+            (preview.total(), preview.shown(), preview.omitted()),
+            (4, 2, 2)
+        );
+        assert_eq!(preview.rows()[0].path(), Path::new("a"));
+        assert_eq!(preview.rows()[1].path(), Path::new("b"));
     }
 
     #[test]
@@ -1072,15 +1569,22 @@ mod tests {
         assert!(TracePreviewCollector::new(0).is_err());
         assert!(TracePreviewCollector::new(101).is_err());
 
-        let mut collector = TracePreviewCollector::new(1).unwrap();
-        collector.push(row("z", 0)).unwrap();
-        collector.push(row("a", 0)).unwrap();
-        let preview = collector.finish();
-        assert_eq!(
-            (preview.total(), preview.shown(), preview.omitted()),
-            (2, 1, 1)
-        );
-        assert_eq!(preview.rows()[0].path(), Path::new("a"));
+        for limit in [1, 20, 100] {
+            let mut collector = TracePreviewCollector::new(limit).unwrap();
+            for index in (0..101).rev() {
+                collector.push(row(&format!("{index:03}"), 0)).unwrap();
+            }
+            let preview = collector.finish();
+            assert_eq!(
+                (preview.total(), preview.shown(), preview.omitted()),
+                (101, limit as u64, 101 - limit as u64)
+            );
+            assert_eq!(preview.rows()[0].path(), Path::new("000"));
+            assert_eq!(
+                preview.rows().last().unwrap().path(),
+                Path::new(&format!("{:03}", limit - 1))
+            );
+        }
     }
 
     #[test]

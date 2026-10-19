@@ -232,6 +232,45 @@ fn explain_json_exposes_analysis_date_and_source() {
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["analysis_time"]["date"], "2025-03-04");
     assert_eq!(value["analysis_time"]["source"], "explicit");
+    git(fixture.path(), &["init", "-q"], None);
+    git(fixture.path(), &["add", "."], None);
+    git(
+        fixture.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        Some("2024-01-01T00:00:00Z"),
+    );
+
+    let trace = run(
+        fixture.path(),
+        &[
+            "--as-of",
+            "2025-03-04",
+            "--format",
+            "json",
+            "explain",
+            "stale",
+            "--trace",
+        ],
+        None,
+    );
+    assert!(trace.status.success(), "{}", stderr(&trace));
+    let trace: serde_json::Value = serde_json::from_slice(&trace.stdout).unwrap();
+    assert_eq!(trace["rule"]["analysis_time"]["date"], "2025-03-04");
+    assert_eq!(trace["rule"]["analysis_time"]["source"], "explicit");
+    assert!(
+        trace["stages"].as_array().unwrap().iter().any(|stage| {
+            stage["name"] == "analysis_time" && stage["reason"] == "analysis_time_available"
+        }),
+        "{trace:#}"
+    );
 }
 
 #[test]

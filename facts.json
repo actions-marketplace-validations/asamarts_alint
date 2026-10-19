@@ -876,15 +876,13 @@
       "trace": {
         "allowed_stages": [
           "selection",
-          "extraction",
-          "cardinality",
           "assertion"
         ],
         "required_stages": [
           "selection",
           "assertion"
         ],
-        "emits_preview_rows": true,
+        "emits_preview_rows": false,
         "nested_evaluation": false
       },
       "nested_rules": false
@@ -1340,7 +1338,7 @@
           "nested",
           "assertion"
         ],
-        "emits_preview_rows": false,
+        "emits_preview_rows": true,
         "nested_evaluation": true
       },
       "nested_rules": true
@@ -1861,15 +1859,13 @@
       "trace": {
         "allowed_stages": [
           "selection",
-          "extraction",
-          "cardinality",
           "assertion"
         ],
         "required_stages": [
           "selection",
           "assertion"
         ],
-        "emits_preview_rows": true,
+        "emits_preview_rows": false,
         "nested_evaluation": false
       },
       "nested_rules": false
@@ -2558,7 +2554,7 @@
           "nested",
           "assertion"
         ],
-        "emits_preview_rows": false,
+        "emits_preview_rows": true,
         "nested_evaluation": true
       },
       "nested_rules": true
@@ -2603,7 +2599,7 @@
           "nested",
           "assertion"
         ],
-        "emits_preview_rows": false,
+        "emits_preview_rows": true,
         "nested_evaluation": true
       },
       "nested_rules": true
@@ -3847,15 +3843,13 @@
       "trace": {
         "allowed_stages": [
           "selection",
-          "extraction",
-          "cardinality",
           "assertion"
         ],
         "required_stages": [
           "selection",
           "assertion"
         ],
-        "emits_preview_rows": true,
+        "emits_preview_rows": false,
         "nested_evaluation": false
       },
       "nested_rules": false
@@ -5397,15 +5391,13 @@
       "trace": {
         "allowed_stages": [
           "selection",
-          "extraction",
-          "cardinality",
           "assertion"
         ],
         "required_stages": [
           "selection",
           "assertion"
         ],
-        "emits_preview_rows": true,
+        "emits_preview_rows": false,
         "nested_evaluation": false
       },
       "nested_rules": false

@@ -1,6 +1,6 @@
-# Design doc: rule trace and extraction preview
+# Design doc: rule trace and evidence preview
 
-Status: Accepted design (2026-10-18); P5 engine model/recorder implemented, P6 CLI projection pending.
+Status: Implemented (2026-10-18); P5 engine model/recorder and P6 CLI projection complete.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 questions Q7/Q14 and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md).
 Demand evidence:
@@ -49,9 +49,9 @@ plain and trace modes; that security correction is the only permitted plain-expl
 
 With `--trace`, the command walks the configured repository and evaluates only the selected
 effective rule. The help text states that this has the same read/process behavior as checking that
-rule; in particular a trusted local `command` rule can execute because trace follows the production
-check path. No fixer is invoked and no fix is applied. Remote composition retains the production
-spawn and trust gates.
+rule; in particular a trusted local `command` rule and configured custom facts can execute because
+trace follows the production check path. No fixer is invoked and no fix is applied. Remote
+composition retains the production spawn and trust gates.
 
 Trace is diagnostic rather than enforcement. Exit 0 means the selected rule reached a represented
 terminal outcome, including satisfied, violated, skipped, or an ordinary typed analysis failure.
@@ -111,10 +111,10 @@ failure with the kind and stage, not an apparently complete sparse trace. A term
 skip exempts kind-owned stages because evaluation never reached them. Ordinary checks do not run
 this audit.
 
-### 2.4 Extraction preview
+### 2.4 Evidence preview
 
-`--trace` reports counts and provenance categories without rendering extracted values. Adding
-`--preview` permits bounded rows such as:
+`--trace` reports aggregate counts without retaining per-value or per-child details. Adding
+`--preview` permits bounded structured-extraction and nested-child rows such as:
 
 ```text
 extract version declarations: 9 inputs, 9 values

@@ -38,6 +38,11 @@ pub(crate) const PROVENANCE_MARKER: &str = "__alint_internal_provenance";
 /// `vars:` ([`merge_mapping_fields`]), and removed by [`RawConfig::finalize`]
 /// before the effective rule is deserialized.
 pub(crate) const ENV_VARS_MARKER: &str = "__alint_internal_env_vars";
+/// Internal sparse set of effective top-level rule fields whose winning value
+/// was derived from the environment, directly or through a template variable.
+/// The loader carries it through field merges and template expansion, then
+/// transfers it to [`alint_core::RuleSpec`] before typed deserialization.
+pub(crate) const SENSITIVE_FIELDS_MARKER: &str = "__alint_internal_sensitive_fields";
 
 /// Internal mapping from each effective top-level rule field to the template,
 /// `extends:` source, or nested config that supplied it. Unlike
@@ -202,6 +207,142 @@ pub(crate) fn merge_field_sources(existing: &mut Mapping, incoming: &Mapping) {
         existing.insert(FIELD_SOURCES_MARKER.into(), merged.into());
     }
 }
+fn sensitive_fields(mapping: &Mapping) -> Option<&Mapping> {
+    mapping
+        .get(SENSITIVE_FIELDS_MARKER)
+        .and_then(serde_yaml_ng::Value::as_mapping)
+}
+
+fn add_sensitive_field(mapping: &mut Mapping, field: &serde_yaml_ng::Value) {
+    let mut fields = mapping
+        .remove(SENSITIVE_FIELDS_MARKER)
+        .and_then(|value| value.as_mapping().cloned())
+        .unwrap_or_default();
+    fields.insert(field.clone(), true.into());
+    mapping.insert(SENSITIVE_FIELDS_MARKER.into(), fields.into());
+}
+
+/// Carry sparse sensitivity with the same last-wins semantics as rule fields.
+pub(crate) fn merge_sensitive_fields(existing: &mut Mapping, incoming: &Mapping) {
+    let incoming_sensitive = sensitive_fields(incoming);
+    let mut merged = existing
+        .remove(SENSITIVE_FIELDS_MARKER)
+        .and_then(|value| value.as_mapping().cloned())
+        .unwrap_or_default();
+    for key in incoming.keys().filter(|key| !is_internal_field(key)) {
+        if incoming_sensitive.is_some_and(|fields| fields.contains_key(key)) {
+            merged.insert(key.clone(), true.into());
+        } else {
+            merged.remove(key);
+        }
+    }
+    if !merged.is_empty() {
+        existing.insert(SENSITIVE_FIELDS_MARKER.into(), merged.into());
+    }
+}
+
+/// Mark template fields which consume an environment-derived instance variable.
+pub(crate) fn mark_template_sensitive_fields(
+    mapping: &mut Mapping,
+    template: &Mapping,
+    env_vars: Option<&Mapping>,
+) {
+    let Some(env_vars) = env_vars else {
+        return;
+    };
+    for (field, value) in template {
+        if is_internal_field(field) {
+            continue;
+        }
+        let used = std::cell::Cell::new(false);
+        visit_strings(value, &mut |text| {
+            alint_core::template::render_message(text, |namespace, name| {
+                if namespace == "vars" && env_vars.contains_key(name) {
+                    used.set(true);
+                }
+                None
+            });
+        });
+        if used.get() {
+            add_sensitive_field(mapping, field);
+        }
+    }
+}
+
+/// Mark conditions whose truth value depends on the host environment, directly
+/// or through an environment-derived top-level variable.
+pub(crate) fn mark_sensitive_conditions(
+    mapping: &mut Mapping,
+    env_vars: &std::collections::HashMap<String, String>,
+) {
+    for top_level in ["when", "require"] {
+        let sensitive = match top_level {
+            "when" => mapping
+                .get("when")
+                .and_then(serde_yaml_ng::Value::as_str)
+                .is_some_and(|source| when_reads_sensitive_input(source, env_vars)),
+            "require" => mapping
+                .get("require")
+                .is_some_and(|value| nested_when_reads_sensitive_input(value, env_vars)),
+            _ => false,
+        };
+        if sensitive {
+            add_sensitive_field(mapping, &top_level.into());
+        }
+    }
+}
+
+fn when_reads_sensitive_input(
+    source: &str,
+    env_vars: &std::collections::HashMap<String, String>,
+) -> bool {
+    alint_core::when::parse(source).is_ok_and(|expression| {
+        expression.first_env_ref().is_some()
+            || expression
+                .var_refs()
+                .iter()
+                .any(|name| env_vars.contains_key(*name))
+    })
+}
+
+fn nested_when_reads_sensitive_input(
+    value: &serde_yaml_ng::Value,
+    env_vars: &std::collections::HashMap<String, String>,
+) -> bool {
+    let Some(sequence) = value.as_sequence() else {
+        return false;
+    };
+    sequence.iter().any(|nested| {
+        let Some(mapping) = nested.as_mapping() else {
+            return false;
+        };
+        ["when", "when_iter"].iter().any(|field| {
+            mapping
+                .get(*field)
+                .and_then(serde_yaml_ng::Value::as_str)
+                .is_some_and(|source| when_reads_sensitive_input(source, env_vars))
+        }) || mapping
+            .get("require")
+            .is_some_and(|child| nested_when_reads_sensitive_input(child, env_vars))
+    })
+}
+
+/// Consume the private sparse marker before typed rule deserialization.
+pub(crate) fn take_sensitive_fields(mapping: &mut Mapping) -> std::collections::BTreeSet<String> {
+    mapping
+        .remove(SENSITIVE_FIELDS_MARKER)
+        .and_then(|value| value.as_mapping().cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|(field, marked)| {
+            marked
+                .as_bool()
+                .unwrap_or(false)
+                .then(|| field.as_str().map(str::to_string))
+                .flatten()
+        })
+        .collect()
+}
 
 /// Resolve the source of a configured field path such as
 /// `scope_filter.changed_since` from its top-level mapping key.
@@ -210,6 +351,23 @@ pub(crate) fn configured_field_source<'a>(mapping: &'a Mapping, field: &str) -> 
     field_sources(mapping)
         .and_then(|sources| sources.get(top_level))
         .and_then(serde_yaml_ng::Value::as_str)
+}
+
+fn visit_strings(value: &serde_yaml_ng::Value, visit: &mut impl FnMut(&str)) {
+    match value {
+        serde_yaml_ng::Value::String(text) => visit(text),
+        serde_yaml_ng::Value::Sequence(values) => {
+            for value in values {
+                visit_strings(value, visit);
+            }
+        }
+        serde_yaml_ng::Value::Mapping(mapping) => {
+            for value in mapping.values() {
+                visit_strings(value, visit);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// One `vars.<NAME>` read in a `when` expression of an untrusted remote.
@@ -829,6 +987,7 @@ pub(crate) fn merge_mapping_fields(existing: &mut Mapping, incoming: Mapping) {
     let untrusted_fix_source =
         has_untrusted_fix_source(existing) || has_untrusted_fix_source(&incoming);
     merge_field_sources(existing, &incoming);
+    merge_sensitive_fields(existing, &incoming);
     union_provenance(existing, &incoming);
     // The env-derived mark describes the `vars:` it was recorded with; a later
     // `vars:` replaces the map wholesale, so it replaces (or drops) the mark too.
@@ -838,7 +997,12 @@ pub(crate) fn merge_mapping_fields(existing: &mut Mapping, incoming: Mapping) {
     for (key, value) in incoming {
         if !matches!(
             key.as_str(),
-            Some(UNTRUSTED_FIX_SOURCE_MARKER | PROVENANCE_MARKER | FIELD_SOURCES_MARKER)
+            Some(
+                UNTRUSTED_FIX_SOURCE_MARKER
+                    | PROVENANCE_MARKER
+                    | FIELD_SOURCES_MARKER
+                    | SENSITIVE_FIELDS_MARKER
+            )
         ) {
             existing.insert(key, value);
         }

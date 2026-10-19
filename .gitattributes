@@ -26,6 +26,9 @@ crates/alint/tests/cli/*.toml text eol=lf
 schemas/v1/config.json text eol=lf
 schemas/v1/policy-test.json text eol=lf
 crates/alint-dsl/schemas/v1/config.json text eol=lf
+schemas/v1/policy-test-report.json text eol=lf
+schemas/experimental/rule-trace.json text eol=lf
+crates/alint/schemas/experimental/rule-trace.json text eol=lf
 
 # Generated contracts + crate dependency graph: `gen-facts --check`,
 # `gen-roadmap --check`, and `gen-arch --check` (and their xtask tests)

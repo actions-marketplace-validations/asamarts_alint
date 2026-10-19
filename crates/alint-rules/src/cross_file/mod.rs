@@ -981,7 +981,7 @@ pub static META: alint_core::KindMeta = alint_core::KindMeta {
         std::borrow::Cow::Borrowed("create_and_register"),
     ]),
     expect_matches: false,
-    trace: alint_core::TraceMeta::EXTRACTION,
+    trace: alint_core::TraceMeta::SELECTION,
     nested_rules: false,
 };
 

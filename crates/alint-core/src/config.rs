@@ -405,6 +405,12 @@ pub struct RuleSpec {
     /// report or baseline is exposed. Defaults to `false`.
     #[serde(default)]
     pub sensitive: bool,
+    /// Effective top-level fields whose value was derived from environment
+    /// interpolation. The DSL loader populates this sparse set after merge and
+    /// template expansion; it is never deserialized from user input.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub sensitive_fields: std::collections::BTreeSet<String>,
     /// Optional mechanical-fix strategy. Rules whose builders understand
     /// the chosen op attach a [`Fixer`](crate::Fixer) to the built rule;
     /// rules whose kind is incompatible with the op return a config error
@@ -1180,6 +1186,60 @@ impl RuleSpec {
         ))?)
     }
 
+    /// Record environment-derived effective fields after config composition.
+    #[doc(hidden)]
+    pub fn set_sensitive_fields(&mut self, fields: std::collections::BTreeSet<String>) {
+        self.sensitive_fields = fields;
+    }
+
+    /// Whether one effective top-level field must be hidden from public output.
+    #[must_use]
+    pub fn field_is_sensitive(&self, field: &str) -> bool {
+        self.sensitive || self.sensitive_fields.contains(field)
+    }
+
+    /// Whether dynamic evidence from this rule must use the sensitive-result policy.
+    #[must_use]
+    pub fn has_sensitive_evidence(&self) -> bool {
+        self.sensitive
+            || self
+                .sensitive_fields
+                .iter()
+                .any(|field| field != "policy_url")
+    }
+
+    /// Whether any configured field can carry protected source material.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn has_sensitive_configuration(&self) -> bool {
+        self.sensitive || !self.sensitive_fields.is_empty()
+    }
+
+    /// Fail closed when an error may quote environment-derived or explicitly
+    /// sensitive configuration. Structural rule identity remains visible.
+    #[doc(hidden)]
+    pub fn redact_configuration_error(&self, error: crate::Error) -> crate::Error {
+        if !self.has_sensitive_configuration() {
+            return error;
+        }
+        if error.is_internal() {
+            crate::Error::internal("<redacted>")
+        } else {
+            crate::Error::rule_config(&self.id, "<redacted>")
+        }
+    }
+
+    /// Remove potentially sensitive detail from an error type not owned by
+    /// `alint-core::Error`, such as a condition parser diagnostic.
+    #[doc(hidden)]
+    pub fn redact_configuration_message(&self, error: impl std::fmt::Display) -> String {
+        if self.has_sensitive_configuration() {
+            "<redacted>".to_string()
+        } else {
+            error.to_string()
+        }
+    }
+
     /// Reject any leftover option key on this spec — for rule kinds that take
     /// NO kind-specific options. Option-bearing kinds reject unknown fields via
     /// their `deserialize_options::<Options>()` (a `deny_unknown_fields`
@@ -1333,6 +1393,7 @@ impl NestedRuleSpec {
             when: self.when.clone(),
             expect_matches: self.expect_matches,
             sensitive: self.sensitive,
+            sensitive_fields: std::collections::BTreeSet::new(),
             fix: None,
             // `git_tracked_only` and `respect_gitignore` are both kind-specific
             // options now (ADR-0008), stripped from the nested `extra` via

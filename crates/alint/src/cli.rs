@@ -222,10 +222,33 @@ pub(crate) enum Command {
         #[arg(long)]
         category: Option<String>,
     },
-    /// Show a rule's definition.
+    /// Show a configured rule, optionally tracing one real selected-rule run.
     Explain {
         /// Rule id to describe.
         rule_id: String,
+        /// Walk the repository and evaluate only this effective rule. A traced
+        /// command rule and any configured custom facts may execute subprocesses,
+        /// matching `check`; unrelated command rules never run. Trace outcomes
+        /// are diagnostic and exit 0, including violations and skips.
+        #[arg(long)]
+        trace: bool,
+        /// Include bounded, redacted extraction evidence in the trace.
+        #[arg(long, requires = "trace")]
+        preview: bool,
+        /// Maximum retained preview rows (1..=100; default 20).
+        #[arg(
+            long,
+            value_name = "N",
+            requires = "preview",
+            value_parser = clap::value_parser!(u16).range(1..=100)
+        )]
+        preview_limit: Option<u16>,
+        /// Restrict the traced run to paths changed in Git.
+        #[arg(long, requires = "trace")]
+        changed: bool,
+        /// Base ref for the traced changed-path run. Implies `--changed`.
+        #[arg(long, value_name = "REF", requires = "trace")]
+        base: Option<String>,
     },
     /// Apply automatic fixes for violations whose rules declare one.
     Fix {

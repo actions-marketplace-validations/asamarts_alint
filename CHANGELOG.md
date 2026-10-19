@@ -38,6 +38,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository-relative path normalization, source-range validation, or non-UTF-8-safe serialization.
   Ordinary checks construct no trace recorder. `facts.json` format v6 and `alint rules show` expose
   each kind's trace inventory.
+- **`alint explain <rule-id> --trace` now diagnoses one effective rule end to end.** It walks the
+  configured repository, runs no unrelated rule, and renders typed pass, violation, skip, and
+  analysis-failure stages in human or explicitly experimental JSON. The production fact context is
+  preserved, so configured custom facts may execute subprocesses just as they do under `check`.
+  `--changed`/`--base` mirror check scope; opt-in `--preview` retains the deterministic first 1–100
+  structured-extraction or nested-child rows with exact omission/redaction/truncation accounting.
+  Environment-derived and explicitly sensitive option, message, policy-URL, condition, preview,
+  result, and configuration-error evidence is redacted before retention, including through
+  template expansion and config merges. The generated rule-trace JSON Schema is committed at
+  `schemas/experimental/rule-trace.json` and packaged with the CLI.
 
 ### Changed
 
@@ -52,6 +62,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   supported config and policy-test version lists from runtime constants.
 
 ### Fixed
+
+- **The published `alint-testkit` crate now includes the repository's Apache 2.0 license, MIT
+  license, and NOTICE files.** Release packaging no longer omits the attribution files required of
+  every published workspace crate.
 
 - **Policy-test discovery and diagnostics now remain safe around real fixture packages.** Recursive
   `alint test` discovery ignores YAML without a top-level `test_version`, so config chains,

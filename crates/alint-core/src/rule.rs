@@ -565,6 +565,14 @@ impl RuleResult {
         }
     }
 
+    /// Hide a configured policy URL whose winning value came from protected
+    /// configuration while preserving that documentation was configured.
+    pub(crate) fn redact_policy_url(&mut self) {
+        if self.policy_url.is_some() {
+            self.policy_url = Some(Arc::from("<redacted>"));
+        }
+    }
+
     /// Mark findings selected through a secret-bearing manifest scope. The
     /// selected path is the only manifest-derived evidence available at this
     /// boundary, so redact it from flattened messages while retaining fixed
@@ -678,6 +686,34 @@ impl Context<'_> {
         self.trace
             .expect("trace-specific evaluation requires a trace sink")
             .record_extraction(observation);
+    }
+    /// Configured evidence-row limit for the selected trace, if requested.
+    #[doc(hidden)]
+    pub fn trace_preview_limit(&self) -> Option<usize> {
+        self.trace.and_then(crate::TraceSink::preview_limit)
+    }
+
+    /// Whether the selected trace requested evidence rows.
+    #[doc(hidden)]
+    pub fn trace_preview_enabled(&self) -> bool {
+        self.trace_preview_limit().is_some()
+    }
+
+    /// Combine producer-local sensitivity with the effective rule's config
+    /// provenance. This is called before constructing a retained preview row.
+    #[doc(hidden)]
+    pub fn trace_evidence_sensitivity(&self, producer_sensitive: bool) -> crate::TraceSensitivity {
+        self.trace
+            .expect("trace-specific evaluation requires a trace sink")
+            .evidence_sensitivity(producer_sensitive)
+    }
+
+    /// Retain one already bounded/redacted preview candidate.
+    #[doc(hidden)]
+    pub fn record_trace_preview(&self, row: crate::Result<crate::TracePreviewRow>) {
+        self.trace
+            .expect("trace-specific evaluation requires a trace sink")
+            .record_preview(row);
     }
 
     /// Return the deterministic reference instant requested by this rule.

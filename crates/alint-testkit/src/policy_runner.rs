@@ -363,12 +363,17 @@ impl Runner {
                     return Ok(prepared_configuration_error(&error.to_string(), context));
                 }
             };
+            if let Err(error) = rule.validate_nested(&registry) {
+                let error = spec.redact_configuration_error(error);
+                return Ok(prepared_configuration_error(&error.to_string(), context));
+            }
             let mut entry = RuleEntry::new(rule).with_spec(Arc::new(spec.clone()));
             if let Some(source) = &spec.when {
                 let expression = match alint_core::when::parse(source) {
                     Ok(expression) => expression,
                     Err(error) => {
-                        return Ok(prepared_configuration_error(&error.to_string(), context));
+                        let message = spec.redact_configuration_message(error);
+                        return Ok(prepared_configuration_error(&message, context));
                     }
                 };
                 entry = entry.with_when(expression);

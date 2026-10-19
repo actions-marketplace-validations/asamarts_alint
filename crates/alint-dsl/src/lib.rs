@@ -37,16 +37,17 @@ mod nested;
 mod trust;
 
 pub(crate) use trust::{
-    ENV_VARS_MARKER, FIELD_SOURCES_MARKER, PROVENANCE_MARKER, Provenance, SourceClass,
-    UNTRUSTED_FIX_SOURCE_MARKER, UntrustedWhenVarRead, configured_field_source,
+    ENV_VARS_MARKER, FIELD_SOURCES_MARKER, PROVENANCE_MARKER, Provenance, SENSITIVE_FIELDS_MARKER,
+    SourceClass, UNTRUSTED_FIX_SOURCE_MARKER, UntrustedWhenVarRead, configured_field_source,
     demote_content_fixers_in, demote_content_fixers_in_rule, find_spawning_fix_op,
     find_spawning_kind, find_template_placeholder_in_guarded_field, has_untrusted_fix_source,
-    mark_field_sources_in, mark_provenance_in, mark_unattributed_field_sources,
-    mark_untrusted_fix_sources_in, merge_field_sources, merge_mapping_fields,
-    reject_ambiguous_yaml_in, reject_env_expansion_in, reject_env_reads_in_when,
-    reject_remote_assembled_env_refs, reject_untrusted_assembled_when,
-    reject_untrusted_env_instance_vars, reject_untrusted_env_var_reads,
-    strip_fix_promotions_in_rule, take_untrusted_fix_source, union_provenance,
+    mark_field_sources_in, mark_provenance_in, mark_sensitive_conditions,
+    mark_template_sensitive_fields, mark_unattributed_field_sources, mark_untrusted_fix_sources_in,
+    merge_field_sources, merge_mapping_fields, merge_sensitive_fields, reject_ambiguous_yaml_in,
+    reject_env_expansion_in, reject_env_reads_in_when, reject_remote_assembled_env_refs,
+    reject_untrusted_assembled_when, reject_untrusted_env_instance_vars,
+    reject_untrusted_env_var_reads, strip_fix_promotions_in_rule, take_sensitive_fields,
+    take_untrusted_fix_source, union_provenance,
 };
 pub use trust::{
     SPAWNING_FIX_OPS, SPAWNING_RULE_KINDS, reject_allow_out_of_root_in, reject_baseline_in,
@@ -451,6 +452,7 @@ impl RawConfig {
             reject_untrusted_assembled_when(m, &templates_by_id, &id_hint, &self.env_vars)?;
             reject_untrusted_env_instance_vars(m, &templates_by_id, &id_hint)?;
             let mut expanded = expand_template(m, &templates_by_id)?;
+            mark_sensitive_conditions(&mut expanded, &self.env_vars);
             expanded.remove(ENV_VARS_MARKER);
             // A nested-config rule is confined to its subtree here, on the effective
             // rule, so fields and the kind a root template contributes are re-rooted
@@ -501,15 +503,7 @@ impl RawConfig {
                 // op's own default tier.
                 strip_fix_promotions_in_rule(&mut expanded);
             }
-            validate_effective_rule_fields(&expanded, catalog, &id_hint, None, None)?;
-            expanded.remove(FIELD_SOURCES_MARKER);
-            let spec: alint_core::RuleSpec = serde_yaml_ng::from_value(
-                serde_yaml_ng::Value::Mapping(expanded),
-            )
-            .map_err(|e| {
-                Error::rule_config(&id_hint, format!("could not deserialize merged rule: {e}"))
-            })?;
-            rules.push(spec);
+            rules.push(deserialize_effective_rule(expanded, catalog, &id_hint)?);
         }
         Ok(Config {
             version: self.version.unwrap_or(0),
@@ -527,6 +521,47 @@ impl RawConfig {
             compatibility: self.compatibility,
         })
     }
+}
+
+fn deserialize_effective_rule(
+    mut expanded: Mapping,
+    catalog: Option<alint_core::KindCatalog<'_>>,
+    id_hint: &str,
+) -> Result<alint_core::RuleSpec> {
+    let sensitive_configuration = expanded
+        .get(SENSITIVE_FIELDS_MARKER)
+        .and_then(serde_yaml_ng::Value::as_mapping)
+        .is_some_and(|fields| !fields.is_empty())
+        || expanded
+            .get("sensitive")
+            .and_then(serde_yaml_ng::Value::as_bool)
+            .unwrap_or(false);
+    validate_effective_rule_fields(&expanded, catalog, id_hint, None, None).map_err(|error| {
+        if sensitive_configuration {
+            if error.is_internal() {
+                Error::internal("<redacted>")
+            } else {
+                Error::rule_config(id_hint, "<redacted>")
+            }
+        } else {
+            error
+        }
+    })?;
+    expanded.remove(FIELD_SOURCES_MARKER);
+    let sensitive_fields = take_sensitive_fields(&mut expanded);
+    let mut spec: alint_core::RuleSpec =
+        serde_yaml_ng::from_value(serde_yaml_ng::Value::Mapping(expanded)).map_err(|error| {
+            if sensitive_configuration {
+                Error::rule_config(id_hint, "<redacted>")
+            } else {
+                Error::rule_config(
+                    id_hint,
+                    format!("could not deserialize merged rule: {error}"),
+                )
+            }
+        })?;
+    spec.set_sensitive_fields(sensitive_fields);
+    Ok(spec)
 }
 
 fn effective_requirements(compatibility: &[ConfigCompatibility]) -> Option<ConfigRequirements> {
@@ -578,9 +613,13 @@ fn expand_template(
     }
 
     let vars = instance_vars(rule);
+    let env_vars = rule
+        .get(ENV_VARS_MARKER)
+        .and_then(|value| value.as_mapping());
 
     let untrusted_fix_source = has_untrusted_fix_source(template) || has_untrusted_fix_source(rule);
     let mut expanded = (*template).clone();
+    mark_template_sensitive_fields(&mut expanded, template, env_vars);
     mark_unattributed_field_sources(&mut expanded, &format!("template `{template_id}`"));
     let template_field_sources = expanded.remove(FIELD_SOURCES_MARKER);
     let template_provenance = expanded.remove(PROVENANCE_MARKER);
@@ -591,6 +630,7 @@ fn expand_template(
     }
 
     merge_field_sources(&mut expanded, rule);
+    merge_sensitive_fields(&mut expanded, rule);
     for (k, v) in rule {
         let key = k.as_str().unwrap_or_default();
         if matches!(
@@ -600,6 +640,7 @@ fn expand_template(
                 | UNTRUSTED_FIX_SOURCE_MARKER
                 | PROVENANCE_MARKER
                 | FIELD_SOURCES_MARKER
+                | SENSITIVE_FIELDS_MARKER
         ) {
             continue;
         }

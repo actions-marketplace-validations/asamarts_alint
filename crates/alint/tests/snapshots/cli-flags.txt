@@ -71,7 +71,9 @@
 === explain ===
   --as-of <YYYY-MM-DD>
   --ascii
+  --base <REF>
   --baseline <FILE>
+  --changed
   --color <WHEN>
   --compact
   --fail-on-warning
@@ -79,10 +81,13 @@
   --no-docs
   --no-gitignore
   --only <RULE_ID>
+  --preview
+  --preview-limit <N>
   --progress <WHEN>
   --show-baselined
   --show-notes
   --strict-baseline
+  --trace
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>

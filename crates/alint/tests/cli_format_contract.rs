@@ -1256,6 +1256,7 @@ fn explain_surfaces_manifest_scope_filter() {
     // half of that fix unguarded (a Windows-only regression). A member resolves
     // relative to the manifest's dir, so `a` becomes `pkg/a`.
     std::fs::create_dir(dir.path().join("pkg")).unwrap();
+    std::fs::create_dir(dir.path().join("nested")).unwrap();
     std::fs::write(
         dir.path().join("pkg/Cargo.toml"),
         "[workspace]\nmembers = [\"a\"]\n",
@@ -1276,7 +1277,10 @@ fn explain_surfaces_manifest_scope_filter() {
     )
     .unwrap();
 
-    let out = run(dir.path(), &["explain", "rs-members", "--format", "json"]);
+    let out = run(
+        &dir.path().join("nested"),
+        &["explain", "rs-members", "--format", "json"],
+    );
     let v: serde_json::Value =
         serde_json::from_slice(&out.stdout).expect("explain --format json must be JSON");
     let scopes = v["scope_filter"]["manifest_scopes"]
@@ -1293,7 +1297,7 @@ fn explain_surfaces_manifest_scope_filter() {
         "explain json didn't resolve the manifest scope to pkg/a: {v}"
     );
 
-    let out = run(dir.path(), &["explain", "rs-members"]);
+    let out = run(&dir.path().join("nested"), &["explain", "rs-members"]);
     let s = String::from_utf8_lossy(&out.stdout);
     for needle in ["include_manifest_paths", "pkg/Cargo.toml", "pkg/a"] {
         assert!(s.contains(needle), "explain human dropped {needle:?}:\n{s}");

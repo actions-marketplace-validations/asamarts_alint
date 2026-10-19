@@ -286,6 +286,7 @@ mod tests {
             when: None,
             expect_matches: false,
             sensitive: false,
+            sensitive_fields: std::collections::BTreeSet::new(),
             fix: None,
             scope_filter: None,
             extra: serde_yaml_ng::Mapping::new(),

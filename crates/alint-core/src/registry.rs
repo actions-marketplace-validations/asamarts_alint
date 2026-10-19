@@ -244,11 +244,13 @@ impl RuleRegistry {
             &spec.kind,
             registration.metadata.as_ref(),
         )
-        .map_err(|violation| Error::rule_config(&spec.id, violation.message))?;
+        .map_err(|violation| Error::rule_config(&spec.id, violation.message))
+        .map_err(|error| spec.redact_configuration_error(error))?;
         let rule = registration
             .builder
             .build(spec)
-            .map_err(|e| enrich_error(e, &spec.kind))?;
+            .map_err(|error| enrich_error(error, &spec.kind))
+            .map_err(|error| spec.redact_configuration_error(error))?;
         #[cfg(debug_assertions)]
         assert_instance_conformance(
             canonical,
@@ -812,6 +814,7 @@ mod tests {
             when: None,
             expect_matches: false,
             sensitive: false,
+            sensitive_fields: std::collections::BTreeSet::new(),
             fix: None,
             scope_filter: None,
             extra: serde_yaml_ng::Mapping::new(),

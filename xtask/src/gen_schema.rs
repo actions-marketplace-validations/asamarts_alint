@@ -1,6 +1,5 @@
-//! `xtask gen-schema` - assemble `schemas/v1/config.json` from the Rust option
-//! models and committed descriptive base, and generate the public policy-test
-//! schema from `alint-testkit`'s v1 model.
+//! `xtask gen-schema` - assemble the stable config and policy-test schemas plus
+//! the experimental selected-rule trace schema from their Rust models.
 //!
 //! Config generation applies per-kind restrictions from `KindMeta`. Every
 //! canonical kind has a generated option schema. Fidelity is checked semantically
@@ -28,6 +27,13 @@ fn policy_test_schema_path() -> Result<PathBuf> {
 
 fn policy_test_report_schema_path() -> Result<PathBuf> {
     Ok(crate::workspace_root()?.join("schemas/v1/policy-test-report.json"))
+}
+fn rule_trace_schema_path() -> Result<PathBuf> {
+    Ok(crate::workspace_root()?.join("schemas/experimental/rule-trace.json"))
+}
+
+fn in_crate_rule_trace_schema_path() -> Result<PathBuf> {
+    Ok(crate::workspace_root()?.join("crates/alint/schemas/experimental/rule-trace.json"))
 }
 
 /// Build the generated schema in memory: the committed descriptive base with
@@ -932,12 +938,16 @@ pub fn run(check: bool) -> Result<()> {
         alint_testkit::policy_test_schema_json().context("render policy-test schema")?;
     let policy_test_report_rendered = alint_testkit::policy_test_report_schema_json()
         .context("render policy-test report schema")?;
+    let rule_trace_rendered =
+        render(&alint_core::rule_trace_schema()).context("render rule-trace schema")?;
 
     if check {
         let root_path = root_schema_path()?;
         let in_crate_path = in_crate_schema_path()?;
         let policy_test_path = policy_test_schema_path()?;
         let policy_test_report_path = policy_test_report_schema_path()?;
+        let rule_trace_path = rule_trace_schema_path()?;
+        let in_crate_rule_trace_path = in_crate_rule_trace_schema_path()?;
         let root = std::fs::read_to_string(&root_path)
             .with_context(|| format!("read {}", root_path.display()))?;
         let in_crate = std::fs::read_to_string(&in_crate_path)
@@ -946,12 +956,19 @@ pub fn run(check: bool) -> Result<()> {
             .with_context(|| format!("read {}", policy_test_path.display()))?;
         let policy_test_report = std::fs::read_to_string(&policy_test_report_path)
             .with_context(|| format!("read {}", policy_test_report_path.display()))?;
+        let rule_trace = std::fs::read_to_string(&rule_trace_path)
+            .with_context(|| format!("read {}", rule_trace_path.display()))?;
+        let in_crate_rule_trace = std::fs::read_to_string(&in_crate_rule_trace_path)
+            .with_context(|| format!("read {}", in_crate_rule_trace_path.display()))?;
         let stale: Vec<&str> = [
             (root != rendered).then_some("schemas/v1/config.json"),
             (in_crate != rendered).then_some("crates/alint-dsl/schemas/v1/config.json"),
             (policy_test != policy_test_rendered).then_some("schemas/v1/policy-test.json"),
             (policy_test_report != policy_test_report_rendered)
                 .then_some("schemas/v1/policy-test-report.json"),
+            (rule_trace != rule_trace_rendered).then_some("schemas/experimental/rule-trace.json"),
+            (in_crate_rule_trace != rule_trace_rendered)
+                .then_some("crates/alint/schemas/experimental/rule-trace.json"),
         ]
         .into_iter()
         .flatten()
@@ -967,6 +984,12 @@ pub fn run(check: bool) -> Result<()> {
         return Ok(());
     }
 
+    if let Some(parent) = rule_trace_schema_path()?.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = in_crate_rule_trace_schema_path()?.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(root_schema_path()?, &rendered)?;
     std::fs::write(in_crate_schema_path()?, &rendered)?;
     std::fs::write(policy_test_schema_path()?, &policy_test_rendered)?;
@@ -974,9 +997,11 @@ pub fn run(check: bool) -> Result<()> {
         policy_test_report_schema_path()?,
         &policy_test_report_rendered,
     )?;
+    std::fs::write(rule_trace_schema_path()?, &rule_trace_rendered)?;
+    std::fs::write(in_crate_rule_trace_schema_path()?, &rule_trace_rendered)?;
     println!(
-        "wrote config schema copies, schemas/v1/policy-test.json, and \
-         schemas/v1/policy-test-report.json"
+        "wrote config schema copies, schemas/v1 policy-test schemas, and \
+         experimental rule-trace schema copies"
     );
     Ok(())
 }

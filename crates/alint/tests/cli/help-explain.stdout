@@ -1,4 +1,4 @@
-Show a rule's definition
+Show a configured rule, optionally tracing one real selected-rule run
 
 Usage: alint[EXE] explain [OPTIONS] <RULE_ID>
 
@@ -10,17 +10,34 @@ Options:
   -c, --config <CONFIG>
           Path to a config file
 
+      --trace
+          Walk the repository and evaluate only this effective rule. A traced command rule and any
+          configured custom facts may execute subprocesses, matching `check`; unrelated command
+          rules never run. Trace outcomes are diagnostic and exit 0, including violations and skips
+
       --as-of <YYYY-MM-DD>
           Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
           without either, time-dependent rules use the current HEAD commit time
+
+      --preview
+          Include bounded, redacted extraction evidence in the trace
 
   -f, --format <FORMAT>
           Output format
           
           [default: human]
 
+      --preview-limit <N>
+          Maximum retained preview rows (1..=100; default 20)
+
+      --changed
+          Restrict the traced run to paths changed in Git
+
       --no-gitignore
           Disable .gitignore handling (overrides config)
+
+      --base <REF>
+          Base ref for the traced changed-path run. Implies `--changed`
 
       --fail-on-warning
           Treat warnings as errors for exit-code purposes

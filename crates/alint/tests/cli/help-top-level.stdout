@@ -5,7 +5,7 @@ Usage: alint[EXE] [OPTIONS] [COMMAND]
 Commands:
   check             Run linters against the current (or given) directory. Default command
   list              List the rules configured in this repo
-  explain           Show a rule's definition
+  explain           Show a configured rule, optionally tracing one real selected-rule run
   fix               Apply automatic fixes for violations whose rules declare one
   baseline          Snapshot current violations so later runs fail only on new ones
   facts             Evaluate the config's `facts:` entries and print resolved values

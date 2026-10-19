@@ -98,9 +98,11 @@ pub use structured_format::MAX_STRUCTURED_BYTES;
 pub use structured_format::{Format, MAX_XML_DEPTH};
 #[doc(hidden)]
 pub use trace::{
-    RuleTrace, TraceCounts, TraceExtractionObservation, TraceMeta, TracePathOrigin, TracePreview,
-    TracePreviewCollector, TracePreviewRow, TraceProvenance, TraceReason, TraceSensitivity,
-    TraceSink, TraceSourceRange, TraceStage, TraceStageClass, TraceStatus, TraceValueType,
+    RuleTrace, RuleTraceDocument, TraceAnalysisFailure, TraceCounts, TraceExecution,
+    TraceExtractionObservation, TraceMeta, TraceNote, TraceOptions, TracePathOrigin, TracePreview,
+    TracePreviewCollector, TracePreviewRow, TraceProvenance, TraceReason, TraceRelatedLocation,
+    TraceResult, TraceResultRange, TraceSensitivity, TraceSink, TraceSourceRange, TraceStage,
+    TraceStageClass, TraceStatus, TraceValueType, TraceViolation, rule_trace_schema,
 };
 pub use walker::{
     AnalysisRead, FileEntry, FileIndex, MAX_ANALYZE_BYTES, WalkOptions, read_capped_or_skip,

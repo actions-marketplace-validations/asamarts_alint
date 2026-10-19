@@ -296,7 +296,22 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
             base,
         } => cmd_check(&path, &ChangedMode::new(changed, base), &cli.only, &cli),
         Command::List { category } => cmd_list(category.as_deref(), &cli),
-        Command::Explain { rule_id } => cmd_explain(&rule_id, &cli),
+        Command::Explain {
+            rule_id,
+            trace,
+            preview,
+            preview_limit,
+            changed,
+            base,
+        } => cmd_explain(
+            &rule_id,
+            &ExplainOptions {
+                trace,
+                preview_limit: preview.then_some(usize::from(preview_limit.unwrap_or(20))),
+                changed: ChangedMode::new(changed, base),
+            },
+            &cli,
+        ),
         Command::Fix {
             path,
             dry_run,
@@ -538,6 +553,13 @@ fn cmd_init(path: &Path, monorepo: bool) -> Result<ExitCode> {
         ))?;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[derive(Debug)]
+struct ExplainOptions {
+    trace: bool,
+    preview_limit: Option<usize>,
+    changed: ChangedMode,
 }
 
 /// Resolved `--changed` / `--base` state. `--base` implies
@@ -1714,12 +1736,38 @@ fn fact_value_json(v: &alint_core::FactValue) -> serde_json::Value {
     }
 }
 
+fn explain_field_is_sensitive(entry: &alint_core::RuleEntry, field: &str) -> bool {
+    entry
+        .spec
+        .as_deref()
+        .is_some_and(|spec| spec.field_is_sensitive(field))
+}
+
+fn explain_repository_path(root: &Path, path: &Path) -> String {
+    let relative = if path.is_absolute() {
+        match path.strip_prefix(root) {
+            Ok(relative) => relative,
+            Err(_) => return "<outside-repository>".to_string(),
+        }
+    } else {
+        path
+    };
+    if relative
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return "<outside-repository>".to_string();
+    }
+    relative.display().to_string().replace('\\', "/")
+}
+
 /// Render the `scope_filter:` block for `alint explain` (human format): the
 /// `has_ancestor` / `changed_since` gates, and for the manifest predicates the
 /// paths they resolve to (ADR-0010's legibility mitigation). No-op if unset.
 fn write_scope_filter_explain(
     out: &mut impl std::io::Write,
     entry: &alint_core::RuleEntry,
+    root: &Path,
 ) -> Result<()> {
     use alint_output::style;
     let dim = style::DIM;
@@ -1727,6 +1775,10 @@ fn write_scope_filter_explain(
     // scope, so surface each gate — and for the manifest predicates, the paths
     // they actually resolve to (ADR-0010's legibility mitigation).
     if let Some(sf) = entry.scope_filter() {
+        if explain_field_is_sensitive(entry, "scope_filter") {
+            writeln!(out, "{dim}scope_filter:{dim:#} <redacted>")?;
+            return Ok(());
+        }
         writeln!(out, "{dim}scope_filter:{dim:#}")?;
         if let Some(ha) = &sf.has_ancestor {
             writeln!(out, "  {dim}has_ancestor: {dim:#} {}", term(&ha.join(", ")))?;
@@ -1737,7 +1789,7 @@ fn write_scope_filter_explain(
         if (sf.include_manifest_paths.is_some() || sf.exclude_manifest_paths.is_some())
             && let Ok(filter) = alint_core::ScopeFilter::from_spec(entry.rule.id(), sf.clone())
         {
-            for res in filter.resolved_manifest_sets(Path::new(".")) {
+            for res in filter.resolved_manifest_sets(root) {
                 let key = if res.include {
                     "include_manifest_paths"
                 } else {
@@ -1751,7 +1803,7 @@ fn write_scope_filter_explain(
                 } else {
                     res.paths
                         .iter()
-                        .map(|p| p.display().to_string().replace('\\', "/"))
+                        .map(|p| explain_repository_path(root, p))
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
@@ -1760,7 +1812,7 @@ fn write_scope_filter_explain(
                 writeln!(
                     out,
                     "  {dim}{key}:{dim:#} {} -> {}",
-                    term(&res.source.display().to_string().replace('\\', "/")),
+                    term(&explain_repository_path(root, &res.source)),
                     term(&paths)
                 )?;
             }
@@ -1871,11 +1923,262 @@ fn analysis_time_json(
     }
 }
 
-fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
+fn run_explain_trace(
+    loaded: &LoadedConfig,
+    entry: &alint_core::RuleEntry,
+    options: &ExplainOptions,
+    analysis_time: Option<&alint_core::AnalysisTimeResolution>,
+    use_gitignore: bool,
+) -> Result<alint_core::RuleTrace> {
+    let mut engine = Engine::from_entries(loaded.entries.clone(), loaded.registry.clone())
+        .with_facts(loaded.facts.clone())
+        .with_vars(loaded.vars.clone())
+        .with_fix_size_limit(loaded.fix_size_limit);
+    if let Some(resolution) = analysis_time.copied() {
+        engine = engine.with_analysis_time_resolution(resolution);
+    }
+    if let Some(changed_paths) = options.changed.resolve(&loaded.root)? {
+        engine = engine.with_changed_paths(changed_paths);
+    }
+
+    let mut extra_ignores = loaded.extra_ignores.clone();
+    let configured_baseline = loaded.baseline.as_ref().map(|path| loaded.root.join(path));
+    exclude_baseline_from_walk(
+        &mut extra_ignores,
+        &loaded.root,
+        configured_baseline.as_deref(),
+    );
+    let index = walk(
+        &loaded.root,
+        &WalkOptions {
+            respect_gitignore: use_gitignore && loaded.respect_gitignore,
+            extra_ignores,
+        },
+    )
+    .context("walking repository for rule trace")?;
+    let trace_options = match options.preview_limit {
+        Some(limit) => alint_core::TraceOptions::with_preview(limit)?,
+        None => alint_core::TraceOptions::counts_only(),
+    };
+    engine
+        .trace_rule_with_options(entry.rule.id(), &loaded.root, &index, trace_options)
+        .context("tracing selected rule")
+}
+
+fn trace_wire_name(value: &impl serde::Serialize) -> Result<String> {
+    Ok(serde_json::to_string(value)?.trim_matches('"').to_string())
+}
+
+fn write_explain_trace_json(document: &alint_core::RuleTraceDocument) -> Result<ExitCode> {
+    let mut out = std::io::stdout().lock();
+    writeln!(out, "{}", serde_json::to_string_pretty(document)?)?;
+    out.flush().ok();
+    Ok(ExitCode::SUCCESS)
+}
+
+fn write_trace_wrapped(
+    out: &mut impl std::io::Write,
+    prefix: &str,
+    text: &str,
+    width: usize,
+) -> Result<()> {
+    use alint_output::style;
+
+    let safe = term_multiline(text);
+    let indent = prefix.chars().count();
+    for (index, line) in alint_output::wrap_message(&safe, indent, width)
+        .into_iter()
+        .enumerate()
+    {
+        if index == 0 {
+            let dim = style::DIM;
+            write!(out, "{dim}{prefix}{dim:#}")?;
+        } else {
+            write!(out, "{}", " ".repeat(indent))?;
+        }
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+fn write_explain_trace_human(
+    out: &mut impl std::io::Write,
+    document: &alint_core::RuleTraceDocument,
+    width: usize,
+) -> Result<()> {
+    use alint_output::style;
+
+    let dim = style::DIM;
+    writeln!(out, "{dim}trace:{dim:#}")?;
+    for stage in &document.stages {
+        write_explain_trace_stage(out, stage, width)?;
+    }
+    write_explain_trace_result(out, &document.result, width)
+}
+
+fn write_explain_trace_stage(
+    out: &mut impl std::io::Write,
+    stage: &alint_core::TraceStage,
+    width: usize,
+) -> Result<()> {
+    let class = trace_wire_name(&stage.class)?;
+    let status = trace_wire_name(&stage.status)?;
+    let reason = trace_wire_name(&stage.reason)?;
+    write_trace_wrapped(
+        out,
+        &format!("  {}: ", stage.ordinal),
+        &format!("{class} / {} - {status} ({reason})", stage.name()),
+        width,
+    )?;
+    let counts = &stage.counts;
+    if counts.considered != 0 || counts.matched != 0 || counts.inputs != 0 || counts.values != 0 {
+        write_trace_wrapped(
+            out,
+            "    counts: ",
+            &format!(
+                "considered={} matched={} inputs={} values={}",
+                counts.considered, counts.matched, counts.inputs, counts.values,
+            ),
+            width,
+        )?;
+    }
+    if counts.violations != 0 || counts.notes != 0 || counts.analysis_failures != 0 {
+        write_trace_wrapped(
+            out,
+            "    findings: ",
+            &format!(
+                "violations={} notes={} analysis_failures={}",
+                counts.violations, counts.notes, counts.analysis_failures,
+            ),
+            width,
+        )?;
+    }
+    if counts.children != 0 {
+        write_trace_wrapped(
+            out,
+            "    children: ",
+            &format!(
+                "total={} satisfied={} violated={} failed={} skipped={}",
+                counts.children,
+                counts.satisfied_children,
+                counts.violated_children,
+                counts.failed_children,
+                counts.skipped_children,
+            ),
+            width,
+        )?;
+    }
+    if let Some(preview) = stage.preview() {
+        write_trace_wrapped(
+            out,
+            "    preview: ",
+            &format!(
+                "total={} shown={} omitted={} redacted={} truncated={}",
+                preview.total(),
+                preview.shown(),
+                preview.omitted(),
+                preview.redacted(),
+                preview.value_truncated(),
+            ),
+            width,
+        )?;
+        for row in preview.rows() {
+            let pointer = row
+                .pointer()
+                .map(|pointer| format!(" {pointer}"))
+                .unwrap_or_default();
+            write_trace_wrapped(
+                out,
+                "      ",
+                &format!(
+                    "{}{} = {}",
+                    row.path().display(),
+                    pointer,
+                    row.display_value()
+                ),
+                width,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn write_explain_trace_result(
+    out: &mut impl std::io::Write,
+    result: &alint_core::TraceResult,
+    width: usize,
+) -> Result<()> {
+    let status = trace_wire_name(&result.status)?;
+    write_trace_wrapped(
+        out,
+        "result: ",
+        &format!(
+            "{status} (violations={}, analysis_failures={}, notes={})",
+            result.violations.len(),
+            result.analysis_failures.len(),
+            result.notes.len(),
+        ),
+        width,
+    )?;
+    for violation in &result.violations {
+        let path = violation.path.as_deref().unwrap_or("<repository>");
+        write_trace_wrapped(
+            out,
+            "  violation: ",
+            &format!("{path}: {}", violation.message),
+            width,
+        )?;
+    }
+    for failure in &result.analysis_failures {
+        let path = failure.path.as_deref().unwrap_or("<repository>");
+        write_trace_wrapped(
+            out,
+            "  analysis_failure: ",
+            &format!("{path}: {}", failure.message),
+            width,
+        )?;
+    }
+    for note in &result.notes {
+        let path = note.finding.path.as_deref().unwrap_or("<repository>");
+        write_trace_wrapped(
+            out,
+            &format!("  note[{}]: ", note.kind),
+            &format!("{path}: {}", note.finding.message),
+            width,
+        )?;
+    }
+    Ok(())
+}
+
+fn build_explain_trace_document(
+    loaded: &LoadedConfig,
+    entry: &alint_core::RuleEntry,
+    kind_meta: &alint_core::KindMeta,
+    analysis_time: Option<&alint_core::AnalysisTimeResolution>,
+    options: &ExplainOptions,
+    no_gitignore: bool,
+) -> Result<Option<alint_core::RuleTraceDocument>> {
+    if !options.trace {
+        return Ok(None);
+    }
+    let trace = run_explain_trace(loaded, entry, options, analysis_time, no_gitignore)?;
+    Ok(Some(trace.into_document(
+        explain_rule_json_payload(entry, kind_meta, analysis_time, &loaded.root, true),
+        alint_core::TraceExecution {
+            changed: options.changed.enabled,
+            base: options.changed.base.clone(),
+            preview: options.preview_limit.is_some(),
+            preview_limit: options.preview_limit.unwrap_or(20),
+        },
+        &loaded.root,
+    )))
+}
+
+fn cmd_explain(rule_id: &str, options: &ExplainOptions, cli: &Cli) -> Result<ExitCode> {
     use alint_core::Level;
     use alint_output::style;
 
-    let loaded = load_rules(Path::new("."), cli)?;
+    let loaded = load_rules_for_explain(Path::new("."), cli, options.trace.then_some(rule_id))?;
     let Some(entry) = loaded.entries.iter().find(|e| e.rule.id() == rule_id) else {
         bail!("no rule with id {rule_id:?} found in the effective config");
     };
@@ -1892,17 +2195,29 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     // explicit error rather than silently printing the human block.
     let format: Format = cli.format.parse().map_err(|e: String| anyhow::anyhow!(e))?;
     match format {
-        Format::Human => {}
-        Format::Json => return explain_json(entry, kind_meta, analysis_time.as_ref()),
+        Format::Human | Format::Json => {}
         _ => bail!(
             "`alint explain` supports only `--format human` or `--format json` (got {:?})",
             cli.format
         ),
     }
+    let trace_document = build_explain_trace_document(
+        &loaded,
+        entry,
+        kind_meta,
+        analysis_time.as_ref(),
+        options,
+        !cli.no_gitignore,
+    )?;
+    if format == Format::Json {
+        return match trace_document {
+            Some(document) => write_explain_trace_json(&document),
+            None => explain_json(entry, kind_meta, analysis_time.as_ref(), &loaded.root),
+        };
+    }
 
     let (mut out, opts) = render_env(cli)?;
     let dim = style::DIM;
-    let docs = style::DOCS;
     let level_style = match rule.level() {
         Level::Error => style::ERROR,
         Level::Warning => style::WARNING,
@@ -1927,55 +2242,10 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     if entry.expect_matches() {
         writeln!(out, "{dim}expect_matches:{dim:#} true")?;
     }
-    write_scope_filter_explain(&mut out, entry)?;
-    // Kind-specific options (pattern, max_lines, ...): the first inline after
-    // the `options:` label, the rest indented under the value column. A
-    // spec-less entry has no options, so the flattened iterator is empty.
-    for (i, (k, v)) in entry.extra().into_iter().flatten().enumerate() {
-        let key = term(k.as_str().unwrap_or_default());
-        let val = match serde_json::to_value(v) {
-            // A single-line string renders bare; a multi-line string (and every
-            // non-string) renders as compact JSON, so an embedded newline cannot
-            // break the aligned options block.
-            Ok(serde_json::Value::String(s)) if !s.contains(['\n', '\r']) => s,
-            Ok(jv) => jv.to_string(),
-            Err(_) => String::new(),
-        };
-        let val = term(&val);
-        if i == 0 {
-            writeln!(out, "{dim}options:   {dim:#} {dim}{key}:{dim:#} {val}")?;
-        } else {
-            writeln!(out, "            {dim}{key}:{dim:#} {val}")?;
-        }
-    }
-    // A blank / whitespace-only message renders as absent rather than a
-    // dangling `message:` label. Continuation lines indent under the value
-    // column and a trailing newline (block scalars carry one) is dropped, so a
-    // multi-line message stays aligned instead of wrapping back to column 0.
-    if let Some(msg) = entry.message() {
-        let msg = msg.trim_end_matches('\n');
-        if !msg.trim().is_empty() {
-            let msg = term_multiline(msg).replace('\n', &format!("\n{}", " ".repeat(12)));
-            writeln!(out, "{dim}message:   {dim:#} {msg}")?;
-        }
-    }
-    // v0.9.20: honour --no-docs by suppressing the policy_url line.
-    // URLs remain in machine-readable formats regardless.
-    if opts.show_docs
-        && let Some(url) = rule.policy_url()
-    {
-        let url = term(url);
-        writeln!(out, "{dim}policy_url:{dim:#} {docs}{url}{docs:#}")?;
-    }
-    if let Some(when) = entry.when_src() {
-        writeln!(out, "{dim}when:      {dim:#} {}", term(when))?;
-    }
-    if let Some(fixer) = rule.fixer() {
-        writeln!(
-            out,
-            "{dim}fix:       {dim:#} {}",
-            term(&alint_core::Fixer::describe(fixer))
-        )?;
+    write_scope_filter_explain(&mut out, entry, &loaded.root)?;
+    write_explain_rule_evidence(&mut out, entry, opts.show_docs)?;
+    if let Some(document) = trace_document.as_ref() {
+        write_explain_trace_human(&mut out, document, opts.effective_width())?;
     }
     out.flush().ok();
     // v0.9.20: dropped the `debug: {rule:?}` line. The internal Debug
@@ -1987,60 +2257,172 @@ fn cmd_explain(rule_id: &str, cli: &Cli) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Machine-readable single-rule shape for `alint explain <id> --format
-/// json`. Parallels each entry of the `list --format json` inventory.
-fn explain_json(
+fn write_explain_rule_evidence(
+    out: &mut impl std::io::Write,
     entry: &alint_core::RuleEntry,
-    kind_meta: &alint_core::KindMeta,
-    analysis_time: Option<&alint_core::AnalysisTimeResolution>,
-) -> Result<ExitCode> {
-    // `paths` normalises to `{ include, exclude }` glob lists. `rule_kind`
-    // carries the rule's own kind (the envelope's `kind` is the fixed `"rule"`
-    // discriminator), and `categories` matches each `list --format json` entry.
-    let paths = entry.paths().map(|p| {
-        let (include, exclude) = p.include_exclude();
-        serde_json::json!({ "include": include, "exclude": exclude })
-    });
-    let options = match entry.extra() {
-        Some(extra) if !extra.is_empty() => {
-            serde_json::to_value(extra).unwrap_or(serde_json::Value::Null)
+    show_docs: bool,
+) -> Result<()> {
+    use alint_output::style;
+
+    let dim = style::DIM;
+    let docs = style::DOCS;
+    for (index, (key, value)) in entry.extra().into_iter().flatten().enumerate() {
+        let field = key.as_str().unwrap_or_default();
+        let key = term(field);
+        let value = if explain_field_is_sensitive(entry, field) {
+            "<redacted>".to_string()
+        } else {
+            match serde_json::to_value(value) {
+                Ok(serde_json::Value::String(value)) if !value.contains(['\n', '\r']) => value,
+                Ok(value) => value.to_string(),
+                Err(_) => String::new(),
+            }
+        };
+        let value = term(&value);
+        if index == 0 {
+            writeln!(out, "{dim}options:   {dim:#} {dim}{key}:{dim:#} {value}")?;
+        } else {
+            writeln!(out, "            {dim}{key}:{dim:#} {value}")?;
         }
-        _ => serde_json::Value::Null,
-    };
-    // scope_filter: the configured gates plus, for the manifest predicates, the
-    // paths they resolve to (relative to the CWD, like the human block).
-    let scope_filter = entry.scope_filter().map(|sf| {
+    }
+    if let Some(message) = entry.message() {
+        let message = if explain_field_is_sensitive(entry, "message") {
+            "<redacted>"
+        } else {
+            message.trim_end_matches('\n')
+        };
+        if !message.trim().is_empty() {
+            let message = term_multiline(message).replace('\n', &format!("\n{}", " ".repeat(12)));
+            writeln!(out, "{dim}message:   {dim:#} {message}")?;
+        }
+    }
+    if show_docs && let Some(url) = entry.rule.policy_url() {
+        let url = if explain_field_is_sensitive(entry, "policy_url") {
+            "<redacted>"
+        } else {
+            url
+        };
+        let url = term(url);
+        writeln!(out, "{dim}policy_url:{dim:#} {docs}{url}{docs:#}")?;
+    }
+    if let Some(condition) = entry.when_src() {
+        let condition = if explain_field_is_sensitive(entry, "when") {
+            "<redacted>"
+        } else {
+            condition
+        };
+        writeln!(out, "{dim}when:      {dim:#} {}", term(condition))?;
+    }
+    if let Some(fixer) = entry.rule.fixer() {
+        let description = if explain_field_is_sensitive(entry, "fix") {
+            std::borrow::Cow::Borrowed("<redacted>")
+        } else {
+            std::borrow::Cow::Owned(alint_core::Fixer::describe(fixer))
+        };
+        writeln!(
+            out,
+            "{dim}fix:       {dim:#} {}",
+            term(description.as_ref())
+        )?;
+    }
+    Ok(())
+}
+
+fn explain_scope_filter_json(
+    entry: &alint_core::RuleEntry,
+    root: &Path,
+    redact_sensitive: bool,
+) -> Option<serde_json::Value> {
+    if redact_sensitive && explain_field_is_sensitive(entry, "scope_filter") {
+        return entry
+            .scope_filter()
+            .map(|_| serde_json::Value::String("<redacted>".to_string()));
+    }
+    entry.scope_filter().map(|scope| {
         let manifest_scopes: Vec<_> =
-            alint_core::ScopeFilter::from_spec(entry.rule.id(), sf.clone())
-                .map(|f| f.resolved_manifest_sets(Path::new(".")))
+            alint_core::ScopeFilter::from_spec(entry.rule.id(), scope.clone())
+                .map(|filter| filter.resolved_manifest_sets(root))
                 .unwrap_or_default()
                 .into_iter()
-                .map(|r| {
+                .map(|resolved| {
                     serde_json::json!({
-                        "predicate": if r.include {
+                        "predicate": if resolved.include {
                             "include_manifest_paths"
                         } else {
                             "exclude_manifest_paths"
                         },
-                        // Forward-slash for a portable JSON contract (a bare
-                        // PathBuf serializes with the OS-native separator).
-                        "source": r.source.display().to_string().replace('\\', "/"),
-                        "paths": r.paths
+                        "source": explain_repository_path(root, &resolved.source),
+                        "paths": resolved.paths
                             .iter()
-                            .map(|p| p.display().to_string().replace('\\', "/"))
+                            .map(|path| explain_repository_path(root, path))
                             .collect::<Vec<_>>(),
                     })
                 })
                 .collect();
         serde_json::json!({
-            "has_ancestor": sf.has_ancestor,
-            "changed_since": sf.changed_since,
+            "has_ancestor": scope.has_ancestor,
+            "changed_since": scope.changed_since,
             "manifest_scopes": manifest_scopes,
         })
+    })
+}
+
+/// Machine-readable rule body shared by stable static explain and the
+/// experimental trace envelope. Structural ids and repository paths remain
+/// visible; environment-derived or explicitly sensitive evidence is redacted.
+fn explain_rule_json_payload(
+    entry: &alint_core::RuleEntry,
+    kind_meta: &alint_core::KindMeta,
+    analysis_time: Option<&alint_core::AnalysisTimeResolution>,
+    root: &Path,
+    redact_sensitive: bool,
+) -> serde_json::Value {
+    let sensitive = |field: &str| {
+        redact_sensitive
+            && entry
+                .spec
+                .as_deref()
+                .is_some_and(|spec| spec.field_is_sensitive(field))
+    };
+    let redacted = || serde_json::Value::String("<redacted>".to_string());
+    let paths = entry.paths().map(|paths| {
+        let (include, exclude) = paths.include_exclude();
+        serde_json::json!({ "include": include, "exclude": exclude })
     });
-    let mut doc = serde_json::json!({
-        "schema_version": 1,
-        "kind": "rule",
+    let options = match entry.extra() {
+        Some(extra) if !extra.is_empty() => {
+            let mut options = serde_json::Map::new();
+            for (key, value) in extra {
+                let key = key.as_str().unwrap_or_default().to_string();
+                let value = if sensitive(&key) {
+                    redacted()
+                } else {
+                    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+                };
+                options.insert(key, value);
+            }
+            serde_json::Value::Object(options)
+        }
+        _ => serde_json::Value::Null,
+    };
+    let scope_filter = explain_scope_filter_json(entry, root, redact_sensitive);
+    let evidence = |field: &str, value: Option<&str>| {
+        value.map(|value| {
+            if sensitive(field) {
+                redacted()
+            } else {
+                serde_json::Value::String(value.to_string())
+            }
+        })
+    };
+    let fix = entry.rule.fixer().map(|fixer| {
+        if sensitive("fix") {
+            redacted()
+        } else {
+            serde_json::Value::String(alint_core::Fixer::describe(fixer))
+        }
+    });
+    let mut document = serde_json::json!({
         "id": entry.rule.id(),
         "rule_kind": entry.kind(),
         "categories": rules::categories_for_kind(entry.kind()),
@@ -2048,8 +2430,6 @@ fn explain_json(
         "capabilities": kind_meta.serialized_capabilities(),
         "selectors": kind_meta.selectors.as_ref(),
         "fix_ops": kind_meta.fix_ops.as_ref(),
-        // The docs deep link, always present in JSON (like policy_url) regardless
-        // of --no-docs. Family = the primary category slug; alias -> canonical.
         "docs": rules::categories_for_kind(entry.kind()).first().map(|family| {
             format!(
                 "https://alint.org/docs/rules/{family}/{}/",
@@ -2060,25 +2440,47 @@ fn explain_json(
         "paths": paths,
         "scope_filter": scope_filter,
         "options": options,
-        "message": entry.message().filter(|m| !m.trim().is_empty()),
-        "policy_url": entry.rule.policy_url(),
-        "when": entry.when_src(),
+        "message": evidence(
+            "message",
+            entry.message().filter(|message| !message.trim().is_empty()),
+        ),
+        "policy_url": evidence("policy_url", entry.rule.policy_url()),
+        "when": evidence("when", entry.when_src()),
         "expect_matches": entry.expect_matches(),
-        // Both `when` and `conditional` project from the retained `when:` source
-        // (`spec.when`), so within this document they can never disagree - deriving
-        // both from one field keeps it self-consistent for any future caller.
-        // `list --format json`'s `conditional` reads the equivalent parsed `when`.
         "conditional": entry.when_src().is_some(),
         "fixable": entry.rule.fixer().is_some(),
-        "fix": entry.rule.fixer().map(alint_core::Fixer::describe),
+        "fix": fix,
     });
     if let Some(analysis_time) = analysis_time_json(analysis_time) {
-        doc.as_object_mut()
+        document
+            .as_object_mut()
             .expect("explain document is an object")
             .insert("analysis_time".to_string(), analysis_time);
     }
+    document
+}
+
+/// Stable machine-readable single-rule `kind: "rule"` document.
+fn explain_json(
+    entry: &alint_core::RuleEntry,
+    kind_meta: &alint_core::KindMeta,
+    analysis_time: Option<&alint_core::AnalysisTimeResolution>,
+    root: &Path,
+) -> Result<ExitCode> {
+    let mut document = explain_rule_json_payload(entry, kind_meta, analysis_time, root, true);
+    let object = document
+        .as_object_mut()
+        .expect("explain document is an object");
+    object.insert(
+        "schema_version".to_string(),
+        serde_json::Value::Number(1_u64.into()),
+    );
+    object.insert(
+        "kind".to_string(),
+        serde_json::Value::String("rule".to_string()),
+    );
     let mut out = std::io::stdout().lock();
-    writeln!(out, "{}", serde_json::to_string_pretty(&doc)?)?;
+    writeln!(out, "{}", serde_json::to_string_pretty(&document)?)?;
     out.flush().ok();
     Ok(ExitCode::SUCCESS)
 }
@@ -2280,9 +2682,11 @@ fn validate_config_inner(config_path: &Path) -> Result<usize> {
         // kind / option / missing field) — the cross-file iteration rules
         // build these lazily, so without this they slip past validate-config.
         rule.validate_nested(&registry)
+            .map_err(|error| spec.redact_configuration_error(error))
             .with_context(|| format!("building rule {:?}", spec.id))?;
         if let Some(when_src) = &spec.when {
             alint_core::when::parse(when_src)
+                .map_err(|error| anyhow::anyhow!(spec.redact_configuration_message(error)))
                 .with_context(|| format!("rule {:?}: parsing `when`", spec.id))?;
         }
         count += 1;
@@ -2345,6 +2749,14 @@ fn emit_validate_failure(
 }
 
 fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
+    load_rules_for_explain(cwd, cli, None)
+}
+
+fn load_rules_for_explain(
+    cwd: &Path,
+    cli: &Cli,
+    include_off_rule: Option<&str>,
+) -> Result<LoadedConfig> {
     let cwd_abs = std::path::absolute(cwd)
         .with_context(|| format!("resolving repository root {}", cwd.display()))?;
     let (config_path, root) = if let Some(first) = cli.config.first() {
@@ -2373,7 +2785,9 @@ fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
 
     let mut entries: Vec<alint_core::RuleEntry> = Vec::with_capacity(config.rules.len());
     for spec in &config.rules {
-        if matches!(spec.level, alint_core::Level::Off) {
+        if matches!(spec.level, alint_core::Level::Off)
+            && include_off_rule != Some(spec.id.as_str())
+        {
             continue;
         }
         let mut rule = registry
@@ -2383,6 +2797,7 @@ fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
         // typo'd nested kind/option fails here rather than lazily mid-walk
         // (or never, when the selector matches no entries).
         rule.validate_nested(&registry)
+            .map_err(|error| spec.redact_configuration_error(error))
             .with_context(|| format!("building rule {:?}", spec.id))?;
         // Apply the top-level `allow_out_of_root:` policy (parsed from
         // the user's own config only — never from `extends:`). A rule
@@ -2399,6 +2814,7 @@ fn load_rules(cwd: &Path, cli: &Cli) -> Result<LoadedConfig> {
             .with_allow_out_of_root(allow_out_of_root);
         if let Some(when_src) = &spec.when {
             let expr = alint_core::when::parse(when_src)
+                .map_err(|error| anyhow::anyhow!(spec.redact_configuration_message(error)))
                 .with_context(|| format!("rule {:?}: parsing `when`", spec.id))?;
             entry = entry.with_when(expr);
         }

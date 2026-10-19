@@ -428,6 +428,7 @@ impl StructuredPathRule {
                 cardinality_mismatches: u64::from(cardinality_mismatch),
                 ..alint_core::TraceExtractionObservation::default()
             });
+            record_structured_trace_preview(ctx, path, &matches, sensitive);
         }
         // Existence assertion: the query must select nothing. Any match is
         // exactly one file-level violation -- never per-match, so a `$[?...]`
@@ -481,6 +482,42 @@ impl StructuredPathRule {
             }
         }
         violations
+    }
+}
+fn record_structured_trace_preview(
+    ctx: &Context<'_>,
+    path: &Path,
+    matches: &serde_json_path::NodeList<'_>,
+    sensitive: bool,
+) {
+    if !ctx.trace_preview_enabled() {
+        return;
+    }
+    let sensitivity = ctx.trace_evidence_sensitivity(sensitive);
+    for (occurrence, value) in matches.iter().enumerate() {
+        let occurrence = u64::try_from(occurrence).expect("query result index fits u64");
+        ctx.record_trace_preview(alint_core::TracePreviewRow::new(
+            path,
+            alint_core::TracePathOrigin::RepositorySource,
+            None,
+            Some(format!("row:{occurrence}")),
+            occurrence,
+            alint_core::TraceProvenance::Structured,
+            sensitivity,
+            trace_value_type(value),
+            &value.to_string(),
+        ));
+    }
+}
+
+fn trace_value_type(value: &Value) -> alint_core::TraceValueType {
+    match value {
+        Value::String(_) => alint_core::TraceValueType::String,
+        Value::Number(_) => alint_core::TraceValueType::Number,
+        Value::Bool(_) => alint_core::TraceValueType::Boolean,
+        Value::Null => alint_core::TraceValueType::Null,
+        Value::Array(_) => alint_core::TraceValueType::Array,
+        Value::Object(_) => alint_core::TraceValueType::Object,
     }
 }
 
