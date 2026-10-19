@@ -183,6 +183,154 @@ fn contains_alias(text: &str) -> bool {
     found
 }
 
+#[derive(Clone, Copy)]
+struct LiteralScalarNode<'a> {
+    value: Option<&'a str>,
+    indirect: bool,
+}
+
+fn walk_literal_subtree<'event>(
+    events: &'event [(saphyr_parser::Event<'_>, saphyr_parser::Span)],
+    scalar_anchors: &std::collections::HashMap<usize, &'event str>,
+    index: &mut usize,
+    candidate_depth: Option<usize>,
+    target: &[&str],
+    literal: &mut bool,
+) -> Result<LiteralScalarNode<'event>, String> {
+    use saphyr_parser::Event;
+
+    let Some((event, _)) = events.get(*index) else {
+        return Err("unexpected end of YAML event stream".to_string());
+    };
+    let inside = candidate_depth == Some(target.len());
+    match event {
+        Event::Scalar(value, _, anchor, tag) => {
+            let indirect = *anchor != 0 || tag.is_some();
+            if inside && indirect {
+                *literal = false;
+            }
+            *index += 1;
+            Ok(LiteralScalarNode {
+                value: Some(value.as_ref()),
+                indirect,
+            })
+        }
+        Event::Alias(anchor) => {
+            if inside {
+                *literal = false;
+            }
+            *index += 1;
+            Ok(LiteralScalarNode {
+                value: scalar_anchors.get(anchor).copied(),
+                indirect: true,
+            })
+        }
+        Event::SequenceStart(anchor, tag) => {
+            let indirect = *anchor != 0 || tag.is_some();
+            if inside && indirect {
+                *literal = false;
+            }
+            *index += 1;
+            while !matches!(events.get(*index), Some((Event::SequenceEnd, _))) {
+                walk_literal_subtree(
+                    events,
+                    scalar_anchors,
+                    index,
+                    inside.then_some(target.len()),
+                    target,
+                    literal,
+                )?;
+            }
+            *index += 1;
+            Ok(LiteralScalarNode {
+                value: None,
+                indirect,
+            })
+        }
+        Event::MappingStart(anchor, tag) => {
+            let indirect = *anchor != 0 || tag.is_some();
+            if inside && indirect {
+                *literal = false;
+            }
+            *index += 1;
+            while !matches!(events.get(*index), Some((Event::MappingEnd, _))) {
+                let key = walk_literal_subtree(
+                    events,
+                    scalar_anchors,
+                    index,
+                    inside.then_some(target.len()),
+                    target,
+                    literal,
+                )?;
+                if inside && key.value == Some("<<") {
+                    *literal = false;
+                }
+                let child_depth = match candidate_depth {
+                    Some(depth) if depth == target.len() => Some(depth),
+                    Some(depth) if depth < target.len() && key.value == Some(target[depth]) => {
+                        if key.indirect {
+                            *literal = false;
+                        }
+                        Some(depth + 1)
+                    }
+                    _ => None,
+                };
+                walk_literal_subtree(events, scalar_anchors, index, child_depth, target, literal)?;
+            }
+            *index += 1;
+            Ok(LiteralScalarNode {
+                value: None,
+                indirect,
+            })
+        }
+        other => Err(format!("unexpected YAML event {other:?} inside a value")),
+    }
+}
+
+/// Return whether the mapping value at `path` contains only direct YAML nodes.
+///
+/// Compatibility metadata uses this after the cheap complexity guards to reject
+/// anchors, aliases, explicit tags, and merge keys before typed deserialization.
+/// The rest of the document is not restricted. An absent path is literal.
+pub fn mapping_subtree_is_literal(text: &str, path: &[&str]) -> Result<bool, String> {
+    use saphyr_parser::{Event, Parser};
+
+    if path.is_empty() {
+        return Ok(true);
+    }
+    let events = Parser::new_from_str(text)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let scalar_anchors = events
+        .iter()
+        .filter_map(|(event, _)| match event {
+            Event::Scalar(value, _, anchor, _) if *anchor != 0 => Some((*anchor, value.as_ref())),
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let Some(mut index) = events.iter().position(|(event, _)| {
+        matches!(
+            event,
+            Event::Scalar(..)
+                | Event::Alias(..)
+                | Event::SequenceStart(..)
+                | Event::MappingStart(..)
+        )
+    }) else {
+        return Ok(true);
+    };
+    let mut literal = true;
+    walk_literal_subtree(
+        &events,
+        &scalar_anchors,
+        &mut index,
+        Some(0),
+        path,
+        &mut literal,
+    )?;
+    Ok(literal)
+}
+
 /// A structural event the [`Lexer`] reports to its consumer.
 #[derive(Debug, Clone, Copy)]
 enum Tok {

@@ -6,11 +6,23 @@ use serde::Deserialize;
 use crate::facts::FactSpec;
 use crate::level::Level;
 
+fn deserialize_present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 /// Parsed form of a `.alint.yml` file.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub version: u32,
+    /// Highest minimum stable alint release required by any composed source.
+    /// Per-source provenance is retained in [`Self::compatibility`].
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub requires: Option<crate::ConfigRequirements>,
     /// Other config files this one inherits from. Entries resolved
     /// left-to-right; later entries override earlier ones; the
     /// current file's own definitions override everything it extends.
@@ -76,6 +88,10 @@ pub struct Config {
     /// `docs/design/baseline.md` §2.3.
     #[serde(skip)]
     pub baseline: Option<PathBuf>,
+    /// Per-source compatibility records retained by the recursive loader.
+    /// Source-local requirements never participate in config precedence.
+    #[serde(skip)]
+    pub compatibility: Vec<crate::ConfigCompatibility>,
 }
 
 // Returning `Option<u64>` (rather than bare `u64`) keeps the
@@ -93,7 +109,13 @@ fn default_respect_gitignore() -> bool {
 }
 
 impl Config {
+    pub const MIN_SUPPORTED_VERSION: u32 = 1;
     pub const CURRENT_VERSION: u32 = 1;
+
+    #[must_use]
+    pub const fn supports_version(version: u32) -> bool {
+        version >= Self::MIN_SUPPORTED_VERSION && version <= Self::CURRENT_VERSION
+    }
 }
 
 /// Which rules may *read* a config-declared path that escapes the

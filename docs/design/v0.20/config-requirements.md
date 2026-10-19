@@ -1,6 +1,6 @@
 # Design doc: configuration requirements and source-version compatibility
 
-Status: Accepted design (2026-10-18); implementation not started.
+Status: Accepted design (2026-10-18); P4 implemented.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 question Q11 and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md).
 Demand evidence: Phase 1b publishes reusable policy tests and bundled rulesets which need an

@@ -295,6 +295,7 @@ mod tests {
     fn config_with(rules: Vec<alint_core::RuleSpec>) -> alint_core::Config {
         alint_core::Config {
             version: 1,
+            requires: None,
             rules,
             facts: Vec::new(),
             extends: Vec::new(),
@@ -305,6 +306,7 @@ mod tests {
             nested_configs: false,
             allow_out_of_root: alint_core::AllowOutOfRoot::default(),
             baseline: None,
+            compatibility: Vec::new(),
         }
     }
 

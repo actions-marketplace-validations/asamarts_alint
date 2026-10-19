@@ -1,11 +1,12 @@
 //! `xtask gen-schema` - assemble `schemas/v1/config.json` from the Rust option
-//! models and the committed descriptive base, then apply per-kind common-field
-//! restrictions from `KindMeta`. See ADR-0001 and the accepted v0.19 W1 design.
+//! models and committed descriptive base, and generate the public policy-test
+//! schema from `alint-testkit`'s v1 model.
 //!
-//! Every canonical kind has a generated option schema. Fidelity is checked
-//! semantically because schemars emits cosmetic keywords (for example
-//! `format: uint`) that do not change validation behavior. A record/schema
-//! parity gate fails generation if `KindMeta` and any generated branch drift.
+//! Config generation applies per-kind restrictions from `KindMeta`. Every
+//! canonical kind has a generated option schema. Fidelity is checked semantically
+//! because schemars emits cosmetic keywords (for example `format: uint`) that do
+//! not change validation behavior. A record/schema parity gate fails generation
+//! if `KindMeta` and any generated branch drift.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -19,6 +20,10 @@ fn root_schema_path() -> Result<PathBuf> {
 
 fn in_crate_schema_path() -> Result<PathBuf> {
     Ok(crate::workspace_root()?.join("crates/alint-dsl/schemas/v1/config.json"))
+}
+
+fn policy_test_schema_path() -> Result<PathBuf> {
+    Ok(crate::workspace_root()?.join("schemas/v1/policy-test.json"))
 }
 
 /// Build the generated schema in memory: the committed descriptive base with
@@ -919,17 +924,23 @@ fn render(schema: &Value) -> Result<String> {
 pub fn run(check: bool) -> Result<()> {
     let generated = build_generated_schema()?;
     let rendered = render(&generated)?;
+    let policy_test_rendered =
+        alint_testkit::policy_test_schema_json().context("render policy-test schema")?;
 
     if check {
         let root_path = root_schema_path()?;
         let in_crate_path = in_crate_schema_path()?;
+        let policy_test_path = policy_test_schema_path()?;
         let root = std::fs::read_to_string(&root_path)
             .with_context(|| format!("read {}", root_path.display()))?;
         let in_crate = std::fs::read_to_string(&in_crate_path)
             .with_context(|| format!("read {}", in_crate_path.display()))?;
+        let policy_test = std::fs::read_to_string(&policy_test_path)
+            .with_context(|| format!("read {}", policy_test_path.display()))?;
         let stale: Vec<&str> = [
             (root != rendered).then_some("schemas/v1/config.json"),
             (in_crate != rendered).then_some("crates/alint-dsl/schemas/v1/config.json"),
+            (policy_test != policy_test_rendered).then_some("schemas/v1/policy-test.json"),
         ]
         .into_iter()
         .flatten()
@@ -941,13 +952,14 @@ pub fn run(check: bool) -> Result<()> {
                 stale.join(", ")
             );
         }
-        println!("schema is up to date");
+        println!("schemas are up to date");
         return Ok(());
     }
 
     std::fs::write(root_schema_path()?, &rendered)?;
     std::fs::write(in_crate_schema_path()?, &rendered)?;
-    println!("wrote schemas/v1/config.json and the in-crate copy");
+    std::fs::write(policy_test_schema_path()?, &policy_test_rendered)?;
+    println!("wrote config schema copies and schemas/v1/policy-test.json");
     Ok(())
 }
 

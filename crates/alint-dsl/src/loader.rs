@@ -6,7 +6,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use alint_core::{AllowOutOfRoot, Error, Result};
+use alint_core::{
+    AllowOutOfRoot, ConfigCompatibility, ConfigSourceClass, Error, Result, RunningVersion,
+};
 use serde_yaml_ng::Mapping;
 
 use crate::extends;
@@ -21,7 +23,6 @@ use crate::{
 const MAX_EXTENDS_DEPTH: usize = 64;
 
 /// Mutable state shared by one `load_with` call's whole extends resolution.
-#[derive(Default)]
 pub(crate) struct LoadState {
     /// Ancestors on the current DFS path (cycle detection + depth bound).
     pub(crate) visiting: std::collections::HashSet<PathBuf>,
@@ -31,6 +32,35 @@ pub(crate) struct LoadState {
     /// hang from a hostile repo). `is_top` loads read their own trust and
     /// confinement settings and are never memoized.
     memo: std::collections::HashMap<MemoKey, RawConfig>,
+    running_version: RunningVersion,
+}
+
+impl Default for LoadState {
+    fn default() -> Self {
+        Self {
+            visiting: std::collections::HashSet::new(),
+            memo: std::collections::HashMap::new(),
+            running_version: RunningVersion::current(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceContext {
+    source_class: ConfigSourceClass,
+    consumer_version: Option<u32>,
+}
+
+impl SourceContext {
+    pub(crate) const fn new(
+        source_class: ConfigSourceClass,
+        consumer_version: Option<u32>,
+    ) -> Self {
+        Self {
+            source_class,
+            consumer_version,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -38,6 +68,8 @@ struct MemoKey {
     path: PathBuf,
     confine: Option<PathBuf>,
     trusted: Vec<String>,
+    consumer_version: Option<u32>,
+    source_class: ConfigSourceClass,
 }
 
 impl LoadState {
@@ -47,11 +79,19 @@ impl LoadState {
 }
 
 impl MemoKey {
-    fn new(path: &Path, confine: Option<&Path>, trusted: &[String]) -> Self {
+    fn new(
+        path: &Path,
+        confine: Option<&Path>,
+        trusted: &[String],
+        consumer_version: Option<u32>,
+        source_class: ConfigSourceClass,
+    ) -> Self {
         Self {
             path: path.to_path_buf(),
             confine: confine.map(Path::to_path_buf),
             trusted: trusted.to_vec(),
+            consumer_version,
+            source_class,
         }
     }
 }
@@ -94,6 +134,171 @@ fn display_path(path: &Path) -> String {
     }
 }
 
+pub(crate) fn validate_source_compatibility(
+    config: &mut RawConfig,
+    source: &str,
+    source_class: ConfigSourceClass,
+    consumer_version: Option<u32>,
+    running_version: RunningVersion,
+) -> Result<()> {
+    let version = match config.version {
+        Some(version) => version,
+        None if source_class == ConfigSourceClass::DropIn => consumer_version.ok_or_else(|| {
+            Error::internal("drop-in compatibility validation has no root consumer version")
+        })?,
+        None => {
+            return Err(Error::Other(format!(
+                "{source}: missing required config `version` for {source_class:?} source"
+            )));
+        }
+    };
+    if source_class == ConfigSourceClass::DropIn
+        && let (Some(declared), Some(consumer)) = (config.version, consumer_version)
+        && declared != consumer
+    {
+        return Err(Error::Other(format!(
+            "{source}: drop-in config version {declared} must equal root config version {consumer}"
+        )));
+    }
+    if !alint_core::Config::supports_version(version) {
+        return Err(Error::Other(format!(
+            "{source}: unsupported config version {version} (this build supports {} through {})",
+            alint_core::Config::MIN_SUPPORTED_VERSION,
+            alint_core::Config::CURRENT_VERSION
+        )));
+    }
+    if let Some(consumer) = consumer_version
+        && !source_version_allowed(consumer, version)
+    {
+        return Err(Error::Other(format!(
+            "{source}: config version {consumer} cannot consume config version {version}"
+        )));
+    }
+    if let Some(requirements) = config.requires
+        && !running_version.satisfies(requirements.alint)
+    {
+        return Err(Error::Other(format!(
+            "{source}: requires alint {} or newer (running {running_version}; config version {version})",
+            requirements.alint
+        )));
+    }
+    config.version = Some(version);
+    config.compatibility.push(ConfigCompatibility {
+        source: source.to_string(),
+        source_class,
+        config_version: version,
+        requires_alint: config.requires.map(|requirements| requirements.alint),
+        consumer_version,
+    });
+    Ok(())
+}
+
+pub(crate) fn source_version_allowed(consumer: u32, source: u32) -> bool {
+    source <= consumer
+}
+
+fn local_source_display(path: &Path, confine: Option<&Path>) -> String {
+    confine
+        .and_then(|root| path.strip_prefix(root).ok())
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .map_or_else(
+            || {
+                path.file_name().map_or_else(
+                    || display_path(path),
+                    |name| name.to_string_lossy().into_owned(),
+                )
+            },
+            display_path,
+        )
+}
+
+fn remote_source_display(entry: &str) -> String {
+    let without_fragment = entry.split('#').next().unwrap_or(entry);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    let Some((scheme, rest)) = without_query.split_once("://") else {
+        return "<remote>".to_string();
+    };
+    let (authority, suffix) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if suffix.is_empty() {
+        format!("{scheme}://{host}")
+    } else {
+        format!("{scheme}://{host}/{suffix}")
+    }
+}
+
+pub(crate) fn reject_nonliteral_requirement(contents: &str, source: &str) -> Result<()> {
+    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)?;
+    reject_nonliteral_requirement_in_value(contents, source, &value)
+}
+
+fn reject_nonliteral_requirement_in_value(
+    contents: &str,
+    source: &str,
+    value: &serde_yaml_ng::Value,
+) -> Result<()> {
+    let Some(requirements) = value.get("requires") else {
+        return Ok(());
+    };
+    let requirement = requirements.get("alint");
+    let interpolated = requirement
+        .and_then(serde_yaml_ng::Value::as_str)
+        .is_some_and(|value| value.contains("{{") || value.contains("${"));
+    if interpolated || yaml_value_contains_tag(requirements) {
+        return Err(nonliteral_requirement_error(source));
+    }
+    reject_nonliteral_decoded_requirement(contents, source)
+}
+
+pub(crate) fn reject_nonliteral_decoded_requirement(contents: &str, source: &str) -> Result<()> {
+    if !alint_core::yaml_depth::mapping_subtree_is_literal(contents, &["requires"])
+        .map_err(|error| Error::Other(format!("{source}: YAML parse error: {error}")))?
+    {
+        return Err(nonliteral_requirement_error(source));
+    }
+    Ok(())
+}
+
+fn nonliteral_requirement_error(source: &str) -> Error {
+    Error::Other(format!(
+        "{source}: `requires.alint` must be a direct literal stable version without interpolation, aliases, anchors, tags, or merge keys"
+    ))
+}
+
+fn yaml_value_contains_tag(value: &serde_yaml_ng::Value) -> bool {
+    match value {
+        serde_yaml_ng::Value::Tagged(_) => true,
+        serde_yaml_ng::Value::Sequence(values) => values.iter().any(yaml_value_contains_tag),
+        serde_yaml_ng::Value::Mapping(values) => values
+            .iter()
+            .any(|(key, value)| yaml_value_contains_tag(key) || yaml_value_contains_tag(value)),
+        _ => false,
+    }
+}
+
+fn deserialize_raw_config(contents: &str, source: &str) -> Result<RawConfig> {
+    match serde_yaml_ng::from_str(contents) {
+        Ok(config) => {
+            let config: RawConfig = config;
+            if config.requires.is_some() {
+                reject_nonliteral_decoded_requirement(contents, source)?;
+            }
+            Ok(config)
+        }
+        Err(parse_error) => {
+            if let Err(error @ Error::Other(_)) = reject_nonliteral_requirement(contents, source) {
+                return Err(error);
+            }
+            Err(Error::Yaml(parse_error))
+        }
+    }
+}
+
 fn parse_config_interpolated_inner(contents: &str, source: &Path) -> Result<RawConfig> {
     // Reject a deeply-nested-flow config before `serde_yaml_ng` (libyaml) chews
     // on it super-linearly — a DoS reachable through an `extends:`'d ruleset.
@@ -115,6 +320,7 @@ fn parse_config_interpolated_inner(contents: &str, source: &Path) -> Result<RawC
     let source = display_path(source);
     let config: RawConfig = if contents.contains("{{") {
         let mut value: serde_yaml_ng::Value = serde_yaml_ng::from_str(contents)?;
+        reject_nonliteral_requirement_in_value(contents, &source, &value)?;
         // Which vars take their value from the environment, read off the RAW
         // text before interpolation erases the difference.
         let env_vars = env_derived_vars(value.get("vars"));
@@ -147,7 +353,7 @@ fn parse_config_interpolated_inner(contents: &str, source: &Path) -> Result<RawC
         }
         config
     } else {
-        let config = serde_yaml_ng::from_str(contents)?;
+        let config = deserialize_raw_config(contents, &source)?;
         crate::reject_ambiguous_yaml_in(&config, &source)?;
         config
     };
@@ -189,6 +395,7 @@ pub(crate) fn load_recursive(
     // grant trust, so nested calls receive the top's list; `is_top` calls read
     // their OWN `trusted_extends:` and ignore this argument. (W2, auto-fix.md 5.5.)
     trusted: &[String],
+    context: SourceContext,
 ) -> Result<RawConfig> {
     let canonical = path.canonicalize().map_err(|source| Error::Io {
         path: path.to_path_buf(),
@@ -196,7 +403,15 @@ pub(crate) fn load_recursive(
     })?;
     // Diamond chains reload a shared file once per DAG path (2^depth); a
     // non-top-level load is a pure function of its `MemoKey`, so reuse it.
-    let memo_key = (!is_top).then(|| MemoKey::new(&canonical, confine, trusted));
+    let memo_key = (!is_top).then(|| {
+        MemoKey::new(
+            &canonical,
+            confine,
+            trusted,
+            context.consumer_version,
+            context.source_class,
+        )
+    });
     if let Some(cached) = state.cached(memo_key.as_ref()) {
         return Ok(cached);
     }
@@ -226,6 +441,13 @@ pub(crate) fn load_recursive(
         source,
     })?;
     let mut config = parse_config_interpolated(&contents, &canonical)?;
+    validate_source_compatibility(
+        &mut config,
+        &local_source_display(&canonical, confine),
+        context.source_class,
+        context.consumer_version,
+        state.running_version,
+    )?;
 
     // W2 (auto-fix.md 5.5): `trusted_extends:` is a top-level authority. An is_top
     // config (the user's own `.alint.yml` or a `.alint.d/` drop-in) owns the
@@ -280,33 +502,15 @@ pub(crate) fn load_recursive(
         ..RawConfig::default()
     };
     for entry in &extends {
-        let url = entry.url();
-        let mut parent = if url.starts_with("http://") {
-            return Err(Error::Other(format!(
-                "plain http:// is not allowed in `extends:` (entry {url:?}); \
-                 use https:// with an SRI hash instead"
-            )));
-        } else if url.starts_with("https://") {
-            let remote = load_remote(url, opts, &mut state.visiting)?;
-            crate::reject_env_expansion_in(&remote.rules, &remote.templates, url)?;
-            remote
-        } else if let Some(spec) = url.strip_prefix("alint://bundled/") {
-            load_bundled(spec)?
-        } else {
-            let target = resolve_relative(&source_dir, url);
-            confine_extends_target(&target, url, confine)?;
-            load_recursive(&target, state, opts, confine, false, trusted)?
-        };
-        gate_extended_source(&parent, url, opts.kind_catalog)?;
-        mark_extended_provenance(&mut parent, url);
-        parent.drop_top_level_settings(url);
-        parent.rules = apply_rule_filter(parent.rules, entry)?;
-        if url.starts_with("https://") {
-            let base = url.split('#').next().unwrap_or(url);
-            if !trusted.iter().any(|t| t == base || t == url) {
-                cap_untrusted_remote(&mut parent, url, opts.kind_catalog)?;
-            }
-        }
+        let parent = load_extended_source(
+            entry,
+            &source_dir,
+            state,
+            opts,
+            confine,
+            trusted,
+            config.version,
+        )?;
         merged = merge(merged, parent);
     }
     merged = merge(merged, config);
@@ -315,6 +519,84 @@ pub(crate) fn load_recursive(
         state.memo.insert(key, merged.clone());
     }
     Ok(merged)
+}
+
+fn load_extended_source(
+    entry: &alint_core::ExtendsEntry,
+    source_dir: &Path,
+    state: &mut LoadState,
+    opts: &LoadOptions<'_>,
+    confine: Option<&Path>,
+    trusted: &[String],
+    consumer_version: Option<u32>,
+) -> Result<RawConfig> {
+    let url = entry.url();
+    let source_display = if url.starts_with("http://") || url.starts_with("https://") {
+        remote_source_display(url)
+    } else {
+        url.to_string()
+    };
+    let mut parent = if url.starts_with("http://") {
+        return Err(Error::Other(format!(
+            "plain http:// is not allowed in `extends:` (entry {source_display:?}); \
+             use https:// with an SRI hash instead"
+        )));
+    } else if url.starts_with("https://") {
+        let mut remote = load_remote(url, opts, &mut state.visiting)?;
+        validate_source_compatibility(
+            &mut remote,
+            &source_display,
+            ConfigSourceClass::Remote,
+            consumer_version,
+            state.running_version,
+        )?;
+        if !remote.extends.is_empty() {
+            return Err(Error::Other(format!(
+                "remote config at {source_display} contains its own `extends:`; \
+                 nested remote extends are not supported in this build"
+            )));
+        }
+        crate::reject_env_expansion_in(&remote.rules, &remote.templates, &source_display)?;
+        remote
+    } else if let Some(spec) = url.strip_prefix("alint://bundled/") {
+        let mut bundled = load_bundled(spec)?;
+        validate_source_compatibility(
+            &mut bundled,
+            &format!("alint://bundled/{spec}"),
+            ConfigSourceClass::Bundled,
+            consumer_version,
+            state.running_version,
+        )?;
+        if !bundled.extends.is_empty() {
+            return Err(Error::internal(format!(
+                "bundled ruleset '{spec}' declares its own `extends:`"
+            )));
+        }
+        bundled
+    } else {
+        let target = resolve_relative(source_dir, url);
+        confine_extends_target(&target, url, confine)?;
+        load_recursive(
+            &target,
+            state,
+            opts,
+            confine,
+            false,
+            trusted,
+            SourceContext::new(ConfigSourceClass::LocalExtend, consumer_version),
+        )?
+    };
+    gate_extended_source(&parent, &source_display, opts.kind_catalog)?;
+    mark_extended_provenance(&mut parent, &source_display);
+    parent.drop_top_level_settings(&source_display);
+    parent.rules = apply_rule_filter(parent.rules, entry, &source_display)?;
+    if url.starts_with("https://") {
+        let base = url.split('#').next().unwrap_or(url);
+        if !trusted.iter().any(|entry| entry == base || entry == url) {
+            cap_untrusted_remote(&mut parent, &source_display, opts.kind_catalog)?;
+        }
+    }
+    Ok(parent)
 }
 
 /// Record that the `extends:` source `url` shaped `parent`'s rules / templates,
@@ -382,18 +664,53 @@ fn cap_untrusted_remote(
     Ok(())
 }
 
+fn sanitized_remote_resolution_error(source: &str, error: &extends::ResolveError) -> Error {
+    let detail = match error {
+        extends::ResolveError::Sri(_) => "integrity verification failed".to_string(),
+        extends::ResolveError::Fetch(extends::FetchError::Request { .. }) => {
+            "HTTPS request failed".to_string()
+        }
+        extends::ResolveError::Fetch(extends::FetchError::Status { status, .. }) => {
+            format!("server returned HTTP {status}")
+        }
+        extends::ResolveError::Fetch(extends::FetchError::TooLarge { limit, .. }) => {
+            format!("response body exceeds the {limit}-byte ceiling")
+        }
+        extends::ResolveError::Fetch(extends::FetchError::Io { source, .. }) => {
+            format!("response body read failed: {source}")
+        }
+        extends::ResolveError::Cache(extends::CacheError::NoCacheDir) => {
+            "could not resolve a user cache directory".to_string()
+        }
+        extends::ResolveError::Cache(extends::CacheError::Io { source, .. }) => {
+            format!("cache I/O failed: {source}")
+        }
+        extends::ResolveError::Cache(extends::CacheError::CorruptEntry { .. }) => {
+            "cached remote ruleset failed integrity verification".to_string()
+        }
+    };
+    Error::Other(format!("resolving {source}: {detail}"))
+}
+
 fn load_remote(
     entry: &str,
     opts: &LoadOptions<'_>,
     visiting: &mut std::collections::HashSet<PathBuf>,
 ) -> Result<RawConfig> {
-    let (url, sri) = extends::split_url_and_sri(entry).map_err(|e| Error::Other(e.to_string()))?;
+    let source = remote_source_display(entry);
+    let (url, sri) = extends::split_url_and_sri(entry).map_err(|_| {
+        Error::Other(format!(
+            "remote `extends` entry {source:?} has invalid integrity metadata; \
+             expected `#sha256-<64 lowercase hex characters>`"
+        ))
+    })?;
     let Some(sri) = sri else {
         return Err(Error::Other(format!(
-            "remote `extends` entry {entry:?} has no integrity hash; \
+            "remote `extends` entry {source:?} has no integrity hash; \
              HTTPS extends require `#sha256-<hex>` in the URL fragment"
         )));
     };
+    let source = remote_source_display(&url);
 
     let cache = match opts.cache.clone() {
         Some(c) => c,
@@ -402,7 +719,7 @@ fn load_remote(
     };
     let fetcher = opts.fetcher.clone().unwrap_or_default();
     let body = extends::resolve_remote(&url, &sri, &fetcher, &cache)
-        .map_err(|e| Error::Other(format!("resolving {url}: {e}")))?;
+        .map_err(|error| sanitized_remote_resolution_error(&source, &error))?;
 
     // Remote entries may themselves extend other things (local
     // paths relative to… what, exactly?). For v0.2 we forbid
@@ -410,7 +727,7 @@ fn load_remote(
     // When we lift this restriction, the base for relative
     // resolution needs a deliberate decision.
     let body_str = std::str::from_utf8(&body)
-        .map_err(|e| Error::Other(format!("remote body from {url} is not UTF-8: {e}")))?;
+        .map_err(|e| Error::Other(format!("remote body from {source} is not UTF-8: {e}")))?;
     // A remote body is untrusted input (SRI pins WHICH bytes, not that they are
     // benign), so it needs the same flow-depth guard as a local config -- otherwise
     // `serde_yaml_ng` (libyaml) chews super-linearly on a deep-flow bomb and hangs
@@ -419,29 +736,27 @@ fn load_remote(
     // are covered -- true for local, and now for remote).
     if !alint_core::yaml_depth::flow_depth_within_limit(body_str) {
         return Err(Error::Other(format!(
-            "remote config at {url}: YAML flow nesting exceeds the maximum supported depth ({})",
+            "remote config at {source}: YAML flow nesting exceeds the maximum supported depth ({})",
             alint_core::yaml_depth::MAX_YAML_FLOW_DEPTH
         )));
     }
     if !alint_core::yaml_depth::expansion_within_limit(body_str) {
         return Err(Error::Other(format!(
-            "remote config at {url}: YAML alias expansion exceeds the maximum supported size"
+            "remote config at {source}: YAML alias expansion exceeds the maximum supported size"
         )));
     }
-    let config: RawConfig = serde_yaml_ng::from_str(body_str)
-        .map_err(|e| Error::Other(format!("remote config at {url}: YAML parse error: {e}")))?;
-    crate::reject_ambiguous_yaml_in(&config, url.as_str())?;
-    if !config.extends.is_empty() {
-        return Err(Error::Other(format!(
-            "remote config at {url} contains its own `extends:`; \
-             nested remote extends are not supported in this build"
-        )));
-    }
+    let config = deserialize_raw_config(body_str, &source).map_err(|error| match error {
+        Error::Yaml(error) => Error::Other(format!(
+            "remote config at {source}: YAML parse error: {error}"
+        )),
+        other => other,
+    })?;
+    crate::reject_ambiguous_yaml_in(&config, &source)?;
     // Cycle guard token for the URL itself so a self-referencing
     // fetched config can't loop.
     let token = std::path::PathBuf::from(format!("remote://{}", sri.encoded()));
     if !visiting.insert(token.clone()) {
-        return Err(Error::Other(format!("cycle on remote extends: {url}")));
+        return Err(Error::Other(format!("cycle on remote extends: {source}")));
     }
     visiting.remove(&token);
     Ok(config)
@@ -498,18 +813,21 @@ fn load_bundled(spec: &str) -> Result<RawConfig> {
             "built-in ruleset '{spec}' exceeds a maximum supported YAML complexity limit"
         )));
     }
-    let config: RawConfig = serde_yaml_ng::from_str(body).map_err(|e| {
-        // A ruleset shipped *inside* the binary failing to parse is an alint
-        // bug, not the user's config — Internal → CLI exit 3 (M11).
-        Error::internal(format!("built-in ruleset '{spec}' failed to parse: {e}"))
-    })?;
+    let config =
+        deserialize_raw_config(body, &format!("alint://bundled/{spec}")).map_err(|error| {
+            match error {
+                Error::Yaml(error) => {
+                    // A ruleset shipped *inside* the binary failing to parse is an
+                    // alint bug, not the user's config — Internal → CLI exit 3 (M11).
+                    Error::internal(format!(
+                        "built-in ruleset '{spec}' failed to parse: {error}"
+                    ))
+                }
+                other => Error::internal(other.to_string()),
+            }
+        })?;
     crate::reject_ambiguous_yaml_in(&config, &format!("alint://bundled/{spec}"))
         .map_err(|e| Error::internal(e.to_string()))?;
-    if !config.extends.is_empty() {
-        return Err(Error::internal(format!(
-            "bundled ruleset '{spec}' declares its own `extends:`"
-        )));
-    }
     Ok(config)
 }
 
@@ -569,6 +887,171 @@ mod tests {
             display_path(Path::new("/repo/.alint.yml")),
             "/repo/.alint.yml"
         );
+    }
+
+    #[test]
+    fn remote_source_display_removes_credentials_query_and_fragment() {
+        assert_eq!(
+            remote_source_display(
+                "https://user:secret@example.test/rules.yml?token=secret#sha256-deadbeef"
+            ),
+            "https://example.test/rules.yml"
+        );
+    }
+
+    #[test]
+    fn requirement_must_be_direct_literal_metadata() {
+        for body in [
+            "version: 1\nrequires:\n  alint: '{{env.ALINT_REQUIRED}}'\nrules: []\n",
+            "version: 1\nvars: { minimum: &v '0.19.0' }\nrequires:\n  alint: *v\nrules: []\n",
+            "version: 1\nrequires:\n  alint: &v '0.19.0'\nrules: []\n",
+            "version: 1\nrequires:\n  alint: !release '0.19.0'\nrules: []\n",
+            "version: 1\nrequires:\n  <<: { alint: '0.19.0' }\nrules: []\n",
+            "version: 1\nvars: { requirement_key: &k requires }\n? *k\n:\n  alint: '0.19.0'\nrules: []\n",
+            "version: 1\nvars: { minimum: &v '0.19.0' }\n\"requi\\x72es\":\n  alint: *v\nrules: []\n",
+        ] {
+            let error = parse_config_interpolated_inner(body, Path::new(".alint.yml"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("direct literal stable version"), "{error}");
+        }
+    }
+
+    #[test]
+    fn unrelated_yaml_metadata_does_not_taint_a_literal_requirement() {
+        let config = parse_config_interpolated_inner(
+            "version: 1\nvars: { reusable: &value literal }\nrequires:\n  alint: '0.19.0'\nrules: []\n",
+            Path::new(".alint.yml"),
+        )
+        .unwrap();
+        assert_eq!(
+            config.requires.unwrap().alint,
+            alint_core::StableVersion::new(0, 19, 0)
+        );
+    }
+    #[test]
+    fn every_complete_source_class_requires_an_explicit_version() {
+        let running = RunningVersion::new(alint_core::StableVersion::new(0, 19, 0), false);
+        for source_class in [
+            ConfigSourceClass::Root,
+            ConfigSourceClass::LocalExtend,
+            ConfigSourceClass::Bundled,
+            ConfigSourceClass::Remote,
+            ConfigSourceClass::Nested,
+            ConfigSourceClass::Inline,
+        ] {
+            let mut config = RawConfig::default();
+            let error = validate_source_compatibility(
+                &mut config,
+                "source.yml",
+                source_class,
+                None,
+                running,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("missing required config `version`"),
+                "{source_class:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn drop_in_inherits_omitted_version_and_records_compatibility() {
+        let mut config: RawConfig = serde_yaml_ng::from_str("rules: []").unwrap();
+        validate_source_compatibility(
+            &mut config,
+            ".alint.d/10-team.yml",
+            ConfigSourceClass::DropIn,
+            Some(1),
+            RunningVersion::new(alint_core::StableVersion::new(0, 19, 0), false),
+        )
+        .unwrap();
+        assert_eq!(config.version, Some(1));
+        assert_eq!(config.compatibility.len(), 1);
+        assert_eq!(config.compatibility[0].consumer_version, Some(1));
+    }
+
+    #[test]
+    fn drop_in_explicit_version_must_equal_root() {
+        let running = RunningVersion::new(alint_core::StableVersion::new(0, 19, 0), false);
+        let mut matching: RawConfig = serde_yaml_ng::from_str("version: 1\nrules: []").unwrap();
+        validate_source_compatibility(
+            &mut matching,
+            ".alint.d/10-team.yml",
+            ConfigSourceClass::DropIn,
+            Some(1),
+            running,
+        )
+        .unwrap();
+        assert_eq!(matching.compatibility[0].consumer_version, Some(1));
+
+        let mut mismatching: RawConfig = serde_yaml_ng::from_str("version: 2\nrules: []").unwrap();
+        let error = validate_source_compatibility(
+            &mut mismatching,
+            ".alint.d/10-team.yml",
+            ConfigSourceClass::DropIn,
+            Some(1),
+            running,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("drop-in config version 2 must equal root config version 1"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn local_source_requirement_fails_before_child_resolution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".alint.yml");
+        std::fs::write(
+            &path,
+            "version: 1\nrequires:\n  alint: '999.0.0'\nextends:\n  - https://invalid.invalid/rules.yml#sha256-deadbeef\nrules:\n  - id: forbidden-command\n    kind: command\n    command: [sh, -c, 'exit 0']\n    level: error\n",
+        )
+        .unwrap();
+        let error = crate::load(&path).unwrap_err().to_string();
+        assert!(error.contains("requires alint 999.0.0 or newer"), "{error}");
+        assert!(!error.contains("fetch"), "{error}");
+        assert!(!error.contains("forbidden-command"), "{error}");
+    }
+
+    #[test]
+    fn source_version_direction_is_not_symmetric() {
+        for (consumer, source, allowed) in [(1, 1, true), (1, 2, false), (2, 1, true), (2, 2, true)]
+        {
+            assert_eq!(
+                source_version_allowed(consumer, source),
+                allowed,
+                "{consumer} -> {source}"
+            );
+        }
+        assert!(
+            source_version_allowed(2, 1) && !source_version_allowed(1, 2),
+            "a v2 -> v1 -> v2 chain must fail at its second edge"
+        );
+    }
+
+    #[test]
+    fn memoization_separates_consumer_versions() {
+        let path = Path::new("/repo/base.yml");
+        let v1 = MemoKey::new(
+            path,
+            Some(Path::new("/repo")),
+            &[],
+            Some(1),
+            ConfigSourceClass::LocalExtend,
+        );
+        let v2 = MemoKey::new(
+            path,
+            Some(Path::new("/repo")),
+            &[],
+            Some(2),
+            ConfigSourceClass::LocalExtend,
+        );
+        assert!(v1 != v2);
     }
 
     #[test]
@@ -681,5 +1164,10 @@ mod tests {
             started.elapsed()
         );
         assert_eq!(cfg.rules.len(), depth + 1);
+        assert_eq!(
+            cfg.compatibility.len(),
+            depth + 1,
+            "diamond references must retain one compatibility record per canonical source/context"
+        );
     }
 }

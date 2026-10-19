@@ -844,6 +844,7 @@ mod tests {
         );
         let config = crate::config::Config {
             version: 1,
+            requires: None,
             extends: Vec::new(),
             ignore: Vec::new(),
             respect_gitignore: true,
@@ -854,6 +855,7 @@ mod tests {
             nested_configs: false,
             allow_out_of_root: crate::AllowOutOfRoot::default(),
             baseline: None,
+            compatibility: Vec::new(),
         };
         let err = reject_custom_facts(&config, "./base.yml").unwrap_err();
         assert!(err.to_string().contains("custom"), "{err}");
@@ -865,6 +867,7 @@ mod tests {
         let facts = parse("- id: plain\n  any_file_exists: x\n");
         let config = crate::config::Config {
             version: 1,
+            requires: None,
             extends: Vec::new(),
             ignore: Vec::new(),
             respect_gitignore: true,
@@ -875,6 +878,7 @@ mod tests {
             nested_configs: false,
             allow_out_of_root: crate::AllowOutOfRoot::default(),
             baseline: None,
+            compatibility: Vec::new(),
         };
         assert!(reject_custom_facts(&config, "./base.yml").is_ok());
     }

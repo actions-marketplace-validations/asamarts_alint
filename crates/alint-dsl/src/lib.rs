@@ -55,7 +55,9 @@ pub use trust::{
     reject_trusted_extends_in, reject_untrusted_ignore_in,
 };
 
-use alint_core::{Config, Error, FactSpec, Result};
+use alint_core::{
+    Config, ConfigCompatibility, ConfigRequirements, Error, FactSpec, Result, RunningVersion,
+};
 use serde::Deserialize;
 use serde_yaml_ng::Mapping;
 
@@ -122,9 +124,15 @@ pub fn load_with(path: &Path, opts: &LoadOptions<'_>) -> Result<Config> {
             path: path.to_path_buf(),
             source,
         })?;
-        let discovered =
-            nested::discover_nested(&root_dir, &canonical_root_cfg, &raw, opts.kind_catalog)?;
-        raw.rules.extend(discovered);
+        let (discovered_rules, discovered_compatibility) = nested::discover_nested(
+            &root_dir,
+            &canonical_root_cfg,
+            &raw,
+            opts.kind_catalog,
+            RunningVersion::current(),
+        )?;
+        raw.rules.extend(discovered_rules);
+        extend_compatibility(&mut raw.compatibility, discovered_compatibility);
     }
 
     let merged = raw.finalize(opts.kind_catalog)?;
@@ -166,7 +174,15 @@ fn load_top_level_raw(path: &Path, opts: &LoadOptions<'_>) -> Result<RawConfig> 
     // recursion passes `false`), so an untrusted ruleset can't lift confinement.
     // `&[]` trusted: the top-level config reads its OWN `trusted_extends:` inside
     // `load_recursive` (is_top), so the seed list is empty.
-    let mut raw = loader::load_recursive(path, &mut state, opts, Some(&confine_root), true, &[])?;
+    let mut raw = loader::load_recursive(
+        path,
+        &mut state,
+        opts,
+        Some(&confine_root),
+        true,
+        &[],
+        loader::SourceContext::new(alint_core::ConfigSourceClass::Root, None),
+    )?;
 
     // `.alint.d/*.yml` drop-ins — auto-discovered next to the
     // top-level config and merged in alphabetical order. The
@@ -198,6 +214,7 @@ fn load_top_level_raw(path: &Path, opts: &LoadOptions<'_>) -> Result<RawConfig> 
             true,
             // is_top: a drop-in reads its own `trusted_extends:`, so seed empty.
             &[],
+            loader::SourceContext::new(alint_core::ConfigSourceClass::DropIn, raw.version),
         )?;
         raw = merge(raw, drop_in);
     }
@@ -254,11 +271,14 @@ pub(crate) struct RawConfig {
     // the defaults once, after every source has merged.
     #[serde(default)]
     version: Option<u32>,
+    /// Source-local minimum binary requirement. Validated before composition.
+    #[serde(default, deserialize_with = "deserialize_explicit")]
+    requires: Option<ConfigRequirements>,
     #[serde(default)]
     extends: Vec<alint_core::ExtendsEntry>,
     #[serde(default)]
     ignore: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_explicit")]
     respect_gitignore: Option<bool>,
     #[serde(default)]
     vars: std::collections::HashMap<String, String>,
@@ -280,7 +300,7 @@ pub(crate) struct RawConfig {
     #[serde(default, deserialize_with = "deserialize_explicit")]
     #[allow(clippy::option_option)] // unset vs explicit `null` vs a limit
     fix_size_limit: Option<Option<u64>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_explicit")]
     nested_configs: Option<bool>,
     /// `allow_out_of_root:` — the top-level escape hatch for path
     /// confinement. Parsed here (the YAML-facing form); the loader
@@ -317,6 +337,9 @@ pub(crate) struct RawConfig {
     /// config has merged, so `finalize` judges them. Not part of the schema.
     #[serde(skip)]
     untrusted_when_var_reads: Vec<UntrustedWhenVarRead>,
+    /// Validated per-source compatibility records retained through composition.
+    #[serde(skip)]
+    compatibility: Vec<ConfigCompatibility>,
 }
 
 const DEFAULT_FIX_SIZE_LIMIT: Option<u64> = Some(1 << 20);
@@ -340,6 +363,7 @@ impl RawConfig {
     pub(crate) fn drop_top_level_settings(&mut self, source: &str) {
         // `version:` describes the extended file itself, not the consumer.
         self.version = None;
+        self.requires = None;
         let declared: Vec<&str> = [
             ("respect_gitignore", self.respect_gitignore.take().is_some()),
             ("fix_size_limit", self.fix_size_limit.take().is_some()),
@@ -505,6 +529,7 @@ impl RawConfig {
         }
         Ok(Config {
             version: self.version.unwrap_or(0),
+            requires: effective_requirements(&self.compatibility),
             extends: Vec::new(),
             ignore: self.ignore,
             respect_gitignore: self.respect_gitignore.unwrap_or(true),
@@ -515,10 +540,18 @@ impl RawConfig {
             nested_configs: self.nested_configs.unwrap_or(false),
             allow_out_of_root: self.allow_out_of_root,
             baseline: self.baseline,
+            compatibility: self.compatibility,
         })
     }
 }
 
+fn effective_requirements(compatibility: &[ConfigCompatibility]) -> Option<ConfigRequirements> {
+    compatibility
+        .iter()
+        .filter_map(|record| record.requires_alint)
+        .max()
+        .map(|alint| ConfigRequirements { alint })
+}
 /// Expand a rule mapping that references `extends_template:`,
 /// or pass it through unchanged if it doesn't. The expansion
 /// looks up the named template, rejects unknown ids and
@@ -909,7 +942,20 @@ pub fn parse(yaml: &str) -> Result<Config> {
             "YAML alias expansion exceeds the maximum supported size".to_string(),
         ));
     }
-    let config: Config = serde_yaml_ng::from_str(yaml)?;
+    let mut config: Config = match serde_yaml_ng::from_str(yaml) {
+        Ok(config) => config,
+        Err(parse_error) => {
+            if let Err(error @ Error::Other(_)) =
+                loader::reject_nonliteral_requirement(yaml, "<inline>")
+            {
+                return Err(error);
+            }
+            return Err(Error::Yaml(parse_error));
+        }
+    };
+    if config.requires.is_some() {
+        loader::reject_nonliteral_decoded_requirement(yaml, "<inline>")?;
+    }
     if !config.extends.is_empty() {
         return Err(Error::Other(
             "`extends:` is only resolved when loading from a file; \
@@ -917,6 +963,30 @@ pub fn parse(yaml: &str) -> Result<Config> {
                 .into(),
         ));
     }
+    if !Config::supports_version(config.version) {
+        return Err(Error::Other(format!(
+            "<inline>: unsupported config version {} (this build supports {} through {})",
+            config.version,
+            Config::MIN_SUPPORTED_VERSION,
+            Config::CURRENT_VERSION
+        )));
+    }
+    let running_version = RunningVersion::current();
+    if let Some(requirements) = config.requires
+        && !running_version.satisfies(requirements.alint)
+    {
+        return Err(Error::Other(format!(
+            "<inline>: requires alint {} or newer (running {running_version}; config version {})",
+            requirements.alint, config.version
+        )));
+    }
+    config.compatibility.push(ConfigCompatibility {
+        source: "<inline>".to_string(),
+        source_class: alint_core::ConfigSourceClass::Inline,
+        config_version: config.version,
+        requires_alint: config.requires.map(|requirements| requirements.alint),
+        consumer_version: None,
+    });
     validate(&config)?;
     Ok(config)
 }
@@ -930,11 +1000,11 @@ pub fn parse(yaml: &str) -> Result<Config> {
 pub(crate) fn apply_rule_filter(
     rules: Vec<serde_yaml_ng::Mapping>,
     entry: &alint_core::ExtendsEntry,
+    source_display: &str,
 ) -> Result<Vec<serde_yaml_ng::Mapping>> {
-    let url = entry.url();
     if entry.only().is_some() && entry.except().is_some() {
         return Err(Error::Other(format!(
-            "`extends:` entry {url:?}: `only:` and `except:` are mutually exclusive"
+            "`extends:` entry {source_display:?}: `only:` and `except:` are mutually exclusive"
         )));
     }
     let Some((filter_ids, mode)) = entry
@@ -946,7 +1016,7 @@ pub(crate) fn apply_rule_filter(
     };
     if filter_ids.is_empty() {
         return Err(Error::Other(format!(
-            "`extends:` entry {url:?}: `{}:` is empty; list at least one rule id",
+            "`extends:` entry {source_display:?}: `{}:` is empty; list at least one rule id",
             mode.field_name()
         )));
     }
@@ -963,7 +1033,7 @@ pub(crate) fn apply_rule_filter(
         let mut known: Vec<&String> = available.iter().collect();
         known.sort();
         return Err(Error::Other(format!(
-            "`extends:` entry {url:?}: {} references unknown rule id(s) {:?}; ruleset ships: {:?}",
+            "`extends:` entry {source_display:?}: {} references unknown rule id(s) {:?}; ruleset ships: {:?}",
             mode.field_name(),
             unknown,
             known,
@@ -1025,6 +1095,25 @@ impl FilterMode {
 ///   ([`RawConfig::drop_top_level_settings`]).
 /// - `extends` is always left empty on the merged result;
 ///   resolved already.
+fn extend_compatibility(
+    target: &mut Vec<ConfigCompatibility>,
+    incoming: impl IntoIterator<Item = ConfigCompatibility>,
+) {
+    for record in incoming {
+        if !target.contains(&record) {
+            target.push(record);
+        }
+    }
+}
+
+fn merged_compatibility(
+    mut current: Vec<ConfigCompatibility>,
+    incoming: Vec<ConfigCompatibility>,
+) -> Vec<ConfigCompatibility> {
+    extend_compatibility(&mut current, incoming);
+    current
+}
+
 pub(crate) fn merge(a: RawConfig, b: RawConfig) -> RawConfig {
     let version = b.version.or(a.version);
     let respect_gitignore = b.respect_gitignore.or(a.respect_gitignore);
@@ -1061,6 +1150,7 @@ pub(crate) fn merge(a: RawConfig, b: RawConfig) -> RawConfig {
     vars.extend(b.vars);
     let mut untrusted_when_var_reads = a.untrusted_when_var_reads;
     untrusted_when_var_reads.extend(b.untrusted_when_var_reads);
+    let compatibility = merged_compatibility(a.compatibility, b.compatibility);
 
     let mut facts_by_id: std::collections::BTreeMap<String, FactSpec> =
         std::collections::BTreeMap::new();
@@ -1141,6 +1231,7 @@ pub(crate) fn merge(a: RawConfig, b: RawConfig) -> RawConfig {
 
     RawConfig {
         version,
+        requires: None,
         extends: Vec::new(),
         ignore,
         respect_gitignore,
@@ -1155,14 +1246,16 @@ pub(crate) fn merge(a: RawConfig, b: RawConfig) -> RawConfig {
         trusted_extends,
         env_vars,
         untrusted_when_var_reads,
+        compatibility,
     }
 }
 
 fn validate(config: &Config) -> Result<()> {
-    if config.version != Config::CURRENT_VERSION {
+    if !Config::supports_version(config.version) {
         return Err(Error::Other(format!(
-            "unsupported config version {} (this build supports {})",
+            "unsupported config version {} (this build supports {} through {})",
             config.version,
+            Config::MIN_SUPPORTED_VERSION,
             Config::CURRENT_VERSION,
         )));
     }

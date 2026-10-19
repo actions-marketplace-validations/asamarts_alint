@@ -1,6 +1,6 @@
 # v0.20: Policy authoring loop
 
-Status: Accepted design (2026-10-18); implementation not started.
+Status: Accepted design (2026-10-18); P1 and P4 implemented, P2/P3 next.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 (DEC-6) and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md)
 (Phase 1b questions Q7, Q11, and Q14).
@@ -124,6 +124,18 @@ v0.20 does not add:
 P1, P4, and the trace model portion of P5 can proceed independently. P2 precedes the CLI so the
 command cannot become a private runner implementation. P5 precedes trace rendering so human and
 JSON output project one typed event model. P7 is a migration, not a second implementation.
+
+Implementation status:
+
+- **P1 complete:** the independent `alint-testkit::policy_test` v1 model, aggregate validation
+  diagnostics, package/fixture confinement preflight, generated
+  `schemas/v1/policy-test.json`, and adversarial unit coverage are committed. The legacy internal
+  runner remains intentionally separate until the P2/P3 cutover; P7 removes it after the public
+  runner is executable.
+- **P4 complete:** root, local, bundled, remote, nested, drop-in, and direct-parse sources validate
+  `version` and literal `requires.alint` before composition. Compatibility provenance survives the
+  merge, requirements remain non-policy metadata, and the committed config schema exposes the
+  closed requirement map.
 
 ## Cross-cutting invariants
 

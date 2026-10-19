@@ -1,5 +1,5 @@
 {
-  "format_version": 4,
+  "format_version": 5,
   "alint_version": "0.19.0",
   "counts": {
     "rule_kinds": 102,
@@ -4790,6 +4790,14 @@
       "expect_matches": true,
       "nested_rules": false
     }
+  },
+  "compatibility": {
+    "config_versions": [
+      1
+    ],
+    "policy_test_versions": [
+      1
+    ]
   },
   "rule_source_files": {
     "changeset_requires_path": "changeset_requires_path",

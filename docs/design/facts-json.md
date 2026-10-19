@@ -1,8 +1,9 @@
 # Design doc: `facts.json` — the machine-readable surface-area contract
 
 Status: Implemented (`xtask gen-facts` + committed `facts.json`, Phase 3);
-format v4 added the canonical `KindMeta` inventory in v0.19 W1 (2026-10-16).
-Decisions: ADR-0001 (spec-driven development), extended by ADR-0019 Phase 0.
+format v4 added the canonical `KindMeta` inventory in v0.19 W1 (2026-10-16), and format v5 adds
+language compatibility discovery in v0.20 P1/P4.
+Decisions: ADR-0001 (spec-driven development), extended by ADR-0019 Phase 0 and ADR-0022.
 Demand evidence: the v0.9.22 audit found a "60 rule kinds" README claim that was
 ten behind reality for months; the 2026-05-22 alint.org bump silently failed CF
 Pages because the consumer and producer disagreed on a hand-counted number.
@@ -41,7 +42,7 @@ volatile fields, so it is committed and content-diff gated like the schema.
 
 ```json
 {
-  "format_version": 4,
+  "format_version": 5,
   "alint_version": "0.19.0",
   "counts": {
     "rule_kinds": 102,
@@ -69,6 +70,10 @@ volatile fields, so it is committed and content-diff gated like the schema.
       "...": "other KindMeta fields"
     }
   },
+  "compatibility": {
+    "config_versions": [1],
+    "policy_test_versions": [1]
+  },
   "bundled_rulesets": ["apache/governance", "go", "rust", "..."],
   "output_formats": ["agent", "github", "gitlab", "human", "json", "junit", "markdown", "sarif"],
   "subcommands": ["check", "explain", "export-agents-md", "..."],
@@ -83,9 +88,11 @@ list-backed counts equal their list lengths; `auto_fix_ops` is count-only.
 `kind_meta` is keyed by canonical kind only; consumers resolve an alias through
 `rule_aliases` and then read the canonical record.
 
-`facts.json` ships alongside the volatile build-time `manifest.json`. Format v4
-adds the `kind_meta` inventory. The alint.org facts loader ignores unknown keys;
-its supported-version checks apply to the separate bundle manifest.
+`facts.json` ships alongside the volatile build-time `manifest.json`. Format v4 added the
+`kind_meta` inventory. Format v5 adds `compatibility`, derived from the config and policy-test
+runtime constants; trace support joins that object only when the trace surface exists. The
+alint.org facts loader ignores unknown keys; its supported-version checks apply to the separate
+bundle manifest.
 
 ## 3. Semantics
 
@@ -98,6 +105,8 @@ uses, so `facts.json` can never disagree with the README:
 | `rule_kinds` (count) | canonical entries in the generated category bridge |
 | `rule_aliases` (count and map) | `ALIAS_TO_CANONICAL` in the generated category bridge |
 | `kind_meta` | canonical `KindMeta` records in the built-in `RuleRegistry`; aliases resolve through `rule_aliases` |
+| `compatibility.config_versions` | `Config::{MIN_SUPPORTED_VERSION,CURRENT_VERSION}` |
+| `compatibility.policy_test_versions` | `alint_testkit::POLICY_TEST_VERSION` |
 | `rule_kinds` (list) | accepted `kind:` values in `crates/alint-dsl/tests/fixtures/all_kinds.yaml`, aliases included |
 | `families` | non-meta `## ` headings in `docs/rules.md` |
 | `bundled_rulesets` | `.yml` files (recursive) under `crates/alint-dsl/rulesets/v1/` |

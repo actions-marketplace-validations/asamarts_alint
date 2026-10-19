@@ -11,7 +11,10 @@
 use std::fs;
 use std::path::Path;
 
-use alint_core::{Error, KindCatalog, KindMeta, PathsSupport, Result, SelectorType};
+use alint_core::{
+    ConfigCompatibility, ConfigSourceClass, Error, KindCatalog, KindMeta, PathsSupport, Result,
+    RunningVersion, SelectorType,
+};
 use serde_yaml_ng::{Mapping, Value};
 
 use crate::{DEFAULT_CONFIG_NAMES, RawConfig};
@@ -71,9 +74,8 @@ const NESTED_RULE_KINDS: &[&str] = &["for_each_dir", "for_each_file", "every_mat
 /// MVP restrictions enforced here:
 /// - Nested configs cannot declare `extends:`, `facts:`,
 ///   `vars:`, `ignore:`, `respect_gitignore:`, `fix_size_limit:`,
-///   or `nested_configs:`. Only `version:` and `rules:` are
-///   honored; other fields trip `deny_unknown_fields` or a
-///   dedicated check.
+///   or `nested_configs:`. Only `version:`, `requires:`, and `rules:` are
+///   honored; other fields trip `deny_unknown_fields` or a dedicated check.
 /// - Each nested rule must provide at least one scope field
 ///   (`paths` / `select` / `primary`) — otherwise there's
 ///   nothing to re-root and the rule's effective scope can't
@@ -85,7 +87,8 @@ pub(crate) fn discover_nested(
     canonical_root_cfg: &Path,
     root: &RawConfig,
     catalog: Option<KindCatalog<'_>>,
-) -> Result<Vec<Mapping>> {
+    running_version: RunningVersion,
+) -> Result<(Vec<Mapping>, Vec<ConfigCompatibility>)> {
     let walk_opts = alint_core::WalkOptions {
         respect_gitignore: root.respect_gitignore.unwrap_or(true),
         extra_ignores: root.ignore.clone(),
@@ -102,6 +105,7 @@ pub(crate) fn discover_nested(
         .collect();
 
     let mut discovered: Vec<Mapping> = Vec::new();
+    let mut compatibility = Vec::new();
     for entry in &index.entries {
         if entry.is_dir {
             continue;
@@ -129,7 +133,16 @@ pub(crate) fn discover_nested(
             .map(Path::to_path_buf)
             .unwrap_or_default();
 
-        let nested_rules = load_nested_config(&abs, &rel_dir, catalog)?;
+        let source = entry.path.to_string_lossy().replace('\\', "/");
+        let (nested_rules, nested_compatibility) = load_nested_config(
+            &abs,
+            &rel_dir,
+            &source,
+            root.version,
+            running_version,
+            catalog,
+        )?;
+        compatibility.extend(nested_compatibility);
         for rule in nested_rules {
             if let Some(id) = rule.get("id").and_then(|v| v.as_str())
                 && !seen_ids.insert(id.to_string())
@@ -148,7 +161,7 @@ pub(crate) fn discover_nested(
             discovered.push(rule);
         }
     }
-    Ok(discovered)
+    Ok((discovered, compatibility))
 }
 
 /// Load a nested config and return its rule mappings, each
@@ -157,8 +170,11 @@ pub(crate) fn discover_nested(
 fn load_nested_config(
     abs_path: &Path,
     rel_dir: &Path,
+    source: &str,
+    consumer_version: Option<u32>,
+    running_version: RunningVersion,
     catalog: Option<KindCatalog<'_>>,
-) -> Result<Vec<Mapping>> {
+) -> Result<(Vec<Mapping>, Vec<ConfigCompatibility>)> {
     let contents = fs::read_to_string(abs_path).map_err(|source| Error::Io {
         path: abs_path.to_path_buf(),
         source,
@@ -167,12 +183,18 @@ fn load_nested_config(
     // same `{{env.X}}` interpolation as the top-level config and
     // drop-ins. Its errors already name the file.
     let mut config: RawConfig = crate::loader::parse_config_interpolated(&contents, abs_path)?;
+    crate::loader::validate_source_compatibility(
+        &mut config,
+        source,
+        ConfigSourceClass::Nested,
+        consumer_version,
+        running_version,
+    )?;
 
     // MVP: reject nested configs that try to set anything that
-    // could affect the whole repo. Only `version:` and `rules:`
-    // are meaningful; everything else is suspicious enough to
-    // require an explicit error.
-    let source = abs_path.display().to_string();
+    // could affect the whole repo. Only `version:`, `requires:`, and `rules:`
+    // are meaningful; everything else is suspicious enough to require an
+    // explicit error.
     if !config.extends.is_empty() {
         return Err(Error::Other(format!(
             "nested config {source} declares `extends:` - nested configs \
@@ -191,12 +213,12 @@ fn load_nested_config(
              root-only concept; move them to the root config"
         )));
     }
-    if !config.ignore.is_empty() || config.nested_configs == Some(true) {
+    if !config.ignore.is_empty() {
         return Err(Error::Other(format!(
-            "nested config {source} declares `ignore:` or `nested_configs:` - \
-             both are root-only in this release"
+            "nested config {source} declares `ignore:` - it is root-only in this release"
         )));
     }
+    reject_nested_execution_settings(&config, source)?;
     if config.baseline.is_some() {
         return Err(Error::Other(format!(
             "nested config {source} declares `baseline:` - the baseline is a \
@@ -235,14 +257,14 @@ fn load_nested_config(
     // (the C2 RCE bypass). Mirrors the `extends:` gate; spawning templates
     // are refused wholesale just above, and `finalize` re-checks the
     // expanded rule set as a backstop.
-    crate::reject_command_rules_in(&config.rules, &source, catalog)?;
+    crate::reject_command_rules_in(&config.rules, source, catalog)?;
     // ...and no *spawning fix op* (`git_untrack`, `git rm --cached`) either: a
     // subtree `.alint.yml` is as untrusted as an `extends:`'d ruleset, so a
     // spawning fixer it declares would shell out on `alint fix`. (Templates are
     // already refused wholesale above, so only `rules:` needs this gate here.)
-    crate::reject_spawning_fix_ops_in(&config.rules, &source, catalog)?;
+    crate::reject_spawning_fix_ops_in(&config.rules, source, catalog)?;
     // ...and no inherited rule may promote a destructive fix to auto-apply.
-    crate::reject_fix_promotion_in(&config.rules, &source)?;
+    crate::reject_fix_promotion_in(&config.rules, source)?;
     // ...and every CONTENT-INJECTING fixer is demoted to a suggestion, EXACTLY as
     // for an `extends:`'d remote (loader.rs). Without this a subtree `.alint.yml`
     // -- untrusted, "anyone who can open a PR" -- could auto-apply a content fixer
@@ -253,7 +275,7 @@ fn load_nested_config(
     // SILENT auto-apply, matching this module's stated "as untrusted as an
     // `extends:`'d ruleset" trust model (audit: nested-config HIGH).
     crate::demote_content_fixers_in(&mut config.rules, catalog);
-    crate::mark_field_sources_in(&mut config.rules, &source);
+    crate::mark_field_sources_in(&mut config.rules, source);
     // Preserve that source trust through root-template expansion. Without this
     // marker a nested rule with `extends_template:` could acquire a root template's
     // content fixer only after the source-local demotion above had already run.
@@ -264,6 +286,7 @@ fn load_nested_config(
     // end up with mixed-separator globs like `packages\foo/foo.txt`
     // that don't compile against globset cleanly.
     let dir_prefix = rel_dir.to_string_lossy().replace('\\', "/");
+    let compatibility = std::mem::take(&mut config.compatibility);
     let mut out = Vec::with_capacity(config.rules.len());
     for mut rule in config.rules {
         // Re-rooting is deferred to `finalize`, AFTER template expansion: a nested
@@ -272,14 +295,36 @@ fn load_nested_config(
         // instance here missed both (v0.18.3 review). The marker carries the prefix.
         let mut marker = Mapping::new();
         marker.insert("prefix".into(), dir_prefix.clone().into());
-        marker.insert("source".into(), source.clone().into());
+        marker.insert("source".into(), source.into());
         rule.insert(
             NESTED_SCOPE_MARKER.into(),
             serde_yaml_ng::Value::Mapping(marker),
         );
         out.push(rule);
     }
-    Ok(out)
+    Ok((out, compatibility))
+}
+
+fn reject_nested_execution_settings(config: &RawConfig, source: &str) -> Result<()> {
+    let declared: Vec<&str> = [
+        ("respect_gitignore", config.respect_gitignore.is_some()),
+        ("fix_size_limit", config.fix_size_limit.is_some()),
+        ("nested_configs", config.nested_configs.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, is_declared)| is_declared.then_some(name))
+    .collect();
+    if declared.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Other(format!(
+        "nested config {source} declares {} - these settings are root-only in this release",
+        declared
+            .iter()
+            .map(|name| format!("`{name}:`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
 }
 
 /// Internal raw-mapping marker on a rule contributed by a nested config: the

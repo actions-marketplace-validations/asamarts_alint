@@ -16,10 +16,10 @@ echo "==> Running xtask docs-export --check"
 cargo run -q -p xtask -- docs-export --check
 
 # `xtask gen-schema --check` regenerates schemas/v1/config.json (+ the in-crate
-# copy) from canonical Rust option types and the shared optionless model, then
-# applies KindMeta common-field restrictions and fails on type, registry, or
-# metadata drift. This is the regenerate-and-diff gate for ADR-0001 and v0.19
-# W1. Run `cargo run -p xtask -- gen-schema` after changing an option type or KindMeta.
+# copy) and schemas/v1/policy-test.json from their canonical Rust models, then
+# applies KindMeta common-field restrictions to config and fails on type, registry,
+# metadata drift. This is the regenerate-and-diff gate for ADR-0001, v0.19 W1,
+# and ADR-0022. Run it after changing option metadata or a public schema model.
 echo "==> Running xtask gen-schema --check"
 cargo run -q -p xtask -- gen-schema --check
 

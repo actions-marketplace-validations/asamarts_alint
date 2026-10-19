@@ -25,7 +25,7 @@ use serde::Serialize;
 
 /// Bumped when the `facts.json` shape changes, so a downstream
 /// consumer (alint.org) can pin the schema it understands.
-const FORMAT_VERSION: u32 = 4;
+const FORMAT_VERSION: u32 = 5;
 
 static RULE_REGISTRY: LazyLock<alint_core::RuleRegistry> =
     LazyLock::new(alint_rules::builtin_registry);
@@ -48,6 +48,7 @@ struct Facts {
     rule_categories: BTreeMap<String, Vec<String>>,
     rule_aliases: BTreeMap<String, String>,
     kind_meta: BTreeMap<String, alint_core::KindMeta>,
+    compatibility: Compatibility,
     rule_source_files: BTreeMap<String, String>,
     example_rule_counts: BTreeMap<String, usize>,
     bench_scenario_rule_counts: BTreeMap<String, usize>,
@@ -67,6 +68,12 @@ struct Counts {
     auto_fix_ops: usize,
     output_formats: usize,
     subcommands: usize,
+}
+
+#[derive(Serialize)]
+struct Compatibility {
+    config_versions: Vec<u32>,
+    policy_test_versions: Vec<u32>,
 }
 
 /// A category in the taxonomy vocabulary: URL slug, display title, and
@@ -132,6 +139,12 @@ fn build_facts() -> Result<Facts> {
         .kind_metadata()
         .map(|(kind, meta)| (kind.to_string(), meta.clone()))
         .collect();
+    let compatibility = Compatibility {
+        config_versions: (alint_core::Config::MIN_SUPPORTED_VERSION
+            ..=alint_core::Config::CURRENT_VERSION)
+            .collect(),
+        policy_test_versions: vec![alint_testkit::POLICY_TEST_VERSION],
+    };
     let rule_source_files = rule_source_files(&root)?;
     let example_rule_counts = example_rule_counts(&root)?;
     let bench_scenario_rule_counts = bench_scenario_rule_counts(&root)?;
@@ -157,6 +170,7 @@ fn build_facts() -> Result<Facts> {
         rule_aliases,
         rule_source_files,
         kind_meta,
+        compatibility,
         example_rule_counts,
         bench_scenario_rule_counts,
         bundled_rulesets,
@@ -641,6 +655,20 @@ mod tests {
         assert_eq!(
             absent["fix_ops"],
             serde_json::json!(["file_remove", "git_untrack", "relocate"])
+        );
+    }
+
+    #[test]
+    fn compatibility_inventory_comes_from_runtime_constants() {
+        let facts = build_facts().expect("build facts");
+        assert_eq!(facts.format_version, 5);
+        assert_eq!(
+            facts.compatibility.config_versions,
+            vec![alint_core::Config::CURRENT_VERSION]
+        );
+        assert_eq!(
+            facts.compatibility.policy_test_versions,
+            vec![alint_testkit::POLICY_TEST_VERSION]
         );
     }
 

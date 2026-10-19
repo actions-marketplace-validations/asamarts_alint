@@ -6,12 +6,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The public policy-test v1 contract now has a typed Rust model and generated JSON Schema.**
+  `alint-testkit` parses `test_version: 1` documents through YAML complexity, explicit-tag,
+  explicit-null, and duplicate-key guards; returns aggregate structured validation diagnostics;
+  and publishes `schemas/v1/policy-test.json`. Package confinement rejects unsafe inline-tree
+  names and links, lexical/canonical package escapes, unsafe fixture entries and symlinks, special
+  or privileged files, invalid deterministic environment entries, and unsafe snapshot targets.
+  This is the P1 contract foundation; the public runner and `alint test` command remain the next
+  P2/P3 slice.
+
+### Changed
+
+- **Every configuration source now proves language and binary compatibility before composition.**
+  Root, local-extended, bundled, HTTPS, nested, and drop-in sources validate their own `version`
+  before trust gates or merge. Complete sources must declare it; a drop-in may omit it and inherit
+  the root's version. A source may add the closed literal
+  `requires: { alint: "MAJOR.MINOR.PATCH" }` mapping; malformed, interpolated, or unsatisfied
+  requirements fail with source and running-version diagnostics before that source's child
+  resolution. Requirements are retained as audit metadata and never merge as policy. The config
+  JSON Schema and embedded copy include the new field; `facts.json` format v5 publishes the
+  supported config and policy-test version lists from runtime constants.
+
 ### Fixed
 
 - **The published GitHub Actions guide now follows the post-release immutable pin.** The docs bundle
   overlays that guide from `main` after a tag is published and rejects generated output whose
   Action examples do not match `ci/action-doc-pin.env`, instead of leaving alint.org's copy-paste
   snippets one release behind.
+
+- **Nested configs now reject every execution setting they cannot honor.** Explicit
+  `respect_gitignore`, `fix_size_limit`, and `nested_configs` declarations now fail, including an
+  intentional `fix_size_limit: null` or `nested_configs: false`, instead of being silently dropped
+  while only `version`, `requires`, and `rules` take effect. File loading also rejects `null` for
+  the two boolean settings rather than silently applying their defaults.
 
 - **Benchmark regressions now compare like workloads.** Macro reports record a semantic revision
   for every scenario, `bench-gate` skips cross-version timing comparisons across an intentional

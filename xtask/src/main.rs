@@ -21,8 +21,8 @@
 //!   docs) and the site repo (presentation).
 //! - `gen-public-roadmap` — render the public roadmap from the canonical
 //!   `docs/design/ROADMAP.md` (also invoked internally by `docs-export`).
-//! - `gen-schema`         — regenerate `schemas/v1/config.json` from the rule
-//!   `Options` structs (schemars); `--check` gates drift.
+//! - `gen-schema`         — regenerate config and policy-test schemas from
+//!   canonical Rust models; `--check` gates drift.
 //! - `gen-facts`          — regenerate `facts.json` (the surface-area contract)
 //!   from canonical sources; `--check` gates drift.
 //! - `gen-roadmap`        — regenerate `roadmap.json` (the public-roadmap
@@ -281,11 +281,11 @@ enum Commands {
         #[arg(long, default_value = "Roadmap")]
         title: String,
     },
-    /// Generate `schemas/v1/config.json` from canonical Rust option types and
-    /// the shared optionless model, with common fields derived from `KindMeta`.
-    /// See ADR-0001 and the accepted v0.19 W1 design.
+    /// Generate public config and policy-test JSON Schemas from their canonical
+    /// Rust models, with config common fields derived from `KindMeta`.
+    /// See ADR-0001, the accepted v0.19 W1 design, and ADR-0022.
     GenSchema {
-        /// Verify the committed schema is up to date instead of rewriting it.
+        /// Verify the committed schemas are up to date instead of rewriting them.
         #[arg(long)]
         check: bool,
     },

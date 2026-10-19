@@ -1,6 +1,6 @@
 # Design doc: public policy tests
 
-Status: Accepted design (2026-10-18); implementation not started.
+Status: Accepted design (2026-10-18); P1 model/schema/confinement implemented, P2/P3 pending.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 DEC-6 and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md).
 Demand evidence: [`../general-linter.md` section 5.8](../general-linter.md#58-policy-authoring-testing-and-debugging),
@@ -123,10 +123,11 @@ expect:
     analysis_failures: []
 ```
 
-Unknown fields and unknown enum values are rejected. Duplicate YAML keys, aliases whose expanded
-shape exceeds the shared bound, and excessive flow nesting are rejected by the same guarded parser
-contract as configuration input. `test_version: 1` is an integer, not a quoted range. A newer test
-version fails with the source path and running runner version.
+Unknown fields and unknown enum values are rejected. Duplicate YAML keys, explicit tags and nulls,
+aliases whose expanded shape exceeds the shared bound, and excessive flow nesting are rejected by
+the guarded parser contract. Optional fields are omitted rather than set to `null`.
+`test_version: 1` is an integer, not a quoted range. A newer test version fails with the source path
+and running runner version.
 
 The committed JSON Schema is `schemas/v1/policy-test.json`. It is generated from the Rust model,
 contains `additionalProperties: false` at every closed object, and includes the bounded scalar and
@@ -477,10 +478,11 @@ the CLI grant alone cannot widen an undeclared scenario.
 
 ## 5. Implementation notes
 
-The first implementation change adds `test_version` and schema derives to the existing scenario
-model, then migrates all 578 documents in one mechanical pass. The parser first reads a small guarded
-envelope containing only the version discriminator, then dispatches to the v1 type; it does not
-parse untrusted YAML twice through different guard policies.
+P1 adds the versioned model and schema beside the repository-internal scenario model so it does not
+expose a partially capable runner. P2 migrates all 578 documents and the existing runner in one
+mechanical cutover, then removes the internal model. The guarded parser builds one untyped value,
+checks its version discriminator, and dispatches that same value to the v1 type; it does not parse
+untrusted YAML twice through different guard policies.
 
 `LoadOptions` gains injected environment lookup, remote policy, config source provider/confinement,
 and repository root instead of testkit-specific loader forks. Production defaults retain current

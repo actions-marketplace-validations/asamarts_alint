@@ -6,6 +6,7 @@
 pub mod analysis_time;
 pub mod baseline;
 mod category;
+mod compatibility;
 mod config;
 pub mod did_you_mean;
 mod dotenv;
@@ -42,6 +43,10 @@ pub use analysis_time::{
     ParseAnalysisTimeError, resolve_analysis_time,
 };
 pub use category::Category;
+pub use compatibility::{
+    ConfigCompatibility, ConfigRequirements, ConfigSourceClass, ParseStableVersionError,
+    RunningVersion, StableVersion,
+};
 pub use config::{
     AllowOutOfRoot, CompiledNestedSpec, Config, ContentSourceSpec, ExtendsEntry,
     FileAppendFinalNewlineFixSpec, FileAppendFixSpec, FileCollapseBlankLinesFixSpec,

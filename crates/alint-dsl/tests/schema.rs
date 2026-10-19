@@ -111,6 +111,49 @@ fn accepts_minimal_config() {
 }
 
 #[test]
+fn requirement_schema_matches_the_runtime_literal_grammar() {
+    let validator = compile_schema();
+    for accepted in ["0.0.0", "0.19.0", "18446744073709551615.0.1"] {
+        let yaml = format!("version: 1\nrequires:\n  alint: '{accepted}'\nrules: []\n");
+        let instance = yaml_to_json(&yaml);
+        assert_valid(&validator, &instance, accepted);
+        serde_yaml_ng::from_str::<alint_core::Config>(&yaml).unwrap_or_else(|error| {
+            panic!("runtime rejected schema-valid requirement {accepted:?}: {error}")
+        });
+    }
+
+    for rejected in [
+        "01.2.3",
+        "1.2",
+        "1.2.3.4",
+        ">=1.2.3",
+        "1.2.3-alpha",
+        "1.2.3+build",
+    ] {
+        let yaml = format!("version: 1\nrequires:\n  alint: '{rejected}'\nrules: []\n");
+        let instance = yaml_to_json(&yaml);
+        assert_invalid(&validator, &instance, rejected);
+        assert!(
+            serde_yaml_ng::from_str::<alint_core::Config>(&yaml).is_err(),
+            "runtime accepted schema-invalid requirement {rejected:?}"
+        );
+    }
+
+    for yaml in [
+        "version: 1\nrequires: {}\nrules: []\n",
+        "version: 1\nrequires: { alint: '0.19.0', other: x }\nrules: []\n",
+        "version: 1\nrequires: { alint: [0, 19, 0] }\nrules: []\n",
+    ] {
+        let instance = yaml_to_json(yaml);
+        assert_invalid(&validator, &instance, yaml);
+        assert!(
+            serde_yaml_ng::from_str::<alint_core::Config>(yaml).is_err(),
+            "runtime accepted {yaml:?}"
+        );
+    }
+}
+
+#[test]
 fn accepts_every_rule_kind() {
     let validator = compile_schema();
     let yaml = include_str!("fixtures/all_kinds.yaml");

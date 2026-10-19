@@ -744,6 +744,17 @@ fn rejects_wrong_version() {
 }
 
 #[test]
+fn file_loader_rejects_null_boolean_settings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join(".alint.yml");
+    for setting in ["respect_gitignore", "nested_configs"] {
+        std::fs::write(&path, format!("version: 1\n{setting}: null\nrules: []\n")).unwrap();
+        let err = load(&path).unwrap_err();
+        assert!(err.to_string().contains("invalid type"), "{setting}: {err}");
+    }
+}
+
+#[test]
 fn parse_rejects_config_with_extends() {
     // `parse(yaml)` can't resolve a path-relative `extends:` —
     // load_recursive needs a base path. Error rather than
@@ -2697,6 +2708,30 @@ fn nested_allow_out_of_root_is_rejected() {
 }
 
 #[test]
+fn nested_execution_settings_are_rejected_even_at_false_or_null() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root_cfg = tmp.path().join(".alint.yml");
+    std::fs::write(&root_cfg, "version: 1\nnested_configs: true\nrules: []\n").unwrap();
+    let pkg_dir = tmp.path().join("packages/foo");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let nested_cfg = pkg_dir.join(".alint.yml");
+
+    for (name, declaration) in [
+        ("respect_gitignore", "respect_gitignore: true"),
+        ("fix_size_limit", "fix_size_limit: null"),
+        ("nested_configs", "nested_configs: false"),
+    ] {
+        std::fs::write(
+            &nested_cfg,
+            format!("version: 1\n{declaration}\nrules: []\n"),
+        )
+        .unwrap();
+        let err = load(&root_cfg).unwrap_err();
+        assert!(err.to_string().contains(name), "{name}: {err}");
+    }
+}
+
+#[test]
 fn nested_trusted_extends_is_rejected() {
     // A nested config may not declare `trusted_extends:` -- it is a trusted,
     // root-only grant (a subtree must not allowlist a remote ruleset's content
@@ -4176,4 +4211,186 @@ fn injected_plugin_metadata_allows_an_extended_plugin_kind() {
     let config = super::load_with(&child, &LoadOptions::with_catalog(registry.catalog())).unwrap();
     assert_eq!(config.rules[0].kind, "plugin/file_exists");
     registry.build(&config.rules[0]).unwrap();
+}
+
+#[test]
+fn compatibility_records_every_composed_source_class() {
+    use alint_core::ConfigSourceClass;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = extends::Cache::at(tmp.path().join("cache"));
+    let remote_url = seed_remote(
+        &cache,
+        "version: 1\nrequires:\n  alint: '0.19.0'\nrules: []\n",
+    );
+    std::fs::write(tmp.path().join("base.yml"), "version: 1\nrules: []\n").unwrap();
+    std::fs::create_dir(tmp.path().join(".alint.d")).unwrap();
+    std::fs::write(tmp.path().join(".alint.d/10-team.yml"), "rules: []\n").unwrap();
+    std::fs::create_dir(tmp.path().join("sub")).unwrap();
+    std::fs::write(
+        tmp.path().join("sub/.alint.yml"),
+        "version: 1\nrules:\n  - id: nested-readme\n    kind: file_exists\n    paths: README.md\n    level: warning\n",
+    )
+    .unwrap();
+    let root = tmp.path().join(".alint.yml");
+    std::fs::write(
+        &root,
+        format!(
+            "version: 1\nnested_configs: true\nextends:\n  - ./base.yml\n  - alint://bundled/hygiene/no-tracked-artifacts@v1\n  - \"{remote_url}\"\nrules: []\n"
+        ),
+    )
+    .unwrap();
+
+    let config = load_with(&root, &LoadOptions::with_cache(cache)).unwrap();
+    let classes: std::collections::HashSet<ConfigSourceClass> = config
+        .compatibility
+        .iter()
+        .map(|record| record.source_class)
+        .collect();
+    assert_eq!(
+        classes,
+        [
+            ConfigSourceClass::Root,
+            ConfigSourceClass::LocalExtend,
+            ConfigSourceClass::Bundled,
+            ConfigSourceClass::Remote,
+            ConfigSourceClass::DropIn,
+            ConfigSourceClass::Nested,
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(
+        config.requires.unwrap().alint,
+        alint_core::StableVersion::new(0, 19, 0)
+    );
+}
+
+#[test]
+fn complete_extended_source_must_declare_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("base.yml"), "rules: []\n").unwrap();
+    let root = tmp.path().join(".alint.yml");
+    std::fs::write(&root, "version: 1\nextends: [./base.yml]\nrules: []\n").unwrap();
+    let error = load(&root).unwrap_err().to_string();
+    assert!(
+        error.contains("base.yml") && error.contains("missing required config `version`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn remote_requirement_diagnostic_redacts_url_secrets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = extends::Cache::at(tmp.path().join("cache"));
+    let url = seed_remote(
+        &cache,
+        "version: 1\nrequires:\n  alint: '999.0.0'\nrules: []\n",
+    );
+    let secret_url = url
+        .replacen("https://", "https://user:secret@", 1)
+        .replacen(".yml#", ".yml?token=secret#", 1);
+    let root = tmp.path().join(".alint.yml");
+    std::fs::write(
+        &root,
+        format!("version: 1\nextends: [\"{secret_url}\"]\nrules: []\n"),
+    )
+    .unwrap();
+    let error = load_with(&root, &LoadOptions::with_cache(cache))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("https://example.invalid/remote.yml")
+            && error.contains("requires alint 999.0.0 or newer"),
+        "{error}"
+    );
+    assert!(!error.contains("user:secret"), "{error}");
+    assert!(!error.contains("token=secret"), "{error}");
+}
+
+#[test]
+fn every_remote_diagnostic_path_redacts_url_secrets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = extends::Cache::at(tmp.path().join("cache"));
+
+    for (body, filtered) in [
+        ("version: 1\nrequires: null\nrules: []\n", false),
+        ("version: 1\nrules: []\n", true),
+    ] {
+        let url = seed_remote(&cache, body);
+        let secret_url = url
+            .replacen("https://", "https://user:secret@", 1)
+            .replacen(".yml#", ".yml?token=secret#", 1);
+        let root = tmp.path().join(if filtered {
+            "filtered.yml"
+        } else {
+            "malformed.yml"
+        });
+        let extends = if filtered {
+            format!("extends:\n  - url: \"{secret_url}\"\n    only: []\n")
+        } else {
+            format!("extends: [\"{secret_url}\"]\n")
+        };
+        std::fs::write(&root, format!("version: 1\n{extends}rules: []\n")).unwrap();
+        let error = load_with(&root, &LoadOptions::with_cache(cache.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("https://example.invalid/remote.yml"),
+            "{error}"
+        );
+        assert!(!error.contains("user:secret"), "{error}");
+        assert!(!error.contains("token=secret"), "{error}");
+    }
+
+    let root = tmp.path().join("missing-integrity.yml");
+    std::fs::write(
+        &root,
+        "version: 1\nextends: [\"https://user:secret@example.invalid/remote.yml?token=secret\"]\nrules: []\n",
+    )
+    .unwrap();
+    let error = load_with(&root, &LoadOptions::with_cache(cache))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("https://example.invalid/remote.yml"),
+        "{error}"
+    );
+    assert!(!error.contains("user:secret"), "{error}");
+    assert!(!error.contains("token=secret"), "{error}");
+}
+
+#[test]
+fn direct_parse_enforces_literal_requirement_and_records_inline_source() {
+    let config = parse("version: 1\nrequires:\n  alint: '0.19.0'\nrules: []\n").unwrap();
+    assert_eq!(config.compatibility.len(), 1);
+    assert_eq!(
+        config.compatibility[0].source_class,
+        alint_core::ConfigSourceClass::Inline
+    );
+
+    for invalid in [
+        "0.19",
+        "0.19.0-alpha.1",
+        ">=0.19.0",
+        "00.19.0",
+        "0.19.0+build",
+    ] {
+        let error = parse(&format!(
+            "version: 1\nrequires:\n  alint: '{invalid}'\nrules: []\n"
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("requires"), "{invalid}: {error}");
+    }
+
+    for invalid in ["requires: null", "requires: {}", "requires:\n  alint: null"] {
+        let error = parse(&format!("version: 1\n{invalid}\nrules: []\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("requires") || error.contains("alint"),
+            "{error}"
+        );
+    }
 }

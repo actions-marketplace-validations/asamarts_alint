@@ -168,6 +168,7 @@ fn is_deliberately_invalid(b: &Block) -> bool {
 /// `deny_unknown_fields` field list.
 const TOP_KEYS: &[&str] = &[
     "version:",
+    "requires:",
     "rules:",
     "extends:",
     "facts:",

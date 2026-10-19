@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A node in a tree spec: either a file (scalar) or a directory
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// Serde `untagged` round-trip: a YAML scalar deserializes to
 /// [`TreeNode::File`] and a YAML mapping deserializes to
 /// [`TreeNode::Dir`].
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum TreeNode {
     File(String),
@@ -28,7 +29,7 @@ pub enum TreeNode {
 /// mapping carrying `$exec` is always this node - `$exec` is therefore a
 /// reserved filename (a fixture cannot materialise a literal file named
 /// `$exec`; nothing needs to).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExecNode {
     #[serde(rename = "$exec")]
@@ -37,7 +38,7 @@ pub struct ExecNode {
 
 /// A symbolic link, written as a reserved-key mapping: `{ "$symlink": "target" }`.
 /// `$symlink` is a reserved filename like `$exec`. Unix-only to materialise.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SymlinkNode {
     #[serde(rename = "$symlink")]
@@ -64,7 +65,7 @@ impl TreeNode {
 
 /// A tree-spec root: always a directory at the top level. The
 /// outer map's keys are the children of the materialization root.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(transparent)]
 pub struct TreeSpec {
     pub root: BTreeMap<String, TreeNode>,
