@@ -8,7 +8,7 @@
     "bundled_rulesets": 24,
     "auto_fix_ops": 26,
     "output_formats": 8,
-    "subcommands": 12
+    "subcommands": 13
   },
   "rule_kinds": [
     "changeset_requires_path",
@@ -5026,6 +5026,7 @@
     "lsp",
     "rules",
     "suggest",
+    "test",
     "validate-config"
   ],
   "fact_predicates": [

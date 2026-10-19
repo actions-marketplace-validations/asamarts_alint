@@ -10,6 +10,7 @@ use alint_core::{
     FixStatus, Level, Report, RuleEntry, RuleSpec, WalkOptions, walk,
 };
 use regex::Regex;
+use schemars::JsonSchema;
 use serde::Serialize;
 use tempfile::TempDir;
 
@@ -21,7 +22,7 @@ use crate::policy_test::{
     ViolationMatcher,
 };
 use crate::runner_artifacts::{
-    reconcile_snapshot, render_fix_diff, repository_files, staged_between,
+    PendingSnapshotUpdate, reconcile_snapshot, render_fix_diff, repository_files, staged_between,
 };
 use crate::treespec::{Discrepancy, VerifyMode, materialize, verify};
 
@@ -50,6 +51,17 @@ struct ExecutionContext<'a> {
     package: &'a PackageRoot,
 }
 
+struct PreparedPolicyTest {
+    package: PackageRoot,
+    sandbox: TempDir,
+    repository: PathBuf,
+    config_path: PathBuf,
+    source_provider: Arc<dyn alint_dsl::ConfigSourceProvider>,
+    environment: Arc<dyn alint_dsl::EnvironmentProvider>,
+    process_environment: BTreeMap<String, String>,
+    _git_environment: alint_core::git::ScopedProcessEnvironment,
+}
+
 // Stack-only transient avoids a heap allocation on every policy-test step.
 #[allow(clippy::large_enum_variant)]
 enum PreparedStep {
@@ -73,14 +85,62 @@ impl Runner {
     /// error. A config error produced by the config under test is an observation
     /// and can therefore match `exit: configuration_error`.
     pub fn run(&self, test: &PolicyTest, source: &Path) -> Result<PolicyTestRun> {
+        self.run_inner(test, source, false)
+    }
+
+    /// Execute one test while deferring an enabled snapshot update.
+    ///
+    /// The caller can execute a batch and commit each pending update only after
+    /// every test's inline expectations pass. `RunnerOptions::update_snapshots`
+    /// must be enabled.
+    pub fn run_deferred_snapshot_update(
+        &self,
+        test: &PolicyTest,
+        source: &Path,
+    ) -> Result<PolicyTestRun> {
+        if !self.options.update_snapshots {
+            return Err(Error::runtime(
+                "deferred snapshot execution requires `update_snapshots: true`",
+            ));
+        }
+        self.run_inner(test, source, true)
+    }
+
+    /// Validate and prepare one test without evaluating any rule or fixer.
+    ///
+    /// Batch callers use this before execution so definition, package-path,
+    /// config-load, and capability failures cannot occur after an earlier test
+    /// has already executed a user command.
+    pub fn preflight(&self, test: &PolicyTest, source: &Path) -> Result<()> {
         if let Err(diagnostics) = test.validate() {
             return Err(Error::definition(diagnostics));
         }
-        if let Some(reason) = platform_skip_reason(&test.tags) {
-            return Ok(PolicyTestRun::skipped(source, test, reason));
+        if platform_skip_reason(&test.tags).is_some() {
+            return Ok(());
         }
+        let prepared = self.prepare_policy_test(test, source)?;
+        let context = ExecutionContext {
+            repository: &prepared.repository,
+            sandbox: prepared.sandbox.path(),
+            config_path: &prepared.config_path,
+            source_provider: prepared.source_provider.clone(),
+            environment: prepared.environment.clone(),
+            process_environment: &prepared.process_environment,
+            test,
+            package: &prepared.package,
+        };
+        let step = test.when[0];
+        let _ = self.prepare_step(step, &context)?;
+        Ok(())
+    }
 
+    fn prepare_policy_test(&self, test: &PolicyTest, source: &Path) -> Result<PreparedPolicyTest> {
         let package = PackageRoot::for_policy_test(source).map_err(Error::from)?;
+        if let Some(snapshot) = test.snapshot.as_deref() {
+            package
+                .resolve_snapshot_target(snapshot)
+                .map_err(Error::from)?;
+        }
         let sandbox = tempfile::Builder::new()
             .prefix("alint-policy-test-")
             .tempdir()
@@ -93,32 +153,58 @@ impl Runner {
             path: repository.clone(),
             source: source_error,
         })?;
-
         materialize_repository(test, &package, &repository)?;
         let process_environment = deterministic_process_environment(
             test,
             sandbox.path(),
             self.options.allow_host_keyring && test.capabilities.host_keyring,
         )?;
-        let _git_environment =
+        let git_environment =
             alint_core::git::scoped_process_environment(&repository, process_environment.clone());
         if let Some(git_spec) = &test.given.git {
             setup_git(&repository, git_spec, &process_environment)?;
         }
-
         let (config_path, source_provider) = config_source(test, &package, source)?;
         let environment: Arc<dyn alint_dsl::EnvironmentProvider> =
             Arc::new(FixedEnvironment(test.given.env.clone()));
+        Ok(PreparedPolicyTest {
+            package,
+            sandbox,
+            repository,
+            config_path,
+            source_provider,
+            environment,
+            process_environment,
+            _git_environment: git_environment,
+        })
+    }
+
+    fn run_inner(
+        &self,
+        test: &PolicyTest,
+        source: &Path,
+        defer_snapshot_update: bool,
+    ) -> Result<PolicyTestRun> {
+        if let Err(diagnostics) = test.validate() {
+            return Err(Error::definition(diagnostics));
+        }
+        if let Some(reason) = platform_skip_reason(&test.tags) {
+            return Ok(PolicyTestRun::skipped(source, test, reason));
+        }
+
+        let prepared = self.prepare_policy_test(test, source)?;
+        let repository = &prepared.repository;
+        let package = &prepared.package;
         let (observations, mut mismatches) = {
             let context = ExecutionContext {
-                repository: &repository,
-                sandbox: sandbox.path(),
-                config_path: &config_path,
-                source_provider,
-                environment,
-                process_environment: &process_environment,
+                repository,
+                sandbox: prepared.sandbox.path(),
+                config_path: &prepared.config_path,
+                source_provider: prepared.source_provider.clone(),
+                environment: prepared.environment.clone(),
+                process_environment: &prepared.process_environment,
                 test,
-                package: &package,
+                package,
             };
             let mut observations = Vec::with_capacity(test.when.len());
             let mut mismatches = Vec::new();
@@ -135,7 +221,7 @@ impl Runner {
                 TreeExpectationMode::Strict => VerifyMode::Strict,
                 TreeExpectationMode::Contains => VerifyMode::Contains,
             };
-            let mut tree_report = verify(expected_tree, &repository, mode)?;
+            let mut tree_report = verify(expected_tree, repository, mode)?;
             tree_report
                 .discrepancies
                 .retain(|item| !runner_owned_tree_path(item));
@@ -148,12 +234,13 @@ impl Runner {
             }
         }
 
-        reconcile_snapshot(
+        let pending_snapshot = reconcile_snapshot(
             test.snapshot.as_deref(),
-            &package,
+            package,
             &observations,
             &mut mismatches,
             self.options.update_snapshots,
+            defer_snapshot_update,
         )?;
 
         let status = if mismatches.is_empty() {
@@ -168,8 +255,9 @@ impl Runner {
             status,
             observations,
             mismatches,
-            root: repository,
-            _sandbox: Some(sandbox),
+            root: prepared.repository,
+            pending_snapshot,
+            _sandbox: Some(prepared.sandbox),
         })
     }
 
@@ -337,6 +425,7 @@ pub struct PolicyTestRun {
     pub observations: Vec<StepObservation>,
     pub mismatches: Vec<Mismatch>,
     pub root: PathBuf,
+    pending_snapshot: Option<PendingSnapshotUpdate>,
     _sandbox: Option<TempDir>,
 }
 
@@ -354,6 +443,7 @@ impl PolicyTestRun {
                 detail: reason,
             }],
             root: PathBuf::new(),
+            pending_snapshot: None,
             _sandbox: None,
         }
     }
@@ -362,9 +452,23 @@ impl PolicyTestRun {
     pub fn passed(&self) -> bool {
         self.status == TestStatus::Passed
     }
+
+    /// Commit a snapshot update deferred by
+    /// [`Runner::run_deferred_snapshot_update`].
+    ///
+    /// Returns `Ok(false)` when the test has no snapshot or its inline
+    /// expectations failed, so no update was prepared.
+    pub fn commit_snapshot_update(&mut self) -> Result<bool> {
+        let Some(update) = self.pending_snapshot.as_ref() else {
+            return Ok(false);
+        };
+        update.commit()?;
+        self.pending_snapshot = None;
+        Ok(true)
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TestStatus {
     Passed,
@@ -372,7 +476,7 @@ pub enum TestStatus {
     Skipped,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct StepObservation {
     pub exit: ExpectedExit,
     pub violations: Vec<ObservedViolation>,
@@ -407,7 +511,7 @@ impl StepObservation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ObservedViolation {
     pub rule: String,
     pub level: String,
@@ -423,7 +527,7 @@ pub struct ObservedViolation {
     pub related: Vec<ObservedRelatedLocation>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ObservedAnalysisFailure {
     pub rule: String,
     pub kind: String,
@@ -435,7 +539,7 @@ pub struct ObservedAnalysisFailure {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ObservedNote {
     pub kind: String,
     pub path: Option<String>,
@@ -446,7 +550,7 @@ pub struct ObservedNote {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ObservedRelatedLocation {
     pub label: String,
     pub path: String,
@@ -456,14 +560,14 @@ pub struct ObservedRelatedLocation {
     pub end_column: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct Mismatch {
     pub step: Option<usize>,
     pub channel: MismatchChannel,
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MismatchChannel {
     Exit,
@@ -1578,7 +1682,7 @@ fn git(
         source: source_error,
     })?;
     if !output.status.success() {
-        return Err(Error::runtime(format!(
+        return Err(Error::git_fixture(format!(
             "isolated git command failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));

@@ -8,6 +8,7 @@ pub mod policy_test;
 mod runner_artifacts;
 #[cfg(feature = "strategies")]
 pub mod strategies;
+pub mod test_report;
 pub mod treespec;
 pub use confinement::{ConfinementError, PackageEntryKind, PackageRoot, validate_package_path};
 pub use error::{Error, Result};
@@ -23,6 +24,11 @@ pub use policy_test::{
     PolicyGit, PolicyTest, PolicyTestParseError, RelatedLocationMatcher, StepExpectation,
     TestCapabilities, TestStep, TreeExpectationMode, ValidationCode, ValidationDiagnostic,
     ViolationMatcher, policy_test_schema, policy_test_schema_json,
+};
+pub use test_report::{
+    POLICY_TEST_REPORT_KIND, POLICY_TEST_REPORT_SCHEMA_VERSION, PolicyTestIssue, PolicyTestRecord,
+    PolicyTestReport, PolicyTestStatus, PolicyTestStepReport, PolicyTestSummary,
+    policy_test_report_schema, policy_test_report_schema_json,
 };
 pub use treespec::{
     Discrepancy, ExecNode, ExtractOpts, SymlinkNode, TreeNode, TreeSpec, VerifyMode, VerifyReport,

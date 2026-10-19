@@ -1,6 +1,6 @@
 # v0.20: Policy authoring loop
 
-Status: Accepted design (2026-10-18); P1 and P4 implemented, P2/P3 next.
+Status: Accepted design (2026-10-18); P1-P4 implemented, P5/P6 next.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 (DEC-6) and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md)
 (Phase 1b questions Q7, Q11, and Q14).
@@ -129,9 +129,13 @@ Implementation status:
 
 - **P1 complete:** the independent `alint-testkit::policy_test` v1 model, aggregate validation
   diagnostics, package/fixture confinement preflight, generated
-  `schemas/v1/policy-test.json`, and adversarial unit coverage are committed. The legacy internal
-  runner remains intentionally separate until the P2/P3 cutover; P7 removes it after the public
-  runner is executable.
+  `schemas/v1/policy-test.json`, and adversarial unit coverage are committed.
+- **P2 complete:** `alint-testkit` is a published runner with package/repository root separation,
+  deterministic environment and Git setup, explicit capability gates, redacted observations,
+  deferred snapshot updates, and the in-repository corpus migrated to the public parser and runner.
+- **P3 complete:** `alint test` provides deterministic discovery and filters, whole-batch
+  preflight, human and schema-backed JSON reports, confined snapshot updates, documented exit
+  classes, and fresh-downstream installed-binary integration coverage.
 - **P4 complete:** root, local, bundled, remote, nested, drop-in, and direct-parse sources validate
   `version` and literal `requires.alint` before composition. Compatibility provenance survives the
   merge, requirements remain non-policy metadata, and the committed config schema exposes the
@@ -204,8 +208,8 @@ v0.20 is complete only when all of the following are observed:
 
 ## Implementation handoff
 
-Start with P1 and P4. P1 freezes the serialized test vocabulary before public Rust APIs expose it;
-P4 removes the current source-version blind spot before v0.20 rulesets use a minimum requirement.
-Then land P2/P3 as one vertical command slice and P5/P6 as one trace slice. Migrate the corpus and
-bundle ownership only after both public contracts are executable, so the migration itself is the
-end-to-end proof rather than hand-edited documentation.
+P1-P4 are implemented. P5/P6 are the next vertical slice: add the zero-cost-on-normal-check typed
+trace recorder first, then expose deterministic, redaction-safe `explain --trace` and bounded
+`--preview` projections. The policy-test parser/runner corpus migration portion of P7 landed with
+P2; after P6, complete the trace-dependent bundle coverage audit, then close P8 with release
+packaging, generated artifacts, and the full acceptance matrix.

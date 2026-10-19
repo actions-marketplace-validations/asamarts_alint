@@ -55,6 +55,7 @@ pub(crate) const CLI_REFERENCE_SUBCMDS: &[&str] = &[
     "init",
     "suggest",
     "export-agents-md",
+    "test",
     "validate-config",
     "lsp",
     "rules",

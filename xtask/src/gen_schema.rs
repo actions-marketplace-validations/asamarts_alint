@@ -26,6 +26,10 @@ fn policy_test_schema_path() -> Result<PathBuf> {
     Ok(crate::workspace_root()?.join("schemas/v1/policy-test.json"))
 }
 
+fn policy_test_report_schema_path() -> Result<PathBuf> {
+    Ok(crate::workspace_root()?.join("schemas/v1/policy-test-report.json"))
+}
+
 /// Build the generated schema in memory: the committed descriptive base with
 /// every canonical rule branch replaced by its schemars-derived equivalent.
 pub fn build_generated_schema() -> Result<Value> {
@@ -926,21 +930,28 @@ pub fn run(check: bool) -> Result<()> {
     let rendered = render(&generated)?;
     let policy_test_rendered =
         alint_testkit::policy_test_schema_json().context("render policy-test schema")?;
+    let policy_test_report_rendered = alint_testkit::policy_test_report_schema_json()
+        .context("render policy-test report schema")?;
 
     if check {
         let root_path = root_schema_path()?;
         let in_crate_path = in_crate_schema_path()?;
         let policy_test_path = policy_test_schema_path()?;
+        let policy_test_report_path = policy_test_report_schema_path()?;
         let root = std::fs::read_to_string(&root_path)
             .with_context(|| format!("read {}", root_path.display()))?;
         let in_crate = std::fs::read_to_string(&in_crate_path)
             .with_context(|| format!("read {}", in_crate_path.display()))?;
         let policy_test = std::fs::read_to_string(&policy_test_path)
             .with_context(|| format!("read {}", policy_test_path.display()))?;
+        let policy_test_report = std::fs::read_to_string(&policy_test_report_path)
+            .with_context(|| format!("read {}", policy_test_report_path.display()))?;
         let stale: Vec<&str> = [
             (root != rendered).then_some("schemas/v1/config.json"),
             (in_crate != rendered).then_some("crates/alint-dsl/schemas/v1/config.json"),
             (policy_test != policy_test_rendered).then_some("schemas/v1/policy-test.json"),
+            (policy_test_report != policy_test_report_rendered)
+                .then_some("schemas/v1/policy-test-report.json"),
         ]
         .into_iter()
         .flatten()
@@ -959,7 +970,14 @@ pub fn run(check: bool) -> Result<()> {
     std::fs::write(root_schema_path()?, &rendered)?;
     std::fs::write(in_crate_schema_path()?, &rendered)?;
     std::fs::write(policy_test_schema_path()?, &policy_test_rendered)?;
-    println!("wrote config schema copies and schemas/v1/policy-test.json");
+    std::fs::write(
+        policy_test_report_schema_path()?,
+        &policy_test_report_rendered,
+    )?;
+    println!(
+        "wrote config schema copies, schemas/v1/policy-test.json, and \
+         schemas/v1/policy-test-report.json"
+    );
     Ok(())
 }
 

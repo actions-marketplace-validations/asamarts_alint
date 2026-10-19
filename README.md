@@ -51,6 +51,11 @@ alint fix              # apply them
 
 `alint init` writes that file for you by detecting the ecosystems in your repo, so you rarely start from a blank page. The [quickstart on alint.org](https://alint.org/docs/getting-started/quickstart/) walks a first config end to end.
 
+Ruleset authors can put versioned fixture documents under `alint-tests/` and run `alint test`.
+Each test owns an isolated repository tree, config, environment, Git history, ordered check/fix
+steps, inline expectations, and an optional JSON snapshot. The public
+[`alint-testkit`](https://crates.io/crates/alint-testkit) crate exposes the same hermetic runner.
+
 ## How it works
 
 A config is a list of rules, but you rarely write them all by hand. `extends:` composes **rulesets**, and alint ships 24 of them compiled into the binary, so there is no download and no network round trip. Most are gated on what the repo actually contains, so listing the Rust ruleset in a repo with no Rust does nothing. You layer your own rules on top, and override or switch off anything you inherit.
@@ -186,7 +191,7 @@ alint is telemetry-free and makes no network access at runtime, except for the `
 
 - [Concepts](https://alint.org/docs/concepts/): the rule model, scopes, and `when:` conditions
 - [Rule reference](https://alint.org/docs/rules/) and [bundled rulesets](https://alint.org/docs/bundled-rulesets/)
-- [CLI](https://alint.org/docs/cli/) (all 12 subcommands) and the [configuration schema](https://alint.org/docs/configuration/)
+- [CLI](https://alint.org/docs/cli/) (all 13 subcommands) and the [configuration schema](https://alint.org/docs/configuration/)
 - [Cookbook](https://alint.org/docs/cookbook/): monorepos, CI hardening, package shape, custom `command` rules
 - [Architecture](https://alint.org/docs/about/architecture/) and [roadmap](https://alint.org/docs/about/roadmap/) through v1.0
 

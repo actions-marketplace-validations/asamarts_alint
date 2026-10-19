@@ -389,8 +389,8 @@ pub enum PolicyDocsCase {
 }
 
 /// Stable machine-readable validation category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[schemars(rename_all = "snake_case")]
 pub enum ValidationCode {
     UnsupportedVersion,
     EmptyName,
@@ -411,6 +411,42 @@ pub enum ValidationCode {
     InvalidTag,
     InvalidDocsMetadata,
     InvalidMatcher,
+}
+
+impl ValidationCode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedVersion => "unsupported_version",
+            Self::EmptyName => "empty_name",
+            Self::RepositorySource => "repository_source",
+            Self::ConfigSource => "config_source",
+            Self::InvalidPackagePath => "invalid_package_path",
+            Self::InvalidTree => "invalid_tree",
+            Self::InvalidEnvironment => "invalid_environment",
+            Self::InvalidAnalysisTime => "invalid_analysis_time",
+            Self::StepExpectationCount => "step_expectation_count",
+            Self::MissingAssertion => "missing_assertion",
+            Self::InvalidStepExpectation => "invalid_step_expectation",
+            Self::InvalidMessageMatcher => "invalid_message_matcher",
+            Self::InvalidRegex => "invalid_regex",
+            Self::InvalidCount => "invalid_count",
+            Self::InvalidRange => "invalid_range",
+            Self::InvalidGitSetup => "invalid_git_setup",
+            Self::InvalidTag => "invalid_tag",
+            Self::InvalidDocsMetadata => "invalid_docs_metadata",
+            Self::InvalidMatcher => "invalid_matcher",
+        }
+    }
+}
+
+impl Serialize for ValidationCode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
 }
 
 /// Structured policy-test definition diagnostic.

@@ -122,6 +122,11 @@ General rule tests live under `crates/alint-e2e/scenarios/check/<family>/`.
 Bundled-ruleset tests live under
 `crates/alint-dsl/ruleset-tests/v1/<bundle>/`. Audits walk both trees recursively.
 
+Downstream rulesets use the same public contract under `alint-tests/`. Run `alint test` from the
+package root, pass files/directories explicitly for another layout, and use
+`alint test --update-snapshots` only after reviewing inline expectation changes. Command-spawning
+tests require both `capabilities: { spawn: true }` and the explicit `--allow-spawn` host grant.
+
 - `content/` content scanning (`file_content_matches`, `file_content_forbidden`,
   `file_header`, `file_footer`, `no_trailing_whitespace`, `final_newline`,
   `line_endings`)

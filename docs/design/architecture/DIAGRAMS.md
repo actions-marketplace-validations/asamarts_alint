@@ -39,19 +39,20 @@ graph TB
   Editor["Editor"]
   PreCommit["pre-commit"]
   subgraph Alint["`alint`"]
-    Alint.Tooling["Dev + build tooling"]
     Alint.Cli["CLI"]
     Alint.LspServer["LSP server"]
+    Alint.Tooling["Dev + build tooling"]
   end
+  Repo["Linted repository"]
   Site["alint.org"]
   Docsbundle["docs-bundle branch"]
-  Repo["Linted repository"]
   Dev -. "`runs alint check / fix`" .-> Alint.Cli
   Dev -. "`gets inline diagnostics in the editor`" .-> Alint.LspServer
   Ci -. "`runs as a pipeline gate / GitHub Action`" .-> Alint.Cli
   Editor -. "`speaks LSP over stdio to`" .-> Alint.LspServer
   PreCommit -. "`runs alint check on commit (and manual alint fix)`" .-> Alint.Cli
   Alint.Cli -.-> Alint.LspServer
+  Alint.Cli -.-> Alint.Tooling
   Alint.LspServer -.-> Alint.Cli
   Alint.Tooling -.-> Alint.Cli
   Alint.Cli -. "`reads files + git history; reports violations`" .-> Repo
@@ -97,6 +98,7 @@ graph TB
   AlintCli.Dsl -.-> AlintCli.Rules
   AlintCli.AlintBin -. "`reads files + git history; reports violations`" .-> Repo
   AlintCli.AlintBin -.-> AlintLspServer
+  AlintCli.AlintBin -.-> AlintTooling
 ```
 
 ## Crate dependency graph
@@ -139,6 +141,7 @@ graph TB
   AlintTooling.E2e -.-> AlintCli.Dsl
   AlintTooling.E2e -.-> AlintCli.Output
   AlintTooling.E2e -.-> AlintCli.Rules
+  AlintCli.AlintBin -.-> AlintTooling.Testkit
   AlintTooling.E2e -.-> AlintTooling.Testkit
   AlintTooling.Testkit -.-> AlintCli.Core
   AlintTooling.Testkit -.-> AlintCli.Dsl

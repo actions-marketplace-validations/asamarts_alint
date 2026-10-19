@@ -175,13 +175,66 @@ snapshot: snapshots/result.json
         allow_host_keyring: false,
         update_snapshots: true,
     });
-    let update_run = updater.run(&test, &source).unwrap();
-    assert!(update_run.passed(), "{:#?}", update_run.mismatches);
-    let snapshot = std::fs::read_to_string(package.path().join("snapshots/result.json")).unwrap();
+    let mut deferred = updater
+        .run_deferred_snapshot_update(&test, &source)
+        .unwrap();
+    assert!(deferred.passed(), "{:#?}", deferred.mismatches);
+    let snapshot_path = package.path().join("snapshots/result.json");
+    assert!(!snapshot_path.exists());
+    assert!(deferred.commit_snapshot_update().unwrap());
+    assert!(!deferred.commit_snapshot_update().unwrap());
+    let snapshot = std::fs::read_to_string(&snapshot_path).unwrap();
     assert!(snapshot.contains("policy-test-snapshot"));
     assert!(!snapshot.contains("never-render-this-value"));
     assert!(!snapshot.contains(&package.path().to_string_lossy().to_string()));
 
+    std::fs::remove_file(&snapshot_path).unwrap();
+    let immediate = updater.run(&test, &source).unwrap();
+    assert!(immediate.passed(), "{:#?}", immediate.mismatches);
+    assert!(snapshot_path.exists());
+
     let checked = Runner::default().run(&test, &source).unwrap();
     assert!(checked.passed(), "{:#?}", checked.mismatches);
+}
+
+#[cfg(unix)]
+#[test]
+fn deferred_snapshot_commit_revalidates_a_replaced_parent() {
+    use std::os::unix::fs::symlink;
+
+    let package = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let (source, test) = policy_file(
+        package.path(),
+        "snapshot-race.yml",
+        r"test_version: 1
+name: snapshot parent race
+given:
+  tree: {}
+  config: |
+    version: 1
+    rules: []
+when: [check]
+expect:
+  - exit: success
+    violations: []
+snapshot: snapshots/result.json
+",
+    );
+    let runner = Runner::new(RunnerOptions {
+        allow_spawn: false,
+        allow_host_keyring: false,
+        update_snapshots: true,
+    });
+    let mut run = runner.run_deferred_snapshot_update(&test, &source).unwrap();
+    symlink(outside.path(), package.path().join("snapshots")).unwrap();
+
+    let error = run.commit_snapshot_update().unwrap_err();
+    assert!(error.to_string().contains("snapshot parent"), "{error:?}");
+    assert!(!outside.path().join("result.json").exists());
+    std::fs::remove_file(package.path().join("snapshots")).unwrap();
+    std::fs::create_dir(package.path().join("snapshots")).unwrap();
+    assert!(run.commit_snapshot_update().unwrap());
+    assert!(!run.commit_snapshot_update().unwrap());
+    assert!(package.path().join("snapshots/result.json").exists());
 }

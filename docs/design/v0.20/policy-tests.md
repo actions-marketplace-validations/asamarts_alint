@@ -1,6 +1,6 @@
 # Design doc: public policy tests
 
-Status: Accepted design (2026-10-18); P1 model/schema/confinement implemented, P2/P3 pending.
+Status: Accepted design (2026-10-18); P1-P3 implemented.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 DEC-6 and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md).
 Demand evidence: [`../general-linter.md` section 5.8](../general-linter.md#58-policy-authoring-testing-and-debugging),
@@ -357,7 +357,7 @@ snapshot. A normal run never writes the source package.
 Human output prints one source/name header, one line per step, and only the details needed to explain
 a mismatch. Paths are package- or fixture-relative; text is terminal-sanitized; tree mismatches
 never render file bytes or hashes. A final count shows passed, failed, invalid, and skipped-platform
-scenarios. The command is quiet about passing record details unless verbose output is added in a
+tests. The command is quiet about passing finding details unless verbose output is added in a
 future release.
 
 JSON uses `schemas/v1/policy-test-report.json`:
@@ -377,28 +377,32 @@ JSON uses `schemas/v1/policy-test-report.json`:
 }
 ```
 
-Each test record includes normalized source, name, tags, status, ordered step observations, and
-structured mismatches. It contains no generated-at field. Stable policy-test report JSON follows
-the normal additive-before-breaking schema discipline; snapshots are stable within their declared
-schema. Human wording remains non-API.
+Each executed test record includes normalized source, name, tags, status, ordered step observations,
+and structured mismatches. Invalid records carry structured issues; discovery or batch-operational
+issues are top-level because no test may own them. The report contains no generated-at field. Stable
+policy-test report JSON follows the normal additive-before-breaking schema discipline; snapshots are
+stable within their declared schema. Human wording remains non-API.
 
 ### 2.9 Published runner crate
 
 The existing `alint-testkit` crate becomes publishable at the workspace version. It exposes the
-versioned `Scenario` model, schema generation entry point, `Runner`/`RunnerOptions`, structured
-scenario results and mismatches, tree fixture types, and validation errors. Public errors are typed
-and non-exhaustive. The high-level `Runner::run` always validates, confines, and applies capability
-policy; an unchecked public execution path is not exposed.
+versioned `PolicyTest` model, schema generation entry points, `Runner`/`RunnerOptions`, structured
+policy-test results and mismatches, tree fixture types, aggregate report types, and validation
+errors. Public errors are typed and non-exhaustive. The high-level `Runner::run` always validates,
+confines, and applies capability policy; an unchecked public execution path is not exposed.
+`Runner::preflight` lets batch callers establish definition, package, config, and capability safety
+without evaluating a rule. Deferred snapshot updates execute once and expose an explicit commit
+step after every selected test's inline assertions pass.
 
 `proptest` strategies and repository-only generators move behind a non-default `strategies`
 feature or into test code. The crate's default dependency graph contains only runtime runner needs.
 Release ordering publishes it after `alint-core`, `alint-dsl`, and `alint-rules` and before the CLI.
-A package-content check verifies licenses, README, schemas/docs links, and no scenario corpus or
+A package-content check verifies licenses, README, schemas/docs links, and no policy-test corpus or
 build artifact is accidentally shipped.
 
-The CLI depends on this runner. `alint-e2e` also loads all scenario documents through it. Existing
-programmatic invariant tests which intentionally construct partial scenarios move to a private
-helper instead of retaining a public validation bypass.
+The CLI depends on this runner. `alint-e2e` also loads all policy-test documents through it.
+Programmatic invariant tests use the public validated execution path rather than retaining an
+unchecked validation bypass.
 
 ### 2.10 Bundled ruleset ownership
 

@@ -17,6 +17,19 @@ pub(super) struct FileSnapshot {
     mode: u32,
 }
 
+#[derive(Debug)]
+pub(super) struct PendingSnapshotUpdate {
+    package: PackageRoot,
+    relative: String,
+    rendered: String,
+}
+
+impl PendingSnapshotUpdate {
+    pub(super) fn commit(&self) -> Result<()> {
+        write_snapshot_atomic(&self.package, &self.relative, &self.rendered)
+    }
+}
+
 pub(super) fn repository_files(root: &Path) -> Result<BTreeMap<PathBuf, FileSnapshot>> {
     fn collect(
         root: &Path,
@@ -171,9 +184,10 @@ pub(super) fn reconcile_snapshot(
     observations: &[StepObservation],
     mismatches: &mut Vec<Mismatch>,
     update: bool,
-) -> Result<()> {
+    defer_update: bool,
+) -> Result<Option<PendingSnapshotUpdate>> {
     let Some(snapshot) = snapshot else {
-        return Ok(());
+        return Ok(None);
     };
     let target = package
         .resolve_snapshot_target(snapshot)
@@ -181,9 +195,17 @@ pub(super) fn reconcile_snapshot(
     let rendered = render_snapshot(observations)?;
     if update {
         if mismatches.is_empty() {
-            write_snapshot_atomic(&target, &rendered)?;
+            let pending = PendingSnapshotUpdate {
+                package: package.clone(),
+                relative: snapshot.to_string(),
+                rendered,
+            };
+            if defer_update {
+                return Ok(Some(pending));
+            }
+            pending.commit()?;
         }
-        return Ok(());
+        return Ok(None);
     }
     match std::fs::read_to_string(&target) {
         Ok(actual) if normalize_lf(&actual) == rendered => {}
@@ -206,7 +228,7 @@ pub(super) fn reconcile_snapshot(
             });
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn render_snapshot(observations: &[StepObservation]) -> Result<String> {
@@ -228,18 +250,12 @@ fn render_snapshot(observations: &[StepObservation]) -> Result<String> {
     Ok(rendered)
 }
 
-fn write_snapshot_atomic(target: &Path, contents: &str) -> Result<()> {
-    if std::fs::symlink_metadata(target).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        return Err(Error::runtime(format!(
-            "snapshot target {} became a symlink",
-            target.display()
-        )));
-    }
+fn write_snapshot_atomic(package: &PackageRoot, relative: &str, contents: &str) -> Result<()> {
+    ensure_snapshot_parent(package, relative)?;
+    let target = package
+        .resolve_snapshot_target(relative)
+        .map_err(Error::from)?;
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent).map_err(|source| Error::Io {
-        path: parent.to_path_buf(),
-        source,
-    })?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|source| Error::Io {
         path: parent.to_path_buf(),
         source,
@@ -247,17 +263,77 @@ fn write_snapshot_atomic(target: &Path, contents: &str) -> Result<()> {
     temporary
         .write_all(contents.as_bytes())
         .map_err(|source| Error::Io {
-            path: target.to_path_buf(),
+            path: target.clone(),
             source,
         })?;
     temporary.flush().map_err(|source| Error::Io {
-        path: target.to_path_buf(),
+        path: target.clone(),
         source,
     })?;
-    temporary.persist(target).map_err(|error| Error::Io {
-        path: target.to_path_buf(),
+    if let Ok(metadata) = std::fs::symlink_metadata(&target)
+        && metadata.is_file()
+    {
+        std::fs::set_permissions(temporary.path(), metadata.permissions()).map_err(|source| {
+            Error::Io {
+                path: target.clone(),
+                source,
+            }
+        })?;
+    }
+    let revalidated = package
+        .resolve_snapshot_target(relative)
+        .map_err(Error::from)?;
+    if revalidated != target {
+        return Err(Error::runtime(
+            "snapshot target changed while preparing its atomic replacement",
+        ));
+    }
+    temporary.persist(&target).map_err(|error| Error::Io {
+        path: target.clone(),
         source: error.error,
     })?;
+    Ok(())
+}
+
+fn ensure_snapshot_parent(package: &PackageRoot, relative: &str) -> Result<()> {
+    let Some(parent) = Path::new(relative).parent() else {
+        return Ok(());
+    };
+    let mut current = package.path().to_path_buf();
+    for component in parent.components() {
+        current.push(component.as_os_str());
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(Error::runtime(format!(
+                    "snapshot parent {} is not a regular directory",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current).map_err(|source| Error::Io {
+                    path: current.clone(),
+                    source,
+                })?;
+            }
+            Err(source) => {
+                return Err(Error::Io {
+                    path: current,
+                    source,
+                });
+            }
+        }
+        let canonical = current.canonicalize().map_err(|source| Error::Io {
+            path: current.clone(),
+            source,
+        })?;
+        if !canonical.starts_with(package.path()) {
+            return Err(Error::runtime(
+                "snapshot parent escaped the policy-test package root",
+            ));
+        }
+        current = canonical;
+    }
     Ok(())
 }
 
@@ -297,5 +373,28 @@ mod tests {
                 new_mode: 0o100_755
             }
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_replacement_preserves_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("case.yml");
+        std::fs::write(&source, "test_version: 1\n").unwrap();
+        let package = PackageRoot::for_policy_test(&source).unwrap();
+        std::fs::create_dir(temp.path().join("snapshots")).unwrap();
+        let target = temp.path().join("snapshots/result.json");
+        std::fs::write(&target, "old\n").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        write_snapshot_atomic(&package, "snapshots/result.json", "new\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new\n");
+        assert_eq!(
+            std::fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
     }
 }

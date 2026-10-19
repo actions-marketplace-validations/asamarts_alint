@@ -17,7 +17,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   final-tree checks, and atomic JSON snapshots. All 578 declarative tests use the public contract;
   bundled ruleset tests now live beside their owning rulesets under `alint-dsl/ruleset-tests/v1`,
   and the obsolete internal scenario model and unchecked runner are removed. The crate is
-  publishable with an opt-in `strategies` feature; `alint test` is the remaining CLI slice.
+  publishable with an opt-in `strategies` feature and stable policy-test/report JSON Schemas.
+
+- **`alint test` now provides the public policy-authoring loop.** It discovers `.yml` and `.yaml`
+  documents under `alint-tests/` or explicit paths, applies repeatable AND tag filters and a
+  path/name substring filter, preflights every selected definition and capability before execution,
+  and runs tests in deterministic source/name order. Human and stable JSON reports distinguish
+  passed, failed, invalid, and platform-skipped tests; exits 0/1/2/3 map to pass, mismatch, invalid
+  input, and operational failure. Snapshot updates are confined and deferred until every selected
+  test's inline expectations pass. Native process and host-keyring access each require both a
+  document declaration and an explicit CLI grant.
 
 ### Changed
 

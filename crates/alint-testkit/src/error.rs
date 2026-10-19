@@ -35,6 +35,9 @@ pub enum Error {
     #[error("policy-test capability error: {0}")]
     Capability(String),
 
+    #[error("policy-test Git fixture error: {0}")]
+    GitFixture(String),
+
     #[error("policy-test runner error: {0}")]
     Runtime(String),
 }
@@ -50,5 +53,9 @@ impl Error {
 
     pub(crate) fn capability(message: impl Into<String>) -> Self {
         Self::Capability(message.into())
+    }
+
+    pub(crate) fn git_fixture(message: impl Into<String>) -> Self {
+        Self::GitFixture(message.into())
     }
 }

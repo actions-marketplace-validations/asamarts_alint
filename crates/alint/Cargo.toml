@@ -22,6 +22,7 @@ alint-dsl.workspace = true
 alint-rules.workspace = true
 alint-output.workspace = true
 alint-lsp.workspace = true
+alint-testkit.workspace = true
 anstream.workspace = true
 anyhow.workspace = true
 clap.workspace = true
@@ -37,6 +38,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 tempfile.workspace = true
 trycmd.workspace = true
 

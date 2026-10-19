@@ -208,3 +208,29 @@
   -h, --help
   -q, --quiet
 
+=== test ===
+  --allow-host-keyring
+  --allow-spawn
+  --as-of <YYYY-MM-DD>
+  --ascii
+  --baseline <FILE>
+  --color <WHEN>
+  --compact
+  --fail-on-warning
+  --filter <TEXT>
+  --include-fixes
+  --no-docs
+  --no-gitignore
+  --only <RULE_ID>
+  --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
+  --tag <TAG>
+  --update-snapshots
+  --width <COLS>
+  -c, --config <CONFIG>
+  -f, --format <FORMAT>
+  -h, --help
+  -q, --quiet
+

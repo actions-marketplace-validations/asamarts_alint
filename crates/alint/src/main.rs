@@ -22,6 +22,7 @@ mod progress;
 mod rules;
 mod safe_write;
 mod suggest;
+mod test_cmd;
 
 use cli::{Cli, Command, RulesCommand};
 
@@ -355,6 +356,26 @@ fn run(mut cli: Cli) -> Result<ExitCode> {
                 confidence,
                 include_bundled,
                 explain,
+            },
+            &cli,
+        ),
+        Command::Test {
+            paths,
+            tag,
+            filter,
+            update_snapshots,
+            allow_spawn,
+            allow_host_keyring,
+            format,
+        } => test_cmd::run(
+            &test_cmd::RunOptions {
+                paths: &paths,
+                tags: &tag,
+                filter: filter.as_deref(),
+                update_snapshots,
+                allow_spawn,
+                allow_host_keyring,
+                format: &format,
             },
             &cli,
         ),

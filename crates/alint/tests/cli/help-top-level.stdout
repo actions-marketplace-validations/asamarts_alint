@@ -12,6 +12,7 @@ Commands:
   init              Scaffold a starter `.alint.yml` for the detected ecosystem
   export-agents-md  Generate an `AGENTS.md` section from the active rule set
   suggest           Scan for antipatterns and propose rules that would catch them
+  test              Run versioned policy tests in isolated temporary repositories
   validate-config   Parse-validate an `.alint.yml` without walking the tree
   lsp               Start the alint language server (LSP over stdio)
   rules             Browse the catalog of rule kinds alint ships (config-independent)

@@ -18,8 +18,13 @@ assert!(run.passed(), "{:#?}", run.mismatches);
 
 Rules or fixers that spawn commands, and rules that access a host keyring, require both a document declaration under `capabilities` and the corresponding `RunnerOptions` grant. The default grants neither capability.
 
+Batch callers can invoke `Runner::preflight` for every selected document before execution.
+`Runner::run_deferred_snapshot_update` and `PolicyTestRun::commit_snapshot_update` support
+all-inline-assertions-first snapshot updates without executing a test twice.
+
 - [Policy-test v1 schema](https://github.com/asamarts/alint/blob/main/schemas/v1/policy-test.json)
 - [Policy-test contract](https://github.com/asamarts/alint/blob/main/docs/design/v0.20/policy-tests.md)
+- [Policy-test report v1 schema](https://github.com/asamarts/alint/blob/main/schemas/v1/policy-test-report.json)
 - [Tree fixture syntax](TREE_SPEC.md)
 
 The optional `strategies` feature exposes repository-maintained proptest generators. It is disabled by default.

@@ -9,6 +9,7 @@ model {
   alint.cli.alintBin -> alint.lspServer.lspd
   alint.cli.alintBin -> alint.cli.output
   alint.cli.alintBin -> alint.cli.rules
+  alint.cli.alintBin -> alint.tooling.testkit
   alint.tooling.bench -> alint.cli.core
   alint.tooling.bench -> alint.cli.dsl
   alint.tooling.bench -> alint.cli.output

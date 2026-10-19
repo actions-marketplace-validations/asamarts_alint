@@ -394,6 +394,41 @@ pub(crate) enum Command {
         #[arg(long)]
         explain: bool,
     },
+    /// Run versioned policy tests in isolated temporary repositories.
+    ///
+    /// With no PATH, discovers YAML documents below `alint-tests/`.
+    /// Explicit paths may be policy-test files or directories. Exit 1
+    /// means expectation mismatch, 2 means invalid test input, and 3
+    /// means the runner could not safely operate its sandbox.
+    Test {
+        /// Policy-test YAML files or directories. Defaults to `alint-tests/`.
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        /// Select tests carrying this tag. Repeat for an AND filter.
+        #[arg(long, value_name = "TAG")]
+        tag: Vec<String>,
+        /// Case-sensitive substring match against test name or source path.
+        #[arg(long, value_name = "TEXT")]
+        filter: Option<String>,
+        /// Replace snapshots after every selected test's inline assertions pass.
+        #[arg(long)]
+        update_snapshots: bool,
+        /// Grant tests that declare `spawn: true` full native code-execution authority.
+        #[arg(long)]
+        allow_spawn: bool,
+        /// Grant tests that declare `host_keyring: true` access to the host keyring.
+        #[arg(long)]
+        allow_host_keyring: bool,
+        /// Report format. JSON follows `schemas/v1/policy-test-report.json`.
+        #[arg(
+            long,
+            short = 'f',
+            value_name = "FORMAT",
+            default_value = "human",
+            value_parser = clap::builder::PossibleValuesParser::new(["human", "json"]),
+        )]
+        format: String,
+    },
     /// Parse-validate an `.alint.yml` without walking the tree.
     ///
     /// Resolves `extends:`, builds every rule, and parses every
