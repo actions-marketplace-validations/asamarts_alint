@@ -23,10 +23,12 @@ moves.
 ### Where things stand
 
 - **Planning is done.** The general-linter program is adopted (ADR-0019); every DEC-1 to DEC-14
-  outcome is recorded in [`../general-linter.md`](../general-linter.md) section 13.1, the open
-  questions in section 13.2, and the plugin design in
-  [`../plugin-architecture.md`](../plugin-architecture.md). W1's design
-  ([`kind-meta.md`](kind-meta.md)) is accepted with K1 to K5 decided (its section 7).
+  outcome is recorded in [`../general-linter.md`](../general-linter.md) section 13.1, the remaining
+  later-phase questions in section 13.2, and the plugin design in
+  [`../plugin-architecture.md`](../plugin-architecture.md). Phase 1b has graduated to the accepted
+  [`../v0.20/`](../v0.20/README.md) design and
+  [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md). W1's design
+  ([`kind-meta.md`](kind-meta.md)) was accepted with K1 to K5 decided (its section 7).
 - **v0.18.3 shipped** (tag `v0.18.3`, commit `b02109b8`): the four K2 bugs plus the ten review
   findings described below (#327).
 - **v0.18.4 shipped** (tag `v0.18.4`, commit `18e1a66d`): the `--changed` performance fix (#329;
@@ -165,13 +167,14 @@ release-by-release row.
 
 ### Next work, in order
 
-1. **Design Phase 1b for v0.20:** `alint test` (DEC-6) and `explain --trace` (Q14), preserving the
-   capability-catalog and fail-loud contracts delivered here.
+1. **Implement Phase 1b for v0.20** from [`../v0.20/README.md`](../v0.20/README.md): start with
+   the versioned policy-test model (P1) and per-source compatibility checks (P4), then land the
+   public runner/CLI and selected-rule trace as vertical slices.
 2. **Resolve the remaining YAML supply-chain warning:** evaluate a safe-Rust replacement for
    `unsafe-libyaml`/`serde_yaml_ng`, including the compatibility and adversarial corpus, or scope a
    purpose-built parser ([#334](https://github.com/asamarts/alint/issues/334)).
-3. **Select the next rule-gap slice** from `rule-coverage-gaps.md` only after Phase 1b's contracts
-   are decided, so new kinds do not create a second metadata or test convention.
+3. **Select the next rule-gap slice** from `rule-coverage-gaps.md` after the Phase 1b public
+   metadata and test conventions are executable, so new kinds do not create a second convention.
 
 Every implementation item W1-W10 has its design document in this directory. No v0.19 code or
 documentation work item remains open.
@@ -182,7 +185,8 @@ documentation work item remains open.
   (WIT loading, the subset checker, the wire lock, a `check` / `lock` CLI) is in place with CI
   green; next are the Rust and protobuf emitters. Nothing is published to crates.io until it has
   real functionality (crates.io does not allow name-only placeholder releases).
-- **Phase 1b design**: `alint test` (DEC-6) and `explain --trace` (Q14), for v0.20.
+- **Phase 1b implementation**: the accepted policy-test, trace/preview, and config-compatibility
+  contracts in [`../v0.20/`](../v0.20/README.md).
 - **adotenv 0.2 adoption is complete.** alint uses the lossless strict parser, maps bare
   declarations to JSON `null`, and consumes native verified `TextEdit` batches in
   `crates/alint-core/src/structured_fix/mod.rs`.
@@ -433,8 +437,9 @@ generated-source boundaries, release-time roadmap update, and validation plan de
   [`../plugin-architecture.md`](../plugin-architecture.md) section 6 starts in parallel as
   `witforge` (`asamarts/witforge`, private until alint's contract `0.x` consumes it; Q16,
   decided 2026-10-14).
-- **Phase 1b design.** The design documents for `alint test` (DEC-6) and `explain --trace`
-  (Q14) can be written during v0.19, for implementation in v0.20.
+- **Phase 1b design (completed 2026-10-18).** The accepted
+  [`../v0.20/`](../v0.20/README.md) documents specify `alint test` (DEC-6), selected-rule trace and
+  preview (Q7/Q14), and per-source config requirements (Q11) for v0.20 implementation.
 
 ## Gates for the release
 

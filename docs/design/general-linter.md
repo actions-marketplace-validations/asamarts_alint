@@ -2,11 +2,15 @@
 
 Status: Accepted direction (2026-10-14). Revised after an adversarial review against `main` at
 v0.18.2 (section 15); the program-level decisions are taken (section 13.1) and recorded in
-[ADR-0019](../adr/0019-general-linter-program-and-plugin-architecture.md). Each phase still
-graduates to its own design document before implementation.
-Decisions: [ADR-0019](../adr/0019-general-linter-program-and-plugin-architecture.md). Section 13.2
+[ADR-0019](../adr/0019-general-linter-program-and-plugin-architecture.md). Phase 1b has graduated
+to the accepted [`v0.20/`](v0.20/README.md) design and
+[ADR-0022](../adr/0022-policy-authoring-loop-contracts.md); later phases still graduate to their own
+design documents before implementation.
+Decisions: [ADR-0019](../adr/0019-general-linter-program-and-plugin-architecture.md) and
+[ADR-0022](../adr/0022-policy-authoring-loop-contracts.md). Section 13.2
 lists the questions each phase's design decides, and section 13.3 lists the existing ADRs and
-constitution invariants this program amends or supersedes. ADRs are immutable (constitution 13), so each amendment is a new superseding ADR.
+constitution invariants this program amends or supersedes. ADRs are immutable (constitution 13), so
+each amendment is a new superseding ADR.
 Any public DSL version, new execution model, or plugin ABI must graduate to its own design
 document and ADR before implementation.
 Demand evidence: the 111-repository v0.12 coverage study and its architecture synthesis
@@ -1044,62 +1048,39 @@ pressure that would otherwise motivate it.
 
 ### 7.7 Policy tests
 
-A first-class test format should operate on fixture repositories, not mock internal APIs:
-
-```yaml
-test_version: 1
-cases:
-  - name: matching dependency pins pass
-    fixture: fixtures/pins-pass
-    expect: { findings: [] }
-
-  - name: drift points to both declarations
-    fixture: fixtures/pins-drift
-    expect:
-      findings:
-        - rule: dependency-versions-agree
-          count: 1
-          primary: packages/b/package.json
-          related: [packages/a/package.json]
-```
-
-`alint test` should support expected findings, notes, related locations, fix diffs, exit
-class, and deterministic snapshots. Remote execution stays disabled; command/plugin tests
-must explicitly declare and provide those capabilities. This is a dedicated policy-test schema,
-not a `.alint.yml` config with an overloaded `version` field; fixture paths remain confined to
-the test package by default.
+A first-class test format operates on fixture repositories, not mock internal APIs. DEC-6 is now
+specified by the accepted [`v0.20/policy-tests.md`](v0.20/policy-tests.md) design.
 
 **Build on the existing harness rather than inventing a second format.** alint already has a
-deny-unknown-fields scenario format in `crates/alint-testkit` (`given.tree` / `given.config`,
-a `when: [check, fix, check]` step list, `expect` per step, `expect_tree`, and the ADR-0014
-rule-page marker), and over 500 scenarios use it. The sketch above is a different format for
-the same job. The recommended path (decision DEC-6) is to promote that scenario schema, plus an
-optional `given.fixture: <dir>` for on-disk fixtures, as the public policy-test format with a
-published JSON Schema and its own version field. Two mechanics follow:
+deny-unknown-fields scenario format in `crates/alint-testkit` (`given.tree` / `given.config`, a
+`when: [check, fix, check]` step list, `expect` per step, `expect_tree`, and the ADR-0014
+rule-page marker), and 578 scenarios use it. The earlier `cases:` sketch represented requirements,
+not a second accepted syntax. The public format remains one scenario per YAML document and adds:
 
-- `alint-testkit` is `publish = false` and documented as not a stable API, and a published
-  crate cannot depend on an unpublished one. The runner either moves into a published crate or
-  the testkit is published with a stability statement.
-- The design doc must specify fixture confinement (resolved under the test file's directory,
-  `..` rejected the same way `extends:` targets are confined), `extends:` inside tests (bundled
-  and local only, `https://` refused), cases that need a Git repository (the harness already
-  builds one by spawning `git`), and message matching (exact, regex, or omitted).
+- a required, independent `test_version: 1`;
+- optional confined `given.fixture` and `given.config_file` package paths;
+- findings, notes, analysis failures, related locations, fix diffs, command exit class, final-tree
+  checks, and deterministic structured snapshots;
+- bundled and confined local extends only; `https://` is refused before cache or network access;
+- explicit document declarations plus separate host grants for process and keyring capabilities;
+- exact, regex, and deliberately omitted message matching;
+- a published JSON Schema and a published `alint-testkit` runner crate.
 
-Module authors then also get what ADR-0014 gives rule pages: the same fixture can render as a
-documented example.
+`alint test` and `alint-e2e` use that same parser and runner. Module authors keep what ADR-0014
+already provides: the exact executable fixture can also render as a documented example.
 
 ### 7.8 Versioning across `extends`, schemas, and tooling
 
 A new DSL surface touches more than the parser. Each of these needs an answer in the Phase 3
-design document (except the `requires:` field, question Q11, which lands earlier in Phase 1b),
-with the defaults recommended here:
+design document except the source-version and `requires` contract, which is accepted for Phase 1b
+in [`v0.20/config-requirements.md`](v0.20/config-requirements.md):
 
 - **Version mixing across `extends:`.** The loader currently drops an extended file's `version:`
-  without checking it, so a v1 consumer extending a v2 ruleset would fail with an opaque
-  "unknown field" error. Each extended source's version is validated before it is dropped. A
-  v2 consumer may extend v1 sources; a v1 consumer extending a v2 source is a hard error that
-  names the required version. A v1-compatible `requires: { alint: ">=0.N" }` ruleset field
-  should land before Phase 3, so rulesets that use new kinds can say so (question Q11).
+  without checking it. v0.20 validates and records every complete source before merge. A v1
+  source may extend only v1 sources; a future v2 source may extend v1 or v2, never the reverse at
+  any recursive edge. Complete extended sources must state `version`; `.alint.d` fragments may
+  inherit the root's version. The v1-compatible `requires: { alint: "0.20.0" }` field is a
+  source-local minimum stable release, not a SemVer range, and cannot grant capabilities.
 - **JSON Schema and editors.** Configs point editors at `schemas/v1/config.json` on `main`. A v2
   surface ships `schemas/v2/config.json`; the v1 schema is frozen, and the published `$id`
   stops pointing at a moving branch.
@@ -1495,8 +1476,8 @@ expressiveness:
 This is intentionally staged. Publishing the generic YAML first would freeze the weakest
 part of the design before provenance, testing, and planning are ready. Each phase has a proposed
 target release, a size, the substrates it delivers, and an exit criterion. DEC-1 adopted these
-targets; the roadmap records Phases 0 and 1a under v0.19, and later targets stay provisional
-until each phase's design document.
+targets; the roadmap records Phases 0 and 1a under v0.19, and the accepted Phase 1b design under
+v0.20. Later targets stay provisional until each phase's design document.
 
 ### 11.1 Phase summary
 
@@ -1504,7 +1485,7 @@ until each phase's design document.
 |---|---|---|---|
 | 0. Terminology and capability inventory | v0.19 | S | `KindMeta` declared for every kind, emitted into `facts.json`, the spawn and Git lists derived from it, and the audit gate green |
 | 1a. Fail-loud and finding foundations | v0.19 | L | every row of section 4.12 closed or explicitly recorded as accepted, each with a gate asserting its invariant |
-| 1b. Authoring loop | v0.20 | M | `alint test` public with a published schema; a rule-level `explain --trace`; the bundled rulesets carry their own tests |
+| 1b. Authoring loop | v0.20 | M | `alint test` public with a published schema; selected-rule `explain --trace`; bundled rulesets own tests; each composed config source validates `version` and optional `requires.alint` before merge |
 | 2. Internal relation IR (go / no-go) | v0.21 | L | the IR pilot ships as a v1 kind, one existing kind is ported with zero shadow diffs over one release, and the section 9.6 budgets hold |
 | 3. Selectors, report-only constraints, and `version: 2` | v0.22 or later | L | the section 12.1 measures met on the Phase 3 conformance policies (locale key parity, dependency version consistency, toolchain-pin consistency; stale exceptions are measured at Phase 4); the version-boundary ADR accepted |
 | 4. Typed modules and exception data | unscheduled | M | decided after Phase 3 by measured reuse pressure |
@@ -1553,14 +1534,19 @@ section 5.2.4 design (section 4.11). Phase 1 keeps today's per-file atomicity an
 
 ### 11.4 Phase 1b: authoring loop
 
-- Promote the testkit scenario format to `alint test` for downstream rulesets and fixtures
-  (section 7.7, decision DEC-6).
-- Add a rule-level `explain --trace`: which gates ran, which selectors matched how many
-  resources, extracted counts and cardinalities, and which assertion failed. The plan-level
-  trace of section 9.1 waits for the Phase 2 IR. Trace output is experimental (human output,
-  or JSON under ADR-0009's `schema_version` envelope marked experimental) until v2 is stable,
-  so users cannot freeze IR internals by scripting against it (question Q14).
-- Add an extraction preview with provenance and truncation markers.
+The accepted v0.20 scope, work-item order, invariants, and release acceptance are in
+[`v0.20/README.md`](v0.20/README.md):
+
+- Promote the existing one-scenario-per-document testkit format to `alint test`, publish its JSON
+  Schema and runner crate, add confined real fixtures/config files, and move bundled ruleset tests
+  to their ownership boundary ([`v0.20/policy-tests.md`](v0.20/policy-tests.md), DEC-6).
+- Add a selected-rule `explain --trace` through production engine dispatch: gates, selector
+  counts, extraction/cardinality stages, assertion outcome, and bounded redaction-safe preview.
+  Plan-level trace waits for the Phase 2 IR. Trace and preview JSON remain explicitly experimental
+  until v2 is stable ([`v0.20/rule-trace.md`](v0.20/rule-trace.md), Q7/Q14).
+- Validate each composed config source's language before merge and add literal
+  `requires.alint` minimum-version metadata to v1
+  ([`v0.20/config-requirements.md`](v0.20/config-requirements.md), Q11).
 
 Phase 1 as a whole has standalone value and reduces the risk of every later phase.
 
@@ -1733,7 +1719,7 @@ outcome differs from the review's recommendation, the outcome column says so.
 | DEC-3 | Redaction default for evidence values | **Redact values from dotenv and properties by default, plus an opt-in `sensitive:` marker elsewhere.** Raw values never reach baseline files. The baseline fingerprint is already a hash of the identity, so redaction changes only the advisory message; the Phase 1a design must still address that an unsalted hash of a low-entropy value can be brute-forced |
 | DEC-4 | How the JSON report evolves | **Relax v1's `additionalProperties: false` one release before adding fields**, announced in the changelog. A v2 report is reserved for removals and renames. Consequence: related locations reach SARIF and the LSP in v0.19 (both formats already allow them) and the JSON report one release later |
 | DEC-5 | Baseline identity under the richer finding model | **Freeze existing kinds' fingerprints behind a golden gate** recomputed over the scenario corpus. Related locations never enter a fingerprint, new kinds set `baseline_key` from sorted identity fields, and the baseline schema stays at version 1 |
-| DEC-6 | The public policy-test format | **Promote the testkit scenario schema**, with `given.fixture:`, its own version field and a published JSON Schema; the runner moves into a published crate |
+| DEC-6 | The public policy-test format | **Promote the one-scenario-per-document testkit schema**, with `given.fixture:`, its own version field and a published JSON Schema; publish the existing `alint-testkit` as the runner rather than creating a second facade |
 | DEC-7 | The IR proof strategy | **Pilot on the new `key_parity` kind, then port existing kinds only under differential shadow evaluation** with zero differences for one release |
 | DEC-8 | Named kinds versus generic constraints for the relational gaps | **Named v1 kinds implemented on the IR**; no standalone evaluators for those gaps before Phase 2; the generic `constraint` is the escape hatch |
 | DEC-9 | The DSL version boundary and its order relative to v1.0 | **`version: 2` ships before v1.0** (not the review's post-1.0 recommendation). v1.0 therefore follows Phase 3 and freezes both `version: 1` and `version: 2`, together with the plugin contract 1.0 |
@@ -1745,7 +1731,7 @@ outcome differs from the review's recommendation, the outcome column says so.
 
 ### 13.2 Questions decided in their phase's design document
 
-| ID | Question | Phase | Recommendation |
+| ID | Question | Phase | Outcome / recommendation |
 |---|---|---|---|
 | Q1 | Are selectors and relations top-level, rule-local, or both, and how do they relate to ADR-0010's deferred `path_sets:` block? | 3 | both, with local definitions anonymous and top-level ones namespaced; `path_sets:` becomes the selector feature, not a second concept |
 | Q2 | How do selectors on full-index rules interact with `--changed`? | 3 | selectors filter compared rows, never path scope; the rule runs when any context row changed |
@@ -1753,16 +1739,16 @@ outcome differs from the review's recommendation, the outcome column says so.
 | Q4 | Which value types are core? | 2 | primitives with lexeme-preserving numbers, path, lists, and records; semantic scalars (`semver`, SPDX) only with several consumers |
 | Q5 | How are object keys and duplicate entries represented across all eight formats? | 1a | as ordered entry rows with spans, never as a JSON object |
 | Q6 | What is the smallest join vocabulary that covers the corpus without accidental quadratic plans? | 3 | equality joins on declared fields only, with explicit caps; no implicit cross products |
-| Q7 | Are relation rows user-visible in JSON output? | 1b | only through the experimental preview command |
+| Q7 | Are relation rows user-visible in JSON output? | 1b | **Decided 2026-10-18 (ADR-0022):** only through bounded experimental `explain --trace --preview`; this is not the Phase 2 relation IR |
 | Q8 | Which existing kinds compile to generic constraints, and which stay native? | 2 | decided per kind from the shadow-port results; graph, Unicode, and Git kernels stay native |
 | Q9 | Can snapshot views support every pure rule? | 5 | no; the `KindMeta` inventory declares snapshot compatibility and incompatible rules are rejected per view |
 | Q10 | Exact shape of the adapter, analyzer, and fixer worlds in contract 0.x (the roles themselves are decided by DEC-14a) | 2 | separate worlds, even if one artifact implements several; inputs pushed by the host, no host callbacks in 0.x |
 | Q16 | Name and repository of the WIT contract compiler, and its first-release scope | now | **Decided 2026-10-14:** `witforge` (`asamarts/witforge`), private first, public with 0.1 once alint's contract `0.x` consumes it; MVP emits Rust types and traits plus `.proto` with the lockfile, JSON Schema next |
 | Q17 | The plugin manifest and `alint build` manifest formats, and how plugin kinds are namespaced in `.alint.yml` | 6 | `<plugin>/<kind>` kind names; YAML for `plugins:` in config; TOML for the build manifest |
-| Q11 | How do versions mix across `extends:`, and when does `requires:` land? | 1b | v2 consumers may extend v1 sources, never the reverse; `requires:` lands in v1 before Phase 3 |
+| Q11 | How do versions mix across `extends:`, and when does `requires:` land? | 1b | **Decided 2026-10-18 (ADR-0022):** every source is checked before merge; v2 consumers may extend v1 sources, never the reverse; v1 gains literal minimum `requires.alint` stable triplets |
 | Q12 | How are named objects namespaced and protected from shadowing? | 3 | provenance on every named object, namespace-qualified references, no shadowing of local names, plan-time capability monotonicity |
 | Q13 | How are paths compared in joins? | 2 | byte-exact on normalized paths, opt-in case folding, never host-dependent |
-| Q14 | What is the stability tier of `explain --trace` and previews? | 1b | experimental until v2 is stable |
+| Q14 | What is the stability tier of `explain --trace` and previews? | 1b | **Decided 2026-10-18 (ADR-0022):** separate experimental JSON until v2 is stable; stable static explain JSON is unchanged |
 | Q15 | Is the `when` expression syntax evolved in place or replaced for v2? | 3 | preserve v1 `when`; extend a typed evaluator internally before choosing syntax |
 
 ### 13.3 Records this program would amend or supersede
@@ -1771,12 +1757,12 @@ outcome differs from the review's recommendation, the outcome column says so.
 |---|---|---|
 | Constitution invariant 1 (determinism) | an explicit time input and a declared-host-input class (DEC-11) | Phase 1a |
 | Constitution invariant 2 and ADR-0003 (dispatch) | full-index context separated from target selection (Q2) | Phase 3 |
-| ADR-0002 (YAML, flat merge by id) | namespaced modules and a `version: 2` envelope (DEC-9, Q12) | Phases 3 and 4 |
-| ADR-0004 (trust boundary) | plugin and named-object grants (DEC-14f, Q12) | Phases 3 and 6 |
+| ADR-0002 (YAML, flat merge by id) | per-source version/requirement checks (Q11), then namespaced modules and a `version: 2` envelope (DEC-9, Q12) | Phase 1b, then Phases 3 and 4; Phase 1b recorded by ADR-0022 |
+| ADR-0004 (trust boundary) | policy-test host grants (DEC-6), then plugin and named-object grants (DEC-14f, Q12) | Phase 1b, then Phases 3 and 6; Phase 1b recorded by ADR-0022 |
 | `ARCHITECTURE.md` "Plugin model" (native Rust plugins out of scope) | compiled-in native plugins, process plugins, and WASM components (DEC-14) | updated 2026-10-14 |
 | ADR-0006 (baseline) | exception relations and the stale default (Q3); fingerprint freeze stated explicitly (DEC-5) | Phases 1a and 4 |
 | ADR-0008 (`git_tracked_only` is a kind option) | a selector-level `tracked` predicate implemented for every domain | Phase 3 |
-| ADR-0009, ADR-0012, ADR-0013 (explain and output projections) | an evaluating trace and new finding fields under the completeness gates | Phases 1a and 1b |
+| ADR-0009, ADR-0012, ADR-0013 (explain and output projections) | an evaluating trace and new finding fields under the completeness gates | Phases 1a and 1b; Phase 1b recorded by ADR-0022 |
 | ADR-0010 (manifest values never decide verdicts) | policy-source files (DEC-12) | before `editorconfig_conforms` |
 | ADR-0017 (fix model) | generic edit plans built on `sync_from` and the deferred section 5.2.4 transaction | after Phase 3 |
 | Roadmap backlog and v1.0 milestone | plugin plan of record (DEC-14) and DSL ordering (DEC-9) | on acceptance of DEC-1 |
