@@ -49,7 +49,7 @@ fn slash(path: &Path) -> String {
 fn collect_policy_test(corpus_root: &Path, path: &Path, records: &mut Vec<GoldenFingerprint>) {
     let yaml = std::fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("read policy test {}: {error}", path.display()));
-    let policy_test: PolicyTest = serde_yaml_ng::from_str(&yaml)
+    let policy_test = PolicyTest::from_yaml(&yaml)
         .unwrap_or_else(|error| panic!("parse policy test {}: {error}", path.display()));
 
     // Evaluate every corpus fixture from its declared initial tree, including

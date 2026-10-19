@@ -1,6 +1,6 @@
 # Design doc: public policy tests
 
-Status: Accepted design (2026-10-18); P1-P3 implemented.
+Status: Accepted design (2026-10-18); P1-P3 and P7 implemented.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 DEC-6 and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md).
 Demand evidence: [`../general-linter.md` section 5.8](../general-linter.md#58-policy-authoring-testing-and-debugging),
@@ -428,10 +428,10 @@ scenario. Additional boundary, fix, or composition cases are demand-driven. Cata
 cover bundle filtering/composition and every declared `requires.alint` value without duplicating the
 same assertion for each bundle.
 
-A generated parity gate compares ruleset stems with test directories and rejects orphaned tests or
-untested bundles. The 48 current bundled scenarios migrate rather than remain in a central second
-location. ADR-0014 examples may point at these documents; docs export still executes the exact
-fixture.
+A runtime-catalog parity gate compares every shipped `(name, revision)` with its owned-test
+directory and rejects orphaned tests or untested bundles. The original 48 centralized bundled
+scenarios migrated into the ownership tree, which now contains 93 scenarios. ADR-0014 examples may
+point at these documents; docs export still executes the exact fixture.
 
 ## 3. Semantics
 

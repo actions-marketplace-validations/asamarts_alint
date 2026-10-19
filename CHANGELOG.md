@@ -61,6 +61,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   JSON Schema and embedded copy include the new field; `facts.json` format v5 publishes the
   supported config and policy-test version lists from runtime constants.
 
+- **Bundled ruleset tests now have executable ownership gates.** The runtime catalog and
+  `alint-dsl/ruleset-tests/<revision>/` directories must match exactly; all 24 shipped v1 bundles
+  own explicit, unfiltered pass and fail scenarios. Catalog filtering, composition, and declared
+  compatibility metadata run through production loading. The complete 578-document corpus is
+  count-pinned, parsed by `PolicyTest::from_yaml`, and executed by the public runner; supplementary
+  audits no longer deserialize the public test type through an unchecked YAML path.
+
 ### Fixed
 
 - **Environment-derived selector paths no longer leak through diagnostics.** Static and traced

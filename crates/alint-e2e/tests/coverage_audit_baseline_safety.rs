@@ -154,12 +154,10 @@ fn collect_from_policy_tests(
         update_snapshots: false,
     });
     for path in yml_files(dir) {
-        let Ok(yaml) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(policy_test) = serde_yaml_ng::from_str::<PolicyTest>(&yaml) else {
-            continue;
-        };
+        let yaml = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read policy test {}: {error}", path.display()));
+        let policy_test = PolicyTest::from_yaml(&yaml)
+            .unwrap_or_else(|error| panic!("parse policy test {}: {error}", path.display()));
         let Some(config) = policy_test.given.config.as_deref() else {
             continue;
         };
@@ -167,9 +165,9 @@ fn collect_from_policy_tests(
             .into_iter()
             .map(|(id, kind)| (id, registry.canonical_kind(&kind).to_string()))
             .collect();
-        let Ok(run) = runner.run(&policy_test, &path) else {
-            continue;
-        };
+        let run = runner
+            .run(&policy_test, &path)
+            .unwrap_or_else(|error| panic!("run policy test {}: {error}", path.display()));
         for (step, observation) in policy_test.when.iter().zip(&run.observations) {
             if !matches!(step, TestStep::Check | TestStep::CheckChanged) {
                 continue;

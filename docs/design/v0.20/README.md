@@ -1,6 +1,6 @@
 # v0.20: Policy authoring loop
 
-Status: Accepted design (2026-10-18); P1-P6 implemented, P7 next.
+Status: Accepted design (2026-10-18); P1-P7 implemented, P8 next.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 (DEC-6) and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md)
 (Phase 1b questions Q7, Q11, and Q14).
@@ -29,10 +29,10 @@ only one or two leaves a broken loop: a test failure without trustworthy diagnos
 without a repeatable contract, or a published ruleset with no enforceable minimum binary version.
 
 The release promotes existing machinery rather than introducing parallel conventions. The current
-repository has 578 scenario documents, including 207 executable documentation examples and 48
-bundled-ruleset scenarios, plus 24 shipped v1 bundled rulesets. Those assets are the migration
-corpus and compatibility oracle. The public format remains one scenario per YAML document and the
-existing `given` / `when` / `expect` vocabulary remains authoritative.
+repository has 578 scenario documents, including 207 executable documentation examples and 93
+bundle-owned scenarios, plus 24 shipped v1 bundled rulesets. Those assets are the migration corpus
+and compatibility oracle. The public format remains one scenario per YAML document and the existing
+`given` / `when` / `expect` vocabulary remains authoritative.
 
 ## Scope
 
@@ -152,6 +152,11 @@ Implementation status:
   structured-extraction and nested-child previews, and shares field-sensitive
   redaction between plain and traced explain. The committed schema ships in the
   binary crate.
+- **P7 complete:** the runtime bundle catalog and owned-test directory catalog must match exactly;
+  all 24 shipped bundles own explicit whole-bundle pass and fail scenarios. Catalog filtering,
+  composition, and declared compatibility metadata execute through production loading, while all
+  578 documents are count-pinned, parsed by `PolicyTest::from_yaml`, and executed by the public
+  runner. Alternate direct deserialization of the public policy-test type has been removed.
 
 ## Cross-cutting invariants
 
@@ -220,7 +225,6 @@ v0.20 is complete only when all of the following are observed:
 
 ## Implementation handoff
 
-P1-P6 are implemented. P7 is next: complete the trace-dependent bundled-ruleset
-ownership and coverage audit on top of the public parser/runner corpus migration
-that landed with P2. Then close P8 with release packaging, generated artifacts,
-and the full acceptance matrix.
+P1-P7 are implemented. P8 is next: close the release with the complete user-documentation and
+release-note pass, package/install acceptance, generated artifacts, cross-platform and shell
+checks, advisory review, and the full acceptance matrix.

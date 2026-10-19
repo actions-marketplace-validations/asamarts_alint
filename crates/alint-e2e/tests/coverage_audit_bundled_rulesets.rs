@@ -1,146 +1,154 @@
 //! Ownership and behavior parity audit for bundled rulesets.
 //!
-//! Every YAML under `crates/alint-dsl/rulesets/v1/` maps to exactly one sibling
-//! directory under `crates/alint-dsl/ruleset-tests/v1/`. Tests in that directory
-//! must extend the matching packaged `alint://bundled/...@v1` URI. Every bundle
-//! requires at least one passing fixture and one fixture with findings.
+//! The runtime bundle catalog is the source of truth. Every shipped revision maps
+//! to exactly one directory under `crates/alint-dsl/ruleset-tests/<rev>/`, every
+//! document is parsed through the public policy-test parser, and every owner has
+//! at least one explicit passing fixture and one fixture with findings.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use alint_core::ExtendsEntry;
+use alint_testkit::{ExpectedExit, PolicyTest, Runner, RunnerOptions};
+use serde::Deserialize;
+
 #[derive(Default)]
 struct Coverage {
-    well_formed_in: Vec<String>,
-    ill_formed_in: Vec<String>,
+    passing: Vec<String>,
+    failing: Vec<String>,
 }
 
-/// Translate a path under `crates/alint-dsl/rulesets/v1/` into
-/// the `alint://bundled/<…>@v1` URI scenarios use to extend it.
-/// `oss-baseline.yml` → `alint://bundled/oss-baseline@v1`;
-/// `monorepo/cargo-workspace.yml` →
-/// `alint://bundled/monorepo/cargo-workspace@v1`.
-fn ruleset_uri(rel_path: &Path) -> Option<String> {
-    let rel = rel_path.with_extension("");
-    let body = rel.to_str()?.replace('\\', "/");
-    Some(format!("alint://bundled/{body}@v1"))
+#[derive(Default, Deserialize)]
+struct ScenarioConfig {
+    #[serde(default)]
+    extends: Vec<ExtendsEntry>,
+    #[serde(default)]
+    rules: Vec<serde_yaml_ng::Value>,
 }
 
-/// Pull every `alint://bundled/...` URI referenced from this
-/// scenario's `given.config:`. The config carries `extends:` as
-/// a list of strings; we don't try to parse it formally — a
-/// substring match against the canonical URI is enough.
-fn scenario_extends_set(text: &str) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("- alint://bundled/") {
-            let uri = format!("alint://bundled/{}", rest.trim_matches(['\'', '"']));
-            out.insert(uri);
-        } else if let Some(rest) = trimmed.strip_prefix("alint://bundled/") {
-            // tolerate `alint://...` on a bare line, just in case
-            out.insert(format!(
-                "alint://bundled/{}",
-                rest.trim_matches(['\'', '"', ' ', ',']),
-            ));
-        }
-    }
-    out
-}
-
-/// True if every `expect[*].violations:` block in the YAML is
-/// empty. Empty list → scenario expects no violations →
-/// "well-formed". Any non-empty entry → "ill-formed".
-fn is_well_formed(scenario: &serde_yaml_ng::Value) -> bool {
-    let Some(expect) = scenario.get("expect") else {
-        return true;
-    };
-    let mut all_empty = true;
-    walk_expect(expect, &mut all_empty);
-    all_empty
-}
-
-fn walk_expect(v: &serde_yaml_ng::Value, all_empty: &mut bool) {
-    match v {
-        serde_yaml_ng::Value::Mapping(m) => {
-            if let Some(violations) = m.get(serde_yaml_ng::Value::String("violations".into()))
-                && let Some(seq) = violations.as_sequence()
-                && !seq.is_empty()
-            {
-                *all_empty = false;
-            }
-            for (_, child) in m {
-                walk_expect(child, all_empty);
-            }
-        }
-        serde_yaml_ng::Value::Sequence(seq) => {
-            for child in seq {
-                walk_expect(child, all_empty);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn walk_yaml_paths(root: &Path) -> Vec<PathBuf> {
+fn yaml_paths(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(read) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in read.flatten() {
-            let path = entry.path();
+        for entry in std::fs::read_dir(&dir)
+            .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        {
+            let path = entry
+                .unwrap_or_else(|error| panic!("read entry below {}: {error}", dir.display()))
+                .path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().and_then(|s| s.to_str()) == Some("yml")
-                || path.extension().and_then(|s| s.to_str()) == Some("yaml")
-            {
+            } else if matches!(
+                path.extension().and_then(|extension| extension.to_str()),
+                Some("yml" | "yaml")
+            ) {
                 out.push(path);
             }
         }
     }
+    out.sort();
     out
 }
 
-fn assert_complete_coverage(coverage: &HashMap<String, Coverage>, all_uris: &[String]) {
-    let mut missing_well_formed = Vec::new();
-    let mut missing_ill_formed = Vec::new();
-    for uri in all_uris {
-        let item = coverage.get(uri).expect("coverage seeded above");
-        if item.well_formed_in.is_empty() {
-            missing_well_formed.push(uri);
+fn parse_policy_test(path: &Path) -> PolicyTest {
+    let yaml = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("read policy test {}: {error}", path.display()));
+    let test = PolicyTest::from_yaml(&yaml)
+        .unwrap_or_else(|error| panic!("parse policy test {}: {error}", path.display()));
+    if let Err(diagnostics) = test.validate() {
+        panic!("validate policy test {}: {diagnostics:#?}", path.display());
+    }
+    test
+}
+
+fn config_body(path: &Path, test: &PolicyTest) -> String {
+    if let Some(config) = &test.given.config {
+        return config.clone();
+    }
+    let relative = test
+        .given
+        .config_file
+        .as_ref()
+        .unwrap_or_else(|| panic!("{} has no config source", path.display()));
+    let package_path = path
+        .parent()
+        .unwrap_or_else(|| panic!("{} has no parent", path.display()))
+        .join(relative);
+    std::fs::read_to_string(&package_path)
+        .unwrap_or_else(|error| panic!("read config {}: {error}", package_path.display()))
+}
+
+fn parse_scenario_config(path: &Path, test: &PolicyTest) -> ScenarioConfig {
+    let config = config_body(path, test);
+    serde_yaml_ng::from_str(&config)
+        .unwrap_or_else(|error| panic!("parse config from {}: {error}", path.display()))
+}
+
+fn owner_key(path: &Path, tests_root: &Path) -> String {
+    let relative = path
+        .parent()
+        .and_then(|parent| parent.strip_prefix(tests_root).ok())
+        .unwrap_or_else(|| panic!("{} has no bundle owner directory", path.display()));
+    relative.to_string_lossy().replace('\\', "/")
+}
+
+fn owner_uri(owner: &str) -> String {
+    let (revision, name) = owner
+        .split_once('/')
+        .unwrap_or_else(|| panic!("bundle owner {owner:?} must start with a revision directory"));
+    format!("alint://bundled/{name}@{revision}")
+}
+
+fn catalog() -> BTreeMap<String, String> {
+    let mut catalog = BTreeMap::new();
+    for (name, revision) in alint_dsl::bundled::catalog() {
+        let owner = format!("{revision}/{name}");
+        let uri = format!("alint://bundled/{name}@{revision}");
+        assert_eq!(
+            catalog.insert(owner.clone(), uri),
+            None,
+            "runtime bundle catalog contains duplicate owner {owner:?}"
+        );
+    }
+    catalog
+}
+
+fn assert_complete_coverage(coverage: &BTreeMap<String, Coverage>) {
+    let mut missing_passing = Vec::new();
+    let mut missing_failing = Vec::new();
+    for (uri, item) in coverage {
+        if item.passing.is_empty() {
+            missing_passing.push(uri);
         }
-        if item.ill_formed_in.is_empty() {
-            missing_ill_formed.push(uri);
+        if item.failing.is_empty() {
+            missing_failing.push(uri);
         }
     }
-    if missing_well_formed.is_empty() && missing_ill_formed.is_empty() {
+    if missing_passing.is_empty() && missing_failing.is_empty() {
         return;
     }
 
     let mut report = String::new();
-    if !missing_well_formed.is_empty() {
+    if !missing_passing.is_empty() {
         let _ = writeln!(
             report,
-            "{} of {} bundled rulesets have no WELL-FORMED policy test \
-             (expect: [{{ violations: [] }}]):",
-            missing_well_formed.len(),
-            all_uris.len(),
+            "{} of {} bundled rulesets have no passing policy test with an explicit `violations: []` assertion:",
+            missing_passing.len(),
+            coverage.len(),
         );
-        for uri in missing_well_formed {
+        for uri in missing_passing {
             let _ = writeln!(report, "  - {uri}");
         }
     }
-    if !missing_ill_formed.is_empty() {
+    if !missing_failing.is_empty() {
         let _ = writeln!(
             report,
-            "{} of {} bundled rulesets have no ILL-FORMED policy test \
-             (expect: with at least one non-empty violations entry):",
-            missing_ill_formed.len(),
-            all_uris.len(),
+            "{} of {} bundled rulesets have no failing policy test with an explicit non-empty `violations:` assertion:",
+            missing_failing.len(),
+            coverage.len(),
         );
-        for uri in missing_ill_formed {
+        for uri in missing_failing {
             let _ = writeln!(report, "  - {uri}");
         }
     }
@@ -148,70 +156,167 @@ fn assert_complete_coverage(coverage: &HashMap<String, Coverage>, all_uris: &[St
 }
 
 #[test]
-fn every_bundled_ruleset_has_well_formed_and_ill_formed_scenarios() {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace = manifest
+fn runtime_bundle_catalog_exactly_matches_owned_pass_and_fail_tests() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .expect("workspace root from alint-e2e CARGO_MANIFEST_DIR");
-    let dsl = workspace.join("crates").join("alint-dsl");
-    let rulesets_dir = dsl.join("rulesets").join("v1");
-    let ruleset_tests_dir = dsl.join("ruleset-tests").join("v1");
+    let tests_root = workspace.join("crates/alint-dsl/ruleset-tests");
+    let catalog = catalog();
+    let mut actual_owners = BTreeSet::new();
+    let mut coverage: BTreeMap<String, Coverage> = catalog
+        .values()
+        .cloned()
+        .map(|uri| (uri, Coverage::default()))
+        .collect();
+    let mut scenario_names = BTreeMap::new();
 
-    // Map bundled URI → coverage status.
-    let mut coverage: HashMap<String, Coverage> = HashMap::new();
-    let mut all_uris: Vec<String> = Vec::new();
-    for path in walk_yaml_paths(&rulesets_dir) {
-        let rel = path
-            .strip_prefix(&rulesets_dir)
-            .expect("rulesets file under rulesets dir");
-        if let Some(uri) = ruleset_uri(rel) {
-            all_uris.push(uri.clone());
-            coverage.insert(uri, Coverage::default());
-        }
-    }
-    all_uris.sort();
-
-    for path in walk_yaml_paths(&ruleset_tests_dir) {
-        let text = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read policy test {}: {error}", path.display()));
-        let extends = scenario_extends_set(&text);
+    for path in yaml_paths(&tests_root) {
         let relative = path
-            .strip_prefix(&ruleset_tests_dir)
-            .expect("ruleset test is below test root");
-        let bundle = relative
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| panic!("ruleset test {} has no bundle directory", path.display()));
-        let expected_uri = format!(
-            "alint://bundled/{}@v1",
-            bundle.to_string_lossy().replace('\\', "/")
+            .strip_prefix(&tests_root)
+            .expect("ruleset test is below test root")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let owner = owner_key(&path, &tests_root);
+        actual_owners.insert(owner.clone());
+        let expected_uri = owner_uri(&owner);
+        assert_eq!(
+            catalog.get(&owner),
+            Some(&expected_uri),
+            "orphaned ruleset-test owner {owner:?} for {relative} has no shipped bundle"
+        );
+
+        let test = parse_policy_test(&path);
+        if let Some(previous) = scenario_names.insert(test.name.clone(), relative.clone()) {
+            panic!(
+                "duplicate bundled policy-test name {:?} in {previous} and {relative}",
+                test.name
+            );
+        }
+        let config = parse_scenario_config(&path, &test);
+        assert_eq!(
+            config.extends.len(),
+            1,
+            "{relative} must extend exactly its owning bundle"
+        );
+        let entry = &config.extends[0];
+        assert_eq!(
+            entry.url(),
+            expected_uri,
+            "{relative} must extend its owning bundle"
         );
         assert!(
-            coverage.contains_key(&expected_uri),
-            "orphaned ruleset-test directory {} has no bundled ruleset",
-            bundle.display()
+            entry.only().is_none() && entry.except().is_none(),
+            "{relative} must exercise the complete owning bundle without `only:` or `except:`"
         );
-        assert_eq!(
-            extends,
-            HashSet::from([expected_uri.clone()]),
-            "{} must extend exactly its owning bundle",
-            path.display()
-        );
-        let scenario: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
-            .unwrap_or_else(|error| panic!("parse policy test {}: {error}", path.display()));
-        let well_formed = is_well_formed(&scenario);
-        let scenario_name = relative.display().to_string();
-        for uri in &extends {
-            if let Some(c) = coverage.get_mut(uri) {
-                if well_formed {
-                    c.well_formed_in.push(scenario_name.clone());
-                } else {
-                    c.ill_formed_in.push(scenario_name.clone());
-                }
-            }
+
+        let explicit_violation_sets: Vec<_> = test
+            .expect
+            .iter()
+            .filter_map(|expectation| expectation.violations.as_ref())
+            .collect();
+        let item = coverage
+            .get_mut(&expected_uri)
+            .expect("catalog and owner parity checked above");
+        if explicit_violation_sets
+            .iter()
+            .any(|violations| !violations.is_empty())
+        {
+            item.failing.push(relative);
+        } else if !explicit_violation_sets.is_empty()
+            && test
+                .expect
+                .iter()
+                .all(|expectation| expectation.exit == ExpectedExit::Success)
+        {
+            item.passing.push(relative);
         }
     }
 
-    assert_complete_coverage(&coverage, &all_uris);
+    assert_eq!(
+        actual_owners,
+        catalog.keys().cloned().collect(),
+        "the runtime bundle catalog and owned-test directories must match exactly"
+    );
+    assert_complete_coverage(&coverage);
+}
+
+#[derive(Clone, Copy)]
+enum CatalogBehavior {
+    Only,
+    Except,
+    Composition,
+}
+
+#[test]
+fn catalog_filtering_and_composition_run_through_the_public_runner() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cases = [
+        (
+            "scenarios/check/extends/bundled_extends_only_keeps_listed_rules.yml",
+            CatalogBehavior::Only,
+        ),
+        (
+            "scenarios/check/extends/bundled_extends_except_drops_rules_by_id.yml",
+            CatalogBehavior::Except,
+        ),
+        (
+            "scenarios/check/extends/partial_override_bundled.yml",
+            CatalogBehavior::Composition,
+        ),
+    ];
+    let runner = Runner::new(RunnerOptions::default());
+
+    for (relative, behavior) in cases {
+        let path = manifest.join(relative);
+        let test = parse_policy_test(&path);
+        let config = parse_scenario_config(&path, &test);
+        match behavior {
+            CatalogBehavior::Only => assert!(
+                config.extends.iter().any(|entry| entry.only().is_some()),
+                "{relative} must exercise bundled `only:` filtering"
+            ),
+            CatalogBehavior::Except => assert!(
+                config.extends.iter().any(|entry| entry.except().is_some()),
+                "{relative} must exercise bundled `except:` filtering"
+            ),
+            CatalogBehavior::Composition => {
+                assert!(!config.extends.is_empty(), "{relative}");
+                assert!(!config.rules.is_empty(), "{relative}");
+            }
+        }
+        let run = runner
+            .run(&test, &path)
+            .unwrap_or_else(|error| panic!("run {relative}: {error}"));
+        assert!(run.passed(), "{relative}: {:#?}", run.mismatches);
+    }
+}
+
+#[test]
+fn every_bundle_requirement_value_reaches_production_compatibility_metadata() {
+    let registry = alint_rules::builtin_registry();
+    for (name, revision) in alint_dsl::bundled::catalog() {
+        let spec = format!("{name}@{revision}");
+        let body = alint_dsl::bundled::resolve(&spec).expect("catalog entry resolves");
+        let raw: alint_core::Config = serde_yaml_ng::from_str(body)
+            .unwrap_or_else(|error| panic!("parse bundled ruleset {spec}: {error}"));
+        let expected_requirement = raw.requires.map(|requirements| requirements.alint);
+
+        let repository = tempfile::tempdir().expect("temporary bundle compatibility repository");
+        let root = repository.path().join(".alint.yml");
+        let uri = format!("alint://bundled/{spec}");
+        std::fs::write(&root, format!("version: 1\nextends: [{uri}]\nrules: []\n"))
+            .expect("write compatibility config");
+        let loaded = alint_dsl::load_with(
+            &root,
+            &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+        )
+        .unwrap_or_else(|error| panic!("load {uri}: {error}"));
+        let record = loaded
+            .compatibility
+            .iter()
+            .find(|record| record.source == uri)
+            .unwrap_or_else(|| panic!("{uri} compatibility metadata was not retained"));
+        assert_eq!(record.requires_alint, expected_requirement, "{uri}");
+    }
 }
