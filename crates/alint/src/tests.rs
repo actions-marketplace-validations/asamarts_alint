@@ -5,8 +5,16 @@
 //! tests under `tests/cli/`.
 
 use super::*;
-use alint_core::{FactKind, FactSpec, FactValue, FactValues, facts::OneOrMany};
+use std::io::Write;
+
+use alint_core::{FactKind, FactSpec, FactValue, FactValues, FixReport, facts::OneOrMany};
 use alint_output::Format;
+
+use crate::check::write_report_notes;
+use crate::fix::fix_exit_status;
+use crate::inspect::{
+    fact_value_display, fact_value_json, render_facts, render_facts_human, render_facts_json,
+};
 
 #[test]
 fn error_is_internal_classifies_the_exit_code() {

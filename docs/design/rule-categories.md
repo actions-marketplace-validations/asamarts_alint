@@ -25,7 +25,7 @@ fact.
 
 - `xtask/src/facts.rs` `families()` = the non-meta `## ` headings; the `families`
   list and count in `facts.json` come from there.
-- `xtask/src/docs_export.rs` slices `rules.md` H2 -> H3 into
+- `xtask/src/docs_export/rule_pages.rs` slices `rules.md` H2 -> H3 into
   `rules/<family>/<kind>.md` pages plus a per-family index, and returns a singular
   `kind -> family-slug` map.
 - `xtask/src/gen_model.rs` walks the same H2 -> H3 to build `rule-families.gen.c4`.
@@ -106,9 +106,9 @@ consumer: its `rule-families.gen.c4` taxonomy stays primary-only (see gen-model 
 
 ### The `Category` vocabulary (alint-core)
 
-The 13 current families become enum variants. Title and slug match what the engine's
-`slugify()` (`xtask/src/docs_export.rs`) already generates for family directory names,
-and hence the site URLs, so nothing changes:
+The 13 current families become enum variants. Title and slug match what the exporter's
+`slugify()` (`xtask/src/docs_export/rule_pages.rs`) already generates for family directory
+names, and hence the site URLs, so nothing changes:
 
 | Variant | title() | slug() |
 |---|---|---|

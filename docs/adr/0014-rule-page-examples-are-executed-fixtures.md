@@ -36,8 +36,8 @@ Two independent bodies of work touch examples, and they do not meet:
   or message-bearing commits, commits with real file deltas).
 - **The docs example gates** are shallow. `coverage_audit_doc_examples.rs`
   checks only that each page's YAML *parses*; it never runs it.
-  `docs_export.rs::enforce_example_gates` checks only that each kind's H3 has a
-  fenced YAML block whose `kind:` matches. Nothing asserts the example
+  `xtask/src/docs_export/rule_pages.rs::enforce_example_gates` checks only that
+  each kind's H3 has a fenced YAML block whose `kind:` matches. Nothing asserts the example
   corresponds to a real repository, produces the output the prose claims, or
   even that the config is valid against a live tree.
 
@@ -243,4 +243,4 @@ Harder, and accepted:
   `crates/alint-testkit/src/treespec/materialize.rs` (no mode/symlink today),
   `crates/alint-e2e/tests/coverage_audit_pass_fail.rs` (`NATIVE_FIRES_ALLOWLIST`),
   `crates/alint-e2e/tests/coverage_audit_doc_examples.rs` (loads-only),
-  `xtask/src/docs_export.rs` (`enforce_example_gates`, `emit_rule_page`).
+  `xtask/src/docs_export/rule_pages.rs` (`enforce_example_gates`, `emit_rule_page`).

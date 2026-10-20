@@ -65,7 +65,7 @@ Structured JSONPath expressions are compiled once when configuration is built an
 ## 5. Implementation notes
 
 - `crates/alint-core/src/extract.rs` owns compiled structured extractors and the partitioned result.
-- `crates/alint-core/src/scope_filter.rs`, `walker.rs`, and `engine.rs` own manifest resolution failures and active-rule routing.
+- `crates/alint-core/src/scope_filter.rs`, `walker.rs`, and `engine/gates.rs` own manifest resolution failures and active-rule routing.
 - `crates/alint-core/src/engine.rs` uses `KindMeta::effective_capabilities`; no second Git-kind allow-list is introduced.
 - `crates/alint-rules/src/lib.rs` owns the shared value-free non-string diagnostic; `cross_file`, `file_graph`, and `registry_paths_resolve` call it.
 - No dependency is added. Extraction remains linear in query matches; JSONPath compilation moves from per-file evaluation to config load.

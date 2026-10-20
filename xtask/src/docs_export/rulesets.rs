@@ -2,10 +2,18 @@
 //! ruleset checks, the reasoning its authors left as comments in the YAML, the
 //! facts its `when:` clauses read, and how to customize it.
 use std::fmt::Write as _;
+use std::fs;
+use std::path::Path;
 
 use alint_rules::kind_docs::KIND_SUMMARIES;
+use anyhow::{Context, Result};
 
-use super::{escape_yaml_string, first_sentence, ruleset_meta_description};
+use crate::walkdir_plain;
+
+use super::docs_paths;
+use super::rule_pages::{
+    escape_yaml_string, first_sentence, meta_desc_clean, strip_markup, truncate_meta_summary,
+};
 
 /// GitHub repo-relative base for source-of-truth links rendered
 /// into the bundled-ruleset pages. Pinned to `main` so readers
@@ -315,6 +323,32 @@ fn table_cell(text: &str) -> String {
         .replace('|', "\\|")
 }
 
+/// Build one searchable, honest ruleset description. The ruleset name leads,
+/// so it can never be removed by a cap; a long author-written overview is
+/// shortened with an explicit ellipsis rather than presented as a complete but
+/// grammatically broken sentence.
+pub(super) fn ruleset_meta_description(name: &str, overview_md: &str) -> String {
+    const MAX_CHARS: usize = 158;
+
+    let lead = format!("{name}@v1 bundled alint ruleset");
+    let opening = strip_markup(&first_overview_sentence(overview_md));
+    let opening = meta_desc_clean(&opening, usize::MAX);
+    if opening.chars().count() < 25 {
+        return format!("{lead}.");
+    }
+
+    // Reserve `: ` plus a final period in case the source sentence has none.
+    let budget = MAX_CHARS.saturating_sub(lead.chars().count() + 3);
+    let summary = truncate_meta_summary(&opening, budget);
+    let punctuation = if summary.ends_with('.') || summary.ends_with('!') || summary.ends_with('?')
+    {
+        ""
+    } else {
+        "."
+    };
+    format!("{lead}: {summary}{punctuation}")
+}
+
 /// Render the markdown body for a single bundled ruleset. The
 /// page has these sections, in order:
 ///
@@ -614,4 +648,265 @@ fn write_ruleset_source(out: &mut String, rel_repo_path: &str) {
         "The full ruleset definition, comments included, is committed at \
          [`{rel_repo_path}`]({ALINT_REPO_BLOB_URL}/{rel_repo_path}) in the alint repo.",
     );
+}
+/// One markdown page per `crates/alint-dsl/rulesets/v1/**/*.yml`,
+/// summarising the ruleset's rules with their level / kind / message
+/// / policy URL. Slash-separated names (`hygiene/lockfiles`,
+/// `ci/github-actions`) are flattened with a `-` for the bundle
+/// filename so Starlight's autogen sidebar produces a flat list.
+///
+/// Each page now also carries:
+/// - An overview parsed from the YAML's leading comment block
+///   (the natural-language description the ruleset author wrote
+///   above `version: 1`).
+/// - A `## Source` section with a link back to the canonical YAML
+///   in the alint repo plus the full file embedded as a fenced
+///   code block, so readers can see the exact rule definitions
+///   without leaving the docs.
+pub(super) fn generate_bundled_ruleset_pages(
+    workspace: &Path,
+    target_dir: &Path,
+    kind_to_family: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    struct RulesetEntry {
+        pretty: String,
+        flat_slug: String,
+        summary: String,
+    }
+
+    let rulesets_root = workspace.join(docs_paths::RULESETS_DIR);
+    let bundled_dir = target_dir.join("bundled-rulesets");
+    fs::create_dir_all(&bundled_dir)?;
+
+    let mut entries: Vec<RulesetEntry> = Vec::new();
+
+    for entry in walkdir_plain(&rulesets_root)? {
+        let md = fs::metadata(&entry)?;
+        if !md.is_file() {
+            continue;
+        }
+        let ext = entry.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if ext != "yml" && ext != "yaml" {
+            continue;
+        }
+        let rel = entry.strip_prefix(&rulesets_root).unwrap();
+        let pretty_name = rel.with_extension("");
+        let pretty_str = pretty_name.to_string_lossy().replace('\\', "/");
+        let flat_slug = pretty_str.replace('/', "-");
+        let flat_filename = format!("{flat_slug}.md");
+
+        let yaml_text =
+            fs::read_to_string(&entry).with_context(|| format!("reading {}", entry.display()))?;
+        let yaml: yaml_serde::Value = yaml_serde::from_str(&yaml_text)
+            .with_context(|| format!("parsing {}", entry.display()))?;
+
+        // Repo-relative path for the source link, always forward-
+        // slashed regardless of host OS so the URL is portable.
+        let rel_path_str = rel.to_string_lossy().replace('\\', "/");
+        let rel_repo_path = format!("{}/{}", docs_paths::RULESETS_DIR, rel_path_str);
+
+        let overview_md = render_overview_from_comments(&yaml_text);
+        let summary = first_overview_sentence(&overview_md);
+
+        let page = render_ruleset_page(
+            &pretty_str,
+            &overview_md,
+            &yaml_text,
+            &rel_repo_path,
+            &yaml,
+            kind_to_family,
+        );
+        let dest = bundled_dir.join(&flat_filename);
+        fs::write(&dest, page).with_context(|| format!("writing {}", dest.display()))?;
+
+        entries.push(RulesetEntry {
+            pretty: pretty_str,
+            flat_slug,
+            summary,
+        });
+    }
+
+    // An index page listing every ruleset — overwrites the hand-
+    // written placeholder when the sync script lays the bundle into
+    // alint.org. Each entry shows a one-line summary (the first
+    // sentence of the ruleset's leading comment block) so the
+    // index is scannable without opening every page.
+    entries.sort_by(|a, b| a.pretty.cmp(&b.pretty));
+    let mut index = String::new();
+    let _ = writeln!(&mut index, "---");
+    let _ = writeln!(&mut index, "title: Bundled Rulesets");
+    let _ = writeln!(
+        &mut index,
+        "description: One-line ecosystem baselines built into the alint binary."
+    );
+    let _ = writeln!(&mut index, "sidebar:");
+    let _ = writeln!(&mut index, "  order: 1");
+    let _ = writeln!(&mut index, "---");
+    let _ = writeln!(&mut index);
+    let _ = writeln!(
+        &mut index,
+        "Adopt with `extends: [alint://bundled/<name>@v1]`. Each ruleset's full rule list lives on its own page below."
+    );
+    let _ = writeln!(&mut index);
+    let _ = writeln!(&mut index, "## Currently shipped");
+    let _ = writeln!(&mut index);
+    for e in &entries {
+        if e.summary.is_empty() {
+            let _ = writeln!(
+                &mut index,
+                "- [`{name}@v1`](/docs/bundled-rulesets/{slug}/)",
+                name = e.pretty,
+                slug = e.flat_slug
+            );
+        } else {
+            let _ = writeln!(
+                &mut index,
+                "- [`{name}@v1`](/docs/bundled-rulesets/{slug}/) — {summary}",
+                name = e.pretty,
+                slug = e.flat_slug,
+                summary = e.summary,
+            );
+        }
+    }
+    fs::write(bundled_dir.join("index.md"), index)?;
+
+    Ok(())
+}
+
+/// Parse the leading comment block of a ruleset YAML into
+/// markdown. The first line is expected to be the canonical
+/// `# alint://bundled/<name>@<rev>` URI tag and is stripped.
+/// Subsequent comment lines are emitted as paragraphs (preserving
+/// the author's line breaks so list items render correctly) or,
+/// when a paragraph starts with a 4-space indent, as a fenced
+/// `yaml` code block — that's the convention authors use for
+/// the "here's the `extends:` snippet" mini-blocks.
+///
+/// Reading stops at the first non-comment, non-blank line. By
+/// convention the rule body starts right after the leading
+/// comment block, so this naturally captures only the file's
+/// top-of-file description.
+pub(crate) fn render_overview_from_comments(yaml_text: &str) -> String {
+    enum Block {
+        Para(Vec<String>),
+        Code(Vec<String>),
+    }
+
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut comment_started = false;
+    // Treat start-of-input as a paragraph break so the very first
+    // non-blank comment line opens a new block.
+    let mut paragraph_break = true;
+
+    for raw in yaml_text.lines() {
+        let line = raw.trim_end();
+        if line.is_empty() {
+            if !comment_started {
+                continue;
+            }
+            // A literal blank line (no `#`) ends the leading
+            // comment block. Authors use blank `#` lines for
+            // paragraph breaks INSIDE the block — those are
+            // handled below.
+            break;
+        }
+        if !line.starts_with('#') {
+            break;
+        }
+        comment_started = true;
+
+        // Strip the `#` marker and exactly one trailing space.
+        let after_hash = &line[1..];
+        let body = after_hash.strip_prefix(' ').unwrap_or(after_hash);
+
+        if body.is_empty() {
+            paragraph_break = true;
+            continue;
+        }
+        // Skip the canonical `# alint://bundled/<name>@<rev>` URI
+        // header — it's metadata, not prose.
+        if body.starts_with("alint://bundled/") {
+            continue;
+        }
+
+        // 4-space indent at the START of a block = code block.
+        // Continuation lines inside an existing block keep that
+        // block's kind regardless of their own indent (so
+        // bulleted lists with hanging-indent continuations
+        // stay in a single Para block).
+        if paragraph_break {
+            if let Some(rest) = body.strip_prefix("    ") {
+                blocks.push(Block::Code(vec![rest.to_string()]));
+            } else {
+                blocks.push(Block::Para(vec![body.to_string()]));
+            }
+        } else {
+            match blocks
+                .last_mut()
+                .expect("paragraph_break=false implies a current block exists")
+            {
+                Block::Para(lines) => lines.push(body.to_string()),
+                Block::Code(lines) => {
+                    // Inside a code block, dedent up to 4 spaces so
+                    // the rendered code matches the opening line's
+                    // visual indentation.
+                    let dedented = body.strip_prefix("    ").unwrap_or(body);
+                    lines.push(dedented.to_string());
+                }
+            }
+        }
+        paragraph_break = false;
+    }
+
+    let mut out = String::new();
+    for (i, b) in blocks.iter().enumerate() {
+        if i > 0 {
+            out.push_str("\n\n");
+        }
+        match b {
+            Block::Para(lines) => out.push_str(&overview_paragraph(lines)),
+            Block::Code(lines) => {
+                out.push_str("```yaml\n");
+                for l in lines {
+                    out.push_str(l);
+                    out.push('\n');
+                }
+                out.push_str("```");
+            }
+        }
+    }
+    out
+}
+
+/// First-sentence summary of a rendered overview, used to
+/// populate the bundled-rulesets index page. Skips fenced code
+/// blocks, takes the first paragraph of natural-language prose,
+/// and truncates at the first sentence-ending `. ` boundary.
+pub(crate) fn first_overview_sentence(overview_md: &str) -> String {
+    let mut paragraph = String::new();
+    let mut in_code = false;
+    for line in overview_md.lines() {
+        if line.trim_start().starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if !paragraph.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if !paragraph.is_empty() {
+            paragraph.push(' ');
+        }
+        paragraph.push_str(trimmed);
+    }
+    if let Some(idx) = paragraph.find(". ") {
+        paragraph.truncate(idx + 1);
+    }
+    paragraph.trim().to_string()
 }

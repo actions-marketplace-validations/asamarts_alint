@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::escape_yaml_string;
+use super::rule_pages::escape_yaml_string;
 
 /// `description:` frontmatter for the pages exported verbatim from repo docs
 /// (`copy_one` and the public-roadmap generator inject only a `title:`).

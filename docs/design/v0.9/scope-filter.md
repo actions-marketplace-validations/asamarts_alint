@@ -1,7 +1,7 @@
 # scope_filter — closest-ancestor manifest scoping for per-file rules
 
 Status: Implemented in v0.9.6 (`crates/alint-core/src/scope_filter.rs`,
-engine integration at `crates/alint-core/src/engine.rs`
+engine integration in `crates/alint-core/src/engine/run.rs` through
 `run_per_file`). Per-file rule builders thread the filter onto
 the built rule via `RuleSpec::parse_scope_filter` (`config.rs`)
 so `Rule::scope_filter()` returns it back to the engine.

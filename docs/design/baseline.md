@@ -436,9 +436,9 @@ By failure mode:
   load/save, `schema_version` gate), `violation_fingerprint(&Violation, content:
   Option<&[u8]>) -> [u8; 32]`, and `apply(&mut Report, &Baseline, strict) ->
   Suppressed` (marks `RuleResult.suppressed`, returns the summary + stale list).
-  CLI (`crates/alint/src/main.rs`) gains `cmd_baseline`, threads `--baseline` /
+  CLI (`crates/alint/src/check.rs`) owns `cmd_baseline` and threads `--baseline` /
   `baseline:` key / `--strict-baseline` / `--show-baselined` into `cmd_check`,
-  at the same post-load layer as the existing `apply_only_filter`.
+  at the same post-load layer as `apply_only_filter`.
 - **Unify the fingerprint (review H1). — RESOLVED (v0.14 deferral close-out,
   2026-07-05).** `gitlab.rs` used to ship its own
   `fingerprint(rule_id|path|message|occurrence)` (SHA-256, bare `|` separator)

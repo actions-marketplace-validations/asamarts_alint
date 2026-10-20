@@ -11,7 +11,7 @@
 //! identity isn't `(rule_id, path)`; the boundary is enforced by the
 //! `coverage_audit_baseline_safety` collision-invariant in `alint-e2e`.
 //! `check --baseline` wires this in between `Engine::run` and the
-//! formatters (see `crates/alint/src/main.rs`).
+//! formatters (see `crates/alint/src/check.rs`).
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

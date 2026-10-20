@@ -7,13 +7,13 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use super::{
-    CLI_REFERENCE_SUBCMDS, cli_view, escape_yaml_string, help_section_body, meta_desc_clean,
-    parse_help_definition_list,
-};
+use super::CLI_REFERENCE_SUBCMDS;
+use super::rule_pages::{escape_yaml_string, meta_desc_clean};
+use crate::build_release_binary;
 
 /// The long flag of a clap option term: `-c, --config <CONFIG>` -> `--config`.
 fn option_long_flag(term: &str) -> Option<&str> {
@@ -399,4 +399,264 @@ pub(super) fn check_cli_prose_files(cli_dir: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+/// The architecture flow embedded atop a generated `cli/<sub>` page, if any.
+/// The architecture view embedded on a `cli/<sub>` reference page, with a
+/// one-line caption. `facts` is intentionally absent: factsFlow depicts
+/// fact-evaluation *plus* rule gating, but `alint facts` only evaluates and
+/// prints facts, so the diagram would over-reach.
+pub(crate) fn cli_view(sub: &str) -> Option<(&'static str, &'static str)> {
+    match sub {
+        "check" => Some(("checkFlow", "The pipeline `alint check` runs:")),
+        "fix" => Some(("fixFlow", "How `alint fix` applies fixes and re-checks:")),
+        "lsp" => Some(("lspFlow", "How `alint lsp` serves an editor over LSP:")),
+        _ => None,
+    }
+}
+
+/// The contiguous indented body of a top-level `--help` section (e.g.
+/// `"Commands:"` / `"Options:"`): the indented lines after the header, up to the
+/// next non-indented header. Blank lines are dropped.
+fn help_section_body<'a>(help: &'a str, header: &str) -> Vec<&'a str> {
+    let mut lines = help.lines();
+    for line in lines.by_ref() {
+        if line.trim_end() == header {
+            break;
+        }
+    }
+    let mut body = Vec::new();
+    for line in lines {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if !line.starts_with(char::is_whitespace) {
+            break; // reached the next section header
+        }
+        body.push(line);
+    }
+    body
+}
+
+/// Parse an indented clap `term  description` block (a `Commands:` or `Options:`
+/// body) into `(term, description)` pairs, folding wrapped continuation lines
+/// into the preceding description. clap puts each term at a shallow indent (2 or
+/// 6) and wraps its description at a deeper column, which is how we tell them
+/// apart.
+fn parse_help_definition_list(lines: &[&str]) -> Vec<(String, String)> {
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for line in lines {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent <= 6 {
+            let (term, desc) = trimmed.split_once("  ").unwrap_or((trimmed, ""));
+            entries.push((term.trim().to_string(), desc.trim().to_string()));
+        } else if let Some((_, desc)) = entries.last_mut() {
+            if !desc.is_empty() {
+                desc.push(' ');
+            }
+            desc.push_str(line.trim());
+        }
+    }
+    entries
+}
+
+/// Render the top-level `alint --help` as a formatted CLI landing page: the
+/// about blurb, the usage line, a Commands table (each linked to its subcommand
+/// page), and a Global-options table that names the `top_level_only` flags no
+/// subcommand takes (`--version`). Everything is parsed from the captured
+/// `--help`, so it can never drift from the binary. Returns `None` if the help
+/// doesn't parse into a sane shape (no options found) so the caller falls back
+/// to the raw help dump — a clap format change degrades to the old behaviour,
+/// never to garbage.
+pub(super) fn format_top_help(help: &str, top_level_only: &[String]) -> Option<String> {
+    let commands = parse_help_definition_list(&help_section_body(help, "Commands:"));
+    let options = parse_help_definition_list(&help_section_body(help, "Options:"));
+    if options.is_empty() {
+        return None;
+    }
+
+    let about = help
+        .lines()
+        .take_while(|l| !l.starts_with("Usage:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    let usage = help
+        .lines()
+        .find(|l| l.starts_with("Usage:"))
+        .unwrap_or_default();
+
+    let esc = |s: &str| s.replace('|', "\\|");
+    let known: std::collections::HashSet<&str> = CLI_REFERENCE_SUBCMDS.iter().copied().collect();
+
+    let mut out = String::new();
+    if !about.is_empty() {
+        let _ = writeln!(&mut out, "{about}\n");
+    }
+    if !usage.is_empty() {
+        let _ = writeln!(&mut out, "```\n{usage}\n```\n");
+    }
+    if !commands.is_empty() {
+        let _ = writeln!(&mut out, "## Commands\n");
+        let _ = writeln!(&mut out, "| Command | Description |");
+        let _ = writeln!(&mut out, "| --- | --- |");
+        for (cmd, desc) in &commands {
+            let name = cmd.split_whitespace().next().unwrap_or(cmd);
+            let cell = if known.contains(name) {
+                format!("[`{cmd}`](/docs/cli/{name}/)")
+            } else {
+                format!("`{cmd}`")
+            };
+            let _ = writeln!(&mut out, "| {cell} | {} |", esc(desc));
+        }
+        let _ = writeln!(&mut out);
+    }
+    let _ = writeln!(&mut out, "## Global options\n");
+    if top_level_only.is_empty() {
+        let _ = writeln!(&mut out, "These apply to every subcommand.\n");
+    } else {
+        let except = code_list(top_level_only);
+        let _ = writeln!(
+            &mut out,
+            "These apply to every subcommand except {except}.\n"
+        );
+    }
+    let _ = writeln!(&mut out, "| Flag | Description |");
+    let _ = writeln!(&mut out, "| --- | --- |");
+    for (flag, desc) in &options {
+        let _ = writeln!(&mut out, "| `{}` | {} |", esc(flag), esc(desc));
+    }
+    let _ = writeln!(&mut out);
+    let _ = writeln!(&mut out, "<sub>Generated from `alint --help`.</sub>");
+
+    Some(out)
+}
+
+/// Build the alint binary in release mode, then capture
+/// `alint --help` and `alint <subcmd> --help` for each subcommand.
+/// The top-level help renders as a formatted landing page (`cli/index.md`);
+/// each subcommand's help becomes its own page under `cli/<subcmd>.md`.
+pub(super) fn generate_cli_reference(workspace: &Path, target_dir: &Path) -> Result<()> {
+    let bin = build_release_binary()?;
+
+    let cli_dir = target_dir.join("cli");
+    fs::create_dir_all(&cli_dir)?;
+    // Prose copied in from docs/site/cli/ (by copy_site_tree) must each belong
+    // to a subcommand page. Checked before anything is generated here, since
+    // the landing page below is written as cli/index.md.
+    check_cli_prose_files(&cli_dir)?;
+
+    let top = run_help(&bin, &[])?;
+    let globals = global_options(&top);
+    // The global flags some subcommand's help repeats or redefines; the others
+    // work only on the top-level command, and the landing page says so.
+    let mut in_subcommands = std::collections::HashSet::new();
+    let subcmds = CLI_REFERENCE_SUBCMDS;
+    for sub in subcmds {
+        let help = run_help(&bin, &[sub])?;
+        // SERP description: clap prints the subcommand's own one-
+        // line summary as the first non-empty line of --help
+        // (before the blank line and `Usage:`). Use it verbatim
+        // so the snippet says what `alint <sub>` does, not "see
+        // --help". Keep the command (the search query) in the
+        // string; no em-dashes (style guide).
+        let help_summary = meta_desc_clean(&help_first_line(&help), 120);
+        let cli_desc = if help_summary.len() < 12 {
+            format!("alint {sub} subcommand. CLI reference and flags for alint {sub}.")
+        } else if help_summary.ends_with('.') {
+            format!("{help_summary} alint {sub} CLI reference and flags.")
+        } else {
+            format!("{help_summary}. alint {sub} CLI reference and flags.")
+        };
+        // Hand-written prose for the page, from docs/site/cli/<sub>.md. It is
+        // already in the bundle at this path (copy_site_tree runs first and
+        // applies the release gating), and this page replaces it.
+        let page_path = cli_dir.join(format!("{sub}.md"));
+        let prose = if page_path.is_file() {
+            let text = fs::read_to_string(&page_path)
+                .with_context(|| format!("reading {}", page_path.display()))?;
+            Some(parse_cli_prose(&text).with_context(|| format!("docs/site/cli/{sub}.md"))?)
+        } else {
+            None
+        };
+        let stripped = strip_global_options(&help, &globals);
+        in_subcommands.extend(stripped.removed.iter().chain(&stripped.own).cloned());
+        let page = render_cli_page(sub, &cli_desc, prose.as_ref(), &stripped);
+        fs::write(&page_path, page)?;
+    }
+
+    // Top-level help → cli/index.md
+    let top_level_only = top_level_only(&globals, &in_subcommands);
+    let mut index = String::new();
+    let _ = writeln!(&mut index, "---");
+    let _ = writeln!(&mut index, "title: CLI");
+    let _ = writeln!(
+        &mut index,
+        "description: alint's subcommands and global flags, captured from the binary itself."
+    );
+    let _ = writeln!(&mut index, "sidebar:");
+    let _ = writeln!(&mut index, "  order: 1");
+    let _ = writeln!(&mut index, "---");
+    let _ = writeln!(&mut index);
+    // Prefer a formatted landing page (Commands + Global-options tables) parsed
+    // from `--help`; fall back to the raw dump if the help doesn't parse.
+    if let Some(body) = format_top_help(&top, &top_level_only) {
+        index.push_str(&body);
+    } else {
+        let _ = writeln!(&mut index, "```");
+        index.push_str(&top);
+        let _ = writeln!(&mut index, "```");
+    }
+    fs::write(cli_dir.join("index.md"), index)?;
+
+    // Sanity-check: workspace path exists.
+    let _ = workspace;
+    Ok(())
+}
+
+fn run_help(bin: &Path, subcmd_args: &[&str]) -> Result<String> {
+    let mut cmd = Command::new(bin);
+    cmd.args(subcmd_args).arg("--help");
+    let out = cmd.output().with_context(|| format!("running {cmd:?}"))?;
+    if !out.status.success() {
+        bail!(
+            "alint {:?} --help exited {:?}",
+            subcmd_args,
+            out.status.code()
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// First descriptive line of a clap `--help` dump: clap prints the
+/// command's about-string as the leading line(s) before the blank
+/// line that precedes `Usage:`. Returns the joined about block
+/// (it can wrap to a second line), skipping anything that is
+/// itself a section header (`Usage:`, `Options:`, `Arguments:`,
+/// `Commands:`). Used as the seed for the CLI page SERP
+/// description.
+fn help_first_line(help: &str) -> String {
+    let mut acc = String::new();
+    for line in help.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            if !acc.is_empty() {
+                break;
+            }
+            continue;
+        }
+        if t.starts_with("Usage:")
+            || t.starts_with("Options:")
+            || t.starts_with("Arguments:")
+            || t.starts_with("Commands:")
+        {
+            break;
+        }
+        if !acc.is_empty() {
+            acc.push(' ');
+        }
+        acc.push_str(t);
+    }
+    acc
 }

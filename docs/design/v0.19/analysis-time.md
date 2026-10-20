@@ -96,9 +96,9 @@ individual unblameable file.
 
 `crates/alint-core/src/analysis_time.rs` owns strict parsing, UTC civil-date conversion, source
 metadata, and display. `crates/alint-core/src/git.rs` owns the HEAD committer-time query and
-deterministic blame setup. `crates/alint-core/src/engine.rs` resolves at most once per engine
-repository root, guarded by a runtime `wants_analysis_time()` audit that must agree with `KindMeta`.
-`git_blame_age` is the first user. No date/time dependency is added.
+deterministic blame setup. `crates/alint-core/src/engine/gates.rs` resolves at most once per
+engine repository root, guarded by a runtime `wants_analysis_time()` audit that must agree with
+`KindMeta`. `git_blame_age` is the first user. No date/time dependency is added.
 
 Constitution invariant 1 is amended by ADR-0020: deterministic inputs include explicit CLI and
 environment values plus immutable repository state; ambient wall time is forbidden in analysis.

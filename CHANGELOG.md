@@ -51,6 +51,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Oversized Rust implementation files are now split by responsibility.** CLI command execution
+  lives in per-command modules; engine execution, fixing, gates, and tests use phase-focused
+  modules; DSL tests are grouped by concern; and docs export separates rule, ruleset, and CLI page
+  generation. All Rust sources remain below the repository's 2,000-line cap without public API or
+  behavior changes.
+
 - **YAML parsing now uses the YAML organization's maintained fork.** `yaml_serde` 0.10.7 and
   `libyaml-rs` 0.3.0 replace `serde_yaml_ng` and the archived `unsafe-libyaml`, removing
   `RUSTSEC-2024-0449` from the dependency graph without changing accepted YAML, value semantics,

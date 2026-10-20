@@ -75,7 +75,7 @@ edits" case (auto-fix.md 2, "Cross-file value propagation").
 
 ## The fixer wiring -- a WHOLE-FILE `apply` fixer that reuses the located resolver
 
-**Engine finding (verified in `engine.rs:1633-1656`): a `collect_edits`-based
+**Engine finding (verified in `engine/fix.rs`): a `collect_edits`-based
 located fixer must NOT host on `cross_file`.** The engine's located branch
 assumes every located fixer hosts on a PER-FILE rule; it confines `--changed`
 purely via the filtered index and never consults `writes_outside_changed`. A
@@ -89,7 +89,7 @@ blast-radius class the arc has audited repeatedly), so we AVOID it.
 **Instead the value fixer is a WHOLE-FILE `apply` fixer** (like the identical
 `SyncFromFixer`), which reuses the located resolver INTERNALLY to compute the new
 bytes and routes through the existing whole-file path -- which already demotes an
-out-of-scope target via `writes_outside_changed` (engine.rs:1616). Its `apply`:
+out-of-scope target via `writes_outside_changed` (`engine/fix.rs`). Its `apply`:
 
 1. read the source, extract the source scalar (via the source `Extract`);
 2. build `StructuredFixer::set(target_fmt, target_path, target_path_src,

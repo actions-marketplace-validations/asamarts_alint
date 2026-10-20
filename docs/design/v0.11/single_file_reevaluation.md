@@ -1,7 +1,7 @@
 # Single-file re-evaluation contract
 
 Status: **Implemented** (2026-05-24). `Engine::run_for_file` ships in
-`crates/alint-core/src/engine.rs` with the contract below; the LSP
+`crates/alint-core/src/engine/run.rs` with the contract below; the LSP
 server's `didChange` handler now drives it for live per-keystroke
 diagnostics (`crates/alint-lsp`). A `reeval_vs_full` group in
 `crates/alint-bench/benches/single_file_rules.rs` captures the hot-path
@@ -90,10 +90,8 @@ re-evaluation should be ~5ms (vs ~186ms full).
 
 ## Implementation notes
 
-- Land in `crates/alint-core/src/engine.rs` next to the existing `run`
-  and `fix` methods.
-- Re-use `run_per_file`'s inner dispatch logic via a shared helper —
-  refactor only if the duplication exceeds ~30 lines.
+- `Engine::run_for_file` lives in `crates/alint-core/src/engine/run.rs` beside
+  the full-run paths and reuses their shared per-file dispatch helper.
 - New micro-bench in `crates/alint-bench/benches/single_file_rules.rs`:
   capture single-file re-evaluation cost vs `Engine::run` ratio at 1k /
   10k / 100k workspaces.

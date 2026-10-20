@@ -107,12 +107,9 @@ fn baseline_without_scope_filter_fires_on_every_match() {
 /// actual Rust package. `services/web/scripts/migrate.rs` has
 /// no `Cargo.toml` ancestor and must be silently skipped.
 ///
-/// Today (v0.9.6) this fails — per-file rule builders parse
-/// `spec.scope_filter` into the spec but never thread it into
-/// the built rule, so `Rule::scope_filter()` returns the trait
-/// default `None` and the engine's gate is a no-op. The fix is
-/// to have each per-file rule build/store/expose the filter so
-/// `engine.rs:417` actually filters dispatch.
+/// This regression gate proves per-file rule builders thread
+/// `spec.scope_filter` into the built rule, so `Rule::scope_filter()` exposes
+/// it and `engine/gates.rs` filters dispatch.
 #[test]
 fn scope_filter_skips_files_without_ancestor_manifest() {
     let tmp = polyglot_tree();

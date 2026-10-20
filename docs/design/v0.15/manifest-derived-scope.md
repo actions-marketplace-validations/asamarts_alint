@@ -152,8 +152,8 @@ Mandatory section. What fires wrongly, and the mitigations.
 ## 5. Implementation notes
 
 - **Module.** Extend `ScopeFilter` in `crates/alint-core/src/scope_filter.rs`; engine
-  integration is already threaded through `run_per_file` (`engine.rs`) and the per-file rule
-  builders (`RuleSpec::parse_scope_filter` in `config.rs`).
+  integration is already threaded through `run_per_file` (`engine/run.rs`) and the
+  per-file rule builders (`RuleSpec::parse_scope_filter` in `config.rs`).
 - **Reuse, do not reinvent.** The extract one-of is already factored for
   `registry_paths_resolve` and `file_graph.from_content`; `derive_target` is already in
   `file_graph`. The new code is a predicate variant plus a resolve-once cache plus `explain`

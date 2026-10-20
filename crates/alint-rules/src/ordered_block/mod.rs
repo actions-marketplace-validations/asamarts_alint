@@ -38,7 +38,7 @@ use crate::io::looks_binary;
 /// otherwise): (1) the fixpoint merge keys fixable findings by `violation_key`,
 /// which for a key-LESS path-bearing finding collapses to `(rule_id, path)` --
 /// so two out-of-order blocks in ONE file would collide and the merge would drop
-/// one (`engine.rs` F4 tripwire); (2) `can_fix` must tell the sortable entry
+/// one (`engine/fix.rs` F4 tripwire); (2) `can_fix` must tell the sortable entry
 /// findings (`ENTRY`) apart from the one thing `sort` cannot repair, an unclosed
 /// block with no `end` (`UNCLOSED`), so `check` never advertises the latter
 /// fixable. Both are `\0`-delimited with the block's 0-based ORDINAL (not its

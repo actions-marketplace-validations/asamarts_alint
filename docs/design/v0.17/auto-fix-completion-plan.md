@@ -296,7 +296,7 @@ warning or a v0.18 migration.
   (recorded in `cross-file-value-propagation.md`): a located `collect_edits` fixer
   must NOT host on `cross_file` -- the engine's located branch assumes per-file
   hosts and would silently escape the `--changed` blast radius on a
-  `requires_full_index` rule (engine.rs:1633-1656). The whole-file `apply` approach
+  `requires_full_index` rule (`engine/fix.rs`). The whole-file `apply` approach
   routes through the existing blast-radius-demoted path, so NO engine change.**
   `cross_file`'s `fixer` field widened to `Option<Box<dyn Fixer>>` (identical ->
   `SyncFromFixer`, equals -> the value fixer). `build()` accepts equals + all

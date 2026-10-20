@@ -130,6 +130,6 @@ Harder, and accepted:
   `crates/alint/tests/cli_format_contract.rs`).
 - Related: ADR-0011 (per-kind explanations — the *other* explain gap) and ADR-0009
   (the `list` / `rules` surfaces these findings touch).
-- Anchors: the lossy projection at load (`crates/alint/src/main.rs`, the
-  `RuleEntry::with_kind` site), the `Rule` trait + `rule_common_impl!`
+- Anchors: the retained projection at load (`crates/alint/src/config_cmd.rs`, the
+  `RuleEntry::with_spec` site), the `Rule` trait + `rule_common_impl!`
   (`crates/alint-core/src/rule.rs`), and the `all_kinds.yaml` fixture.

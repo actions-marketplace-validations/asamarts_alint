@@ -7,10 +7,10 @@ that don't fit anywhere else in the source tree.
 This directory mixes two audiences:
 
 1. **Public docs synced to alint.org.** Currently one file:
-   `rule-authoring.md`. The `xtask docs-export` pipeline at
-   `xtask/src/docs_export.rs:28` enumerates this explicitly; adding
-   another public dev doc means adding a path constant there and
-   bundling it into the `target/docs-bundle/development/` output.
+   `rule-authoring.md`. The `xtask docs-export` pipeline's `docs_paths` module in
+   `xtask/src/docs_export.rs` enumerates this explicitly; adding another public dev
+   doc means adding a path constant there and bundling it into the
+   `target/docs-bundle/development/` output.
 2. **Internal-but-tracked engineering artefacts.** Audit logs,
    per-batch analysis files, cleanup-cycle trackers. Committed so
    the institutional memory survives, but not pushed to alint.org.
@@ -36,9 +36,9 @@ This directory mixes two audiences:
 When adding a new file:
 
 - **Public doc** (showing up on alint.org): add the path constant
-  to `xtask/src/docs_export.rs`'s `paths` module, then add a row
-  here marked **Public** with the synced URL. The sidebar in
-  alint.org's `astro.config.mjs` may need a matching entry too.
+  to the `docs_paths` module in `xtask/src/docs_export.rs`, then add a row here marked
+  **Public** with the synced URL. The sidebar in alint.org's `astro.config.mjs` may
+  need a matching entry too.
 - **Internal artefact** (audit log, analysis pass, etc.): just
   commit it; add a row here marked **Internal** with one-line
   context. Multi-file series (per-batch logs) share a single
