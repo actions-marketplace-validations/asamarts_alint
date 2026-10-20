@@ -140,6 +140,24 @@ _resolve_latest_tag() {
   return 1
 }
 
+# Download a release asset with bounded retries for every transport failure.
+# curl's portable `--retry` set excludes some connection-level errors (for
+# example TLS connection resets), so use an explicit loop instead of depending
+# on newer `--retry-all-errors` support.
+_download() {
+  local output=$1 url=$2 attempt
+  for attempt in 1 2 3; do
+    if curl -fsSL -o "${output}" "${url}"; then
+      return 0
+    fi
+    if [[ "${attempt}" -eq 3 ]]; then
+      return 1
+    fi
+    echo "==> Download failed (attempt ${attempt}/3); retrying in 2s..." >&2
+    sleep 2
+  done
+}
+
 main() {
 
   REPO="${ALINT_REPO:-asamarts/alint}"
@@ -202,8 +220,8 @@ main() {
   trap 'rm -rf "${TMPDIR}"' EXIT
 
   echo "==> Downloading ${ARCHIVE_URL}"
-  curl -fsSL --retry 3 --retry-delay 2 -o "${TMPDIR}/${ARCHIVE}" "${ARCHIVE_URL}"
-  curl -fsSL --retry 3 --retry-delay 2 -o "${TMPDIR}/${ARCHIVE}.sha256" "${SHA_URL}"
+  _download "${TMPDIR}/${ARCHIVE}" "${ARCHIVE_URL}"
+  _download "${TMPDIR}/${ARCHIVE}.sha256" "${SHA_URL}"
 
   echo "==> Verifying SHA-256"
   cd "${TMPDIR}"

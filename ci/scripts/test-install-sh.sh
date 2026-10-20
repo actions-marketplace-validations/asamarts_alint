@@ -241,5 +241,60 @@ explicit_case "branch name" main INVALID
 explicit_case "path-like tag" v1.2.3/../../asset INVALID
 explicit_case "incomplete tag" v1.2 INVALID
 
+# Fixed release assets retry transport failures that curl's portable
+# `--retry` set does not cover (for example exit 35, a TLS connection reset).
+mkdir -p "$sandbox/retrybin" "$sandbox/retry-state"
+cat > "$sandbox/retrybin/curl" <<'STUB'
+#!/usr/bin/env bash
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o) out=$2; shift 2 ;;
+    *) url=$1; shift ;;
+  esac
+done
+case "$url" in
+  *.tar.gz)
+    count_file="$STUB_STATE/archive-count"
+    count=0
+    [[ ! -f "$count_file" ]] || read -r count < "$count_file"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$count_file"
+    [[ "$count" -gt 1 ]] || exit 35
+    printf 'archive\n' > "$out"
+    ;;
+  *.tar.gz.sha256) printf 'checksum\n' > "$out" ;;
+  *) exit 22 ;;
+esac
+STUB
+cat > "$sandbox/retrybin/uname" <<'STUB'
+#!/bin/sh
+case "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac
+STUB
+cat > "$sandbox/retrybin/sha256sum" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+cat > "$sandbox/retrybin/tar" <<'STUB'
+#!/bin/sh
+mkdir -p alint-v9.8.7-x86_64-unknown-linux-musl
+printf '#!/bin/sh\nexit 0\n' > alint-v9.8.7-x86_64-unknown-linux-musl/alint
+STUB
+cat > "$sandbox/retrybin/sleep" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+chmod +x "$sandbox/retrybin/"*
+if ! env -i PATH="$sandbox/retrybin:/usr/bin:/bin" HOME="$sandbox" \
+  STUB_STATE="$sandbox/retry-state" INSTALL_DIR="$sandbox/retry-install" \
+  ALINT_VERSION=v9.8.7 bash install.sh > "$sandbox/retry-out" 2>&1 ||
+  [[ $(cat "$sandbox/retry-state/archive-count") != 2 ]] ||
+  ! grep -q 'Download failed (attempt 1/3)' "$sandbox/retry-out" ||
+  [[ ! -x "$sandbox/retry-install/alint" ]]; then
+  echo "[test-install-sh] release archive transport failure was not retried:" >&2
+  sed 's/^/    | /' "$sandbox/retry-out" >&2
+  fail=1
+fi
+
 [[ "$fail" -eq 0 ]] && echo "[test-install-sh] OK - every truncated prefix of install.sh executes nothing"
 exit "$fail"

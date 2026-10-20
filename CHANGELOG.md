@@ -112,6 +112,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   execute; non-capturing docs validation accepts explicit platform skips; and the integration suite
   compiles warning-free while its CLI help snapshots normalize the executable suffix on Windows.
 
+- **Release installation now retries connection-level asset download failures.** The installer uses
+  a bounded portable retry loop for the archive and checksum, covering TLS resets and similar curl
+  failures that `--retry` alone does not classify as transient.
+
 - **Counted policy-test matchers no longer allocate from an impossible declared cardinality.**
   Exact matching first checks the overflow-safe expected total against the observed result count,
   so a tiny test document with a platform-sized `count` produces one deterministic mismatch instead
