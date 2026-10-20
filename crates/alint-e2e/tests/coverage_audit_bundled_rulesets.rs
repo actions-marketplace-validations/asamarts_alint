@@ -7,11 +7,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use alint_core::ExtendsEntry;
 use alint_testkit::{ExpectedExit, PolicyTest, Runner, RunnerOptions};
 use serde::Deserialize;
+
+mod support;
 
 #[derive(Default)]
 struct Coverage {
@@ -27,34 +29,8 @@ struct ScenarioConfig {
     rules: Vec<serde_yaml_ng::Value>,
 }
 
-fn yaml_paths(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)
-            .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
-        {
-            let path = entry
-                .unwrap_or_else(|error| panic!("read entry below {}: {error}", dir.display()))
-                .path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if matches!(
-                path.extension().and_then(|extension| extension.to_str()),
-                Some("yml" | "yaml")
-            ) {
-                out.push(path);
-            }
-        }
-    }
-    out.sort();
-    out
-}
-
-fn parse_policy_test(path: &Path) -> PolicyTest {
-    let yaml = std::fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("read policy test {}: {error}", path.display()));
-    let test = PolicyTest::from_yaml(&yaml)
+fn parse_policy_test(path: &Path, yaml: &str) -> PolicyTest {
+    let test = PolicyTest::from_yaml(yaml)
         .unwrap_or_else(|error| panic!("parse policy test {}: {error}", path.display()));
     if let Err(diagnostics) = test.validate() {
         panic!("validate policy test {}: {diagnostics:#?}", path.display());
@@ -155,6 +131,26 @@ fn assert_complete_coverage(coverage: &BTreeMap<String, Coverage>) {
     panic!("\n{report}");
 }
 
+#[cfg(unix)]
+#[test]
+fn ownership_discovery_ignores_support_yaml_and_directory_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().unwrap();
+    let owner = root.path().join("v1/example");
+    std::fs::create_dir_all(&owner).unwrap();
+    std::fs::write(owner.join("pass.yml"), "test_version: 1\n").unwrap();
+    std::fs::write(owner.join("support.yaml"), "version: 1\nrules: []\n").unwrap();
+    symlink("example", root.path().join("v1/linked")).unwrap();
+
+    let sources = support::policy_test_sources(root.path());
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    assert_eq!(
+        sources[0].0.strip_prefix(root.path()).unwrap(),
+        Path::new("v1/example/pass.yml")
+    );
+}
+
 #[test]
 fn runtime_bundle_catalog_exactly_matches_owned_pass_and_fail_tests() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -171,7 +167,7 @@ fn runtime_bundle_catalog_exactly_matches_owned_pass_and_fail_tests() {
         .collect();
     let mut scenario_names = BTreeMap::new();
 
-    for path in yaml_paths(&tests_root) {
+    for (path, yaml) in support::policy_test_sources(&tests_root) {
         let relative = path
             .strip_prefix(&tests_root)
             .expect("ruleset test is below test root")
@@ -186,7 +182,7 @@ fn runtime_bundle_catalog_exactly_matches_owned_pass_and_fail_tests() {
             "orphaned ruleset-test owner {owner:?} for {relative} has no shipped bundle"
         );
 
-        let test = parse_policy_test(&path);
+        let test = parse_policy_test(&path, &yaml);
         if let Some(previous) = scenario_names.insert(test.name.clone(), relative.clone()) {
             panic!(
                 "duplicate bundled policy-test name {:?} in {previous} and {relative}",
@@ -269,7 +265,9 @@ fn catalog_filtering_and_composition_run_through_the_public_runner() {
 
     for (relative, behavior) in cases {
         let path = manifest.join(relative);
-        let test = parse_policy_test(&path);
+        let yaml = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read policy test {}: {error}", path.display()));
+        let test = parse_policy_test(&path, &yaml);
         let config = parse_scenario_config(&path, &test);
         match behavior {
             CatalogBehavior::Only => assert!(

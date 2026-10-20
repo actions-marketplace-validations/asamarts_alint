@@ -9,6 +9,7 @@ use alint_output::{sanitize_terminal as term, sanitize_terminal_multiline as ter
 use alint_testkit::{
     Error as RunnerError, MismatchChannel, PackageRoot, PolicyTest, PolicyTestIssue,
     PolicyTestRecord, PolicyTestReport, PolicyTestStatus, Runner, RunnerOptions, TestStep,
+    has_policy_test_discriminator,
 };
 use anyhow::{Result, bail};
 
@@ -391,7 +392,7 @@ fn collect_path(
                         None
                     } else {
                         match std::fs::read_to_string(&canonical) {
-                            Ok(yaml) if implicit_policy_test_candidate(&yaml) => Some(yaml),
+                            Ok(yaml) if has_policy_test_discriminator(&yaml) => Some(yaml),
                             Ok(_) => return,
                             Err(error) if error.kind() == std::io::ErrorKind::InvalidData => return,
                             Err(error) => {
@@ -459,34 +460,6 @@ fn is_yaml(path: &Path) -> bool {
         path.extension().and_then(|extension| extension.to_str()),
         Some("yml" | "yaml")
     )
-}
-
-fn implicit_policy_test_candidate(yaml: &str) -> bool {
-    let has_top_level_marker = yaml.lines().any(|line| {
-        if line.starts_with([' ', '\t']) {
-            return false;
-        }
-        let line = line.strip_prefix('\u{feff}').unwrap_or(line);
-        line.split_once(':').is_some_and(|(key, _)| {
-            matches!(
-                key.trim(),
-                "test_version" | "'test_version'" | "\"test_version\""
-            )
-        })
-    });
-    if has_top_level_marker {
-        return true;
-    }
-    if !alint_core::yaml_depth::flow_depth_within_limit(yaml)
-        || !alint_core::yaml_depth::expansion_within_limit(yaml)
-    {
-        return false;
-    }
-    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml).is_ok_and(|value| {
-        value
-            .as_mapping()
-            .is_some_and(|mapping| mapping.contains_key("test_version"))
-    })
 }
 
 fn path_issue(code: &str, path: &Path, detail: &str) -> PolicyTestIssue {
@@ -748,26 +721,6 @@ mod tests {
             Some("named")
         ));
         assert!(!selected(&candidate, &["missing".to_string()], None));
-    }
-
-    #[test]
-    fn implicit_discovery_requires_a_top_level_version_discriminator() {
-        for candidate in [
-            "test_version: 1\n",
-            "'test_version': 1\n",
-            "{\"test_version\": 1}\n",
-            "test_version: [\n",
-        ] {
-            assert!(implicit_policy_test_candidate(candidate), "{candidate:?}");
-        }
-        for support in [
-            "version: 1\nrules: []\n",
-            "name: workflow\non: [push]\n",
-            "fixture:\n  test_version: 1\n",
-            "malformed: [\n",
-        ] {
-            assert!(!implicit_policy_test_candidate(support), "{support:?}");
-        }
     }
 
     #[test]

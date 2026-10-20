@@ -70,6 +70,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Policy-test corpus audits now follow public discovery semantics.** The CLI, 578-document
+  migration gate, and bundle-ownership gate share one bounded top-level `test_version`
+  discriminator. Package-local YAML support files are no longer misclassified as owned tests,
+  recursive audit walks do not follow directory symlinks, and `.yaml` scenario documents execute
+  through the public runner instead of falling outside the repository harness.
+
 - **Environment-derived selector paths no longer leak through diagnostics.** Static and traced
   `explain`, bounded previews, check/fix formats, baselines, `export-agents-md`, SARIF annotations,
   agent output, policy-test observations, and LSP diagnostics now project protected `paths:`,

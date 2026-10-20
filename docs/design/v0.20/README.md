@@ -154,9 +154,10 @@ Implementation status:
   binary crate.
 - **P7 complete:** the runtime bundle catalog and owned-test directory catalog must match exactly;
   all 24 shipped bundles own explicit whole-bundle pass and fail scenarios. Catalog filtering,
-  composition, and declared compatibility metadata execute through production loading, while all
-  578 documents are count-pinned, parsed by `PolicyTest::from_yaml`, and executed by the public
-  runner. Alternate direct deserialization of the public policy-test type has been removed.
+  composition, and declared compatibility metadata execute through production loading. The CLI and
+  corpus gates share the bounded public discovery discriminator, while all 578 documents are
+  count-pinned, parsed by `PolicyTest::from_yaml`, and executed by the public runner. Alternate
+  direct deserialization of the public policy-test type has been removed.
 
 ## Cross-cutting invariants
 

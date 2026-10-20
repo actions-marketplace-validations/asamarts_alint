@@ -487,6 +487,42 @@ pub enum PolicyTestParseError {
     UnsupportedVersion { found: u64, supported: u32 },
 }
 
+/// Return whether recursively discovered YAML declares a top-level policy-test
+/// version discriminator.
+///
+/// Discovery uses this bounded probe to distinguish scenario documents from
+/// package-local YAML fixtures and config chains. A positive result still goes
+/// through [`PolicyTest::from_yaml`], which reports malformed or unsupported
+/// documents rather than silently skipping them.
+#[must_use]
+pub fn has_policy_test_discriminator(input: &str) -> bool {
+    let has_top_level_marker = input.lines().any(|line| {
+        if line.starts_with([' ', '\t']) {
+            return false;
+        }
+        let line = line.strip_prefix('\u{feff}').unwrap_or(line);
+        line.split_once(':').is_some_and(|(key, _)| {
+            matches!(
+                key.trim(),
+                "test_version" | "'test_version'" | "\"test_version\""
+            )
+        })
+    });
+    if has_top_level_marker {
+        return true;
+    }
+    if !alint_core::yaml_depth::flow_depth_within_limit(input)
+        || !alint_core::yaml_depth::expansion_within_limit(input)
+    {
+        return false;
+    }
+    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(input).is_ok_and(|value| {
+        value
+            .as_mapping()
+            .is_some_and(|mapping| mapping.contains_key("test_version"))
+    })
+}
+
 impl PolicyTest {
     /// Parse one v1 document after shared YAML complexity guards and version dispatch.
     pub fn from_yaml(input: &str) -> Result<Self, PolicyTestParseError> {
@@ -1519,6 +1555,26 @@ expect:
   - exit: success
     violations: []
 "#
+    }
+
+    #[test]
+    fn discovery_discriminator_accepts_top_level_forms_and_ignores_support_yaml() {
+        for candidate in [
+            "test_version: 1\n",
+            "'test_version': 1\n",
+            "{\"test_version\": 1}\n",
+            "test_version: [\n",
+        ] {
+            assert!(has_policy_test_discriminator(candidate), "{candidate:?}");
+        }
+        for support in [
+            "version: 1\nrules: []\n",
+            "name: workflow\non: [push]\n",
+            "fixture:\n  test_version: 1\n",
+            "malformed: [\n",
+        ] {
+            assert!(!has_policy_test_discriminator(support), "{support:?}");
+        }
     }
 
     #[test]

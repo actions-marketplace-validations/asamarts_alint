@@ -6,29 +6,10 @@ use std::path::Path;
 use alint_testkit::{PolicyTest, Runner, RunnerOptions, TestStatus};
 use dir_test::{Fixture, dir_test};
 
+mod support;
+
 const EXPECTED_GENERAL_SCENARIOS: usize = 485;
 const EXPECTED_BUNDLED_SCENARIOS: usize = 93;
-
-fn scenario_paths(root: &Path) -> Vec<std::path::PathBuf> {
-    let mut paths = Vec::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(directory) = stack.pop() {
-        for entry in std::fs::read_dir(&directory)
-            .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
-        {
-            let path = entry
-                .unwrap_or_else(|error| panic!("read entry below {}: {error}", directory.display()))
-                .path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().and_then(|extension| extension.to_str()) == Some("yml") {
-                paths.push(path);
-            }
-        }
-    }
-    paths.sort();
-    paths
-}
 
 #[test]
 fn all_578_migrated_documents_use_the_public_v1_parser() {
@@ -47,20 +28,25 @@ fn all_578_migrated_documents_use_the_public_v1_parser() {
     ];
     let mut total = 0;
     for (root, expected, label) in roots {
-        let paths = scenario_paths(&root);
+        let sources = support::policy_test_sources(&root);
         assert_eq!(
-            paths.len(),
+            sources.len(),
             expected,
             "{label} policy-test inventory changed; update the migration count deliberately"
         );
-        total += paths.len();
-        for path in paths {
-            let yaml = std::fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        total += sources.len();
+        for (path, yaml) in sources {
             let test = PolicyTest::from_yaml(&yaml)
                 .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
             if let Err(diagnostics) = test.validate() {
                 panic!("validate {}: {diagnostics:#?}", path.display());
+            }
+            // `dir-test` handles the repository's `.yml` corpus one fixture per
+            // Rust test. Execute any `.yaml` policy document here so package-local
+            // `.yaml` support files remain discoverable but are not mistaken for
+            // scenarios.
+            if path.extension().and_then(|extension| extension.to_str()) == Some("yaml") {
+                run_policy_test(&path, &test);
             }
         }
     }
@@ -86,25 +72,34 @@ fn bundled_ruleset(fixture: Fixture<&str>) {
 }
 
 fn run_fixture(fixture: &Fixture<&str>) {
-    let path = fixture.path();
+    let path = Path::new(fixture.path());
     let policy_test = PolicyTest::from_yaml(fixture.content())
-        .unwrap_or_else(|error| panic!("policy test at {path}: parse error: {error}"));
+        .unwrap_or_else(|error| panic!("policy test at {}: parse error: {error}", path.display()));
+    run_policy_test(path, &policy_test);
+}
+
+fn run_policy_test(path: &Path, policy_test: &PolicyTest) {
     let runner = Runner::new(RunnerOptions {
         allow_spawn: true,
         allow_host_keyring: true,
         update_snapshots: false,
     });
-    let run = runner
-        .run(&policy_test, Path::new(path))
-        .unwrap_or_else(|error| panic!("policy test {:?} at {path}: {error}", policy_test.name));
+    let run = runner.run(policy_test, path).unwrap_or_else(|error| {
+        panic!(
+            "policy test {:?} at {}: {error}",
+            policy_test.name,
+            path.display()
+        )
+    });
     if run.status == TestStatus::Skipped {
-        eprintln!("skipping {path}: {:?}", run.mismatches);
+        eprintln!("skipping {}: {:?}", path.display(), run.mismatches);
         return;
     }
     assert!(
         run.passed(),
-        "policy test {:?} at {path} mismatched: {:#?}",
+        "policy test {:?} at {} mismatched: {:#?}",
         policy_test.name,
+        path.display(),
         run.mismatches
     );
 }

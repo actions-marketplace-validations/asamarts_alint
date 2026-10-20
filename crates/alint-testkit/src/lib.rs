@@ -23,7 +23,7 @@ pub use policy_test::{
     POLICY_TEST_VERSION, PolicyCommit, PolicyDetailedCommit, PolicyDocsCase, PolicyDocsExample,
     PolicyGit, PolicyTest, PolicyTestParseError, RelatedLocationMatcher, StepExpectation,
     TestCapabilities, TestStep, TreeExpectationMode, ValidationCode, ValidationDiagnostic,
-    ViolationMatcher, policy_test_schema, policy_test_schema_json,
+    ViolationMatcher, has_policy_test_discriminator, policy_test_schema, policy_test_schema_json,
 };
 pub use test_report::{
     POLICY_TEST_REPORT_KIND, POLICY_TEST_REPORT_SCHEMA_VERSION, PolicyTestIssue, PolicyTestRecord,
