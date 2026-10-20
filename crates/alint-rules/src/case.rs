@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn alias_deserialization() {
-        use serde_yaml_ng::from_str;
+        use yaml_serde::from_str;
         let cases = &[
             ("PascalCase", CaseConvention::Pascal),
             ("pascal", CaseConvention::Pascal),

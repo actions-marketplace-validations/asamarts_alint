@@ -51,6 +51,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **YAML parsing now uses the YAML organization's maintained fork.** `yaml_serde` 0.10.7 and
+  `libyaml-rs` 0.3.0 replace `serde_yaml_ng` and the archived `unsafe-libyaml`, removing
+  `RUSTSEC-2024-0449` from the dependency graph without changing accepted YAML, value semantics,
+  diagnostics, the 128-level recursion boundary, or alint's stricter flow/alias resource guards.
+  The migration includes a parser-independent compatibility contract and a measured
+  [buy-versus-build decision](docs/design/yaml-parser.md).
+
 - **Every configuration source now proves language and binary compatibility before composition.**
   Root, local-extended, bundled, HTTPS, nested, and drop-in sources validate their own `version`
   before trust gates or merge. Complete sources must declare it; a drop-in may omit it and inherit

@@ -1,6 +1,6 @@
 //! Pre-parse bounds on YAML flow-collection nesting depth and alias use.
 //!
-//! `serde_yaml_ng`/libyaml is super-linear on deeply-nested FLOW collections
+//! `yaml_serde`/libyaml-rs is super-linear on deeply-nested FLOW collections
 //! (`[[[…]]]` / `{{{…}}}`): a ~40 KB `[`×20000 document already takes seconds,
 //! and a slightly deeper one hangs the whole run — an algorithmic-complexity `DoS`
 //! reachable both from a `yaml_path_*` rule over crafted repo content and from a
@@ -15,7 +15,7 @@
 //! collection whose `"` a heuristic read as a string to EOF; a block-scalar line
 //! starting with `"`; a plain-scalar continuation line) -- and a hidden `[[[…` or
 //! `*alias` run is exactly the `DoS` the guard exists to stop. So the lexer mirrors
-//! libyaml's scanner (unsafe-libyaml 0.2.11, `scanner.rs`): token dispatch,
+//! libyaml's scanner (libyaml-rs 0.3.0, `scanner.rs`): token dispatch,
 //! comments at any token start, plain-scalar end rules (incl. multi-line
 //! continuation bounded by the block indent), quoted-scalar escapes,
 //! indentation-delimited block scalars (auto-detected or explicit indent), the
@@ -26,7 +26,7 @@
 //! A differential property test pins the parity against the real parser.
 
 /// Real config/manifest YAML nests a handful of flow levels; anything past this
-/// is a bomb. Pinned to `serde_yaml_ng`'s own recursion limit: its deserializer
+/// is a bomb. Pinned to `yaml_serde`'s own recursion limit: its deserializer
 /// allows 128 nested collections (block or flow) and fails the 129th, so a
 /// document whose flow nesting alone exceeds 128 can never deserialize into a
 /// value anyway -- rejecting it here introduces no new false reject, only skips
@@ -65,13 +65,13 @@ fn flow_depth_within_limit_with(text: &str, max: usize) -> bool {
 /// [`YAML_NODE_COST`] for the estimate, [`expansion_budget`] for the whole
 /// budget).
 ///
-/// `serde_yaml_ng` materializes each `*alias` by COPYING its anchor's whole
+/// `yaml_serde` materializes each `*alias` by COPYING its anchor's whole
 /// subtree -- every node and every scalar string -- and its OWN limits do not
 /// bound this: the recursion limit (128) only catches *nested* aliases (classic
 /// billion-laughs), and the alias-DEREF counter (`jumpcount > events.len()*100`)
 /// is never reached by a SINGLE anchor referenced many times -- N flat `*a` refs
 /// make only N derefs but N x (anchor size) materializations. Measured (release,
-/// peak RSS, both the `serde_yaml_ng::Value` config path and the
+/// peak RSS, both the `yaml_serde::Value` config path and the
 /// `serde_json::Value` structured-query path): an 18.5 KB `a: &a [{k: v} x 500]` +
 /// 5000 refs (7.5M nodes, ~235 B/node) took 1.6-1.8 GB and 2-3 s, and a 1 MB
 /// `a: &a "<1 MB>"` + 4000 refs (only 4000 nodes, but 4 GB of string copies)
@@ -127,7 +127,7 @@ pub fn expansion_budget(len: usize) -> usize {
 /// [`expansion_budget`]. Only a document that actually uses an alias
 /// (`*name`) can amplify, so alias-free text short-circuits to `true` at zero cost
 /// (its node count is ~linear in bytes, already bounded by the read cap). For
-/// alias-bearing text a cheap DISCARD-ONLY pass drives `serde_yaml_ng`'s
+/// alias-bearing text a cheap DISCARD-ONLY pass drives `yaml_serde`'s
 /// deserializer, which replays anchored events through the visitor -- so the
 /// expansion is charged ([`YAML_NODE_COST`] per node plus every scalar's bytes,
 /// exactly the copies the real parse would make) and the pass bails once the
@@ -159,7 +159,7 @@ fn expansion_within_limit_with(text: &str, max: usize) -> bool {
         remaining: &remaining,
         exceeded: &exceeded,
     };
-    let _ = seed.deserialize(serde_yaml_ng::Deserializer::from_str(text));
+    let _ = seed.deserialize(yaml_serde::Deserializer::from_str(text));
     !exceeded.get()
 }
 
@@ -350,8 +350,8 @@ struct KeyMark {
     col: isize,
 }
 
-/// A port of the token-boundary logic of libyaml's scanner (unsafe-libyaml
-/// 0.2.11, `yaml_parser_fetch_next_token` and the `scan_*` routines it calls). It
+/// A port of the token-boundary logic of libyaml-rs 0.3.0's scanner
+/// (`yaml_parser_fetch_next_token` and the `scan_*` routines it calls). It
 /// tracks exactly the state that decides where tokens begin and end -- flow
 /// level, the block indent stack, `simple_key_allowed`, and the level-0 simple
 /// key -- and skips scalar / comment CONTENTS the way libyaml does, reporting
@@ -373,7 +373,7 @@ struct Lexer<'a> {
 
 impl<'a> Lexer<'a> {
     fn new(text: &'a str) -> Self {
-        // No BOM special-casing here: `serde_yaml_ng` sets the parser's encoding
+        // No BOM special-casing here: `yaml_serde` sets the parser's encoding
         // to UTF-8 explicitly, so libyaml's reader never runs its BOM detection
         // and hands a leading BOM to the scanner. The scanner skips it in
         // `scan_to_next_token` (at column 0, like any line start) with an
@@ -970,27 +970,27 @@ mod tests {
     }
 
     #[test]
-    fn flow_depth_limit_matches_serde_yaml_ngs_recursion_limit() {
-        // The ceiling sits exactly at serde_yaml_ng's recursion limit: the
+    fn flow_depth_limit_matches_yaml_serdes_recursion_limit() {
+        // The ceiling sits exactly at yaml_serde's recursion limit: the
         // deepest flow document it can deserialize passes the guard and parses
         // to the same value as without the guard, and one level deeper is a
-        // document serde_yaml_ng could never deserialize (so the guard adds no
+        // document yaml_serde could never deserialize (so the guard adds no
         // new false reject). A regression to a looser ceiling (1024 before) fails
         // the second half.
         let at = MAX_YAML_FLOW_DEPTH;
         let ok = bomb(at);
         assert!(flow_depth_within_limit(&ok));
-        let parsed = serde_yaml_ng::from_str::<serde_json::Value>(&ok).unwrap();
+        let parsed = yaml_serde::from_str::<serde_json::Value>(&ok).unwrap();
         assert_eq!(crate::Format::Yaml.parse(&ok).unwrap(), parsed);
         let over = bomb(at + 1);
-        assert!(serde_yaml_ng::from_str::<serde_json::Value>(&over).is_err());
-        assert!(serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&over).is_err());
+        assert!(yaml_serde::from_str::<serde_json::Value>(&over).is_err());
+        assert!(yaml_serde::from_str::<yaml_serde::Value>(&over).is_err());
         assert!(!flow_depth_within_limit(&over));
         // Curly flow maps count the same way.
         let maps = |n: usize| format!("{}1{}", "{a: ".repeat(n), "}".repeat(n));
-        assert!(serde_yaml_ng::from_str::<serde_json::Value>(&maps(at)).is_ok());
+        assert!(yaml_serde::from_str::<serde_json::Value>(&maps(at)).is_ok());
         assert!(flow_depth_within_limit(&maps(at)));
-        assert!(serde_yaml_ng::from_str::<serde_json::Value>(&maps(at + 1)).is_err());
+        assert!(yaml_serde::from_str::<serde_json::Value>(&maps(at + 1)).is_err());
         assert!(!flow_depth_within_limit(&maps(at + 1)));
     }
 
@@ -1023,7 +1023,7 @@ mod tests {
         ];
         for case in cases {
             // Sanity: each case is genuinely parseable YAML (so the bomb is real).
-            let parsed: Result<serde_yaml_ng::Value, _> = serde_yaml_ng::from_str(case);
+            let parsed: Result<yaml_serde::Value, _> = yaml_serde::from_str(case);
             assert!(parsed.is_ok(), "case must be valid YAML: {case:?}");
             assert!(
                 contains_alias(case),
@@ -1087,11 +1087,11 @@ mod tests {
         assert!(!flow_depth_within_limit(&anchored));
     }
 
-    /// `true` when the REAL parser (libyaml via `serde_yaml_ng`) sees nesting past
+    /// `true` when the REAL parser (libyaml-rs via `yaml_serde`) sees nesting past
     /// its 128-level recursion limit -- i.e. the fixture's bracket run is genuine
     /// structure, not text hidden inside a scalar or comment.
     fn libyaml_sees_deep_nesting(doc: &str) -> bool {
-        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(doc)
+        yaml_serde::from_str::<yaml_serde::Value>(doc)
             .err()
             .is_some_and(|e| e.to_string().contains("recursion limit"))
     }
@@ -1122,7 +1122,7 @@ mod tests {
     /// `true` when the REAL parser sees a genuine alias token (an undefined
     /// `*undefined_zz` reference is reported as an unknown anchor).
     fn libyaml_sees_alias(doc: &str) -> bool {
-        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(doc)
+        yaml_serde::from_str::<yaml_serde::Value>(doc)
             .err()
             .is_some_and(|e| e.to_string().contains("unknown anchor"))
     }
@@ -1203,7 +1203,7 @@ mod tests {
         ];
         for doc in &ok {
             assert!(
-                serde_yaml_ng::from_str::<serde_yaml_ng::Value>(doc).is_ok(),
+                yaml_serde::from_str::<yaml_serde::Value>(doc).is_ok(),
                 "fixture must be valid YAML: {doc:?}"
             );
             assert!(flow_depth_within_limit(doc), "false reject: {doc:?}");
@@ -1241,7 +1241,7 @@ mod tests {
     #[test]
     fn leading_bom_does_not_desync_the_line_one_column() {
         // Regression: the lexer stripped a leading BOM without advancing the
-        // column, but libyaml (UTF-8 encoding set explicitly by serde_yaml_ng)
+        // column, but libyaml-rs (UTF-8 encoding set explicitly by yaml_serde)
         // skips it as a column-0 character, so `\u{feff}---` is NOT a document
         // marker to libyaml. The off-by-one hid everything after it inside a
         // phantom single-quoted scalar: a 60 000-deep flow bomb passed the guard
@@ -1484,7 +1484,7 @@ mod tests {
             )
         }));
         assert!(contains_alias(&doc));
-        assert!(serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&doc).is_ok());
+        assert!(yaml_serde::from_str::<yaml_serde::Value>(&doc).is_ok());
         assert!(expansion_within_limit_with(
             &doc,
             MAX_YAML_EXPANSION_BYTES / 10

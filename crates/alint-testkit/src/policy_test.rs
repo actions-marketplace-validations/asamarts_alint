@@ -478,7 +478,7 @@ pub enum PolicyTestParseError {
     #[error("policy-test YAML uses explicit `null`; omit optional fields instead")]
     ExplicitNull,
     #[error("policy-test YAML parse error: {0}")]
-    Yaml(#[from] serde_yaml_ng::Error),
+    Yaml(#[from] yaml_serde::Error),
     #[error("policy-test document must be a YAML mapping")]
     NotMapping,
     #[error("policy-test document must declare integer `test_version: 1`")]
@@ -516,7 +516,7 @@ pub fn has_policy_test_discriminator(input: &str) -> bool {
     {
         return false;
     }
-    serde_yaml_ng::from_str::<serde_yaml_ng::Value>(input).is_ok_and(|value| {
+    yaml_serde::from_str::<yaml_serde::Value>(input).is_ok_and(|value| {
         value
             .as_mapping()
             .is_some_and(|mapping| mapping.contains_key("test_version"))
@@ -534,7 +534,7 @@ impl PolicyTest {
         if !alint_core::yaml_depth::expansion_within_limit(input) {
             return Err(PolicyTestParseError::AliasExpansion);
         }
-        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(input)?;
+        let value: yaml_serde::Value = yaml_serde::from_str(input)?;
         if contains_tag(&value) {
             return Err(PolicyTestParseError::ExplicitTag);
         }
@@ -544,7 +544,7 @@ impl PolicyTest {
         let mapping = value.as_mapping().ok_or(PolicyTestParseError::NotMapping)?;
         let version = mapping
             .get("test_version")
-            .and_then(serde_yaml_ng::Value::as_u64)
+            .and_then(yaml_serde::Value::as_u64)
             .ok_or(PolicyTestParseError::MissingVersion)?;
         if version != u64::from(POLICY_TEST_VERSION) {
             return Err(PolicyTestParseError::UnsupportedVersion {
@@ -552,7 +552,7 @@ impl PolicyTest {
                 supported: POLICY_TEST_VERSION,
             });
         }
-        serde_yaml_ng::from_value(value).map_err(PolicyTestParseError::Yaml)
+        yaml_serde::from_value(value).map_err(PolicyTestParseError::Yaml)
     }
 
     /// Return every definition error in deterministic document order.
@@ -1288,25 +1288,25 @@ fn validate_range(
     }
 }
 
-fn contains_tag(value: &serde_yaml_ng::Value) -> bool {
+fn contains_tag(value: &yaml_serde::Value) -> bool {
     match value {
-        serde_yaml_ng::Value::Tagged(_) => true,
-        serde_yaml_ng::Value::Sequence(values) => values.iter().any(contains_tag),
-        serde_yaml_ng::Value::Mapping(values) => values
+        yaml_serde::Value::Tagged(_) => true,
+        yaml_serde::Value::Sequence(values) => values.iter().any(contains_tag),
+        yaml_serde::Value::Mapping(values) => values
             .iter()
             .any(|(key, value)| contains_tag(key) || contains_tag(value)),
         _ => false,
     }
 }
 
-fn contains_null(value: &serde_yaml_ng::Value) -> bool {
+fn contains_null(value: &yaml_serde::Value) -> bool {
     match value {
-        serde_yaml_ng::Value::Null => true,
-        serde_yaml_ng::Value::Sequence(values) => values.iter().any(contains_null),
-        serde_yaml_ng::Value::Mapping(values) => values
+        yaml_serde::Value::Null => true,
+        yaml_serde::Value::Sequence(values) => values.iter().any(contains_null),
+        yaml_serde::Value::Mapping(values) => values
             .iter()
             .any(|(key, value)| contains_null(key) || contains_null(value)),
-        serde_yaml_ng::Value::Tagged(value) => contains_null(&value.value),
+        yaml_serde::Value::Tagged(value) => contains_null(&value.value),
         _ => false,
     }
 }

@@ -160,7 +160,7 @@ All four resolved with the maintainer (2026-08-31):
 
 ## 8. Resource-pressure hardening
 
-Surfaced by the pre-v0.16 adversarial audit (rounds 3-4) and closed in it. Every crafted-SMALL-file DoS is fixed: the HCL/YAML/XML depth guards, the HCL byte cap, the per-element XML attribute cap, and the YAML alias-EXPANSION guard (`yaml_depth::expansion_within_limit`; a single anchor referenced many times, or a `<<: *a` merge, which `serde_yaml_ng`'s own recursion/deref limits miss, ballooned a ~150 KB file into tens of millions of nodes). Round 4 also folded in the two general-engine resource-pressure fixes:
+Surfaced by the pre-v0.16 adversarial audit (rounds 3-4) and closed in it. Every crafted-SMALL-file DoS is fixed: the HCL/YAML/XML depth guards, the HCL byte cap, the per-element XML attribute cap, and the YAML alias-EXPANSION guard (`yaml_depth::expansion_within_limit`; a single anchor referenced many times, or a `<<: *a` merge, which `yaml_serde`'s own recursion/deref limits miss, ballooned a ~150 KB file into tens of millions of nodes). Round 4 also folded in the two general-engine resource-pressure fixes:
 
 - **Parse-tree memory amplification (per-file caps: FIXED).**
   `MAX_ANALYZE_BYTES` (256 MiB, `walker.rs`) bounds input bytes, but a parsed

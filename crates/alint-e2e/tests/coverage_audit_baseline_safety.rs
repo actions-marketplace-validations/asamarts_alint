@@ -60,12 +60,12 @@ struct Finding {
 /// `RuleResult`'s `rule_id` can be resolved back to its kind. Falls back to
 /// the `rule_id` itself for rules pulled in via `extends:` (ruleset instances).
 fn id_to_kind(config: &str) -> BTreeMap<String, String> {
-    fn walk(v: &serde_yaml_ng::Value, out: &mut BTreeMap<String, String>) {
+    fn walk(v: &yaml_serde::Value, out: &mut BTreeMap<String, String>) {
         match v {
-            serde_yaml_ng::Value::Mapping(m) => {
+            yaml_serde::Value::Mapping(m) => {
                 if let (Some(id), Some(kind)) = (
-                    m.get("id").and_then(serde_yaml_ng::Value::as_str),
-                    m.get("kind").and_then(serde_yaml_ng::Value::as_str),
+                    m.get("id").and_then(yaml_serde::Value::as_str),
+                    m.get("kind").and_then(yaml_serde::Value::as_str),
                 ) {
                     out.insert(id.to_string(), kind.to_string());
                 }
@@ -73,12 +73,12 @@ fn id_to_kind(config: &str) -> BTreeMap<String, String> {
                     walk(c, out);
                 }
             }
-            serde_yaml_ng::Value::Sequence(s) => s.iter().for_each(|c| walk(c, out)),
+            yaml_serde::Value::Sequence(s) => s.iter().for_each(|c| walk(c, out)),
             _ => {}
         }
     }
     let mut out = BTreeMap::new();
-    let Ok(v) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(config) else {
+    let Ok(v) = yaml_serde::from_str::<yaml_serde::Value>(config) else {
         return out;
     };
     walk(&v, &mut out);

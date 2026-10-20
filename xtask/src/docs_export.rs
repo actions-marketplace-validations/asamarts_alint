@@ -1831,7 +1831,7 @@ fn generate_bundled_ruleset_pages(
 
         let yaml_text =
             fs::read_to_string(&entry).with_context(|| format!("reading {}", entry.display()))?;
-        let yaml: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml_text)
+        let yaml: yaml_serde::Value = yaml_serde::from_str(&yaml_text)
             .with_context(|| format!("parsing {}", entry.display()))?;
 
         // Repo-relative path for the source link, always forward-

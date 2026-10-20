@@ -1311,17 +1311,17 @@ fn inspect_rule_capabilities(
 }
 
 fn inspect_nested_values(
-    mapping: &serde_yaml_ng::Mapping,
+    mapping: &yaml_serde::Mapping,
     catalog: alint_core::KindCatalog<'_>,
     spawn_use: &mut Option<String>,
     keyring_use: &mut Option<String>,
 ) {
     for value in mapping.values() {
         match value {
-            serde_yaml_ng::Value::Mapping(nested) => {
+            yaml_serde::Value::Mapping(nested) => {
                 if nested.contains_key("kind")
-                    && let Ok(rule) = serde_yaml_ng::from_value::<RuleSpec>(
-                        serde_yaml_ng::Value::Mapping(nested.clone()),
+                    && let Ok(rule) = yaml_serde::from_value::<RuleSpec>(
+                        yaml_serde::Value::Mapping(nested.clone()),
                     )
                 {
                     inspect_rule_capabilities(&rule, catalog, spawn_use, keyring_use);
@@ -1329,12 +1329,12 @@ fn inspect_nested_values(
                     inspect_nested_values(nested, catalog, spawn_use, keyring_use);
                 }
             }
-            serde_yaml_ng::Value::Sequence(values) => {
+            yaml_serde::Value::Sequence(values) => {
                 for value in values {
-                    if let serde_yaml_ng::Value::Mapping(nested) = value {
+                    if let yaml_serde::Value::Mapping(nested) = value {
                         if nested.contains_key("kind")
-                            && let Ok(rule) = serde_yaml_ng::from_value::<RuleSpec>(
-                                serde_yaml_ng::Value::Mapping(nested.clone()),
+                            && let Ok(rule) = yaml_serde::from_value::<RuleSpec>(
+                                yaml_serde::Value::Mapping(nested.clone()),
                             )
                         {
                             inspect_rule_capabilities(&rule, catalog, spawn_use, keyring_use);
@@ -2098,7 +2098,7 @@ mod tests {
                 break;
             }
             let text = std::fs::read_to_string(&source).unwrap();
-            let document: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&text) {
+            let document: yaml_serde::Value = match yaml_serde::from_str(&text) {
                 Ok(document) => document,
                 Err(_) => continue,
             };

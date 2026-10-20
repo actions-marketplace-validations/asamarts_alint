@@ -23,7 +23,7 @@ proptest.workspace = true
 roxmltree.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
+yaml_serde.workspace = true
 tempfile.workspace = true
 toml.workspace = true
 

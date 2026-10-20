@@ -157,7 +157,7 @@ impl Format {
                         crate::yaml_depth::MAX_YAML_FLOW_DEPTH
                     ));
                 }
-                // Bound ALIAS expansion: `serde_yaml_ng`'s own limits miss a single
+                // Bound ALIAS expansion: yaml_serde's own limits miss a single
                 // anchor referenced many times (`*a` x N -> N x anchor-size nodes),
                 // which balloons a small file into millions of nodes. Cheap
                 // discard-only pre-count; alias-free text short-circuits for free.
@@ -1652,7 +1652,7 @@ mod tests {
         assert_eq!(
             Format::Yaml.parse("a: 1\na: 2\n").unwrap()["a"],
             serde_json::json!(2),
-            "YAML (serde_yaml_ng) keeps the last duplicate key"
+            "YAML (yaml_serde) keeps the last duplicate key"
         );
         assert_eq!(
             Format::Dotenv.parse("a=1\na=2\n").unwrap()["a"],

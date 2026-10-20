@@ -74,7 +74,7 @@ fn fixture_configs(root: &Path) -> Vec<(String, String)> {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let Ok(v) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text) else {
+            let Ok(v) = yaml_serde::from_str::<yaml_serde::Value>(&text) else {
                 continue;
             };
             if v.get("docs").is_none() {
@@ -83,7 +83,7 @@ fn fixture_configs(root: &Path) -> Vec<(String, String)> {
             if let Some(config) = v
                 .get("given")
                 .and_then(|g| g.get("config"))
-                .and_then(serde_yaml_ng::Value::as_str)
+                .and_then(yaml_serde::Value::as_str)
             {
                 let src = path
                     .strip_prefix(root)
@@ -229,21 +229,21 @@ fn to_config(body: &str) -> Option<String> {
 /// silently dropped. A config that doesn't parse here returns `false` so the
 /// loader still runs and reports the structural error.
 fn has_network_extends(config: &str) -> bool {
-    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(config) else {
+    let Ok(doc) = yaml_serde::from_str::<yaml_serde::Value>(config) else {
         return false;
     };
-    let entry_is_network = |e: &serde_yaml_ng::Value| {
+    let entry_is_network = |e: &yaml_serde::Value| {
         let url = match e {
-            serde_yaml_ng::Value::String(s) => Some(s.as_str()),
-            serde_yaml_ng::Value::Mapping(m) => m
-                .get(serde_yaml_ng::Value::String("url".into()))
-                .and_then(serde_yaml_ng::Value::as_str),
+            yaml_serde::Value::String(s) => Some(s.as_str()),
+            yaml_serde::Value::Mapping(m) => m
+                .get(yaml_serde::Value::String("url".into()))
+                .and_then(yaml_serde::Value::as_str),
             _ => None,
         };
         url.is_some_and(|u| u.starts_with("http://") || u.starts_with("https://"))
     };
     match doc.get("extends") {
-        Some(serde_yaml_ng::Value::Sequence(seq)) => seq.iter().any(entry_is_network),
+        Some(yaml_serde::Value::Sequence(seq)) => seq.iter().any(entry_is_network),
         Some(other) => entry_is_network(other),
         None => false,
     }
@@ -260,22 +260,22 @@ fn has_network_extends(config: &str) -> bool {
 /// map-vs-sequence `rules:` bug) won't parse here; we return it
 /// unchanged so the loader still reports the structural error.
 fn inject_default_levels(config: &str) -> String {
-    let Ok(mut doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(config) else {
+    let Ok(mut doc) = yaml_serde::from_str::<yaml_serde::Value>(config) else {
         return config.to_string();
     };
     if let Some(rules) = doc
         .get_mut("rules")
-        .and_then(serde_yaml_ng::Value::as_sequence_mut)
+        .and_then(yaml_serde::Value::as_sequence_mut)
     {
         for rule in rules.iter_mut() {
             if let Some(map) = rule.as_mapping_mut() {
-                let key = serde_yaml_ng::Value::String("level".into());
+                let key = yaml_serde::Value::String("level".into());
                 map.entry(key)
-                    .or_insert_with(|| serde_yaml_ng::Value::String("error".into()));
+                    .or_insert_with(|| yaml_serde::Value::String("error".into()));
             }
         }
     }
-    serde_yaml_ng::to_string(&doc).unwrap_or_else(|_| config.to_string())
+    yaml_serde::to_string(&doc).unwrap_or_else(|_| config.to_string())
 }
 
 #[test]
@@ -491,8 +491,8 @@ fn every_rule_kind_rejects_an_unknown_option() {
                 }
                 let mut bogus = spec.clone();
                 bogus.extra.insert(
-                    serde_yaml_ng::Value::String("__alint_unknown_option_probe__".into()),
-                    serde_yaml_ng::Value::Bool(true),
+                    yaml_serde::Value::String("__alint_unknown_option_probe__".into()),
+                    yaml_serde::Value::Bool(true),
                 );
                 probed.insert(spec.kind.clone());
                 if registry.build(&bogus).is_ok() {
@@ -525,8 +525,8 @@ fn every_rule_kind_rejects_an_unknown_option() {
             }
             let mut bogus = spec.clone();
             bogus.extra.insert(
-                serde_yaml_ng::Value::String("__alint_unknown_option_probe__".into()),
-                serde_yaml_ng::Value::Bool(true),
+                yaml_serde::Value::String("__alint_unknown_option_probe__".into()),
+                yaml_serde::Value::Bool(true),
             );
             probed.insert(spec.kind.clone());
             if registry.build(&bogus).is_ok() {

@@ -345,7 +345,7 @@ pub(super) fn render_ruleset_page(
     overview_md: &str,
     yaml_text: &str,
     rel_repo_path: &str,
-    yaml: &serde_yaml_ng::Value,
+    yaml: &yaml_serde::Value,
     kind_to_family: &std::collections::HashMap<String, String>,
 ) -> String {
     let mut out = String::new();
@@ -421,7 +421,7 @@ pub(super) fn render_ruleset_page(
 }
 
 /// A string field of a rule mapping.
-fn str_field(rule: &serde_yaml_ng::Value, key: &str) -> Option<String> {
+fn str_field(rule: &yaml_serde::Value, key: &str) -> Option<String> {
     rule.get(key).and_then(|v| v.as_str()).map(str::to_string)
 }
 
@@ -431,7 +431,7 @@ fn str_field(rule: &serde_yaml_ng::Value, key: &str) -> Option<String> {
 /// `when:` fact gates. Two columns, and the ids as plain link text (which
 /// wraps at its hyphens, where a code span wouldn't), so the table fits the
 /// content width.
-fn write_ruleset_summary(out: &mut String, rules: &[serde_yaml_ng::Value]) {
+fn write_ruleset_summary(out: &mut String, rules: &[yaml_serde::Value]) {
     let _ = writeln!(out, "## What it checks");
     let _ = writeln!(out);
     let _ = writeln!(
@@ -495,7 +495,7 @@ fn write_ruleset_summary(out: &mut String, rules: &[serde_yaml_ng::Value]) {
 fn write_rule_section(
     out: &mut String,
     id: &str,
-    rule: &serde_yaml_ng::Value,
+    rule: &yaml_serde::Value,
     source: Option<&RuleSource>,
     kind_to_family: &std::collections::HashMap<String, String>,
 ) {
@@ -560,7 +560,7 @@ fn write_rule_section(
 /// The "Customize" section, with this ruleset's own ids: the first rule
 /// turned off, and the next rule that isn't already an error promoted to
 /// one (left out when every other rule is an error).
-fn write_ruleset_customize(out: &mut String, name: &str, rules: &[serde_yaml_ng::Value]) {
+fn write_ruleset_customize(out: &mut String, name: &str, rules: &[yaml_serde::Value]) {
     let first = str_field(&rules[0], "id").unwrap_or_default();
     let promote = rules[1..]
         .iter()

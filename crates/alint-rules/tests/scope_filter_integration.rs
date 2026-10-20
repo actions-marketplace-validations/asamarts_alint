@@ -20,9 +20,9 @@ use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
 
 /// Build a single-rule engine from a YAML spec snippet. The spec
-/// is parsed via `serde_yaml_ng` exactly as the loader would.
+/// is parsed via `yaml_serde` exactly as the loader would.
 fn engine_from_yaml(yaml: &str) -> Engine {
-    let spec: Arc<alint_core::RuleSpec> = Arc::new(serde_yaml_ng::from_str(yaml).unwrap());
+    let spec: Arc<alint_core::RuleSpec> = Arc::new(yaml_serde::from_str(yaml).unwrap());
     let registry = builtin_registry();
     let rule = registry.build(&spec).unwrap();
     Engine::from_entries(vec![RuleEntry::new(rule).with_spec(spec)], registry)

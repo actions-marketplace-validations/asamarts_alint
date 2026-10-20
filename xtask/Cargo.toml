@@ -24,7 +24,7 @@ clap.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
+yaml_serde.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]

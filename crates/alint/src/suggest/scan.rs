@@ -128,7 +128,7 @@ fn read_existing_extends(root: &Path) -> Vec<String> {
         let Ok(body) = std::fs::read_to_string(&path) else {
             continue;
         };
-        // Guard a deep-flow YAML bomb before serde_yaml_ng (libyaml) processes it
+        // Guard a deep-flow YAML bomb before yaml_serde/libyaml-rs processes it
         // super-linearly -- the same guard the config loader applies. `suggest`
         // reads the repo's `.alint.yml` directly, so an untrusted checkout could
         // otherwise hang it. Degrade gracefully to "no existing extends", as this
@@ -138,7 +138,7 @@ fn read_existing_extends(root: &Path) -> Vec<String> {
         {
             return Vec::new();
         }
-        let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&body) else {
+        let Ok(doc) = yaml_serde::from_str::<yaml_serde::Value>(&body) else {
             return Vec::new();
         };
         return collect_extends(&doc);
@@ -152,11 +152,11 @@ fn read_existing_extends(root: &Path) -> Vec<String> {
 /// silently — the loader will surface its own error if the
 /// user's config is malformed; we just need our best-effort
 /// already-covered set.
-fn collect_extends(doc: &serde_yaml_ng::Value) -> Vec<String> {
+fn collect_extends(doc: &yaml_serde::Value) -> Vec<String> {
     let Some(map) = doc.as_mapping() else {
         return Vec::new();
     };
-    let Some(extends) = map.get(serde_yaml_ng::Value::String("extends".into())) else {
+    let Some(extends) = map.get(yaml_serde::Value::String("extends".into())) else {
         return Vec::new();
     };
     let Some(seq) = extends.as_sequence() else {
@@ -164,9 +164,9 @@ fn collect_extends(doc: &serde_yaml_ng::Value) -> Vec<String> {
     };
     seq.iter()
         .filter_map(|entry| match entry {
-            serde_yaml_ng::Value::String(s) => Some(s.clone()),
-            serde_yaml_ng::Value::Mapping(m) => m
-                .get(serde_yaml_ng::Value::String("url".into()))
+            yaml_serde::Value::String(s) => Some(s.clone()),
+            yaml_serde::Value::Mapping(m) => m
+                .get(yaml_serde::Value::String("url".into()))
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             _ => None,

@@ -15,7 +15,7 @@ use alint_core::{
     ConfigCompatibility, ConfigSourceClass, Error, KindCatalog, KindMeta, PathsSupport, Result,
     RunningVersion, SelectorType,
 };
-use serde_yaml_ng::{Mapping, Value};
+use yaml_serde::{Mapping, Value};
 
 use crate::{DEFAULT_CONFIG_NAMES, RawConfig};
 
@@ -305,7 +305,7 @@ fn load_nested_config(
         marker.insert("source".into(), source.into());
         rule.insert(
             NESTED_SCOPE_MARKER.into(),
-            serde_yaml_ng::Value::Mapping(marker),
+            yaml_serde::Value::Mapping(marker),
         );
         out.push(rule);
     }
@@ -586,7 +586,7 @@ fn scope_value_in(value: &str, prefix: &str, in_require: bool) -> Result<String>
 /// [`scope_paths_value`] with the `require:`-block token rule applied to every
 /// string in the value.
 fn scope_paths_value_in(
-    value: &mut serde_yaml_ng::Value,
+    value: &mut yaml_serde::Value,
     prefix: &str,
     in_require: bool,
 ) -> Result<()> {
@@ -594,15 +594,15 @@ fn scope_paths_value_in(
         return scope_paths_value(value, prefix);
     }
     match value {
-        serde_yaml_ng::Value::String(s) => *s = scope_value_in(s, prefix, true)?,
-        serde_yaml_ng::Value::Sequence(seq) => {
+        yaml_serde::Value::String(s) => *s = scope_value_in(s, prefix, true)?,
+        yaml_serde::Value::Sequence(seq) => {
             for item in seq {
-                if let serde_yaml_ng::Value::String(s) = item {
+                if let yaml_serde::Value::String(s) = item {
                     *s = scope_value_in(s, prefix, true)?;
                 }
             }
         }
-        serde_yaml_ng::Value::Mapping(m) => {
+        yaml_serde::Value::Mapping(m) => {
             for key in &["include", "exclude"] {
                 if let Some(inner) = m.get_mut(*key) {
                     scope_paths_value_in(inner, prefix, true)?;
@@ -621,15 +621,15 @@ fn scope_paths_value_in(
 ///
 /// Absolute paths and `..`-prefixed globs are rejected; they'd
 /// escape the subtree the nested config is supposed to confine.
-fn scope_paths_value(value: &mut serde_yaml_ng::Value, prefix: &str) -> Result<()> {
+fn scope_paths_value(value: &mut yaml_serde::Value, prefix: &str) -> Result<()> {
     match value {
-        serde_yaml_ng::Value::String(s) => {
+        yaml_serde::Value::String(s) => {
             *s = scope_glob(s, prefix)?;
         }
-        serde_yaml_ng::Value::Sequence(seq) => {
+        yaml_serde::Value::Sequence(seq) => {
             for item in seq {
                 if let Some(s) = item.as_str() {
-                    *item = serde_yaml_ng::Value::String(scope_glob(s, prefix)?);
+                    *item = yaml_serde::Value::String(scope_glob(s, prefix)?);
                 } else {
                     return Err(Error::Other(
                         "path array contains a non-string entry; nested scoping only \
@@ -639,7 +639,7 @@ fn scope_paths_value(value: &mut serde_yaml_ng::Value, prefix: &str) -> Result<(
                 }
             }
         }
-        serde_yaml_ng::Value::Mapping(m) => {
+        yaml_serde::Value::Mapping(m) => {
             // include / exclude form — prefix each list in place.
             for key in &["include", "exclude"] {
                 if let Some(inner) = m.get_mut(*key) {

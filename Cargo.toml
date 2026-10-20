@@ -35,7 +35,7 @@ alint-testkit = { path = "crates/alint-testkit", version = "0.19.0" }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml_ng = "0.10"
+yaml_serde = "0.10.7"
 globset = "0.4"
 ignore = "0.4"
 regex = "1"
@@ -99,7 +99,7 @@ jsonc-parser = { version = "0.34.0", features = ["cst"] }
 # Span-capable YAML AST for the Phase-2 structured `set_value` fixer (alint-core
 # `structured_fix::yaml_`): `saphyr::MarkedYaml` is a spanned node tree, so a YAML
 # scalar edit is a span-splice (like JSON). The check side parses YAML via
-# `serde_yaml_ng` (libyaml), which exposes no spans, so this is the fix side's
+# `yaml_serde`/libyaml-rs, which exposes no spans, so this is the fix side's
 # spanned view. MIT OR Apache-2.0 (same as the workspace). PINNED at 0.1.0: it is
 # pre-1.0 AND its `Marker.index` is a CHAR offset (the `index()` rustdoc wrongly
 # says bytes -- verified empirically), which `yaml_` converts to bytes; a bump must

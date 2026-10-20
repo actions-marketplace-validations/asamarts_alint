@@ -46,7 +46,7 @@ fn git_required_kinds() -> BTreeSet<String> {
 
 /// Pull every rule kind referenced in this scenario's
 /// `given.config:` rules block.
-fn kinds_in_scenario(scenario: &serde_yaml_ng::Value) -> HashSet<String> {
+fn kinds_in_scenario(scenario: &yaml_serde::Value) -> HashSet<String> {
     let mut out = HashSet::new();
     let Some(given) = scenario.get("given") else {
         return out;
@@ -54,18 +54,18 @@ fn kinds_in_scenario(scenario: &serde_yaml_ng::Value) -> HashSet<String> {
     let Some(config) = given.get("config").and_then(|v| v.as_str()) else {
         return out;
     };
-    let Ok(parsed) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(config) else {
+    let Ok(parsed) = yaml_serde::from_str::<yaml_serde::Value>(config) else {
         return out;
     };
     walk_kinds(&parsed, &mut out);
     out
 }
 
-fn walk_kinds(v: &serde_yaml_ng::Value, out: &mut HashSet<String>) {
+fn walk_kinds(v: &yaml_serde::Value, out: &mut HashSet<String>) {
     match v {
-        serde_yaml_ng::Value::Mapping(m) => {
+        yaml_serde::Value::Mapping(m) => {
             if let Some(kind) = m
-                .get(serde_yaml_ng::Value::String("kind".into()))
+                .get(yaml_serde::Value::String("kind".into()))
                 .and_then(|v| v.as_str())
             {
                 out.insert(kind.to_string());
@@ -74,7 +74,7 @@ fn walk_kinds(v: &serde_yaml_ng::Value, out: &mut HashSet<String>) {
                 walk_kinds(child, out);
             }
         }
-        serde_yaml_ng::Value::Sequence(seq) => {
+        yaml_serde::Value::Sequence(seq) => {
             for child in seq {
                 walk_kinds(child, out);
             }
@@ -86,12 +86,12 @@ fn walk_kinds(v: &serde_yaml_ng::Value, out: &mut HashSet<String>) {
 /// True if this scenario sets up a real git repo via
 /// `given.git.init: true`. Anything else (`given.git:` absent,
 /// or `init: false`) counts as "outside a git repo".
-fn has_git_init(scenario: &serde_yaml_ng::Value) -> bool {
+fn has_git_init(scenario: &yaml_serde::Value) -> bool {
     scenario
         .get("given")
         .and_then(|g| g.get("git"))
         .and_then(|git| git.get("init"))
-        .and_then(serde_yaml_ng::Value::as_bool)
+        .and_then(yaml_serde::Value::as_bool)
         .unwrap_or(false)
 }
 
@@ -137,7 +137,7 @@ fn git_required_rules_have_in_repo_and_outside_repo_scenarios() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(scenario) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text) else {
+        let Ok(scenario) = yaml_serde::from_str::<yaml_serde::Value>(&text) else {
             continue;
         };
         let kinds = kinds_in_scenario(&scenario);

@@ -14,7 +14,7 @@ fn compile_schema() -> jsonschema::Validator {
 }
 
 fn yaml_to_json(yaml: &str) -> serde_json::Value {
-    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).expect("yaml should parse");
+    let value: yaml_serde::Value = yaml_serde::from_str(yaml).expect("yaml should parse");
     serde_json::to_value(value).expect("yaml → json should round-trip")
 }
 
@@ -117,7 +117,7 @@ fn requirement_schema_matches_the_runtime_literal_grammar() {
         let yaml = format!("version: 1\nrequires:\n  alint: '{accepted}'\nrules: []\n");
         let instance = yaml_to_json(&yaml);
         assert_valid(&validator, &instance, accepted);
-        serde_yaml_ng::from_str::<alint_core::Config>(&yaml).unwrap_or_else(|error| {
+        yaml_serde::from_str::<alint_core::Config>(&yaml).unwrap_or_else(|error| {
             panic!("runtime rejected schema-valid requirement {accepted:?}: {error}")
         });
     }
@@ -134,7 +134,7 @@ fn requirement_schema_matches_the_runtime_literal_grammar() {
         let instance = yaml_to_json(&yaml);
         assert_invalid(&validator, &instance, rejected);
         assert!(
-            serde_yaml_ng::from_str::<alint_core::Config>(&yaml).is_err(),
+            yaml_serde::from_str::<alint_core::Config>(&yaml).is_err(),
             "runtime accepted schema-invalid requirement {rejected:?}"
         );
     }
@@ -147,7 +147,7 @@ fn requirement_schema_matches_the_runtime_literal_grammar() {
         let instance = yaml_to_json(yaml);
         assert_invalid(&validator, &instance, yaml);
         assert!(
-            serde_yaml_ng::from_str::<alint_core::Config>(yaml).is_err(),
+            yaml_serde::from_str::<alint_core::Config>(yaml).is_err(),
             "runtime accepted {yaml:?}"
         );
     }
@@ -230,16 +230,16 @@ fn sensitive_rejects_non_boolean_values() {
 #[test]
 fn fixture_covers_every_registered_rule_kind() {
     let yaml = include_str!("fixtures/all_kinds.yaml");
-    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).expect("fixture parses");
+    let parsed: yaml_serde::Value = yaml_serde::from_str(yaml).expect("fixture parses");
     let fixture_kinds: std::collections::HashSet<String> = parsed
         .as_mapping()
-        .and_then(|m| m.get(serde_yaml_ng::Value::String("rules".into())))
+        .and_then(|m| m.get(yaml_serde::Value::String("rules".into())))
         .and_then(|v| v.as_sequence())
         .map(|seq| {
             seq.iter()
                 .filter_map(|rule| {
                     rule.as_mapping()
-                        .and_then(|m| m.get(serde_yaml_ng::Value::String("kind".into())))
+                        .and_then(|m| m.get(yaml_serde::Value::String("kind".into())))
                         .and_then(|v| v.as_str())
                         .map(str::to_string)
                 })
@@ -314,8 +314,8 @@ fn every_registered_kind_rejects_an_unknown_option() {
         }
         let mut bogus = spec.clone();
         bogus.extra.insert(
-            serde_yaml_ng::Value::String("__alint_unknown_option_probe__".into()),
-            serde_yaml_ng::Value::Bool(true),
+            yaml_serde::Value::String("__alint_unknown_option_probe__".into()),
+            yaml_serde::Value::Bool(true),
         );
         probed.insert(spec.kind.clone());
         if registry.build(&bogus).is_ok() {
@@ -501,7 +501,7 @@ fn fix_schema_matches_every_fix_op() {
         ] {
             let body = format!("{base}{extra}");
             let fix_yaml = format!("{op}:\n{}", indent(&body));
-            let serde_ok = serde_yaml_ng::from_str::<alint_core::FixSpec>(&fix_yaml).is_ok();
+            let serde_ok = yaml_serde::from_str::<alint_core::FixSpec>(&fix_yaml).is_ok();
             let fix = yaml_to_json(&fix_yaml);
             assert_eq!(
                 validator.is_valid(&fix),

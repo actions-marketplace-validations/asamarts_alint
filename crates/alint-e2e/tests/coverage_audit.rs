@@ -17,7 +17,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 fn collect_kinds_from_yaml(yaml: &str, out: &mut HashSet<String>) {
-    let Ok(parsed) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(yaml) else {
+    let Ok(parsed) = yaml_serde::from_str::<yaml_serde::Value>(yaml) else {
         return;
     };
     walk(&parsed, out);
@@ -33,11 +33,11 @@ fn collect_kinds_from_yaml(yaml: &str, out: &mut HashSet<String>) {
 /// When we see a string value, try to re-parse it as YAML and
 /// recurse — otherwise the rules buried in those strings are
 /// invisible to the audit.
-fn walk(value: &serde_yaml_ng::Value, out: &mut HashSet<String>) {
+fn walk(value: &yaml_serde::Value, out: &mut HashSet<String>) {
     match value {
-        serde_yaml_ng::Value::Mapping(m) => {
+        yaml_serde::Value::Mapping(m) => {
             if let Some(kind) = m
-                .get(serde_yaml_ng::Value::String("kind".into()))
+                .get(yaml_serde::Value::String("kind".into()))
                 .and_then(|v| v.as_str())
             {
                 out.insert(kind.to_string());
@@ -46,14 +46,14 @@ fn walk(value: &serde_yaml_ng::Value, out: &mut HashSet<String>) {
                 walk(v, out);
             }
         }
-        serde_yaml_ng::Value::Sequence(seq) => {
+        yaml_serde::Value::Sequence(seq) => {
             for v in seq {
                 walk(v, out);
             }
         }
-        serde_yaml_ng::Value::String(s) => {
+        yaml_serde::Value::String(s) => {
             if s.contains("kind:")
-                && let Ok(inner) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(s)
+                && let Ok(inner) = yaml_serde::from_str::<yaml_serde::Value>(s)
             {
                 walk(&inner, out);
             }

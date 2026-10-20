@@ -686,7 +686,7 @@ fn assert_instance_conformance(kind: &str, meta: &KindMeta, spec: &RuleSpec, rul
     let git_tracked_only = spec
         .extra
         .get("git_tracked_only")
-        .and_then(serde_yaml_ng::Value::as_bool)
+        .and_then(yaml_serde::Value::as_bool)
         .unwrap_or(false);
     let expected_git_mode = match (meta.git_tracked_only, git_tracked_only) {
         (GitTrackedSupport::FileOnly, true) => GitTrackedMode::FileOnly,
@@ -817,12 +817,12 @@ mod tests {
             sensitive_fields: std::collections::BTreeSet::new(),
             fix: None,
             scope_filter: None,
-            extra: serde_yaml_ng::Mapping::new(),
+            extra: yaml_serde::Mapping::new(),
         }
     }
 
     fn parsed_spec(fields: &str) -> RuleSpec {
-        serde_yaml_ng::from_str(&format!("id: t\nkind: test_kind\nlevel: error\n{fields}")).unwrap()
+        yaml_serde::from_str(&format!("id: t\nkind: test_kind\nlevel: error\n{fields}")).unwrap()
     }
 
     #[derive(Debug)]

@@ -1222,7 +1222,7 @@ mod tests {
     #[test]
     fn whole_file_resolves_and_yields_full_text() {
         let spec: super::ExtractSpec =
-            serde_yaml_ng::from_str("whole_file: {}").expect("parse whole_file spec");
+            yaml_serde::from_str("whole_file: {}").expect("parse whole_file spec");
         let extract = spec.resolve().expect("resolve whole_file");
         assert!(matches!(extract, super::Extract::WholeFile));
         let text = "line one\nline two\n";
@@ -1241,7 +1241,7 @@ mod tests {
     #[test]
     fn whole_file_conflicts_with_another_source() {
         let spec: super::ExtractSpec =
-            serde_yaml_ng::from_str("whole_file: {}\nregex: '(x)'").expect("parse spec");
+            yaml_serde::from_str("whole_file: {}\nregex: '(x)'").expect("parse spec");
         assert!(spec.resolve().is_err(), "two sources must be rejected");
     }
 
@@ -1250,7 +1250,7 @@ mod tests {
         // The `xml:` extract mode reuses `Format::Xml.parse` -- an XML leaf comes
         // back as its string value, exactly like the other structured modes.
         let spec: super::ExtractSpec =
-            serde_yaml_ng::from_str("xml: \"$.Project.PropertyGroup.Version\"")
+            yaml_serde::from_str("xml: \"$.Project.PropertyGroup.Version\"")
                 .expect("parse xml spec");
         let extract = spec.resolve().expect("resolve xml");
         assert!(matches!(
@@ -1297,7 +1297,7 @@ mod tests {
     fn xml_and_toml_both_set_is_rejected() {
         // The one-of guard still holds with the new `xml` field in the mix.
         let spec: super::ExtractSpec =
-            serde_yaml_ng::from_str("xml: \"$.a\"\ntoml: \"$.b\"").expect("parse two-set spec");
+            yaml_serde::from_str("xml: \"$.a\"\ntoml: \"$.b\"").expect("parse two-set spec");
         assert!(
             spec.resolve().is_err(),
             "two structured modes must be rejected"

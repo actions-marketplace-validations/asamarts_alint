@@ -598,7 +598,7 @@ impl RuleEntry {
     /// The rule's kind-specific options (the flattened non-common `RuleSpec`
     /// fields, e.g. `pattern`, `max_lines`), or `None` when built without a spec.
     #[must_use]
-    pub fn extra(&self) -> Option<&serde_yaml_ng::Mapping> {
+    pub fn extra(&self) -> Option<&yaml_serde::Mapping> {
         self.spec.as_ref().map(|s| &s.extra)
     }
 
@@ -660,15 +660,15 @@ impl RuleEntry {
     }
 }
 
-fn option_value_is_set(value: &serde_yaml_ng::Value) -> bool {
+fn option_value_is_set(value: &yaml_serde::Value) -> bool {
     match value {
-        serde_yaml_ng::Value::Null => false,
-        serde_yaml_ng::Value::Bool(value) => *value,
-        serde_yaml_ng::Value::String(value) => !value.is_empty(),
-        serde_yaml_ng::Value::Sequence(value) => !value.is_empty(),
-        serde_yaml_ng::Value::Mapping(value) => !value.is_empty(),
-        serde_yaml_ng::Value::Number(_) => true,
-        serde_yaml_ng::Value::Tagged(value) => option_value_is_set(&value.value),
+        yaml_serde::Value::Null => false,
+        yaml_serde::Value::Bool(value) => *value,
+        yaml_serde::Value::String(value) => !value.is_empty(),
+        yaml_serde::Value::Sequence(value) => !value.is_empty(),
+        yaml_serde::Value::Mapping(value) => !value.is_empty(),
+        yaml_serde::Value::Number(_) => true,
+        yaml_serde::Value::Tagged(value) => option_value_is_set(&value.value),
     }
 }
 
@@ -766,7 +766,7 @@ fn when_expr_uses_iter(expr: &WhenExpr) -> bool {
 
 fn configured_iteration_gate(spec: Option<&crate::RuleSpec>) -> Result<Option<WhenExpr>> {
     spec.and_then(|spec| spec.extra.get("when_iter"))
-        .and_then(serde_yaml_ng::Value::as_str)
+        .and_then(yaml_serde::Value::as_str)
         .map(crate::when::parse)
         .transpose()
         .map_err(|error| {
@@ -781,10 +781,10 @@ fn configured_select_scope(spec: Option<&crate::RuleSpec>) -> Result<Option<crat
         return Ok(None);
     };
     let patterns = match value {
-        serde_yaml_ng::Value::String(pattern) => vec![pattern.clone()],
-        serde_yaml_ng::Value::Sequence(patterns) => patterns
+        yaml_serde::Value::String(pattern) => vec![pattern.clone()],
+        yaml_serde::Value::Sequence(patterns) => patterns
             .iter()
-            .filter_map(serde_yaml_ng::Value::as_str)
+            .filter_map(yaml_serde::Value::as_str)
             .map(str::to_string)
             .collect(),
         _ => return Ok(None),
@@ -5080,7 +5080,7 @@ mod tests {
         })
     }
     fn manifest_scope() -> Scope {
-        let spec: crate::RuleSpec = serde_yaml_ng::from_str(
+        let spec: crate::RuleSpec = yaml_serde::from_str(
             "id: a\nkind: x\nlevel: error\npaths: \"**/*.txt\"\n\
              scope_filter:\n  include_manifest_paths:\n    source: package.json\n    \
              extract: { json: \"$.files[*]\" }\n",
@@ -5255,7 +5255,7 @@ mod tests {
     }
 
     fn nested_parent(yaml: &str) -> Box<dyn Rule> {
-        let spec: crate::NestedRuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
+        let spec: crate::NestedRuleSpec = yaml_serde::from_str(yaml).unwrap();
         let compiled = crate::CompiledNestedSpec::compile(spec, "owner", 0).unwrap();
         Box::new(NestedDependencyParent {
             id: "owner",
@@ -7119,7 +7119,7 @@ mod tests {
 
     /// A scope with `scope_filter: { has_ancestor: Cargo.toml }` over `**/*.rs`.
     fn ancestor_scope() -> Scope {
-        let spec: crate::RuleSpec = serde_yaml_ng::from_str(
+        let spec: crate::RuleSpec = yaml_serde::from_str(
             "id: a\nkind: x\nlevel: error\npaths: \"**/*.rs\"\nscope_filter:\n  has_ancestor: Cargo.toml\n",
         )
         .unwrap();
@@ -7338,7 +7338,7 @@ mod tests {
             scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
             prefix: b"MAGIC".to_vec(),
         });
-        let spec: crate::RuleSpec = serde_yaml_ng::from_str(
+        let spec: crate::RuleSpec = yaml_serde::from_str(
             "id: needs-magic\nkind: file_content_matches\npaths: \"**/*.txt\"\n\
              pattern: MAGIC\nsensitive: true\nlevel: error\n",
         )
@@ -7371,7 +7371,7 @@ mod tests {
             scope: Scope::from_patterns(&["**/*.txt".to_string()]).unwrap(),
             prefix: b"MAGIC".to_vec(),
         });
-        let spec: crate::RuleSpec = serde_yaml_ng::from_str(
+        let spec: crate::RuleSpec = yaml_serde::from_str(
             "id: needs-magic\nkind: file_content_matches\npaths: \"**/*.txt\"\n\
              pattern: MAGIC\nsensitive: true\nlevel: error\n",
         )
@@ -7531,7 +7531,7 @@ mod tests {
 
     fn trace_spec(id: &str, level: &str, paths: &str, sensitive: bool) -> Arc<crate::RuleSpec> {
         Arc::new(
-            serde_yaml_ng::from_str(&format!(
+            yaml_serde::from_str(&format!(
                 "id: {id}\nkind: nested_scope_fixture\nlevel: {level}\npaths: \"{paths}\"\n\
                  sensitive: {sensitive}\n"
             ))
@@ -7748,7 +7748,7 @@ mod tests {
         );
 
         let expect_spec: Arc<crate::RuleSpec> = Arc::new(
-            serde_yaml_ng::from_str(
+            yaml_serde::from_str(
                 "id: expect\nkind: nested_scope_fixture\nlevel: error\n\
                  paths: \"**/*.md\"\nexpect_matches: true\n",
             )
@@ -7854,7 +7854,7 @@ mod tests {
                 .any(|stage| stage.reason == TraceReason::GitUnavailable)
         );
         let git_spec: Arc<crate::RuleSpec> = Arc::new(
-            serde_yaml_ng::from_str(
+            yaml_serde::from_str(
                 "id: git\nkind: nested_git_fixture\nlevel: error\npaths: \"**/*.txt\"\n",
             )
             .unwrap(),

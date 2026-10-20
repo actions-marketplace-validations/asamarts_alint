@@ -296,8 +296,8 @@ fn example_ordered_block_markers_are_literal_lines() {
             for key in ["start", "end"] {
                 let Some(marker) = rule
                     .extra
-                    .get(serde_yaml_ng::Value::String(key.to_owned()))
-                    .and_then(serde_yaml_ng::Value::as_str)
+                    .get(yaml_serde::Value::String(key.to_owned()))
+                    .and_then(yaml_serde::Value::as_str)
                 else {
                     continue;
                 };

@@ -87,7 +87,7 @@ rules:
     vars:
       dir: packages
 ";
-    let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let cfg: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let final_cfg = cfg.finalize(Some(test_catalog())).unwrap();
     assert_eq!(final_cfg.rules.len(), 1);
     let r = &final_cfg.rules[0];
@@ -116,7 +116,7 @@ rules:
     id: apps-have-readme
     vars: { dir: apps }
 ";
-    let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let cfg: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let final_cfg = cfg.finalize(Some(test_catalog())).unwrap();
     let ids: Vec<&str> = final_cfg.rules.iter().map(|r| r.id.as_str()).collect();
     assert_eq!(
@@ -145,7 +145,7 @@ rules:
     level: error
     vars: { dir: services }
 ";
-    let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let cfg: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let final_cfg = cfg.finalize(Some(test_catalog())).unwrap();
     assert_eq!(final_cfg.rules[0].level, alint_core::Level::Error);
 }
@@ -165,7 +165,7 @@ rules:
   - extends_template: contains-template
     id: packages-have-readmes
 ";
-    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let raw: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
     assert!(
         error.contains("`paths` is not supported by `dir_contains`"),
@@ -191,7 +191,7 @@ rules:
   - extends_template: nested-template
     id: packages-have-readmes
 ";
-    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let raw: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
     assert!(error.contains("nested rule #0 (`dir_contains`)"), "{error}");
     assert!(error.contains("`paths` is not supported"), "{error}");
@@ -206,7 +206,7 @@ fn nested_rule_rejects_synthesized_parent_fields() {
              select: packages/*\n    require:\n      - kind: file_exists\n        \
              paths: \"{{path}}/README.md\"\n        {field}\n    level: error\n"
         );
-        let raw: RawConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+        let raw: RawConfig = yaml_serde::from_str(&yaml).unwrap();
         let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
         assert!(
             error.contains("not supported on a nested rule"),
@@ -273,7 +273,7 @@ rules:
     expect_matches: false
     level: error
 ";
-    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let raw: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
     assert!(
         error.contains("`expect_matches` is not supported by `file_exists`"),
@@ -292,7 +292,7 @@ rules:
     fix: null
     level: error
 ";
-    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let raw: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
     assert!(
         error.contains("`fix` is not supported by `command_idempotent`"),
@@ -311,7 +311,7 @@ rules:
     fix: null
     level: error
 ";
-    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let raw: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
     assert!(
         error.contains("`fix` for `file_exists` must select exactly one operation"),
@@ -332,7 +332,7 @@ fn configured_null_scope_filter_is_rejected_for_supported_kinds() {
              \x20   level: error\n\
              \x20   {options}\n"
         );
-        let raw: RawConfig = serde_yaml_ng::from_str(&yaml).unwrap();
+        let raw: RawConfig = yaml_serde::from_str(&yaml).unwrap();
         let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
         assert!(
             error.contains("`scope_filter` must be a mapping with at least one predicate"),
@@ -352,7 +352,7 @@ rules:
     scope_filter: null
     level: error
 ";
-    let raw: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let raw: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let error = raw.finalize(Some(test_catalog())).unwrap_err().to_string();
     assert!(
         error.contains("`scope_filter` is not supported by `file_exists`"),
@@ -372,7 +372,7 @@ rules:
   - extends_template: typo-template
     id: my-rule
 ";
-    let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let cfg: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let err = cfg.finalize(Some(test_catalog())).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("typo-template"));
@@ -395,7 +395,7 @@ rules:
   - extends_template: outer
     id: my-rule
 ";
-    let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let cfg: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let err = cfg.finalize(Some(test_catalog())).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("leaf-only"));
@@ -421,7 +421,7 @@ rules:
     id: my-rule
     vars: { dir: pkg }
 ";
-    let cfg: RawConfig = serde_yaml_ng::from_str(yaml).unwrap();
+    let cfg: RawConfig = yaml_serde::from_str(yaml).unwrap();
     let final_cfg = cfg.finalize(Some(test_catalog())).unwrap();
     let r = &final_cfg.rules[0];
     let paths = r.paths.as_ref().unwrap();
@@ -561,7 +561,7 @@ fn extended_config_allow_out_of_root_does_not_lift_confinement_before_reject() {
 fn deeply_nested_flow_config_is_rejected_before_libyaml_parses_it() {
     // W2 wiring regression: a config whose YAML nests flow collections far too
     // deep must be rejected by the pre-parse `flow_depth_within_limit` guard
-    // BEFORE it reaches serde_yaml_ng/libyaml (which is super-linear on flow
+    // BEFORE it reaches yaml_serde/libyaml-rs (which is super-linear on flow
     // nesting and would hang the run). The `yaml_depth` unit tests only cover
     // the scanner in isolation; this pins that the config loader actually calls
     // it, so a deleted guard here would fail rather than silently reopen the DoS.
@@ -615,7 +615,7 @@ fn bom_prefixed_config_bombs_are_rejected_before_libyaml_parses_them() {
 fn big_scalar_alias_bomb_config_is_rejected_before_libyaml_parses_it() {
     // Regression: the alias budget counted nodes, so a 1 MB anchored scalar
     // replayed 4000 times (4000 nodes, 4 GB of string copies into the
-    // `serde_yaml_ng::Value` the loader builds) passed the guard.
+    // `yaml_serde::Value` the loader builds) passed the guard.
     let body = format!(
         "x: &a \"{}\"\ny: [{}]\n",
         "x".repeat(1_000_000),
@@ -3209,8 +3209,8 @@ fn parse_rejects_a_yaml_flow_bomb_without_hanging() {
 
 #[test]
 fn extends_promoting_file_remove_to_safe_is_rejected() {
-    use serde_yaml_ng::Mapping;
-    let parse_rule = |y: &str| -> Mapping { serde_yaml_ng::from_str(y).unwrap() };
+    use yaml_serde::Mapping;
+    let parse_rule = |y: &str| -> Mapping { yaml_serde::from_str(y).unwrap() };
 
     // An INHERITED rule promoting `file_remove` to Safe is refused (5.5: an
     // inherited fixer may be demoted, never promoted -- an extended ruleset must

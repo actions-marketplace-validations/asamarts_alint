@@ -333,7 +333,7 @@ mod tests {
 select: 'packages/*'
 require: 'README.md'
 ";
-        let opts: Options = serde_yaml_ng::from_str(yaml).unwrap();
+        let opts: Options = yaml_serde::from_str(yaml).unwrap();
         assert!(matches!(opts.require, RequireList::One(_)));
     }
 

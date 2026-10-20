@@ -311,7 +311,7 @@ mod tests {
             sensitive_fields: std::collections::BTreeSet::new(),
             fix: None,
             scope_filter: None,
-            extra: serde_yaml_ng::Mapping::new(),
+            extra: yaml_serde::Mapping::new(),
         }
     }
 

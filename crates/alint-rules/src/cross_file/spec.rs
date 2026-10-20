@@ -507,14 +507,14 @@ mod tests {
     fn untagged_enums_name_accepted_forms_not_internal_enum() {
         // A value matching no variant reports the accepted forms (via
         // `#[serde(expecting)]`), not the internal untagged-enum name.
-        let n = serde_yaml_ng::from_str::<NormalizeSpec>("42")
+        let n = yaml_serde::from_str::<NormalizeSpec>("42")
             .unwrap_err()
             .to_string();
         assert!(
             n.contains("a normalize transform") && !n.contains("NormalizeSpec"),
             "NormalizeSpec: {n}"
         );
-        let t = serde_yaml_ng::from_str::<TargetsSpec>("42")
+        let t = yaml_serde::from_str::<TargetsSpec>("42")
             .unwrap_err()
             .to_string();
         assert!(

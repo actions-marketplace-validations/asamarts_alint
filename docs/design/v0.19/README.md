@@ -165,16 +165,16 @@ starts at v0.18.4. The 36-cell website snapshot and head-parity baseline merged 
 [`/benchmarks/`](https://alint.org/benchmarks/) page now shows the v0.18.4 headline and
 release-by-release row.
 
-### Next work, in order
+### Follow-up status
 
-1. **Implement Phase 1b for v0.20** from [`../v0.20/README.md`](../v0.20/README.md): start with
-   the versioned policy-test model (P1) and per-source compatibility checks (P4), then land the
-   public runner/CLI and selected-rule trace as vertical slices.
-2. **Resolve the remaining YAML supply-chain warning:** evaluate a safe-Rust replacement for
-   `unsafe-libyaml`/`serde_yaml_ng`, including the compatibility and adversarial corpus, or scope a
-   purpose-built parser ([#334](https://github.com/asamarts/alint/issues/334)).
-3. **Select the next rule-gap slice** from `rule-coverage-gaps.md` after the Phase 1b public
-   metadata and test conventions are executable, so new kinds do not create a second convention.
+1. **Phase 1b for v0.20:** P1-P7 are complete; P8 documentation, release notes, packaging, and
+   generated-artifact closure is next in [`../v0.20/README.md`](../v0.20/README.md).
+2. **YAML supply-chain warning:** resolved through the YAML organization's maintained
+   `yaml_serde`/`libyaml-rs` stack. The compatibility corpus, adversarial limits, candidate
+   measurements, buy-versus-build decision, and re-evaluation triggers are recorded in
+   [`../yaml-parser.md`](../yaml-parser.md) and [#334](https://github.com/asamarts/alint/issues/334).
+3. **Next rule-gap slice:** select from `rule-coverage-gaps.md` after P8 closes the Phase 1b public
+   metadata and test conventions, so new kinds do not create a second convention.
 
 Every implementation item W1-W10 has its design document in this directory. No v0.19 code or
 documentation work item remains open.

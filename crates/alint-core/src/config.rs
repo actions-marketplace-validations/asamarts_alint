@@ -243,11 +243,11 @@ impl<'de> Deserialize<'de> for ExtendsEntry {
         D: serde::Deserializer<'de>,
     {
         use serde::de::Error as _;
-        match serde_yaml_ng::Value::deserialize(deserializer)? {
-            serde_yaml_ng::Value::String(url) => Ok(Self::Url(url)),
-            value @ serde_yaml_ng::Value::Mapping(_) => {
+        match yaml_serde::Value::deserialize(deserializer)? {
+            yaml_serde::Value::String(url) => Ok(Self::Url(url)),
+            value @ yaml_serde::Value::Mapping(_) => {
                 let FilteredExtendsEntry { url, only, except } =
-                    serde_yaml_ng::from_value(value).map_err(D::Error::custom)?;
+                    yaml_serde::from_value(value).map_err(D::Error::custom)?;
                 Ok(Self::Filtered { url, only, except })
             }
             _ => Err(D::Error::custom(
@@ -447,7 +447,7 @@ pub struct RuleSpec {
     /// The entire YAML mapping, retained so each rule builder can deserialize
     /// its kind-specific fields without every option being represented here.
     #[serde(flatten)]
-    pub extra: serde_yaml_ng::Mapping,
+    pub extra: yaml_serde::Mapping,
 }
 
 /// The `fix:` block on a rule. Exactly one op key must be present —
@@ -549,17 +549,17 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::de::Error as _;
-    let value = serde_yaml_ng::Value::deserialize(deserializer)?;
+    let value = yaml_serde::Value::deserialize(deserializer)?;
     if value.is_null() {
         return Ok(None);
     }
-    if let serde_yaml_ng::Value::Mapping(m) = &value
+    if let yaml_serde::Value::Mapping(m) = &value
         && m.len() != 1
     {
         let mut keys: Vec<String> = m
             .keys()
             .map(|k| match k {
-                serde_yaml_ng::Value::String(s) => s.clone(),
+                yaml_serde::Value::String(s) => s.clone(),
                 other => format!("{other:?}"),
             })
             .collect();
@@ -579,7 +579,7 @@ where
     // unknown key). Naming the op turns that into an actionable message without a
     // second op-name SSOT (the name comes straight from the single key).
     let single_op: Option<String> = match &value {
-        serde_yaml_ng::Value::Mapping(m) => m
+        yaml_serde::Value::Mapping(m) => m
             .iter()
             .next()
             .and_then(|(k, _)| k.as_str())
@@ -591,7 +591,7 @@ where
     // gates -- which refuse an inherited `applicability: safe` promotion and
     // demote an untrusted remote's content fixers -- inspect mappings only, so a
     // positional `file_remove: [safe]` would load as an unreviewed promotion.
-    if let serde_yaml_ng::Value::Mapping(m) = &value
+    if let yaml_serde::Value::Mapping(m) = &value
         && let Some((op, args)) = m.iter().next()
         && !args.is_mapping()
     {
@@ -601,7 +601,7 @@ where
              with no options)"
         )));
     }
-    serde_yaml_ng::from_value(value)
+    yaml_serde::from_value(value)
         .map(Some)
         .map_err(|e| match single_op {
             Some(op) => D::Error::custom(format!(
@@ -1181,7 +1181,7 @@ impl RuleSpec {
     where
         T: serde::de::DeserializeOwned,
     {
-        Ok(serde_yaml_ng::from_value(serde_yaml_ng::Value::Mapping(
+        Ok(yaml_serde::from_value(yaml_serde::Value::Mapping(
             self.extra.clone(),
         ))?)
     }
@@ -1316,7 +1316,7 @@ pub struct NestedRuleSpec {
     #[serde(default)]
     pub scope_filter: Option<crate::ScopeFilterSpec>,
     #[serde(flatten)]
-    pub extra: serde_yaml_ng::Mapping,
+    pub extra: yaml_serde::Mapping,
 }
 
 /// A [`NestedRuleSpec`] with its `when:` source pre-compiled
@@ -1456,11 +1456,11 @@ mod tests {
 
     #[test]
     fn allow_out_of_root_deserializes_bool_and_map() {
-        let t: AllowOutOfRoot = serde_yaml_ng::from_str("true").unwrap();
+        let t: AllowOutOfRoot = yaml_serde::from_str("true").unwrap();
         assert_eq!(t, AllowOutOfRoot::All);
-        let f: AllowOutOfRoot = serde_yaml_ng::from_str("false").unwrap();
+        let f: AllowOutOfRoot = yaml_serde::from_str("false").unwrap();
         assert_eq!(f, AllowOutOfRoot::Confined);
-        let m: AllowOutOfRoot = serde_yaml_ng::from_str("kinds: [pair_hash]\nrules: [x]").unwrap();
+        let m: AllowOutOfRoot = yaml_serde::from_str("kinds: [pair_hash]\nrules: [x]").unwrap();
         match m {
             AllowOutOfRoot::Selective { kinds, rules } => {
                 assert!(kinds.contains("pair_hash"));
@@ -1470,7 +1470,7 @@ mod tests {
         }
         // an unknown key in the map form is rejected with a message that names
         // the accepted forms, not the internal untagged-enum type.
-        let err = serde_yaml_ng::from_str::<AllowOutOfRoot>("bogus: 1").unwrap_err();
+        let err = yaml_serde::from_str::<AllowOutOfRoot>("bogus: 1").unwrap_err();
         assert!(
             err.to_string().contains("a boolean, or a map"),
             "expected a friendly message, got: {err}"
@@ -1485,21 +1485,21 @@ mod tests {
     fn untagged_config_enums_name_accepted_forms_not_internal_type() {
         // A value matching no variant reports the accepted forms (via
         // `#[serde(expecting)]`), never the internal untagged-enum type name.
-        let p = serde_yaml_ng::from_str::<PathsSpec>("42")
+        let p = yaml_serde::from_str::<PathsSpec>("42")
             .unwrap_err()
             .to_string();
         assert!(
             p.contains("a glob string") && !p.contains("PathsSpec"),
             "PathsSpec: {p}"
         );
-        let e = serde_yaml_ng::from_str::<ExtendsEntry>("42")
+        let e = yaml_serde::from_str::<ExtendsEntry>("42")
             .unwrap_err()
             .to_string();
         assert!(
             e.contains("a URL or path") && !e.contains("ExtendsEntry"),
             "ExtendsEntry: {e}"
         );
-        let f = serde_yaml_ng::from_str::<FixSpec>("42")
+        let f = yaml_serde::from_str::<FixSpec>("42")
             .unwrap_err()
             .to_string();
         assert!(
@@ -1512,7 +1512,7 @@ mod tests {
     fn config_default_respects_gitignore_and_caps_fix_size() {
         // Round-trip the documented defaults through serde to
         // catch silent default drift.
-        let cfg: Config = serde_yaml_ng::from_str("version: 1\n").expect("minimal config");
+        let cfg: Config = yaml_serde::from_str("version: 1\n").expect("minimal config");
         assert_eq!(cfg.version, 1);
         assert!(cfg.respect_gitignore);
         assert_eq!(cfg.fix_size_limit, Some(1 << 20));
@@ -1523,13 +1523,13 @@ mod tests {
 
     #[test]
     fn config_rejects_unknown_top_level_field() {
-        let err = serde_yaml_ng::from_str::<Config>("version: 1\nignored_typo: true\n");
+        let err = yaml_serde::from_str::<Config>("version: 1\nignored_typo: true\n");
         assert!(err.is_err(), "deny_unknown_fields should reject typos");
     }
 
     #[test]
     fn config_explicit_null_disables_fix_size_limit() {
-        let cfg: Config = serde_yaml_ng::from_str("version: 1\nfix_size_limit: null\n").unwrap();
+        let cfg: Config = yaml_serde::from_str("version: 1\nfix_size_limit: null\n").unwrap();
         assert_eq!(cfg.fix_size_limit, None);
     }
 
@@ -1566,14 +1566,14 @@ mod tests {
 
     #[test]
     fn paths_spec_accepts_three_shapes() {
-        let single: PathsSpec = serde_yaml_ng::from_str("\"src/**\"").unwrap();
+        let single: PathsSpec = yaml_serde::from_str("\"src/**\"").unwrap();
         assert!(matches!(single, PathsSpec::Single(s) if s == "src/**"));
 
-        let many: PathsSpec = serde_yaml_ng::from_str("[\"src/**\", \"!src/vendor/**\"]").unwrap();
+        let many: PathsSpec = yaml_serde::from_str("[\"src/**\", \"!src/vendor/**\"]").unwrap();
         assert!(matches!(many, PathsSpec::Many(v) if v.len() == 2));
 
         let inc_exc: PathsSpec =
-            serde_yaml_ng::from_str("include: src/**\nexclude: src/vendor/**\n").unwrap();
+            yaml_serde::from_str("include: src/**\nexclude: src/vendor/**\n").unwrap();
         match inc_exc {
             PathsSpec::IncludeExclude { include, exclude } => {
                 assert_eq!(include, vec!["src/**"]);
@@ -1586,7 +1586,7 @@ mod tests {
     #[test]
     fn paths_spec_include_accepts_string_or_vec() {
         let from_string: PathsSpec =
-            serde_yaml_ng::from_str("include: a\nexclude:\n  - b\n  - c\n").unwrap();
+            yaml_serde::from_str("include: a\nexclude:\n  - b\n  - c\n").unwrap();
         let PathsSpec::IncludeExclude { include, exclude } = from_string else {
             panic!("expected include/exclude shape");
         };
@@ -1636,7 +1636,7 @@ mod tests {
         struct PatternOnly {
             pattern: String,
         }
-        let spec: RuleSpec = serde_yaml_ng::from_str(
+        let spec: RuleSpec = yaml_serde::from_str(
             "id: r\nkind: file_content_matches\nlevel: error\npaths: src/**\npattern: TODO\n",
         )
         .unwrap();
@@ -1695,7 +1695,7 @@ mod tests {
         ];
         for (yaml, expected) in cases {
             let spec: FixSpec =
-                serde_yaml_ng::from_str(yaml).unwrap_or_else(|e| panic!("{yaml}: {e}"));
+                yaml_serde::from_str(yaml).unwrap_or_else(|e| panic!("{yaml}: {e}"));
             assert_eq!(spec.op_name(), expected);
         }
         // The gate's SSOT must list exactly the variants op_name covers.
@@ -1717,7 +1717,7 @@ mod tests {
             #[serde(default, deserialize_with = "deserialize_fix_spec")]
             fix: Option<FixSpec>,
         }
-        let err = serde_yaml_ng::from_str::<Holder>(
+        let err = yaml_serde::from_str::<Holder>(
             "fix:\n  file_trim_trailing_whitespace: {}\n  file_append_final_newline: {}\n",
         )
         .expect_err("two op keys must be rejected");
@@ -1728,13 +1728,13 @@ mod tests {
         );
 
         // One op still parses, and an absent block stays None.
-        let one = serde_yaml_ng::from_str::<Holder>("fix:\n  file_append_final_newline: {}\n")
+        let one = yaml_serde::from_str::<Holder>("fix:\n  file_append_final_newline: {}\n")
             .expect("single op parses");
         assert_eq!(
             one.fix.as_ref().map(FixSpec::op_name),
             Some("file_append_final_newline")
         );
-        let none = serde_yaml_ng::from_str::<Holder>("version: 1\n").expect("absent parses");
+        let none = yaml_serde::from_str::<Holder>("version: 1\n").expect("absent parses");
         assert!(none.fix.is_none());
     }
 
@@ -1780,7 +1780,7 @@ mod tests {
 
     #[test]
     fn nested_rule_spec_instantiate_synthesizes_id_and_inherits_level() {
-        let nested: NestedRuleSpec = serde_yaml_ng::from_str(
+        let nested: NestedRuleSpec = yaml_serde::from_str(
             "kind: file_exists\npaths: \"{path}/README.md\"\nmessage: missing in {path}\n",
         )
         .unwrap();

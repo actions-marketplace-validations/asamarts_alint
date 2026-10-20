@@ -86,9 +86,9 @@ impl<'de> Deserialize<'de> for FactSpec {
         D: serde::Deserializer<'de>,
     {
         use serde::de::Error as _;
-        let mut map = serde_yaml_ng::Mapping::deserialize(deserializer)?;
+        let mut map = yaml_serde::Mapping::deserialize(deserializer)?;
         let id = match map.remove("id") {
-            Some(serde_yaml_ng::Value::String(id)) => id,
+            Some(yaml_serde::Value::String(id)) => id,
             Some(_) => return Err(D::Error::custom("fact `id` must be a string")),
             None => return Err(D::Error::missing_field("id")),
         };
@@ -116,7 +116,7 @@ impl<'de> Deserialize<'de> for FactSpec {
                 }
             )));
         }
-        let kind = serde_yaml_ng::from_value(serde_yaml_ng::Value::Mapping(map))
+        let kind = yaml_serde::from_value(yaml_serde::Value::Mapping(map))
             .map_err(|e| D::Error::custom(format!("fact {id:?}: {e}")))?;
         Ok(Self { id, kind })
     }
@@ -480,7 +480,7 @@ mod tests {
     }
 
     fn parse(yaml: &str) -> Vec<FactSpec> {
-        serde_yaml_ng::from_str(yaml).unwrap()
+        yaml_serde::from_str(yaml).unwrap()
     }
 
     /// `FactKind::ALL_NAMES` is the source of truth for the `facts.json`
