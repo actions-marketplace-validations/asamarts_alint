@@ -159,6 +159,7 @@ fn counted_matcher_rejects_overflowed_total() {
     );
 }
 
+#[cfg(target_os = "linux")]
 fn policy_scenario_paths(root: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let mut pending = vec![root.to_path_buf()];
@@ -179,6 +180,9 @@ fn policy_scenario_paths(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
+// Complete trace coverage is a Linux-canonical audit: explicit platform tags skip
+// unique pass/fail fixtures on other targets.
+#[cfg(target_os = "linux")]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn canonical_pass_fail_corpus_produces_complete_traces() {
