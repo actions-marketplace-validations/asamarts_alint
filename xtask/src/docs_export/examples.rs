@@ -16,7 +16,7 @@ use std::process::Command;
 use alint_core::RuleRegistry;
 use alint_testkit::{
     PolicyCommit, PolicyDocsCase, PolicyDocsExample, PolicyGit, PolicyTest, Runner, RunnerOptions,
-    TestStep, TreeNode, TreeSpec, materialize, setup_git,
+    TestStatus, TestStep, TreeNode, TreeSpec, materialize, setup_git,
 };
 use anyhow::{Context, Result, bail};
 
@@ -35,8 +35,9 @@ pub(crate) struct RenderedExample {
 /// `capture_output` controls whether the live `alint check` run is captured.
 /// Both the full export and the `--rules-only` docs-bundle bridge pass `true`,
 /// so a doc-only refresh still renders each page's `alint check` output block
-/// from a real run (ADR-0014 Phase 5). Passing `false` renders tree + config
-/// only, skipping the release build. Validation gates run in either mode.
+/// from a real run (ADR-0014 Phase 5). Passing `false` renders tree + config only,
+/// skipping the release build. Static gates run in either mode; executable validation
+/// accepts only an explicit platform skip when no live output is requested.
 pub(crate) fn render_documented(
     workspace: &Path,
     capture_output: bool,
@@ -104,8 +105,18 @@ fn render_one(
     })
     .run(test, source)
     .context("running the documented policy-test contract")?;
-    if !run.passed() {
-        bail!("documented policy test mismatched: {:#?}", run.mismatches);
+    match run.status {
+        TestStatus::Passed => {}
+        TestStatus::Skipped if bin.is_none() => {}
+        TestStatus::Skipped => {
+            bail!(
+                "cannot capture output for a platform-skipped documented policy test: {:#?}",
+                run.mismatches
+            );
+        }
+        TestStatus::Failed => {
+            bail!("documented policy test mismatched: {:#?}", run.mismatches);
+        }
     }
     let output = match bin {
         Some(bin) => Some(run_and_capture(bin, test, docs)?),
