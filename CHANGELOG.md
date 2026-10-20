@@ -105,6 +105,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   mismatch details, baseline keys, and fingerprints now redact every declared `given.env` value
   before reports or snapshots retain them.
 
+- **Platform-specific policy tests are skipped before fixture materialization again.** The public
+  runner now honors `requires-case-sensitive-fs` on default macOS as well as Windows filesystems,
+  preserving the migrated corpus harness contract instead of overwriting case-variant fixtures.
+  The integration suite also compiles warning-free under the Windows `-D warnings` gate.
+
 - **Counted policy-test matchers no longer allocate from an impossible declared cardinality.**
   Exact matching first checks the overflow-safe expected total against the observed result count,
   so a tiny test document with a platform-sized `count` produces one deterministic mismatch instead

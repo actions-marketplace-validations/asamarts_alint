@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use alint_testkit::{Error, PolicyTest, Runner, RunnerOptions};
+#[cfg(unix)]
+use alint_testkit::Error;
+use alint_testkit::{PolicyTest, Runner, RunnerOptions};
 
 fn policy_file(package: &Path, name: &str, yaml: &str) -> (PathBuf, PolicyTest) {
     let source = package.join(name);

@@ -1949,7 +1949,9 @@ fn platform_skip_reason(tags: &[String]) -> Option<String> {
     if tags.iter().any(|tag| tag == "unix-only") && !cfg!(unix) {
         return Some("requires Unix".to_string());
     }
-    if tags.iter().any(|tag| tag == "requires-case-sensitive-fs") && cfg!(windows) {
+    if tags.iter().any(|tag| tag == "requires-case-sensitive-fs")
+        && cfg!(any(target_os = "macos", target_os = "windows"))
+    {
         return Some("requires a case-sensitive filesystem".to_string());
     }
     None
