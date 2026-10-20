@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-# Post-publish install smoke (MP-M5): install alint from ONE distribution channel
-# and assert `alint --version` reports the expected version. Advisory -- run after
-# a release (or on demand) so a broken/stale publish is caught by CI, not a user.
-# Each channel retries to ride out registry / CDN propagation lag.
+# Post-publish install smoke (MP-M5): install alint from ONE distribution channel,
+# assert `alint --version` reports the expected version, and execute a fresh
+# downstream policy-test package through the installed command. Advisory -- run
+# after a release (or on demand) so a broken/stale publish is caught by CI, not a
+# user. Each channel retries to ride out registry / CDN propagation lag.
 #
 # Usage: ci/scripts/smoke-channel.sh <channel> <tag>
 #   channel: install.sh | cargo | cargo-binstall | npm | docker | homebrew | pypi
@@ -25,6 +25,7 @@ IMAGE="ghcr.io/asamarts/alint"
 DOCKER="${DOCKER:-docker}"
 RETRY_MAX="${RETRY_MAX:-6}"
 RETRY_SLEEP="${RETRY_SLEEP:-30}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Retry a command until it succeeds, to absorb post-publish propagation lag.
 retry() {
@@ -81,6 +82,7 @@ check_floating() {
 # the version (not a probe for the bundle), so a missing or unreachable bundle
 # on a new release fails the leg instead of silently downgrading it.
 FIRST_SIGNED_RELEASE="0.15.1"
+FIRST_POLICY_TEST_RELEASE="0.20.0"
 # version_ge A B: numeric vX.Y.Z comparison, A >= B.
 version_ge() {
   local IFS=.
@@ -98,6 +100,17 @@ REQUIRE_VERIFY=0
 if version_ge "$VER" "$FIRST_SIGNED_RELEASE"; then
   REQUIRE_VERIFY=1
 fi
+
+# `alint test` is part of v0.20+. Keep manual smoke dispatches usable for older
+# release tags while requiring the downstream package smoke for every release
+# that claims this public command.
+smoke_policy_test() {
+  if ! version_ge "$VER" "$FIRST_POLICY_TEST_RELEASE"; then
+    echo "  [smoke] note: ${TAG} predates policy tests (first shipped: v${FIRST_POLICY_TEST_RELEASE})"
+    return 0
+  fi
+  "$SCRIPT_DIR/smoke-policy-test.sh" "$@"
+}
 
 # The documented one-liner, as a function so TAG travels as data (env), never
 # spliced into a `bash -c` source string. For a signed release
@@ -126,11 +139,13 @@ case "$CHANNEL" in
     fi
     export PATH="${HOME}/.local/bin:${PATH}"       # install.sh's default INSTALL_DIR
     assert_version alint --version
+    smoke_policy_test alint
     ;;
   cargo)
     # Mirror the documented `cargo install alint`; --force makes a retry idempotent.
     retry cargo install alint --version "${VER}" --force
     assert_version alint --version
+    smoke_policy_test alint
     ;;
   cargo-binstall)
     # --disable-strategies compile: never silently fall back to a SOURCE build, so
@@ -138,15 +153,18 @@ case "$CHANNEL" in
     # MP-M5; binstall otherwise compiles from crates.io and exits 0, hiding it).
     retry cargo binstall --no-confirm --disable-strategies compile "alint@${VER}"
     assert_version alint --version
+    smoke_policy_test alint
     ;;
   npm)
     retry npm install -g "@asamarts/alint@${VER}"
     assert_version alint --version
+    smoke_policy_test alint
     check_floating "$(npm view "@asamarts/alint" version 2>/dev/null)"
     ;;
   docker)
     retry "$DOCKER" pull "${IMAGE}:${VER}"
     assert_version "$DOCKER" run --rm "${IMAGE}:${VER}" --version
+    smoke_policy_test --docker "$DOCKER" "${IMAGE}:${VER}"
     check_floating "$("$DOCKER" run --rm "${IMAGE}:latest" --version 2>&1 | awk '/^alint [0-9]/ { print $2; exit }')"
     ;;
   homebrew)
@@ -191,6 +209,7 @@ case "$CHANNEL" in
       hb_n=$((hb_n + 1))
     done
     assert_version alint --version
+    smoke_policy_test alint
     ;;
   pypi)
     # The Python-ecosystem entry points, exercised against the pinned version.
@@ -207,6 +226,7 @@ case "$CHANNEL" in
     python3 -m venv /tmp/alint-pypi-smoke
     retry /tmp/alint-pypi-smoke/bin/pip install --quiet "alint==${VER}"
     assert_version /tmp/alint-pypi-smoke/bin/alint --version
+    smoke_policy_test /tmp/alint-pypi-smoke/bin/alint
     # Unversioned resolve must serve VER when smoking the latest (no-op otherwise).
     check_floating "$(uvx alint --version 2>&1 | awk '/^alint [0-9]/ { print $2; exit }')"
     ;;

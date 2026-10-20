@@ -1,6 +1,6 @@
 # v0.20: Policy authoring loop
 
-Status: Accepted design (2026-10-18); P1-P7 implemented, P8 next.
+Status: Accepted design (2026-10-18); P1-P8 implemented.
 Decisions: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 (DEC-6) and [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md)
 (Phase 1b questions Q7, Q11, and Q14).
@@ -158,6 +158,10 @@ Implementation status:
   corpus gates share the bounded public discovery discriminator, while all 578 documents are
   count-pinned, parsed by `PolicyTest::from_yaml`, and executed by the public runner. Alternate
   direct deserialization of the public policy-test type has been removed.
+- **P8 complete:** user documentation, release notes, package contents, generated schemas and CLI
+  artifacts are synchronized. Every post-publish channel now executes `alint test` against a fresh
+  downstream package, while preflight, shell, packaging, advisory, and supply-chain gates cover the
+  release from source and installed artifacts.
 
 ## Cross-cutting invariants
 
@@ -226,6 +230,6 @@ v0.20 is complete only when all of the following are observed:
 
 ## Implementation handoff
 
-P1-P7 are implemented. P8 is next: close the release with the complete user-documentation and
-release-note pass, package/install acceptance, generated artifacts, cross-platform and shell
-checks, advisory review, and the full acceptance matrix.
+P1-P8 are implemented. Release acceptance is closed by the package/install policy-test smoke,
+generated-artifact and documentation gates, full workspace preflight, shell and packaging
+harnesses, and advisory and supply-chain checks.

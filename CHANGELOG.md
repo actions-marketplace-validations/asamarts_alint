@@ -75,6 +75,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   count-pinned, parsed by `PolicyTest::from_yaml`, and executed by the public runner; supplementary
   audits no longer deserialize the public test type through an unchecked YAML path.
 
+- **Post-publish distribution smoke now exercises policy-test behavior, not only version
+  metadata.** Every installed CLI channel—release tarball, crates.io source and binary installs,
+  npm, Docker, Homebrew, and PyPI—runs a fresh downstream `alint test` package and validates its
+  stable JSON report, catching package-only runtime omissions that `alint --version` cannot expose.
+
 ### Fixed
 
 - **Policy-test corpus audits now follow public discovery semantics.** The CLI, 578-document
@@ -99,6 +104,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   policy tests; explicitly named files still fail loudly. Policy-test observations, diffs,
   mismatch details, baseline keys, and fingerprints now redact every declared `given.env` value
   before reports or snapshots retain them.
+
+- **Counted policy-test matchers no longer allocate from an impossible declared cardinality.**
+  Exact matching first checks the overflow-safe expected total against the observed result count,
+  so a tiny test document with a platform-sized `count` produces one deterministic mismatch instead
+  of panicking on `Vec` capacity. Matching also reuses its traversal bitmap instead of allocating it
+  once per expectation.
 
 - **The published GitHub Actions guide now follows the post-release immutable pin.** The docs bundle
   overlays that guide from `main` after a tag is published and rejects generated output whose

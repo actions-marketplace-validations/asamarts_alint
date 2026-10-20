@@ -192,7 +192,7 @@ fn missing_default_directory_is_an_error() {
 }
 
 #[test]
-fn installed_binary_runs_directory_fixture_local_config_git_and_fix_pipeline() {
+fn workspace_binary_runs_directory_fixture_local_config_git_and_fix_pipeline() {
     let root = tempfile::tempdir().unwrap();
     write(
         root.path(),

@@ -1,11 +1,12 @@
 name: Post-publish smoke
 
 # MP-M5: advisory post-publish install smoke. Installs alint from each live
-# distribution channel and asserts `alint --version` matches the released tag, so
-# a broken or stale publish (a channel serving the wrong version, a propagation
-# gap, a de-listed package) is caught by CI rather than by a user. This is NOT a
-# release gate -- it runs AFTER publishing (dispatched by release.yml) and on a
-# weekly cron; a red run is a signal to investigate, it blocks nothing.
+# distribution channel, asserts `alint --version` matches the released tag, and
+# executes a fresh downstream policy-test package through the installed command.
+# A broken or stale publish, missing runtime dependency, or packaging-only command
+# failure is caught by CI rather than by a user. This is NOT a release gate -- it
+# runs AFTER publishing (dispatched by release.yml) and on a weekly cron; a red run
+# is a signal to investigate, it blocks nothing.
 
 on:
   workflow_dispatch:

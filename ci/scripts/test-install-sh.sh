@@ -98,36 +98,59 @@ smoke_leg() { # smoke_leg <tag> <fake installer prints Signature OK: 1|0> -> exi
   local tag=$1 sig=$2 home="$sandbox/smoke-home"
   rm -rf "$home" "$sandbox/smokebin"
   mkdir -p "$home" "$sandbox/smokebin"
+  cat > "$sandbox/smokebin/alint-stub" <<'STUB'
+#!/usr/bin/env bash
+case "${1:-}" in
+  --version)
+    echo "alint ${STUB_ALINT_VERSION:?} (stub)"
+    ;;
+  test)
+    echo invoked >> "${STUB_POLICY_LOG:?}"
+    cat <<'JSON'
+{"schema_version":1,"kind":"policy-test-report","tests":[{"status":"passed"}],"issues":[],"summary":{"selected":1,"passed":1,"failed":0,"invalid":0,"skipped":0}}
+JSON
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+STUB
+  chmod +x "$sandbox/smokebin/alint-stub"
   cat > "$sandbox/smokebin/curl" <<STUB
 #!/usr/bin/env bash
 cat <<'INSTALLER'
 echo "REQUIRE=\${ALINT_REQUIRE_VERIFY:-unset}" >> "$sandbox/smoke-req"
 if [[ "$sig" == 1 ]]; then echo "==> Signature OK (stub)"; fi
 mkdir -p "\$HOME/.local/bin"
-printf '#!/usr/bin/env bash\necho "alint %s (stub)"\n' "\${ALINT_VERSION#v}" > "\$HOME/.local/bin/alint"
-chmod +x "\$HOME/.local/bin/alint"
+cp "$sandbox/smokebin/alint-stub" "\$HOME/.local/bin/alint"
 INSTALLER
 STUB
   chmod +x "$sandbox/smokebin/curl"
   : > "$sandbox/smoke-req"
+  : > "$sandbox/smoke-policy-log"
   env -i PATH="$sandbox/smokebin:/usr/bin:/bin" HOME="$home" TMPDIR="${TMPDIR:-/tmp}" \
-    RETRY_MAX=1 RETRY_SLEEP=0 bash ci/scripts/smoke-channel.sh install.sh "$tag" > "$sandbox/smoke-out" 2>&1
+    STUB_ALINT_VERSION="${tag#v}" STUB_POLICY_LOG="$sandbox/smoke-policy-log" \
+    RETRY_MAX=1 RETRY_SLEEP=0 bash ci/scripts/smoke-channel.sh install.sh "$tag" \
+    > "$sandbox/smoke-out" 2>&1
 }
-smoke_case() { # smoke_case <label> <tag> <sig> <want: pass|fail> <want REQUIRE=...>
-  local got=pass
+smoke_case() { # smoke_case <label> <tag> <sig> <want pass|fail> <want REQUIRE> <want policy test 1|0>
+  local got=pass policy_ran=0
   smoke_leg "$2" "$3" || got=fail
-  if [[ "$got" != "$4" ]] || ! grep -qx "REQUIRE=$5" "$sandbox/smoke-req"; then
-    echo "[test-install-sh] smoke install.sh leg, $1: want $4 with REQUIRE=$5, got $got with $(cat "$sandbox/smoke-req")" >&2
+  [[ -s "$sandbox/smoke-policy-log" ]] && policy_ran=1
+  if [[ "$got" != "$4" ]] || ! grep -qx "REQUIRE=$5" "$sandbox/smoke-req" ||
+     [[ "$policy_ran" != "$6" ]]; then
+    echo "[test-install-sh] smoke install.sh leg, $1: want $4 with REQUIRE=$5 and policy-test=$6, got $got with $(cat "$sandbox/smoke-req") and policy-test=$policy_ran" >&2
     sed 's/^/    | /' "$sandbox/smoke-out" >&2
     fail=1
   fi
 }
-smoke_case "signed release, verified"           v0.17.0 1 pass 1
-smoke_case "signed release, verification absent" v0.17.0 0 fail 1
-smoke_case "first signed release is strict"      v0.15.1 0 fail 1
-smoke_case "pre-signing tag (no bundle)"         v0.15.0 0 pass 0
-smoke_case "numeric compare (0.9 < 0.15.1)"      v0.9.0  0 pass 0
-smoke_case "numeric compare (0.100 > 0.15.1)"    v0.100.0 0 fail 1
+smoke_case "signed release, verified"             v0.17.0  1 pass 1 0
+smoke_case "policy-test release, verified"        v0.20.0  1 pass 1 1
+smoke_case "signed release, verification absent"  v0.17.0  0 fail 1 0
+smoke_case "first signed release is strict"        v0.15.1  0 fail 1 0
+smoke_case "pre-signing tag (no bundle)"           v0.15.0  0 pass 0 0
+smoke_case "numeric compare (0.9 < 0.15.1)"        v0.9.0   0 pass 0 0
+smoke_case "numeric compare (0.100 > 0.15.1)"      v0.100.0 0 fail 1 0
 
 # `latest` resolution: github.com's /releases/latest redirect first (not subject
 # to the REST API's per-IP limit, which 403'd installs on shared CI runners),
