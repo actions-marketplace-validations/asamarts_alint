@@ -25,6 +25,7 @@ This directory mixes two audiences:
 | `rule-authoring.md` | **Public** (synced) | Four-step workflow every new rule kind, bundled ruleset, and alias follows. Synced to `alint.org/docs/development/rule-authoring/`. |
 | `launch-evidence.md` | **Public** (URL-referenced) | Engineering audit summary across 30 OSS case studies. Linked from `ROADMAP.md` + the launch blog post; lives only here, served via `raw.githubusercontent`. |
 | `CONFIG-AUTHORING.md` | Internal | 22-pitfall catalogue from the launch-prep validation passes (P2a + P2b). Reference material for `.alint.yml` schema, parser, and runtime-audit work. |
+| `private-macos-validation.md` | Internal | Host-agnostic runbook for native tests on privately managed macOS capacity: trusted-commit boundary, SSH/environment isolation, validation contract, privacy-safe evidence, and mandatory cleanup. |
 | `case-study-deep-analysis-log.md` | Internal | Master tracking + cross-cutting findings from the per-case-study deep analyses that fed the v0.10 rule-kind backlog. |
 | `case-study-revalidation-log.md` | Internal | Master tracker for the 2026-05-07 30-case-study revalidation pass against v0.9.17. |
 | `case-study-revalidation-batch-{1..6}.md` | Internal | Per-batch findings from the same pass (5 case studies each, alphabetical). |

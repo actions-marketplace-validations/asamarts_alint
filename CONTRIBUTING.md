@@ -79,6 +79,25 @@ Not in `preflight.sh` (slower; CI's `MSRV` job and the release preflight run
 it): `ci/scripts/msrv.sh` compiles the workspace with the exact toolchain named
 by `[workspace.package].rust-version`, so the MSRV is never hand-copied into CI.
 
+### Private native macOS validation
+
+Maintainers with access to a privately managed Mac may supplement
+`cross-platform.yml` with native tests before pushing platform-sensitive changes
+or release candidates. The host identity and connection details stay in local
+SSH configuration and MUST NOT appear in the repository, CI variables, issues,
+or logs.
+
+Only immutable, maintainer-reviewed commits may run on a personal host. Cargo
+build scripts and tests execute native code; arbitrary fork or pull-request code
+requires a disposable VM or dedicated unprivileged account with no personal
+files, credentials, unlocked Keychain items, or forwarded SSH agent. Follow the
+source-transfer, environment-isolation, test, evidence, and cleanup requirements
+in [`docs/development/private-macos-validation.md`](docs/development/private-macos-validation.md).
+
+This private run supplements rather than replaces GitHub-hosted macOS CI. Linux
+`ci/scripts/preflight.sh` remains required because it owns the Ubuntu-defined
+docs-export and generated-artifact gates.
+
 ### Dependency advisories
 
 `ci/scripts/deny.sh` (cargo-deny) and `ci/scripts/audit.sh` (cargo audit) fail
