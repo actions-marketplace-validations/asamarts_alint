@@ -52,12 +52,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Exact-path repository facts now use the lazy `FileIndex` path-to-entry index.**
-  `any_file_exists`, `all_files_exist`, and `file_content_matches` retain glob,
-  exclusion, ignore, and validation semantics without rescanning every walked file
-  for each literal fact. On the controlled 100k-file S4 fact workload this removes
-  90.4% of the incremental instruction cost; a Criterion scaling benchmark and a
-  deterministic Callgrind cell guard the linear shape. See the
-  [investigation](docs/benchmarks/investigations/2026-10-s4-literal-facts/).
+  `any_file_exists`, `all_files_exist`, and `file_content_matches` retain glob, exclusion, ignore,
+  and validation semantics without rescanning every walked file for each literal fact;
+  `count_files` now takes the same indexed path for an exact zero-or-one count. On the controlled
+  100k-file, 20-fact existence/content workload this removes 90.4% of the incremental instruction
+  cost; a Criterion scaling benchmark and a deterministic Callgrind cell guard the linear shape.
+  See the [investigation](docs/benchmarks/investigations/2026-10-s4-literal-facts/).
 
 - **The S4 benchmark workload is now revision 3.** Its Git fixture commits realistic
   version and toolchain authorities, activating all 35 rules added in revision 2;
@@ -132,8 +132,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `alint test` discovery ignores YAML without a top-level `test_version`, so config chains,
   workflows, malformed parser fixtures, and other repository-owned YAML are not misclassified as
   policy tests; explicitly named files still fail loudly. Policy-test observations, diffs,
-  mismatch details, baseline keys, and fingerprints now redact every declared `given.env` value
-  before reports or snapshots retain them.
+  mismatch details, baseline keys, fingerprints, and pre-execution capability denials now redact
+  every declared `given.env` value before reports or snapshots retain them.
 
 - **Platform-specific policy tests are skipped before fixture materialization again.** The public
   runner now honors `requires-case-sensitive-fs` on default macOS as well as Windows filesystems,
@@ -146,11 +146,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a bounded portable retry loop for the archive and checksum, covering TLS resets and similar curl
   failures that `--retry` alone does not classify as transient.
 
-- **Counted policy-test matchers no longer allocate from an impossible declared cardinality.**
-  Exact matching first checks the overflow-safe expected total against the observed result count,
-  so a tiny test document with a platform-sized `count` produces one deterministic mismatch instead
-  of panicking on `Vec` capacity. Matching also reuses its traversal bitmap instead of allocating it
-  once per expectation.
+- **Counted policy-test matchers no longer allocate from an impossible declared cardinality or
+  recurse through an unbounded augmenting path.** Exact matching first checks the overflow-safe
+  expected total against the observed result count, so a tiny test document with a platform-sized
+  `count` produces one deterministic mismatch instead of panicking on `Vec` capacity. Matching
+  reuses its traversal storage, flips augmenting paths iteratively to prevent process-stack
+  exhaustion on wide valid documents, and compiles each message regex only once per step.
+
+- **Selected-rule traces can no longer accept successful results that omit required evaluation
+  stages.** Trace completion now checks the declared stage inventory whenever a producer returns a
+  result, while retaining the intentional exemption for engine-owned terminal gate results.
 
 - **The published GitHub Actions guide now follows the post-release immutable pin.** The docs bundle
   overlays that guide from `main` after a tag is published and rejects generated output whose

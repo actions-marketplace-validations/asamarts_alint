@@ -1,4 +1,6 @@
+use super::matching::{match_counted, violation_matches};
 use super::*;
+use crate::policy_test::ViolationMatcher;
 
 #[test]
 fn observations_use_public_paths_without_changing_fingerprint_inputs() {
@@ -105,11 +107,12 @@ fn maximum_matching_handles_overlapping_matchers() {
         },
     ];
     let mut mismatches = Vec::new();
+    let regexes = HashMap::new();
     match_counted(
         &expected,
         &actual,
         |matcher| matcher.count,
-        violation_matches,
+        |matcher, observation| violation_matches(matcher, observation, &regexes),
         0,
         MismatchChannel::Violations,
         &mut mismatches,

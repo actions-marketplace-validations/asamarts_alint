@@ -361,11 +361,15 @@ fn evaluate_one(
             Ok(FactValue::Bool(true))
         }
         FactKind::CountFiles { count_files } => {
-            let scope = Scope::from_patterns(std::slice::from_ref(count_files))?;
-            let count = index
-                .files()
-                .filter(|entry| scope.matches(&entry.path, index))
-                .count();
+            let count = if let Some(path) = crate::template::literal_glob_path(count_files) {
+                usize::from(index.contains_file(Path::new(&path)))
+            } else {
+                let scope = Scope::from_patterns(std::slice::from_ref(count_files))?;
+                index
+                    .files()
+                    .filter(|entry| scope.matches(&entry.path, index))
+                    .count()
+            };
             Ok(FactValue::Int(i64::try_from(count).unwrap_or(i64::MAX)))
         }
         FactKind::FileContentMatches {
@@ -658,6 +662,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v.get("n_rs"), Some(&FactValue::Int(3)));
+    }
+
+    #[test]
+    fn count_files_preserves_exact_and_escaped_literal_semantics() {
+        let facts = parse(
+            "- id: manifest\n  count_files: Cargo.toml\n\
+             - id: route\n  count_files: \"app/[[]slug[]]/config.toml\"\n",
+        );
+        let values = evaluate_facts(
+            &facts,
+            Path::new("/"),
+            &idx(&["Cargo.toml", "app/[slug]/config.toml", "src/lib.rs"]),
+        )
+        .unwrap();
+        assert_eq!(values.get("manifest"), Some(&FactValue::Int(1)));
+        assert_eq!(values.get("route"), Some(&FactValue::Int(1)));
+
+        let missing = evaluate_facts(&facts, Path::new("/"), &idx(&["src/lib.rs"])).unwrap();
+        assert_eq!(missing.get("manifest"), Some(&FactValue::Int(0)));
+        assert_eq!(missing.get("route"), Some(&FactValue::Int(0)));
     }
 
     #[test]

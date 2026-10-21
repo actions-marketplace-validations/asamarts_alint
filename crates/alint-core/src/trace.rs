@@ -1249,11 +1249,19 @@ impl TraceRecorder {
                 "rule kind `{kind}` emitted undeclared trace stage `{stage:?}`"
             )));
         }
-        if assertion_reached {
+        let terminal_gate_result = self.stages.iter().any(|stage| {
+            stage.class == TraceStageClass::Gate
+                && matches!(
+                    stage.status,
+                    TraceStatus::Violated | TraceStatus::AnalysisFailure
+                )
+        });
+        if assertion_reached || (result.is_some() && !terminal_gate_result) {
             for required in self.meta.required_stages.iter() {
                 if !observed.contains(required) {
                     return Err(Error::internal(format!(
-                        "rule kind `{kind}` reached assertion without required trace stage `{required:?}`"
+                        "rule kind `{kind}` completed evaluation without required trace stage \
+                         `{required:?}`"
                     )));
                 }
             }
@@ -1778,6 +1786,42 @@ mod tests {
                 .to_string()
                 .contains("violation status is inconsistent")
         );
+    }
+
+    #[test]
+    fn successful_result_requires_assertion_stage() {
+        let recorder = TraceRecorder::new(TraceMeta::ASSERTION);
+        assert!(
+            recorder
+                .finish("id".into(), "kind".into(), Some(passing_result()))
+                .unwrap_err()
+                .to_string()
+                .contains("required trace stage")
+        );
+    }
+
+    #[test]
+    fn terminal_gate_result_does_not_require_evaluation_stages() {
+        let mut recorder = TraceRecorder::new(TraceMeta::SELECTION);
+        recorder
+            .record(TraceStage::new(
+                TraceStageClass::Gate,
+                "expect_matches",
+                TraceStatus::Violated,
+                TraceReason::ExpectMatchesViolated,
+            ))
+            .unwrap();
+        let result = RuleResult::new(
+            "id".into(),
+            crate::Level::Error,
+            None,
+            vec![crate::Violation::new("scope assertion failed")],
+            false,
+        );
+        let trace = recorder
+            .finish("id".into(), "kind".into(), Some(result))
+            .unwrap();
+        assert_eq!(trace.outcome, TraceStatus::Violated);
     }
 
     #[test]

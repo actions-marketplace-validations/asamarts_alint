@@ -1,25 +1,27 @@
 //! Validating, confined runner for versioned public policy tests.
 
+mod matching;
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use alint_core::{
-    AnalysisFailureKind, Applicability, Capability, Engine, FactKind, FileIndex, FixReport,
-    FixStatus, Level, Report, RuleEntry, RuleSpec, WalkOptions, walk,
+    Applicability, Capability, Engine, FactKind, FileIndex, FixReport, FixStatus, Level, Report,
+    RuleEntry, RuleSpec, WalkOptions, walk,
 };
-use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
 use tempfile::TempDir;
 
+use matching::match_step;
+
 use crate::confinement::{ConfinementError, PackageEntryKind, PackageRoot};
 use crate::error::{Error, Result};
 use crate::policy_test::{
-    AnalysisFailureMatcher, ExpectedExit, LevelMatcher, MessageMatcher, NoteMatcher, PolicyCommit,
-    PolicyGit, PolicyTest, RelatedLocationMatcher, StepExpectation, TestStep, TreeExpectationMode,
-    ViolationMatcher,
+    ExpectedExit, PolicyCommit, PolicyGit, PolicyTest, StepExpectation, TestStep,
+    TreeExpectationMode,
 };
 use crate::runner_artifacts::{
     PendingSnapshotUpdate, reconcile_snapshot, render_fix_diff, repository_files, staged_between,
@@ -344,13 +346,23 @@ impl Runner {
                 context,
             ));
         }
-        enforce_capabilities(
+        if let Err(error) = enforce_capabilities(
             context.test,
             &self.options,
             &config.rules,
             &config.facts,
             &registry,
-        )?;
+        ) {
+            return Err(match error {
+                Error::Capability(message) => Error::capability(sanitize_text(
+                    &message,
+                    context.test,
+                    context.repository,
+                    context.package.path(),
+                )),
+                other => other,
+            });
+        }
 
         let mut entries = Vec::with_capacity(config.rules.len());
         for spec in &config.rules {
@@ -867,410 +879,6 @@ fn observed_failure_key(
             right.column,
             &right.message,
         ))
-}
-
-fn match_step(index: usize, expected: &StepExpectation, actual: &StepObservation) -> Vec<Mismatch> {
-    let mut mismatches = Vec::new();
-    if expected.exit != actual.exit {
-        mismatch(
-            &mut mismatches,
-            index,
-            MismatchChannel::Exit,
-            format!("expected {:?}, got {:?}", expected.exit, actual.exit),
-        );
-    }
-    if let Some(expected) = &expected.violations {
-        match_counted(
-            expected,
-            &actual.violations,
-            |matcher| matcher.count,
-            violation_matches,
-            index,
-            MismatchChannel::Violations,
-            &mut mismatches,
-        );
-    }
-    if let Some(expected) = &expected.analysis_failures {
-        match_counted(
-            expected,
-            &actual.analysis_failures,
-            |matcher| matcher.count,
-            analysis_failure_matches,
-            index,
-            MismatchChannel::AnalysisFailures,
-            &mut mismatches,
-        );
-    }
-    if let Some(expected) = &expected.notes {
-        match_counted(
-            expected,
-            &actual.notes,
-            |matcher| matcher.count,
-            note_matches,
-            index,
-            MismatchChannel::Notes,
-            &mut mismatches,
-        );
-    }
-    exact_list(
-        expected.applied.as_deref(),
-        &actual.applied,
-        index,
-        MismatchChannel::Applied,
-        &mut mismatches,
-    );
-    exact_list(
-        expected.skipped.as_deref(),
-        &actual.skipped,
-        index,
-        MismatchChannel::Skipped,
-        &mut mismatches,
-    );
-    exact_list(
-        expected.suggested.as_deref(),
-        &actual.suggested,
-        index,
-        MismatchChannel::Suggested,
-        &mut mismatches,
-    );
-    exact_list(
-        expected.unfixable.as_deref(),
-        &actual.unfixable,
-        index,
-        MismatchChannel::Unfixable,
-        &mut mismatches,
-    );
-    if let Some(expected) = expected.non_convergent
-        && expected != actual.non_convergent
-    {
-        mismatch(
-            &mut mismatches,
-            index,
-            MismatchChannel::NonConvergent,
-            format!("expected {expected}, got {}", actual.non_convergent),
-        );
-    }
-    if let Some(expected) = &expected.diff
-        && actual.diff.as_deref() != Some(expected)
-    {
-        mismatch(
-            &mut mismatches,
-            index,
-            MismatchChannel::Diff,
-            "canonical diff differs".to_string(),
-        );
-    }
-    match_configuration_error(
-        expected
-            .configuration_error
-            .as_ref()
-            .map(|matcher| &matcher.message),
-        actual.configuration_error.as_deref(),
-        index,
-        &mut mismatches,
-    );
-    mismatches
-}
-
-fn match_configuration_error(
-    expected: Option<&MessageMatcher>,
-    actual: Option<&str>,
-    step: usize,
-    mismatches: &mut Vec<Mismatch>,
-) {
-    match (expected, actual) {
-        (Some(expected), Some(actual)) if message_matches(expected, actual) => {}
-        (Some(_), Some(_)) => mismatch(
-            mismatches,
-            step,
-            MismatchChannel::ConfigurationError,
-            "configuration error message did not match".to_string(),
-        ),
-        (Some(_), None) => mismatch(
-            mismatches,
-            step,
-            MismatchChannel::ConfigurationError,
-            "expected a configuration error, but evaluation started".to_string(),
-        ),
-        (None, _) => {}
-    }
-}
-
-fn exact_list(
-    expected: Option<&[String]>,
-    actual: &[String],
-    step: usize,
-    channel: MismatchChannel,
-    mismatches: &mut Vec<Mismatch>,
-) {
-    let Some(expected) = expected else { return };
-    let mut expected = expected.to_vec();
-    let mut actual = actual.to_vec();
-    expected.sort();
-    actual.sort();
-    if expected != actual {
-        mismatch(
-            mismatches,
-            step,
-            channel,
-            format!("expected {expected:?}, got {actual:?}"),
-        );
-    }
-}
-
-fn augment_match<E, A>(
-    expected_index: usize,
-    expected: &[&E],
-    actual: &[A],
-    matches: &impl Fn(&E, &A) -> bool,
-    seen: &mut [bool],
-    actual_to_expected: &mut [Option<usize>],
-) -> bool {
-    for actual_index in 0..actual.len() {
-        if seen[actual_index] || !matches(expected[expected_index], &actual[actual_index]) {
-            continue;
-        }
-        seen[actual_index] = true;
-        if actual_to_expected[actual_index].is_none_or(|previous| {
-            augment_match(
-                previous,
-                expected,
-                actual,
-                matches,
-                seen,
-                actual_to_expected,
-            )
-        }) {
-            actual_to_expected[actual_index] = Some(expected_index);
-            return true;
-        }
-    }
-    false
-}
-
-fn match_counted<E: std::fmt::Debug, A: std::fmt::Debug>(
-    expected: &[E],
-    actual: &[A],
-    count: impl Fn(&E) -> usize,
-    matches: impl Fn(&E, &A) -> bool,
-    step: usize,
-    channel: MismatchChannel,
-    mismatches: &mut Vec<Mismatch>,
-) {
-    let Some(expected_count) = expected
-        .iter()
-        .try_fold(0usize, |total, matcher| total.checked_add(count(matcher)))
-    else {
-        mismatch(
-            mismatches,
-            step,
-            channel,
-            format!(
-                "exact one-to-one match failed; expected count exceeds the platform limit, got {} actual item(s)",
-                actual.len()
-            ),
-        );
-        return;
-    };
-    if expected_count != actual.len() {
-        mismatch(
-            mismatches,
-            step,
-            channel,
-            format!(
-                "exact one-to-one match failed; expected count {expected_count}, got {} actual item(s)",
-                actual.len()
-            ),
-        );
-        return;
-    }
-    let expanded: Vec<&E> = expected
-        .iter()
-        .flat_map(|matcher| std::iter::repeat_n(matcher, count(matcher)))
-        .collect();
-    let mut actual_to_expected = vec![None; actual.len()];
-    let mut matched_expected = vec![false; expanded.len()];
-    let mut seen = vec![false; actual.len()];
-    for (expected_index, matched) in matched_expected.iter_mut().enumerate() {
-        seen.fill(false);
-        *matched = augment_match(
-            expected_index,
-            &expanded,
-            actual,
-            &matches,
-            &mut seen,
-            &mut actual_to_expected,
-        );
-    }
-    if matched_expected.iter().all(|matched| *matched)
-        && actual_to_expected.iter().all(Option::is_some)
-    {
-        return;
-    }
-    let unmatched_expected: Vec<_> = expanded
-        .iter()
-        .zip(&matched_expected)
-        .filter_map(|(item, matched)| (!matched).then_some(format!("{item:?}")))
-        .collect();
-    let unmatched_actual: Vec<_> = actual
-        .iter()
-        .zip(&actual_to_expected)
-        .filter_map(|(item, matched)| matched.is_none().then_some(format!("{item:?}")))
-        .collect();
-    mismatch(
-        mismatches,
-        step,
-        channel,
-        format!(
-            "exact one-to-one match failed; unmatched expectations={unmatched_expected:?}; unmatched actual={unmatched_actual:?}"
-        ),
-    );
-}
-
-fn violation_matches(expected: &ViolationMatcher, actual: &ObservedViolation) -> bool {
-    expected.rule == actual.rule
-        && expected
-            .level
-            .is_none_or(|value| level_matches(value, &actual.level))
-        && optional_eq(expected.path.as_ref(), actual.path.as_ref())
-        && expected.line.is_none_or(|value| actual.line == Some(value))
-        && expected
-            .column
-            .is_none_or(|value| actual.column == Some(value))
-        && expected
-            .end_line
-            .is_none_or(|value| actual.end_line == Some(value))
-        && expected
-            .end_column
-            .is_none_or(|value| actual.end_column == Some(value))
-        && expected
-            .message
-            .as_ref()
-            .is_none_or(|value| message_matches(value, &actual.message))
-        && expected.related.as_ref().is_none_or(|locations| {
-            locations.len() == actual.related.len()
-                && locations
-                    .iter()
-                    .zip(&actual.related)
-                    .all(|(left, right)| related_matches(left, right))
-        })
-}
-
-fn analysis_failure_matches(
-    expected: &AnalysisFailureMatcher,
-    actual: &ObservedAnalysisFailure,
-) -> bool {
-    expected.rule == actual.rule
-        && expected
-            .kind
-            .is_none_or(|value| value_name(value) == actual.kind)
-        && optional_eq(expected.path.as_ref(), actual.path.as_ref())
-        && expected.line.is_none_or(|value| actual.line == Some(value))
-        && expected
-            .column
-            .is_none_or(|value| actual.column == Some(value))
-        && expected
-            .end_line
-            .is_none_or(|value| actual.end_line == Some(value))
-        && expected
-            .end_column
-            .is_none_or(|value| actual.end_column == Some(value))
-        && expected
-            .message
-            .as_ref()
-            .is_none_or(|value| message_matches(value, &actual.message))
-}
-
-fn note_matches(expected: &NoteMatcher, actual: &ObservedNote) -> bool {
-    expected
-        .kind
-        .as_ref()
-        .is_none_or(|value| value == &actual.kind)
-        && optional_eq(expected.path.as_ref(), actual.path.as_ref())
-        && expected.line.is_none_or(|value| actual.line == Some(value))
-        && expected
-            .column
-            .is_none_or(|value| actual.column == Some(value))
-        && expected
-            .end_line
-            .is_none_or(|value| actual.end_line == Some(value))
-        && expected
-            .end_column
-            .is_none_or(|value| actual.end_column == Some(value))
-        && expected
-            .message
-            .as_ref()
-            .is_none_or(|value| message_matches(value, &actual.message))
-}
-
-fn related_matches(expected: &RelatedLocationMatcher, actual: &ObservedRelatedLocation) -> bool {
-    expected
-        .label
-        .as_ref()
-        .is_none_or(|value| value == &actual.label)
-        && expected.path == actual.path
-        && expected.line.is_none_or(|value| actual.line == Some(value))
-        && expected
-            .column
-            .is_none_or(|value| actual.column == Some(value))
-        && expected
-            .end_line
-            .is_none_or(|value| actual.end_line == Some(value))
-        && expected
-            .end_column
-            .is_none_or(|value| actual.end_column == Some(value))
-}
-
-fn message_matches(expected: &MessageMatcher, actual: &str) -> bool {
-    if let Some(exact) = &expected.exact {
-        return exact == actual;
-    }
-    expected
-        .regex
-        .as_ref()
-        .is_some_and(|source| Regex::new(source).is_ok_and(|regex| regex.is_match(actual)))
-}
-
-fn level_matches(expected: LevelMatcher, actual: &str) -> bool {
-    matches!(
-        (expected, actual),
-        (LevelMatcher::Error, "error")
-            | (LevelMatcher::Warning, "warning")
-            | (LevelMatcher::Info, "info")
-            | (LevelMatcher::Off, "off")
-    )
-}
-
-fn value_name(value: crate::policy_test::AnalysisFailureKindMatcher) -> &'static str {
-    match value {
-        crate::policy_test::AnalysisFailureKindMatcher::Evaluation => {
-            AnalysisFailureKind::Evaluation.as_str()
-        }
-        crate::policy_test::AnalysisFailureKindMatcher::Condition => {
-            AnalysisFailureKind::Condition.as_str()
-        }
-        crate::policy_test::AnalysisFailureKindMatcher::ResourceRead => {
-            AnalysisFailureKind::ResourceRead.as_str()
-        }
-        crate::policy_test::AnalysisFailureKindMatcher::ResourceParse => {
-            AnalysisFailureKind::ResourceParse.as_str()
-        }
-        crate::policy_test::AnalysisFailureKindMatcher::NestedRuleBuild => {
-            AnalysisFailureKind::NestedRuleBuild.as_str()
-        }
-    }
-}
-
-fn optional_eq<T: PartialEq>(expected: Option<&T>, actual: Option<&T>) -> bool {
-    expected.is_none_or(|value| actual == Some(value))
-}
-
-fn mismatch(mismatches: &mut Vec<Mismatch>, step: usize, channel: MismatchChannel, detail: String) {
-    mismatches.push(Mismatch {
-        step: Some(step),
-        channel,
-        detail,
-    });
 }
 
 fn enforce_capabilities(

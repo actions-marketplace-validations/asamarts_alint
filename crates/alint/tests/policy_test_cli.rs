@@ -431,10 +431,12 @@ fn duplicate_snapshot_targets_and_incompatible_globals_fail_before_execution() {
 fn spawn_requires_document_declaration_and_cli_grant_and_batch_preflight_is_non_executing() {
     let root = tempfile::tempdir().unwrap();
     let canary = root.path().join("canary");
+    let sensitive_id = "ENV_FACT_ID_DO_NOT_REPORT";
     let command_test = format!(
-        "test_version: 1\nname: command\ncapabilities:\n  spawn: true\ngiven:\n  env:\n    CANARY: {}\n  tree:\n    input.txt: \
-\"x\\n\"\n  config: |\n    version: 1\n    rules:\n      - id: command\n        kind: command\n        paths: input.txt\n        command: [\"sh\", \"-c\", \"touch \\\"$CANARY\\\"\"]\n        level: error\nwhen: [check]\nexpect:\n  - exit: success\n    violations: []\n",
-        canary.display()
+        "test_version: 1\nname: command\ncapabilities:\n  spawn: true\ngiven:\n  env:\n    CANARY: {}\n    FACT_ID: {}\n  tree:\n    input.txt: \
+\"x\\n\"\n  config: |\n    version: 1\n    facts:\n      - id: \"{{{{env.FACT_ID}}}}\"\n        custom:\n          argv: [\"sh\", \"-c\", \"printf ok\"]\n    rules:\n      - id: command\n        kind: command\n        paths: input.txt\n        command: [\"sh\", \"-c\", \"touch \\\"$CANARY\\\"\"]\n        level: error\nwhen: [check]\nexpect:\n  - exit: success\n    violations: []\n",
+        canary.display(),
+        sensitive_id
     );
     write(root.path(), "alint-tests/a-command.yml", &command_test);
     let denied = run(root.path(), &["test", "--format", "json"]);
@@ -442,6 +444,12 @@ fn spawn_requires_document_declaration_and_cli_grant_and_batch_preflight_is_non_
     assert!(!canary.exists(), "command ran without the CLI grant");
     let denied_report: serde_json::Value = serde_json::from_slice(&denied.stdout).unwrap();
     assert_eq!(denied_report["tests"][0]["issues"][0]["code"], "capability");
+    let denied_stdout = String::from_utf8_lossy(&denied.stdout);
+    assert!(
+        !denied_stdout.contains(sensitive_id),
+        "capability diagnostic leaked an environment-derived fact id"
+    );
+    assert!(denied_stdout.contains("<redacted:"), "{denied_stdout}");
 
     write(
         root.path(),
