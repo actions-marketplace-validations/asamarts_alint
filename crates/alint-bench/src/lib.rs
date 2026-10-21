@@ -8,4 +8,6 @@
 //! driver reuses [`tree::generate_tree`] to materialise scaling-curve trees
 //! before shelling out to `hyperfine`.
 
+#[doc(hidden)]
+pub mod fact_fixture;
 pub mod tree;

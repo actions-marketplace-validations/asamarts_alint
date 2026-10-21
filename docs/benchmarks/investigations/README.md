@@ -37,6 +37,15 @@ Each investigation directory ships:
 
 ## Existing investigations
 
+### [`2026-10-s4-literal-facts/`](2026-10-s4-literal-facts/)
+
+The apparent v0.18.4 → v0.19.0 S4 regression combined an unlabeled workload
+reset (50 → 85 resolved rules) with a real O(facts × files) cost: 20 absent
+exact-path facts each scanned the full index. A shared path-to-entry index
+removes 90.44% of the incremental 100k-file instruction cost; S4 r3 activates
+the intended version/toolchain rules, and benchmark history now displays
+workload revisions and reset boundaries.
+
 ### [`2026-10-v0.18.3-changed-mode/`](2026-10-v0.18.3-changed-mode/)
 
 The v0.18.3 release bench failed the regression gate on S2 1m `changed` (+16%): every

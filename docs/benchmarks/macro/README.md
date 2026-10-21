@@ -38,12 +38,14 @@ counts come from `facts.json`'s `bench_scenario_rule_counts`.
 | **S1** | 16 | Layout and path (walk-bound): filename class, existence / absence, path metadata, and a `scope_filter` shape. Walker + `GlobSet` with little or no content read, the cheapest path. | `ls-lint`, `shell` | old S1 / S10 + the layout half of S2 / S4 |
 | **S2** | 20 | Per-file content: the 13 content kinds + forbidden-content patterns + `ordered_block` / `import_gate` / `xml_path_*` over `**/*.rs` (plus one `.csproj` overlay). The per-file dispatch fan-out. | `shell`, `repolinter` | old S2 / S5 / S6 / S12 |
 | **S3** | 16 | Cross-file, relational and graph: `pair` / `unique_by` / the `for_each_*` family / registry / `cross_file` / `pair_hash`, three `file_graph` build-and-traverse passes, and one single-shot command spawn. The heaviest scenario. | — | old S7 / S11 / S13 / S14 |
-| **S4** | 85 (r2) | Workspace bundle (realistic; release anchor): `extends` the `oss-baseline` + `rust` + `node` + `python` + `monorepo` + `cargo-workspace` + `versioning` + `toolchain-pins` rulesets over a POLYGLOT + GIT tree, `nested_configs` on, with the two git-aware rules inline. Revision 1 through v0.18.4 had 50 rules and omitted the final two bundles; compare timings only within one workload revision. | — | old S3 / S8 / S9 |
+| **S4** | 85 (r3) | Workspace bundle (realistic; release anchor): `extends` the `oss-baseline` + `rust` + `node` + `python` + `monorepo` + `cargo-workspace` + `versioning` + `toolchain-pins` rulesets over a POLYGLOT + GIT tree, `nested_configs` on, with the two git-aware rules inline. Revision 1 through v0.18.4 had 50 rules; revision 2 in v0.19.0 resolved 85 but left the 35 version/toolchain rules inactive; revision 3 commits realistic anchors, making 23/24 facts true and 82/85 rules active. Compare timings only within one workload revision. | — | old S3 / S8 / S9 |
 | **SFIX** | 24 fix ops | Auto-fix (dedicated): `alint fix --unsafe-fixes --dry-run` over all 24 non-spawn fix ops (`FixSpec::ALL_OP_NAMES` minus the spawning ops) on the planted `sfix/` fixture. Runs under `fix` mode only. | — | old S5 (4-op fix pass) + the deterministic `sfix_trim` |
 
 S2 / S3 / SFIX each plant a deterministic fixture overlay
-(`Scenario::setup_overlay`); S1 / S4 need none. S4 is the only scenario
-that `requires_polyglot_tree` + `requires_git_repo`.
+(`Scenario::setup_overlay`); S1 needs none. S4 is the only scenario
+that `requires_polyglot_tree` + `requires_git_repo`; its generator commits the
+root version/toolchain anchors before timing so full and changed modes see the
+same policy inputs.
 
 ## Tool matrix
 

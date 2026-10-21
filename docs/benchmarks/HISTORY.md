@@ -25,7 +25,9 @@ Each scenario gets its own section with:
 1. A one-paragraph overview of what dispatch shape the scenario stresses
    and which class of regression it catches.
 2. A table per mode (`full` and `changed`) with rows = version (newest
-   first), columns = size (1k / 10k / 100k / 1M). Cells are
+   first), an explicit semantic workload revision, and columns = size
+   (1k / 10k / 100k / 1M). A bold `rN ← reset from rM` label marks the
+   newer side of every incomparable workload boundary. Timing cells are
    `mean ± stddev`, formatted in ms below 1 s and seconds above.
 3. `—` means the version was not measured at that size.
    `n/a` means the scenario didn't exist at the tag.
@@ -42,30 +44,30 @@ before merging — see [`../../RELEASING.md`](../../RELEASING.md).
 ## Cross-version headline trajectory
 
 1M/full cells across all four check scenarios. S4 (workspace bundle) is the
-realistic-monorepo release anchor every publish captures; its workload revision
-changed from 50 to 85 resolved rules in v0.19.0, so its timings are comparable
-only within one revision. S3 is the heaviest, graph-dominated scenario; S1/S2
-track the walk-bound and per-file-content paths.
+realistic-monorepo release anchor every publish captures. Its explicit workload
+column marks revision resets; timings on opposite sides of a reset are
+incomparable. S3 is the heaviest, graph-dominated scenario; S1/S2 track the
+walk-bound and per-file-content paths.
 
-| Version | Date | 1M S1 full | 1M S2 full | 1M S3 full | 1M S4 full | Headline change |
-|---|---|---:|---:|---:|---:|---|
-| **v0.19.0** | 2026-10-18 | 4.11 s ± 0.03 | 18.80 s ± 0.12 | 475.6 s ± 3.6 | 18.73 s ± 0.66 | General-linter phase 0/1a makes the rule registry authoritative for capabilities and generated schemas, fails incomplete analysis loudly, preserves source relationships and duplicate structured rows, and adds seven standalone policy kinds plus opt-in versioning and toolchain bundles. |
-| v0.18.4 | 2026-10-15 | 4.01 s ± 0.07 | 18.38 s ± 0.04 | 475.2 s ± 2.0 | 16.17 s ± 0.03 | A performance and correctness patch. |
-| v0.18.2 | 2026-10-13 | 4.02 s ± 0.03 | 18.43 s ± 0.04 | 474.8 s ± 1.2 | 16.28 s ± 0.10 | A security and correctness patch: alint's terminal output now escapes every invisible character its own rules flag, `.env` parsing and editing moves to the new `adotenv` crate (fixing a `set_value` edit that silently never applied), and a leading BOM no longer shifts columns or widths. |
-| v0.18.1 | 2026-10-12 | 4.12 s ± 0.06 | 18.12 s ± 0.02 | 475.3 s ± 1.3 | 16.07 s ± 0.02 | A performance and installer patch. |
-| v0.18.0 | 2026-10-11 | 4.03 s ± 0.08 | 19.51 s ± 0.07 | 475.1 s ± 1.7 | 16.60 s ± 0.01 | A security and correctness release from a whole-repository audit and an adversarial re-review of its fixes. |
-| v0.17.0 | 2026-10-01 | 4.07 s ± 0.05 | 18.75 s ± 0.06 | 475.3 s ± 3.0 | 16.56 s ± 0.23 | This release adds `alint fix`, an auto-fix engine that applies or suggests edits across 26 fix operations. |
-| v0.16.0 | 2026-09-02 | 4.05 s ± 0.07 | 18.33 s ± 0.03 | 474.7 s ± 0.8 | 16.46 s ± 0.17 | This release completes the config-format coverage arc and hardens every config parser against crafted-file denial-of-service. |
-| v0.15.0 | 2026-08-16 | 4.18 s ± 0.09 | 18.51 s ± 0.08 | 474.4 s ± 1.4 | 16.47 s ± 0.04 | v0.15 makes rules legible and monorepos first-class. |
-| v0.14.2 | 2026-08-06 | 4.13 s ± 0.05 | 19.10 s ± 0.41 | 473.6 s ± 1.5 | 16.34 s ± 0.01 | A fixes-and-hardening patch on top of 0.14.1. |
-| v0.14.1 | 2026-07-24 | 4.22 s ± 0.09 | 21.40 s ± 3.62 | 473.7 s ± 2.2 | 16.44 s ± 0.04 | A performance patch. |
-| v0.14.0 | 2026-07-18 | 4.14 s ± 0.05 | 23.01 s ± 3.17 | 477.0 s ± 0.6 | 18.15 s ± 0.72 | The adoption release. **Baseline mode** (`alint baseline` + `alint check --baseline`) grandfathers a repo's existing violations behind a content-fingerprinted snapshot, so `alint check` reports and gates only on *new* findings — alint becomes a blocking merge gate on an established codebase without a flag-day cleanup, and for SARIF the suppressed findings are *marked, not deleted*, so GitHub Code Scanning dismisses them instead of flapping fixed-then-reopened. |
-| v0.13.0 | 2026-06-17 | 4.14 s ± 0.05 | 25.04 s ± 1.53 | 486.5 s ± 2.0 | 19.26 s ± 0.46 | This release turns the documented surface into generated, drift-proof contracts. |
-| v0.12.0 | 2026-06-07 | 4.61 s ± 0.40 | 25.44 s ± 2.67 | 488.6 s ± 1.5 | 21.99 s ± 0.65 | The case-study-driven rule-kind expansion, paired with a security cycle that hardens path handling into a real boundary. |
-| v0.11.0 | 2026-05-28 | 4.27 s ± 0.15 | 26.53 s ± 1.19 | n/a | 23.38 s ± 0.18 | The LSP + editor-integration release. |
-| v0.10.2 | 2026-05-21 | 4.07 s ± 0.08 | 17.93 s ± 0.40 | n/a | 15.82 s ± 0.24 | Targeted follow-up to v0.10.1. |
-| v0.10.1 | 2026-05-20 | 4.03 s ± 0.04 | 17.64 s ± 0.04 | n/a | 15.96 s ± 0.03 | Small post-release follow-up to v0.10.0. |
-| v0.10.0 | 2026-05-20 | 4.06 s ± 0.08 | 17.75 s ± 0.02 | n/a | 16.03 s ± 0.05 | The "case-study coverage push" minor. |
+| Version | Date | 1M S1 full | 1M S2 full | 1M S3 full | S4 workload | 1M S4 full | Headline change |
+|---|---|---:|---:|---:|---|---:|---|
+| **v0.19.0** | 2026-10-18 | 4.11 s ± 0.03 | 18.80 s ± 0.12 | 475.6 s ± 3.6 | **r2 ← reset from r1** | 18.73 s ± 0.66 | General-linter phase 0/1a makes the rule registry authoritative for capabilities and generated schemas, fails incomplete analysis loudly, preserves source relationships and duplicate structured rows, and adds seven standalone policy kinds plus opt-in versioning and toolchain bundles. |
+| v0.18.4 | 2026-10-15 | 4.01 s ± 0.07 | 18.38 s ± 0.04 | 475.2 s ± 2.0 | r1 | 16.17 s ± 0.03 | A performance and correctness patch. |
+| v0.18.2 | 2026-10-13 | 4.02 s ± 0.03 | 18.43 s ± 0.04 | 474.8 s ± 1.2 | r1 | 16.28 s ± 0.10 | A security and correctness patch: alint's terminal output now escapes every invisible character its own rules flag, `.env` parsing and editing moves to the new `adotenv` crate (fixing a `set_value` edit that silently never applied), and a leading BOM no longer shifts columns or widths. |
+| v0.18.1 | 2026-10-12 | 4.12 s ± 0.06 | 18.12 s ± 0.02 | 475.3 s ± 1.3 | r1 | 16.07 s ± 0.02 | A performance and installer patch. |
+| v0.18.0 | 2026-10-11 | 4.03 s ± 0.08 | 19.51 s ± 0.07 | 475.1 s ± 1.7 | r1 | 16.60 s ± 0.01 | A security and correctness release from a whole-repository audit and an adversarial re-review of its fixes. |
+| v0.17.0 | 2026-10-01 | 4.07 s ± 0.05 | 18.75 s ± 0.06 | 475.3 s ± 3.0 | r1 | 16.56 s ± 0.23 | This release adds `alint fix`, an auto-fix engine that applies or suggests edits across 26 fix operations. |
+| v0.16.0 | 2026-09-02 | 4.05 s ± 0.07 | 18.33 s ± 0.03 | 474.7 s ± 0.8 | r1 | 16.46 s ± 0.17 | This release completes the config-format coverage arc and hardens every config parser against crafted-file denial-of-service. |
+| v0.15.0 | 2026-08-16 | 4.18 s ± 0.09 | 18.51 s ± 0.08 | 474.4 s ± 1.4 | r1 | 16.47 s ± 0.04 | v0.15 makes rules legible and monorepos first-class. |
+| v0.14.2 | 2026-08-06 | 4.13 s ± 0.05 | 19.10 s ± 0.41 | 473.6 s ± 1.5 | r1 | 16.34 s ± 0.01 | A fixes-and-hardening patch on top of 0.14.1. |
+| v0.14.1 | 2026-07-24 | 4.22 s ± 0.09 | 21.40 s ± 3.62 | 473.7 s ± 2.2 | r1 | 16.44 s ± 0.04 | A performance patch. |
+| v0.14.0 | 2026-07-18 | 4.14 s ± 0.05 | 23.01 s ± 3.17 | 477.0 s ± 0.6 | r1 | 18.15 s ± 0.72 | The adoption release. **Baseline mode** (`alint baseline` + `alint check --baseline`) grandfathers a repo's existing violations behind a content-fingerprinted snapshot, so `alint check` reports and gates only on *new* findings — alint becomes a blocking merge gate on an established codebase without a flag-day cleanup, and for SARIF the suppressed findings are *marked, not deleted*, so GitHub Code Scanning dismisses them instead of flapping fixed-then-reopened. |
+| v0.13.0 | 2026-06-17 | 4.14 s ± 0.05 | 25.04 s ± 1.53 | 486.5 s ± 2.0 | r1 | 19.26 s ± 0.46 | This release turns the documented surface into generated, drift-proof contracts. |
+| v0.12.0 | 2026-06-07 | 4.61 s ± 0.40 | 25.44 s ± 2.67 | 488.6 s ± 1.5 | r1 | 21.99 s ± 0.65 | The case-study-driven rule-kind expansion, paired with a security cycle that hardens path handling into a real boundary. |
+| v0.11.0 | 2026-05-28 | 4.27 s ± 0.15 | 26.53 s ± 1.19 | n/a | r1 | 23.38 s ± 0.18 | The LSP + editor-integration release. |
+| v0.10.2 | 2026-05-21 | 4.07 s ± 0.08 | 17.93 s ± 0.40 | n/a | r1 | 15.82 s ± 0.24 | Targeted follow-up to v0.10.1. |
+| v0.10.1 | 2026-05-20 | 4.03 s ± 0.04 | 17.64 s ± 0.04 | n/a | r1 | 15.96 s ± 0.03 | Small post-release follow-up to v0.10.0. |
+| v0.10.0 | 2026-05-20 | 4.06 s ± 0.08 | 17.75 s ± 0.02 | n/a | r1 | 16.03 s ± 0.05 | The "case-study coverage push" minor. |
 
 Pre-consolidation history (the 14-scenario bench-host series v0.10.0-v0.16.0, and
 the retired 3900X series before it) lives in
@@ -80,47 +82,47 @@ Walker + `GlobSet` + path/metadata rules with little or no content read — the 
 
 ### S1 — full
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 11 ms ± 1 | 44 ms ± 2 | 394 ms ± 12 | 4.11 s ± 0.03 |
-| v0.18.4 | 10 ms ± 1 | 44 ms ± 3 | 385 ms ± 9 | 4.01 s ± 0.07 |
-| v0.18.2 | 10 ms ± 1 | 44 ms ± 2 | 386 ms ± 6 | 4.02 s ± 0.03 |
-| v0.18.1 | 10 ms ± 1 | 45 ms ± 2 | 403 ms ± 16 | 4.12 s ± 0.06 |
-| v0.18.0 | 10 ms ± 1 | 44 ms ± 1 | 377 ms ± 6 | 4.03 s ± 0.08 |
-| v0.17.0 | 10 ms ± 1 | 44 ms ± 2 | 391 ms ± 12 | 4.07 s ± 0.05 |
-| v0.16.0 | 10 ms ± 1 | 44 ms ± 2 | 384 ms ± 9 | 4.05 s ± 0.07 |
-| v0.15.0 | 11 ms ± 1 | 45 ms ± 2 | 394 ms ± 10 | 4.18 s ± 0.09 |
-| v0.14.2 | 11 ms ± 1 | 45 ms ± 2 | 389 ms ± 10 | 4.13 s ± 0.05 |
-| v0.14.1 | 11 ms ± 1 | 44 ms ± 3 | 387 ms ± 10 | 4.22 s ± 0.09 |
-| v0.14.0 | 11 ms ± 1 | 44 ms ± 2 | 390 ms ± 14 | 4.14 s ± 0.05 |
-| v0.13.0 | 11 ms ± 1 | 45 ms ± 2 | 383 ms ± 9 | 4.14 s ± 0.05 |
-| v0.12.0 | 10 ms ± 1 | 44 ms ± 3 | 391 ms ± 10 | 4.61 s ± 0.40 |
-| v0.11.0 | 10 ms ± 1 | 45 ms ± 1 | 393 ms ± 13 | 4.27 s ± 0.15 |
-| v0.10.2 | 9 ms ± 1 | 43 ms ± 3 | 384 ms ± 7 | 4.07 s ± 0.08 |
-| v0.10.1 | 9 ms ± 0 | 42 ms ± 2 | 383 ms ± 11 | 4.03 s ± 0.04 |
-| v0.10.0 | 10 ms ± 1 | 43 ms ± 2 | 382 ms ± 12 | 4.06 s ± 0.08 |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | r1 | 11 ms ± 1 | 44 ms ± 2 | 394 ms ± 12 | 4.11 s ± 0.03 |
+| v0.18.4 | r1 | 10 ms ± 1 | 44 ms ± 3 | 385 ms ± 9 | 4.01 s ± 0.07 |
+| v0.18.2 | r1 | 10 ms ± 1 | 44 ms ± 2 | 386 ms ± 6 | 4.02 s ± 0.03 |
+| v0.18.1 | r1 | 10 ms ± 1 | 45 ms ± 2 | 403 ms ± 16 | 4.12 s ± 0.06 |
+| v0.18.0 | r1 | 10 ms ± 1 | 44 ms ± 1 | 377 ms ± 6 | 4.03 s ± 0.08 |
+| v0.17.0 | r1 | 10 ms ± 1 | 44 ms ± 2 | 391 ms ± 12 | 4.07 s ± 0.05 |
+| v0.16.0 | r1 | 10 ms ± 1 | 44 ms ± 2 | 384 ms ± 9 | 4.05 s ± 0.07 |
+| v0.15.0 | r1 | 11 ms ± 1 | 45 ms ± 2 | 394 ms ± 10 | 4.18 s ± 0.09 |
+| v0.14.2 | r1 | 11 ms ± 1 | 45 ms ± 2 | 389 ms ± 10 | 4.13 s ± 0.05 |
+| v0.14.1 | r1 | 11 ms ± 1 | 44 ms ± 3 | 387 ms ± 10 | 4.22 s ± 0.09 |
+| v0.14.0 | r1 | 11 ms ± 1 | 44 ms ± 2 | 390 ms ± 14 | 4.14 s ± 0.05 |
+| v0.13.0 | r1 | 11 ms ± 1 | 45 ms ± 2 | 383 ms ± 9 | 4.14 s ± 0.05 |
+| v0.12.0 | r1 | 10 ms ± 1 | 44 ms ± 3 | 391 ms ± 10 | 4.61 s ± 0.40 |
+| v0.11.0 | r1 | 10 ms ± 1 | 45 ms ± 1 | 393 ms ± 13 | 4.27 s ± 0.15 |
+| v0.10.2 | r1 | 9 ms ± 1 | 43 ms ± 3 | 384 ms ± 7 | 4.07 s ± 0.08 |
+| v0.10.1 | r1 | 9 ms ± 0 | 42 ms ± 2 | 383 ms ± 11 | 4.03 s ± 0.04 |
+| v0.10.0 | r1 | 10 ms ± 1 | 43 ms ± 2 | 382 ms ± 12 | 4.06 s ± 0.08 |
 
 ### S1 — changed
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 13 ms ± 1 | 54 ms ± 2 | 459 ms ± 5 | 5.01 s ± 0.07 |
-| v0.18.4 | 21 ms ± 1 | 53 ms ± 1 | 448 ms ± 12 | 4.92 s ± 0.01 |
-| v0.18.2 | 20 ms ± 1 | 52 ms ± 1 | 444 ms ± 7 | 4.92 s ± 0.01 |
-| v0.18.1 | 20 ms ± 1 | 51 ms ± 1 | 446 ms ± 8 | 4.92 s ± 0.01 |
-| v0.18.0 | 14 ms ± 1 | 54 ms ± 1 | 447 ms ± 9 | 4.96 s ± 0.01 |
-| v0.17.0 | 12 ms ± 1 | 51 ms ± 1 | 440 ms ± 6 | 4.90 s ± 0.01 |
-| v0.16.0 | 20 ms ± 1 | 52 ms ± 1 | 446 ms ± 11 | 4.90 s ± 0.01 |
-| v0.15.0 | 13 ms ± 1 | 52 ms ± 1 | 448 ms ± 11 | 4.97 s ± 0.07 |
-| v0.14.2 | 13 ms ± 1 | 49 ms ± 0 | 415 ms ± 8 | 4.39 s ± 0.02 |
-| v0.14.1 | 21 ms ± 1 | 49 ms ± 1 | 416 ms ± 10 | 4.40 s ± 0.03 |
-| v0.14.0 | 22 ms ± 1 | 49 ms ± 1 | 420 ms ± 9 | 4.43 s ± 0.02 |
-| v0.13.0 | 13 ms ± 1 | 49 ms ± 1 | 419 ms ± 7 | 4.41 s ± 0.01 |
-| v0.12.0 | 13 ms ± 1 | 48 ms ± 1 | 419 ms ± 7 | 4.45 s ± 0.09 |
-| v0.11.0 | 20 ms ± 1 | 49 ms ± 1 | 414 ms ± 8 | 4.60 s ± 0.16 |
-| v0.10.2 | 20 ms ± 1 | 50 ms ± 3 | 415 ms ± 5 | 4.39 s ± 0.08 |
-| v0.10.1 | 19 ms ± 1 | 48 ms ± 1 | 418 ms ± 9 | 4.33 s ± 0.01 |
-| v0.10.0 | 19 ms ± 1 | 48 ms ± 1 | 418 ms ± 8 | 4.35 s ± 0.02 |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | r1 | 13 ms ± 1 | 54 ms ± 2 | 459 ms ± 5 | 5.01 s ± 0.07 |
+| v0.18.4 | r1 | 21 ms ± 1 | 53 ms ± 1 | 448 ms ± 12 | 4.92 s ± 0.01 |
+| v0.18.2 | r1 | 20 ms ± 1 | 52 ms ± 1 | 444 ms ± 7 | 4.92 s ± 0.01 |
+| v0.18.1 | r1 | 20 ms ± 1 | 51 ms ± 1 | 446 ms ± 8 | 4.92 s ± 0.01 |
+| v0.18.0 | r1 | 14 ms ± 1 | 54 ms ± 1 | 447 ms ± 9 | 4.96 s ± 0.01 |
+| v0.17.0 | r1 | 12 ms ± 1 | 51 ms ± 1 | 440 ms ± 6 | 4.90 s ± 0.01 |
+| v0.16.0 | r1 | 20 ms ± 1 | 52 ms ± 1 | 446 ms ± 11 | 4.90 s ± 0.01 |
+| v0.15.0 | r1 | 13 ms ± 1 | 52 ms ± 1 | 448 ms ± 11 | 4.97 s ± 0.07 |
+| v0.14.2 | r1 | 13 ms ± 1 | 49 ms ± 0 | 415 ms ± 8 | 4.39 s ± 0.02 |
+| v0.14.1 | r1 | 21 ms ± 1 | 49 ms ± 1 | 416 ms ± 10 | 4.40 s ± 0.03 |
+| v0.14.0 | r1 | 22 ms ± 1 | 49 ms ± 1 | 420 ms ± 9 | 4.43 s ± 0.02 |
+| v0.13.0 | r1 | 13 ms ± 1 | 49 ms ± 1 | 419 ms ± 7 | 4.41 s ± 0.01 |
+| v0.12.0 | r1 | 13 ms ± 1 | 48 ms ± 1 | 419 ms ± 7 | 4.45 s ± 0.09 |
+| v0.11.0 | r1 | 20 ms ± 1 | 49 ms ± 1 | 414 ms ± 8 | 4.60 s ± 0.16 |
+| v0.10.2 | r1 | 20 ms ± 1 | 50 ms ± 3 | 415 ms ± 5 | 4.39 s ± 0.08 |
+| v0.10.1 | r1 | 19 ms ± 1 | 48 ms ± 1 | 418 ms ± 9 | 4.33 s ± 0.01 |
+| v0.10.0 | r1 | 19 ms ± 1 | 48 ms ± 1 | 418 ms ± 8 | 4.35 s ± 0.02 |
 
 ## S2 — Per-file content
 
@@ -128,47 +130,47 @@ Per-file dispatch fan-out: every `**/*.rs` file is read once and hit by the whol
 
 ### S2 — full
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 24 ms ± 1 | 178 ms ± 6 | 1.81 s ± 0.06 | 18.80 s ± 0.12 |
-| v0.18.4 | 24 ms ± 1 | 174 ms ± 5 | 1.75 s ± 0.04 | 18.38 s ± 0.04 |
-| v0.18.2 | 23 ms ± 1 | 171 ms ± 1 | 1.74 s ± 0.01 | 18.43 s ± 0.04 |
-| v0.18.1 | 23 ms ± 1 | 167 ms ± 1 | 1.73 s ± 0.05 | 18.12 s ± 0.02 |
-| v0.18.0 | 24 ms ± 1 | 184 ms ± 5 | 1.87 s ± 0.04 | 19.51 s ± 0.07 |
-| v0.17.0 | 23 ms ± 1 | 173 ms ± 2 | 1.77 s ± 0.00 | 18.75 s ± 0.06 |
-| v0.16.0 | 23 ms ± 2 | 170 ms ± 3 | 1.74 s ± 0.01 | 18.33 s ± 0.03 |
-| v0.15.0 | 23 ms ± 1 | 172 ms ± 1 | 1.74 s ± 0.01 | 18.51 s ± 0.08 |
-| v0.14.2 | 23 ms ± 1 | 171 ms ± 2 | 1.73 s ± 0.01 | 19.10 s ± 0.41 |
-| v0.14.1 | 24 ms ± 1 | 168 ms ± 1 | 1.72 s ± 0.00 | 21.40 s ± 3.62 |
-| v0.14.0 | 25 ms ± 1 | 174 ms ± 1 | 1.78 s ± 0.01 | 23.01 s ± 3.17 |
-| v0.13.0 | 23 ms ± 1 | 162 ms ± 1 | 1.66 s ± 0.00 | 25.04 s ± 1.53 |
-| v0.12.0 | 23 ms ± 1 | 162 ms ± 1 | 1.66 s ± 0.00 | 25.44 s ± 2.67 |
-| v0.11.0 | 23 ms ± 1 | 162 ms ± 1 | 1.66 s ± 0.00 | 26.53 s ± 1.19 |
-| v0.10.2 | 22 ms ± 1 | 167 ms ± 4 | 1.71 s ± 0.06 | 17.93 s ± 0.40 |
-| v0.10.1 | 22 ms ± 1 | 161 ms ± 1 | 1.66 s ± 0.00 | 17.64 s ± 0.04 |
-| v0.10.0 | 22 ms ± 1 | 162 ms ± 1 | 1.67 s ± 0.02 | 17.75 s ± 0.02 |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | r1 | 24 ms ± 1 | 178 ms ± 6 | 1.81 s ± 0.06 | 18.80 s ± 0.12 |
+| v0.18.4 | r1 | 24 ms ± 1 | 174 ms ± 5 | 1.75 s ± 0.04 | 18.38 s ± 0.04 |
+| v0.18.2 | r1 | 23 ms ± 1 | 171 ms ± 1 | 1.74 s ± 0.01 | 18.43 s ± 0.04 |
+| v0.18.1 | r1 | 23 ms ± 1 | 167 ms ± 1 | 1.73 s ± 0.05 | 18.12 s ± 0.02 |
+| v0.18.0 | r1 | 24 ms ± 1 | 184 ms ± 5 | 1.87 s ± 0.04 | 19.51 s ± 0.07 |
+| v0.17.0 | r1 | 23 ms ± 1 | 173 ms ± 2 | 1.77 s ± 0.00 | 18.75 s ± 0.06 |
+| v0.16.0 | r1 | 23 ms ± 2 | 170 ms ± 3 | 1.74 s ± 0.01 | 18.33 s ± 0.03 |
+| v0.15.0 | r1 | 23 ms ± 1 | 172 ms ± 1 | 1.74 s ± 0.01 | 18.51 s ± 0.08 |
+| v0.14.2 | r1 | 23 ms ± 1 | 171 ms ± 2 | 1.73 s ± 0.01 | 19.10 s ± 0.41 |
+| v0.14.1 | r1 | 24 ms ± 1 | 168 ms ± 1 | 1.72 s ± 0.00 | 21.40 s ± 3.62 |
+| v0.14.0 | r1 | 25 ms ± 1 | 174 ms ± 1 | 1.78 s ± 0.01 | 23.01 s ± 3.17 |
+| v0.13.0 | r1 | 23 ms ± 1 | 162 ms ± 1 | 1.66 s ± 0.00 | 25.04 s ± 1.53 |
+| v0.12.0 | r1 | 23 ms ± 1 | 162 ms ± 1 | 1.66 s ± 0.00 | 25.44 s ± 2.67 |
+| v0.11.0 | r1 | 23 ms ± 1 | 162 ms ± 1 | 1.66 s ± 0.00 | 26.53 s ± 1.19 |
+| v0.10.2 | r1 | 22 ms ± 1 | 167 ms ± 4 | 1.71 s ± 0.06 | 17.93 s ± 0.40 |
+| v0.10.1 | r1 | 22 ms ± 1 | 161 ms ± 1 | 1.66 s ± 0.00 | 17.64 s ± 0.04 |
+| v0.10.0 | r1 | 22 ms ± 1 | 162 ms ± 1 | 1.67 s ± 0.02 | 17.75 s ± 0.02 |
 
 ### S2 — changed
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 15 ms ± 1 | 61 ms ± 1 | 492 ms ± 1 | 5.21 s ± 0.01 |
-| v0.18.4 | 23 ms ± 1 | 59 ms ± 1 | 503 ms ± 9 | 5.14 s ± 0.01 |
-| v0.18.2 | 22 ms ± 1 | 58 ms ± 1 | 490 ms ± 3 | 5.16 s ± 0.01 |
-| v0.18.1 | 23 ms ± 2 | 58 ms ± 1 | 500 ms ± 8 | 5.14 s ± 0.01 |
-| v0.18.0 | 16 ms ± 1 | 62 ms ± 2 | 521 ms ± 11 | 5.33 s ± 0.01 |
-| v0.17.0 | 15 ms ± 1 | 58 ms ± 1 | 494 ms ± 2 | 5.20 s ± 0.01 |
-| v0.16.0 | 23 ms ± 1 | 59 ms ± 2 | 500 ms ± 10 | 5.17 s ± 0.01 |
-| v0.15.0 | 16 ms ± 1 | 58 ms ± 1 | 490 ms ± 1 | 5.18 s ± 0.00 |
-| v0.14.2 | 16 ms ± 1 | 59 ms ± 1 | 489 ms ± 2 | 5.23 s ± 0.06 |
-| v0.14.1 | 23 ms ± 1 | 58 ms ± 1 | 491 ms ± 2 | 5.39 s ± 0.12 |
-| v0.14.0 | 24 ms ± 1 | 59 ms ± 1 | 498 ms ± 3 | 5.35 s ± 0.01 |
-| v0.13.0 | 16 ms ± 1 | 58 ms ± 1 | 487 ms ± 3 | 5.26 s ± 0.01 |
-| v0.12.0 | 16 ms ± 1 | 58 ms ± 1 | 487 ms ± 2 | 5.46 s ± 0.05 |
-| v0.11.0 | 23 ms ± 1 | 58 ms ± 1 | 486 ms ± 1 | 5.67 s ± 0.49 |
-| v0.10.2 | 22 ms ± 1 | 59 ms ± 2 | 489 ms ± 7 | 5.14 s ± 0.01 |
-| v0.10.1 | 22 ms ± 1 | 57 ms ± 1 | 485 ms ± 2 | 5.13 s ± 0.00 |
-| v0.10.0 | 22 ms ± 1 | 56 ms ± 1 | 486 ms ± 3 | 5.14 s ± 0.00 |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | r1 | 15 ms ± 1 | 61 ms ± 1 | 492 ms ± 1 | 5.21 s ± 0.01 |
+| v0.18.4 | r1 | 23 ms ± 1 | 59 ms ± 1 | 503 ms ± 9 | 5.14 s ± 0.01 |
+| v0.18.2 | r1 | 22 ms ± 1 | 58 ms ± 1 | 490 ms ± 3 | 5.16 s ± 0.01 |
+| v0.18.1 | r1 | 23 ms ± 2 | 58 ms ± 1 | 500 ms ± 8 | 5.14 s ± 0.01 |
+| v0.18.0 | r1 | 16 ms ± 1 | 62 ms ± 2 | 521 ms ± 11 | 5.33 s ± 0.01 |
+| v0.17.0 | r1 | 15 ms ± 1 | 58 ms ± 1 | 494 ms ± 2 | 5.20 s ± 0.01 |
+| v0.16.0 | r1 | 23 ms ± 1 | 59 ms ± 2 | 500 ms ± 10 | 5.17 s ± 0.01 |
+| v0.15.0 | r1 | 16 ms ± 1 | 58 ms ± 1 | 490 ms ± 1 | 5.18 s ± 0.00 |
+| v0.14.2 | r1 | 16 ms ± 1 | 59 ms ± 1 | 489 ms ± 2 | 5.23 s ± 0.06 |
+| v0.14.1 | r1 | 23 ms ± 1 | 58 ms ± 1 | 491 ms ± 2 | 5.39 s ± 0.12 |
+| v0.14.0 | r1 | 24 ms ± 1 | 59 ms ± 1 | 498 ms ± 3 | 5.35 s ± 0.01 |
+| v0.13.0 | r1 | 16 ms ± 1 | 58 ms ± 1 | 487 ms ± 3 | 5.26 s ± 0.01 |
+| v0.12.0 | r1 | 16 ms ± 1 | 58 ms ± 1 | 487 ms ± 2 | 5.46 s ± 0.05 |
+| v0.11.0 | r1 | 23 ms ± 1 | 58 ms ± 1 | 486 ms ± 1 | 5.67 s ± 0.49 |
+| v0.10.2 | r1 | 22 ms ± 1 | 59 ms ± 2 | 489 ms ± 7 | 5.14 s ± 0.01 |
+| v0.10.1 | r1 | 22 ms ± 1 | 57 ms ± 1 | 485 ms ± 2 | 5.13 s ± 0.00 |
+| v0.10.0 | r1 | 22 ms ± 1 | 56 ms ± 1 | 486 ms ± 3 | 5.14 s ± 0.00 |
 
 ## S3 — Cross-file, relational & graph
 
@@ -176,95 +178,95 @@ Whole-index build + path-index + relational fan-out (`pair` / `unique_by` / `for
 
 ### S3 — full
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 462 ms ± 21 | 4.68 s ± 0.10 | 47.40 s ± 1.17 | 475.6 s ± 3.6 |
-| v0.18.4 | 464 ms ± 21 | 4.68 s ± 0.14 | 48.05 s ± 1.76 | 475.2 s ± 2.0 |
-| v0.18.2 | 450 ms ± 4 | 4.64 s ± 0.03 | 46.93 s ± 0.20 | 474.8 s ± 1.2 |
-| v0.18.1 | 456 ms ± 14 | 4.76 s ± 0.21 | 46.87 s ± 0.22 | 475.3 s ± 1.3 |
-| v0.18.0 | 452 ms ± 13 | 4.72 s ± 0.17 | 46.93 s ± 0.30 | 475.1 s ± 1.7 |
-| v0.17.0 | 447 ms ± 2 | 4.63 s ± 0.02 | 46.68 s ± 0.16 | 475.3 s ± 3.0 |
-| v0.16.0 | 451 ms ± 12 | 4.67 s ± 0.14 | 46.96 s ± 0.69 | 474.7 s ± 0.8 |
-| v0.15.0 | 447 ms ± 1 | 4.62 s ± 0.01 | 46.96 s ± 0.73 | 474.4 s ± 1.4 |
-| v0.14.2 | 447 ms ± 2 | 4.63 s ± 0.02 | 46.51 s ± 0.17 | 473.6 s ± 1.5 |
-| v0.14.1 | 447 ms ± 2 | 4.62 s ± 0.02 | 46.63 s ± 0.17 | 473.7 s ± 2.2 |
-| v0.14.0 | 451 ms ± 2 | 4.66 s ± 0.02 | 47.05 s ± 0.12 | 477.0 s ± 0.6 |
-| v0.13.0 | 459 ms ± 2 | 4.76 s ± 0.02 | 48.13 s ± 0.25 | 486.5 s ± 2.0 |
-| v0.12.0 | 457 ms ± 1 | 4.75 s ± 0.02 | 47.97 s ± 0.13 | 488.6 s ± 1.5 |
-| v0.11.0 | n/a | n/a | n/a | n/a |
-| v0.10.2 | n/a | n/a | n/a | n/a |
-| v0.10.1 | n/a | n/a | n/a | n/a |
-| v0.10.0 | n/a | n/a | n/a | n/a |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | r1 | 462 ms ± 21 | 4.68 s ± 0.10 | 47.40 s ± 1.17 | 475.6 s ± 3.6 |
+| v0.18.4 | r1 | 464 ms ± 21 | 4.68 s ± 0.14 | 48.05 s ± 1.76 | 475.2 s ± 2.0 |
+| v0.18.2 | r1 | 450 ms ± 4 | 4.64 s ± 0.03 | 46.93 s ± 0.20 | 474.8 s ± 1.2 |
+| v0.18.1 | r1 | 456 ms ± 14 | 4.76 s ± 0.21 | 46.87 s ± 0.22 | 475.3 s ± 1.3 |
+| v0.18.0 | r1 | 452 ms ± 13 | 4.72 s ± 0.17 | 46.93 s ± 0.30 | 475.1 s ± 1.7 |
+| v0.17.0 | r1 | 447 ms ± 2 | 4.63 s ± 0.02 | 46.68 s ± 0.16 | 475.3 s ± 3.0 |
+| v0.16.0 | r1 | 451 ms ± 12 | 4.67 s ± 0.14 | 46.96 s ± 0.69 | 474.7 s ± 0.8 |
+| v0.15.0 | r1 | 447 ms ± 1 | 4.62 s ± 0.01 | 46.96 s ± 0.73 | 474.4 s ± 1.4 |
+| v0.14.2 | r1 | 447 ms ± 2 | 4.63 s ± 0.02 | 46.51 s ± 0.17 | 473.6 s ± 1.5 |
+| v0.14.1 | r1 | 447 ms ± 2 | 4.62 s ± 0.02 | 46.63 s ± 0.17 | 473.7 s ± 2.2 |
+| v0.14.0 | r1 | 451 ms ± 2 | 4.66 s ± 0.02 | 47.05 s ± 0.12 | 477.0 s ± 0.6 |
+| v0.13.0 | r1 | 459 ms ± 2 | 4.76 s ± 0.02 | 48.13 s ± 0.25 | 486.5 s ± 2.0 |
+| v0.12.0 | r1 | 457 ms ± 1 | 4.75 s ± 0.02 | 47.97 s ± 0.13 | 488.6 s ± 1.5 |
+| v0.11.0 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.2 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.1 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.0 | n/a | n/a | n/a | n/a | n/a |
 
 ### S3 — changed
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 462 ms ± 17 | 4.71 s ± 0.11 | 47.66 s ± 1.44 | 481.6 s ± 7.3 |
-| v0.18.4 | 467 ms ± 17 | 4.74 s ± 0.18 | 47.16 s ± 0.64 | 474.5 s ± 1.6 |
-| v0.18.2 | 460 ms ± 3 | 4.67 s ± 0.03 | 47.05 s ± 0.32 | 475.8 s ± 0.4 |
-| v0.18.1 | 469 ms ± 17 | 4.74 s ± 0.18 | 47.11 s ± 0.33 | 474.4 s ± 0.7 |
-| v0.18.0 | 452 ms ± 1 | 4.79 s ± 0.23 | 46.95 s ± 0.17 | 474.9 s ± 1.9 |
-| v0.17.0 | 450 ms ± 2 | 4.64 s ± 0.01 | 46.79 s ± 0.21 | 475.3 s ± 0.4 |
-| v0.16.0 | 465 ms ± 16 | 4.64 s ± 0.02 | 46.64 s ± 0.16 | 474.4 s ± 0.5 |
-| v0.15.0 | 450 ms ± 1 | 4.63 s ± 0.02 | 46.70 s ± 0.17 | 476.1 s ± 0.6 |
-| v0.14.2 | 451 ms ± 2 | 4.64 s ± 0.02 | 46.68 s ± 0.10 | 474.3 s ± 0.4 |
-| v0.14.1 | 458 ms ± 2 | 4.63 s ± 0.01 | 46.70 s ± 0.16 | 473.9 s ± 1.8 |
-| v0.14.0 | 461 ms ± 2 | 4.67 s ± 0.01 | 47.09 s ± 0.14 | 478.4 s ± 1.0 |
-| v0.13.0 | 461 ms ± 3 | 4.75 s ± 0.03 | 47.99 s ± 0.21 | 488.2 s ± 2.9 |
-| v0.12.0 | 460 ms ± 1 | 4.75 s ± 0.01 | 48.14 s ± 0.17 | 491.0 s ± 2.2 |
-| v0.11.0 | n/a | n/a | n/a | n/a |
-| v0.10.2 | n/a | n/a | n/a | n/a |
-| v0.10.1 | n/a | n/a | n/a | n/a |
-| v0.10.0 | n/a | n/a | n/a | n/a |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | r1 | 462 ms ± 17 | 4.71 s ± 0.11 | 47.66 s ± 1.44 | 481.6 s ± 7.3 |
+| v0.18.4 | r1 | 467 ms ± 17 | 4.74 s ± 0.18 | 47.16 s ± 0.64 | 474.5 s ± 1.6 |
+| v0.18.2 | r1 | 460 ms ± 3 | 4.67 s ± 0.03 | 47.05 s ± 0.32 | 475.8 s ± 0.4 |
+| v0.18.1 | r1 | 469 ms ± 17 | 4.74 s ± 0.18 | 47.11 s ± 0.33 | 474.4 s ± 0.7 |
+| v0.18.0 | r1 | 452 ms ± 1 | 4.79 s ± 0.23 | 46.95 s ± 0.17 | 474.9 s ± 1.9 |
+| v0.17.0 | r1 | 450 ms ± 2 | 4.64 s ± 0.01 | 46.79 s ± 0.21 | 475.3 s ± 0.4 |
+| v0.16.0 | r1 | 465 ms ± 16 | 4.64 s ± 0.02 | 46.64 s ± 0.16 | 474.4 s ± 0.5 |
+| v0.15.0 | r1 | 450 ms ± 1 | 4.63 s ± 0.02 | 46.70 s ± 0.17 | 476.1 s ± 0.6 |
+| v0.14.2 | r1 | 451 ms ± 2 | 4.64 s ± 0.02 | 46.68 s ± 0.10 | 474.3 s ± 0.4 |
+| v0.14.1 | r1 | 458 ms ± 2 | 4.63 s ± 0.01 | 46.70 s ± 0.16 | 473.9 s ± 1.8 |
+| v0.14.0 | r1 | 461 ms ± 2 | 4.67 s ± 0.01 | 47.09 s ± 0.14 | 478.4 s ± 1.0 |
+| v0.13.0 | r1 | 461 ms ± 3 | 4.75 s ± 0.03 | 47.99 s ± 0.21 | 488.2 s ± 2.9 |
+| v0.12.0 | r1 | 460 ms ± 1 | 4.75 s ± 0.01 | 48.14 s ± 0.17 | 491.0 s ± 2.2 |
+| v0.11.0 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.2 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.1 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.0 | n/a | n/a | n/a | n/a | n/a |
 
 ## S4 — Workspace bundle
 
-The realistic mixed workload and the release anchor: `extends:` eight bundled rulesets (oss-baseline + rust + node + python + monorepo + cargo-workspace + versioning + toolchain-pins) over a POLYGLOT + GIT tree (`crates/` + `packages/` + `apps/`, initialised as a real repo) with `nested_configs` on and two inline git-aware rules. Consolidates the old realistic-monorepo, git-overlay, and nested-polyglot scenarios. Workload revision 1 through v0.18.4 resolved 50 rules; revision 2 from v0.19.0 adds the final two bundles and resolves 85. Compare S4 timings only within one revision. The `s4_1m_full` cell is the trajectory anchor every publish captures.
+The realistic mixed workload and the release anchor: `extends:` eight bundled rulesets (oss-baseline + rust + node + python + monorepo + cargo-workspace + versioning + toolchain-pins) over a POLYGLOT + GIT tree (`crates/` + `packages/` + `apps/`, initialised as a real repo) with `nested_configs` on and two inline git-aware rules. Consolidates the old realistic-monorepo, git-overlay, and nested-polyglot scenarios. Workload revision 1 through v0.18.4 resolved 50 rules; revision 2 in v0.19.0 added the final two bundles and resolved 85 but left their 35 rules fact-gated off. Revision 3 keeps 85 rules and commits realistic version/toolchain anchors: 23 of 24 facts are true and 82 rules are active (only the three intentional root Cargo-workspace rules remain inactive). Compare timings only within one revision. The `s4_1m_full` cell is the trajectory anchor every publish captures.
 
 ### S4 — full
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 58 ms ± 1 | 203 ms ± 4 | 1.78 s ± 0.05 | 18.73 s ± 0.66 |
-| v0.18.4 | 33 ms ± 2 | 156 ms ± 4 | 1.45 s ± 0.01 | 16.17 s ± 0.03 |
-| v0.18.2 | 32 ms ± 1 | 154 ms ± 3 | 1.45 s ± 0.02 | 16.28 s ± 0.10 |
-| v0.18.1 | 32 ms ± 1 | 152 ms ± 2 | 1.43 s ± 0.01 | 16.07 s ± 0.02 |
-| v0.18.0 | 32 ms ± 1 | 162 ms ± 4 | 1.49 s ± 0.01 | 16.60 s ± 0.01 |
-| v0.17.0 | 30 ms ± 1 | 155 ms ± 2 | 1.47 s ± 0.01 | 16.56 s ± 0.23 |
-| v0.16.0 | 32 ms ± 1 | 156 ms ± 3 | 1.46 s ± 0.01 | 16.46 s ± 0.17 |
-| v0.15.0 | 31 ms ± 1 | 155 ms ± 3 | 1.46 s ± 0.01 | 16.47 s ± 0.04 |
-| v0.14.2 | 31 ms ± 1 | 154 ms ± 2 | 1.46 s ± 0.01 | 16.34 s ± 0.01 |
-| v0.14.1 | 32 ms ± 1 | 155 ms ± 2 | 1.46 s ± 0.01 | 16.44 s ± 0.04 |
-| v0.14.0 | 33 ms ± 2 | 158 ms ± 2 | 1.50 s ± 0.01 | 18.15 s ± 0.72 |
-| v0.13.0 | 32 ms ± 2 | 151 ms ± 2 | 1.43 s ± 0.01 | 19.26 s ± 0.46 |
-| v0.12.0 | 31 ms ± 1 | 150 ms ± 1 | 1.43 s ± 0.01 | 21.99 s ± 0.65 |
-| v0.11.0 | 31 ms ± 1 | 150 ms ± 2 | 1.43 s ± 0.01 | 23.38 s ± 0.18 |
-| v0.10.2 | 29 ms ± 1 | 152 ms ± 5 | 1.45 s ± 0.03 | 15.82 s ± 0.24 |
-| v0.10.1 | 30 ms ± 1 | 148 ms ± 2 | 1.42 s ± 0.01 | 15.96 s ± 0.03 |
-| v0.10.0 | 30 ms ± 1 | 149 ms ± 1 | 1.42 s ± 0.01 | 16.03 s ± 0.05 |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | **r2 ← reset from r1** | 58 ms ± 1 | 203 ms ± 4 | 1.78 s ± 0.05 | 18.73 s ± 0.66 |
+| v0.18.4 | r1 | 33 ms ± 2 | 156 ms ± 4 | 1.45 s ± 0.01 | 16.17 s ± 0.03 |
+| v0.18.2 | r1 | 32 ms ± 1 | 154 ms ± 3 | 1.45 s ± 0.02 | 16.28 s ± 0.10 |
+| v0.18.1 | r1 | 32 ms ± 1 | 152 ms ± 2 | 1.43 s ± 0.01 | 16.07 s ± 0.02 |
+| v0.18.0 | r1 | 32 ms ± 1 | 162 ms ± 4 | 1.49 s ± 0.01 | 16.60 s ± 0.01 |
+| v0.17.0 | r1 | 30 ms ± 1 | 155 ms ± 2 | 1.47 s ± 0.01 | 16.56 s ± 0.23 |
+| v0.16.0 | r1 | 32 ms ± 1 | 156 ms ± 3 | 1.46 s ± 0.01 | 16.46 s ± 0.17 |
+| v0.15.0 | r1 | 31 ms ± 1 | 155 ms ± 3 | 1.46 s ± 0.01 | 16.47 s ± 0.04 |
+| v0.14.2 | r1 | 31 ms ± 1 | 154 ms ± 2 | 1.46 s ± 0.01 | 16.34 s ± 0.01 |
+| v0.14.1 | r1 | 32 ms ± 1 | 155 ms ± 2 | 1.46 s ± 0.01 | 16.44 s ± 0.04 |
+| v0.14.0 | r1 | 33 ms ± 2 | 158 ms ± 2 | 1.50 s ± 0.01 | 18.15 s ± 0.72 |
+| v0.13.0 | r1 | 32 ms ± 2 | 151 ms ± 2 | 1.43 s ± 0.01 | 19.26 s ± 0.46 |
+| v0.12.0 | r1 | 31 ms ± 1 | 150 ms ± 1 | 1.43 s ± 0.01 | 21.99 s ± 0.65 |
+| v0.11.0 | r1 | 31 ms ± 1 | 150 ms ± 2 | 1.43 s ± 0.01 | 23.38 s ± 0.18 |
+| v0.10.2 | r1 | 29 ms ± 1 | 152 ms ± 5 | 1.45 s ± 0.03 | 15.82 s ± 0.24 |
+| v0.10.1 | r1 | 30 ms ± 1 | 148 ms ± 2 | 1.42 s ± 0.01 | 15.96 s ± 0.03 |
+| v0.10.0 | r1 | 30 ms ± 1 | 149 ms ± 1 | 1.42 s ± 0.01 | 16.03 s ± 0.05 |
 
 ### S4 — changed
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 55 ms ± 2 | 146 ms ± 2 | 1.13 s ± 0.03 | 11.91 s ± 0.11 |
-| v0.18.4 | 37 ms ± 1 | 158 ms ± 4 | 846 ms ± 5 | 9.56 s ± 0.08 |
-| v0.18.2 | 36 ms ± 1 | 106 ms ± 2 | 828 ms ± 3 | 9.35 s ± 0.04 |
-| v0.18.1 | 36 ms ± 1 | 98 ms ± 1 | 828 ms ± 6 | 9.36 s ± 0.03 |
-| v0.18.0 | 30 ms ± 1 | 102 ms ± 2 | 833 ms ± 2 | 9.40 s ± 0.02 |
-| v0.17.0 | 28 ms ± 2 | 98 ms ± 2 | 824 ms ± 5 | 9.35 s ± 0.03 |
-| v0.16.0 | 36 ms ± 2 | 102 ms ± 2 | 825 ms ± 3 | 9.30 s ± 0.03 |
-| v0.15.0 | 29 ms ± 1 | 99 ms ± 2 | 824 ms ± 4 | 9.33 s ± 0.02 |
-| v0.14.2 | 34 ms ± 2 | 99 ms ± 1 | 824 ms ± 8 | 9.36 s ± 0.05 |
-| v0.14.1 | 36 ms ± 1 | 98 ms ± 2 | 829 ms ± 6 | 9.33 s ± 0.06 |
-| v0.14.0 | 36 ms ± 2 | 99 ms ± 1 | 833 ms ± 6 | 9.55 s ± 0.05 |
-| v0.13.0 | 28 ms ± 1 | 98 ms ± 1 | 832 ms ± 7 | 9.54 s ± 0.05 |
-| v0.12.0 | 36 ms ± 1 | 100 ms ± 2 | 830 ms ± 4 | 9.77 s ± 0.02 |
-| v0.11.0 | 36 ms ± 1 | 172 ms ± 2 | 831 ms ± 9 | 9.82 s ± 0.22 |
-| v0.10.2 | 35 ms ± 2 | 100 ms ± 2 | 846 ms ± 14 | 9.34 s ± 0.01 |
-| v0.10.1 | 36 ms ± 1 | 118 ms ± 1 | 831 ms ± 2 | 9.39 s ± 0.02 |
-| v0.10.0 | 35 ms ± 1 | 98 ms ± 1 | 833 ms ± 5 | 9.40 s ± 0.06 |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | **r2 ← reset from r1** | 55 ms ± 2 | 146 ms ± 2 | 1.13 s ± 0.03 | 11.91 s ± 0.11 |
+| v0.18.4 | r1 | 37 ms ± 1 | 158 ms ± 4 | 846 ms ± 5 | 9.56 s ± 0.08 |
+| v0.18.2 | r1 | 36 ms ± 1 | 106 ms ± 2 | 828 ms ± 3 | 9.35 s ± 0.04 |
+| v0.18.1 | r1 | 36 ms ± 1 | 98 ms ± 1 | 828 ms ± 6 | 9.36 s ± 0.03 |
+| v0.18.0 | r1 | 30 ms ± 1 | 102 ms ± 2 | 833 ms ± 2 | 9.40 s ± 0.02 |
+| v0.17.0 | r1 | 28 ms ± 2 | 98 ms ± 2 | 824 ms ± 5 | 9.35 s ± 0.03 |
+| v0.16.0 | r1 | 36 ms ± 2 | 102 ms ± 2 | 825 ms ± 3 | 9.30 s ± 0.03 |
+| v0.15.0 | r1 | 29 ms ± 1 | 99 ms ± 2 | 824 ms ± 4 | 9.33 s ± 0.02 |
+| v0.14.2 | r1 | 34 ms ± 2 | 99 ms ± 1 | 824 ms ± 8 | 9.36 s ± 0.05 |
+| v0.14.1 | r1 | 36 ms ± 1 | 98 ms ± 2 | 829 ms ± 6 | 9.33 s ± 0.06 |
+| v0.14.0 | r1 | 36 ms ± 2 | 99 ms ± 1 | 833 ms ± 6 | 9.55 s ± 0.05 |
+| v0.13.0 | r1 | 28 ms ± 1 | 98 ms ± 1 | 832 ms ± 7 | 9.54 s ± 0.05 |
+| v0.12.0 | r1 | 36 ms ± 1 | 100 ms ± 2 | 830 ms ± 4 | 9.77 s ± 0.02 |
+| v0.11.0 | r1 | 36 ms ± 1 | 172 ms ± 2 | 831 ms ± 9 | 9.82 s ± 0.22 |
+| v0.10.2 | r1 | 35 ms ± 2 | 100 ms ± 2 | 846 ms ± 14 | 9.34 s ± 0.01 |
+| v0.10.1 | r1 | 36 ms ± 1 | 118 ms ± 1 | 831 ms ± 2 | 9.39 s ± 0.02 |
+| v0.10.0 | r1 | 35 ms ± 1 | 98 ms ± 1 | 833 ms ± 5 | 9.40 s ± 0.06 |
 
 ## SFIX — Auto-fix
 
@@ -272,25 +274,25 @@ The fix engine over all 24 non-spawning fix ops (`FixSpec::ALL_OP_NAMES` minus `
 
 ### SFIX — fix
 
-| Version | 1k | 10k | 100k | 1M |
-|---|---:|---:|---:|---:|
-| **v0.19.0** | 53 ms ± 2 | 493 ms ± 5 | 5.12 s ± 0.21 | 53.86 s ± 1.91 |
-| v0.18.4 | 54 ms ± 3 | 503 ms ± 24 | 4.97 s ± 0.06 | 52.68 s ± 0.48 |
-| v0.18.2 | 53 ms ± 1 | 487 ms ± 4 | 4.94 s ± 0.04 | 52.91 s ± 1.20 |
-| v0.18.1 | 51 ms ± 1 | 487 ms ± 5 | 4.90 s ± 0.04 | 51.99 s ± 0.29 |
-| v0.18.0 | 58 ms ± 1 | 572 ms ± 27 | 5.57 s ± 0.05 | 58.66 s ± 0.58 |
-| v0.17.0 | 56 ms ± 1 | 533 ms ± 7 | 5.43 s ± 0.03 | 57.26 s ± 0.19 |
-| v0.16.0 | n/a | n/a | n/a | n/a |
-| v0.15.0 | n/a | n/a | n/a | n/a |
-| v0.14.2 | n/a | n/a | n/a | n/a |
-| v0.14.1 | n/a | n/a | n/a | n/a |
-| v0.14.0 | n/a | n/a | n/a | n/a |
-| v0.13.0 | n/a | n/a | n/a | n/a |
-| v0.12.0 | n/a | n/a | n/a | n/a |
-| v0.11.0 | n/a | n/a | n/a | n/a |
-| v0.10.2 | n/a | n/a | n/a | n/a |
-| v0.10.1 | n/a | n/a | n/a | n/a |
-| v0.10.0 | n/a | n/a | n/a | n/a |
+| Version | Workload | 1k | 10k | 100k | 1M |
+|---|---|---:|---:|---:|---:|
+| **v0.19.0** | r1 | 53 ms ± 2 | 493 ms ± 5 | 5.12 s ± 0.21 | 53.86 s ± 1.91 |
+| v0.18.4 | r1 | 54 ms ± 3 | 503 ms ± 24 | 4.97 s ± 0.06 | 52.68 s ± 0.48 |
+| v0.18.2 | r1 | 53 ms ± 1 | 487 ms ± 4 | 4.94 s ± 0.04 | 52.91 s ± 1.20 |
+| v0.18.1 | r1 | 51 ms ± 1 | 487 ms ± 5 | 4.90 s ± 0.04 | 51.99 s ± 0.29 |
+| v0.18.0 | r1 | 58 ms ± 1 | 572 ms ± 27 | 5.57 s ± 0.05 | 58.66 s ± 0.58 |
+| v0.17.0 | r1 | 56 ms ± 1 | 533 ms ± 7 | 5.43 s ± 0.03 | 57.26 s ± 0.19 |
+| v0.16.0 | n/a | n/a | n/a | n/a | n/a |
+| v0.15.0 | n/a | n/a | n/a | n/a | n/a |
+| v0.14.2 | n/a | n/a | n/a | n/a | n/a |
+| v0.14.1 | n/a | n/a | n/a | n/a | n/a |
+| v0.14.0 | n/a | n/a | n/a | n/a | n/a |
+| v0.13.0 | n/a | n/a | n/a | n/a | n/a |
+| v0.12.0 | n/a | n/a | n/a | n/a | n/a |
+| v0.11.0 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.2 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.1 | n/a | n/a | n/a | n/a | n/a |
+| v0.10.0 | n/a | n/a | n/a | n/a | n/a |
 
 ## How to add a row
 

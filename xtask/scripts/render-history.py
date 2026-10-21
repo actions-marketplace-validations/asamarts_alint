@@ -39,6 +39,7 @@ from typing import Dict, List, Tuple
 
 Cell = Tuple[str, str, str, str]    # (version, scenario, size, mode)
 Stat = Tuple[float, float]           # (mean_ms, stddev_ms)
+RevisionKey = Tuple[str, str]        # (version, scenario)
 
 
 def semver_key(v: str) -> Tuple[int, ...]:
@@ -207,7 +208,7 @@ SCENARIOS = [
     ),
     (
         "S4", "Workspace bundle",
-        "The realistic mixed workload and the release anchor: `extends:` eight bundled rulesets (oss-baseline + rust + node + python + monorepo + cargo-workspace + versioning + toolchain-pins) over a POLYGLOT + GIT tree (`crates/` + `packages/` + `apps/`, initialised as a real repo) with `nested_configs` on and two inline git-aware rules. Consolidates the old realistic-monorepo, git-overlay, and nested-polyglot scenarios. Workload revision 1 through v0.18.4 resolved 50 rules; revision 2 from v0.19.0 adds the final two bundles and resolves 85. Compare S4 timings only within one revision. The `s4_1m_full` cell is the trajectory anchor every publish captures.",
+        "The realistic mixed workload and the release anchor: `extends:` eight bundled rulesets (oss-baseline + rust + node + python + monorepo + cargo-workspace + versioning + toolchain-pins) over a POLYGLOT + GIT tree (`crates/` + `packages/` + `apps/`, initialised as a real repo) with `nested_configs` on and two inline git-aware rules. Consolidates the old realistic-monorepo, git-overlay, and nested-polyglot scenarios. Workload revision 1 through v0.18.4 resolved 50 rules; revision 2 in v0.19.0 added the final two bundles and resolved 85 but left their 35 rules fact-gated off. Revision 3 keeps 85 rules and commits realistic version/toolchain anchors: 23 of 24 facts are true and 82 rules are active (only the three intentional root Cargo-workspace rules remain inactive). Compare timings only within one revision. The `s4_1m_full` cell is the trajectory anchor every publish captures.",
     ),
     (
         "SFIX", "Auto-fix",
@@ -260,6 +261,59 @@ def load_arch(base: str, arch: str) -> Dict[Cell, Stat]:
     return data
 
 
+def load_revisions(base: str, arch: str) -> Dict[RevisionKey, int]:
+    """Load each measured scenario's semantic workload revision.
+
+    Reports predating revision metadata are revision 1 by definition. A value is
+    recorded only when that scenario has a row, preserving `n/a` / missing-cell
+    distinctions in the renderer.
+    """
+    revisions: Dict[RevisionKey, int] = {}
+    arch_dir = os.path.join(base, arch)
+    if not os.path.isdir(arch_dir):
+        return revisions
+    for vdir in sorted(os.listdir(arch_dir)):
+        vpath = os.path.join(arch_dir, vdir)
+        if not os.path.isdir(vpath):
+            continue
+        for result_path in glob.glob(os.path.join(vpath, "**", "results.json"), recursive=True):
+            with open(result_path, encoding="utf-8") as result_file:
+                blob = json.load(result_file)
+            declared = blob.get("args", {}).get("scenario_revisions", {})
+            measured = {row["scenario"] for row in blob.get("rows", [])}
+            for scenario in measured:
+                revisions[(vdir, scenario)] = int(declared.get(scenario, 1))
+    return revisions
+
+
+def workload_label(
+    revisions: Dict[RevisionKey, int],
+    versions: List[str],
+    version: str,
+    scenario: str,
+) -> str:
+    """Render a revision and mark the newer side of a reset boundary."""
+    key = (version, scenario)
+    if key not in revisions:
+        first = FIRST_VERSION.get(scenario)
+        if first is not None and semver_key(version) < semver_key(first):
+            return "n/a"
+        return "—"
+    revision = revisions[key]
+    current_index = versions.index(version)
+    older_revision = next(
+        (
+            revisions[(older, scenario)]
+            for older in versions[current_index + 1 :]
+            if (older, scenario) in revisions
+        ),
+        None,
+    )
+    if older_revision is not None and older_revision != revision:
+        return f"**r{revision} ← reset from r{older_revision}**"
+    return f"r{revision}"
+
+
 def fmt(data: Dict[Cell, Stat], v: str, s: str, sz: str, m: str) -> str:
     cell = data.get((v, s, sz, m))
     if cell is None:
@@ -290,6 +344,7 @@ HEADLINE_CELLS = [
 
 def render(
     data: Dict[Cell, Stat],
+    revisions: Dict[RevisionKey, int] | None = None,
     changelog_headlines: Dict[str, Tuple[str, str]] | None = None,
     arch: str = "linux-x86_64",
 ) -> str:
@@ -303,6 +358,7 @@ def render(
     automatically — no edit to this script required.
     """
     versions_present = sorted({k[0] for k in data}, key=semver_key, reverse=True)
+    revisions = revisions or {}
 
     # Recurrence guard (added after S14 was silently dropped): every scenario
     # measured in the corpus MUST have a SCENARIOS entry, else its section is
@@ -350,7 +406,9 @@ def render(
         "1. A one-paragraph overview of what dispatch shape the scenario stresses",
         "   and which class of regression it catches.",
         "2. A table per mode (`full` and `changed`) with rows = version (newest",
-        "   first), columns = size (1k / 10k / 100k / 1M). Cells are",
+        "   first), an explicit semantic workload revision, and columns = size",
+        "   (1k / 10k / 100k / 1M). A bold `rN ← reset from rM` label marks the",
+        "   newer side of every incomparable workload boundary. Timing cells are",
         "   `mean ± stddev`, formatted in ms below 1 s and seconds above.",
         "3. `—` means the version was not measured at that size.",
         "   `n/a` means the scenario didn't exist at the tag.",
@@ -367,13 +425,13 @@ def render(
         "## Cross-version headline trajectory",
         "",
         "1M/full cells across all four check scenarios. S4 (workspace bundle) is the",
-        "realistic-monorepo release anchor every publish captures; its workload revision",
-        "changed from 50 to 85 resolved rules in v0.19.0, so its timings are comparable",
-        "only within one revision. S3 is the heaviest, graph-dominated scenario; S1/S2",
-        "track the walk-bound and per-file-content paths.",
+        "realistic-monorepo release anchor every publish captures. Its explicit workload",
+        "column marks revision resets; timings on opposite sides of a reset are",
+        "incomparable. S3 is the heaviest, graph-dominated scenario; S1/S2 track the",
+        "walk-bound and per-file-content paths.",
         "",
-        "| Version | Date | 1M S1 full | 1M S2 full | 1M S3 full | 1M S4 full | Headline change |",
-        "|---|---|---:|---:|---:|---:|---|",
+        "| Version | Date | 1M S1 full | 1M S2 full | 1M S3 full | S4 workload | 1M S4 full | Headline change |",
+        "|---|---|---:|---:|---:|---|---:|---|",
     ]
     # Date table — one row per version present on disk. CHANGELOG-parsed
     # headlines win when defined, so new releases need no script edit.
@@ -383,8 +441,12 @@ def render(
     for v in versions_present:
         date, headline = headlines.get(v, ("?", "—"))
         cells = [fmt(data, v, sx, "1m", "full") for sx in ("S1", "S2", "S3", "S4")]
+        s4_revision = workload_label(revisions, versions_present, v, "S4")
         marker = "**" if v == versions_present[0] else ""
-        out.append(f"| {marker}{v}{marker} | {date} | {' | '.join(cells)} | {headline} |")
+        out.append(
+            f"| {marker}{v}{marker} | {date} | {' | '.join(cells[:3])} | "
+            f"{s4_revision} | {cells[3]} | {headline} |"
+        )
     out += [
         "",
         "Pre-consolidation history (the 14-scenario bench-host series v0.10.0-v0.16.0, and",
@@ -402,13 +464,16 @@ def render(
             out += [
                 f"### {sid} — {mode}",
                 "",
-                "| Version | 1k | 10k | 100k | 1M |",
-                "|---|---:|---:|---:|---:|",
+                "| Version | Workload | 1k | 10k | 100k | 1M |",
+                "|---|---|---:|---:|---:|---:|",
             ]
             for v in versions_present:
                 row_cells = [fmt(data, v, sid, sz, mode) for sz in SIZES]
+                revision = workload_label(revisions, versions_present, v, sid)
                 marker = "**" if v == versions_present[0] else ""
-                out.append(f"| {marker}{v}{marker} | {' | '.join(row_cells)} |")
+                out.append(
+                    f"| {marker}{v}{marker} | {revision} | {' | '.join(row_cells)} |"
+                )
             out.append("")
     out += [
         "## How to add a row",
@@ -436,6 +501,7 @@ def render(
 
 def render_trajectory_json(
     data: Dict[Cell, Stat],
+    revisions: Dict[RevisionKey, int],
     changelog_headlines: Dict[str, Tuple[str, str]] | None,
     arch: str,
 ) -> str:
@@ -452,8 +518,8 @@ def render_trajectory_json(
     are non-breaking; removals/semantic changes bump the version.
 
     The four cell columns mirror the markdown table: 1M S1/S2/S3/S4
-    in `full` mode. Consumers that want the full matrix render
-    HISTORY.md directly.
+    in `full` mode. Each row also carries those scenarios' semantic workload
+    revisions so consumers cannot silently chart across a reset boundary.
     """
     headlines: Dict[str, Tuple[str, str]] = {}
     if changelog_headlines:
@@ -484,6 +550,10 @@ def render_trajectory_json(
             "version": v,
             "date": date,
             "headline": headline,
+            "workload_revisions": {
+                scenario: revisions.get((v, scenario))
+                for _json_key, scenario in HEADLINE_CELLS
+            },
             "cells": cells,
         })
     payload = {
@@ -532,14 +602,15 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
 
     data = load_arch(args.base, args.arch)
+    revisions = load_revisions(args.base, args.arch)
     changelog_headlines = parse_changelog(args.changelog)
     if not data:
         return 1
-    sys.stdout.write(render(data, changelog_headlines, args.arch))
+    sys.stdout.write(render(data, revisions, changelog_headlines, args.arch))
     if args.json_out:
         os.makedirs(os.path.dirname(os.path.abspath(args.json_out)) or ".", exist_ok=True)
         with open(args.json_out, "w", encoding="utf-8") as f:
-            f.write(render_trajectory_json(data, changelog_headlines, args.arch))
+            f.write(render_trajectory_json(data, revisions, changelog_headlines, args.arch))
     return 0
 
 

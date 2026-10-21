@@ -5,11 +5,11 @@
 # rust + monorepo + cargo-workspace bundle), S8 (git overlay), and S9 (nested
 # polyglot). `extends:` the eight bundled rulesets over a POLYGLOT + GIT tree
 # (crates/ + packages/ + apps/, initialised as a real repo), with `nested_configs`
-# on and the two git-aware rules inline. The tree has no root `[workspace]`, so the
-# cargo-workspace fact-gated rules no-op gracefully -- included for the realistic
-# bundle a Cargo monorepo consumer would `extends:`. git_no_denied_paths /
-# git_tracked_only fire only inside the repo, which is why s4 needs the git tree in
-# every mode.
+# on and the two git-aware rules inline. The committed root policy anchors activate
+# all versioning and toolchain-pins rules against realistic nested package targets.
+# The tree intentionally has no root Cargo `[workspace]`, so only the three
+# cargo-workspace fact-gated rules no-op. git_no_denied_paths / git_tracked_only
+# fire only inside the repo, which is why S4 needs the git tree in every mode.
 
 version: 1
 nested_configs: true

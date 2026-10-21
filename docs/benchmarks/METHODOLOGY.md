@@ -33,7 +33,7 @@ syscall instruction counts drift with glibc/kernel versions.
 So we split:
 
 - **criterion micro-benches** isolate the pure-CPU kernels
-  where instruction-ish patterns are stable. 12 criterion bench
+  where instruction-ish patterns are stable. 13 criterion bench
   files under `crates/alint-bench/benches/` (the two `det_*`
   gungraun benches there back the deterministic gate below, not
   this layer); the catalogue with per-bench rationale lives in
@@ -61,8 +61,9 @@ the published `results.json`. The harness:
    `alint_bench::tree::generate_monorepo(packages,
    files_per_package, seed)`. The seed is fixed (`0xA11E47`
    by default) so every machine materialises a byte-identical
-   tree. S4 uses the nested polyglot generator and a real Git
-   repository so its workspace and git-aware paths fire.
+   tree. S4 uses the nested polyglot generator with committed
+   version/toolchain policy anchors and a real Git repository so its
+   workspace, versioning, toolchain, and git-aware paths fire.
 4. **Stages** the scenario overlay and the current tool's configuration at the
    tree root, removing that tool-specific config before the next competitor so
    shared trees do not accumulate extra benchmark inputs.
@@ -116,8 +117,9 @@ workload revision per scenario. When both reports declare different
 revisions, the gate still applies the new run's within-run quality check
 but skips that scenario's cross-version regression comparison: different
 resolved rules or fixture semantics are different work, not evidence of
-an engine regression. The scenario contract test anchors each revision's
-resolved rule count.
+an engine regression. Scenario contracts anchor the revision's resolved
+rule count and, for fact-gated workloads, the fact truth and active-rule
+profiles.
 
 The published `HISTORY.md` tables and the alint.org trajectory
 deliberately stay `mean +/- stddev`: every historical row and the

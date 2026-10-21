@@ -509,8 +509,8 @@ when its run completes. Review checklist:
    `RESET` line and skips only that scenario's cross-version regression
    comparison while retaining its within-run quality gate. Confirm that
    the revision bump corresponds to an intentional resolved-rule or
-   fixture-semantics change; the scenario contract test pins the expected
-   rule count for each revision.
+   fixture-semantics change. Scenario contracts pin the expected rule
+   count and, for fact-gated workloads, fact truth and active-rule profiles.
 
    Non-zero exit means do not merge. Advisory lines never block.
    The published `HISTORY.md` table still shows `mean +/- stddev`
@@ -526,7 +526,7 @@ when its run completes. Review checklist:
 
    Verify `args.scenario_revisions` is present. A `RESET` is valid only
    when the scenario workload intentionally changed and `HISTORY.md`
-   explains the old and new workloads.
+   displays the old/new revisions and reset boundary.
 
 3. **HISTORY.md review.** The workflow rebases the result branch onto current
    `main`, runs `xtask/scripts/render-history.py`, and includes the refreshed

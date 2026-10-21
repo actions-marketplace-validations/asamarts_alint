@@ -75,6 +75,10 @@ name = "blame_cache"
 harness = false
 required-features = ["fs-benches"]
 
+[[bench]]
+name = "facts"
+harness = false
+
 # Deterministic (Valgrind) benches — the load-immune regression gate.
 # Run with: cargo bench -p alint-bench --bench det_engine
 [[bench]]

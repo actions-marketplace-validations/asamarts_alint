@@ -1,16 +1,23 @@
 # Micro-benchmarks
 
 [criterion](https://docs.rs/criterion)-driven micro-benchmarks for
-alint's pure-CPU primitives. 12 bench files under
-`crates/alint-bench/benches/`, each isolating one shape of the engine /
-rule layer / output pipeline so a regression in any one of them is
-visible without re-running the full e2e wall-time matrix.
+alint's pure-CPU primitives. 13 Criterion targets under
+`crates/alint-bench/benches/`, plus two `det_*` gungraun targets for the
+deterministic gate. Each isolates one shape of the engine / rule layer /
+output pipeline so a regression is visible without re-running the full e2e
+wall-time matrix.
 
 ## How to run
 
 ```sh
-cargo bench -p alint-bench --features fs-benches            # all 12
+for bench in glob_compile glob_match regex_content rule_engine walker \
+  single_file_rules cross_file_rules output_formats fix_throughput \
+  dsl_extends structured_query blame_cache facts; do
+  cargo bench -p alint-bench --features fs-benches --bench "$bench"
+done
+
 cargo bench -p alint-bench --features fs-benches --bench rule_engine
+cargo bench -p alint-bench --bench facts                    # literal fact index
 ```
 
 See [`../RUNNING.md`](../RUNNING.md) for full options and how to publish.
@@ -87,6 +94,13 @@ larger sizes here.
 the cost of populating + reading the blame cache; only meaningful
 inside a real git repo. Gated behind the `fs-benches` feature.
 
+### `facts.rs`
+Twenty absent literal repository facts over fresh 1k / 10k / 100k
+`FileIndex` values, matching S4's versioning + toolchain-pins fact mix.
+The timed region includes the lazy exact-file index build. It guards the
+intended O(files + facts) shape against a return to one full index scan
+per fact.
+
 ## Where results live
 
 ```
@@ -119,6 +133,7 @@ Two-axis catch matrix:
 | `cross_file_*` regression | for_each_dir / pair / unique_by inner loops; check the path-index fast paths |
 | `output_formats_*` regression | formatter struct shape (Arc/Cow leakage, allocator behavior) |
 | `structured_query/*` regression | structured_path fast path or jsonpath/regex cost |
+| `literal_facts/*` regression or super-linear scaling | exact-path fact evaluation bypassed `FileIndex` lookup and returned to per-fact scans |
 
 ## Adding a new micro-bench
 

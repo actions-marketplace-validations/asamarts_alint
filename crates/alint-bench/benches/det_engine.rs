@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
+use alint_bench::fact_fixture::{absent_literal_facts, build_entries};
+use alint_core::facts::{FactSpec, evaluate_facts};
 use alint_core::{Context, Engine, FileEntry, FileIndex, Level, Rule, RuleEntry, Violation};
 use gungraun::{
     Callgrind, EventKind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
@@ -130,6 +132,24 @@ fn fixture(n: usize) -> Fixture {
     }
 }
 
+struct FactFixture {
+    facts: Vec<FactSpec>,
+    index: FileIndex,
+}
+
+fn fact_fixture(n: usize) -> FactFixture {
+    FactFixture {
+        facts: absent_literal_facts(),
+        index: FileIndex::from_entries(build_entries(n)),
+    }
+}
+
+#[library_benchmark(setup = fact_fixture)]
+#[bench::n10k(10_000)]
+fn absent_literal_fact_run(fix: FactFixture) {
+    std::hint::black_box(evaluate_facts(&fix.facts, Path::new("/bench/root"), &fix.index).unwrap());
+}
+
 fn run_git(root: &Path, args: &[&str]) {
     let output = Command::new("git")
         .arg("-C")
@@ -191,7 +211,10 @@ fn analysis_time_run(fix: Fixture) {
     std::hint::black_box(engine.run(&root, &index).unwrap());
 }
 
-library_benchmark_group!(name = engine, benchmarks = [engine_run, analysis_time_run]);
+library_benchmark_group!(
+    name = engine,
+    benchmarks = [engine_run, absent_literal_fact_run, analysis_time_run]
+);
 
 main!(
     config = LibraryBenchmarkConfig::default().tool(

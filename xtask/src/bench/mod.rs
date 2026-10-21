@@ -163,10 +163,10 @@ pub enum Scenario {
     /// Axis D — workspace bundle (realistic; release anchor). The eight
     /// bundled rulesets (`oss-baseline` + `rust` + `node` + `python` +
     /// `monorepo` + `cargo-workspace` + `versioning` + `toolchain-pins`) over
-    /// a POLYGLOT + GIT tree, with `nested_configs` on and the two git-aware
-    /// rules inline. Absorbs the old S3/S8/S9.
-    /// `requires_polyglot_tree` + `requires_git_repo` route it to the
-    /// git-aware polyglot generator.
+    /// a POLYGLOT + GIT tree, with committed version/toolchain anchors,
+    /// `nested_configs` on, and the two git-aware rules inline. Absorbs the old
+    /// S3/S8/S9. `requires_polyglot_tree` + `requires_git_repo` route it to the
+    /// anchored git-aware polyglot generator.
     S4,
     /// Axis E — auto-fix (dedicated). `alint fix --unsafe-fixes --dry-run`
     /// exercising all 24 non-spawn fix ops over the planted `sfix/` fixture
@@ -206,7 +206,7 @@ impl Scenario {
     /// misreported as an engine regression.
     pub fn workload_revision(self) -> u32 {
         match self {
-            Self::S4 => 2,
+            Self::S4 => 3,
             Self::S1 | Self::S2 | Self::S3 | Self::Sfix => 1,
         }
     }
@@ -677,7 +677,7 @@ mod tests {
             (Scenario::S1, 1, 16),
             (Scenario::S2, 1, 20),
             (Scenario::S3, 1, 16),
-            (Scenario::S4, 2, 85),
+            (Scenario::S4, 3, 85),
             (Scenario::Sfix, 1, 24),
         ];
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -707,6 +707,66 @@ mod tests {
                 scenario.label()
             );
         }
+    }
+
+    /// S4 is only a useful release anchor when the bundles it advertises are
+    /// active. Revision 3 plants exact version/toolchain authorities so all 35
+    /// rules added in revision 2 execute; only the intentionally unsupported
+    /// root Cargo-workspace overlay remains gated off.
+    #[test]
+    fn s4_workload_profile_activates_versioning_and_toolchain_rules() {
+        let tree = alint_bench::tree::generate_git_nested_polyglot_monorepo(3, 1, 0x00A1_1E47)
+            .expect("generate S4 fixture");
+        let config_path = tree.root().join(".alint.yml");
+        std::fs::write(&config_path, Scenario::S4.config_yaml()).expect("write S4 config");
+        let registry = alint_rules::builtin_registry();
+        let config = alint_dsl::load_with(
+            &config_path,
+            &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+        )
+        .expect("load S4 config");
+        let index = alint_core::walk(tree.root(), &alint_core::WalkOptions::default())
+            .expect("walk S4 fixture");
+        let values = alint_core::facts::evaluate_facts(&config.facts, tree.root(), &index)
+            .expect("evaluate S4 facts");
+
+        assert_eq!(values.len(), 24, "S4 fact count changed");
+        let mut false_facts: Vec<&str> = values
+            .as_map()
+            .iter()
+            .filter(|(_, value)| !value.truthy())
+            .map(|(id, _)| id.as_str())
+            .collect();
+        false_facts.sort_unstable();
+        assert_eq!(false_facts, ["is_cargo_workspace"]);
+
+        let when_env = alint_core::when::WhenEnv::new(&values, &config.vars);
+        let mut inactive_rules: Vec<&str> = config
+            .rules
+            .iter()
+            .filter(|spec| {
+                spec.when.as_ref().is_some_and(|when| {
+                    !alint_core::when::parse(when)
+                        .and_then(|expr| expr.evaluate(&when_env))
+                        .unwrap_or_else(|error| panic!("rule {:?} when: {error}", spec.id))
+                })
+            })
+            .map(|spec| spec.id.as_str())
+            .collect();
+        inactive_rules.sort_unstable();
+        assert_eq!(
+            inactive_rules,
+            [
+                "cargo-workspace-member-declares-name",
+                "cargo-workspace-member-has-readme",
+                "cargo-workspace-members-declared",
+            ],
+        );
+        assert_eq!(
+            config.rules.len() - inactive_rules.len(),
+            82,
+            "S4 active rule profile changed; restore it or bump the workload revision",
+        );
     }
 
     /// `Scenario::all()` must enumerate every variant — the

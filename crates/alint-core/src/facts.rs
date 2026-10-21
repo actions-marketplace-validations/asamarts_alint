@@ -18,7 +18,7 @@
 //! but not arbitrary filesystem state outside the repo root.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use std::time::Duration;
 
@@ -28,7 +28,7 @@ use serde::Deserialize;
 use crate::error::{Error, Result};
 use crate::extract::{Extract, ExtractSpec, extract_values};
 use crate::scope::Scope;
-use crate::walker::FileIndex;
+use crate::walker::{FileEntry, FileIndex};
 
 /// A value a fact evaluates to. Keeps the surface small for v0.2; richer
 /// types (list, map) arrive with the `when` expression language.
@@ -65,6 +65,13 @@ impl OneOrMany {
         match self {
             Self::One(s) => vec![s.clone()],
             Self::Many(v) => v.clone(),
+        }
+    }
+
+    fn as_slice(&self) -> &[String] {
+        match self {
+            Self::One(value) => std::slice::from_ref(value),
+            Self::Many(values) => values,
         }
     }
 }
@@ -284,6 +291,44 @@ pub fn evaluate_facts_with_environment(
     Ok(out)
 }
 
+/// Decode a pattern list only when every member names one exact indexed path.
+///
+/// A leading exclusion or any real glob returns `None`, preserving the full
+/// `Scope` path for ordered include/exclude semantics. Escaped metacharacters
+/// are decoded by the same helper used by rule-level literal fast paths.
+fn literal_paths(patterns: &[String]) -> Option<Vec<PathBuf>> {
+    let mut paths: Vec<PathBuf> = patterns
+        .iter()
+        .map(|pattern| crate::template::literal_glob_path(pattern).map(PathBuf::from))
+        .collect::<Option<_>>()?;
+    paths.sort_unstable();
+    paths.dedup();
+    Some(paths)
+}
+
+fn file_content_matches_entry(
+    entry: &FileEntry,
+    root: &Path,
+    regex: &Regex,
+    extract: Option<&Extract>,
+) -> bool {
+    // Cap the read (M3): a fact content-predicate must not read a multi-GB
+    // in-scope file unbounded. Gates on the walk-time size and bounds the actual
+    // read (TOCTOU-safe via read_capped_or_skip).
+    let Some(bytes) = crate::walker::read_capped_or_skip(&root.join(&entry.path), entry.size)
+    else {
+        return false;
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return false;
+    };
+    let Some(extract) = extract else {
+        return regex.is_match(text);
+    };
+    extract_values(extract, text)
+        .is_ok_and(|values| values.strings.iter().any(|value| regex.is_match(value)))
+}
+
 fn evaluate_one(
     spec: &FactSpec,
     root: &Path,
@@ -292,16 +337,24 @@ fn evaluate_one(
 ) -> Result<FactValue> {
     match &spec.kind {
         FactKind::AnyFileExists { any_file_exists } => {
-            let globs = any_file_exists.to_vec();
-            let scope = Scope::from_patterns(&globs)?;
-            let found = index.files().any(|e| scope.matches(&e.path, index));
+            let patterns = any_file_exists.as_slice();
+            let found = if let Some(paths) = literal_paths(patterns) {
+                paths.iter().any(|path| index.contains_file(path))
+            } else {
+                let scope = Scope::from_patterns(patterns)?;
+                index.files().any(|entry| scope.matches(&entry.path, index))
+            };
             Ok(FactValue::Bool(found))
         }
         FactKind::AllFilesExist { all_files_exist } => {
-            let globs = all_files_exist.to_vec();
-            for glob in &globs {
-                let scope = Scope::from_patterns(std::slice::from_ref(glob))?;
-                if !index.files().any(|e| scope.matches(&e.path, index)) {
+            for pattern in all_files_exist.as_slice() {
+                let found = if let Some(path) = crate::template::literal_glob_path(pattern) {
+                    index.contains_file(Path::new(&path))
+                } else {
+                    let scope = Scope::from_patterns(std::slice::from_ref(pattern))?;
+                    index.files().any(|entry| scope.matches(&entry.path, index))
+                };
+                if !found {
                     return Ok(FactValue::Bool(false));
                 }
             }
@@ -311,14 +364,21 @@ fn evaluate_one(
             let scope = Scope::from_patterns(std::slice::from_ref(count_files))?;
             let count = index
                 .files()
-                .filter(|e| scope.matches(&e.path, index))
+                .filter(|entry| scope.matches(&entry.path, index))
                 .count();
             Ok(FactValue::Int(i64::try_from(count).unwrap_or(i64::MAX)))
         }
         FactKind::FileContentMatches {
             file_content_matches: spec,
         } => {
-            let scope = Scope::from_patterns(&spec.paths.to_vec())?;
+            let patterns = spec.paths.as_slice();
+            let literal_paths = literal_paths(patterns);
+            // Preserve validation precedence: a malformed glob is reported
+            // before a malformed content regex, as it was on the scan path.
+            let scope = literal_paths
+                .is_none()
+                .then(|| Scope::from_patterns(patterns))
+                .transpose()?;
             let regex = Regex::new(&spec.pattern)
                 .map_err(|e| Error::Other(format!("fact pattern /{}/: {e}", spec.pattern)))?;
             let extract = spec
@@ -336,27 +396,18 @@ fn evaluate_one(
                     )),
                 })
                 .transpose()?;
-            let any = index.files().any(|entry| {
-                if !scope.matches(&entry.path, index) {
-                    return false;
-                }
-                // Cap the read (M3): a fact content-predicate must not read a
-                // multi-GB in-scope file unbounded. Gates on the walk-time size
-                // and bounds the actual read (TOCTOU-safe via read_capped_or_skip).
-                let Some(bytes) =
-                    crate::walker::read_capped_or_skip(&root.join(&entry.path), entry.size)
-                else {
-                    return false;
-                };
-                let Ok(text) = std::str::from_utf8(&bytes) else {
-                    return false;
-                };
-                let Some(extract) = extract.as_ref() else {
-                    return regex.is_match(text);
-                };
-                extract_values(extract, text)
-                    .is_ok_and(|values| values.strings.iter().any(|value| regex.is_match(value)))
-            });
+            let any = if let Some(paths) = literal_paths {
+                paths
+                    .iter()
+                    .filter_map(|path| index.find_file(path))
+                    .any(|entry| file_content_matches_entry(entry, root, &regex, extract.as_ref()))
+            } else {
+                let scope = scope.expect("non-literal patterns compile a scope");
+                index
+                    .files()
+                    .filter(|entry| scope.matches(&entry.path, index))
+                    .any(|entry| file_content_matches_entry(entry, root, &regex, extract.as_ref()))
+            };
             Ok(FactValue::Bool(any))
         }
         FactKind::GitBranch { git_branch: _ } => Ok(FactValue::String(read_git_branch(root))),
@@ -552,6 +603,22 @@ mod tests {
     }
 
     #[test]
+    fn any_file_exists_preserves_escaped_literals_and_mixed_excludes() {
+        let escaped = parse("- id: route\n  any_file_exists: \"app/[[]slug[]]/config.toml\"\n");
+        let values =
+            evaluate_facts(&escaped, Path::new("/"), &idx(&["app/[slug]/config.toml"])).unwrap();
+        assert_eq!(values.get("route"), Some(&FactValue::Bool(true)));
+
+        let mixed = parse(
+            "- id: source\n  any_file_exists: [Cargo.toml, \"src/*.rs\", \"!src/generated.rs\"]\n",
+        );
+        let excluded = evaluate_facts(&mixed, Path::new("/"), &idx(&["src/generated.rs"])).unwrap();
+        assert_eq!(excluded.get("source"), Some(&FactValue::Bool(false)));
+        let included = evaluate_facts(&mixed, Path::new("/"), &idx(&["src/lib.rs"])).unwrap();
+        assert_eq!(included.get("source"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
     fn all_files_exist_true_when_all_match() {
         let facts = parse("- id: is_monorepo\n  all_files_exist: [Cargo.toml, README.md]\n");
         let v = evaluate_facts(
@@ -568,6 +635,17 @@ mod tests {
         let facts = parse("- id: is_monorepo\n  all_files_exist: [Cargo.toml, README.md]\n");
         let v = evaluate_facts(&facts, Path::new("/"), &idx(&["Cargo.toml"])).unwrap();
         assert_eq!(v.get("is_monorepo"), Some(&FactValue::Bool(false)));
+    }
+
+    #[test]
+    fn all_files_exist_combines_literal_and_glob_members() {
+        let facts = parse("- id: complete\n  all_files_exist: [Cargo.toml, \"src/*.rs\"]\n");
+        let complete =
+            evaluate_facts(&facts, Path::new("/"), &idx(&["Cargo.toml", "src/lib.rs"])).unwrap();
+        assert_eq!(complete.get("complete"), Some(&FactValue::Bool(true)));
+
+        let incomplete = evaluate_facts(&facts, Path::new("/"), &idx(&["Cargo.toml"])).unwrap();
+        assert_eq!(incomplete.get("complete"), Some(&FactValue::Bool(false)));
     }
 
     #[test]
@@ -637,6 +715,55 @@ mod tests {
         let idx = idx(&["Cargo.toml"]);
         let v = evaluate_facts(&facts, tmp.path(), &idx).unwrap();
         assert_eq!(v.get("uses_tokio"), Some(&FactValue::Bool(false)));
+    }
+
+    #[test]
+    fn file_content_literal_lookup_obeys_the_walked_index() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("ignored.txt"), "needle\n").unwrap();
+        std::fs::write(tmp.path().join("kept.txt"), "plain\n").unwrap();
+        let facts = parse(
+            "- id: found\n  file_content_matches:\n    paths: [missing.txt, ignored.txt]\n    pattern: needle\n",
+        );
+
+        let omitted = evaluate_facts(&facts, tmp.path(), &idx(&["kept.txt"])).unwrap();
+        assert_eq!(omitted.get("found"), Some(&FactValue::Bool(false)));
+
+        let indexed =
+            evaluate_facts(&facts, tmp.path(), &idx(&["kept.txt", "ignored.txt"])).unwrap();
+        assert_eq!(indexed.get("found"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
+    fn file_content_glob_lookup_preserves_exclusions() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/generated.txt"), "needle\n").unwrap();
+        std::fs::write(tmp.path().join("src/kept.txt"), "plain\n").unwrap();
+        let facts = parse(
+            "- id: found\n  file_content_matches:\n    paths: [\"src/*.txt\", \"!src/generated.txt\"]\n    pattern: needle\n",
+        );
+        let index = idx(&["src/generated.txt", "src/kept.txt"]);
+
+        let excluded = evaluate_facts(&facts, tmp.path(), &index).unwrap();
+        assert_eq!(excluded.get("found"), Some(&FactValue::Bool(false)));
+
+        std::fs::write(tmp.path().join("src/kept.txt"), "needle\n").unwrap();
+        let included = evaluate_facts(&facts, tmp.path(), &index).unwrap();
+        assert_eq!(included.get("found"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
+    fn file_content_reports_invalid_glob_before_invalid_regex() {
+        let facts =
+            parse("- id: invalid\n  file_content_matches:\n    paths: '['\n    pattern: '['\n");
+        let error = evaluate_facts(&facts, Path::new("."), &idx(&[])).unwrap_err();
+        let Error::Glob { pattern, .. } = error else {
+            panic!("expected glob validation to run first, got {error}");
+        };
+        assert_eq!(pattern, "[");
     }
 
     #[test]

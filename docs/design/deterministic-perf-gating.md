@@ -39,6 +39,8 @@ very-high deltas — RECALIBRATED 2026-06-08 to diagnostic-only + an `EstimatedC
 - one time-capable rule against a fixed Git repository, covering capability
   discovery, root normalization, and cache initialization without folding that
   one-off work into the common-path cells
+- twenty absent literal facts against a fresh 10k-file index, including the lazy
+  exact-file index build; guards the O(files + facts) fact-evaluation shape
 - the walker over a fixed tree (H1 — the +788k indirect mispredicts found in the
   investigation)
 - `Scope::matches` / the per-file `evaluate_file` dispatch

@@ -189,14 +189,12 @@ pub struct FileEntry {
 /// The indexed result of one filesystem walk. All rules share this index —
 /// the walk happens once per `alint check` invocation.
 ///
-/// `path_set` is a lazy `HashSet<Arc<Path>>` over file entries.
-/// Built once on first call to [`FileIndex::contains_file`] /
-/// [`FileIndex::file_path_set`] and re-used across all subsequent
-/// lookups. Cross-file rules that ask "does this exact path
-/// exist?" (most importantly `file_exists` instantiated by
-/// `for_each_dir`) hit the set instead of doing an O(N) linear
-/// scan over every entry. At 1M files in a 5,000-package
-/// monorepo, this turns the fan-out shape from O(D × N) =
+/// `file_entry_indices` is a lazy `HashMap<Arc<Path>, usize>` over file entries.
+/// Built once on the first exact-file lookup and re-used for both existence and
+/// metadata queries. `path_set` retains the public set view lazily, but internal
+/// callers do not build a second file index. Cross-file rules that ask exact-path
+/// questions use the map instead of scanning every entry. At 1M files in a
+/// 5,000-package monorepo, this turns the fan-out shape from O(D × N) =
 /// 5 × 10⁹ ops to O(D) = 5,000 lookups.
 ///
 /// `parent_to_children` (v0.9.8) is a second lazy index — for
@@ -207,7 +205,9 @@ pub struct FileEntry {
 /// per-dir O(N) scan. Closes the v0.9.5 → v0.9.8 cliff: at 1M
 /// files / 5K dirs, `dir_only_contains` drops from 5 billion
 /// path-parent comparisons to ~1 million.
-/// A shared set of repository-relative paths (see `FileIndex::tree_files`).
+/// Shared repository-relative file index (see `FileIndex::tree_files`).
+type SharedFileIndex = Arc<HashMap<Arc<Path>, usize>>;
+/// Shared repository-relative path set including directories.
 type SharedPathSet = Arc<HashSet<Arc<Path>>>;
 
 #[derive(Debug, Default)]
@@ -220,11 +220,15 @@ pub struct FileIndex {
     escaping_symlinks: Vec<Arc<Path>>,
     path_set: OnceLock<SharedPathSet>,
     all_path_set: OnceLock<SharedPathSet>,
-    /// For a `--changed`-filtered index: the FULL tree's file set, shared (not
-    /// copied) from the index it was filtered from, so a lookup about the repository
-    /// rather than the iterated files (a `scope_filter.has_ancestor` marker) still
-    /// sees unchanged files. Unset on a full index, where the own set is the tree's.
-    tree_files: OnceLock<SharedPathSet>,
+    /// Exact file path → position in `entries`, shared with changed-file indexes
+    /// when they need whole-tree exact-file lookups.
+    file_entry_indices: OnceLock<SharedFileIndex>,
+    /// For a `--changed`-filtered index: the FULL tree's exact-file index,
+    /// shared (not copied) from the index it was filtered from, so a lookup about
+    /// the repository rather than the iterated files (a
+    /// `scope_filter.has_ancestor` marker) still sees unchanged files. Unset on a
+    /// full index, where its own index represents the tree.
+    tree_files: OnceLock<SharedFileIndex>,
     parent_to_children: OnceLock<HashMap<Arc<Path>, Vec<usize>>>,
     /// Per-`since`-ref diff sets backing `scope_filter.changed_since:`.
     /// Populated once by the engine before per-file dispatch after repository
@@ -252,7 +256,7 @@ impl FileIndex {
     /// Construct a [`FileIndex`] from raw entries. Equivalent to
     /// `FileIndex { entries, ..Default::default() }` but spelled
     /// out so test/bench fixtures don't have to know about the
-    /// internal lazy `path_set` field.
+    /// internal lazy indexes.
     pub fn from_entries(entries: Vec<FileEntry>) -> Self {
         Self::from_entries_with_escaping(entries, Vec::new())
     }
@@ -269,6 +273,7 @@ impl FileIndex {
             escaping_symlinks,
             path_set: OnceLock::new(),
             all_path_set: OnceLock::new(),
+            file_entry_indices: OnceLock::new(),
             tree_files: OnceLock::new(),
             parent_to_children: OnceLock::new(),
             changed_paths: OnceLock::new(),
@@ -418,6 +423,24 @@ impl FileIndex {
         })
     }
 
+    fn file_entry_indices_arc(&self) -> &SharedFileIndex {
+        self.file_entry_indices.get_or_init(|| {
+            #[cfg(debug_assertions)]
+            let start = std::time::Instant::now();
+            let mut indices = HashMap::with_capacity(self.entries.len());
+            for (index, entry) in self.entries.iter().enumerate() {
+                if !entry.is_dir {
+                    // A walked index has unique paths. Retaining the first entry
+                    // also preserves `find_file`'s historical result for a
+                    // hand-built index containing duplicates.
+                    indices.entry(Arc::clone(&entry.path)).or_insert(index);
+                }
+            }
+            trace_index_build!("file_entry_indices", start, self.entries.len());
+            Arc::new(indices)
+        })
+    }
+
     fn all_path_set_arc(&self) -> &SharedPathSet {
         self.all_path_set.get_or_init(|| {
             #[cfg(debug_assertions)]
@@ -432,14 +455,16 @@ impl FileIndex {
         })
     }
 
-    /// Share `full`'s file set into this (`--changed`-filtered) index, so
+    /// Share `full`'s exact-file index into this (`--changed`-filtered) index, so
     /// [`Self::contains_file_in_tree`] answers about the whole repository.
     /// Engine-only, once per run, and only when a rule needs it (a
-    /// `scope_filter.has_ancestor` marker lookup); a no-op if already set. The set is
-    /// reference-counted, not copied, but building it costs a pass over the full
-    /// index, which a run without such lookups should not pay.
+    /// `scope_filter.has_ancestor` marker lookup); a no-op if already set. The
+    /// map is reference-counted, not copied, but building it costs a pass over
+    /// the full index, which a run without such lookups should not pay.
     pub(crate) fn share_tree_files_from(&self, full: &FileIndex) {
-        let _ = self.tree_files.set(Arc::clone(full.file_path_set_arc()));
+        let _ = self
+            .tree_files
+            .set(Arc::clone(full.file_entry_indices_arc()));
     }
 
     /// Does `rel` exist as a file anywhere in the repository? On a full index this
@@ -448,18 +473,18 @@ impl FileIndex {
     /// tree (ancestor markers), never for deciding which files to iterate.
     pub fn contains_file_in_tree(&self, rel: &Path) -> bool {
         match self.tree_files.get() {
-            Some(files) => files.contains(rel),
+            Some(files) => files.contains_key(rel),
             None => self.contains_file(rel),
         }
     }
 
     /// O(1) "does this exact relative path exist as a file?"
-    /// query. Triggers the lazy build of the path set on first
-    /// call. Use this instead of iterating `files()` whenever a
-    /// rule needs to check a fully-qualified path — at scale,
-    /// the hash lookup is several orders of magnitude faster.
+    /// query. Triggers the lazy build of the file-entry index on first call. Use
+    /// this instead of iterating `files()` whenever a rule needs to check a
+    /// fully-qualified path — at scale, the hash lookup is several orders of
+    /// magnitude faster.
     pub fn contains_file(&self, rel: &Path) -> bool {
-        self.file_path_set().contains(rel)
+        self.file_entry_indices_arc().contains_key(rel)
     }
 
     /// O(1) "does this exact relative path exist as an indexed file or
@@ -470,17 +495,14 @@ impl FileIndex {
         self.all_path_set_arc().contains(rel)
     }
 
-    /// Find a file entry by its exact relative path. Uses the
-    /// lazy path set for the existence check, then re-scans
-    /// entries linearly to return the matching `&FileEntry`
-    /// (entries are pinned, but the set stores `Arc<Path>` keys
-    /// not direct entry references). Most callers want the
-    /// boolean answer — prefer [`FileIndex::contains_file`].
+    /// Find a file entry by its exact relative path in O(1) average time.
+    ///
+    /// The path → entry index is built lazily on first use. Like
+    /// [`Self::contains_file`], this only sees non-directory entries admitted by
+    /// the walker, preserving ignore and repository-boundary semantics.
     pub fn find_file(&self, rel: &Path) -> Option<&FileEntry> {
-        if !self.contains_file(rel) {
-            return None;
-        }
-        self.files().find(|e| &*e.path == rel)
+        let entry_index = *self.file_entry_indices_arc().get(rel)?;
+        self.entries.get(entry_index)
     }
 
     // ── v0.9.8 — parent_to_children index ────────────────────────

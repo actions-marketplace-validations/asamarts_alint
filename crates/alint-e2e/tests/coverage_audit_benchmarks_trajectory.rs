@@ -137,6 +137,15 @@ fn benchmarks_trajectory_renders_with_latest_version_on_top() {
         !rows[0]["cells"]["s4_1m_full"].is_null(),
         "top row ({top_version}) has no s4_1m_full cell — partial bench publish?",
     );
+    let latest_report: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(results_dir.join(&top_version).join("results.json"))
+            .expect("read latest benchmark report"),
+    )
+    .expect("parse latest benchmark report");
+    assert_eq!(
+        rows[0]["workload_revisions"]["S4"], latest_report["args"]["scenario_revisions"]["S4"],
+        "trajectory S4 revision must match the latest published report",
+    );
 }
 
 #[test]
@@ -218,6 +227,10 @@ fn committed_history_matches_renderer() {
     let rendered = String::from_utf8(out.stdout)
         .expect("render-history.py stdout is UTF-8")
         .replace("\r\n", "\n");
+    assert!(
+        rendered.contains("**r2 ← reset from r1**"),
+        "S4's v0.19.0 workload reset must be visible beside its timing rows",
+    );
     let committed = std::fs::read_to_string(workspace.join("docs/benchmarks/HISTORY.md"))
         .expect("read committed benchmark history")
         .replace("\r\n", "\n");

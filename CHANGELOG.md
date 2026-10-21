@@ -51,6 +51,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Exact-path repository facts now use the lazy `FileIndex` path-to-entry index.**
+  `any_file_exists`, `all_files_exist`, and `file_content_matches` retain glob,
+  exclusion, ignore, and validation semantics without rescanning every walked file
+  for each literal fact. On the controlled 100k-file S4 fact workload this removes
+  90.4% of the incremental instruction cost; a Criterion scaling benchmark and a
+  deterministic Callgrind cell guard the linear shape. See the
+  [investigation](docs/benchmarks/investigations/2026-10-s4-literal-facts/).
+
+- **The S4 benchmark workload is now revision 3.** Its Git fixture commits realistic
+  version and toolchain authorities, activating all 35 rules added in revision 2;
+  the contract pins 23/24 true facts and 82/85 active rules. Published history and
+  trajectory data now carry explicit workload revisions and mark reset boundaries
+  instead of presenting unlike timings as a continuous series.
+
 - **Oversized Rust implementation files are now split by responsibility.** CLI command execution
   lives in per-command modules; engine execution, fixing, gates, and tests use phase-focused
   modules; DSL tests are grouped by concern; and docs export separates rule, ruleset, and CLI page

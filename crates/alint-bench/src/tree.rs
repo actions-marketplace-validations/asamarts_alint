@@ -170,22 +170,109 @@ pub fn generate_git_monorepo(
     Ok(tree)
 }
 
-/// Like [`generate_nested_polyglot_monorepo`] but the result is a real git repo
-/// (init + `add -A` + initial commit at generation time). Produced for
-/// bench-scale's scenario that needs BOTH a polyglot tree AND a git repo
-/// (the consolidated `s4_workspace`, which stacks the bundled ecosystem rulesets
-/// over a nested-polyglot tree AND runs `git_no_denied_paths` / `git_tracked_only`
-/// git-aware rules -- those only fire inside a real repo). The check side must see
-/// the repo in every mode, so the git state is baked at generation, not deferred to
-/// the `--changed` setup.
+/// Like [`generate_nested_polyglot_monorepo`] but with the committed root policy
+/// anchors used by S4 and a real Git repository (`init` + `add -A` + initial
+/// commit). The anchors activate the versioning and toolchain-pins bundles; the
+/// nested Rust/Node/Python manifests give the activated versioning relations
+/// realistic targets. S4's check side must see both the anchors and repository
+/// state in every mode, so both are materialised before the initial commit rather
+/// than staged later as an overlay.
 pub fn generate_git_nested_polyglot_monorepo(
     packages: usize,
     files_per_package: usize,
     seed: u64,
 ) -> io::Result<Tree> {
-    let tree = generate_nested_polyglot_monorepo(packages, files_per_package, seed)?;
+    let mut tree = generate_nested_polyglot_monorepo(packages, files_per_package, seed)?;
+    plant_s4_workspace_anchors(&mut tree)?;
     git_init_and_commit(tree.root())?;
     Ok(tree)
+}
+
+fn plant_s4_workspace_anchors(tree: &mut Tree) -> io::Result<()> {
+    const ANCHORS: &[(&str, &str)] = &[
+        ("VERSION", "0.1.0\n"),
+        (
+            "CHANGELOG.md",
+            "# Changelog\n\n## 0.1.0\n\nSynthetic S4 benchmark release.\n",
+        ),
+        (".nvmrc", "20.18.0\n"),
+        ("rust-toolchain.toml", "[toolchain]\nchannel = \"1.88.0\"\n"),
+        (".python-version", "3.13.0\n"),
+        (".ruby-version", "3.3.0\n"),
+        (".java-version", "21.0.0\n"),
+        (
+            "global.json",
+            "{\n  \"sdk\": { \"version\": \"9.0.100\" },\n  \"tools\": { \"dotnet\": \"9.0.100\" }\n}\n",
+        ),
+        (
+            ".tool-versions",
+            concat!(
+                "nodejs 20.18.0\n",
+                "rust 1.88.0\n",
+                "python 3.13.0\n",
+                "ruby 3.3.0\n",
+                "java 21.0.0\n",
+                "dotnet 9.0.100\n",
+            ),
+        ),
+        (
+            "package.json",
+            concat!(
+                "{\n",
+                "  \"name\": \"alint-s4-benchmark\",\n",
+                "  \"version\": \"0.1.0\",\n",
+                "  \"private\": true,\n",
+                "  \"engines\": { \"node\": \"20.18.0\" },\n",
+                "  \"volta\": { \"node\": \"20.18.0\" }\n",
+                "}\n",
+            ),
+        ),
+        (
+            "Dockerfile.toolchains",
+            concat!(
+                "FROM node:20.18.0 AS node\n",
+                "FROM rust:1.88.0 AS rust\n",
+                "FROM python:3.13.0 AS python\n",
+                "FROM ruby:3.3.0 AS ruby\n",
+                "FROM eclipse-temurin:21.0.0 AS java\n",
+                "FROM mcr.microsoft.com/dotnet/sdk:9.0.100 AS dotnet\n",
+            ),
+        ),
+        (
+            ".github/workflows/toolchains.yml",
+            concat!(
+                "name: toolchains\n",
+                "on: [push]\n",
+                "jobs:\n",
+                "  verify:\n",
+                "    runs-on: ubuntu-latest\n",
+                "    steps:\n",
+                "      - uses: actions/setup-node@v4\n",
+                "        with: { node-version: 20.18.0 }\n",
+                "      - uses: dtolnay/rust-toolchain@stable\n",
+                "        with: { toolchain: 1.88.0 }\n",
+                "      - uses: actions/setup-python@v5\n",
+                "        with: { python-version: 3.13.0 }\n",
+                "      - uses: ruby/setup-ruby@v1\n",
+                "        with: { ruby-version: 3.3.0 }\n",
+                "      - uses: actions/setup-java@v4\n",
+                "        with: { java-version: 21.0.0 }\n",
+                "      - uses: actions/setup-dotnet@v4\n",
+                "        with: { dotnet-version: 9.0.100 }\n",
+            ),
+        ),
+    ];
+
+    for (relative, content) in ANCHORS {
+        let relative = PathBuf::from(relative);
+        let absolute = tree.root().join(&relative);
+        if let Some(parent) = absolute.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(absolute, content)?;
+        tree.files.push(relative);
+    }
+    Ok(())
 }
 
 /// Turn a freshly-generated tree at `root` into a committed git repo. Shared by
