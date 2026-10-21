@@ -1235,6 +1235,10 @@ fn yaml_value_span_declines_non_scalar_alias_multidoc_and_bad_input() {
     // A multi-document stream is ambiguous -> declines.
     let multi = "a: 1\n---\nb: 2\n";
     assert!(resolve_value_span(Format::Yaml, multi.as_bytes(), &[key("a")]).is_none());
+    // Duplicate mappings are ambiguous -> decline rather than editing whichever
+    // value the loader happened to retain.
+    let duplicate = "a: 1\na: 2\n";
+    assert!(resolve_value_span(Format::Yaml, duplicate.as_bytes(), &[key("a")]).is_none());
     // Malformed YAML / a missing key -> None (no panic).
     assert!(resolve_value_span(Format::Yaml, b"a: [1, 2\n", &[key("a")]).is_none());
     assert!(resolve_value_span(Format::Yaml, b"a: 1\n", &[key("z")]).is_none());
@@ -1314,9 +1318,8 @@ fn yaml_value_span_declines_block_scalars_and_implicit_null() {
 
 #[test]
 fn yaml_value_span_for_an_explicit_empty_key_is_none_or_exactly_the_value() {
-    // saphyr 0.1.0 resolves the empty key of `? \n: 8080` to `""` (0.0.12: null;
-    // saphyr-rs/saphyr#136 may restore null). Either way the resolver must decline
-    // or point at exactly the value -- never a bogus span.
+    // saphyr 0.2.2 resolves the empty key of `? \n: 8080` to `""`. The resolver
+    // must still decline or point at exactly the value -- never a bogus span.
     let src = "? \n: 8080\n";
     if let Some(span) = resolve_value_span(Format::Yaml, src.as_bytes(), &[key("")]) {
         assert_eq!(&src[span], "8080");

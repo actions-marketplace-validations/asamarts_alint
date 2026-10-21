@@ -1738,5 +1738,9 @@ flow: [é, 🚀]
             extract_entry_rows(Format::Yaml, "---\na: 1\n---\nb: 2\n"),
             Err(EntryRowsError::Parse(_))
         ));
+        assert!(matches!(
+            extract_entry_rows(Format::Yaml, "before: visible\0after: hidden\n"),
+            Err(EntryRowsError::Parse(_))
+        ));
     }
 }

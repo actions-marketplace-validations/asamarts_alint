@@ -1673,9 +1673,9 @@ mod json_ {
 /// key does not own its line).
 ///
 /// THREE `saphyr` quirks handled here (all verified empirically + gated; re-checked
-/// on 0.1.0, which additionally resolves an empty plain node to `""`, not null):
-/// (1) `Marker::index` is a CHAR offset despite the `index()` rustdoc claiming
-/// bytes, so spans are converted char->byte; a bump must re-verify this. (2) a
+/// on 0.2.2, which still resolves an empty plain node to `""`, not null): (1)
+/// `Marker::index` is a CHAR offset despite the `index()` rustdoc claiming bytes,
+/// so spans are converted char->byte; a bump must re-verify this. (2) a
 /// QUOTED scalar's `span.end` runs to end-of-line (past a trailing comment), so
 /// `clamp_quoted_scalar_span` tightens it to the closing quote -- else a splice
 /// silently deletes the comment (the audit's HIGH finding; a plain scalar's end is

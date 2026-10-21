@@ -46,22 +46,23 @@ entry points, and malformed-input locations. Existing focused suites additionall
 
 ## Candidate evaluation
 
-Repository facts and candidate metadata were checked on 2026-10-19. MSRV compatibility is against
-alint's Rust 1.88 floor.
+Repository facts and candidate metadata were checked through 2026-10-21. MSRV compatibility is
+against alint's Rust 1.88 floor.
 
 | Candidate | Maintenance / license / MSRV | Compatibility and security result | Decision |
 |---|---|---|---|
 | `yaml_serde` 0.10.7 + `libyaml-rs` 0.3.0 | YAML organization; MIT OR Apache-2.0 + MIT; Rust 1.82 + 1.60; `yaml_serde` released seven 0.10.x versions from January-August 2026 and `libyaml-rs` 0.3.0 in March | Source-compatible `Value`, `Mapping`, Serde, streaming, tags, diagnostics, and libyaml semantics; removes the archived crate/advisory; parser still contains maintained C2Rust unsafe code | **Selected** |
 | `noyalib-serde-yaml` / `noyalib` 0.0.57 | Active, MIT OR Apache-2.0, `#![forbid(unsafe_code)]`; eight releases from September-October 2026; 0.0.57 compiles on Rust 1.88, while 0.0.58 already requires 1.89; `RUSTSEC-2026-0333` fixed since 0.0.53 | Compatibility shim compiled in isolation, but representative parsing was 2.2x slower and its default alias ratio rejected a currently supported one-anchor/11-alias shape as `repetition limit exceeded`; pre-1.0 patch releases are intentionally breaking, requiring an exact pin | Rejected for this migration |
 | `serde-saphyr` 1.0.0 | Active, MIT OR Apache-2.0, unsafe forbidden; 1.0 released in July 2026 and compiles on Rust 1.88; 2.0 followed in October and requires Rust 1.89 | Direct typed Serde and budgets are strong, but it has no `serde_yaml`-compatible `Value`/`Mapping`/`from_value` surface. Its default depth budget rejected level 65, below alint's supported level 128, and the representative parse was 1.7x slower | Rejected for current compatibility |
-| `saphyr` / `saphyr-parser` 0.2.2 and `yaml-rust2` 0.13 | Active pure-Rust YAML 1.2 parser/value families; MIT OR Apache-2.0; Rust 1.85; `saphyr-parser` released 0.1 in September and 0.2.2 in October 2026 | Good event and spanned trees, but no drop-in Serde/value/error contract. Alint already uses pinned Saphyr 0.1 for source spans and duplicate-aware events; replacing the data-binding parser would require owning a second Serde deserializer and semantic adapter | Keep for span/event use only |
+| `saphyr` / `saphyr-parser` 0.2.2 and `yaml-rust2` 0.13 | Active pure-Rust YAML 1.2 parser/value families; MIT OR Apache-2.0; Rust 1.85; `saphyr-parser` released 0.1 in September and 0.2.2 in October 2026 | Good event and spanned trees, but no drop-in Serde/value/error contract. Alint pins both Saphyr crates to 0.2.2 for source spans and duplicate-aware events; replacing the data-binding parser would require owning a second Serde deserializer and semantic adapter | Keep for span/event use only |
 | `yaml_serde` alternatives backed by renamed libyaml forks | Mixed | Either retained the same unsafe implementation with less institutional ownership, were deprecated, carried advisories, or exceeded the MSRV | Rejected |
 | In-house full parser or documented subset | Owned, no external parser dependency | Full compatibility means scanner, parser, aliases, merges, tags, Serde, generic values, spans, diagnostics, serialization, resource limits, conformance suite, differential fuzzing, and long-term maintenance. A subset would reject accepted user YAML and is a compatibility change, not a dependency refactor | Not competitive; do not build now |
 
-The selected Serde/value API has no source-span interface; alint therefore retains its existing
-pinned Saphyr event adapter for YAML edits and duplicate-aware extraction. The RustSec database
-reported no advisory for `yaml_serde` or `libyaml-rs` at evaluation time. The comparison explicitly
-treated an archived or advised transitive parser as disqualifying rather than something to waive.
+The selected Serde/value API has no source-span interface; alint therefore retains its pinned
+Saphyr 0.2.2 event adapter for YAML edits and duplicate-aware extraction. The RustSec database
+reported no advisory for `yaml_serde`, `libyaml-rs`, `saphyr`, or `saphyr-parser` at evaluation
+time. The comparison explicitly treated an archived or advised transitive parser as disqualifying
+rather than something to waive.
 
 The in-house assessment reused the existing `yaml_depth` lexer and the Saphyr-backed span/event paths
 as the smallest realistic prototype boundary. They demonstrate that alint can own narrow lexical

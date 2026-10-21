@@ -78,6 +78,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The migration includes a parser-independent compatibility contract and a measured
   [buy-versus-build decision](docs/design/yaml-parser.md).
 
+- **Malformed YAML can no longer produce a partial extraction or an ambiguous fix.**
+  Raw NUL bytes fail direct event-stream extraction instead of terminating it early, and
+  structured fixes decline duplicate mapping keys rather than selecting one value. The
+  aligned `saphyr` and `saphyr-parser` 0.2.2 update is regression-tested and kept in one
+  Dependabot group so their pre-1.0 event contracts cannot drift.
+
 - **Every configuration source now proves language and binary compatibility before composition.**
   Root, local-extended, bundled, HTTPS, nested, and drop-in sources validate their own `version`
   before trust gates or merge. Complete sources must declare it; a drop-in may omit it and inherit
@@ -101,6 +107,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stable JSON report, catching package-only runtime omissions that `alint --version` cannot expose.
 
 ### Fixed
+
+- **HTTPS configuration loading no longer trusts certificates through compromised emSign
+  intermediates.** The locked `rustls-webpki` and Mozilla root store now contain the coordinated
+  fixes for `RUSTSEC-2026-0382` and `RUSTSEC-2026-0381`.
 
 - **Policy-test corpus audits now follow public discovery semantics.** The CLI, 578-document
   migration gate, and bundle-ownership gate share one bounded top-level `test_version`

@@ -21,6 +21,17 @@ updates:
       timezone: America/New_York
     open-pull-requests-limit: 5
     groups:
+      # These pre-1.0 crates share parser behavior and must resolve together.
+      # A 0.x minor bump is semver-major, so the general group cannot keep them
+      # aligned without this explicit all-update-types group.
+      saphyr-stack:
+        patterns:
+          - "saphyr"
+          - "saphyr-parser"
+        update-types:
+          - patch
+          - minor
+          - major
       patch-and-minor:
         update-types:
           - patch
