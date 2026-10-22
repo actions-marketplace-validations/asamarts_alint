@@ -25,6 +25,41 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The deterministic perf gate also runs on pushes to `main`, comparing the
   pushed range.
 
+### Performance
+
+- **Every rule's path check is cheaper.** Matching a file against a rule's
+  `paths:` include and exclude globs prepared the path for matching twice, once
+  per glob set; it is now prepared once. The rule-dispatch benchmark drops 23%
+  in instructions and raw glob matching 12%.
+- **Nested-rule kinds are about three times cheaper.** `every_matching_has`,
+  `for_each_dir` and `for_each_file` build each nested rule once per matched
+  entry, and compiling its literal path (`packages/p0/README.md`) into a glob
+  set was most of that cost. A scope whose only pattern is a literal path now
+  matches by comparing the path instead. Nested rules also no longer re-run
+  build-time validation per entry, skip glob escaping for values with nothing
+  to escape, and derive only the path tokens their templates use. Instruction
+  counts drop 67-70% (`every_matching_has`, `for_each_dir`), below v0.17.0.
+- **`pair` and `unique_by` are cheaper.** Both now derive only the path tokens
+  their templates use; `pair` skips its partner-path normalization when the
+  rendered path is already normal, and `unique_by` groups keys in a hash map
+  (output order unchanged). Instruction counts drop 26-27% (`pair`) and 32-47%
+  (`unique_by`).
+- **Terminal output of many findings is cheaper.** The human, github and
+  markdown formats sanitize every path and message; printable ASCII now skips
+  the per-character check. Instruction counts drop 16-28%, below v0.17.0.
+- **YAML is scanned once, not twice, before parsing.** The denial-of-service
+  guards (flow-collection depth and alias expansion) share one pass and skip it
+  when the document has none of the bytes that could trip them. YAML structured
+  queries drop 16% (back to v0.17.0), `pinned_references` 22%.
+- **Loading an `extends:` chain is cheaper.** A config reached through
+  `extends:` is memoized only when it is loaded a second time (diamond chains
+  stay linear), and provenance markers are updated in place. A 16-level chain
+  loads with 21% fewer instructions.
+- **End to end**, against v0.20.0 on the bench host in two separate sessions,
+  structured-query and cross-file checks (S2, S4) run 3-5% faster from 10k to
+  1m files (best run of each cell). Walk- and content-scan-bound runs (S1, S3)
+  take the same time, although S1 now executes 6% fewer instructions.
+
 ### Fixed
 
 - The 1k `changed`-mode benchmark cells no longer swing between about 11
