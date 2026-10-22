@@ -105,8 +105,24 @@ pub fn render_path_glob(template: &str, t: &PathTokens) -> String {
         } else {
             v
         };
-        out.push_str(&glob_escape(v));
+        push_glob_escaped(out, v);
     })
+}
+
+/// True when `s` has a byte [`glob_escape`] would rewrite.
+fn needs_glob_escape(s: &str) -> bool {
+    s.bytes().any(|b| {
+        matches!(b, b'?' | b'*' | b'[' | b']' | b'{' | b'}') || (b == b'\\' && !cfg!(windows))
+    })
+}
+
+/// Append `v` glob-escaped, without allocating when it has nothing to escape.
+fn push_glob_escaped(out: &mut String, v: &str) {
+    if needs_glob_escape(v) {
+        out.push_str(&glob_escape(v));
+    } else {
+        out.push_str(v);
+    }
 }
 
 /// Escape `s` so it matches only itself when compiled as an alint glob
@@ -117,6 +133,9 @@ pub fn render_path_glob(template: &str, t: &PathTokens) -> String {
 /// name, so it is left as-is.
 #[must_use]
 pub fn glob_escape(s: &str) -> String {
+    if !needs_glob_escape(s) {
+        return s.to_owned();
+    }
     let escaped = globset::escape(s);
     if cfg!(windows) {
         escaped
@@ -141,6 +160,12 @@ pub fn glob_escape(s: &str) -> String {
 pub fn literal_glob_path(pattern: &str) -> Option<String> {
     if pattern.starts_with('!') {
         return None;
+    }
+    if !pattern
+        .bytes()
+        .any(|b| matches!(b, b'\\' | b'[' | b'*' | b'?' | b']' | b'{' | b'}'))
+    {
+        return Some(pattern.to_owned());
     }
     let mut out = String::with_capacity(pattern.len());
     let mut chars = pattern.chars().peekable();
@@ -514,6 +539,102 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-fast-path algorithms, kept as the reference the fast paths must
+    /// match exactly.
+    fn glob_escape_reference(s: &str) -> String {
+        let escaped = globset::escape(s);
+        if cfg!(windows) {
+            escaped
+        } else {
+            escaped.replace('\\', "\\\\")
+        }
+    }
+
+    fn literal_glob_path_reference(pattern: &str) -> Option<String> {
+        if pattern.starts_with('!') {
+            return None;
+        }
+        let mut out = String::with_capacity(pattern.len());
+        let mut chars = pattern.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' if !cfg!(windows) => out.push(chars.next()?),
+                '[' => {
+                    let x = chars.next()?;
+                    if matches!(x, '!' | '^') || chars.next()? != ']' {
+                        return None;
+                    }
+                    out.push(x);
+                }
+                '*' | '?' | ']' | '{' | '}' => return None,
+                c => out.push(c),
+            }
+        }
+        Some(out)
+    }
+
+    /// Every string up to length 3 over an alphabet that covers each glob
+    /// metacharacter, the escape character, `!` and a non-ASCII char.
+    fn exhaustive_short_strings() -> Vec<String> {
+        const ALPHABET: [char; 13] = [
+            'a', '/', '.', '*', '?', '[', ']', '{', '}', '\\', '!', '\u{e9}', ' ',
+        ];
+        let mut out = vec![String::new()];
+        for len in 1..=3 {
+            let mut idx = vec![0usize; len];
+            loop {
+                out.push(idx.iter().map(|&i| ALPHABET[i]).collect());
+                let mut pos = 0;
+                loop {
+                    idx[pos] += 1;
+                    if idx[pos] < ALPHABET.len() {
+                        break;
+                    }
+                    idx[pos] = 0;
+                    pos += 1;
+                    if pos == len {
+                        break;
+                    }
+                }
+                if pos == len {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn glob_escape_fast_path_matches_the_reference() {
+        for s in exhaustive_short_strings() {
+            assert_eq!(glob_escape(&s), glob_escape_reference(&s), "{s:?}");
+            let mut pushed = String::from("pre/");
+            push_glob_escaped(&mut pushed, &s);
+            assert_eq!(
+                pushed,
+                format!("pre/{}", glob_escape_reference(&s)),
+                "{s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn literal_glob_path_fast_path_matches_the_reference() {
+        for s in exhaustive_short_strings() {
+            assert_eq!(
+                literal_glob_path(&s),
+                literal_glob_path_reference(&s),
+                "{s:?}"
+            );
+            let escaped = glob_escape(&s);
+            assert_eq!(
+                literal_glob_path(&escaped),
+                literal_glob_path_reference(&escaped),
+                "escaped {s:?}"
+            );
+        }
+    }
 
     #[test]
     fn literal_glob_path_resolves_escapes_and_rejects_real_globs() {
