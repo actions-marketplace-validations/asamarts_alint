@@ -594,12 +594,31 @@ fn readiness_probe(tool: Tool, scenario: Scenario, mode: Mode) -> Option<Readine
 /// initial commit IS the bench base. The follow-up file-touch
 /// step then produces the working-tree diff `--changed` mode
 /// measures.
+///
+/// Either way the index is then settled ([`settle_racy_index`]) so
+/// `git ls-files --modified` costs the same in every run.
 fn init_git_for_changed_mode(root: &Path) -> Result<()> {
     git(root, &["init", "-q", "-b", "main"])?;
     git(root, &["config", "gc.auto", "0"])?;
-    if has_initial_commit(root) {
-        return Ok(());
+    if !has_initial_commit(root) {
+        commit_bench_base(root)?;
     }
+    settle_racy_index(root)
+}
+
+/// Git (built without `USE_NSEC`, its default) treats a tracked file whose
+/// mtime falls in the same wall-clock second as `.git/index` as racily clean
+/// and re-hashes its content on every `ls-files --modified`, which never
+/// rewrites the index to clear it. A small tree is generated and committed
+/// within one second, so anywhere from none to all of its files were re-hashed
+/// on every timed `--changed` run depending on where the second boundary fell.
+/// Wait out the second, then let `git status` rewrite the index.
+fn settle_racy_index(root: &Path) -> Result<()> {
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    git(root, &["status", "--porcelain", "--untracked-files=no"])
+}
+
+fn commit_bench_base(root: &Path) -> Result<()> {
     git(root, &["add", "-A"])?;
     git(
         root,
@@ -664,6 +683,43 @@ fn touch_subset(root: &Path, subset: &[&PathBuf]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Index entries whose mtime second is not older than the index file's
+    /// own mtime second: what git re-hashes on every `ls-files --modified`.
+    fn racy_entries(root: &Path) -> usize {
+        let index = fs::metadata(root.join(".git/index")).unwrap();
+        let index_secs = index
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["ls-files", "--debug"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("mtime: "))
+            .filter_map(|mtime| mtime.split(':').next()?.parse::<u64>().ok())
+            .filter(|&secs| secs >= index_secs)
+            .count()
+    }
+
+    #[test]
+    fn changed_mode_setup_leaves_no_racily_clean_entries() {
+        // Without the settle step, files written and committed within one
+        // second are all racily clean, and `--changed` re-hashes them on
+        // every timed run.
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..50 {
+            fs::write(tmp.path().join(format!("f{i}.txt")), format!("{i}\n")).unwrap();
+        }
+        init_git_for_changed_mode(tmp.path()).unwrap();
+        assert_eq!(racy_entries(tmp.path()), 0);
+    }
 
     fn row(tool: &str, size_files: usize, mean_ms: f64) -> Row {
         Row {
