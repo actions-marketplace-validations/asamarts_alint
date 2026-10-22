@@ -9,11 +9,16 @@ TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 git clone -q --no-local "$REPO_ROOT" "$TMP_ROOT/repo"
-# Exercise working-tree changes before they are committed, not only the clone's
-# HEAD copies. The documentation fixtures are already part of this PR; these
-# two files are the implementation under test in the same change.
-cp "$REPO_ROOT/ci/scripts/check-version-pins.sh" "$TMP_ROOT/repo/ci/scripts/check-version-pins.sh"
-cp "$REPO_ROOT/action.yml" "$TMP_ROOT/repo/action.yml"
+# A local clone contains only HEAD. Overlay and commit every tracked working-tree
+# change so a pre-commit run exercises the actual candidate, including an
+# uncommitted release bump and any gate/fixture edits made in the same change.
+# `--binary` keeps this faithful if a future contract input is non-text.
+git -C "$REPO_ROOT" diff --binary HEAD -- . |
+  git -C "$TMP_ROOT/repo" apply --whitespace=nowarn
+git -C "$TMP_ROOT/repo" add -A
+git -C "$TMP_ROOT/repo" \
+  -c user.name='alint tests' -c user.email='tests@alint.invalid' \
+  commit --allow-empty -q -m 'fixture: current candidate'
 cd "$TMP_ROOT/repo"
 
 # Read the documented Action pin and the workspace version instead of

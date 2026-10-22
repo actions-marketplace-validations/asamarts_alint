@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-21
+
+General-linter phase 1b closes the policy-authoring loop with a public, hermetic policy-test
+runner, selected-rule production traces with bounded redaction-safe previews, and per-source
+configuration compatibility requirements. The release also hardens sensitive diagnostics and YAML
+handling, moves exact-path facts onto the lazy file index, and makes release, benchmark, and
+ruleset ownership contracts executable.
+
 ### Added
 
 - **`alint-testkit` now ships the public, hermetic policy-test v1 runner.** `PolicyTest` documents
@@ -58,6 +66,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   100k-file, 20-fact existence/content workload this removes 90.4% of the incremental instruction
   cost; a Criterion scaling benchmark and a deterministic Callgrind cell guard the linear shape.
   See the [investigation](docs/benchmarks/investigations/2026-10-s4-literal-facts/).
+
+- **Release hot paths no longer build avoidable intermediate state.** Static `explain --format
+  json` serializes its typed, borrowed rule document directly through a buffered writer instead of
+  constructing and then copying an outer JSON value tree. Git subprocess setup also skips the
+  scoped-environment registry lookup and map clone for ordinary repositories while continuing to
+  strip every repository redirector from policy-test environments.
 
 - **The S4 benchmark workload is now revision 3.** Its Git fixture commits realistic
   version and toolchain authorities, activating all 35 rules added in revision 2;
@@ -161,6 +175,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   overlays that guide from `main` after a tag is published and rejects generated output whose
   Action examples do not match `ci/action-doc-pin.env`, instead of leaving alint.org's copy-paste
   snippets one release behind.
+
+- **Release-bump shell validation now tests the actual candidate tree.** The version-pin harness
+  overlays and commits every tracked working-tree change in its disposable clone, so local
+  pre-commit validation neither fails on the expected uncommitted version bump nor tests stale
+  release metadata from `HEAD`.
 
 - **Nested configs now reject every execution setting they cannot honor.** Explicit
   `respect_gitignore`, `fix_size_limit`, and `nested_configs` declarations now fail, including an
@@ -8111,7 +8130,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/asamarts/alint/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/asamarts/alint/compare/v0.18.4...v0.19.0
 [0.18.4]: https://github.com/asamarts/alint/compare/v0.18.3...v0.18.4
 [0.18.3]: https://github.com/asamarts/alint/compare/v0.18.2...v0.18.3

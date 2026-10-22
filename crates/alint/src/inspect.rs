@@ -708,8 +708,15 @@ fn build_explain_trace_document(
         return Ok(None);
     }
     let trace = run_explain_trace(loaded, entry, options, analysis_time, no_gitignore)?;
+    let rule = serde_json::to_value(explain_rule_json_document(
+        entry,
+        kind_meta,
+        analysis_time,
+        &loaded.root,
+        false,
+    ))?;
     Ok(Some(trace.into_document(
-        explain_rule_json_payload(entry, kind_meta, analysis_time, &loaded.root, true),
+        rule,
         alint_core::TraceExecution {
             changed: options.changed.enabled,
             base: options.changed.base.clone(),
@@ -917,19 +924,80 @@ fn explain_scope_filter_json(
 /// Machine-readable rule body shared by stable static explain and the
 /// experimental trace envelope. Structural ids remain visible; protected
 /// fields, including environment-derived selectors, are redacted.
-fn explain_rule_json_payload(
-    entry: &alint_core::RuleEntry,
-    kind_meta: &alint_core::KindMeta,
+#[derive(serde::Serialize)]
+struct ExplainRuleDocument<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    analysis_time: Option<serde_json::Value>,
+    capabilities: ExplainCapabilities<'a>,
+    categories: Vec<&'static str>,
+    conditional: bool,
+    docs: Option<String>,
+    expect_matches: bool,
+    fix: Option<serde_json::Value>,
+    fix_ops: ExplainFixOps<'a>,
+    fixable: bool,
+    id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
+    level: &'static str,
+    message: Option<serde_json::Value>,
+    options: serde_json::Value,
+    paths: Option<serde_json::Value>,
+    policy_url: Option<serde_json::Value>,
+    rule_kind: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema_version: Option<u32>,
+    scope_filter: Option<serde_json::Value>,
+    selectors: ExplainSelectors<'a>,
+    summary: Option<&'static str>,
+    when: Option<serde_json::Value>,
+}
+
+struct ExplainCapabilities<'a>(&'a alint_core::KindMeta);
+
+impl serde::Serialize for ExplainCapabilities<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(&self.0.serialized_capabilities(), serializer)
+    }
+}
+
+struct ExplainFixOps<'a>(&'a alint_core::KindMeta);
+
+impl serde::Serialize for ExplainFixOps<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(self.0.fix_ops.as_ref(), serializer)
+    }
+}
+
+struct ExplainSelectors<'a>(&'a alint_core::KindMeta);
+
+impl serde::Serialize for ExplainSelectors<'_> {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(self.0.selectors.as_ref(), serializer)
+    }
+}
+
+fn explain_rule_json_document<'a>(
+    entry: &'a alint_core::RuleEntry,
+    kind_meta: &'a alint_core::KindMeta,
     analysis_time: Option<&alint_core::AnalysisTimeResolution>,
     root: &Path,
-    redact_sensitive: bool,
-) -> serde_json::Value {
+    stable_envelope: bool,
+) -> ExplainRuleDocument<'a> {
     let sensitive = |field: &str| {
-        redact_sensitive
-            && entry
-                .spec
-                .as_deref()
-                .is_some_and(|spec| spec.field_is_sensitive(field))
+        entry
+            .spec
+            .as_deref()
+            .is_some_and(|spec| spec.field_is_sensitive(field))
     };
     let redacted = || serde_json::Value::String("<redacted>".to_string());
     let paths = entry.paths().map(|paths| {
@@ -956,7 +1024,6 @@ fn explain_rule_json_payload(
         }
         _ => serde_json::Value::Null,
     };
-    let scope_filter = explain_scope_filter_json(entry, root, redact_sensitive);
     let evidence = |field: &str, value: Option<&str>| {
         value.map(|value| {
             if sensitive(field) {
@@ -973,42 +1040,41 @@ fn explain_rule_json_payload(
             serde_json::Value::String(alint_core::Fixer::describe(fixer))
         }
     });
-    let mut document = serde_json::json!({
-        "id": entry.rule.id(),
-        "rule_kind": entry.kind(),
-        "categories": rules::categories_for_kind(entry.kind()),
-        "summary": rules::description_for_kind(entry.kind()),
-        "capabilities": kind_meta.serialized_capabilities(),
-        "selectors": kind_meta.selectors.as_ref(),
-        "fix_ops": kind_meta.fix_ops.as_ref(),
-        "docs": rules::categories_for_kind(entry.kind()).first().map(|family| {
-            format!(
-                "https://alint.org/docs/rules/{family}/{}/",
-                rules::canonical_kind(entry.kind())
-            )
-        }),
-        "level": entry.rule.level().as_str(),
-        "paths": paths,
-        "scope_filter": scope_filter,
-        "options": options,
-        "message": evidence(
+    let categories = rules::categories_for_kind(entry.kind());
+    let docs = categories.first().map(|family| {
+        format!(
+            "https://alint.org/docs/rules/{family}/{}/",
+            rules::canonical_kind(entry.kind())
+        )
+    });
+
+    ExplainRuleDocument {
+        analysis_time: analysis_time_json(analysis_time),
+        capabilities: ExplainCapabilities(kind_meta),
+        categories,
+        conditional: entry.when_src().is_some(),
+        docs,
+        expect_matches: entry.expect_matches(),
+        fix,
+        fix_ops: ExplainFixOps(kind_meta),
+        fixable: entry.rule.fixer().is_some(),
+        id: entry.rule.id(),
+        kind: stable_envelope.then_some("rule"),
+        level: entry.rule.level().as_str(),
+        message: evidence(
             "message",
             entry.message().filter(|message| !message.trim().is_empty()),
         ),
-        "policy_url": evidence("policy_url", entry.rule.policy_url()),
-        "when": evidence("when", entry.when_src()),
-        "expect_matches": entry.expect_matches(),
-        "conditional": entry.when_src().is_some(),
-        "fixable": entry.rule.fixer().is_some(),
-        "fix": fix,
-    });
-    if let Some(analysis_time) = analysis_time_json(analysis_time) {
-        document
-            .as_object_mut()
-            .expect("explain document is an object")
-            .insert("analysis_time".to_string(), analysis_time);
+        options,
+        paths,
+        policy_url: evidence("policy_url", entry.rule.policy_url()),
+        rule_kind: entry.kind(),
+        schema_version: stable_envelope.then_some(1),
+        scope_filter: explain_scope_filter_json(entry, root, true),
+        selectors: ExplainSelectors(kind_meta),
+        summary: rules::description_for_kind(entry.kind()),
+        when: evidence("when", entry.when_src()),
     }
-    document
 }
 
 /// Stable machine-readable single-rule `kind: "rule"` document.
@@ -1018,20 +1084,11 @@ fn explain_json(
     analysis_time: Option<&alint_core::AnalysisTimeResolution>,
     root: &Path,
 ) -> Result<ExitCode> {
-    let mut document = explain_rule_json_payload(entry, kind_meta, analysis_time, root, true);
-    let object = document
-        .as_object_mut()
-        .expect("explain document is an object");
-    object.insert(
-        "schema_version".to_string(),
-        serde_json::Value::Number(1_u64.into()),
-    );
-    object.insert(
-        "kind".to_string(),
-        serde_json::Value::String("rule".to_string()),
-    );
-    let mut out = std::io::stdout().lock();
-    writeln!(out, "{}", serde_json::to_string_pretty(&document)?)?;
+    let document = explain_rule_json_document(entry, kind_meta, analysis_time, root, true);
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    serde_json::to_writer_pretty(&mut out, &document)?;
+    writeln!(out)?;
     out.flush().ok();
     Ok(ExitCode::SUCCESS)
 }

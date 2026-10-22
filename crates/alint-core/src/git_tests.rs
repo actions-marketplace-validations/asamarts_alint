@@ -248,6 +248,33 @@ fn git_queries_ignore_foreign_repository_environment() {
 }
 
 #[test]
+fn scoped_process_environment_filters_repository_redirectors() {
+    let root = tempfile::tempdir().unwrap();
+    let environment = ProcessEnvironment::from([
+        ("GIT_DIR".to_string(), "/foreign/repository".to_string()),
+        ("SAFE_VALUE".to_string(), "retained".to_string()),
+    ]);
+    let _guard = scoped_process_environment(root.path(), environment);
+
+    let command = git_command(root.path());
+    let git_dir = command
+        .get_envs()
+        .find(|(name, _)| *name == "GIT_DIR")
+        .map(|(_, value)| value);
+    let safe_value = command
+        .get_envs()
+        .find(|(name, _)| *name == "SAFE_VALUE")
+        .map(|(_, value)| value);
+
+    assert_eq!(git_dir, None);
+    assert_eq!(
+        safe_value,
+        Some(Some(std::ffi::OsStr::new("retained"))),
+        "unrelated scoped values must reach Git"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn git_log_queries_disable_configured_signature_verification() {
     use std::io::Write as _;

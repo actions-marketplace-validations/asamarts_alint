@@ -86,23 +86,41 @@ const GIT_LOCAL_ENV_VARS: &[&str] = &[
     "GIT_ICASE_PATHSPECS",
 ];
 
-fn clear_git_repository_env(command: &mut Command) {
+fn clear_git_repository_env(
+    command: &mut Command,
+    scoped_environment: Option<&ProcessEnvironment>,
+) {
     for name in GIT_LOCAL_ENV_VARS {
-        command.env_remove(name);
+        // `Command::env_remove` forces Rust to copy the complete process
+        // environment at spawn time, even when the named variable is absent.
+        // Preserve the direct-inheritance fast path without weakening scoped
+        // runners: inspect whichever environment the child will inherit.
+        let is_present = scoped_environment.map_or_else(
+            || std::env::var_os(name).is_some(),
+            |environment| environment.contains_key(*name),
+        );
+        if is_present {
+            command.env_remove(name);
+        }
     }
 }
 
 fn git_command(root: &Path) -> Command {
     let mut command = Command::new("git");
-    let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let environment = SCOPED_PROCESS_ENVIRONMENTS
         .lock()
         .ok()
-        .and_then(|environments| environments.get(&key).cloned());
-    if let Some(environment) = environment {
-        command.env_clear().envs(environment.iter());
+        .and_then(|environments| {
+            if environments.is_empty() {
+                return None;
+            }
+            let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+            environments.get(&key).cloned()
+        });
+    if let Some(environment) = environment.as_deref() {
+        command.env_clear().envs(environment);
     }
-    clear_git_repository_env(&mut command);
+    clear_git_repository_env(&mut command, environment.as_deref());
     // Repository paths are byte-exact inputs, never user-authored pathspecs;
     // replacement refs are clone-local state, never repository history; log
     // display preferences must not invoke signature verifiers or alter stdout.
