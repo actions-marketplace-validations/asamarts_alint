@@ -49,6 +49,10 @@ pub fn flow_depth_within_limit(text: &str) -> bool {
 /// [`flow_depth_within_limit`] with an explicit ceiling (tests probe parity with
 /// a ceiling below the real parser's recursion limit).
 fn flow_depth_within_limit_with(text: &str, max: usize) -> bool {
+    // A flow collection needs a `[` or `{` byte; without one the depth is 0.
+    if !text.bytes().any(|b| b == b'[' || b == b'{') {
+        return true;
+    }
     let mut within = true;
     Lexer::new(text).run(|tok| match tok {
         Tok::FlowOpen(depth) if depth > max => {
@@ -173,6 +177,10 @@ fn expansion_within_limit_with(text: &str, max: usize) -> bool {
 /// a false positive merely triggers the (still correct, still bounded) counting
 /// pass.
 fn contains_alias(text: &str) -> bool {
+    // An alias token needs a `*` byte.
+    if !text.as_bytes().contains(&b'*') {
+        return false;
+    }
     let mut found = false;
     Lexer::new(text).run(|tok| {
         if matches!(tok, Tok::Alias) {
@@ -945,6 +953,67 @@ impl<'de> serde::de::Visitor<'de> for NodeBudget<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The byte prefilters must never change a verdict: compare them with the
+    /// lexer walks they short-circuit, over every string up to length 4 on an
+    /// alphabet of YAML's structural characters.
+    #[test]
+    fn prefilters_agree_with_the_lexer() {
+        fn flow_reference(text: &str, max: usize) -> bool {
+            let mut within = true;
+            Lexer::new(text).run(|tok| match tok {
+                Tok::FlowOpen(depth) if depth > max => {
+                    within = false;
+                    false
+                }
+                _ => true,
+            });
+            within
+        }
+        fn alias_reference(text: &str) -> bool {
+            let mut found = false;
+            Lexer::new(text).run(|tok| {
+                if matches!(tok, Tok::Alias) {
+                    found = true;
+                }
+                !found
+            });
+            found
+        }
+        const ALPHABET: [char; 14] = [
+            'a', ' ', '\n', ':', '-', '[', ']', '{', '}', '*', '&', '#', '\'', '"',
+        ];
+        let mut idx = [0usize; 4];
+        let mut checked = 0usize;
+        for len in 0..=4 {
+            idx.fill(0);
+            loop {
+                let text: String = idx[..len].iter().map(|&i| ALPHABET[i]).collect();
+                for max in [0, 1] {
+                    assert_eq!(
+                        flow_depth_within_limit_with(&text, max),
+                        flow_reference(&text, max),
+                        "{text:?} max={max}"
+                    );
+                }
+                assert_eq!(contains_alias(&text), alias_reference(&text), "{text:?}");
+                checked += 1;
+                let mut pos = 0;
+                while pos < len {
+                    idx[pos] += 1;
+                    if idx[pos] < ALPHABET.len() {
+                        break;
+                    }
+                    idx[pos] = 0;
+                    pos += 1;
+                }
+                if pos == len {
+                    break;
+                }
+            }
+        }
+        assert!(checked > 40_000, "{checked}");
+    }
 
     #[test]
     fn shallow_and_realistic_yaml_passes() {
