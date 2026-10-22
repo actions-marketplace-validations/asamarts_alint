@@ -46,6 +46,18 @@ pub fn sanitize_terminal_multiline(s: &str) -> Cow<'_, str> {
 }
 
 fn sanitize_terminal_impl(s: &str, preserve_newlines: bool) -> Cow<'_, str> {
+    // Printable ASCII needs no escaping: every character the slow path escapes
+    // is a C0/DEL/C1 control or non-ASCII. Nearly every path, message and rule
+    // id takes this byte scan instead of a per-character classification.
+    if s.bytes()
+        .all(|b| (0x20..0x7f).contains(&b) || (preserve_newlines && b == b'\n'))
+    {
+        return Cow::Borrowed(s);
+    }
+    sanitize_slow(s, preserve_newlines)
+}
+
+fn sanitize_slow(s: &str, preserve_newlines: bool) -> Cow<'_, str> {
     if !s.chars().any(|c| is_unsafe(c, preserve_newlines)) {
         return Cow::Borrowed(s);
     }
@@ -68,6 +80,42 @@ fn sanitize_terminal_impl(s: &str, preserve_newlines: bool) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ascii_fast_path_agrees_with_the_full_scan() {
+        let mut inputs: Vec<String> = (0u8..0x80).map(|b| char::from(b).to_string()).collect();
+        for a in 0u8..0x80 {
+            for b in [b'a', b'\n', b'\t', 0x1b, 0x7f] {
+                inputs.push(format!("{}{}x", char::from(a), char::from(b)));
+            }
+        }
+        inputs.extend(
+            [
+                "src/main.rs: tidy up",
+                "caf\u{e9}",
+                "a\u{202e}b",
+                "\u{200b}",
+                "\u{feff}x",
+                "x\u{85}y",
+                "\u{2028}",
+            ]
+            .map(String::from),
+        );
+        for s in &inputs {
+            for preserve in [false, true] {
+                assert_eq!(
+                    sanitize_terminal_impl(s, preserve),
+                    sanitize_slow(s, preserve),
+                    "{s:?} preserve_newlines={preserve}"
+                );
+                assert_eq!(
+                    matches!(sanitize_terminal_impl(s, preserve), Cow::Borrowed(_)),
+                    matches!(sanitize_slow(s, preserve), Cow::Borrowed(_)),
+                    "{s:?}: borrowed iff nothing to escape"
+                );
+            }
+        }
+    }
 
     #[test]
     fn clean_text_is_borrowed_unchanged() {

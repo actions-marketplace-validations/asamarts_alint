@@ -10,6 +10,7 @@
 /// (the five explicit embeddings/overrides, the four isolates, and the
 /// three implicit directional marks ALM/LRM/RLM).
 #[must_use]
+#[inline]
 pub const fn is_bidi_control(c: char) -> bool {
     matches!(c,
         '\u{061C}'                  // ALM
@@ -22,6 +23,7 @@ pub const fn is_bidi_control(c: char) -> bool {
 /// flags. `is_leading_feff == true` means U+FEFF at byte 0 of the file (the
 /// BOM case) - that's deliberately NOT flagged.
 #[must_use]
+#[inline]
 pub const fn is_flagged_zero_width(c: char, is_leading_feff: bool) -> bool {
     match c {
         '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{180E}' => true,
@@ -40,6 +42,7 @@ pub const fn is_flagged_zero_width(c: char, is_leading_feff: bool) -> bool {
 /// flags use them, because they are also the "ASCII smuggling" channel for
 /// hidden instructions.
 #[must_use]
+#[inline]
 pub const fn is_hidden_on_display(c: char) -> bool {
     matches!(c,
         '\u{00AD}'                      // SOFT HYPHEN
@@ -61,6 +64,7 @@ pub const fn is_hidden_on_display(c: char) -> bool {
 /// control, a flagged zero-width character (U+FEFF included, wherever it
 /// sits), or another display-invisible character.
 #[must_use]
+#[inline]
 pub const fn is_deceptive_on_display(c: char) -> bool {
     is_bidi_control(c) || is_flagged_zero_width(c, false) || is_hidden_on_display(c)
 }
