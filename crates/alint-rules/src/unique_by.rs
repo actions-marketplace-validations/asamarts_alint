@@ -20,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use alint_core::template::{PathTokens, render_message, render_path};
+use alint_core::template::{PathTokens, TokenSet, render_message, render_path};
 use alint_core::{
     Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
 };
@@ -76,11 +76,12 @@ impl Rule for UniqueByRule {
         // walker's per-file allocation rather than copying bytes
         // through a `PathBuf`.
         let mut groups: BTreeMap<String, Vec<std::sync::Arc<std::path::Path>>> = BTreeMap::new();
+        let needed = TokenSet::of(&self.key_template);
         for entry in ctx.index.files() {
             if !self.select_scope.matches(&entry.path, ctx.index) {
                 continue;
             }
-            let tokens = PathTokens::from_path(&entry.path);
+            let tokens = PathTokens::from_path_with(&entry.path, needed);
             let mut key = render_path(&self.key_template, &tokens);
             if self.case_insensitive {
                 key = key.to_lowercase();

@@ -19,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
-use alint_core::template::{PathTokens, render_message, render_path};
+use alint_core::template::{PathTokens, TokenSet, render_message, render_path};
 use alint_core::{
     Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
 };
@@ -61,11 +61,12 @@ impl Rule for PairRule {
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
+        let needed = TokenSet::of(&self.partner_template);
         for entry in ctx.index.files() {
             if !self.primary_scope.matches(&entry.path, ctx.index) {
                 continue;
             }
-            let tokens = PathTokens::from_path(&entry.path);
+            let tokens = PathTokens::from_path_with(&entry.path, needed);
             let partner_rel = render_path(&self.partner_template, &tokens);
             if partner_rel.is_empty() {
                 violations.push(
@@ -81,17 +82,20 @@ impl Rule for PairRule {
             // Lexically normalize `.` / `..` / empty segments so a template like
             // `{dir}/../include/{stem}.h` resolves to the in-index path. A `..`
             // that climbs above the repository root is never a valid partner.
-            let Some(partner_path) = normalize_rel(&partner_rel) else {
-                violations.push(
-                    Violation::new(format!(
-                        "partner template {:?} resolves outside the repository root for {} \
+            let partner_path = match normalize_rel_owned(partner_rel) {
+                Ok(path) => path,
+                Err(partner_rel) => {
+                    violations.push(
+                        Violation::new(format!(
+                            "partner template {:?} resolves outside the repository root for {} \
                          ({partner_rel})",
-                        self.partner_template,
-                        entry.path.display(),
-                    ))
-                    .with_path(entry.path.clone()),
-                );
-                continue;
+                            self.partner_template,
+                            entry.path.display(),
+                        ))
+                        .with_path(entry.path.clone()),
+                    );
+                    continue;
+                }
             };
             if resolves_to_self(&partner_path, &entry.path) {
                 violations.push(
@@ -127,10 +131,8 @@ impl Rule for PairRule {
 /// Windows (elsewhere it is a legal filename byte).
 fn normalize_rel(rel: &str) -> Option<PathBuf> {
     // Almost every rendered partner is already normal: return it without the
-    // segment vector, join and second allocation.
-    if !(cfg!(windows) && rel.contains('\\'))
-        && rel.split('/').all(|seg| !matches!(seg, "" | "." | ".."))
-    {
+    // segment vector and join.
+    if is_normal_rel(rel) {
         return Some(PathBuf::from(rel));
     }
     let mut parts: Vec<&str> = Vec::new();
@@ -149,6 +151,21 @@ fn normalize_rel(rel: &str) -> Option<PathBuf> {
     // Re-join with `/`, not the OS separator: messages show this path, and
     // Windows `Path` equality already treats `/` and `\` alike for the lookup.
     Some(PathBuf::from(parts.join("/")))
+}
+
+/// No empty, `.` or `..` segment (and, on Windows, no `\\` separator).
+fn is_normal_rel(rel: &str) -> bool {
+    !(cfg!(windows) && rel.contains('\\'))
+        && rel.split('/').all(|seg| !matches!(seg, "" | "." | ".."))
+}
+
+/// [`normalize_rel`] for an owned rendering: an already-normal path becomes the
+/// `PathBuf` without a copy. `Err` hands the rendering back for the message.
+fn normalize_rel_owned(rel: String) -> std::result::Result<PathBuf, String> {
+    if is_normal_rel(&rel) {
+        return Ok(PathBuf::from(rel));
+    }
+    normalize_rel(&rel).ok_or(rel)
 }
 
 fn resolves_to_self(partner: &Path, primary: &Path) -> bool {
@@ -410,6 +427,11 @@ mod tests {
         }
         for rel in &cases {
             assert_eq!(normalize_rel(rel), reference(rel), "{rel:?}");
+            assert_eq!(
+                normalize_rel_owned(rel.clone()).ok(),
+                reference(rel),
+                "owned {rel:?}"
+            );
         }
     }
 

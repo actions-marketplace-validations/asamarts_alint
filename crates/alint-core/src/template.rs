@@ -28,37 +28,111 @@ pub struct PathTokens {
     pub parent_name: String,
 }
 
+/// Which path tokens a set of templates refers to. Per-entry callers derive
+/// only these: each token is a fresh allocation, and most templates use one or
+/// two of the six.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenSet(u8);
+
+impl TokenSet {
+    const PATH: u8 = 1;
+    const DIR: u8 = 1 << 1;
+    const BASENAME: u8 = 1 << 2;
+    const STEM: u8 = 1 << 3;
+    const EXT: u8 = 1 << 4;
+    const PARENT_NAME: u8 = 1 << 5;
+
+    /// Every token.
+    pub const ALL: Self = Self(0b11_1111);
+    /// No token.
+    pub const NONE: Self = Self(0);
+
+    /// The tokens `template` contains (by literal `{name}` occurrence, so an
+    /// unknown or escaped token can only over-include, never miss one).
+    #[must_use]
+    pub fn of(template: &str) -> Self {
+        if !template.contains('{') {
+            return Self::NONE;
+        }
+        let mut bits = 0;
+        for (name, bit) in [
+            ("{path}", Self::PATH),
+            ("{dir}", Self::DIR),
+            ("{basename}", Self::BASENAME),
+            ("{stem}", Self::STEM),
+            ("{ext}", Self::EXT),
+            ("{parent_name}", Self::PARENT_NAME),
+        ] {
+            if template.contains(name) {
+                bits |= bit;
+            }
+        }
+        Self(bits)
+    }
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    const fn has(self, bit: u8) -> bool {
+        self.0 & bit != 0
+    }
+}
+
 impl PathTokens {
     /// Derive tokens from a relative path. Missing components (e.g. a path
     /// with no parent, or no extension) resolve to the empty string.
     pub fn from_path(rel: &Path) -> Self {
+        Self::from_path_with(rel, TokenSet::ALL)
+    }
+
+    /// [`Self::from_path`] deriving only the tokens in `needed`; the others are
+    /// empty. Rendering a template whose tokens are all in `needed` gives the
+    /// same result as with every token derived. A path containing a glob
+    /// metacharacter derives every token, so [`unescape_token_values`] (which
+    /// consults all six) also behaves exactly as with [`Self::from_path`].
+    pub fn from_path_with(rel: &Path, needed: TokenSet) -> Self {
+        let needed = if needs_glob_escape(&rel.to_string_lossy()) {
+            TokenSet::ALL
+        } else {
+            needed
+        };
+        let derive = |bit, f: &dyn Fn() -> String| {
+            if needed.has(bit) { f() } else { String::new() }
+        };
         Self {
-            path: rel.display().to_string(),
-            dir: rel
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default(),
-            basename: rel
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            stem: rel
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            ext: rel
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            parent_name: rel
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
+            path: derive(TokenSet::PATH, &|| rel.display().to_string()),
+            dir: derive(TokenSet::DIR, &|| {
+                rel.parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            }),
+            basename: derive(TokenSet::BASENAME, &|| {
+                rel.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            stem: derive(TokenSet::STEM, &|| {
+                rel.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            ext: derive(TokenSet::EXT, &|| {
+                rel.extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            parent_name: derive(TokenSet::PARENT_NAME, &|| {
+                rel.parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
         }
     }
 }
@@ -603,6 +677,53 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn partial_tokens_render_like_full_tokens() {
+        let templates = [
+            "{dir}/{stem}.h",
+            "{path}/README.md",
+            "{parent_name}-{basename}",
+            "{ext}",
+            "include/{stem}{ext}.bak",
+            "no tokens here",
+            "{unknown}/{stem}",
+            "{dir}",
+        ];
+        for path in [
+            "src/mod/foo.c",
+            "top.c",
+            "a/b",
+            "Makefile",
+            "x/.hidden",
+            "",
+            "app/[slug]",
+        ] {
+            let full = PathTokens::from_path(Path::new(path));
+            for template in templates {
+                let partial = PathTokens::from_path_with(Path::new(path), TokenSet::of(template));
+                assert_eq!(
+                    render_path(template, &partial),
+                    render_path(template, &full)
+                );
+                let message = format!("expected {}", render_path_glob(template, &partial));
+                assert_eq!(
+                    unescape_token_values(&message, &partial),
+                    unescape_token_values(&message, &full),
+                    "{path:?} {template:?}"
+                );
+                assert_eq!(
+                    render_path_glob(template, &partial),
+                    render_path_glob(template, &full)
+                );
+            }
+        }
+        assert_eq!(TokenSet::of("plain"), TokenSet::NONE);
+        assert_eq!(
+            TokenSet::of("{dir}").union(TokenSet::of("{stem}")),
+            TokenSet::of("{dir}/{stem}")
+        );
     }
 
     #[test]
