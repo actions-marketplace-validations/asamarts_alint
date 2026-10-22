@@ -217,15 +217,28 @@ library_benchmark_group!(
 );
 
 main!(
-    config = LibraryBenchmarkConfig::default().tool(
-        Callgrind::default()
-            .args(["--cache-sim=yes", "--branch-sim=yes"])
-            // Gate on Ir (work, +2%) and EstimatedCycles (net work + cache +
-            // branch penalties, +5%). Branch mispredicts (Bcm/Bim) are
-            // diagnostic-only — reported always, but NOT gated: they false-positive
-            // on benign branch-pattern shifts (v0.12's walker symlink-security
-            // closure moved them +73..217% at <1% net cycles). See the design doc.
-            .soft_limits([(EventKind::Ir, 2.0), (EventKind::EstimatedCycles, 5.0)]),
-    ),
+    // `Engine::run` evaluates rules on rayon worker threads (`pool.install`).
+    // Callgrind collects only the benchmark function's own thread by default,
+    // which left `engine_run` counting ~0.06% of the engine's work (mostly the
+    // fixture teardown). One worker thread keeps the count deterministic; the
+    // job-execute toggles collect what that worker runs. See
+    // docs/benchmarks/investigations/2026-10-v0.20-bench-increases/.
+    config = LibraryBenchmarkConfig::default()
+        .env("RAYON_NUM_THREADS", "1")
+        .tool(
+            Callgrind::default()
+                .args([
+                    "--cache-sim=yes",
+                    "--branch-sim=yes",
+                    "--toggle-collect=*StackJob*as rayon_core::job::Job*::execute*",
+                    "--toggle-collect=*HeapJob*as rayon_core::job::Job*::execute*",
+                ])
+                // Gate on Ir (work, +2%) and EstimatedCycles (net work + cache +
+                // branch penalties, +5%). Branch mispredicts (Bcm/Bim) are
+                // diagnostic-only — reported always, but NOT gated: they false-positive
+                // on benign branch-pattern shifts (v0.12's walker symlink-security
+                // closure moved them +73..217% at <1% net cycles). See the design doc.
+                .soft_limits([(EventKind::Ir, 2.0), (EventKind::EstimatedCycles, 5.0)]),
+        ),
     library_benchmark_groups = engine
 );

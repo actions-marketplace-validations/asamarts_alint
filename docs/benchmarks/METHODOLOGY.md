@@ -147,6 +147,23 @@ well as CV-advisory (`gate.rs` `CHANGED_REGRESSION_ADVISORY_SIZES`): they report
 `min_ms` delta as `ADV` but do not fail the gate, while `full`/10k and all 100k/1m cells
 still gate. The deterministic gate stays the authoritative regression signal.
 
+**The 1k `changed` cells had a second, harness-made cause (found 2026-10).** Git, built
+without `USE_NSEC` (its default), treats a tracked file whose mtime falls in the same
+wall-clock second as `.git/index` as *racily clean* and re-hashes its content on every
+`git ls-files --modified`, the command `--changed` runs; `ls-files` never rewrites the
+index, so the cost repeats on every timed run. The harness generates and commits a 1k
+tree within one second, so anywhere from none to all of it was racy depending on where
+the second boundary fell: published 1k `changed` cells flipped between about 11 and
+about 20 ms from release to release with unchanged code (up to 43M extra instructions
+in git per run). `init_git_for_changed_mode` now waits out the second and lets `git
+status` rewrite the index (`settle_racy_index`); 10k and larger trees take more than a
+second to commit and were never affected
+([`investigations/2026-10-v0.20-bench-increases/`](investigations/2026-10-v0.20-bench-increases/)).
+On the bench host, five fresh-tree 1k runs per harness took S1 `changed` from 11.1-19.8 ms
+(79% spread) to 10.6-12.0 ms, and S2 from 65% to 12%. The cells still vary about ±6-9%
+around their median, the same floor as the 1k `full` cells (which never gated), so 1k
+`changed` stays regression-advisory.
+
 ### Why hyperfine and not a custom Rust harness
 
 hyperfine measures wall-time of an external command from
@@ -273,12 +290,86 @@ The CI bench jobs (per PR, `ci.yml`) are **not** the wall-clock
    not a correctness gate).
 2. **`perf-gate`** — the deterministic gungraun gate
    (`ci/scripts/det-perf-gate.sh`): instruction-count `Ir` (+2%) and
-   `EstimatedCycles` (+5%) vs the PR's merge-base, load-immune so it
-   runs on any runner (GitHub-hosted for PRs today) and posts its
-   per-bench table to the job summary. **Advisory today**
+   `EstimatedCycles` (+5%) vs the base, load-immune so it runs on any
+   runner (GitHub-hosted for PRs today) and posts its per-bench table to
+   the job summary. It runs on pull requests (base = the PR's base) and
+   on pushes to `main` (base = the tip before the push), because most
+   engine changes land as direct pushes. **Advisory today**
    (`DET_PERF_ADVISORY=1` — a regression annotates, doesn't fail; a
    gate that couldn't run fails the job as a tooling failure); see
    [`../design/deterministic-perf-gating.md`](../design/deterministic-perf-gating.md).
+   `det_engine` runs with one rayon worker and collects that worker's
+   jobs: until 2026-10 it counted only the benchmark thread, about 0.06%
+   of the engine's work. The gate now fails as a tooling failure if
+   `engine_run n10k` counts fewer than 10M instructions.
+3. **Micro subset** (same job, `ci/scripts/micro-det-gate.sh`): the curated
+   low-noise criterion micro benchmarks counted by `xtask micro-det`
+   (below), head vs the same base. Advisory: a bench growing more than +3%
+   in instructions annotates the run.
+
+At release, `bench-record.yml` runs three more checks on the tagged commit:
+
+- **`bench-gate`, automated.** After the macro matrix it runs against the
+  previous release's committed `results.json` and the long-horizon anchor,
+  and records the verdict in the job summary and the results PR (it does
+  not abort the job, so the results are still published for review).
+- **`micro-det` job** (GitHub-hosted, in parallel): the full criterion suite
+  in instructions, vs the previous release (+3% per gated bench) and the
+  anchor (+10%). A regression fails the job; the results PR's checklist
+  requires it to be green.
+- **Same-session micro A/B** (report-only): the previous release's criterion
+  suite runs first on the bench host as baseline `prev`, then the new
+  ref's with `--baseline-lenient prev`, so the PR shows each benchmark's
+  wall-clock change measured minutes apart. This covers the I/O-heavy
+  benches (walker, file content rules, blame cache) whose cost instruction
+  counts cannot see.
+
+### Deterministic micro counts (`xtask micro-det`)
+
+Wall-clock micro results from one release to the next cannot tell a 10%
+step from run-to-run noise: v0.20.0's published `every_matching_has/1000`
+rose 14% with identical instructions and simulated cycles. `xtask
+micro-det` makes the micro suite deterministic:
+
+1. Each ref is checked out in a worktree and its own, unmodified criterion
+   benches are built against a counting stand-in for `criterion`
+   (`xtask/src/bench/micro_det_criterion_shim.rs`, patched over the crates.io
+   crate with `--config patch.crates-io.criterion.path=…`).
+2. Each benchmark runs under Callgrind at 1 and K iterations
+   (`RAYON_NUM_THREADS=1`), collecting only inside the stand-in's
+   per-iteration `__inv_measure` frame and the rayon jobs it dispatches.
+   `(Ir(K) - Ir(1)) / (K - 1)` is the exact steady-state instruction count
+   of one iteration on every thread, with setup and first-call warm-up
+   excluded.
+3. Head is compared with base (and the anchor). The gate covers every
+   benchmark whose count is stable: in calibration (two full runs of v0.19.0
+   and v0.20.0) 56+ benchmarks moved under 1% between identical runs. Two
+   kinds are reported only (`REPORT_ONLY` in `xtask/src/bench/micro_det.rs`):
+   the wall-clock-bound walker, blame-cache and dry-run fix benches, and the
+   benches that read real files (single-file content rules, most structured
+   queries), whose count moved 1-18% because glibc's allocator takes
+   history-dependent paths there. The same-session wall-clock A/B covers
+   those. The per-PR subset is a cheap gated selection covering each
+   regression-prone area.
+
+```sh
+cargo run -q -p xtask -- micro-det --base v0.20.0 --head HEAD            # curated subset
+cargo run -q -p xtask -- micro-det --base v0.20.0 --suite full --anchor auto
+```
+
+It needs `valgrind` and takes a few minutes for the subset. Instruction
+counts depend on the compiler, so both refs are always built in the same
+run with the same toolchain; never compare counts across runs.
+
+### Long-horizon anchor
+
+Every gate above compares a release with its predecessor, so creep can pass
+every step: config loading grew +41%, +16% and +13% over three releases. The
+anchor file [`ANCHOR`](ANCHOR) names a reference release. `bench-gate --anchor
+auto` (macro gating cells, `min_ms`) and `micro-det --anchor auto`
+(instructions) fail when a release exceeds it by more than 10% cumulative.
+Accepting a deliberate cost means bumping the anchor in a reviewed commit, with
+the reason in the file, so creep becomes a recorded decision.
 
 `xtask bench-compare` (micro vs the v0.7.0 floor) is a **local** helper,
 not wired into any workflow. Wall-clock regression is gated

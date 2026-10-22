@@ -37,6 +37,7 @@ pub mod compare;
 pub mod docker;
 mod fingerprint;
 pub mod gate;
+pub mod micro_det;
 pub mod tools;
 
 pub use tools::Tool;

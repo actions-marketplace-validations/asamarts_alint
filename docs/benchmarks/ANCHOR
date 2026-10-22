@@ -1,0 +1,11 @@
+# Long-horizon performance anchor.
+#
+# Release gates compare each release with the one before it, so steady creep
+# can pass every step. `xtask bench-gate --anchor auto` (macro, min_ms) and
+# `xtask micro-det --anchor auto` (micro, instructions) also compare against
+# this release and fail beyond +10% cumulative.
+#
+# To accept a deliberate cost, bump `version` in a reviewed commit and say why
+# in `reason`. Earlier anchors and reasons are in this file's git history.
+version = "v0.20.0"
+reason = "baseline before the v0.18-v0.20 regression fixes; see docs/benchmarks/investigations/2026-10-v0.20-bench-increases/"

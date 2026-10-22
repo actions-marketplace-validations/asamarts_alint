@@ -447,7 +447,8 @@ Helix / Eclipse are docs-only (config snippets): nothing to publish.
 ## Bench-record review (the human gate)
 
 > **Regression detection is the deterministic `perf-gate` CI job**
-> (`ci/scripts/det-perf-gate.sh`, per-PR; design:
+> (`ci/scripts/det-perf-gate.sh` plus the micro subset in
+> `ci/scripts/micro-det-gate.sh`, on every PR and every push to `main`; design:
 > [`docs/design/deterministic-perf-gating.md`](docs/design/deterministic-perf-gating.md)).
 > It compares Valgrind instruction/cache/branch counts PR-vs-merge-base and is
 > **load-immune**, so it catches regressions deterministically where wall-clock
@@ -479,9 +480,26 @@ Helix / Eclipse are docs-only (config snippets): nothing to publish.
 > count or a same-box quiescent A/B, not the deterministic gate alone.
 
 `bench-record.yml` opens a PR titled `docs(bench): <tag> bench-scale results`
-when its run completes. Review checklist:
+when its run completes. Its body starts with the automated release gates:
 
-1. **Run the wall-clock gate (characterization; quiescence-sensitive).**
+- `bench-gate` against the previous release and the long-horizon anchor
+  (`docs/benchmarks/ANCHOR`), run by the bench job after the macro matrix.
+- The `micro-det (deterministic)` job of the same run: the full criterion
+  suite in Valgrind instruction counts, vs the previous release (+3% per
+  gated bench) and the anchor (+10%). It runs on GitHub-hosted capacity in
+  parallel with the bench host and fails on a gated regression.
+- A same-session criterion A/B (report-only): the previous release's micro
+  suite measured minutes before the new one on the bench host, with each
+  benchmark's change and confidence interval.
+
+Review checklist:
+
+1. **Check the automated gates.** Both must pass: the `bench-gate` block in
+   the PR body shows exit 0, and the run's `micro-det (deterministic)` job is
+   green. A gate that fails because of a deliberate cost (a new feature, a
+   security check) is accepted by bumping `docs/benchmarks/ANCHOR` in a
+   reviewed commit whose `reason` says why, never by ignoring the gate. The
+   macro gate below is characterization and quiescence-sensitive.
    `xtask bench-gate` records absolute throughput. It supersedes the old "skim
    the PR body for any cell with `stddev_ms / mean_ms > 0.10`" eyeball: that flat
    per-cell CV rule was never met by any shipped release (chronic
@@ -495,7 +513,10 @@ when its run completes. Review checklist:
    git show "origin/bench-record/$tag:docs/benchmarks/macro/results/linux-x86_64/$tag/results.json" > /tmp/new.json
    cargo run -q -p xtask -- bench-gate \
      --results /tmp/new.json \
-     --baseline "docs/benchmarks/macro/results/linux-x86_64/$prev/results.json"
+     --baseline "docs/benchmarks/macro/results/linux-x86_64/$prev/results.json" \
+     --anchor "docs/benchmarks/macro/results/linux-x86_64/$(sed -n 's/^version = "\(.*\)"$/\1/p' docs/benchmarks/ANCHOR)/results.json"
+   # The micro gate, reproducible on any machine with valgrind:
+   cargo run -q -p xtask -- micro-det --base "$prev" --head "$tag" --suite full --anchor auto
    ```
 
    - **Quality**: per-cell within-run CV `<= 10%`, applied only
@@ -511,6 +532,9 @@ when its run completes. Review checklist:
      by host C-state/frequency behavior (see `docs/benchmarks/METHODOLOGY.md`).
      A gating failure is a real perf regression: open an investigation
      (step 4) before merging.
+   - **Anchor**: the same gating cells may not exceed the anchor release's
+     `min_ms` by more than 10% cumulative, so creep that passes every
+     adjacent comparison still fails.
 
    Every new report carries `args.scenario_revisions`. If both reports
    declare different revisions for a scenario, `bench-gate` prints a

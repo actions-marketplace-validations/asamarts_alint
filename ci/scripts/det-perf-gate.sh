@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Deterministic perf gate (load-immune).
 #
-# Compares the PR's instruction / cache / branch counts vs the merge-base, IN
-# THIS RUN, with the same toolchain + Valgrind on both sides. Because the metrics
+# Compares the PR's (or, on a push to main, the pushed range's) instruction /
+# cache / branch counts vs its base (see perf-gate-base.sh), IN THIS RUN, with
+# the same toolchain + Valgrind on both sides. Because the metrics
 # are deterministic (Valgrind simulation, not wall-clock), the shared runner's
 # co-tenant load — which chronically contaminates the wall-clock `bench-scale`
 # (see docs/benchmarks/investigations/2026-06-v0.12-perf-validation/) — does NOT
@@ -50,9 +51,15 @@ ADVISORY="${DET_PERF_ADVISORY:-1}"
 
 HEAD_SHA="$(git rev-parse HEAD)"
 HEAD_REF="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-BASE_SHA="${PR_BASE_SHA:-}"
-if [[ -z "$BASE_SHA" ]]; then
-  BASE_SHA="$(git merge-base HEAD origin/main 2>/dev/null || true)"
+# shellcheck source=ci/scripts/perf-gate-base.sh
+source "$(dirname "$0")/perf-gate-base.sh"
+BASE_SHA="$(perf_gate_base)"
+if [[ -n "${PR_BASE_SHA:-}" ]]; then
+  COMPARED="this PR vs merge base"
+elif [[ -n "${PUSH_BEFORE_SHA:-}" ]]; then
+  COMPARED="this push vs the previous tip"
+else
+  COMPARED="HEAD vs merge base"
 fi
 if [[ -z "$BASE_SHA" || "$BASE_SHA" == "$HEAD_SHA" ]]; then
   echo "==> no distinct base to compare against (push-to-main / first commit) — skipping"
@@ -102,7 +109,7 @@ ir_rows() {
 
 report() { # $1 = verdict line, $2 = gungraun log
   summary "### Deterministic perf gate: $1" "" \
-    "Valgrind instruction counts (Ir), this PR vs merge base \`${BASE_SHA:0:12}\`." "" \
+    "Valgrind instruction counts (Ir), ${COMPARED} \`${BASE_SHA:0:12}\`." "" \
     "| Bench | Base | PR | Delta |" "|---|---:|---:|---:|"
   summary "$(ir_rows "$2")"
 }
@@ -121,10 +128,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> [1/2] baseline: build + bench merge-base ${BASE_SHA:0:12}"
-git checkout -q "$BASE_SHA" || tooling_failure "could not check out the merge base ${BASE_SHA:0:12}"
+echo "==> [1/2] baseline: build + bench base ${BASE_SHA:0:12}"
+git checkout -q "$BASE_SHA" || tooling_failure "could not check out the base ${BASE_SHA:0:12}"
 if ! run_benches --save-baseline=base; then
-  tooling_failure "the baseline build or bench failed at the merge base ${BASE_SHA:0:12}"
+  tooling_failure "the baseline build or bench failed at the base ${BASE_SHA:0:12}"
 fi
 
 echo "==> [2/2] PR: build + bench ${HEAD_SHA:0:12}, compare vs base"
@@ -133,6 +140,17 @@ bench_log="$(mktemp)"
 run_benches --baseline=base 2>&1 | tee "$bench_log"
 rc="${PIPESTATUS[0]}"
 restore_head # restore the original branch, or the detached commit
+
+# det_engine's engine_run must count the rayon worker that evaluates the
+# rules. Until 2026-10 it counted only the benchmark thread (~0.06% of the
+# work), so engine changes were invisible to this gate; a count this small means
+# that blind spot is back.
+engine_n10k="$(sed 's/\x1b\[[0-9;]*m//g' "$bench_log" | awk '
+  /^det_engine::.*engine_run n10k/ { f = 1; next }
+  f && $1 == "Instructions:" { split($2, v, "|"); print v[1]; exit }')"
+if [[ -n "$engine_n10k" && "$engine_n10k" =~ ^[0-9]+$ && "$engine_n10k" -lt 10000000 ]]; then
+  tooling_failure "det_engine engine_run n10k counted only ${engine_n10k} instructions; it is no longer collecting the rayon worker thread"
+fi
 
 if [[ "$rc" -ne 0 ]]; then
   # Distinguish a real soft-limit breach from a bench that never produced a

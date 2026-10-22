@@ -60,6 +60,15 @@ very-high deltas — RECALIBRATED 2026-06-08 to diagnostic-only + an `EstimatedC
 - one fixed-repository `alint explain` cell for a time-capable rule, isolating
   the single HEAD-time lookup so Callgrind also traces the Git child process
 
+**Layer 3 — the criterion micro suite in instructions (`xtask micro-det`, 2026-10)**:
+every criterion micro bench, compiled per ref against a counting stand-in for
+`criterion` and run under Callgrind at two iteration counts; the difference is
+the exact steady-state instructions of one iteration on every thread, with setup
+excluded. A curated low-noise subset runs in the `perf-gate` job (advisory); the
+full suite runs in `bench-record.yml` at release and gates (+3% vs the previous
+release, +10% vs the anchor in `docs/benchmarks/ANCHOR`). Method and policy:
+`docs/benchmarks/METHODOLOGY.md` § "Deterministic micro counts".
+
 ## Gating policy (mirrors `gate.rs` gating-vs-advisory split)
 
 | Metric (source) | Role |
@@ -183,6 +192,20 @@ trustworthy too.
   the bench cells — compile-verified both ways); valgrind pinned in
   `bench/Dockerfile` (bookworm base = 3.19); RELEASING.md demotes wall-clock
   `bench-scale` to characterization + names the deterministic gate primary.
+- **2026-10: `det_engine` was blind to the rule engine, fixed.** `Engine::run`
+  hands rule evaluation to a rayon pool (`with_worker_pool` → `pool.install`),
+  and gungraun collects only the benchmark function's own thread, so `engine_run`
+  counted about 0.06% of the engine's work (`n10k`: 2.25M reported vs 36M real;
+  most of the 2.25M was dropping the fixture). The pool size also made the old
+  count depend on the host's core count (pool start-up was in the measured
+  call). The bench now runs with `RAYON_NUM_THREADS=1` and toggles collection
+  on rayon `StackJob`/`HeapJob::execute`: 99.9% of the work, repeatable to 0.01%.
+  `det-perf-gate.sh` fails as a tooling failure if `engine_run n10k` drops under
+  10M instructions. Investigation:
+  `docs/benchmarks/investigations/2026-10-v0.20-bench-increases/`.
+- **2026-10: the gate also runs on pushes to `main`**, comparing the pushed
+  range (`ci/scripts/perf-gate-base.sh`). 28 of v0.20's 29 commits were direct
+  pushes the PR-only gate never saw.
 - **Remaining:** flip `Ir` advisory→gating (`DET_PERF_ADVISORY=0`) after the
   rollout calibrates against real PR noise; optional strace syscall check;
   runner-isolation (separate track).

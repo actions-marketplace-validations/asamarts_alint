@@ -205,6 +205,11 @@ enum Commands {
     /// `RELEASING.md`; thresholds validated against the full
     /// corpus — see
     /// `docs/benchmarks/investigations/2026-05-bench-runner-instability/`.
+    /// Deterministic instruction counts for the criterion micro suite, head
+    /// vs base (and the long-horizon anchor): each ref's benches compiled
+    /// against a counting criterion stand-in and run under Callgrind. Needs
+    /// valgrind. See `docs/benchmarks/METHODOLOGY.md`.
+    MicroDet(bench::micro_det::Args),
     BenchGate {
         /// The run to gate (a `bench-scale` `results.json`).
         #[arg(long)]
@@ -213,6 +218,11 @@ enum Commands {
         /// regression check. Omit to run quality-only.
         #[arg(long)]
         baseline: Option<PathBuf>,
+        /// Long-horizon anchor: a `results.json`, or `auto` for the release
+        /// named in `docs/benchmarks/ANCHOR` (resolved beside `--results`).
+        /// Gating cells may not exceed it by more than 10% cumulative.
+        #[arg(long)]
+        anchor: Option<String>,
     },
     /// Snapshot `target/criterion/` into the per-version
     /// committable location under
@@ -377,9 +387,12 @@ fn main() -> Result<()> {
             after,
             threshold,
         } => bench::compare::run(&before, &after, threshold),
-        Commands::BenchGate { results, baseline } => {
-            bench::gate::run(&results, baseline.as_deref())
-        }
+        Commands::MicroDet(args) => bench::micro_det::run(&args),
+        Commands::BenchGate {
+            results,
+            baseline,
+            anchor,
+        } => bench::gate::run(&results, baseline.as_deref(), anchor.as_deref()),
         Commands::DocsExport {
             out,
             check,

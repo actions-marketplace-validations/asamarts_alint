@@ -373,16 +373,21 @@ jobs:
   # It used to require `hosted != 'true'`, which silently skipped it on every PR
   # once PRs moved to hosted capacity. A tooling failure fails this job (see the
   # script); it is not in `summary.needs`, so it never blocks a merge.
+  # Also runs on pushes to main, comparing the pushed range (the tip before the
+  # push vs the new one): most engine changes land as direct pushes, which a
+  # PR-only gate never saw (28 of v0.20's 29 commits). Same advisory policy.
   perf-gate:
     name: Perf Gate (deterministic)
     needs: [changes, build]
     if: >-
       !cancelled() && !failure()
-      && github.event_name == 'pull_request'
+      && (github.event_name == 'pull_request'
+          || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
       && needs.changes.outputs.rust == 'true'
     runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
-    # Two release builds (merge base + PR) and the Valgrind benches.
-    timeout-minutes: 120
+    # Two release builds (base + head) and the Valgrind benches, then two
+    # bench-profile builds and the micro subset under Callgrind.
+    timeout-minutes: 180
     env:
       # Advisory: a perf regression annotates but does not fail the job. When
       # flipping this to "0" (enforcing), also add `perf-gate` to the `summary`
@@ -398,9 +403,19 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-perf-gate
-      - env:
+      - name: det_engine + det_check
+        env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: ci/scripts/det-perf-gate.sh
+      # The curated micro subset (`xtask micro-det --suite pr`), advisory. The
+      # full suite gates releases in bench-record.yml.
+      - name: micro benches (subset)
+        if: ${{ !cancelled() }}
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: ci/scripts/micro-det-gate.sh
 
   # ── Examples validate ────────────────────────────────────────────
   # Run `alint validate-config` against every examples/*/.alint.yml.
