@@ -30,7 +30,10 @@ pub(crate) struct LoadState {
     /// reload it once per path through the DAG (2^depth loads, an effective
     /// hang from a hostile repo). `is_top` loads read their own trust and
     /// confinement settings and are never memoized.
-    memo: std::collections::HashMap<MemoKey, RawConfig>,
+    /// `None` marks a key seen once: only a key loaded a SECOND time (a real
+    /// diamond) is cloned into the memo, so a linear chain never pays for it while
+    /// a diamond still loads each shared file at most twice.
+    memo: std::collections::HashMap<MemoKey, Option<RawConfig>>,
     running_version: RunningVersion,
 }
 
@@ -72,8 +75,19 @@ struct MemoKey {
 }
 
 impl LoadState {
+    fn remember(&mut self, key: MemoKey, config: &RawConfig) {
+        match self.memo.entry(key) {
+            std::collections::hash_map::Entry::Vacant(seen_once) => {
+                seen_once.insert(None);
+            }
+            std::collections::hash_map::Entry::Occupied(mut seen_twice) => {
+                *seen_twice.get_mut() = Some(config.clone());
+            }
+        }
+    }
+
     fn cached(&self, key: Option<&MemoKey>) -> Option<RawConfig> {
-        key.and_then(|k| self.memo.get(k)).cloned()
+        key.and_then(|k| self.memo.get(k)).and_then(Clone::clone)
     }
 }
 
@@ -549,7 +563,7 @@ pub(crate) fn load_recursive(
     if extends.is_empty() {
         visiting.remove(&canonical);
         if let Some(key) = memo_key {
-            state.memo.insert(key, config.clone());
+            state.remember(key, &config);
         }
         return Ok(config);
     }
@@ -598,7 +612,7 @@ pub(crate) fn load_recursive(
     merged = merge(merged, config);
     state.visiting.remove(&canonical);
     if let Some(key) = memo_key {
-        state.memo.insert(key, merged.clone());
+        state.remember(key, &merged);
     }
     Ok(merged)
 }
@@ -1127,6 +1141,30 @@ mod tests {
             source_version_allowed(2, 1) && !source_version_allowed(1, 2),
             "a v2 -> v1 -> v2 chain must fail at its second edge"
         );
+    }
+
+    #[test]
+    fn memo_clones_a_config_only_once_it_is_seen_twice() {
+        let key = || {
+            MemoKey::new(
+                Path::new("/repo/base.yml"),
+                Some(Path::new("/repo")),
+                &[],
+                Some(1),
+                ConfigSourceClass::LocalExtend,
+            )
+        };
+        let config = RawConfig {
+            version: Some(1),
+            ..RawConfig::default()
+        };
+        let mut state = LoadState::default();
+        // A linear chain loads each file once: nothing is cloned or served.
+        state.remember(key(), &config);
+        assert!(state.cached(Some(&key())).is_none());
+        // A second load of the same file (a diamond) stores it; later loads hit.
+        state.remember(key(), &config);
+        assert_eq!(state.cached(Some(&key())).map(|c| c.version), Some(Some(1)));
     }
 
     #[test]
