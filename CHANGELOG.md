@@ -6,8 +6,33 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `xtask micro-det` counts the instructions of every criterion micro
+  benchmark under Callgrind, across git refs. Pull requests and pushes to
+  `main` run a curated low-noise subset (advisory); `bench-record` runs the
+  full suite at release and fails when a benchmark grows more than 3% over
+  the previous release.
+- A long-horizon performance anchor (`docs/benchmarks/ANCHOR`):
+  `xtask bench-gate --anchor` and `xtask micro-det --anchor` fail a release
+  that exceeds the anchor release by more than 10%, so creep that passes
+  every release-to-release check still surfaces. `bench-record` now runs
+  `bench-gate` itself and adds a same-session criterion A/B against the
+  previous release to the results PR.
+
+### Changed
+
+- The deterministic perf gate also runs on pushes to `main`, comparing the
+  pushed range.
+
 ### Fixed
 
+- The 1k `changed`-mode benchmark cells no longer swing between about 11
+  and 20 ms from one release to the next: the harness committed the
+  generated tree within one second, so git re-hashed every "racily clean"
+  file on each timed run. The index is now settled before timing.
+- The deterministic `det_engine` benchmark now counts the rayon worker that
+  evaluates rules; it had been counting about 0.06% of the engine's work.
 - Correct the crates.io Trusted Publishing instructions for a brand-new crate:
   bootstrap its first tagged version with a scoped maintainer token from the
   exact release commit, configure the crate's OIDC publisher, then rerun the
