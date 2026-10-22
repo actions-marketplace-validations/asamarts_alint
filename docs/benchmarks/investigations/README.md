@@ -37,6 +37,17 @@ Each investigation directory ships:
 
 ## Existing investigations
 
+### [`2026-10-v0.20-bench-increases/`](2026-10-v0.20-bench-increases/)
+
+The bimodal 1k `changed` cells (~11 vs ~20 ms per release) are git's racy-clean
+index check: the harness commits the 1k tree within one wall-clock second, so up
+to every file is re-hashed on every timed run. Settling the index fixes it. Separately,
+Callgrind K-differencing of every micro bench from v0.17.0 to v0.20.0 found real
+per-kind regressions (config load +84%, github output +27%, `pair` +18%, YAML queries
++19%, nested kinds +8 to +15% Ir) that no gate saw: `det_engine` collects ~0.06% of
+the engine's work (rayon workers are not collected), and the micro suite is ungated.
+Prototyped fixes recover 5 to 27% per bench.
+
 ### [`2026-10-s4-literal-facts/`](2026-10-s4-literal-facts/)
 
 The apparent v0.18.4 → v0.19.0 S4 regression combined an unlabeled workload
