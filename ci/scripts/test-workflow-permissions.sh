@@ -43,6 +43,7 @@ EXPECTED_JOB_OVERRIDES = {
         'packages': 'write',
     },
     ('bench-record.yml', 'guard'): {'contents': 'read'},
+    ('bench-record.yml', 'micro-det'): {'contents': 'read'},
     ('bench-record.yml', 'bench'): {
         'contents': 'write',
         'pull-requests': 'write',
