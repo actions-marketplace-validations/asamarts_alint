@@ -34,7 +34,7 @@
 //! never affect it.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -44,6 +44,11 @@ use super::{Report, Row};
 const QUALITY_CV_MAX: f64 = 0.10;
 /// `min_ms` regression ceiling vs baseline for gating cells.
 const REGRESSION_MAX: f64 = 0.15;
+/// Cumulative `min_ms` ceiling vs the long-horizon anchor release
+/// (`docs/benchmarks/ANCHOR`) for the same gating cells: creep that passes
+/// every adjacent-release check still fails here, until the anchor is
+/// deliberately bumped in a reviewed commit.
+const ANCHOR_REGRESSION_MAX: f64 = 0.10;
 /// Sizes whose within-run CV is advisory-only (measurement-floor
 /// noise per the investigation; chronic across every shipped
 /// release, so not a publish-quality signal).
@@ -243,6 +248,99 @@ fn evaluate_with_revisions(
     o
 }
 
+/// Cumulative check against the anchor release: every cell the regression
+/// gate covers (advisory `changed` cells and workload resets excluded) must
+/// stay within `ANCHOR_REGRESSION_MAX` of the anchor's `min_ms`.
+fn evaluate_anchor(
+    rows: &[Row],
+    anchor: &[Row],
+    anchor_version: &str,
+    revisions: &BTreeMap<String, u32>,
+    anchor_revisions: &BTreeMap<String, u32>,
+) -> Outcome {
+    let mut o = Outcome::default();
+    o.lines.push(format!(
+        "[anchor] min_ms vs anchor {anchor_version} (gate: same cells, +{:.0}% cumulative)",
+        ANCHOR_REGRESSION_MAX * 100.0
+    ));
+    for scenario in revisions.keys() {
+        if let Some((from, to)) = workload_revision_change(scenario, revisions, anchor_revisions) {
+            o.lines.push(format!(
+                "  RESET    {scenario}: workload r{from} → r{to} since the anchor; skipped"
+            ));
+        }
+    }
+    let amap: HashMap<_, _> = anchor.iter().map(|r| (key(r), r)).collect();
+    let mut deltas: Vec<(f64, String)> = Vec::new();
+    for r in rows {
+        if workload_revision_change(&r.scenario, revisions, anchor_revisions).is_some()
+            || regression_advisory_only(r)
+            || !REGRESSION_SIZES.contains(&r.size_label.as_str())
+        {
+            continue;
+        }
+        let Some(a) = amap.get(&key(r)) else {
+            continue;
+        };
+        if a.min_ms == 0.0 {
+            continue;
+        }
+        let d = (r.min_ms - a.min_ms) / a.min_ms;
+        if d > ANCHOR_REGRESSION_MAX {
+            o.gating_failures += 1;
+        }
+        deltas.push((d, cell(r)));
+    }
+    deltas.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    for (d, c) in deltas.iter().take(8) {
+        let tag = if *d > ANCHOR_REGRESSION_MAX {
+            "FAIL"
+        } else {
+            "ok  "
+        };
+        o.lines.push(format!(
+            "  {tag} {c:34} min_ms {:+.1}% vs anchor",
+            d * 100.0
+        ));
+    }
+    if o.gating_failures == 0 {
+        o.lines.push(format!(
+            "  anchor: PASS (max cumulative min_ms delta ≤ +{:.0}%)",
+            ANCHOR_REGRESSION_MAX * 100.0
+        ));
+    } else {
+        o.lines.push(
+            "  anchor: FAIL; fix the regression, or accept it by bumping \
+             docs/benchmarks/ANCHOR in a reviewed commit with a reason"
+                .into(),
+        );
+    }
+    o
+}
+
+/// Resolve `--anchor`: `auto` reads the version from `docs/benchmarks/ANCHOR`
+/// and finds its `results.json` beside the gated run's (same arch dir).
+fn resolve_anchor(anchor: &str, results: &Path) -> Result<(PathBuf, String)> {
+    if anchor != "auto" {
+        let path = PathBuf::from(anchor);
+        let label = path
+            .parent()
+            .and_then(Path::file_name)
+            .map_or_else(|| anchor.to_string(), |n| n.to_string_lossy().into_owned());
+        return Ok((path, label));
+    }
+    let root = crate::workspace_root_from_xtask()?;
+    let text = std::fs::read_to_string(root.join("docs/benchmarks/ANCHOR"))
+        .context("reading docs/benchmarks/ANCHOR")?;
+    let version = super::micro_det::anchor_version(&text)
+        .context("docs/benchmarks/ANCHOR names no version")?;
+    let arch_dir = results
+        .parent()
+        .and_then(Path::parent)
+        .context("cannot derive the arch directory from --results")?;
+    Ok((arch_dir.join(&version).join("results.json"), version))
+}
+
 fn read_report(p: &Path) -> Result<Report> {
     let s = std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
     serde_json::from_str(&s).with_context(|| format!("parsing {} as a bench Report", p.display()))
@@ -250,10 +348,17 @@ fn read_report(p: &Path) -> Result<Report> {
 
 /// CLI entry point: read `results` (and optional `baseline`),
 /// print the gate report, exit non-zero on a gating failure.
-pub fn run(results: &Path, baseline: Option<&Path>) -> Result<()> {
+pub fn run(results: &Path, baseline: Option<&Path>, anchor: Option<&str>) -> Result<()> {
     let rep = read_report(results)?;
     let base = match baseline {
         Some(p) => Some(read_report(p)?),
+        None => None,
+    };
+    let anchor = match anchor {
+        Some(a) => {
+            let (path, label) = resolve_anchor(a, results)?;
+            Some((read_report(&path)?, label))
+        }
         None => None,
     };
 
@@ -274,12 +379,25 @@ pub fn run(results: &Path, baseline: Option<&Path>) -> Result<()> {
     for l in &outcome.lines {
         println!("{l}");
     }
+    let mut gating_failures = outcome.gating_failures;
+    if let Some((anchor, label)) = &anchor {
+        let anchored = evaluate_anchor(
+            &rep.rows,
+            &anchor.rows,
+            label,
+            &rep.args.scenario_revisions,
+            &anchor.args.scenario_revisions,
+        );
+        for l in &anchored.lines {
+            println!("{l}");
+        }
+        gating_failures += anchored.gating_failures;
+    }
 
-    if outcome.gating_failures > 0 {
+    if gating_failures > 0 {
         bail!(
-            "bench gate: {} gating failure(s) — not publishable; see \
-             docs/benchmarks/investigations/2026-05-bench-runner-instability/README.md",
-            outcome.gating_failures
+            "bench gate: {gating_failures} gating failure(s) — not publishable; see \
+             docs/benchmarks/investigations/2026-05-bench-runner-instability/README.md"
         );
     }
     println!("bench gate: PASS");
@@ -435,5 +553,47 @@ mod tests {
         let after = vec![row("S1", "10k", "full", 30.0, 0.5, 30.0)]; // +25% min
         let o = evaluate(&after, Some(&base));
         assert_eq!(o.gating_failures, 1, "full/10k regression must still gate");
+    }
+
+    #[test]
+    fn anchor_flags_cumulative_creep_that_adjacent_checks_pass() {
+        let anchor = vec![
+            row("S2", "100k", "full", 1000.0, 10.0, 1000.0),
+            row("S1", "1m", "full", 4000.0, 40.0, 4000.0),
+        ];
+        // +12% vs anchor: under the +15% adjacent gate, over the +10% anchor gate.
+        let rows = vec![
+            row("S2", "100k", "full", 1120.0, 10.0, 1120.0),
+            row("S1", "1m", "full", 4200.0, 40.0, 4200.0),
+        ];
+        let empty = BTreeMap::new();
+        let o = evaluate_anchor(&rows, &anchor, "v0.20.0", &empty, &empty);
+        assert_eq!(o.gating_failures, 1, "{:#?}", o.lines);
+        assert!(
+            o.lines
+                .iter()
+                .any(|l| l.contains("FAIL") && l.contains("S2 100k full"))
+        );
+    }
+
+    #[test]
+    fn anchor_skips_advisory_cells_and_workload_resets() {
+        let anchor = vec![
+            row("S1", "1k", "changed", 10.0, 1.0, 10.0),
+            row("S4", "100k", "full", 1000.0, 10.0, 1000.0),
+        ];
+        let rows = vec![
+            row("S1", "1k", "changed", 30.0, 1.0, 30.0),
+            row("S4", "100k", "full", 2000.0, 10.0, 2000.0),
+        ];
+        let revisions: BTreeMap<String, u32> = [("S4".to_string(), 4)].into_iter().collect();
+        let anchor_revisions: BTreeMap<String, u32> = [("S4".to_string(), 3)].into_iter().collect();
+        let o = evaluate_anchor(&rows, &anchor, "v0.20.0", &revisions, &anchor_revisions);
+        assert_eq!(o.gating_failures, 0, "{:#?}", o.lines);
+        assert!(
+            o.lines
+                .iter()
+                .any(|l| l.contains("RESET") && l.contains("S4"))
+        );
     }
 }
