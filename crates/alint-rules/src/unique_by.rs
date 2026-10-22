@@ -18,7 +18,7 @@
 //! every colliding file. For groups of N, that is one violation (not N),
 //! because the collision is a single fact.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use alint_core::template::{PathTokens, TokenSet, render_message, render_path};
 use alint_core::{
@@ -71,11 +71,12 @@ impl Rule for UniqueByRule {
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        // BTreeMap gives a stable (sorted) iteration order →
-        // deterministic output. Storing `Arc<Path>` re-uses the
-        // walker's per-file allocation rather than copying bytes
-        // through a `PathBuf`.
-        let mut groups: BTreeMap<String, Vec<std::sync::Arc<std::path::Path>>> = BTreeMap::new();
+        // Group in a hash map (one hash per file instead of ~log2(n) string
+        // comparisons in an ordered map), then sort only the colliding groups
+        // by key, so the output order is the same sorted-key order as before.
+        // Storing `Arc<Path>` re-uses the walker's per-file allocation rather
+        // than copying bytes through a `PathBuf`.
+        let mut groups: HashMap<String, Vec<std::sync::Arc<std::path::Path>>> = HashMap::new();
         let needed = TokenSet::of(&self.key_template);
         for entry in ctx.index.files() {
             if !self.select_scope.matches(&entry.path, ctx.index) {
@@ -93,11 +94,13 @@ impl Rule for UniqueByRule {
             }
             groups.entry(key).or_default().push(entry.path.clone());
         }
+        let mut duplicates: Vec<_> = groups
+            .into_iter()
+            .filter(|(_, paths)| paths.len() > 1)
+            .collect();
+        duplicates.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         let mut violations = Vec::new();
-        for (key, mut paths) in groups {
-            if paths.len() <= 1 {
-                continue;
-            }
+        for (key, mut paths) in duplicates {
             paths.sort();
             let anchor = paths[0].clone();
             let msg = self.format_message(&key, &paths);
@@ -318,6 +321,24 @@ mod tests {
             ],
         );
         assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn groups_report_in_sorted_key_order() {
+        let r = rule("**/*.rs", "{stem}");
+        let mut files = Vec::new();
+        for key in (0..40).rev() {
+            files.push(format!("a/k{key:02}.rs"));
+            files.push(format!("b/k{key:02}.rs"));
+        }
+        let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+        let v = eval(&r, &refs);
+        let anchors: Vec<String> = v
+            .iter()
+            .map(|v| v.path.as_ref().unwrap().display().to_string())
+            .collect();
+        let expected: Vec<String> = (0..40).map(|key| format!("a/k{key:02}.rs")).collect();
+        assert_eq!(anchors, expected);
     }
 
     #[test]
