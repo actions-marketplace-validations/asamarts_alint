@@ -65,6 +65,17 @@ det_check::check_grp::check s5_1k:(materialize("s5", S5, 1_000)) -> crates/alint
 Gungraun result: Ok. 3 without regressions; 0 regressed; 3 benchmarks finished in 120s
 OUT
 printf 'error: could not compile `alint` (bin "alint")\n' > "$sandbox/build-error.txt"
+# det_engine counting only the benchmark thread (the pre-2026-10 blind spot).
+cat > "$sandbox/gungraun-blind.txt" <<'OUT'
+det_engine::engine::engine_run n10k:(fixture(10_000))
+  Instructions:                        2245079|2258760              (-0.60569%) [-1.00609x]
+Gungraun result: Ok. 1 without regressions; 0 regressed; 1 benchmarks finished in 5s
+OUT
+cat > "$sandbox/gungraun-counted.txt" <<'OUT'
+det_engine::engine::engine_run n10k:(fixture(10_000))
+  Instructions:                       43828695|43811012             (+0.04036%) [+1.00040x]
+Gungraun result: Ok. 1 without regressions; 0 regressed; 1 benchmarks finished in 5s
+OUT
 # The same comparison as gungraun prints it in CI, ANSI-coloured (format taken
 # from a hosted perf-gate run): the table must still parse.
 e=$'\e'
@@ -76,7 +87,7 @@ e=$'\e'
 
 repo="$sandbox/repo"
 mkdir -p "$repo/ci/scripts"
-cp "$REPO_ROOT/ci/scripts/det-perf-gate.sh" "$repo/ci/scripts/"
+cp "$REPO_ROOT/ci/scripts/det-perf-gate.sh" "$REPO_ROOT/ci/scripts/perf-gate-base.sh" "$repo/ci/scripts/"
 git -C "$repo" init -q -b main
 git -C "$repo" config user.email test@example.com
 git -C "$repo" config user.name Test
@@ -164,7 +175,7 @@ fi
 
 echo "==> baseline bench fails: tooling failure, exit 1, PR head restored"
 run_gate STUB_BASE_RC=1
-if [[ $rc -eq 1 ]] && has out "baseline build or bench failed at the merge base ${base_sha:0:12}" \
+if [[ $rc -eq 1 ]] && has out "baseline build or bench failed at the base ${base_sha:0:12}" \
   && ! has log ' -- --baseline=base' && restored; then
   ok "a failed baseline fails as tooling and restores the PR head"
 else
@@ -201,6 +212,50 @@ if [[ $rc -eq 0 ]] && has out 'no distinct base' && [[ ! -s "$sandbox/log" ]]; t
   ok "no distinct base skips without building"
 else
   bad "no distinct base (rc=$rc)"
+fi
+
+echo "==> push to main: compares the pushed range (base = the previous tip)"
+run_gate PR_BASE_SHA= PUSH_BEFORE_SHA="$base_sha"
+if [[ $rc -eq 0 ]] && has summary "this push vs the previous tip \`${base_sha:0:12}\`" && restored; then
+  ok "a push is gated against the tip before it"
+else
+  bad "push range (rc=$rc)"
+fi
+
+echo "==> force-push: compares against where the histories meet"
+git -C "$repo" checkout -q "$base_sha"
+echo side > "$repo/side.txt"
+git -C "$repo" add -A
+git -C "$repo" commit -q -m side
+side_sha=$(git -C "$repo" rev-parse HEAD)
+run_gate PR_BASE_SHA= PUSH_BEFORE_SHA="$side_sha"
+if [[ $rc -eq 0 ]] && has summary "\`${base_sha:0:12}\`" && restored; then
+  ok "a force-push falls back to the merge base with the old tip"
+else
+  bad "force-push base (rc=$rc)"
+fi
+
+echo "==> push creating a branch (zero before-sha): merge base with origin/main, here none"
+run_gate PR_BASE_SHA= PUSH_BEFORE_SHA=0000000000000000000000000000000000000000
+if [[ $rc -eq 0 ]] && has out 'no distinct base'; then
+  ok "a zero before-sha does not crash the gate"
+else
+  bad "zero before-sha (rc=$rc)"
+fi
+
+echo "==> det_engine counting only the bench thread: tooling failure"
+run_gate STUB_PR_OUTPUT="$sandbox/gungraun-blind.txt"
+if [[ $rc -eq 1 ]] && has out 'engine_run n10k counted only 2245079 instructions' \
+  && has summary '### Deterministic perf gate: did not run' && restored; then
+  ok "a blind det_engine fails loudly"
+else
+  bad "blind det_engine (rc=$rc)"
+fi
+run_gate STUB_PR_OUTPUT="$sandbox/gungraun-counted.txt"
+if [[ $rc -eq 0 ]] && has summary '| `det_engine::engine_run n10k` | 43811012 | 43828695 | +0.04036% |'; then
+  ok "a det_engine counting the worker passes the floor"
+else
+  bad "counted det_engine (rc=$rc)"
 fi
 
 echo "==> an attached PR head remains on its original branch"
