@@ -420,7 +420,7 @@ pub(crate) fn visit_sensitive_for_each(
                 }
             }
             let spec = nested.spec.instantiate(parent_id, index, level, &tokens);
-            let Ok(rule) = registry.build(&spec) else {
+            let Ok(rule) = registry.build_instantiated(&spec) else {
                 continue;
             };
             rule.visit_sensitive_paths(parent_explicit || spec.sensitive, ctx, visit);
@@ -626,7 +626,7 @@ fn evaluate_for_each_inner<const TRACE: bool>(
                 }
             }
             let nested_spec = nested.spec.instantiate(parent_id, i, level, &tokens);
-            let nested_rule = match registry.build(&nested_spec) {
+            let nested_rule = match registry.build_instantiated(&nested_spec) {
                 Ok(r) => r,
                 Err(e) => {
                     if TRACE {
