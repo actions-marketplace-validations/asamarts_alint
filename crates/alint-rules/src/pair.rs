@@ -126,6 +126,13 @@ impl Rule for PairRule {
 /// followed, matching the index's own lexical paths. `\` is a separator only on
 /// Windows (elsewhere it is a legal filename byte).
 fn normalize_rel(rel: &str) -> Option<PathBuf> {
+    // Almost every rendered partner is already normal: return it without the
+    // segment vector, join and second allocation.
+    if !(cfg!(windows) && rel.contains('\\'))
+        && rel.split('/').all(|seg| !matches!(seg, "" | "." | ".."))
+    {
+        return Some(PathBuf::from(rel));
+    }
     let mut parts: Vec<&str> = Vec::new();
     for seg in rel.split(|c: char| c == '/' || (cfg!(windows) && c == '\\')) {
         match seg {
@@ -370,6 +377,40 @@ mod tests {
         let v = eval(&r, &["src/foo.c", "foo.h"]);
         assert_eq!(v.len(), 1);
         assert!(v[0].message.contains("outside the repository root"));
+    }
+
+    #[test]
+    fn normalize_rel_fast_path_matches_the_segment_walk() {
+        fn reference(rel: &str) -> Option<PathBuf> {
+            let mut parts: Vec<&str> = Vec::new();
+            for seg in rel.split(|c: char| c == '/' || (cfg!(windows) && c == '\\')) {
+                match seg {
+                    "" | "." => {}
+                    ".." => {
+                        parts.pop()?;
+                    }
+                    s => parts.push(s),
+                }
+            }
+            if parts.is_empty() {
+                return None;
+            }
+            Some(PathBuf::from(parts.join("/")))
+        }
+        let segs = ["", ".", "..", "a", "b.h", "\\x"];
+        let mut cases = Vec::new();
+        for a in segs {
+            for b in segs {
+                for c in segs {
+                    cases.push(format!("{a}/{b}/{c}"));
+                    cases.push(format!("{a}/{b}"));
+                }
+                cases.push(a.to_string());
+            }
+        }
+        for rel in &cases {
+            assert_eq!(normalize_rel(rel), reference(rel), "{rel:?}");
+        }
     }
 
     #[test]
