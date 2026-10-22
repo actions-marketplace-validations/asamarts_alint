@@ -13,8 +13,11 @@ git clone -q --no-local "$REPO_ROOT" "$TMP_ROOT/repo"
 # change so a pre-commit run exercises the actual candidate, including an
 # uncommitted release bump and any gate/fixture edits made in the same change.
 # `--binary` keeps this faithful if a future contract input is non-text.
-git -C "$REPO_ROOT" diff --binary HEAD -- . |
-  git -C "$TMP_ROOT/repo" apply --whitespace=nowarn
+candidate_patch="$TMP_ROOT/candidate.patch"
+git -C "$REPO_ROOT" diff --binary HEAD -- . >"$candidate_patch"
+if [[ -s "$candidate_patch" ]]; then
+  git -C "$TMP_ROOT/repo" apply --whitespace=nowarn "$candidate_patch"
+fi
 git -C "$TMP_ROOT/repo" add -A
 git -C "$TMP_ROOT/repo" \
   -c user.name='alint tests' -c user.email='tests@alint.invalid' \

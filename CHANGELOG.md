@@ -179,7 +179,8 @@ ruleset ownership contracts executable.
 - **Release-bump shell validation now tests the actual candidate tree.** The version-pin harness
   overlays and commits every tracked working-tree change in its disposable clone, so local
   pre-commit validation neither fails on the expected uncommitted version bump nor tests stale
-  release metadata from `HEAD`.
+  release metadata from `HEAD`; clean CI checkouts also skip the absent overlay instead of asking
+  `git apply` to consume an empty patch.
 
 - **Nested configs now reject every execution setting they cannot honor.** Explicit
   `respect_gitignore`, `fix_size_limit`, and `nested_configs` declarations now fail, including an
