@@ -124,7 +124,9 @@ const HEAVY: &[&str] = &[
 ///   real files, and glibc's allocator takes history-dependent paths there.
 ///   The same-session wall-clock A/B in bench-record covers them.
 ///
-/// Everything else moved under 1% and gates.
+/// `xml_path_equals/1000` moved 1.0% on the dev box and 1.8% on a hosted
+/// runner between identical builds: too close to the 3% gate to fail a
+/// release on. Everything else moved under 1% and gates.
 const REPORT_ONLY: &[&str] = &[
     "walker/",
     "blame_cache/",
@@ -140,7 +142,7 @@ const REPORT_ONLY: &[&str] = &[
     "structured_query/json_path_equals/",
     "structured_query/json_schema_passes/",
     "structured_query/toml_path_equals/",
-    "structured_query/xml_path_equals/100",
+    "structured_query/xml_path_equals/",
     "structured_query/xml_path_matches/100",
     "structured_query/yaml_path_matches/100",
     "cross_file/every_matching_has/100",
@@ -164,7 +166,6 @@ const PR_SUBSET: &[&str] = &[
     "single_file/file_hash/1000",
     "single_file/pinned_references/1000",
     "single_file/reeval_vs_full/run_for_file/1000",
-    "structured_query/xml_path_equals/1000",
     "structured_query/xml_path_matches/1000",
     "structured_query/yaml_path_matches/1000",
 ];
@@ -835,7 +836,11 @@ mod tests {
             "allocator-noisy"
         );
         assert!(!policy("structured_query/xml_path_equals/100").gate);
-        assert!(policy("structured_query/xml_path_equals/1000").gate);
+        assert!(
+            !policy("structured_query/xml_path_equals/1000").gate,
+            "1.8% CI noise"
+        );
+        assert!(policy("structured_query/xml_path_matches/1000").gate);
         // Every PR-subset bench gates: an advisory subset of report-only
         // benches would be noise.
         for prefix in PR_SUBSET {
