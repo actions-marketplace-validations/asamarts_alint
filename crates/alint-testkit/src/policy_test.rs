@@ -511,9 +511,8 @@ pub fn has_policy_test_discriminator(input: &str) -> bool {
     if has_top_level_marker {
         return true;
     }
-    if !alint_core::yaml_depth::flow_depth_within_limit(input)
-        || !alint_core::yaml_depth::expansion_within_limit(input)
-    {
+    let yaml_guards = alint_core::yaml_depth::scan_guards(input);
+    if !yaml_guards.flow_within_limit() || !yaml_guards.expansion_within_limit(input) {
         return false;
     }
     yaml_serde::from_str::<yaml_serde::Value>(input).is_ok_and(|value| {
@@ -526,12 +525,13 @@ pub fn has_policy_test_discriminator(input: &str) -> bool {
 impl PolicyTest {
     /// Parse one v1 document after shared YAML complexity guards and version dispatch.
     pub fn from_yaml(input: &str) -> Result<Self, PolicyTestParseError> {
-        if !alint_core::yaml_depth::flow_depth_within_limit(input) {
+        let yaml_guards = alint_core::yaml_depth::scan_guards(input);
+        if !yaml_guards.flow_within_limit() {
             return Err(PolicyTestParseError::FlowDepth(
                 alint_core::yaml_depth::MAX_YAML_FLOW_DEPTH,
             ));
         }
-        if !alint_core::yaml_depth::expansion_within_limit(input) {
+        if !yaml_guards.expansion_within_limit(input) {
             return Err(PolicyTestParseError::AliasExpansion);
         }
         let value: yaml_serde::Value = yaml_serde::from_str(input)?;

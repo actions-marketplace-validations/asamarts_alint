@@ -151,7 +151,8 @@ impl Format {
                 // crafted `[[[…` file otherwise hangs the run) — the YAML analogue
                 // of the `xml_within_parse_limits` guard below. JSON (serde_json,
                 // 128-deep) and TOML (toml, 80-deep) carry their own limits.
-                if !crate::yaml_depth::flow_depth_within_limit(text) {
+                let yaml_guards = crate::yaml_depth::scan_guards(text);
+                if !yaml_guards.flow_within_limit() {
                     return Err(format!(
                         "YAML flow nesting exceeds the maximum supported depth ({})",
                         crate::yaml_depth::MAX_YAML_FLOW_DEPTH
@@ -161,7 +162,7 @@ impl Format {
                 // anchor referenced many times (`*a` x N -> N x anchor-size nodes),
                 // which balloons a small file into millions of nodes. Cheap
                 // discard-only pre-count; alias-free text short-circuits for free.
-                if !crate::yaml_depth::expansion_within_limit(text) {
+                if !yaml_guards.expansion_within_limit(text) {
                     return Err(
                         "YAML alias expansion exceeds the maximum supported size".to_string()
                     );

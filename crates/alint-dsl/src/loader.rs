@@ -337,7 +337,8 @@ fn parse_config_interpolated_inner_with_environment(
     }
 
     // on it super-linearly — a DoS reachable through an `extends:`'d ruleset.
-    if !alint_core::yaml_depth::flow_depth_within_limit(contents) {
+    let yaml_guards = alint_core::yaml_depth::scan_guards(contents);
+    if !yaml_guards.flow_within_limit() {
         return Err(Error::Other(format!(
             "{}: YAML flow nesting exceeds the maximum supported depth ({})",
             source.display(),
@@ -346,7 +347,7 @@ fn parse_config_interpolated_inner_with_environment(
     }
     // Reject an alias-expansion bomb (a single anchor referenced many times) the
     // same way -- yaml_serde's own limits don't catch it.
-    if !alint_core::yaml_depth::expansion_within_limit(contents) {
+    if !yaml_guards.expansion_within_limit(contents) {
         return Err(Error::Other(format!(
             "{}: YAML alias expansion exceeds the maximum supported size",
             source.display(),
@@ -835,13 +836,14 @@ fn load_remote(
     // the run. The local/interpolated path guards in `parse_config_interpolated`;
     // this direct `from_str` bypassed it (the guard's docs claim `extends:` bodies
     // are covered -- true for local, and now for remote).
-    if !alint_core::yaml_depth::flow_depth_within_limit(body_str) {
+    let yaml_guards = alint_core::yaml_depth::scan_guards(body_str);
+    if !yaml_guards.flow_within_limit() {
         return Err(Error::Other(format!(
             "remote config at {source}: YAML flow nesting exceeds the maximum supported depth ({})",
             alint_core::yaml_depth::MAX_YAML_FLOW_DEPTH
         )));
     }
-    if !alint_core::yaml_depth::expansion_within_limit(body_str) {
+    if !yaml_guards.expansion_within_limit(body_str) {
         return Err(Error::Other(format!(
             "remote config at {source}: YAML alias expansion exceeds the maximum supported size"
         )));
@@ -907,9 +909,8 @@ fn load_bundled(spec: &str) -> Result<RawConfig> {
     // these guards are defense-in-depth, not an attack surface -- but keeping the
     // checks uniform with the remote/local paths means no `yaml_serde::from_str`
     // in the loader is ever unguarded. A bundled ruleset tripping one is an alint bug.
-    if !alint_core::yaml_depth::flow_depth_within_limit(body)
-        || !alint_core::yaml_depth::expansion_within_limit(body)
-    {
+    let yaml_guards = alint_core::yaml_depth::scan_guards(body);
+    if !yaml_guards.flow_within_limit() || !yaml_guards.expansion_within_limit(body) {
         return Err(Error::internal(format!(
             "built-in ruleset '{spec}' exceeds a maximum supported YAML complexity limit"
         )));

@@ -133,9 +133,8 @@ fn read_existing_extends(root: &Path) -> Vec<String> {
         // reads the repo's `.alint.yml` directly, so an untrusted checkout could
         // otherwise hang it. Degrade gracefully to "no existing extends", as this
         // function already does for an unparseable config.
-        if !alint_core::yaml_depth::flow_depth_within_limit(&body)
-            || !alint_core::yaml_depth::expansion_within_limit(&body)
-        {
+        let yaml_guards = alint_core::yaml_depth::scan_guards(&body);
+        if !yaml_guards.flow_within_limit() || !yaml_guards.expansion_within_limit(&body) {
             return Vec::new();
         }
         let Ok(doc) = yaml_serde::from_str::<yaml_serde::Value>(&body) else {
