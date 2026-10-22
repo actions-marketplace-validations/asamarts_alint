@@ -6,6 +6,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Correct the crates.io Trusted Publishing instructions for a brand-new crate:
+  bootstrap its first tagged version with a scoped maintainer token from the
+  exact release commit, configure the crate's OIDC publisher, then rerun the
+  idempotent failed release job.
+
 ## [0.20.0] - 2026-10-21
 
 General-linter phase 1b closes the policy-authoring loop with a public, hermetic policy-test

@@ -194,17 +194,25 @@ can expire mid-release. Consumer-side verification commands live in
 
 ## Adding a new published crate
 
-When a new workspace crate joins the crates.io publish list
-(`ci/scripts/publish-crates.sh` `CRATES=()`), **register its crates.io
-Trusted Publisher before the release that first publishes it via OIDC**:
-crate → Settings → Trusted Publishing → repo `asamarts/alint`, workflow
-`release.yml`, no environment. The OIDC token is scoped per crate, so a
-crate without a publisher entry fails that release's `publish to
-crates.io` job with `403 ... access token is not valid for crate
-<name>`, *after* the earlier crates have already published (crates.io
-is permanent; see Yanking). The publish script is idempotent, so the
-recovery is: add the publisher, then `gh run rerun <id> --failed`
-(never re-tag). `alint-lsp` hit this on v0.11.1.
+crates.io Trusted Publishing cannot create a crate. When a new workspace crate
+joins `ci/scripts/publish-crates.sh`'s `CRATES=()` list, its first tagged release
+therefore requires this one-time bootstrap:
+
+1. Let the release workflow publish the established crates and fail at the new
+   crate with `403 Forbidden: Trusted Publishing tokens do not support creating
+   new crates`.
+2. From the exact clean tagged commit, run
+   `cargo +<RELEASE_RUST> publish -p <crate> --locked` using a maintainer's
+   scoped crates.io token.
+3. Add the crate's Trusted Publisher in crates.io: crate → Settings → Trusted
+   Publishing → repo `asamarts/alint`, workflow `release.yml`, no environment.
+4. Run `gh run rerun <id> --failed`. Never re-tag. The publish script skips
+   versions already visible on crates.io and resumes in dependency order.
+
+The manual first publish is an unavoidable partial release, so do it immediately
+after the expected failure and never from an uncommitted or post-tag tree. Every
+later release is tokenless through OIDC. `alint-testkit` followed this bootstrap
+in v0.20.0.
 
 ## npm Trusted Publishing
 
