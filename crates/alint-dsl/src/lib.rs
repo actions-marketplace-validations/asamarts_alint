@@ -1050,13 +1050,14 @@ pub fn parse(yaml: &str) -> Result<Config> {
     // super-linearly, same as `load()` / the remote+bundled `extends:` bodies. This
     // is a public entry point, so an external caller's untrusted YAML must be as
     // safe here as through the file loader.
-    if !alint_core::yaml_depth::flow_depth_within_limit(yaml) {
+    let yaml_guards = alint_core::yaml_depth::scan_guards(yaml);
+    if !yaml_guards.flow_within_limit() {
         return Err(Error::Other(format!(
             "YAML flow nesting exceeds the maximum supported depth ({})",
             alint_core::yaml_depth::MAX_YAML_FLOW_DEPTH
         )));
     }
-    if !alint_core::yaml_depth::expansion_within_limit(yaml) {
+    if !yaml_guards.expansion_within_limit(yaml) {
         return Err(Error::Other(
             "YAML alias expansion exceeds the maximum supported size".to_string(),
         ));

@@ -1378,6 +1378,44 @@ impl NestedRuleSpec {
     /// path-template substitution (using the iterated entry's tokens) to
     /// every string field. The resulting spec has `id =
     /// "{parent_id}.require[{idx}]"` and inherits `level` from the parent.
+    /// Every path token any rendered field of this spec refers to (`paths`,
+    /// `message` and every string in its options), so callers instantiating
+    /// it per entry derive only those. Over-inclusive by construction.
+    #[must_use]
+    pub fn path_tokens(&self) -> crate::template::TokenSet {
+        use crate::template::TokenSet;
+        fn walk(v: &yaml_serde::Value, acc: &mut TokenSet) {
+            match v {
+                yaml_serde::Value::String(s) => *acc = acc.union(TokenSet::of(s)),
+                yaml_serde::Value::Sequence(items) => items.iter().for_each(|x| walk(x, acc)),
+                yaml_serde::Value::Mapping(m) => m.iter().for_each(|(k, x)| {
+                    walk(k, acc);
+                    walk(x, acc);
+                }),
+                yaml_serde::Value::Tagged(tagged) => walk(&tagged.value, acc),
+                _ => {}
+            }
+        }
+        let mut acc = TokenSet::NONE;
+        let mut add = |s: &str| acc = acc.union(TokenSet::of(s));
+        match &self.paths {
+            Some(PathsSpec::Single(s)) => add(s),
+            Some(PathsSpec::Many(v)) => v.iter().for_each(|s| add(s)),
+            Some(PathsSpec::IncludeExclude { include, exclude }) => {
+                include.iter().chain(exclude).for_each(|s| add(s));
+            }
+            None => {}
+        }
+        if let Some(message) = &self.message {
+            add(message);
+        }
+        for (k, v) in &self.extra {
+            walk(k, &mut acc);
+            walk(v, &mut acc);
+        }
+        acc
+    }
+
     pub fn instantiate(
         &self,
         parent_id: &str,

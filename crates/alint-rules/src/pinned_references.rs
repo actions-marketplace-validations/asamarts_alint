@@ -374,10 +374,11 @@ struct ScalarRef<'a> {
 
 impl YamlDocument {
     fn parse(text: &str) -> std::result::Result<Option<Self>, String> {
-        if !alint_core::yaml_depth::flow_depth_within_limit(text) {
+        let yaml_guards = alint_core::yaml_depth::scan_guards(text);
+        if !yaml_guards.flow_within_limit() {
             return Err("flow collection nesting exceeds the safety limit".to_owned());
         }
-        if !alint_core::yaml_depth::expansion_within_limit(text) {
+        if !yaml_guards.expansion_within_limit(text) {
             return Err("alias expansion exceeds the safety limit".to_owned());
         }
         let mut parser = Parser::new_from_str(text);

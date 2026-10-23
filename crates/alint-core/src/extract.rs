@@ -688,7 +688,8 @@ fn yaml_entry_rows(text: &str) -> std::result::Result<Vec<StructuredEntryRow>, E
     }
     // Keep the lexical flow guard ahead of saphyr's scanner: deeply nested flow
     // collections are super-linear before the parser can emit their starts.
-    if !crate::yaml_depth::flow_depth_within_limit(stripped) {
+    let yaml_guards = crate::yaml_depth::scan_guards(stripped);
+    if !yaml_guards.flow_within_limit() {
         return Err(EntryRowsError::Parse(
             "YAML flow nesting exceeds the supported limit".to_string(),
         ));
@@ -730,7 +731,7 @@ fn yaml_entry_rows(text: &str) -> std::result::Result<Vec<StructuredEntryRow>, E
     // This guard drives a recursive discard-only deserializer when aliases are
     // present, so run it only after collection depth is known safe and before
     // traversing or materializing the parser result.
-    if !crate::yaml_depth::expansion_within_limit(stripped) {
+    if !yaml_guards.expansion_within_limit(stripped) {
         return Err(EntryRowsError::Parse(
             "YAML alias expansion exceeds the maximum supported size".to_string(),
         ));

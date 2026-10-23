@@ -261,6 +261,22 @@ impl RuleRegistry {
         Ok(rule)
     }
 
+    /// [`Self::build`] for a nested-rule instantiation whose field set was already
+    /// validated when the parent rule was built: templating changes only string
+    /// values, never which fields or option keys are present.
+    pub fn build_instantiated(&self, spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+        let canonical = self.canonical_kind(&spec.kind);
+        let registration = self
+            .kinds
+            .get(canonical)
+            .ok_or_else(|| Error::UnknownRuleKind(spec.kind.clone()))?;
+        registration
+            .builder
+            .build(spec)
+            .map_err(|error| enrich_error(error, &spec.kind))
+            .map_err(|error| spec.redact_configuration_error(error))
+    }
+
     pub fn known_kinds(&self) -> impl Iterator<Item = &str> {
         self.kinds
             .keys()
@@ -1076,5 +1092,31 @@ mod tests {
         let mut kinds: Vec<&str> = r.known_kinds().collect();
         kinds.sort_unstable();
         assert_eq!(kinds, vec!["a", "b", "c"]);
+    }
+
+    /// `build_instantiated` skips `validate_configured_fields` because the
+    /// parent already validated each nested spec at build time with
+    /// placeholder tokens. That is sound only while the configured field set of
+    /// an instantiation does not depend on the token values.
+    #[test]
+    fn nested_instantiation_field_set_is_token_independent() {
+        let nested: crate::config::NestedRuleSpec = yaml_serde::from_str(
+            "kind: file_exists\npaths: \"{path}/README.md\"\nmessage: \"{dir} needs a README\"\n\
+             root_only: false\nscope_filter:\n  has_ancestor: Cargo.toml\n",
+        )
+        .unwrap();
+        let placeholder = crate::template::PathTokens::from_path(std::path::Path::new("_"));
+        for path in ["pkgs/a", "pkgs/[weird]{x}/*?", "a/b/c/d.e.f", "", "!neg"] {
+            let tokens = crate::template::PathTokens::from_path(std::path::Path::new(path));
+            let a = nested.instantiate("parent", 0, crate::Level::Error, &placeholder);
+            let b = nested.instantiate("parent", 0, crate::Level::Error, &tokens);
+            assert_eq!(
+                format!("{:?}", ConfiguredFields::from_rule_spec(&a)),
+                format!("{:?}", ConfiguredFields::from_rule_spec(&b)),
+                "{path:?}"
+            );
+            let keys = |s: &crate::RuleSpec| s.extra.keys().cloned().collect::<Vec<_>>();
+            assert_eq!(keys(&a), keys(&b), "{path:?}");
+        }
     }
 }

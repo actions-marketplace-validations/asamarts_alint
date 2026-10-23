@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::{Candidate, Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::config::{PathsSpec, RuleSpec};
 use crate::error::{Error, Result};
@@ -36,6 +36,9 @@ pub struct Scope {
     include: GlobSet,
     exclude: GlobSet,
     has_include: bool,
+    /// A sole literal include pattern, matched by comparing the path's bytes
+    /// instead of through `include` (see [`Scope::from_patterns`]).
+    literal: Option<Box<[u8]>>,
     // The field name `scope_filter` is intentional — the public
     // accessor and the spec field share it, so renaming to
     // `filter` would cost more clarity than it saves.
@@ -55,6 +58,23 @@ fn compile(pattern: &str) -> Result<Glob> {
 
 impl Scope {
     pub fn from_patterns(patterns: &[String]) -> Result<Self> {
+        // A single literal path (what a nested rule's `{path}/README.md` renders
+        // to, once per matched entry) needs no `GlobSet`: compiling one was most
+        // of a nested rule's build. globset matches a literal by exact equality
+        // on the candidate path (separators normalized to `/`), which
+        // `literal_matches` reproduces. The literal test is the shared one the
+        // rules' own literal fast paths use.
+        if let [only] = patterns
+            && let Some(literal) = literal_pattern(only, std::path::is_separator('\\'))
+        {
+            return Ok(Self {
+                include: GlobSet::empty(),
+                exclude: GlobSet::empty(),
+                has_include: true,
+                literal: Some(literal.into_bytes().into_boxed_slice()),
+                scope_filter: None,
+            });
+        }
         let mut include = GlobSetBuilder::new();
         let mut exclude = GlobSetBuilder::new();
         let mut has_include = false;
@@ -76,6 +96,7 @@ impl Scope {
                 source,
             })?,
             has_include,
+            literal: None,
             scope_filter: None,
         })
     }
@@ -118,6 +139,7 @@ impl Scope {
             include: include.build().expect("`**` GlobSet must build"),
             exclude: GlobSet::empty(),
             has_include: true,
+            literal: None,
             scope_filter: None,
         }
     }
@@ -163,10 +185,7 @@ impl Scope {
     /// without the hint).
     #[inline]
     pub fn matches(&self, path: &Path, index: &FileIndex) -> bool {
-        if self.exclude.is_match(path) {
-            return false;
-        }
-        if self.has_include && !self.include.is_match(path) {
+        if !self.path_matches(path) {
             return false;
         }
         if let Some(filter) = &self.scope_filter
@@ -183,10 +202,7 @@ impl Scope {
     /// matcher: callers use it only when the manifest set is unavailable.
     #[inline]
     pub(crate) fn matches_without_manifest(&self, path: &Path, index: &FileIndex) -> bool {
-        if self.exclude.is_match(path) {
-            return false;
-        }
-        if self.has_include && !self.include.is_match(path) {
+        if !self.path_matches(path) {
             return false;
         }
         self.scope_filter
@@ -195,9 +211,186 @@ impl Scope {
     }
 }
 
+impl Scope {
+    /// The include/exclude pattern check alone.
+    ///
+    /// Both sets are checked against one prepared [`Candidate`]:
+    /// `GlobSet::is_match` prepares a fresh one (path normalization, basename
+    /// and extension) on every call, even for an empty `exclude`. Calling the
+    /// out-of-line `is_match_candidate` also keeps this body small enough that
+    /// callers inline it whole, which matters in the per-file dispatch loop.
+    #[inline]
+    fn path_matches(&self, path: &Path) -> bool {
+        if let Some(literal) = &self.literal {
+            return literal_matches(literal, path);
+        }
+        let candidate = Candidate::new(path);
+        !self.exclude.is_match_candidate(&candidate)
+            && (!self.has_include || self.include.is_match_candidate(&candidate))
+    }
+}
+
+/// The literal path `pattern` matches, as globset would compile it, or `None`
+/// to use a `GlobSet`. Where `\\` is a path separator (Windows) globset rewrites
+/// every `\\` in a pattern to `/`, except inside a character class, so the
+/// literal is normalized the same way and a pattern with a class is left to
+/// the `GlobSet`.
+fn literal_pattern(pattern: &str, backslash_is_separator: bool) -> Option<String> {
+    if backslash_is_separator && pattern.contains('[') {
+        return None;
+    }
+    let literal = crate::template::literal_glob_path(pattern)?;
+    Some(if backslash_is_separator {
+        literal.replace('\\', "/")
+    } else {
+        literal
+    })
+}
+
+/// globset's literal match: the path's bytes (lossy UTF-8 with every separator
+/// normalized to `/` off Unix) equal the literal.
+#[inline]
+fn literal_matches(literal: &[u8], path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        path.as_os_str().as_bytes() == literal
+    }
+    #[cfg(not(unix))]
+    {
+        let lossy = path.to_string_lossy();
+        lossy.len() == literal.len()
+            && lossy
+                .bytes()
+                .map(|b| {
+                    if std::path::is_separator(char::from(b)) {
+                        b'/'
+                    } else {
+                        b
+                    }
+                })
+                .eq(literal.iter().copied())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn literal_pattern_normalizes_like_globset_where_backslash_separates() {
+        // Where `\\` separates, globset keeps it literal inside a class: such a
+        // pattern is not a literal path.
+        assert_eq!(literal_pattern("a[\\]b", true), None);
+        assert_eq!(literal_pattern("app/[[]slug[]]", true), None);
+        assert_eq!(literal_pattern("src/*.rs", false), None);
+        if std::path::is_separator('\\') {
+            // A nested `{path}/README.md` rendered on Windows.
+            assert_eq!(
+                literal_pattern("packages\\a/README.md", true).as_deref(),
+                Some("packages/a/README.md")
+            );
+        } else {
+            // Unix: `\\` escapes and a one-character class is a literal.
+            assert_eq!(literal_pattern("a\\*b", false).as_deref(), Some("a*b"));
+            assert_eq!(
+                literal_pattern("app/[[]slug[]]", false).as_deref(),
+                Some("app/[slug]")
+            );
+        }
+    }
+
+    /// Every pattern up to length 3 over the glob alphabet, against every
+    /// candidate path up to length 3: a scope must match exactly what a
+    /// `GlobSet` of the same pattern matches (and fail to build exactly when
+    /// the glob does).
+    #[test]
+    fn literal_fast_path_matches_like_a_globset() {
+        let patterns = short_strings(&['a', '/', '.', '*', '?', '[', ']', '{', '}', '\\', '!'], 3);
+        let paths = short_strings(&['a', '/', '.', '\\', '*', '['], 3);
+        let index = FileIndex::default();
+        let mut literal_scopes = 0;
+        for pattern in &patterns {
+            let reference = compile(pattern).and_then(|glob| {
+                let mut set = GlobSetBuilder::new();
+                set.add(glob);
+                set.build().map_err(|source| Error::Glob {
+                    pattern: pattern.clone(),
+                    source,
+                })
+            });
+            let scope = Scope::from_patterns(std::slice::from_ref(pattern));
+            if pattern.starts_with('!') {
+                continue; // an exclude-only scope, not the single-literal shape
+            }
+            match (&scope, &reference) {
+                (Ok(scope), Ok(set)) => {
+                    literal_scopes += usize::from(scope.literal.is_some());
+                    for path in &paths {
+                        assert_eq!(
+                            scope.matches(Path::new(path), &index),
+                            set.is_match(Path::new(path)),
+                            "pattern {pattern:?} path {path:?}"
+                        );
+                    }
+                }
+                (Err(_), Err(_)) => {}
+                _ => panic!("pattern {pattern:?}: build outcome differs"),
+            }
+        }
+        assert!(literal_scopes > 100, "{literal_scopes}");
+    }
+
+    /// Every string up to `max` characters over `alphabet`, the empty one
+    /// included.
+    fn short_strings(alphabet: &[char], max: usize) -> Vec<String> {
+        let mut out = vec![String::new()];
+        let mut frontier = vec![String::new()];
+        for _ in 0..max {
+            let next: Vec<String> = frontier
+                .iter()
+                .flat_map(|s| alphabet.iter().map(move |c| format!("{s}{c}")))
+                .collect();
+            out.extend(next.iter().cloned());
+            frontier = next;
+        }
+        out
+    }
+
+    /// Include and exclude sets checked against one shared candidate match
+    /// exactly what separate `GlobSet::is_match` calls on the path match, for
+    /// every pair of globs up to length 2 over every path up to length 3.
+    #[test]
+    fn shared_candidate_matches_like_separate_glob_sets() {
+        let set = |pattern: &str| {
+            let mut set = GlobSetBuilder::new();
+            set.add(compile(pattern).ok()?);
+            set.build().ok()
+        };
+        let globs: Vec<(String, GlobSet)> = short_strings(&['a', '/', '.', '*', '?'], 2)
+            .into_iter()
+            .filter_map(|glob| set(&glob).map(|set| (glob, set)))
+            .collect();
+        let paths = short_strings(&['a', '/', '.', 'b'], 3);
+        let index = FileIndex::default();
+        let mut checked = 0;
+        for (include, include_set) in &globs {
+            for (exclude, exclude_set) in &globs {
+                let scope = Scope::from_patterns(&[include.clone(), format!("!{exclude}")])
+                    .expect("both globs compile");
+                for path in &paths {
+                    let path = Path::new(path);
+                    assert_eq!(
+                        scope.matches(path, &index),
+                        include_set.is_match(path) && !exclude_set.is_match(path),
+                        "include {include:?} exclude {exclude:?} path {path:?}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 50_000, "{checked}");
+    }
 
     fn s(patterns: &[&str]) -> Scope {
         Scope::from_patterns(

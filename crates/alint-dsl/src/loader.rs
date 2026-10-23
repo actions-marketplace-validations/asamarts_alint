@@ -30,7 +30,10 @@ pub(crate) struct LoadState {
     /// reload it once per path through the DAG (2^depth loads, an effective
     /// hang from a hostile repo). `is_top` loads read their own trust and
     /// confinement settings and are never memoized.
-    memo: std::collections::HashMap<MemoKey, RawConfig>,
+    /// `None` marks a key seen once: only a key loaded a SECOND time (a real
+    /// diamond) is cloned into the memo, so a linear chain never pays for it while
+    /// a diamond still loads each shared file at most twice.
+    memo: std::collections::HashMap<MemoKey, Option<RawConfig>>,
     running_version: RunningVersion,
 }
 
@@ -72,8 +75,19 @@ struct MemoKey {
 }
 
 impl LoadState {
+    fn remember(&mut self, key: MemoKey, config: &RawConfig) {
+        match self.memo.entry(key) {
+            std::collections::hash_map::Entry::Vacant(seen_once) => {
+                seen_once.insert(None);
+            }
+            std::collections::hash_map::Entry::Occupied(mut seen_twice) => {
+                *seen_twice.get_mut() = Some(config.clone());
+            }
+        }
+    }
+
     fn cached(&self, key: Option<&MemoKey>) -> Option<RawConfig> {
-        key.and_then(|k| self.memo.get(k)).cloned()
+        key.and_then(|k| self.memo.get(k)).and_then(Clone::clone)
     }
 }
 
@@ -323,7 +337,8 @@ fn parse_config_interpolated_inner_with_environment(
     }
 
     // on it super-linearly — a DoS reachable through an `extends:`'d ruleset.
-    if !alint_core::yaml_depth::flow_depth_within_limit(contents) {
+    let yaml_guards = alint_core::yaml_depth::scan_guards(contents);
+    if !yaml_guards.flow_within_limit() {
         return Err(Error::Other(format!(
             "{}: YAML flow nesting exceeds the maximum supported depth ({})",
             source.display(),
@@ -332,7 +347,7 @@ fn parse_config_interpolated_inner_with_environment(
     }
     // Reject an alias-expansion bomb (a single anchor referenced many times) the
     // same way -- yaml_serde's own limits don't catch it.
-    if !alint_core::yaml_depth::expansion_within_limit(contents) {
+    if !yaml_guards.expansion_within_limit(contents) {
         return Err(Error::Other(format!(
             "{}: YAML alias expansion exceeds the maximum supported size",
             source.display(),
@@ -549,7 +564,7 @@ pub(crate) fn load_recursive(
     if extends.is_empty() {
         visiting.remove(&canonical);
         if let Some(key) = memo_key {
-            state.memo.insert(key, config.clone());
+            state.remember(key, &config);
         }
         return Ok(config);
     }
@@ -598,7 +613,7 @@ pub(crate) fn load_recursive(
     merged = merge(merged, config);
     state.visiting.remove(&canonical);
     if let Some(key) = memo_key {
-        state.memo.insert(key, merged.clone());
+        state.remember(key, &merged);
     }
     Ok(merged)
 }
@@ -691,14 +706,13 @@ fn load_extended_source(
 /// blurred where each field came from (e.g. refuse any contribution to a
 /// spawning rule, or a remote-assembled `${` env reference).
 fn mark_extended_provenance(parent: &mut RawConfig, url: &str) {
-    crate::mark_field_sources_in(&mut parent.rules, url);
-    crate::mark_field_sources_in(&mut parent.templates, url);
-    crate::mark_provenance_in(&mut parent.rules, crate::SourceClass::Extended, url);
-    crate::mark_provenance_in(&mut parent.templates, crate::SourceClass::Extended, url);
-    if url.starts_with("https://") {
-        crate::mark_provenance_in(&mut parent.rules, crate::SourceClass::Remote, url);
-        crate::mark_provenance_in(&mut parent.templates, crate::SourceClass::Remote, url);
-    }
+    let classes: &[crate::SourceClass] = if url.starts_with("https://") {
+        &[crate::SourceClass::Extended, crate::SourceClass::Remote]
+    } else {
+        &[crate::SourceClass::Extended]
+    };
+    crate::trust::mark_extended_source_in(&mut parent.rules, url, classes);
+    crate::trust::mark_extended_source_in(&mut parent.templates, url, classes);
 }
 
 /// Apply the restrictions on a remote `extends:` the user has NOT listed in
@@ -821,13 +835,14 @@ fn load_remote(
     // the run. The local/interpolated path guards in `parse_config_interpolated`;
     // this direct `from_str` bypassed it (the guard's docs claim `extends:` bodies
     // are covered -- true for local, and now for remote).
-    if !alint_core::yaml_depth::flow_depth_within_limit(body_str) {
+    let yaml_guards = alint_core::yaml_depth::scan_guards(body_str);
+    if !yaml_guards.flow_within_limit() {
         return Err(Error::Other(format!(
             "remote config at {source}: YAML flow nesting exceeds the maximum supported depth ({})",
             alint_core::yaml_depth::MAX_YAML_FLOW_DEPTH
         )));
     }
-    if !alint_core::yaml_depth::expansion_within_limit(body_str) {
+    if !yaml_guards.expansion_within_limit(body_str) {
         return Err(Error::Other(format!(
             "remote config at {source}: YAML alias expansion exceeds the maximum supported size"
         )));
@@ -893,9 +908,8 @@ fn load_bundled(spec: &str) -> Result<RawConfig> {
     // these guards are defense-in-depth, not an attack surface -- but keeping the
     // checks uniform with the remote/local paths means no `yaml_serde::from_str`
     // in the loader is ever unguarded. A bundled ruleset tripping one is an alint bug.
-    if !alint_core::yaml_depth::flow_depth_within_limit(body)
-        || !alint_core::yaml_depth::expansion_within_limit(body)
-    {
+    let yaml_guards = alint_core::yaml_depth::scan_guards(body);
+    if !yaml_guards.flow_within_limit() || !yaml_guards.expansion_within_limit(body) {
         return Err(Error::internal(format!(
             "built-in ruleset '{spec}' exceeds a maximum supported YAML complexity limit"
         )));
@@ -1127,6 +1141,30 @@ mod tests {
             source_version_allowed(2, 1) && !source_version_allowed(1, 2),
             "a v2 -> v1 -> v2 chain must fail at its second edge"
         );
+    }
+
+    #[test]
+    fn memo_clones_a_config_only_once_it_is_seen_twice() {
+        let key = || {
+            MemoKey::new(
+                Path::new("/repo/base.yml"),
+                Some(Path::new("/repo")),
+                &[],
+                Some(1),
+                ConfigSourceClass::LocalExtend,
+            )
+        };
+        let config = RawConfig {
+            version: Some(1),
+            ..RawConfig::default()
+        };
+        let mut state = LoadState::default();
+        // A linear chain loads each file once: nothing is cloned or served.
+        state.remember(key(), &config);
+        assert!(state.cached(Some(&key())).is_none());
+        // A second load of the same file (a diamond) stores it; later loads hit.
+        state.remember(key(), &config);
+        assert_eq!(state.cached(Some(&key())).map(|c| c.version), Some(Some(1)));
     }
 
     #[test]

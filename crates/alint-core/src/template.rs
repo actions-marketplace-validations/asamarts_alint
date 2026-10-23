@@ -28,37 +28,111 @@ pub struct PathTokens {
     pub parent_name: String,
 }
 
+/// Which path tokens a set of templates refers to. Per-entry callers derive
+/// only these: each token is a fresh allocation, and most templates use one or
+/// two of the six.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenSet(u8);
+
+impl TokenSet {
+    const PATH: u8 = 1;
+    const DIR: u8 = 1 << 1;
+    const BASENAME: u8 = 1 << 2;
+    const STEM: u8 = 1 << 3;
+    const EXT: u8 = 1 << 4;
+    const PARENT_NAME: u8 = 1 << 5;
+
+    /// Every token.
+    pub const ALL: Self = Self(0b11_1111);
+    /// No token.
+    pub const NONE: Self = Self(0);
+
+    /// The tokens `template` contains (by literal `{name}` occurrence, so an
+    /// unknown or escaped token can only over-include, never miss one).
+    #[must_use]
+    pub fn of(template: &str) -> Self {
+        if !template.contains('{') {
+            return Self::NONE;
+        }
+        let mut bits = 0;
+        for (name, bit) in [
+            ("{path}", Self::PATH),
+            ("{dir}", Self::DIR),
+            ("{basename}", Self::BASENAME),
+            ("{stem}", Self::STEM),
+            ("{ext}", Self::EXT),
+            ("{parent_name}", Self::PARENT_NAME),
+        ] {
+            if template.contains(name) {
+                bits |= bit;
+            }
+        }
+        Self(bits)
+    }
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    const fn has(self, bit: u8) -> bool {
+        self.0 & bit != 0
+    }
+}
+
 impl PathTokens {
     /// Derive tokens from a relative path. Missing components (e.g. a path
     /// with no parent, or no extension) resolve to the empty string.
     pub fn from_path(rel: &Path) -> Self {
+        Self::from_path_with(rel, TokenSet::ALL)
+    }
+
+    /// [`Self::from_path`] deriving only the tokens in `needed`; the others are
+    /// empty. Rendering a template whose tokens are all in `needed` gives the
+    /// same result as with every token derived. A path containing a glob
+    /// metacharacter derives every token, so [`unescape_token_values`] (which
+    /// consults all six) also behaves exactly as with [`Self::from_path`].
+    pub fn from_path_with(rel: &Path, needed: TokenSet) -> Self {
+        let needed = if needs_glob_escape(&rel.to_string_lossy()) {
+            TokenSet::ALL
+        } else {
+            needed
+        };
+        let derive = |bit, f: &dyn Fn() -> String| {
+            if needed.has(bit) { f() } else { String::new() }
+        };
         Self {
-            path: rel.display().to_string(),
-            dir: rel
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default(),
-            basename: rel
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            stem: rel
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            ext: rel
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            parent_name: rel
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
+            path: derive(TokenSet::PATH, &|| rel.display().to_string()),
+            dir: derive(TokenSet::DIR, &|| {
+                rel.parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            }),
+            basename: derive(TokenSet::BASENAME, &|| {
+                rel.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            stem: derive(TokenSet::STEM, &|| {
+                rel.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            ext: derive(TokenSet::EXT, &|| {
+                rel.extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            parent_name: derive(TokenSet::PARENT_NAME, &|| {
+                rel.parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
         }
     }
 }
@@ -105,8 +179,24 @@ pub fn render_path_glob(template: &str, t: &PathTokens) -> String {
         } else {
             v
         };
-        out.push_str(&glob_escape(v));
+        push_glob_escaped(out, v);
     })
+}
+
+/// True when `s` has a byte [`glob_escape`] would rewrite.
+fn needs_glob_escape(s: &str) -> bool {
+    s.bytes().any(|b| {
+        matches!(b, b'?' | b'*' | b'[' | b']' | b'{' | b'}') || (b == b'\\' && !cfg!(windows))
+    })
+}
+
+/// Append `v` glob-escaped, without allocating when it has nothing to escape.
+fn push_glob_escaped(out: &mut String, v: &str) {
+    if needs_glob_escape(v) {
+        out.push_str(&glob_escape(v));
+    } else {
+        out.push_str(v);
+    }
 }
 
 /// Escape `s` so it matches only itself when compiled as an alint glob
@@ -117,6 +207,9 @@ pub fn render_path_glob(template: &str, t: &PathTokens) -> String {
 /// name, so it is left as-is.
 #[must_use]
 pub fn glob_escape(s: &str) -> String {
+    if !needs_glob_escape(s) {
+        return s.to_owned();
+    }
     let escaped = globset::escape(s);
     if cfg!(windows) {
         escaped
@@ -141,6 +234,12 @@ pub fn glob_escape(s: &str) -> String {
 pub fn literal_glob_path(pattern: &str) -> Option<String> {
     if pattern.starts_with('!') {
         return None;
+    }
+    if !pattern
+        .bytes()
+        .any(|b| matches!(b, b'\\' | b'[' | b'*' | b'?' | b']' | b'{' | b'}'))
+    {
+        return Some(pattern.to_owned());
     }
     let mut out = String::with_capacity(pattern.len());
     let mut chars = pattern.chars().peekable();
@@ -514,6 +613,149 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-fast-path algorithms, kept as the reference the fast paths must
+    /// match exactly.
+    fn glob_escape_reference(s: &str) -> String {
+        let escaped = globset::escape(s);
+        if cfg!(windows) {
+            escaped
+        } else {
+            escaped.replace('\\', "\\\\")
+        }
+    }
+
+    fn literal_glob_path_reference(pattern: &str) -> Option<String> {
+        if pattern.starts_with('!') {
+            return None;
+        }
+        let mut out = String::with_capacity(pattern.len());
+        let mut chars = pattern.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' if !cfg!(windows) => out.push(chars.next()?),
+                '[' => {
+                    let x = chars.next()?;
+                    if matches!(x, '!' | '^') || chars.next()? != ']' {
+                        return None;
+                    }
+                    out.push(x);
+                }
+                '*' | '?' | ']' | '{' | '}' => return None,
+                c => out.push(c),
+            }
+        }
+        Some(out)
+    }
+
+    /// Every string up to length 3 over an alphabet that covers each glob
+    /// metacharacter, the escape character, `!` and a non-ASCII char.
+    fn exhaustive_short_strings() -> Vec<String> {
+        const ALPHABET: [char; 13] = [
+            'a', '/', '.', '*', '?', '[', ']', '{', '}', '\\', '!', '\u{e9}', ' ',
+        ];
+        let mut out = vec![String::new()];
+        for len in 1..=3 {
+            let mut idx = vec![0usize; len];
+            loop {
+                out.push(idx.iter().map(|&i| ALPHABET[i]).collect());
+                let mut pos = 0;
+                loop {
+                    idx[pos] += 1;
+                    if idx[pos] < ALPHABET.len() {
+                        break;
+                    }
+                    idx[pos] = 0;
+                    pos += 1;
+                    if pos == len {
+                        break;
+                    }
+                }
+                if pos == len {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn partial_tokens_render_like_full_tokens() {
+        let templates = [
+            "{dir}/{stem}.h",
+            "{path}/README.md",
+            "{parent_name}-{basename}",
+            "{ext}",
+            "include/{stem}{ext}.bak",
+            "no tokens here",
+            "{unknown}/{stem}",
+            "{dir}",
+        ];
+        for path in [
+            "src/mod/foo.c",
+            "top.c",
+            "a/b",
+            "Makefile",
+            "x/.hidden",
+            "",
+            "app/[slug]",
+        ] {
+            let full = PathTokens::from_path(Path::new(path));
+            for template in templates {
+                let partial = PathTokens::from_path_with(Path::new(path), TokenSet::of(template));
+                assert_eq!(
+                    render_path(template, &partial),
+                    render_path(template, &full)
+                );
+                let message = format!("expected {}", render_path_glob(template, &partial));
+                assert_eq!(
+                    unescape_token_values(&message, &partial),
+                    unescape_token_values(&message, &full),
+                    "{path:?} {template:?}"
+                );
+                assert_eq!(
+                    render_path_glob(template, &partial),
+                    render_path_glob(template, &full)
+                );
+            }
+        }
+        assert_eq!(TokenSet::of("plain"), TokenSet::NONE);
+        assert_eq!(
+            TokenSet::of("{dir}").union(TokenSet::of("{stem}")),
+            TokenSet::of("{dir}/{stem}")
+        );
+    }
+
+    #[test]
+    fn glob_escape_fast_path_matches_the_reference() {
+        for s in exhaustive_short_strings() {
+            assert_eq!(glob_escape(&s), glob_escape_reference(&s), "{s:?}");
+            let mut pushed = String::from("pre/");
+            push_glob_escaped(&mut pushed, &s);
+            assert_eq!(
+                pushed,
+                format!("pre/{}", glob_escape_reference(&s)),
+                "{s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn literal_glob_path_fast_path_matches_the_reference() {
+        for s in exhaustive_short_strings() {
+            assert_eq!(
+                literal_glob_path(&s),
+                literal_glob_path_reference(&s),
+                "{s:?}"
+            );
+            let escaped = glob_escape(&s);
+            assert_eq!(
+                literal_glob_path(&escaped),
+                literal_glob_path_reference(&escaped),
+                "escaped {s:?}"
+            );
+        }
+    }
 
     #[test]
     fn literal_glob_path_resolves_escapes_and_rejects_real_globs() {

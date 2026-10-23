@@ -117,6 +117,61 @@ pub(crate) fn mark_provenance_in(mappings: &mut [Mapping], class: SourceClass, s
     }
 }
 
+/// [`mark_field_sources_in`] followed by [`mark_provenance_in`] for each of
+/// `classes`, producing identical mappings (key order included) but updating
+/// the markers in place in the steady state of an `extends:` chain, where every
+/// level re-marks every inherited rule: the field-source map keeps its keys and
+/// only changed values are replaced, and a provenance marker that is already
+/// the last key is not removed and re-inserted.
+pub(crate) fn mark_extended_source_in(
+    mappings: &mut [Mapping],
+    source: &str,
+    classes: &[SourceClass],
+) {
+    for mapping in mappings {
+        mark_field_sources_one(mapping, source);
+        for &class in classes {
+            mark_provenance_one(mapping, class, source);
+        }
+    }
+}
+
+fn mark_field_sources_one(mapping: &mut Mapping, source: &str) {
+    let in_place = field_sources(mapping).is_some_and(|sources| {
+        !sources.is_empty()
+            && sources
+                .keys()
+                .eq(mapping.keys().filter(|key| !is_internal_field(key)))
+    });
+    if !in_place {
+        mark_field_sources_in(std::slice::from_mut(mapping), source);
+        return;
+    }
+    if let Some(yaml_serde::Value::Mapping(sources)) = mapping.get_mut(FIELD_SOURCES_MARKER) {
+        for value in sources.values_mut() {
+            if value.as_str() != Some(source) {
+                *value = source.into();
+            }
+        }
+    }
+}
+
+fn mark_provenance_one(mapping: &mut Mapping, class: SourceClass, source: &str) {
+    let last_is_marker = mapping
+        .keys()
+        .last()
+        .is_some_and(|key| key.as_str() == Some(PROVENANCE_MARKER));
+    if last_is_marker
+        && let Some(yaml_serde::Value::Mapping(marker)) = mapping.get_mut(PROVENANCE_MARKER)
+    {
+        if !marker.contains_key(class.key()) {
+            marker.insert(class.key().into(), source.into());
+        }
+        return;
+    }
+    mark_provenance_in(std::slice::from_mut(mapping), class, source);
+}
+
 /// Union `incoming`'s [`PROVENANCE_MARKER`] into `existing`'s, keeping
 /// `existing`'s source for a class both carry.
 pub(crate) fn union_provenance(existing: &mut Mapping, incoming: &Mapping) {

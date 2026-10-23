@@ -31,7 +31,7 @@
 
 use std::path::Path;
 
-use alint_core::template::PathTokens;
+use alint_core::template::{PathTokens, TokenSet};
 use alint_core::when::{IterEnv, WhenExpr};
 use alint_core::{
     AnalysisFailureKind, CompiledNestedSpec, Context, Error, Level, NestedRuleSpec, Result, Rule,
@@ -381,6 +381,7 @@ pub(crate) fn visit_sensitive_for_each(
         IterateMode::Both => Box::new(ctx.index.dirs().chain(ctx.index.files())),
     };
 
+    let needed_tokens = nested_path_tokens(require);
     for entry in entries {
         if !select_scope.matches(&entry.path, ctx.index) {
             continue;
@@ -404,7 +405,7 @@ pub(crate) fn visit_sensitive_for_each(
             }
         }
 
-        let tokens = PathTokens::from_path(&entry.path);
+        let tokens = PathTokens::from_path_with(&entry.path, needed_tokens);
         for (index, nested) in require.iter().enumerate() {
             if let Some(expr) = &nested.when
                 && let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars)
@@ -420,12 +421,19 @@ pub(crate) fn visit_sensitive_for_each(
                 }
             }
             let spec = nested.spec.instantiate(parent_id, index, level, &tokens);
-            let Ok(rule) = registry.build(&spec) else {
+            let Ok(rule) = registry.build_instantiated(&spec) else {
                 continue;
             };
             rule.visit_sensitive_paths(parent_explicit || spec.sensitive, ctx, visit);
         }
     }
+}
+
+/// The path tokens any nested spec renders, derived once per entry.
+fn nested_path_tokens(require: &[CompiledNestedSpec]) -> TokenSet {
+    require.iter().fold(TokenSet::NONE, |acc, nested| {
+        acc.union(nested.spec.path_tokens())
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -488,6 +496,7 @@ fn evaluate_for_each_inner<const TRACE: bool>(
     };
 
     let mut violations = Vec::new();
+    let needed_tokens = nested_path_tokens(require);
     let mut trace_counts = alint_core::TraceCounts::default();
     let mut trace_children = if TRACE {
         ctx.trace_preview_limit()
@@ -551,7 +560,7 @@ fn evaluate_for_each_inner<const TRACE: bool>(
             }
         }
 
-        let tokens = PathTokens::from_path(&entry.path);
+        let tokens = PathTokens::from_path_with(&entry.path, needed_tokens);
         let entry_start = violations.len();
         for (i, nested) in require.iter().enumerate() {
             // v0.9.12: nested `when:` is pre-compiled at rule-
@@ -626,7 +635,7 @@ fn evaluate_for_each_inner<const TRACE: bool>(
                 }
             }
             let nested_spec = nested.spec.instantiate(parent_id, i, level, &tokens);
-            let nested_rule = match registry.build(&nested_spec) {
+            let nested_rule = match registry.build_instantiated(&nested_spec) {
                 Ok(r) => r,
                 Err(e) => {
                     if TRACE {

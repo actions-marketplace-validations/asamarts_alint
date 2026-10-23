@@ -49,6 +49,10 @@ pub fn flow_depth_within_limit(text: &str) -> bool {
 /// [`flow_depth_within_limit`] with an explicit ceiling (tests probe parity with
 /// a ceiling below the real parser's recursion limit).
 fn flow_depth_within_limit_with(text: &str, max: usize) -> bool {
+    // A flow collection needs a `[` or `{` byte; without one the depth is 0.
+    if !text.bytes().any(|b| b == b'[' || b == b'{') {
+        return true;
+    }
     let mut within = true;
     Lexer::new(text).run(|tok| match tok {
         Tok::FlowOpen(depth) if depth > max => {
@@ -149,10 +153,13 @@ pub fn expansion_within_limit(text: &str) -> bool {
 /// the counting + bail + alias-gate logic with a small budget (fast) instead of
 /// materializing millions of nodes at the production ceiling.
 fn expansion_within_limit_with(text: &str, max: usize) -> bool {
+    !contains_alias(text) || expansion_budget_pass(text, max)
+}
+
+/// The discard-only counting pass of [`expansion_within_limit`], for text that
+/// holds an alias.
+fn expansion_budget_pass(text: &str, max: usize) -> bool {
     use serde::de::DeserializeSeed as _;
-    if !contains_alias(text) {
-        return true;
-    }
     let remaining = std::cell::Cell::new(max);
     let exceeded = std::cell::Cell::new(false);
     let seed = NodeBudget {
@@ -161,6 +168,61 @@ fn expansion_within_limit_with(text: &str, max: usize) -> bool {
     };
     let _ = seed.deserialize(yaml_serde::Deserializer::from_str(text));
     !exceeded.get()
+}
+
+/// Both YAML guards from one lexer pass. Callers that checked
+/// [`flow_depth_within_limit`] and then [`expansion_within_limit`] tokenized the
+/// whole document twice; this scans it once (skipping the scan entirely when
+/// neither `[`/`{` nor `*` occurs) and defers the recursive expansion budget
+/// pass to [`GuardScan::expansion_within_limit`], so a caller can still run it
+/// only after its own depth checks, exactly where it ran before.
+#[derive(Debug, Clone, Copy)]
+pub struct GuardScan {
+    flow_within_limit: bool,
+    has_alias: bool,
+}
+
+impl GuardScan {
+    /// Same verdict as [`flow_depth_within_limit`].
+    #[must_use]
+    pub const fn flow_within_limit(&self) -> bool {
+        self.flow_within_limit
+    }
+
+    /// Same verdict as [`expansion_within_limit`] for the scanned `text`.
+    #[must_use]
+    pub fn expansion_within_limit(&self, text: &str) -> bool {
+        !self.has_alias || expansion_budget_pass(text, expansion_budget(text.len()))
+    }
+}
+
+/// Scan `text` once for both guards; see [`GuardScan`].
+#[must_use]
+pub fn scan_guards(text: &str) -> GuardScan {
+    scan_guards_with(text, MAX_YAML_FLOW_DEPTH)
+}
+
+fn scan_guards_with(text: &str, max_depth: usize) -> GuardScan {
+    let has_flow = text.bytes().any(|b| b == b'[' || b == b'{');
+    let has_star = text.as_bytes().contains(&b'*');
+    let mut scan = GuardScan {
+        flow_within_limit: true,
+        has_alias: false,
+    };
+    if !has_flow && !has_star {
+        return scan;
+    }
+    Lexer::new(text).run(|tok| {
+        match tok {
+            Tok::FlowOpen(depth) if depth > max_depth => scan.flow_within_limit = false,
+            Tok::Alias => scan.has_alias = true,
+            Tok::FlowOpen(_) => {}
+        }
+        // Too deep decides the scan (callers stop on it); otherwise keep going
+        // while either question is still open.
+        scan.flow_within_limit && (has_flow || !scan.has_alias)
+    });
+    scan
 }
 
 /// `true` when the text holds a genuine YAML alias token (`*name`), as libyaml's
@@ -173,6 +235,10 @@ fn expansion_within_limit_with(text: &str, max: usize) -> bool {
 /// a false positive merely triggers the (still correct, still bounded) counting
 /// pass.
 fn contains_alias(text: &str) -> bool {
+    // An alias token needs a `*` byte.
+    if !text.as_bytes().contains(&b'*') {
+        return false;
+    }
     let mut found = false;
     Lexer::new(text).run(|tok| {
         if matches!(tok, Tok::Alias) {
@@ -946,6 +1012,76 @@ impl<'de> serde::de::Visitor<'de> for NodeBudget<'_> {
 mod tests {
     use super::*;
 
+    /// The byte prefilters must never change a verdict: compare them with the
+    /// lexer walks they short-circuit, over every string up to length 4 on an
+    /// alphabet of YAML's structural characters.
+    #[test]
+    fn prefilters_agree_with_the_lexer() {
+        fn flow_reference(text: &str, max: usize) -> bool {
+            let mut within = true;
+            Lexer::new(text).run(|tok| match tok {
+                Tok::FlowOpen(depth) if depth > max => {
+                    within = false;
+                    false
+                }
+                _ => true,
+            });
+            within
+        }
+        fn alias_reference(text: &str) -> bool {
+            let mut found = false;
+            Lexer::new(text).run(|tok| {
+                if matches!(tok, Tok::Alias) {
+                    found = true;
+                }
+                !found
+            });
+            found
+        }
+        const ALPHABET: [char; 14] = [
+            'a', ' ', '\n', ':', '-', '[', ']', '{', '}', '*', '&', '#', '\'', '"',
+        ];
+        let mut idx = [0usize; 4];
+        let mut checked = 0usize;
+        for len in 0..=4 {
+            idx.fill(0);
+            loop {
+                let text: String = idx[..len].iter().map(|&i| ALPHABET[i]).collect();
+                for max in [0, 1] {
+                    assert_eq!(
+                        flow_depth_within_limit_with(&text, max),
+                        flow_reference(&text, max),
+                        "{text:?} max={max}"
+                    );
+                }
+                assert_eq!(contains_alias(&text), alias_reference(&text), "{text:?}");
+                let scan = scan_guards_with(&text, 1);
+                assert_eq!(
+                    scan.flow_within_limit(),
+                    flow_reference(&text, 1),
+                    "{text:?}"
+                );
+                if scan.flow_within_limit() {
+                    assert_eq!(scan.has_alias, alias_reference(&text), "{text:?}");
+                }
+                checked += 1;
+                let mut pos = 0;
+                while pos < len {
+                    idx[pos] += 1;
+                    if idx[pos] < ALPHABET.len() {
+                        break;
+                    }
+                    idx[pos] = 0;
+                    pos += 1;
+                }
+                if pos == len {
+                    break;
+                }
+            }
+        }
+        assert!(checked > 40_000, "{checked}");
+    }
+
     #[test]
     fn shallow_and_realistic_yaml_passes() {
         assert!(flow_depth_within_limit(
@@ -1413,9 +1549,11 @@ mod tests {
             "*a,".repeat(3000)
         );
         assert!(!expansion_within_limit(&big));
+        assert!(!scan_guards(&big).expansion_within_limit(&big));
         // The same scalar replayed a handful of times is fine.
         let few = format!("a: &a \"{}\"\nb: [*a, *a, *a]\n", "x".repeat(1_000_000));
         assert!(expansion_within_limit(&few));
+        assert!(scan_guards(&few).expansion_within_limit(&few));
         // Mechanism, small budget: keys and tag names are charged too.
         let s = "y".repeat(1000);
         let key = format!("a: &a {{\"{s}\": 1}}\nb: [{}]\n", "*a,".repeat(200));
@@ -1435,6 +1573,9 @@ mod tests {
             "*a,".repeat(5000)
         );
         assert!(!expansion_within_limit(&doc));
+        let scan = scan_guards(&doc);
+        assert!(scan.flow_within_limit());
+        assert!(!scan.expansion_within_limit(&doc));
     }
 
     #[test]
