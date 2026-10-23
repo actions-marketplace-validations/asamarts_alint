@@ -338,7 +338,7 @@ rules:
   - id: pytorch-pypi-install-must-be-pinned  # mirrors PYPIDEP adapter
     kind: file_content_forbidden
     paths: { include: [".github/**"], exclude: ["**/*.rst", …] }
-    pattern: '(pip|pip3|python -m pip|python3 -m pip|…) install [a-zA-Z0-9][A-Za-z0-9._\-]+([^/=<>~!]+)[A-Za-z0-9._\-*+!]*$'
+    pattern: '(?m)(pip|pip3|python -m pip|python3 -m pip|…) install [a-zA-Z0-9][A-Za-z0-9._\-]+([^/=<>~!]+)[A-Za-z0-9._\-*+!]*$'
   - id: pytorch-typeignore-must-be-qualified  # mirrors TYPEIGNORE adapter
     kind: file_content_forbidden
     paths: { include: ["**/*.py", "**/*.pyi"] }

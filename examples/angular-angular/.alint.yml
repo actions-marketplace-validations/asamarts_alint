@@ -622,7 +622,7 @@ rules:
   - id: angular-bazel-version-shape
     kind: file_content_matches
     paths: .bazelversion
-    pattern: '^\d+\.\d+\.\d+$'
+    pattern: '^\d+\.\d+\.\d+\s*$'
     level: warning
     message: "`.bazelversion` should be a single semver line."
 
@@ -727,7 +727,7 @@ rules:
   - id: angular-nvmrc-shape
     kind: file_content_matches
     paths: .nvmrc
-    pattern: '^\d+\.\d+\.\d+$'
+    pattern: '^\d+\.\d+\.\d+\s*$'
     level: warning
     message: "`.nvmrc` should be a single semver line."
 
