@@ -113,9 +113,7 @@ The pattern is matched against the raw bytes, so a file that is not valid UTF-8 
 
 **`^` and `$` anchor to the whole file, not to lines.** `^TODO` flags a file only when the file starts with `TODO`, and `TODO$` misses every file that ends in a newline. For line anchors write `(?m)^TODO` and `(?m)TODO$` (`(?Rm)TODO$` with CRLF line endings). Each file reports its first match only. See [Regex patterns and anchors](/docs/configuration/patterns/).
 
-<!-- alint:since=0.20.1 -->
 alint warns when a config loads with a forbidden pattern that starts with `^`, or with a `$` that cannot match.
-<!-- /alint:since -->
 
 ### `file_header` (alias: `header`)
 

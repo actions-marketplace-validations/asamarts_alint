@@ -6,6 +6,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-23
+
+A performance and diagnostics patch: rule path checks, nested-rule kinds and several other hot
+paths are cheaper, and alint now warns when a content pattern's `^` or `$` anchors to the whole
+file where a line was almost certainly meant (#343). Structured-query and cross-file checks run
+3-5% faster end to end, the docs explain what each kind matches a regex against, and releases
+gain a deterministic micro-benchmark gate and a long-horizon performance anchor.
+
 ### Added
 
 - `xtask micro-det` counts the instructions of every criterion micro
@@ -8214,7 +8222,8 @@ Initial release. MVP.
   verification.
 - Dogfood `.alint.yml` exercising the tool against its own repo.
 
-[Unreleased]: https://github.com/asamarts/alint/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/asamarts/alint/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/asamarts/alint/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/asamarts/alint/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/asamarts/alint/compare/v0.18.4...v0.19.0
 [0.18.4]: https://github.com/asamarts/alint/compare/v0.18.3...v0.18.4
