@@ -14,6 +14,8 @@ use crate::fixers::{FilePrependFixer, InsertHeaderFixer};
 #[serde(deny_unknown_fields)]
 struct Options {
     /// Rust regex. The first `lines` lines of each file in scope must match.
+    /// They are one string, newlines included, so `^` and `$` anchor to the
+    /// block's start and end unless the pattern turns on `(?m)`.
     pattern: String,
     /// Number of leading lines to consider.
     #[serde(default = "default_lines")]

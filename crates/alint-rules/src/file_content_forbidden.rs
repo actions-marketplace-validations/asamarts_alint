@@ -13,7 +13,9 @@ use crate::fixers::ReplaceFixer;
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    /// Rust regex. File contents must NOT match.
+    /// Rust regex. File contents must NOT match. The whole file is one
+    /// string, so `^` and `$` anchor to its start and end unless the pattern
+    /// turns on multi-line mode with `(?m)`.
     pattern: String,
 }
 

@@ -27,7 +27,9 @@ use crate::fixers::FileAppendFixer;
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    /// Rust regex. The last `lines` lines of each file must match.
+    /// Rust regex. The last `lines` lines of each file must match. They are
+    /// one string, newlines included, so `^` and `$` anchor to the block's
+    /// start and end unless the pattern turns on `(?m)`.
     pattern: String,
     /// Number of trailing lines to consider.
     #[serde(default = "default_lines")]
