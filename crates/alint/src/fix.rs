@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use super::check::{
     ChangedMode, apply_only_filter, exclude_baseline_from_walk, load_baseline, require_directory,
 };
-use super::config_cmd::{load_rules, render_env};
+use super::config_cmd::{load_rules, render_env, report_pattern_hints};
 use super::{Cli, tolerate_broken_pipe};
 
 /// The boolean flags of `alint fix`, grouped so the command signature stays
@@ -75,6 +75,7 @@ pub(super) fn cmd_fix(
     let loaded = load_rules(path, cli)?;
     let root = loaded.root.clone();
     let entries = apply_only_filter(loaded.entries, only)?;
+    report_pattern_hints(&entries, &loaded.registry, &loaded.facts, cli);
     let mut engine = Engine::from_entries(entries, loaded.registry)
         .with_facts(loaded.facts)
         .with_vars(loaded.vars)

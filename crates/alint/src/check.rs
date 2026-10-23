@@ -8,7 +8,7 @@ use alint_core::{Engine, WalkOptions, walk};
 use alint_output::{Format, sanitize_terminal as term};
 use anyhow::{Context, Result, bail};
 
-use super::config_cmd::{load_rules, render_env};
+use super::config_cmd::{load_rules, render_env, report_pattern_hints};
 use super::{Cli, reject_non_human_baseline_format, safe_write, tolerate_broken_pipe};
 
 /// Resolved `--changed` / `--base` state. `--base` implies
@@ -177,6 +177,7 @@ pub(super) fn cmd_check(
     // from the walk. The `--baseline` flag (used as given) overrides the key.
     let effective_baseline = cli.baseline.clone().or(config_baseline);
     let entries = apply_only_filter(loaded.entries, only)?;
+    report_pattern_hints(&entries, &loaded.registry, &loaded.facts, cli);
     let rule_count = entries.len();
     let mut engine = Engine::from_entries(entries, loaded.registry)
         .with_facts(loaded.facts)
@@ -518,6 +519,7 @@ pub(super) fn cmd_baseline(
     // be a symlink. Checked up front so a bad target fails before the run.
     safe_write::check_output(&root, &out_path, output.is_some(), "baseline")?;
 
+    report_pattern_hints(&loaded.entries, &loaded.registry, &loaded.facts, cli);
     let mut engine = Engine::from_entries(loaded.entries, loaded.registry)
         .with_facts(loaded.facts)
         .with_vars(loaded.vars);
