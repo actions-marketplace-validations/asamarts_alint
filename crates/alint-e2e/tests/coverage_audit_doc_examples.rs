@@ -551,3 +551,121 @@ fn every_rule_kind_rejects_an_unknown_option() {
         swallowers.len(),
     );
 }
+
+/// Load-time pattern hints (`alint_core::pattern_hints`, issue #343) must stay
+/// silent on everything alint publishes as guidance: a mis-anchored `^` or `$`
+/// in a docs example teaches the very mistake the hint warns about. Covers the
+/// fenced configs in the governed docs, every site page and example README,
+/// the example configs, every bundled ruleset, and the documented scenarios.
+/// A block that does not load is the schema gate's business and is skipped.
+#[test]
+fn published_patterns_raise_no_anchor_hints() {
+    let root = repo_root();
+    let registry = alint_rules::builtin_registry();
+    // (source, config path): inline blocks are written to a temp dir; files load in place.
+    let mut sources: Vec<(String, PathBuf, Option<tempfile::TempDir>)> = Vec::new();
+    let mut inline = |src: String, config: &str| {
+        if has_network_extends(config) {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".alint.yml");
+        std::fs::write(&path, inject_default_levels(config)).unwrap();
+        sources.push((src, path, Some(dir)));
+    };
+
+    let mut docs: Vec<PathBuf> = DOC_FILES.iter().map(|rel| root.join(rel)).collect();
+    docs.extend(files_under(&root.join("docs/site"), |p| {
+        p.extension().is_some_and(|e| e == "md")
+    }));
+    docs.extend(files_under(&root.join("examples"), |p| {
+        p.file_name().is_some_and(|n| n == "README.md")
+    }));
+    for path in &docs {
+        let text = std::fs::read_to_string(path).unwrap();
+        let rel = path.strip_prefix(&root).unwrap().display().to_string();
+        for block in yaml_blocks(&text) {
+            if !is_deliberately_invalid(&block)
+                && let Some(config) = to_config(&block.body)
+            {
+                inline(format!("{rel}:{}", block.start_line), &config);
+            }
+        }
+    }
+    let rulesets = root.join("crates/alint-dsl/rulesets/v1");
+    for path in files_under(&rulesets, |p| p.extension().is_some_and(|e| e == "yml")) {
+        let name = path.strip_prefix(&rulesets).unwrap().with_extension("");
+        let name = name.to_string_lossy().replace('\\', "/");
+        inline(
+            format!("bundled ruleset {name}"),
+            &format!("version: 1\nextends:\n  - alint://bundled/{name}@v1\n"),
+        );
+    }
+    for (src, config) in fixture_configs(&root) {
+        inline(src, &config);
+    }
+    for path in files_under(&root.join("examples"), |p| {
+        p.file_name().is_some_and(|n| n == ".alint.yml")
+    }) {
+        let src = path.strip_prefix(&root).unwrap().display().to_string();
+        sources.push((src, path, None));
+    }
+
+    let mut checked = 0usize;
+    let mut hints: Vec<String> = Vec::new();
+    for (src, path, _dir) in &sources {
+        let Ok(cfg) = support::load(path) else {
+            continue;
+        };
+        checked += 1;
+        for spec in &cfg.rules {
+            if matches!(spec.level, alint_core::Level::Off) {
+                continue;
+            }
+            let Ok(rule) = registry.build(spec) else {
+                continue;
+            };
+            let tree =
+                alint_core::pattern_hints::rule_tree_hints(&registry, rule.as_ref(), Some(spec));
+            hints.extend(tree.into_iter().map(|hint| format!("{src}: {hint}")));
+        }
+        let facts = alint_core::pattern_hints::fact_hints(&cfg.facts);
+        hints.extend(facts.into_iter().map(|hint| format!("{src}: {hint}")));
+    }
+
+    eprintln!("anchor-hint gate: {checked} published configs checked");
+    assert!(
+        checked >= 300,
+        "only {checked} published configs loaded (far below the usual count) \
+         — the extractor or the loader likely regressed"
+    );
+    assert!(
+        hints.is_empty(),
+        "{} published pattern(s) raise an anchor hint. Fix the pattern (see \
+         docs/site/configuration/patterns.md), or mark a deliberate counter-example \
+         with `<!-- alint:ignore-example -->`.\n  - {}",
+        hints.len(),
+        hints.join("\n  - ")
+    );
+}
+
+/// Files under `dir` (recursively) that `keep` accepts, in a stable order.
+fn files_under(dir: &Path, keep: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if keep(&path) {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
