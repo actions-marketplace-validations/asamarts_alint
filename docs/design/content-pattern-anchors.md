@@ -129,8 +129,9 @@ shape. The 30 example configs now load without a hint, and alint.org's case-stud
 none of the thirteen.
 
 The v0.12 corpus is an archival design record and stays as it was; this section records the finding.
-The S2 bench workload keeps `py-no-print` for now: fixing it changes what S2 measures, so it needs
-a deliberate workload-revision bump (open question 4).
+The S2 bench workload keeps `py-no-print`: fixing it would change what S2 measures, so it needs a
+deliberate workload-revision bump (question 4). Its warning goes nowhere during timing, because
+hyperfine discards the command's output.
 
 ### 3.3 Load-time hints
 
@@ -219,8 +220,10 @@ As built:
 
 1. Options A, B, C or D, and whether D goes into the v2 DSL design. *Resolved 2026-10-23: B.*
 2. The release: v0.20.1 (docs, examples, hints) or v0.21. The docs and example fixes can go live
-   without a release through the docs-bundle rule-page bridge. *Open.*
+   without a release through the docs-bundle rule-page bridge. *Resolved 2026-10-23: a v0.20.1
+   patch, together with the unreleased #347 performance fixes.*
 3. Hint channel: always on, or behind `--quiet` suppression and a JSON `warnings` field.
    *Resolved: always on, silenced by `--quiet`, with `warnings` in `validate-config`'s JSON.*
-4. Whether to fix the S2 bench workload now with a revision bump. *Open.*
+4. Whether to fix the S2 bench workload now with a revision bump. *Resolved 2026-10-23: no. S2
+   keeps its workload and its comparable history; the rule exists to generate content-scan load.*
 5. When to reply on #343. *Resolved: replied 2026-10-23.*
