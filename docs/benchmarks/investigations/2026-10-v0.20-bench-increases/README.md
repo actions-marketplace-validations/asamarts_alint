@@ -269,6 +269,12 @@ Each preserves the behavior its tests pin. The fast paths return exactly what th
 
 Every Phase A item and every Phase B fix was applied. Phase C items 1, 2, 3, 5 and 6 were applied, item 1 in re-scoped form. Item 4 was declined.
 
+The raw data behind this section sits next to this file:
+- [`resolution-macro.tsv`](resolution-macro.tsv) has every timed run of the four macro measurements.
+- [`resolution-micro-det.tsv`](resolution-micro-det.tsv) has the instruction counts of the local and hosted micro-det runs.
+- [`resolution-interleave.tsv`](resolution-interleave.tsv) has the per-round criterion medians of both interleaved runs.
+- [`resolution-s1-det.tsv`](resolution-s1-det.tsv) has the S1 instruction and syscall counts.
+
 | PR | Contents | State |
 |---|---|---|
 | [#345](https://github.com/asamarts/alint/pull/345) | Phase A 1 to 6: racy-index settle with a regression test; `det_engine` rayon fix with a 10 M floor check on `engine_run n10k`; `xtask micro-det`, the deterministic micro gate (`pr` subset on PRs and pushes to `main`, advisory; `full` suite in `bench-record`, gating); `bench-gate --anchor` with [`docs/benchmarks/ANCHOR`](../../ANCHOR) at v0.20.0 and +10%, failing; det gate on pushes to `main` (advisory); same-session criterion A/B in `bench-record` (report-only) | merged |

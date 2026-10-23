@@ -1,0 +1,8 @@
+# `alint check` on generated S1 trees (xtask gen-monorepo, bench-record seed), same binaries as kbench A/B 2,
+# section 6 "Wall-clock on the canonical host". Ryzen 9 3900X. instructions: Callgrind total Ir, all threads,
+# RAYON_NUM_THREADS=1. syscalls: strace -f -c total. Output identical between refs.
+size	ref	instructions	syscalls
+100k	v0.20.0	3567860465	219140
+100k	#347@2e9854c17	3350826153	219625
+1m	v0.20.0	37151875575	2086941
+1m	#347@2e9854c17	34815031434	2086629
