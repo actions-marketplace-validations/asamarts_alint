@@ -417,6 +417,12 @@ jobs:
       # ref's run reports each benchmark's change measured minutes apart on this
       # host, not against a snapshot months old. Best-effort: if the previous
       # tag's benches do not build or run, the comparison is skipped.
+      # The previous tag builds in its own target dir. Between releases both
+      # refs carry the same package versions, and cargo names a workspace
+      # package's artifacts by name, version and workspace-relative path, so in
+      # a shared target dir the new ref's build finds the previous tag's
+      # artifacts, judges them fresh against its own older sources and
+      # benchmarks the previous tag a second time.
       - name: micro baseline (previous release)
         id: micro_prev
         env:
@@ -430,6 +436,7 @@ jobs:
           sudo -n renice -n -10 -p $$ >/dev/null 2>&1 || true
           sudo -n ionice -c2 -n0 -p $$ >/dev/null 2>&1 || true
           prev_src="$RUNNER_TEMP/prev-src"
+          prev_target="$RUNNER_TEMP/prev-target"
           if ! git worktree add --detach "$prev_src" "$PREV_TAG"; then
             echo "::warning title=micro A/B::could not check out ${PREV_TAG}; no same-session comparison"
             exit 0
@@ -444,7 +451,7 @@ jobs:
             args+=(--features fs-benches)
           fi
           sync
-          if (cd "$prev_src" && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" \
+          if (cd "$prev_src" && CARGO_TARGET_DIR="$prev_target" \
                 CRITERION_HOME="$GITHUB_WORKSPACE/target/criterion" \
                 cargo bench -p alint-bench "${args[@]}" -- --save-baseline prev); then
             # Keep only `prev/`: a benchmark the new ref dropped must not be
@@ -455,6 +462,7 @@ jobs:
             echo "::warning title=micro A/B::the ${PREV_TAG} criterion suite did not run; no same-session comparison"
           fi
           git worktree remove --force "$prev_src" || true
+          rm -rf "$prev_target"
 
       - name: micro cargo bench
         env:
