@@ -1,6 +1,6 @@
 # v0.17 → v0.20 benchmark increases: a harness artifact, gate blind spots, and real per-kind regressions
 
-Status: fixed. The measurement fixes are merged (#345, with a follow-up for the new micro A/B in #349), and the product fixes (#347) are in review; [§6](#6-resolution) has what landed and the measured outcome. The v0.20.0 bench PR (#341) passes every gate, but its 1k `changed` cells (+62% / +49%) and several micro benches (+10% to +84% since v0.17.0) looked alarming. Each increase was traced to its cause with load-immune measurements. One is a benchmark-harness artifact. Several are real regressions in specific rule kinds, config loading, and output formatting that accumulated over v0.18 to v0.20 in steps too small for any gate. Two measurement gaps let them through. Large-repo `alint check` performance has **not** regressed: macro `full` S1 to S3 at 100k and 1m are within ±3% from v0.16.0 to v0.20.0.
+Status: fixed. The measurement fixes (#345, with a follow-up for the new micro A/B in #349) and the product fixes (#347) are merged; [§6](#6-resolution) has what landed and the measured outcome. The v0.20.0 bench PR (#341) passes every gate, but its 1k `changed` cells (+62% / +49%) and several micro benches (+10% to +84% since v0.17.0) looked alarming. Each increase was traced to its cause with load-immune measurements. One is a benchmark-harness artifact. Several are real regressions in specific rule kinds, config loading, and output formatting that accumulated over v0.18 to v0.20 in steps too small for any gate. Two measurement gaps let them through. Large-repo `alint check` performance has **not** regressed: macro `full` S1 to S3 at 100k and 1m are within ±3% from v0.16.0 to v0.20.0.
 
 ## Summary
 
@@ -279,7 +279,7 @@ The raw data behind this section sits next to this file:
 |---|---|---|
 | [#345](https://github.com/asamarts/alint/pull/345) | Phase A 1 to 6: racy-index settle with a regression test; `det_engine` rayon fix with a 10 M floor check on `engine_run n10k`; `xtask micro-det`, the deterministic micro gate (`pr` subset on PRs and pushes to `main`, advisory; `full` suite in `bench-record`, gating); `bench-gate --anchor` with [`docs/benchmarks/ANCHOR`](../../ANCHOR) at v0.20.0 and +10%, failing; det gate on pushes to `main` (advisory); same-session criterion A/B in `bench-record` (report-only) | merged |
 | [#346](https://github.com/asamarts/alint/pull/346) | tokio 1.54.1 for RUSTSEC-2026-0384, which was failing Audit and Deny on every PR | merged |
-| [#347](https://github.com/asamarts/alint/pull/347) | Phase B 1 to 6; Phase C 1, 2, 3, 5, 6 | open |
+| [#347](https://github.com/asamarts/alint/pull/347) | Phase B 1 to 6; Phase C 1, 2, 3, 5, 6 | merged |
 | [#349](https://github.com/asamarts/alint/pull/349) | The `bench-record` criterion A/B builds the previous release in its own target directory (see [Measurement lessons](#measurement-lessons)) | merged |
 
 ### Changes from the proposal
