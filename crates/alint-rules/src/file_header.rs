@@ -14,6 +14,8 @@ use crate::fixers::{FilePrependFixer, InsertHeaderFixer};
 #[serde(deny_unknown_fields)]
 struct Options {
     /// Rust regex. The first `lines` lines of each file in scope must match.
+    /// They are one string, newlines included, so `^` and `$` anchor to the
+    /// block's start and end unless the pattern turns on `(?m)`.
     pattern: String,
     /// Number of leading lines to consider.
     #[serde(default = "default_lines")]
@@ -75,6 +77,13 @@ impl Rule for FileHeaderRule {
 
     fn as_per_file(&self) -> Option<&dyn PerFileRule> {
         Some(self)
+    }
+
+    fn pattern_hints(&self) -> Vec<alint_core::pattern_hints::PatternHint> {
+        alint_core::pattern_hints::pattern_hints(
+            &self.pattern_src,
+            alint_core::pattern_hints::PatternTarget::Lines,
+        )
     }
 }
 

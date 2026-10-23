@@ -39,6 +39,10 @@ yaml_serde = "0.10.7"
 globset = "0.4"
 ignore = "0.4"
 regex = "1"
+# Pattern parsing for the load-time anchor hints on content patterns
+# (alint-core `pattern_hints`). Already in the tree via `regex`, so this
+# promotes an existing transitive crate to a direct dep, adding none.
+regex-syntax = "0.8"
 rayon = "1"
 parking_lot = "0.12"
 clap = { version = "4", features = ["derive", "cargo", "env", "wrap_help"] }

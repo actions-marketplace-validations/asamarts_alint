@@ -19,6 +19,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every release-to-release check still surfaces. `bench-record` now runs
   `bench-gate` itself and adds a same-session criterion A/B against the
   previous release to the results PR.
+- **Warnings for mis-anchored content patterns.** In `file_content_forbidden`,
+  `file_content_matches`, `file_header`, `file_footer` and the
+  `file_content_matches` fact, `^` and `$` anchor to the whole file (or block),
+  so `^TODO` only ever checks line 1 and `TODO$` never matches a file that ends
+  in a newline (#343). alint now warns when a config loads with a `$` that
+  cannot match a newline-terminated file, or a forbidden pattern that starts
+  with `^`: on `check`, `fix`, `baseline`, `validate-config` (its JSON output
+  gains `warnings`) and as diagnostics on the config file in the editor. The
+  warnings never change findings or exit codes, and `--quiet` silences them.
 
 ### Changed
 
@@ -62,6 +71,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **What a content pattern matches against is documented.** A new "Regex
+  patterns and anchors" configuration page lists what each kind matches a
+  regex against and what `^` and `$` mean there, and the content rules'
+  reference pages and schema descriptions say how they anchor. Seven
+  mis-anchored patterns in the docs and case-study examples are corrected:
+  the monorepo page's `.bazelversion` shape check, for one, failed every
+  file that ends in a newline (#343).
 - The 1k `changed`-mode benchmark cells no longer swing between about 11
   and 20 ms from one release to the next: the harness committed the
   generated tree within one second, so git re-hashed every "racily clean"

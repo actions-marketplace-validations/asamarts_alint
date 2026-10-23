@@ -188,18 +188,23 @@ pub(super) fn cmd_validate_config(
     // failures plumbed back as a Result for the validate handler
     // rather than aborting the run.
     match validate_config_inner(&config_path) {
-        Ok(rule_count) => emit_validate_success(rule_count, &config_path, format),
+        Ok((rule_count, hints)) => {
+            emit_validate_success(rule_count, &hints, &config_path, format, cli)
+        }
         Err(e) => emit_validate_failure(&e, Some(&config_path), format),
     }
 }
 
-fn validate_config_inner(config_path: &Path) -> Result<usize> {
+fn validate_config_inner(
+    config_path: &Path,
+) -> Result<(usize, Vec<alint_core::pattern_hints::ConfigHint>)> {
     let registry: alint_core::RuleRegistry = alint_rules::builtin_registry();
     let config = alint_dsl::load_with(
         config_path,
         &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
     )?;
     let mut count = 0usize;
+    let mut hints = Vec::new();
     for spec in &config.rules {
         if matches!(spec.level, alint_core::Level::Off) {
             continue;
@@ -213,6 +218,11 @@ fn validate_config_inner(config_path: &Path) -> Result<usize> {
         rule.validate_nested(&registry)
             .map_err(|error| spec.redact_configuration_error(error))
             .with_context(|| format!("building rule {:?}", spec.id))?;
+        hints.extend(alint_core::pattern_hints::rule_tree_hints(
+            &registry,
+            rule.as_ref(),
+            Some(spec),
+        ));
         if let Some(when_src) = &spec.when {
             alint_core::when::parse(when_src)
                 .map_err(|error| anyhow::anyhow!(spec.redact_configuration_message(error)))
@@ -220,20 +230,35 @@ fn validate_config_inner(config_path: &Path) -> Result<usize> {
         }
         count += 1;
     }
-    Ok(count)
+    hints.extend(alint_core::pattern_hints::fact_hints(&config.facts));
+    Ok((count, hints))
 }
 
-fn emit_validate_success(rule_count: usize, config_path: &Path, format: &str) -> Result<ExitCode> {
+fn emit_validate_success(
+    rule_count: usize,
+    hints: &[alint_core::pattern_hints::ConfigHint],
+    config_path: &Path,
+    format: &str,
+    cli: &Cli,
+) -> Result<ExitCode> {
     if format == "json" {
+        // Pattern hints are advisory: the config is still valid.
+        let warnings: Vec<String> = hints.iter().map(ToString::to_string).collect();
         let envelope = serde_json::json!({
             "valid": true,
             "rule_count": rule_count,
             "config_path": config_path.display().to_string(),
             "error": serde_json::Value::Null,
+            "warnings": warnings,
         });
         print_stdout_line(&serde_json::to_string(&envelope)?)?;
     } else {
         // human format
+        if !cli.quiet {
+            for hint in hints {
+                eprintln!("alint: warning: {}", term(&hint.to_string()));
+            }
+        }
         print_stdout_line(&format!(
             "✓ Config valid: {rule_count} rule(s) loaded from {}",
             term(&config_path.display().to_string())
@@ -274,6 +299,27 @@ fn emit_validate_failure(
         Ok(ExitCode::from(3))
     } else {
         Ok(ExitCode::from(1))
+    }
+}
+
+/// Print the load-time pattern hints ([`alint_core::pattern_hints`]) for the
+/// rules about to run and for the facts, unless `--quiet`. They are warnings
+/// only: findings and the exit code are unaffected.
+pub(super) fn report_pattern_hints(
+    entries: &[alint_core::RuleEntry],
+    registry: &RuleRegistry,
+    facts: &[alint_core::FactSpec],
+    cli: &Cli,
+) {
+    if cli.quiet {
+        return;
+    }
+    let hints = entries
+        .iter()
+        .flat_map(|entry| entry.pattern_hints(registry))
+        .chain(alint_core::pattern_hints::fact_hints(facts));
+    for hint in hints {
+        eprintln!("alint: warning: {}", term(&hint.to_string()));
     }
 }
 

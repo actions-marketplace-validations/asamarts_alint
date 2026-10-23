@@ -193,7 +193,7 @@ rules:
   - id: airflow-no-urlparse
     kind: file_content_forbidden          # check-urlparse-usage-in-code
     paths: "**/*.py"
-    pattern: '^\s*from urllib\.parse import .*urlparse'
+    pattern: '(?m)^[ \t]*from urllib\.parse import .*urlparse'
     level: warning
     message: "`urlparse` is not recommended; use `urlsplit()` instead."
 

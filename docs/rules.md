@@ -99,6 +99,8 @@ See [The walker and `.gitignore`](/docs/concepts/targeting/the-walker-and-git/) 
 
 File contents must contain at least one match for a regex.
 
+The whole file is one string: `^` and `$` match only at its start and end, and `$` does not match before the final newline. `^\d+\.\d+\.\d+\s*$` therefore asserts that the whole file is one version, while `(?m)^version = ` finds that line anywhere in the file. See [Regex patterns and anchors](/docs/configuration/patterns/).
+
 Fix: `file_append` — append declared content.
 
 ### `file_content_forbidden` (alias: `content_forbidden`)
@@ -109,6 +111,8 @@ File contents must NOT match a regex.
 
 The pattern is matched against the raw bytes, so a file that is not valid UTF-8 (a stray Latin-1 byte, say) is still searched rather than skipped; an invalid byte simply never matches a Unicode class. The `replace` fix edits such a file at the same byte offsets and leaves every other byte intact. A binary-looking file that is not valid UTF-8 (an image, a font, an archive) is still skipped, and the `replace` fix never edits a binary-looking file (a valid-UTF-8 file with a NUL byte is searched, but its finding is reported as not auto-fixable).
 
+**`^` and `$` anchor to the whole file, not to lines.** `^TODO` flags a file only when the file starts with `TODO`, and `TODO$` misses every file that ends in a newline. For line anchors write `(?m)^TODO` and `(?m)TODO$` (`(?Rm)TODO$` with CRLF line endings). alint warns when a config loads with a forbidden pattern that starts with `^`, or with a `$` that cannot match. Each file reports its first match only. See [Regex patterns and anchors](/docs/configuration/patterns/).
+
 ### `file_header` (alias: `header`)
 
 **Categories:** Content
@@ -116,6 +120,8 @@ The pattern is matched against the raw bytes, so a file that is not valid UTF-8 
 The first N lines must match a regex (line-oriented). For a byte-level prefix check, prefer `file_starts_with`.
 
 A leading UTF-8 BOM is not part of the header: the lines are read after it, which is where both fixes insert the header, so a `^`-anchored pattern matches a BOM file and the fix converges.
+
+The N lines are matched as one string, newlines included, so `^` matches at the start of the first line and `$` only at the end of the block, after the last line's newline. `^// Copyright` checks line 1; `(?m)^// SPDX-License-Identifier:` accepts the line anywhere in the first N. See [Regex patterns and anchors](/docs/configuration/patterns/).
 
 Fix: `file_prepend` — inject declared content at the top, at BOF (after any UTF-8 BOM, which it preserves). Blind to a shebang / XML declaration (it would push either off line 1) -- use `insert_header` when that matters.
 
@@ -174,6 +180,8 @@ File must have at most `max_lines` lines, using the same accounting as `file_min
 **Categories:** Content
 
 The configured number of final lines in each file in scope must match a regex. Mirror of `file_header` anchored at the end of the file. Use for license footers, signed-off-by trailers, generated-file sentinels.
+
+As in `file_header`, the lines are one string, newlines included, so `$` matches only after the final newline: end a pattern with `\s*$`, or use `(?m)`, to match the last line. See [Regex patterns and anchors](/docs/configuration/patterns/).
 
 Fix: `file_append` — append a declared `content`. With no fix declared, violations are unfixable.
 

@@ -492,7 +492,8 @@ impl TraceSink for TraceSession {
 }
 
 /// Visitor used while walking top-level and recursively nested runtime rules.
-type RuleTreeVisitor<'a> = dyn FnMut(&dyn Rule, Option<&crate::RuleSpec>) -> Result<()> + 'a;
+pub(crate) type RuleTreeVisitor<'a> =
+    dyn FnMut(&dyn Rule, Option<&crate::RuleSpec>) -> Result<()> + 'a;
 
 /// A rule bundled with an optional `when` expression. Rules with a `when`
 /// that evaluates to false at runtime are skipped (no `RuleResult` is
@@ -607,6 +608,13 @@ impl RuleEntry {
     ///
     /// Nested iterator rules are instantiated with stable placeholder path
     /// tokens, matching the engine's preparation traversal.
+    /// Pattern hints ([`crate::pattern_hints`]) for this rule and every
+    /// nested rule it instantiates.
+    #[must_use]
+    pub fn pattern_hints(&self, registry: &RuleRegistry) -> Vec<crate::pattern_hints::ConfigHint> {
+        crate::pattern_hints::rule_tree_hints(registry, self.rule.as_ref(), self.spec.as_deref())
+    }
+
     pub fn wants_analysis_time(&self, registry: &RuleRegistry) -> Result<bool> {
         let mut wants = false;
         visit_rule_tree_with_registry(
@@ -718,7 +726,7 @@ fn unavailable_git_failure() -> Violation {
         .as_analysis_failure(AnalysisFailureKind::ResourceRead)
 }
 
-fn visit_rule_tree_with_registry(
+pub(crate) fn visit_rule_tree_with_registry(
     registry: &RuleRegistry,
     rule: &dyn Rule,
     spec: Option<&crate::RuleSpec>,

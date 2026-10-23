@@ -107,6 +107,7 @@ dependencies = [
  "proptest",
  "rayon",
  "regex",
+ "regex-syntax",
  "roxmltree",
  "saphyr",
  "saphyr-parser",

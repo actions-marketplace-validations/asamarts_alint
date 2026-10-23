@@ -9,7 +9,7 @@ use tower_lsp::lsp_types::{InitializeParams, Url};
 use alint_core::baseline::Baseline;
 use alint_core::{Engine, Level, Report, RuleEntry, RuleResult, WalkOptions, walk};
 
-use crate::diagnostics::{TextSource, group_findings};
+use crate::diagnostics::{TextSource, group_findings, hint_findings};
 use crate::{ConfigRun, Finding, Session, WorkspaceCheck};
 
 /// Run every config relevant to the workspace: the config each open
@@ -131,6 +131,13 @@ fn run_config(
     let results = apply_baseline(&session, report.results, None);
     let mut texts = TextSource::with_overlays(overlays.iter().cloned().collect());
     let mut by_path = group_findings(&session.group_ctx(), &results, &mut texts);
+    if !session.pattern_hints.is_empty() {
+        let hints = hint_findings(&session.pattern_hints, &session.config_path, &mut texts);
+        by_path
+            .entry(session.config_path.clone())
+            .or_default()
+            .extend(hints);
+    }
 
     // Overlay: an open document whose buffer differs from disk gets its
     // per-file findings from the buffer, not the stale on-disk bytes.
@@ -261,6 +268,11 @@ fn build_session_for_config(
         entries.push(entry);
     }
 
+    let pattern_hints: Vec<_> = entries
+        .iter()
+        .flat_map(|entry| entry.pattern_hints(&registry))
+        .chain(alint_core::pattern_hints::fact_hints(&config.facts))
+        .collect();
     let mut engine = Engine::from_entries(entries, registry)
         .with_facts(config.facts)
         .with_vars(config.vars)
@@ -298,6 +310,7 @@ fn build_session_for_config(
         config_path: config_path.to_path_buf(),
         baseline,
         kinds,
+        pattern_hints,
     })
 }
 

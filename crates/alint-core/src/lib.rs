@@ -23,6 +23,7 @@ mod level;
 pub mod located_fix;
 mod location;
 mod pathsafe;
+pub mod pattern_hints;
 pub mod process;
 pub mod proposed_fix;
 mod redaction;
