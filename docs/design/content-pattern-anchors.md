@@ -1,7 +1,8 @@
 # Design doc: `^` and `$` in content patterns
 
-Status: Draft. Proposal for [#343](https://github.com/asamarts/alint/issues/343).
-Decisions: none (the recommended path changes no matching semantics).
+Status: Implemented in #351 (option B, chosen 2026-10-23). Proposal for
+[#343](https://github.com/asamarts/alint/issues/343).
+Decisions: none (the chosen path changes no matching semantics).
 
 ## 1. Problem
 
@@ -57,19 +58,21 @@ code change". That left the documentation gap in place.
 
 A scan of every config the repository ships (bundled rulesets, `examples/`, the dogfood config,
 fenced YAML in the docs, the v0.12 corpus, the bench scenarios) found 478 whole-file content
-patterns. Fourteen are wrong, judged by what each rule is evidently for, and each was checked
+patterns. Thirteen are wrong, judged by what each rule is evidently for, and each was checked
 against a realistic file:
 
 | Where | Rule | Pattern | Failure |
 |---|---|---|---|
 | `docs/site/about/monorepos.md` | `workspace-bazel-version-pinned` | `^\d+\.\d+\.\d+$` | fails every version file that ends in a newline |
-| `docs/site/configuration/index.md` | fact `has_exact_sdk` | `^[0-9]+\.[0-9]+\.[0-9]+$` | false for every newline-terminated file |
 | `examples/angular-angular` | `angular-bazel-version-shape`, `angular-nvmrc-shape` | `^\d+\.\d+\.\d+$` | as above |
 | `examples/apache-airflow` | `airflow-no-urlparse` | `^\s*from urllib\.parse import .*urlparse` | only fires when the import is the first non-blank text in the file |
 | `examples/flutter-flutter` | `flutter-no-trailing-whitespace` | `[ \t]+$` | never fires on a file that ends in a newline |
-| `examples/pytorch-pytorch/README.md` | `pytorch-pypi-install-must-be-pinned` | `… [A-Za-z0-9._\-*+!]*$` | misses an unpinned install when any later line contains `/`, `=`, `<`, `>`, `~` or `!` |
+| `examples/pytorch-pytorch/README.md` | `pytorch-pypi-install-must-be-pinned` (its config already has `(?m)`) | `… [A-Za-z0-9._\-*+!]*$` | misses an unpinned install when any later line contains `/`, `=`, `<`, `>`, `~` or `!` |
 | `xtask/src/bench/scenarios/s2_content.yml`, `xtask/src/bench_config.yml` | `py-no-print` | `^\s*print\s*\(` | only a `print(` at the top of the file |
 | v0.12 corpus (design record) | ClickHouse, gradle, TypeScript, pytorch, vim | `\r$`, `^\s*\*\s*@author`, `^\* -text$`, `…*$`, `;;+$` | same two failure modes |
+
+A first, text-only scan also counted the configuration page's `has_exact_sdk` fact, but that fact
+sets `extract:`, so its `^...$` meets the extracted version string and is correct.
 
 The bundled rulesets are correct: `agent-hygiene`'s `(?:^|[\s;{(])console\.log` covers line starts
 through `\s`. Many anchored patterns are also deliberately whole-file, for example
@@ -102,62 +105,79 @@ name. `(?m)` covers the need today.
 
 ### 3.1 Documentation
 
-- A "How patterns match" section in `docs/rules.md`: the haystack table above, the Rust anchor
-  rules, `\A` and `\z` for explicit file start and end, `(?m)` for line anchors, `(?Rm)` for CRLF
-  files, and `\s*$` (or `\n?\z`) for "the file ends here, newline or not".
-- One sentence in the entries for `file_content_forbidden`, `file_content_matches`, `file_header`,
-  `file_footer` and the `file_content_matches` fact that points to it. The `file_content_forbidden`
-  entry also says that it reports the first match in each file.
-- The schema `description` of each of those `pattern` fields gains "matched against the whole
-  file; `^` and `$` anchor to its start and end unless the pattern starts with `(?m)`", so editors
-  show it on hover.
+- A new configuration page, [`docs/site/configuration/patterns.md`](../site/configuration/patterns.md)
+  ("Regex patterns and anchors"): the haystack table above, the Rust anchor rules, `\A` and `\z`
+  for explicit file start and end, `(?m)` for line anchors, `(?Rm)` for CRLF files, `\s*$` for "the
+  file ends here, newline or not", and the warnings. It is a site page rather than a section of
+  `docs/rules.md` because the site renders each rule from its own section only: a family's text
+  before its first rule reaches the family page as one short paragraph at most.
+- A short paragraph in the entries for `file_content_forbidden`, `file_content_matches`,
+  `file_header` and `file_footer`, linking the page, and a sentence under the configuration page's
+  `facts`. The `file_content_forbidden` entry also says that it reports the first match in each file.
+- The schema `description` of each of those `pattern` fields, and of the `file_content_matches`
+  fact's, says the whole file (or block) is one string, so `^` and `$` anchor to it unless the
+  pattern turns on `(?m)`. Editors show it on hover.
 
 ### 3.2 Corrected examples
 
-Fix the docs and `examples/` rows in section 1 (`(?m)` for per-line intent, `\s*$` for
-whole-file shape checks), with a test or `alint check` run against a fixture for each. Re-check
-the alint.org case-study pages that mirror those examples (a scan found none of the fourteen there). The v0.12 corpus is an archival design
-record: leave it and note the finding in the corpus log.
+Done for the docs and `examples/` rows in section 1, each checked against a fixture: `(?m)` for
+per-line intent (airflow uses `(?m)^[ \t]*`, since `\s*` would swallow blank lines and report the
+line above the import), `\s*$` or `\A...\s*\z` for whole-file shape checks, and the pytorch README
+copy brought back in line with its config. Flutter's flow-control check, whose `(^|[ \t])`
+alternative misses a statement at column 0, gained `(?m)` too, although the hints do not catch that
+shape. The 30 example configs now load without a hint, and alint.org's case-study pages contain
+none of the thirteen.
 
-The bench workload is a separate decision. Fixing `py-no-print` changes what S2 measures, so it
-needs a deliberate S2 workload-revision bump. Otherwise leave it and record it as known.
+The v0.12 corpus is an archival design record and stays as it was; this section records the finding.
+The S2 bench workload keeps `py-no-print` for now: fixing it changes what S2 measures, so it needs
+a deliberate workload-revision bump (open question 4).
 
 ### 3.3 Load-time hints
 
-Two narrow checks, run when a rule is built, on the regex AST (`regex-syntax` 0.8, already in the
-dependency tree through `regex`). The AST tells `^` (`StartLine`) apart from `\A` (`StartText`)
-and carries the `m`, `s` and `R` flag scopes, including group-scoped flags such as `(?m:...)`.
+Two narrow checks on the regex AST (`regex-syntax` 0.8, already in the dependency tree through
+`regex`). The AST tells `^` (`StartLine`) apart from `\A` (`StartText`) and carries the flags.
 
-- **H1: a `$` that cannot match a newline-terminated file.** In a whole-file or block kind, a `$`
-  outside multi-line mode that directly follows an atom which cannot match `\n`, and that is not
-  one branch of an alternation. Examples: `foo$`, `[ \t]+$`, `^\d+\.\d+\.\d+$`. Such a `$` matches
-  only when the file does not end in a newline, which is almost never what the author meant.
-- **H2: a leading `^` in `file_content_forbidden`.** A pattern that begins with `^` outside
-  multi-line mode. Every such pattern in the corpus meant "a line starting with". To keep a
-  deliberate file-start anchor and silence the hint, write `\A`.
+- **H1: a `$` that only text without a final newline can reach.** In a whole-file or block kind,
+  read back from a `$` in a sequence, past anything that can match the empty string: the first item
+  that must consume a character cannot end in `\n`. Examples: `foo$`, `[ \t]+$`, `x.*$`,
+  `^\d+\.\d+\.\d+$`. A `$` that opens its sequence (`^$`, the `$` branch of `([^\[]|$)`) never
+  fires, and neither does `.*$`, which matches the empty string at the very end of any file.
+- **H2: a leading `^` in `file_content_forbidden` that is open at the end.** A pattern that begins
+  with `^` and does not end with `$` or `\z`. Every such pattern in the corpus meant "a line
+  starting with", while `^$` or `^exact text$` are whole-file shapes. To keep a deliberate
+  file-start anchor and silence the hint, write `\A`.
 
-Message, once per rule:
+Both stay conservative. A pattern that turns `m` on anywhere gets no hints; an `s` anywhere lets
+`.` count as matching `\n`; and whether a character class can match `\n` is decided by compiling
+that class alone, so every class syntax counts exactly.
+
+The message, once per rule or fact:
 
 ```text
-warning: rule `file_content`: `^` matches only at the start of the file, not at each line.
-         Use `(?m)^` to anchor to lines, or `\A` if you mean the start of the file.
+alint: warning: rule `file_content`: `^` matches only at the start of the file, not at the start of each line; use `(?m)^` to anchor to lines, or `\A` if you mean the start of the file
 ```
 
-Hints are warnings. They never change findings or exit codes. They go to stderr on `check` and
-`fix`, appear in `validate-config` output, and become diagnostics on the config file in the LSP.
+Hints are warnings. They never change findings or exit codes, and `--quiet` silences them. They go
+to stderr on `check`, `fix` and `baseline` (for the rules left after `--only`), into
+`validate-config` output (JSON gains `warnings`), and onto the config file as LSP diagnostics.
 
-On the 478 shipped patterns, H1 and H2 flag exactly the 14 rows in section 1 and nothing else.
-They miss a few ambiguous cases, such as `(^|[ \t])if\(`, which is acceptable for a warning.
+On the 478 shipped patterns, H1 and H2 flag 11 of the 13 rows in section 1 and nothing else. The
+two pytorch copies reach `$` through `[^/=<>~!]+`, which can take the final newline, so they match
+erratically rather than never; they were fixed by hand. The hints also miss ambiguous shapes such
+as `(^|[ \t])if\(`, which is acceptable for a warning.
 
 ### 3.4 Gates
 
-The same hint function backs `coverage_audit_doc_examples` and `coverage_audit_examples_parse`: a
-doc or example config that produces a hint fails, unless the block carries the existing
-`<!-- alint:ignore-example -->` marker. The 14 cannot come back.
+`published_patterns_raise_no_anchor_hints` (in `coverage_audit_doc_examples.rs`) loads every
+config alint publishes as guidance and fails on any hint: fenced configs in the governed docs, every
+site page and example README, the example configs, every bundled ruleset and the documented
+scenarios (391 today; it fails below 300 so a broken extractor cannot pass vacuously). A deliberate
+counter-example can carry the existing `<!-- alint:ignore-example -->` marker. Reverting the
+monorepo page's or flutter's fix makes it fail and name the pattern.
 
 ### 3.5 The report
 
-Reply on #343 with the cause, the `(?m)^test` workaround, and a link to the fix.
+Replied on #343 on 2026-10-23 with the cause, the `(?m)^test` workaround and a link to #351.
 
 ## 4. False-positive surface
 
@@ -168,30 +188,39 @@ Reply on #343 with the cause, the `(?m)^test` workaround, and a link to the fix.
 
 ## 5. Implementation notes
 
-- A pure function in `alint-core` (say `regex_hints::anchor_hints(pattern, Haystack) -> Vec<Hint>`)
-  plus a non-fatal warnings list on the loaded config. alint has no such channel today; the
-  existing hints (did-you-mean, JSONPath dashed keys) only enrich load errors. The LSP and
-  `validate-config` read the same list.
-- `regex-syntax` becomes a direct dependency of `alint-core` at the version `regex` already pulls in.
-- Size: S to M. Docs and examples are a few hours; the hint, its channel and the gates are about
-  a day.
+As built:
+- `alint_core::pattern_hints`: `pattern_hints(pattern, PatternTarget)`, plus `rule_tree_hints`
+  (a rule and its nested `require:` rules, through the engine's rule-tree visitor) and `fact_hints`
+  (whole-file `file_content_matches` facts only), returning `ConfigHint`s.
+- `Rule::pattern_hints` defaults to none; `file_content_forbidden`, `file_content_matches`,
+  `file_header` and `file_footer` report hints for their own haystack. `RuleEntry::pattern_hints`
+  covers a loaded rule's tree.
+- alint had no channel for non-fatal config warnings (did-you-mean and JSONPath hints only enrich
+  load errors). The CLI prints the hints itself after loading, `validate-config` returns them with
+  its result, and the LSP stores them on the session and adds them to the config file's diagnostics
+  at the `id:` line of the rule or fact, as findings that are not per-file.
+- `regex-syntax` is now a direct dependency of `alint-core`, at the version `regex` already uses.
 
 ## 6. Tests
 
-- A unit table for `anchor_hints`:
-  - **Fire:** the 14 shipped patterns.
-  - **Silent:** `\s*$`, `\n?\z`, `([^\[]|$)`, `(?m)^x`, `(?m:^x)`, `(?s).*$`, `[\s\S]*$`,
-    `\Ax`, `x\z`, `(?:^|[\s;{(])x`.
-  - **Scope:** a `$` inside a class or escaped.
-- e2e: `check` prints the warning once and keeps the exit code; `validate-config` shows it;
-  `--format json` output is unchanged.
-- The gates in 3.4 run against the corrected docs and examples.
+- `pattern_hints` unit tables: the shipped broken shapes fire; `\s*$`, `\n?$`, `(?:\r?\n)?$`,
+  `([^\[]|$)`, `^$`, `.*$`, `(?m)`, `(?m:...)`, `(?s).*$`, `[\s\S]*$`, negated classes, `\Ax` and
+  `x\z` stay silent; verbose mode; facts with and without `extract`. Three mutations (a literal
+  `\n`, the both-ends exemption, class evaluation) each fail them.
+- Per kind: each of the four content kinds (and the aliases) reports its own target, and a nested
+  `require:` rule contributes its hints.
+- CLI e2e (`pattern_hints_cli.rs`): `check` warns once and keeps its findings and exit code; JSON
+  stdout is untouched; `--quiet` silences; `fix` warns; `validate-config` in both formats; nested
+  rules and facts; `--only`.
+- LSP: one warning on the config file at the rule's `id:` line, not per-file.
+- The gate in 3.4.
 
 ## 7. Open questions
 
-1. Options A, B, C or D, and whether D goes into the v2 DSL design.
+1. Options A, B, C or D, and whether D goes into the v2 DSL design. *Resolved 2026-10-23: B.*
 2. The release: v0.20.1 (docs, examples, hints) or v0.21. The docs and example fixes can go live
-   without a release through the docs-bundle rule-page bridge.
+   without a release through the docs-bundle rule-page bridge. *Open.*
 3. Hint channel: always on, or behind `--quiet` suppression and a JSON `warnings` field.
-4. Whether to fix the S2 bench workload now with a revision bump.
-5. When to reply on #343.
+   *Resolved: always on, silenced by `--quiet`, with `warnings` in `validate-config`'s JSON.*
+4. Whether to fix the S2 bench workload now with a revision bump. *Open.*
+5. When to reply on #343. *Resolved: replied 2026-10-23.*
