@@ -141,6 +141,11 @@ jobs:
           # prose, just moved.
           git checkout origin/main -- docs/site/configuration/templates.md \
             docs/site/configuration/variable-interpolation.md docs/site/cookbook/suggest.md
+          # The content rules' pages (rule-page bridge, from main) link to the
+          # "Regex patterns and anchors" page added after v0.20.0 (#343). Its
+          # anchor semantics describe released behavior; the load-time warnings
+          # section is a since-block, stripped below until it ships.
+          git checkout origin/main -- docs/site/configuration/patterns.md
           echo "Overlaid reference + Action guide + design + full concepts/ + relocated pages from origin/main ($(git rev-parse --short origin/main))."
 
       - name: Release-gate the overlaid docs (strip unreleased since-blocks)
@@ -174,6 +179,7 @@ jobs:
             docs/site/concepts \
             docs/site/configuration/templates.md \
             docs/site/configuration/variable-interpolation.md \
+            docs/site/configuration/patterns.md \
             docs/site/cookbook/suggest.md \
             docs/site/getting-started/installation.md \
             docs/site/integrations/github-actions.md \

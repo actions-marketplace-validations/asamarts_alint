@@ -38,6 +38,7 @@ To anchor to the whole file on purpose, `\A` and `\z` say so explicitly:
 
 For example, `\A\d+\.\d+\.\d+\s*\z` asserts that a `VERSION` file holds one version and nothing else. `file_content_forbidden` reports the first match in each file, so `(?m)^TODO` flags a file once, at the first line that starts with `TODO`.
 
+<!-- alint:since=0.20.1 -->
 ## Warnings for mis-anchored patterns
 
 When a config loads, alint warns about two shapes that almost never do what the author meant:
@@ -50,6 +51,7 @@ alint: warning: rule `no-todo`: `^` matches only at the start of the file, not a
 ```
 
 The warnings appear on `check`, `fix`, `baseline` and `validate-config` (whose JSON output lists them under `warnings`), and as diagnostics on the config file in an editor. They never change findings or the exit code, and `--quiet` silences them. A pattern that turns on `(?m)` anywhere, or that uses `\A` and `\z` instead of `^` and `$`, gets no warning.
+<!-- /alint:since -->
 
 ## Other flags
 
