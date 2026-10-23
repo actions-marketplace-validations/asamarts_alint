@@ -195,6 +195,51 @@ pub(crate) fn group_findings(
     by_path
 }
 
+/// Load-time pattern hints ([`alint_core::pattern_hints`]) as warnings on
+/// the config file, each at the line that declares its rule or fact when the
+/// file declares it (a nested `require:` rule points at its parent), else at
+/// the top.
+pub(crate) fn hint_findings(
+    hints: &[alint_core::pattern_hints::ConfigHint],
+    config_path: &Path,
+    texts: &mut TextSource,
+) -> Vec<Finding> {
+    let text = texts.get(config_path);
+    hints
+        .iter()
+        .map(|hint| {
+            let declared = hint.id.split(".require[").next().unwrap_or(&hint.id);
+            let line = text.and_then(|text| declaring_line(text, declared));
+            Finding {
+                range: finding_range(line, None, None),
+                severity: DiagnosticSeverity::WARNING,
+                rule_id: hint.id.clone(),
+                message: hint.to_string(),
+                line,
+                column: None,
+                policy_url: None,
+                fixable: false,
+                sensitive: false,
+                per_file: false,
+                description: None,
+                docs_url: None,
+                related_information: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// The 1-indexed line of `id: <id>` (a rule or fact) in a config's text.
+fn declaring_line(text: &str, id: &str) -> Option<usize> {
+    text.lines()
+        .position(|line| {
+            let line = line.trim_start().trim_start_matches('-').trim_start();
+            line.strip_prefix("id:")
+                .is_some_and(|rest| rest.trim().trim_matches(['"', '\'']) == id)
+        })
+        .map(|index| index + 1)
+}
+
 pub(crate) fn severity_of(level: Level) -> Option<DiagnosticSeverity> {
     match level {
         Level::Error => Some(DiagnosticSeverity::ERROR),

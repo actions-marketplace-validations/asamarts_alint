@@ -321,6 +321,48 @@ rules:
 }
 
 #[test]
+fn pattern_hints_are_warnings_on_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join(".alint.yml");
+    std::fs::write(dir.path().join("a.txt"), "test in first line\n").unwrap();
+    std::fs::write(
+        &config_path,
+        r"version: 1
+rules:
+  - id: anchored
+    kind: file_content_forbidden
+    paths: '*.txt'
+    pattern: '^test'
+    level: warning
+  - id: line-anchored
+    kind: file_content_forbidden
+    paths: '*.txt'
+    pattern: '(?m)^test'
+    level: warning
+",
+    )
+    .unwrap();
+
+    let check = super::config::check_workspace(&[dir.path().to_path_buf()], &[], None);
+    let [(_, run)] = &check.runs[..] else {
+        panic!("one config run: {:?}", check.runs.len());
+    };
+    let run = run.as_ref().expect("the config runs");
+    let hints: Vec<&Finding> = run.by_path[&config_path]
+        .iter()
+        .filter(|finding| finding.severity == DiagnosticSeverity::WARNING)
+        .collect();
+    assert_eq!(hints.len(), 1, "{hints:?}");
+    assert_eq!(hints[0].rule_id, "anchored");
+    assert_eq!(hints[0].line, Some(3), "points at the rule's `id:` line");
+    assert!(hints[0].message.contains("`(?m)^`"), "{}", hints[0].message);
+    assert!(
+        !hints[0].per_file,
+        "kept across keystrokes, like cross-file findings"
+    );
+}
+
+#[test]
 fn lsp_diagnostic_redacts_dotenv_evidence() {
     const SECRET: &str = "LSP_TOKEN_VALUE_DO_NOT_REPORT";
     let dir = tempfile::tempdir().unwrap();

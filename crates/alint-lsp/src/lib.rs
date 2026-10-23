@@ -149,6 +149,8 @@ struct Session {
     baseline: Option<Baseline>,
     /// Rule id → rule kind, for the hover's description + docs link.
     kinds: HashMap<String, String>,
+    /// Load-time pattern hints, shown as warnings on the config file.
+    pattern_hints: Vec<alint_core::pattern_hints::ConfigHint>,
 }
 
 impl Session {
