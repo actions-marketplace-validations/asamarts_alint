@@ -1,6 +1,6 @@
 # v0.17 → v0.20 benchmark increases: a harness artifact, gate blind spots, and real per-kind regressions
 
-Status: diagnosed; fixes proposed and prototyped, not yet applied. The v0.20.0 bench PR (#341) passes every gate, but its 1k `changed` cells (+62% / +49%) and several micro benches (+10% to +84% since v0.17.0) looked alarming. Each increase was traced to its cause with load-immune measurements. One is a benchmark-harness artifact. Several are real regressions in specific rule kinds, config loading, and output formatting that accumulated over v0.18 to v0.20 in steps too small for any gate. Two measurement gaps let them through. Large-repo `alint check` performance has **not** regressed: macro `full` S1 to S3 at 100k and 1m are within ±3% from v0.16.0 to v0.20.0.
+Status: fixed. The measurement fixes are merged (#345, with a follow-up for the new micro A/B in #349), and the product fixes (#347) are in review; [§6](#6-resolution) has what landed and the measured outcome. The v0.20.0 bench PR (#341) passes every gate, but its 1k `changed` cells (+62% / +49%) and several micro benches (+10% to +84% since v0.17.0) looked alarming. Each increase was traced to its cause with load-immune measurements. One is a benchmark-harness artifact. Several are real regressions in specific rule kinds, config loading, and output formatting that accumulated over v0.18 to v0.20 in steps too small for any gate. Two measurement gaps let them through. Large-repo `alint check` performance has **not** regressed: macro `full` S1 to S3 at 100k and 1m are within ±3% from v0.16.0 to v0.20.0.
 
 ## Summary
 
@@ -264,3 +264,152 @@ Each preserves the behavior its tests pin. The fast paths return exactly what th
 - Macro artifact: build the harness at `main` and run `xtask bench-scale --sizes 1k --scenarios S1 --modes changed --runs 1 --warmup 0 --json-only --alint-binary <wrapper>`. The wrapper runs `strace -f -e trace=openat git -C "$2" ls-files --modified --others --exclude-standard -z` before exec'ing alint. Count non-`.git` regular-file opens, and compare `git ls-files --debug` mtimes with `stat -c %Y .git/index`. Repeat until a tree lands inside one second, which is about half of them.
 - Micro instruction counts: in a scratch worktree at each tag, swap the dev-dependency `criterion.workspace = true` for a path dependency on a stand-in crate that exports the same API. Its `Bencher::iter` runs `INV_K` iterations of the benchmark whose `group/id` equals `INV_FILTER`. Build with `cargo bench -p alint-bench --features fs-benches --no-run`, then run each binary under `valgrind --tool=callgrind` at two K values with `RAYON_NUM_THREADS=1`.
 - `det_engine` blind spot: run the equivalent criterion fixture under Callgrind with `--collect-atstart=no --toggle-collect='<alint_core::engine::Engine>::run'`, then again with the rayon job toggles in §2.1, and compare both with the full-collection K-difference.
+
+## 6. Resolution
+
+Every Phase A item and every Phase B fix was applied. Phase C items 1, 2, 3, 5 and 6 were applied, item 1 in re-scoped form. Item 4 was declined.
+
+| PR | Contents | State |
+|---|---|---|
+| [#345](https://github.com/asamarts/alint/pull/345) | Phase A 1 to 6: racy-index settle with a regression test; `det_engine` rayon fix with a 10 M floor check on `engine_run n10k`; `xtask micro-det`, the deterministic micro gate (`pr` subset on PRs and pushes to `main`, advisory; `full` suite in `bench-record`, gating); `bench-gate --anchor` with [`docs/benchmarks/ANCHOR`](../../ANCHOR) at v0.20.0 and +10%, failing; det gate on pushes to `main` (advisory); same-session criterion A/B in `bench-record` (report-only) | merged |
+| [#346](https://github.com/asamarts/alint/pull/346) | tokio 1.54.1 for RUSTSEC-2026-0384, which was failing Audit and Deny on every PR | merged |
+| [#347](https://github.com/asamarts/alint/pull/347) | Phase B 1 to 6; Phase C 1, 2, 3, 5, 6 | open |
+| [#349](https://github.com/asamarts/alint/pull/349) | The `bench-record` criterion A/B builds the previous release in its own target directory (see [Measurement lessons](#measurement-lessons)) | merged |
+
+### Changes from the proposal
+
+- **C1, re-scoped.** A compile-once nested plan would re-implement each child kind's evaluation. Profiling the B-phase build showed most of a nested entry's remaining cost was compiling the rendered literal path into a `GlobSet` (18.6k of 30.9k Ir per entry in `every_matching_has/1000`). `Scope::from_patterns` now recognizes a sole literal include pattern and matches it by byte comparison, which is globset's literal strategy. Where `\` is a separator (Windows), globset rewrites a pattern's `\` to `/` outside character classes, so the literal is normalized the same way and a pattern containing a class keeps the `GlobSet`. The first push missed this and failed `windows-latest`. An exhaustive test checks every pattern up to length 3 against a real `GlobSet` on every CI platform.
+- **Found during validation: one glob candidate per scope check.** The same-session criterion A/B showed `glob_match` +2 to +5% wall-clock with flat instruction counts. The single-literal branch had tipped LLVM's inliner: one of the two `GlobSet::is_match` calls in `Scope::matches` was no longer inlined into per-file loops. `is_match` prepares a fresh `Candidate` (normalization, basename, extension) on every call, so every check was preparing the path twice, even for an empty `exclude` set. One shared candidate with `is_match_candidate` removes that cost and the inlining sensitivity: `rule_engine` -23%, `glob_match` -12%, every other rule kind -2 to -4% (Ir).
+- **C2.** `PathTokens::from_path_with` derives only the tokens a template uses, and every token when the path needs glob escaping, so message unescaping is unchanged.
+- **C3.** `scan_guards` answers both YAML guards (flow depth and alias expansion) from one prefiltered lexer pass at all ten call sites. The expansion budget pass still runs only when an alias was seen.
+- **C4, declined.** `run_for_file` is +26% against v0.17.0, about 2.6k instructions per call (under a microsecond per LSP re-evaluation). Caching the gate would add an invalidation path for that saving.
+- **C5.** `unique_by` groups in a `HashMap` and sorts only the colliding keys, so report order is unchanged; a test pins it.
+- **C6, narrow.** Extends provenance and field-source markers are updated in place in one pass per mapping. Moving the marking into deserialization was not needed for the gain.
+- **1k `changed` cells stay advisory.** On kbench, 5 interleaved fresh trees per harness: S1 spread 79% → 12%, S2 65% → 12%, S4 7% → 2%. The bimodality is gone, but ±6 to 9% residual on a 10 to 20 ms cell is still too wide to gate.
+
+### Deterministic outcome
+
+One `xtask micro-det --suite full` run (Callgrind, K-differenced, all threads, one toolchain), v0.17.0 as anchor. micro-det runs each bench with `TMPDIR` under its scratch directory, so path-heavy benches (config loading) count more instructions than the §3 sweep, which used `/tmp`. Compare within this table, not across tables.
+
+| Bench | v0.17.0 | v0.20.0 | #347 | vs v0.20.0 | vs v0.17.0 |
+|---|---:|---:|---:|---:|---:|
+| `cross_file/every_matching_has/1000` | 31,520,420 | 36,194,332 | 11,051,321 | -69.5% | -64.9% |
+| `cross_file/for_each_dir/1000` | 25,923,136 | 27,654,990 | 8,797,134 | -68.2% | -66.1% |
+| `cross_file/unique_by/10000` | 74,912,758 | 74,967,026 | 39,639,006 | -47.1% | -47.1% |
+| `cross_file/unique_by/100000` | 959,882,102 | 1,002,553,740 | 677,513,743 | -32.4% | -29.4% |
+| `output_formats/10000_violations/github` | 100,333,521 | 124,763,137 | 89,876,137 | -28.0% | -10.4% |
+| `cross_file/pair/1000` | 7,737,125 | 8,839,194 | 6,495,614 | -26.5% | -16.0% |
+| `rule_engine/10000` | 36,265,523 | 35,973,916 | 27,674,255 | -23.1% | -23.7% |
+| `single_file/pinned_references/1000` | (new in v0.19) | 18,511,956 | 14,362,533 | -22.4% | |
+| `dsl_extends/chain_depth/16` | 961,320 | 1,791,685 | 1,406,868 | -21.5% | +46.3% |
+| `output_formats/10000_violations/human` | 186,147,735 | 212,773,914 | 178,637,704 | -16.0% | -4.0% |
+| `structured_query/yaml_path_matches/1000` | 76,367,470 | 89,995,333 | 75,496,797 | -16.1% | -1.1% |
+| `glob_match/10000` | 12,846,607 | 12,791,608 | 11,284,941 | -11.8% | -12.2% |
+| `output_formats/1000_violations/markdown` | 19,875,730 | 21,766,756 | 19,220,964 | -11.7% | -3.3% |
+| `dsl_extends/chain_depth/1` | 127,532 | 198,716 | 182,064 | -8.4% | +42.8% |
+| `single_file/reeval_vs_full/run_for_file/1000` | 10,099 | 12,694 | 12,187 | -4.0% | +20.7% |
+
+None of the 61 gated benches regressed against v0.20.0; the largest increase is +0.8%. Three things stay above v0.17.0, all accepted:
+- Config loading (+43 to +46%), the cost of v0.19/v0.20 trust, provenance and compatibility tracking.
+- `run_for_file` (+21%, C4).
+- `fix_throughput/dry_run_only` (the v0.18 write confinement, §3.6).
+
+The single-file content rules move by up to ±12% between refs in this run, but repeat runs of the same ref overlap within that range (setup writes and walks real files), so they stay report-only.
+
+### Wall-clock on the canonical host
+
+Four macro measurements on kbench (i7-6700HQ, `ALINT_BENCH_DROP_CACHES=1`) at bench-record's flags: 1k to 1m, S1 to S4 and SFIX, 3 warmups and 10 runs per cell (1 and 3 at 1m). All four used the racy-fixed harness.
+
+- **A/B 1:** one session, v0.20.0 first, then #347 at `3d4784649`, before the shared-candidate commit.
+- **A/B 2:** one session, v0.20.0 first, then #347's final code at `2e9854c17`.
+- **bench-record 1:** the workflow itself, dispatched on a validation branch of #347 at `8c7b5a9a1` and compared with the published v0.20.0 run (results PR #348, closed unmerged).
+- **bench-record 2:** the workflow again, with #349's fix, on a validation branch carrying #347's final code (`042db8f4f`), compared with the published v0.20.0 run (results PR #350, closed unmerged).
+
+`bench-gate` passes in every case, and in both directions for the two A/Bs. A/B 2 and bench-record 2 measure the final code. Change against v0.20.0, median / min (the gate uses min):
+
+| Cell | A/B 1 | A/B 2 | bench-record 1 | bench-record 2 |
+|---|---:|---:|---:|---:|
+| S2 10k full | -4.2 / -3.8% | -0.3 / -3.0% | -5.7 / -4.6% | -4.4 / -4.5% |
+| S2 100k full | -4.0 / -3.6% | -2.8 / -3.0% | -4.7 / -4.3% | -4.5 / -4.5% |
+| S2 1m full | -2.8 / -2.7% | -4.2 / -3.9% | -3.4 / -3.3% | -3.1 / -3.0% |
+| S4 10k full | -5.7 / -4.2% | -2.1 / -3.7% | -4.0 / -3.5% | -2.5 / -3.9% |
+| S4 100k full | -4.6 / -3.8% | -4.2 / -4.5% | -3.4 / -3.9% | -2.3 / -4.2% |
+| S4 1m full | -3.0 / -2.9% | -7.6 / -4.5% | -5.1 / -4.4% | -4.5 / -4.5% |
+| S1 10k full | -1.9 / -1.3% | +0.4 / -0.5% | -0.9 / -1.7% | +0.2 / -2.5% |
+| S1 100k full | -1.6 / +0.1% | +0.6 / -0.6% | -5.3 / -2.1% | -3.6 / -2.2% |
+| S1 1m full | +0.5 / +0.0% | +3.1 / +3.3% | -4.2 / -1.5% | -2.6 / -0.3% |
+| S3 10k full | +0.1 / +0.6% | +0.2 / +0.5% | +0.5 / +0.0% | +0.6 / -0.1% |
+| S3 100k full | -3.0 / -0.1% | +0.2 / +0.3% | -1.0 / +0.3% | -1.5 / -0.3% |
+| S3 1m full | +0.1 / -0.1% | +5.7 / -0.1% | +0.1 / +0.3% | +0.2 / +0.4% |
+| SFIX 10k fix | -1.5 / -1.0% | -1.7 / -2.8% | -1.2 / -0.9% | -1.6 / -1.1% |
+| SFIX 100k fix | -1.0 / -0.8% | -1.8 / -2.5% | -1.0 / -0.6% | -1.7 / -1.6% |
+| SFIX 1m fix | -0.7 / -1.1% | -3.7 / -1.4% | -3.1 / -2.2% | -3.0 / -2.4% |
+
+S2 (structured queries) and S4 (nested and cross-file kinds) are faster from 10k to 1m by min in every measurement: 3.0 to 4.5% for the final code in both of its sessions, 2.7 to 4.6% across all four.
+
+S1 (walking) and S3 (content scanning) move within ±3% between sessions, in both directions. In A/B 2, S1 1m full read +3.3% by min. That figure rests on 3 timed runs, with v0.20.0's whole matrix run first. To check it, the same two binaries ran on the same generated S1 trees under a deterministic count. #347 executes 6.1% (100k) and 6.3% (1m) fewer instructions (Callgrind, all threads). Its syscall counts are the same: 219,625 vs 219,140 at 100k, 2,086,629 vs 2,086,941 at 1m. The output is identical. bench-record 2, the same code in a later session, measured S1 1m full at -0.3% by min (-2.6% median). The S3 1m median of +5.7% in A/B 2 has a min of -0.1%.
+
+The 1k `changed` cells that prompted this investigation were published at 20.7 ms (S1) and 22.5 ms (S2) for v0.20.0. With the settled index, v0.20.0 runs them in 12.4 to 14.1 ms (S1) and 15.7 to 15.8 ms (S2). #347 runs them in 12.2 to 13.6 ms and 15.0 to 15.4 ms, and bench-record 2 published 13.0 ms and 14.8 ms. So almost all of the published increase was the harness artifact.
+
+### Micro wall-clock
+
+The criterion suite is wall-clock and report-only; the instruction counts above are what gate. Three findings from kbench:
+
+- **The first same-session criterion A/B** ran v0.20.0, then #347 at `be5bc60f3`. It agreed with the instruction counts for every changed kind: nested kinds -69 to -72%, `unique_by` -23 to -42%, github -21 to -23%, human -14 to -21%, `pair` -11 to -15%, YAML queries -11%. It also moved benches whose instruction counts did not change: junit +7%, gitlab/10000 +12.6%, `rule_engine` and `glob_match` +2 to +3.5%.
+- **`glob_match` was real.** It led to the shared glob candidate described above.
+- **Interleaving cancels session drift.** In the interleaved check, both refs' bench binaries alternate order over 6 rounds (ABBA), and each round is compared on its own. The final code against v0.20.0:
+
+| Bench | v0.20.0 | #347 | Per-round change | Mean |
+|---|---:|---:|---|---:|
+| `rule_engine/10000` | 2.290 ms | 1.865 ms | -18.4 -17.8 -19.0 -18.2 -16.8 -19.7 | -18.3% |
+| `glob_match/1000` | 0.162 ms | 0.145 ms | -11.0 -10.9 -10.9 -8.7 -8.9 -10.6 | -10.2% |
+| `glob_match/100000` | 16.402 ms | 14.870 ms | -7.5 -10.1 -10.6 -8.0 -8.5 -9.1 | -9.0% |
+| `output_formats/10000_violations/json` | 5.577 ms | 5.354 ms | -4.2 -3.9 -3.9 -4.0 -4.1 -2.9 | -3.8% |
+| `output_formats/10000_violations/gitlab` | 32.105 ms | 32.018 ms | -0.4 -1.4 -0.4 -0.2 +0.3 -2.0 | -0.7% |
+| `output_formats/100_violations/junit` | 0.124 ms | 0.127 ms | +2.0 +3.1 +5.0 +3.9 +3.8 +4.3 | +3.7% |
+| `output_formats/10000_violations/junit` | 12.253 ms | 12.879 ms | +5.5 +5.9 +4.1 +5.0 +9.2 +4.1 | +5.7% |
+
+junit's code is unchanged, and Callgrind counts the same instructions for both refs (111,282,547 at 10000 violations). Its +4 to +6% on kbench holds in every interleaved round. The same interleaved check on a Zen 2 machine measured -1.3% and +0.3%; that run used `be5bc60f3`, whose junit code is the same. The same instructions sit at different addresses, so this is a code-layout effect on the Skylake host, not added work.
+
+**After #349, bench-record's own A/B agrees on the large moves.** [Run 39926639804](https://github.com/asamarts/alint/actions/runs/39926639804) ran the workflow, with #349's fix, on #347's final code (`042db8f4f`, results PR #350, closed unmerged). Each ref compiled its own sources (2 m 36 s and 2 m 35 s), and 89 of 98 benches changed significantly. The large moves match the instruction counts that the same run's micro-det job measured:
+
+| Bench | A/B wall-clock | micro-det Ir |
+|---|---:|---:|
+| `cross_file/every_matching_has/5000` | -71.2% | -71.0% |
+| `cross_file/for_each_dir/1000` | -68.1% | -69.5% |
+| `cross_file/unique_by/10000` | -45.4% | -45.4% |
+| `output_formats/1000_violations/github` | -28.8% | -23.8% |
+| `cross_file/pair/1000` | -20.7% | -28.0% |
+| `rule_engine/10000` | -17.7% | -25.2% |
+| `structured_query/yaml_path_matches/100` | -14.7% | -14.6% |
+| `glob_match/10000` | -9.4% | -12.9% |
+
+The benches that rose in it did not rise in instruction counts:
+- agent and sarif output rose +9.0 to +9.5% at 10000 violations, and json and junit +3.2 to +5.3%. `literal_facts/20_absent/100000` rose +6.1%. All of these are within ±0.5% Ir.
+- `final_newline/100` rose +5.0% at -7.5% Ir, and `dsl_extends/chain_depth/1` +4.4% at -8.4% Ir.
+
+An interleaved run of the output formats on kbench (6 rounds, as above) does not reproduce the rises:
+
+| Bench | v0.20.0 | #347 | Per-round change | Mean |
+|---|---:|---:|---|---:|
+| `output_formats/100_violations/agent` | 0.137 ms | 0.139 ms | +2.5 +0.5 -5.5 +8.4 +2.0 +0.1 | +1.3% |
+| `output_formats/1000_violations/agent` | 1.344 ms | 1.342 ms | -9.3 -7.5 +2.5 +9.4 -1.8 +0.6 | -1.0% |
+| `output_formats/10000_violations/agent` | 15.209 ms | 13.864 ms | +1.7 -24.7 +5.2 +7.5 -19.3 -19.5 | -8.2% |
+| `output_formats/100_violations/sarif` | 0.181 ms | 0.182 ms | +1.3 +0.9 -0.3 +0.6 +0.6 +0.3 | +0.6% |
+| `output_formats/1000_violations/sarif` | 1.839 ms | 1.847 ms | +0.7 +0.0 +0.3 +8.4 +0.5 +0.0 | +1.7% |
+| `output_formats/10000_violations/sarif` | 18.433 ms | 18.679 ms | +1.1 -7.3 +1.6 +8.7 +1.7 +1.2 | +1.2% |
+| `output_formats/1000_violations/json` | 0.561 ms | 0.540 ms | -3.8 -4.0 -10.4 -3.9 -6.1 -3.6 | -5.3% |
+| `output_formats/10000_violations/json` | 5.568 ms | 5.352 ms | -3.9 -4.1 -3.9 +4.2 -5.5 -3.8 | -2.8% |
+
+Two things separate the interleaved run from the ordered one:
+- **Drift lands on one side.** In round 4 every #347 output bench ran 5 to 9% slower than in its other rounds. An ordered A/B charges such a slow stretch to whichever ref ran then.
+- **`agent` at 10000 violations is bimodal on v0.20.0 itself.** Its rounds take either 13.4 to 13.7 ms or 16.7 to 18.3 ms; #347's stay at 13.4 to 14.5 ms. Against v0.20.0's fast rounds, #347 is +0.3% best to best and +2.6% median to median.
+
+So the output formats with unchanged instruction counts move -5% to +3% on this host: sarif +0.6 to +1.7%, agent -1.0 to +2.6%, json -2.8 to -5.3%. json flipped sign from the ordered A/B, where it read +3.5 to +5.3%.
+
+### Measurement lessons
+
+- **Cargo shares artifacts across worktrees at the same package version.** Cargo names a workspace package's artifacts by name, version and workspace-relative path. Two refs of the same version built into one target directory therefore get the same file names, and the second build can judge the first one's artifacts fresh. One early micro-det comparison measured identical binaries this way, so `xtask micro-det` now runs `cargo clean -p` for every workspace package before each ref's build. The criterion A/B that #345 added to `bench-record` had the same flaw. In the validation run the new ref's build finished in 0.24 s, and the A/B compared v0.20.0 with itself. Tag runs were never affected, because the release bump changes the version. [#349](https://github.com/asamarts/alint/pull/349) gives the previous release its own target directory, and a shell test pins the separation.
+- **Benches that read real files are noisy in Ir too.** On hosted runners, glibc allocator behavior moved `xml_path_equals` and `yaml_path_matches` 1.8 to 2.8% between identical refs, so they report but do not gate in the PR subset.
+- **An ordered micro A/B shows layout and drift, not just code.** bench-record's criterion A/B runs the previous release first, then the new ref. Benches with identical instruction counts can move several percent in it: junit +7% and gitlab/10000 +12.6% in one run, agent and sarif +9 to +9.5% in another (-1 to +3% interleaved), and json +3.5 to +5.3% in the second where interleaving gives -2.8 to -5.3%. Read it for large changes, and confirm small ones with an interleaved run. The instruction counts are what gate.
+- **The first push-to-`main` gate after #345 reports a one-time step.** It compares the new `det_engine` with the base's blind one: `engine_run` n1k +1634%, n10k +2533% (advisory). From the next push on, both sides count the rayon workers.
