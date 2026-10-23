@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::{Candidate, Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::config::{PathsSpec, RuleSpec};
 use crate::error::{Error, Result};
@@ -213,12 +213,20 @@ impl Scope {
 
 impl Scope {
     /// The include/exclude pattern check alone.
+    ///
+    /// Both sets are checked against one prepared [`Candidate`]:
+    /// `GlobSet::is_match` prepares a fresh one (path normalization, basename
+    /// and extension) on every call, even for an empty `exclude`. Calling the
+    /// out-of-line `is_match_candidate` also keeps this body small enough that
+    /// callers inline it whole, which matters in the per-file dispatch loop.
     #[inline]
     fn path_matches(&self, path: &Path) -> bool {
         if let Some(literal) = &self.literal {
             return literal_matches(literal, path);
         }
-        !self.exclude.is_match(path) && (!self.has_include || self.include.is_match(path))
+        let candidate = Candidate::new(path);
+        !self.exclude.is_match_candidate(&candidate)
+            && (!self.has_include || self.include.is_match_candidate(&candidate))
     }
 }
 
@@ -298,21 +306,8 @@ mod tests {
     /// the glob does).
     #[test]
     fn literal_fast_path_matches_like_a_globset() {
-        fn strings(alphabet: &[char], max: usize) -> Vec<String> {
-            let mut out = vec![String::new()];
-            let mut frontier = vec![String::new()];
-            for _ in 0..max {
-                let next: Vec<String> = frontier
-                    .iter()
-                    .flat_map(|s| alphabet.iter().map(move |c| format!("{s}{c}")))
-                    .collect();
-                out.extend(next.iter().cloned());
-                frontier = next;
-            }
-            out
-        }
-        let patterns = strings(&['a', '/', '.', '*', '?', '[', ']', '{', '}', '\\', '!'], 3);
-        let paths = strings(&['a', '/', '.', '\\', '*', '['], 3);
+        let patterns = short_strings(&['a', '/', '.', '*', '?', '[', ']', '{', '}', '\\', '!'], 3);
+        let paths = short_strings(&['a', '/', '.', '\\', '*', '['], 3);
         let index = FileIndex::default();
         let mut literal_scopes = 0;
         for pattern in &patterns {
@@ -344,6 +339,57 @@ mod tests {
             }
         }
         assert!(literal_scopes > 100, "{literal_scopes}");
+    }
+
+    /// Every string up to `max` characters over `alphabet`, the empty one
+    /// included.
+    fn short_strings(alphabet: &[char], max: usize) -> Vec<String> {
+        let mut out = vec![String::new()];
+        let mut frontier = vec![String::new()];
+        for _ in 0..max {
+            let next: Vec<String> = frontier
+                .iter()
+                .flat_map(|s| alphabet.iter().map(move |c| format!("{s}{c}")))
+                .collect();
+            out.extend(next.iter().cloned());
+            frontier = next;
+        }
+        out
+    }
+
+    /// Include and exclude sets checked against one shared candidate match
+    /// exactly what separate `GlobSet::is_match` calls on the path match, for
+    /// every pair of globs up to length 2 over every path up to length 3.
+    #[test]
+    fn shared_candidate_matches_like_separate_glob_sets() {
+        let set = |pattern: &str| {
+            let mut set = GlobSetBuilder::new();
+            set.add(compile(pattern).ok()?);
+            set.build().ok()
+        };
+        let globs: Vec<(String, GlobSet)> = short_strings(&['a', '/', '.', '*', '?'], 2)
+            .into_iter()
+            .filter_map(|glob| set(&glob).map(|set| (glob, set)))
+            .collect();
+        let paths = short_strings(&['a', '/', '.', 'b'], 3);
+        let index = FileIndex::default();
+        let mut checked = 0;
+        for (include, include_set) in &globs {
+            for (exclude, exclude_set) in &globs {
+                let scope = Scope::from_patterns(&[include.clone(), format!("!{exclude}")])
+                    .expect("both globs compile");
+                for path in &paths {
+                    let path = Path::new(path);
+                    assert_eq!(
+                        scope.matches(path, &index),
+                        include_set.is_match(path) && !exclude_set.is_match(path),
+                        "include {include:?} exclude {exclude:?} path {path:?}"
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 50_000, "{checked}");
     }
 
     fn s(patterns: &[&str]) -> Scope {
