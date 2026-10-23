@@ -1036,6 +1036,15 @@ pub trait Rule: Send + Sync + std::fmt::Debug {
         self.path_scope().is_some() || self.as_per_file().is_some()
     }
 
+    /// Advisory hints about this rule's own content pattern: `^` / `$`
+    /// anchors that cannot do what the author almost certainly meant
+    /// ([`crate::pattern_hints`]). Shown as warnings when a config loads; they
+    /// never change a finding. Kinds that match a regex against a whole file
+    /// or a block of lines override this.
+    fn pattern_hints(&self) -> Vec<crate::pattern_hints::PatternHint> {
+        Vec::new()
+    }
+
     /// Return whether at least one indexed target belongs to this rule's
     /// effective scope. Called only when [`Self::supports_expect_matches`] is
     /// true. The default target domain is files; rules over a wider path domain

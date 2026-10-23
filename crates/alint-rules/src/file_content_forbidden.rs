@@ -65,6 +65,13 @@ impl Rule for FileContentForbiddenRule {
     fn as_per_file(&self) -> Option<&dyn PerFileRule> {
         Some(self)
     }
+
+    fn pattern_hints(&self) -> Vec<alint_core::pattern_hints::PatternHint> {
+        alint_core::pattern_hints::pattern_hints(
+            &self.pattern_src,
+            alint_core::pattern_hints::PatternTarget::ForbiddenFile,
+        )
+    }
 }
 
 impl PerFileRule for FileContentForbiddenRule {
@@ -297,6 +304,64 @@ mod tests {
         let (tmp, idx) = tempdir_with_files(&[("img.bin", &[0xff, 0xfe])]);
         let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert!(v.is_empty());
+    }
+
+    #[test]
+    fn a_leading_caret_raises_a_pattern_hint() {
+        // Issue #343: `^test` only ever looks at line 1 of the file.
+        let rule = build(&spec_yaml(
+            "id: t\nkind: file_content_forbidden\npaths: \"*.txt\"\npattern: \"^test\"\nlevel: warning\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            rule.pattern_hints(),
+            vec![alint_core::pattern_hints::PatternHint::LeadingStart]
+        );
+        let rule = build(&spec_yaml(
+            "id: t\nkind: file_content_forbidden\npaths: \"*.txt\"\npattern: \"(?m)^test\"\nlevel: warning\n",
+        ))
+        .unwrap();
+        assert_eq!(rule.pattern_hints(), Vec::new());
+    }
+
+    #[test]
+    fn content_kinds_report_hints_for_their_own_haystack() {
+        use alint_core::pattern_hints::{PatternHint, PatternTarget};
+        let registry = crate::builtin_registry();
+        for (kind, extra, target) in [
+            ("file_content_matches", "", PatternTarget::File),
+            ("content_matches", "", PatternTarget::File),
+            ("file_content_forbidden", "", PatternTarget::ForbiddenFile),
+            ("file_header", "lines: 2\n", PatternTarget::Lines),
+            ("file_footer", "lines: 2\n", PatternTarget::Lines),
+        ] {
+            let spec = spec_yaml(&format!(
+                "id: t\nkind: {kind}\npaths: VERSION\npattern: '[0-9]$'\n{extra}level: warning\n"
+            ));
+            let rule = registry.build(&spec).unwrap();
+            assert_eq!(
+                rule.pattern_hints(),
+                vec![PatternHint::EndBeforeFinalNewline(target)],
+                "{kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_rules_contribute_their_pattern_hints() {
+        let registry = crate::builtin_registry();
+        let spec = spec_yaml(
+            "id: per-package\nkind: for_each_dir\nselect: \"packages/*\"\nrequire:\n  - kind: file_content_forbidden\n    paths: \"{path}/*.py\"\n    pattern: '^\\s*print\\('\nlevel: warning\n",
+        );
+        let rule = registry.build(&spec).unwrap();
+        let hints =
+            alint_core::pattern_hints::rule_tree_hints(&registry, rule.as_ref(), Some(&spec));
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert_eq!(
+            hints[0].hint,
+            alint_core::pattern_hints::PatternHint::LeadingStart
+        );
+        assert!(hints[0].id.starts_with("per-package"), "{}", hints[0].id);
     }
 }
 

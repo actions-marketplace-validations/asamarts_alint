@@ -76,6 +76,13 @@ impl Rule for FileHeaderRule {
     fn as_per_file(&self) -> Option<&dyn PerFileRule> {
         Some(self)
     }
+
+    fn pattern_hints(&self) -> Vec<alint_core::pattern_hints::PatternHint> {
+        alint_core::pattern_hints::pattern_hints(
+            &self.pattern_src,
+            alint_core::pattern_hints::PatternTarget::Lines,
+        )
+    }
 }
 
 impl PerFileRule for FileHeaderRule {
