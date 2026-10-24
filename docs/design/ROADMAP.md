@@ -1728,3 +1728,32 @@ similarity threshold, in the spirit of jscpd or PMD CPD but language-agnostic.
   plugins above, to keep the core binary lean. Either way it must stay
   near-linear (fingerprint hashing, not pairwise comparison) so it does not
   erode the sub-second structural floor.
+
+<!-- alint:internal-start -->
+### Build and dev-loop hygiene
+
+Contributor-loop costs that change nothing alint ships: each one makes the
+edit, build, and test cycle recompile or relink work it does not need to.
+Evidence, fix directions, and acceptance criteria are in
+[`build-dev-loop.md`](https://github.com/asamarts/alint/blob/main/docs/design/build-dev-loop.md).
+
+- **Build-script rerun in git worktrees.** `crates/alint/build.rs:20` emits
+  `cargo:rerun-if-changed=../../.git/HEAD` (still so at `61edcde97`). In a
+  git worktree `.git` is a file, so the path is missing and cargo treats the
+  build script as stale on every build: the `alint` crate recompiles and its
+  39 integration-test binaries relink each time. In the main checkout it
+  reruns on every HEAD move. Resolve the real git dir and emit
+  `rerun-if-changed` only for paths that exist, or read the revision only in
+  release builds. aplan fixed the same defect on 2026-10-21 by resolving the
+  real git dir (A1-629).
+- **One integration-test binary per crate.** Merge the 87 top-level
+  `tests/*.rs` binaries at `61edcde97` (alint 39, alint-e2e 33, rules 6,
+  core 2, dsl 2, output 2, xtask 2, testkit 1) into one binary per crate.
+  Measured on `635b6a91`: editing `alint-core` then `cargo test --no-run`
+  fell from 158 to 50 CPU-s (-69%) with full debuginfo and from 67 to 33
+  (-51%) trimmed; integration-test binaries went from 77 to 7; nextest ran
+  3,303 tests with no new failures. aplan made the same change on 2026-10-21
+  (A1-630, 134 integration-test binaries to 9). With the build-script fix
+  and three smaller build tasks, aplan's compile load on the host fell
+  65-88% over the next two days at unchanged commit volume.
+<!-- alint:internal-end -->
