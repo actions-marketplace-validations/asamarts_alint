@@ -16,7 +16,7 @@ use std::path::Path;
 use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_testkit::treespec::{TreeSpec, materialize};
 
-mod support;
+use crate::support;
 
 const CONFIG: &str = "\
 version: 1

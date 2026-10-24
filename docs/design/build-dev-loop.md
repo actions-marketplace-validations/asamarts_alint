@@ -1,6 +1,6 @@
 # Build and dev-loop hygiene
 
-Status: Section 1 implemented in #356 (2026-10-24, unreleased); section 2 is backlog, not pinned to a release. Drafted 2026-10-21, rechecked at `61edcde97` on 2026-10-23.
+Status: Section 1 implemented in #356 and section 2 in #360 (both 2026-10-24, unreleased). Drafted 2026-10-21, rechecked at `61edcde97` on 2026-10-23.
 Decisions: none
 Roadmap: [`ROADMAP.md`](ROADMAP.md), "Future / backlog", "Build and dev-loop hygiene".
 
@@ -206,6 +206,38 @@ thread-local override.
 - `cargo test --workspace` (shared process) passes, repeatedly.
 - No `--test <old-name>` reference remains in the repository.
 - The PR records `cargo test --no-run` CPU time after editing `alint-core`, before and after.
+
+### Resolution (#360)
+
+Each of the eight crates with integration tests sets `autotests = false` and declares one
+`[[test]]` target, `it`, rooted at `tests/main.rs` rather than the `tests/it/main.rs` above. A
+crate root resolves `mod cli;` to the sibling `tests/cli.rs`, so no file moved, no `#[path]`
+attribute was needed, and the relative `include_str!` paths are untouched. The shared helpers are
+declared once in `main.rs` (`support` in alint-e2e, `#[cfg(unix)] lsp_common` in alint), and the
+13 files that declared them now import them with `use crate::...`. Every `--test <name>` reference
+now reads `--test it -- <name>::`.
+
+Without Cargo's discovery, a new `tests/*.rs` file would never be compiled. xtask's `test_layout`
+test reads `cargo metadata` and fails when a crate with integration tests has any test target
+other than `it` at `tests/main.rs`, or when `main.rs` does not declare one of its test files or
+helper directories. Breaking each condition on purpose produces a failure that names the file and
+the fix.
+
+Measured at `ed9e7620b` in two linked worktrees on the shared dev box (load average 20 to 40 on
+24 cores): touch `crates/alint-core/src/lib.rs`, then `cargo test --workspace --no-run`, in three
+interleaved rounds.
+
+| Measure | Before | After | Change |
+|---|---:|---:|---:|
+| Compiler CPU-s, median of 3 (range) | 121.5 (120.0-122.5) | 56.1 (55.1-57.0) | -54% |
+| Wall-clock s, median of 3 | 14.8 | 8.9 | -40% |
+| Test executables, unit-test harnesses included | 97 | 18 | -81% |
+| `target/debug/deps` after one full build and three rebuilds | 3.9 GB | 2.5 GB | -36% |
+
+Every test executable's `--list` output, keyed by crate and source file, is identical before and
+after (3,831 tests), apart from the gate's two new tests. `cargo test --workspace` passed in the
+old layout once and in the new layout three times in a row, and `cargo nextest run --workspace`
+passed all 3,833 tests. No test depended on running in its own process.
 
 ### Effort
 

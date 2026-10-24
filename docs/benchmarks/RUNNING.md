@@ -141,7 +141,7 @@ The soft `coverage_audit_bench_listing.rs` test (under
 in the registry but absent from any bench scenario:
 
 ```sh
-cargo test -p alint-e2e --test coverage_audit_bench_listing -- --nocapture
+cargo test -p alint-e2e --test it -- coverage_audit_bench_listing:: --nocapture
 ```
 
 Use the listing as a triage list when extending S2 / S3 / S4 — kinds

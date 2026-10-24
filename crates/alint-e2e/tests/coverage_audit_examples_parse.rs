@@ -44,7 +44,7 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-mod support;
+use crate::support;
 
 #[test]
 fn every_examples_alint_yml_parses_and_builds() {

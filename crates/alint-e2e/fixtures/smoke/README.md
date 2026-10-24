@@ -60,7 +60,7 @@ other-rule-id = 1
 3. The `tree/` should contain at minimum one file that should produce
    a violation AND one that should not, so the audit can detect both
    false-positive and false-negative regressions.
-4. Run `cargo test -p alint-e2e --test coverage_audit_smoke_fixtures`
+4. Run `cargo test -p alint-e2e --test it -- coverage_audit_smoke_fixtures::`
    locally to confirm the counts.
 5. Reference the relevant pitfall number in `expected.toml`'s comment
    header so future readers know what regression the fixture guards.

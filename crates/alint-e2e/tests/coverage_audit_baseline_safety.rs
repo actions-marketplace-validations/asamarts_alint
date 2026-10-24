@@ -38,7 +38,7 @@ use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
 use alint_testkit::{PolicyTest, Runner, RunnerOptions, TestStep};
 
-mod support;
+use crate::support;
 
 /// One emitted violation, reduced to what the invariants need.
 struct Finding {

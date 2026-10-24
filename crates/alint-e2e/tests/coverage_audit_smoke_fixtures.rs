@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
 
-mod support;
+use crate::support;
 
 /// Per-scenario `expected.toml` shape.
 #[derive(Debug, serde::Deserialize)]

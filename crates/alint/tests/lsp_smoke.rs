@@ -11,7 +11,7 @@
 //! cross-platform; this is a test-harness simplification.
 #![cfg(unix)]
 
-mod lsp_common;
+use crate::lsp_common;
 
 use std::time::Instant;
 

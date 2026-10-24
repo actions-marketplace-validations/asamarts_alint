@@ -19,7 +19,7 @@ use std::path::Path;
 use alint_core::{Engine, Level, Report, RuleEntry, WalkOptions, walk};
 use alint_testkit::treespec::{TreeSpec, materialize};
 
-mod support;
+use crate::support;
 
 fn chmod(path: &Path, mode: u32) {
     let mut perms = std::fs::metadata(path).unwrap().permissions();

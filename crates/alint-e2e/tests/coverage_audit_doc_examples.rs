@@ -31,7 +31,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-mod support;
+use crate::support;
 
 /// Docs whose fenced config examples must load. Scoped to the
 /// drift-prone hand-written docs the evaluation flagged; extend as new

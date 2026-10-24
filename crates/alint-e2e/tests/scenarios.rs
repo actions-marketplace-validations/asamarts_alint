@@ -6,7 +6,7 @@ use std::path::Path;
 use alint_testkit::{PolicyTest, Runner, RunnerOptions, TestStatus};
 use dir_test::{Fixture, dir_test};
 
-mod support;
+use crate::support;
 
 const EXPECTED_GENERAL_SCENARIOS: usize = 485;
 const EXPECTED_BUNDLED_SCENARIOS: usize = 93;

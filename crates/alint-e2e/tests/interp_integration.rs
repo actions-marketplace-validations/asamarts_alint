@@ -10,7 +10,7 @@
 
 use std::io::Write;
 
-mod support;
+use crate::support;
 
 fn write_config(body: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
