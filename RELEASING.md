@@ -206,13 +206,18 @@ therefore requires this one-time bootstrap:
    scoped crates.io token.
 3. Add the crate's Trusted Publisher in crates.io: crate → Settings → Trusted
    Publishing → repo `asamarts/alint`, workflow `release.yml`, no environment.
+   Do this in the same release, before step 4. Nothing fails if it is skipped
+   until the next release tries to publish the crate through OIDC.
 4. Run `gh run rerun <id> --failed`. Never re-tag. The publish script skips
    versions already visible on crates.io and resumes in dependency order.
 
 The manual first publish is an unavoidable partial release, so do it immediately
 after the expected failure and never from an uncommitted or post-tag tree. Every
-later release is tokenless through OIDC. `alint-testkit` followed this bootstrap
-in v0.20.0.
+later release is tokenless through OIDC. `alint-testkit` was bootstrapped in
+v0.20.0 without step 3, so v0.20.1's `publish to crates.io` job failed with
+`403 Forbidden` on that crate until its Trusted Publisher was added and the job
+rerun. Before tagging the release after a bootstrap, open the new crate's
+Trusted Publishing settings on crates.io and confirm the entry exists.
 
 ## npm Trusted Publishing
 
