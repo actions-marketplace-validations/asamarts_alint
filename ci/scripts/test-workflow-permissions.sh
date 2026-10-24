@@ -25,6 +25,7 @@ EXPECTED_TOP = {
     'bench-docker.yml': {},
     'bench-record.yml': {},
     'ci.yml': {'contents': 'read'},
+    'corpus-replay.yml': {'contents': 'read'},
     'coverage.yml': {'contents': 'read'},
     'cross-platform.yml': {'contents': 'read'},
     'docs-bundle.yml': {'contents': 'write'},
@@ -196,6 +197,7 @@ def effective_permissions(workflow: str, job: str) -> dict[str, str]:
 ORDINARY_READ_ONLY_WORKFLOWS = {
     'action-selftest.yml',
     'ci.yml',
+    'corpus-replay.yml',
     'coverage.yml',
     'cross-platform.yml',
     'editors-e2e.yml',

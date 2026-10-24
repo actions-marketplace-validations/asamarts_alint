@@ -86,6 +86,22 @@ points are explicit.
    script automatically once opted in via
    `git config core.hooksPath ci/githooks`.
 
+   **Corpus replay (releases with relation-layer changes).** Before tagging
+   a release that changes the relation layer (v0.21 onward), run the
+   `Corpus Replay` workflow on the release commit with the previous release
+   as the comparison:
+
+   ```sh
+   gh workflow run corpus-replay.yml --ref main -f compare_ref=v<previous>
+   ```
+
+   It replays the 110-repository case-study corpus with both binaries on the
+   canonical bench host and lists every repository whose findings changed.
+   Each difference must be explained by a CHANGELOG entry, and a crash
+   blocks the release. Once v0.21's shadow harness lands (work item R4), the
+   replay also runs the shadow implementation, and any shadow difference
+   blocks the release.
+
 4. **Commit and tag.**
 
    ```sh
