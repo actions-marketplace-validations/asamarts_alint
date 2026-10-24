@@ -1737,15 +1737,14 @@ edit, build, and test cycle recompile or relink work it does not need to.
 Evidence, fix directions, and acceptance criteria are in
 [`build-dev-loop.md`](https://github.com/asamarts/alint/blob/main/docs/design/build-dev-loop.md).
 
-- **Build-script rerun in git worktrees.** `crates/alint/build.rs:20` emits
-  `cargo:rerun-if-changed=../../.git/HEAD` (still so at `61edcde97`). In a
-  git worktree `.git` is a file, so the path is missing and cargo treats the
-  build script as stale on every build: the `alint` crate recompiles and its
-  39 integration-test binaries relink each time. In the main checkout it
-  reruns on every HEAD move. Resolve the real git dir and emit
-  `rerun-if-changed` only for paths that exist, or read the revision only in
-  release builds. aplan fixed the same defect on 2026-10-21 by resolving the
-  real git dir (A1-629).
+- **Build-script rerun in git worktrees.** Fixed in #356 (unreleased).
+  `crates/alint/build.rs` emitted `cargo:rerun-if-changed=../../.git/HEAD`.
+  In a git worktree `.git` is a file, so the path was missing and cargo
+  treated the build script as stale on every build: the `alint` crate
+  recompiled and its 39 integration-test binaries relinked each time. The
+  script now resolves the real git dir and watches only paths that exist,
+  as aplan did (A1-629); `ci/scripts/test-build-script-freshness.sh` gates
+  it with real cargo builds.
 - **One integration-test binary per crate.** Merge the 87 top-level
   `tests/*.rs` binaries at `61edcde97` (alint 39, alint-e2e 33, rules 6,
   core 2, dsl 2, output 2, xtask 2, testkit 1) into one binary per crate.
