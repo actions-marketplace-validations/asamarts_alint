@@ -12,7 +12,7 @@
 //! Unix-only for the same `file://` reason as the shared harness.
 #![cfg(unix)]
 
-mod lsp_common;
+use crate::lsp_common;
 
 use std::collections::HashMap;
 use std::path::Path;

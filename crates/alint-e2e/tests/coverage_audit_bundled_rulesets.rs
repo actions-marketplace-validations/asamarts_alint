@@ -13,7 +13,7 @@ use alint_core::ExtendsEntry;
 use alint_testkit::{ExpectedExit, PolicyTest, Runner, RunnerOptions};
 use serde::Deserialize;
 
-mod support;
+use crate::support;
 
 #[derive(Default)]
 struct Coverage {

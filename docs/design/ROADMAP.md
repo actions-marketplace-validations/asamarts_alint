@@ -1745,10 +1745,14 @@ Evidence, fix directions, and acceptance criteria are in
   script now resolves the real git dir and watches only paths that exist,
   as aplan did (A1-629); `ci/scripts/test-build-script-freshness.sh` gates
   it with real cargo builds.
-- **One integration-test binary per crate.** Merge the 87 top-level
-  `tests/*.rs` binaries at `61edcde97` (alint 39, alint-e2e 33, rules 6,
-  core 2, dsl 2, output 2, xtask 2, testkit 1) into one binary per crate.
-  Measured on `635b6a91`: editing `alint-core` then `cargo test --no-run`
+- **One integration-test binary per crate.** Done in #360 (unreleased).
+  The 87 top-level `tests/*.rs` binaries (alint 39, alint-e2e 33, rules 6,
+  core 2, dsl 2, output 2, xtask 2, testkit 1) now build as one `it`
+  binary per crate, rooted at `tests/main.rs`, and xtask's `test_layout`
+  test fails if a test file is left out. Touching `alint-core` then
+  `cargo test --no-run` fell from 121.5 to 56.1 CPU-s (-54%) at
+  `ed9e7620b`, with an identical test list. The prototype measured on
+  `635b6a91`: editing `alint-core` then `cargo test --no-run`
   fell from 158 to 50 CPU-s (-69%) with full debuginfo and from 67 to 33
   (-51%) trimmed; integration-test binaries went from 77 to 7; nextest ran
   3,303 tests with no new failures. aplan made the same change on 2026-10-21

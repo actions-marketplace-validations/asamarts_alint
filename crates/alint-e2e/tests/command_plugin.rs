@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use alint_core::{Engine, Level, RuleEntry, WalkOptions, walk};
 
-mod support;
+use crate::support;
 
 fn tempdir() -> tempfile::TempDir {
     tempfile::Builder::new()

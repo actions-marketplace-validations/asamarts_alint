@@ -5,7 +5,7 @@
 //! exercise Unix metadata, shell commands, and case-sensitive filenames. CI runs
 //! this target on Linux. Refresh after an intentional fingerprint migration with:
 //!
-//! `UPDATE_SNAPSHOTS=1 cargo test -p alint-e2e --test fingerprint_golden`
+//! `UPDATE_SNAPSHOTS=1 cargo test -p alint-e2e --test it -- fingerprint_golden::`
 
 #![cfg(target_os = "linux")]
 
@@ -122,7 +122,7 @@ fn policy_test_fingerprints_match_golden() {
     let expected = std::fs::read_to_string(&golden).unwrap_or_else(|error| {
         panic!(
             "read fingerprint snapshot {}: {error}; regenerate with \
-             UPDATE_SNAPSHOTS=1 cargo test -p alint-e2e --test fingerprint_golden",
+             UPDATE_SNAPSHOTS=1 cargo test -p alint-e2e --test it -- fingerprint_golden::",
             golden.display(),
         )
     });
@@ -130,6 +130,7 @@ fn policy_test_fingerprints_match_golden() {
         actual, expected,
         "scenario fingerprints changed; related locations and presentation metadata MUST NOT alter \
          baseline identity. If this is an intentional baseline migration, review the complete diff \
-         and refresh with UPDATE_SNAPSHOTS=1 cargo test -p alint-e2e --test fingerprint_golden",
+         and refresh with UPDATE_SNAPSHOTS=1 cargo test -p alint-e2e --test it -- \
+         fingerprint_golden::",
     );
 }

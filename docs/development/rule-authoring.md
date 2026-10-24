@@ -198,6 +198,11 @@ symlinks, isolated Git histories, backdated commits, environment input, and real
 that cannot be expressed through this public contract; do not add an allowlist entry to bypass a
 missing declarative fixture.
 
+Each crate builds its integration tests as one test binary, `it`, rooted at `tests/main.rs`
+(`autotests = false`). A new `tests/<name>.rs` file runs only after you add `mod <name>;` to that
+crate's `tests/main.rs`; xtask's `test_layout` test fails until you do. Run one file's tests with
+`cargo test -p <crate> --test it -- <name>::`.
+
 ## Adding a new bundled ruleset
 
 1. Add `crates/alint-dsl/rulesets/v1/<name>.yml`. Its first three lines must be:
@@ -214,7 +219,7 @@ missing declarative fixture.
 3. Document the ruleset in `docs/rules.md`. The rule IDs in its markdown table
    and the "N rules" count in the section header must match the YAML exactly;
    `coverage_audit_rules_md_drift` gates this.
-4. Run `cargo test -p alint-e2e --test coverage_audit_bundled_rulesets`.
+4. Run `cargo test -p alint-e2e --test it -- coverage_audit_bundled_rulesets::`.
 
 ### scope_filter for ecosystem rulesets
 
