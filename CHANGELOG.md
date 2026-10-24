@@ -6,6 +6,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A development build's `alint --version` now reports the checked-out commit.
+  The build script watched a fixed `.git/HEAD` path, so the SHA lagged commits
+  on the current branch. It now asks git for the checkout's real files, watches
+  only the ones that exist, and ignores repository variables such as `GIT_DIR`
+  inherited from another checkout's git hook. As a result, building in a linked
+  git worktree no longer recompiles the `alint` crate and relinks its
+  integration tests on every build. `ci/scripts/test-build-script-freshness.sh`
+  drives real cargo builds through each case. Release binaries were not
+  affected.
+
 ## [0.20.1] - 2026-10-23
 
 A performance and diagnostics patch: rule path checks, nested-rule kinds and several other hot

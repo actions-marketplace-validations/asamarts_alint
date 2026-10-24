@@ -1,6 +1,6 @@
 # Build and dev-loop hygiene
 
-Status: Draft (2026-10-21, rechecked at `61edcde97` on 2026-10-23). Backlog; not pinned to a release.
+Status: Section 1 implemented in #356 (2026-10-24, unreleased); section 2 is backlog, not pinned to a release. Drafted 2026-10-21, rechecked at `61edcde97` on 2026-10-23.
 Decisions: none
 Roadmap: [`ROADMAP.md`](ROADMAP.md), "Future / backlog", "Build and dev-loop hygiene".
 
@@ -88,6 +88,29 @@ tooling must still produce a SHA-stamped `--version`. Option 1 keeps a dev build
   rebuild `alint`.
 - A release build still prints the commit SHA and build date in `alint --version`. A build
   without git (a published tarball) still falls back to `unknown`.
+
+### Resolution (#356)
+
+Option 1, with aplan's three details. The script asks git for `--git-dir` and
+`--git-common-dir` and watches only paths that exist: the checkout's `HEAD`, the loose ref it
+points to, or for a packed ref that branch's reflog plus `packed-refs`, and the reftable table
+list when that backend is in use. Its git subprocesses drop the repository-local `GIT_*`
+variables. A linked worktree's hooks export an absolute `GIT_DIR`, so without this a hook in one
+checkout that builds another would bake the first checkout's commit. (Plain commit and pre-push
+hooks in the main checkout export no `GIT_DIR`; commit hooks export a relative
+`GIT_INDEX_FILE`, which `rev-parse` ignores.)
+
+`ci/scripts/test-build-script-freshness.sh` drives a fixture crate whose build script is a copy
+of alint's through 20 cases in real checkouts. It covers this section's acceptance criteria
+plus packed refs, a detached HEAD, an inherited `GIT_DIR` and a build without git. The original
+script fails 8 of them. Two defects beyond the worktree case surfaced. Outside git, the missing
+path made every build rerun. In the main checkout, a commit on the checked-out branch did not
+rerun the script, so a dev build's SHA lagged.
+
+Measured on the real crate in a linked worktree at `6a75eb4d1`: before the fix, an unchanged
+second `cargo build -p alint` reported `Dirty alint: the file crates/alint/../../.git/HEAD is
+missing`. After it, an unchanged second `cargo test -p alint --no-run` compiled nothing and
+finished in 0.14 s.
 
 ### Effort
 
