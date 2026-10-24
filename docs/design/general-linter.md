@@ -1552,8 +1552,9 @@ Phase 1 as a whole has standalone value and reduces the risk of every later phas
 
 ### 11.5 Phase 2: internal relation IR (go / no-go)
 
-The proposed v0.21 design, with its starting point checked against the code and its open
-decisions, is [`v0.21/README.md`](v0.21/README.md).
+The accepted v0.21 design, with its starting point checked against the code, is
+[`v0.21/README.md`](v0.21/README.md); its decisions are recorded in
+[ADR-0023](../adr/0023-relation-ir-key-parity-and-plugin-contract-0x.md).
 
 - Implement internal resource, selector, adapter, relation, and constraint types, with lazy spans
   (section 6.2) and file-major read coalescing (section 9.1).
@@ -1739,18 +1740,18 @@ outcome differs from the review's recommendation, the outcome column says so.
 | Q1 | Are selectors and relations top-level, rule-local, or both, and how do they relate to ADR-0010's deferred `path_sets:` block? | 3 | both, with local definitions anonymous and top-level ones namespaced; `path_sets:` becomes the selector feature, not a second concept |
 | Q2 | How do selectors on full-index rules interact with `--changed`? | 3 | selectors filter compared rows, never path scope; the rule runs when any context row changed |
 | Q3 | Do exception relations supersede ADR-0006's rejection of config-embedded suppressions, and what is the stale default? | 4 | yes, by a superseding ADR justified by the stale check; stale exceptions warn by default and fail under the existing strict flag; the first release keeps exceptions in the top-level config file |
-| Q4 | Which value types are core? | 2 | primitives with lexeme-preserving numbers, path, lists, and records; semantic scalars (`semver`, SPDX) only with several consumers |
+| Q4 | Which value types are core? | 2 | **Decided 2026-10-24 (ADR-0023):** primitives with lexeme-preserving numbers, path, lists, and records; semantic scalars (`semver`, SPDX) only with several consumers |
 | Q5 | How are object keys and duplicate entries represented across all eight formats? | 1a | as ordered entry rows with spans, never as a JSON object |
 | Q6 | What is the smallest join vocabulary that covers the corpus without accidental quadratic plans? | 3 | equality joins on declared fields only, with explicit caps; no implicit cross products |
 | Q7 | Are relation rows user-visible in JSON output? | 1b | **Decided 2026-10-18 (ADR-0022):** only through bounded experimental `explain --trace --preview`; this is not the Phase 2 relation IR |
 | Q8 | Which existing kinds compile to generic constraints, and which stay native? | 2 | decided per kind from the shadow-port results; graph, Unicode, and Git kernels stay native |
 | Q9 | Can snapshot views support every pure rule? | 5 | no; the `KindMeta` inventory declares snapshot compatibility and incompatible rules are rejected per view |
-| Q10 | Exact shape of the adapter, analyzer, and fixer worlds in contract 0.x (the roles themselves are decided by DEC-14a) | 2 | separate worlds, even if one artifact implements several; inputs pushed by the host, no host callbacks in 0.x |
+| Q10 | Exact shape of the adapter, analyzer, and fixer worlds in contract 0.x (the roles themselves are decided by DEC-14a) | 2 | **Decided 2026-10-24 (ADR-0023):** separate worlds, even if one artifact implements several; inputs pushed by the host, no host callbacks in 0.x; the v0.21 traits are hand-written in a doc-hidden `alint-core` module until witforge generates them, and the fixer world follows with slice P2 |
 | Q16 | Name and repository of the WIT contract compiler, and its first-release scope | now | **Decided 2026-10-14:** `witforge` (`asamarts/witforge`), private first, public with 0.1 once alint's contract `0.x` consumes it; MVP emits Rust types and traits plus `.proto` with the lockfile, JSON Schema next |
 | Q17 | The plugin manifest and `alint build` manifest formats, and how plugin kinds are namespaced in `.alint.yml` | 6 | `<plugin>/<kind>` kind names; YAML for `plugins:` in config; TOML for the build manifest |
 | Q11 | How do versions mix across `extends:`, and when does `requires:` land? | 1b | **Decided 2026-10-18 (ADR-0022):** every source is checked before merge; v2 consumers may extend v1 sources, never the reverse; v1 gains literal minimum `requires.alint` stable triplets |
 | Q12 | How are named objects namespaced and protected from shadowing? | 3 | provenance on every named object, namespace-qualified references, no shadowing of local names, plan-time capability monotonicity |
-| Q13 | How are paths compared in joins? | 2 | byte-exact on normalized paths, opt-in case folding, never host-dependent |
+| Q13 | How are paths compared in joins? | 2 | **Decided 2026-10-24 (ADR-0023):** byte-exact on normalized paths, opt-in case folding, never host-dependent |
 | Q14 | What is the stability tier of `explain --trace` and previews? | 1b | **Decided 2026-10-18 (ADR-0022):** separate experimental JSON until v2 is stable; stable static explain JSON is unchanged |
 | Q15 | Is the `when` expression syntax evolved in place or replaced for v2? | 3 | preserve v1 `when`; extend a typed evaluator internally before choosing syntax |
 
