@@ -58,7 +58,7 @@ test time.
    cargo run -p xtask -- gen-facts      # counts + catalogues + KindMeta inventory
    cargo run -p xtask -- gen-schema     # config schema (every canonical kind)
    cargo run -p xtask -- gen-model      # LikeC4 model fragments
-   cargo test -p alint-e2e -- --no-fail-fast
+   cargo test -p alint-e2e
    ```
    Every `coverage_audit_*` test should pass. The `gen-* --check` gates in CI and
    the local preflight fail if any committed contract has drifted from the code.
@@ -201,7 +201,9 @@ missing declarative fixture.
 Each crate builds its integration tests as one test binary, `it`, rooted at `tests/main.rs`
 (`autotests = false`). A new `tests/<name>.rs` file runs only after you add `mod <name>;` to that
 crate's `tests/main.rs`; xtask's `test_layout` test fails until you do. Run one file's tests with
-`cargo test -p <crate> --test it -- <name>::`.
+`cargo test -p <crate> --test it -- <name>::`. The filter matches substrings, so it also runs any
+module whose name ends in `<name>` (`cli::` runs `baseline_cli::` too); pass `--exact` with a full
+test name, or anchor it with nextest: `cargo nextest run -p <crate> -E 'test(/^<name>::/)'`.
 
 ## Adding a new bundled ruleset
 

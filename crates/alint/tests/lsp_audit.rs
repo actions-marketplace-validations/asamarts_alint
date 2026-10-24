@@ -24,12 +24,25 @@ use serde_json::{Value, json};
 
 use lsp_common::{Server, recv_response, spawn_server, wait_for_diagnostics};
 
-/// Read inbound messages until none arrives for `quiet`, returning the
-/// LAST `publishDiagnostics` per URI — the state the editor ends up
-/// showing.
-fn settle(rx: &Receiver<Value>, quiet: Duration) -> HashMap<String, Vec<Value>> {
-    let mut last = HashMap::new();
-    while let Ok(msg) = rx.recv_timeout(quiet) {
+/// Read inbound messages until every URI in `expect` has been published and
+/// then none arrives for `quiet`, returning the LAST `publishDiagnostics`
+/// per URI — the state the editor ends up showing. Waiting for the expected
+/// publishes first keeps a slow server (a loaded host, or the crate's other
+/// tests running alongside in the same binary) from ending the quiet window
+/// before the first one arrives.
+fn settle(rx: &Receiver<Value>, expect: &[&str], quiet: Duration) -> HashMap<String, Vec<Value>> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut last: HashMap<String, Vec<Value>> = HashMap::new();
+    loop {
+        let waiting = expect.iter().any(|uri| !last.contains_key(*uri));
+        let timeout = if waiting {
+            deadline.saturating_duration_since(Instant::now())
+        } else {
+            quiet
+        };
+        let Ok(msg) = rx.recv_timeout(timeout) else {
+            break;
+        };
         if msg["method"] == "textDocument/publishDiagnostics" {
             last.insert(
                 msg["params"]["uri"]
@@ -144,7 +157,7 @@ fn lsp_config_file_findings_are_not_wiped() {
 
     let mut server = start(root);
     open(&mut server, &cfg_uri, config);
-    let last = settle(&server.rx, QUIET);
+    let last = settle(&server.rx, &[&cfg_uri], QUIET);
     let diags = last.get(&cfg_uri).expect("config file got diagnostics");
     assert_eq!(
         codes(diags),
@@ -176,7 +189,7 @@ fn lsp_full_check_does_not_clobber_unsaved_buffer() {
 
     // Opening b triggers a full check from disk.
     open(&mut server, &b, "clean\n");
-    let last = settle(&server.rx, QUIET);
+    let last = settle(&server.rx, &[&a], QUIET);
     let final_a = last.get(&a).expect("the full check republishes a.txt");
     assert_eq!(
         codes(final_a),
@@ -252,7 +265,7 @@ fn lsp_honors_nested_configs_like_the_cli() {
 
     let mut server = start(root);
     open(&mut server, &file_uri, text);
-    let last = settle(&server.rx, QUIET);
+    let last = settle(&server.rx, &[&file_uri], QUIET);
     let mut got = codes(last.get(&file_uri).expect("pkg/a.txt is published"));
     got.sort();
     assert_eq!(got, vec!["pkg-no-fixme", "root-no-todo"], "{last:?}");
@@ -290,7 +303,7 @@ fn lsp_broken_config_disables_stale_engine() {
         "jsonrpc": "2.0", "method": "workspace/didChangeWatchedFiles",
         "params": { "changes": [{ "uri": cfg_uri, "type": 2 }] }
     }));
-    let after_break = settle(&server.rx, QUIET);
+    let after_break = settle(&server.rx, &[&cfg_uri, &a], QUIET);
     assert_eq!(
         after_break.get(&cfg_uri).map(Vec::len),
         Some(1),
@@ -303,7 +316,7 @@ fn lsp_broken_config_disables_stale_engine() {
     );
 
     change(&mut server, &a, 2, "TODO TODO\n");
-    let after_edit = settle(&server.rx, QUIET);
+    let after_edit = settle(&server.rx, &[], QUIET);
     if let Some(diags) = after_edit.get(&a) {
         assert!(
             diags.is_empty(),
@@ -373,7 +386,7 @@ fn lsp_lints_every_workspace_folder() {
         }),
     );
     open(&mut server, &b, "TODO\n");
-    let last = settle(&server.rx, QUIET);
+    let last = settle(&server.rx, &[&b], QUIET);
     assert_eq!(
         last.get(&b).map(|d| codes(d)),
         Some(vec!["no-todo".to_string()]),

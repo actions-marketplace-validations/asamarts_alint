@@ -145,8 +145,8 @@ Existing scenarios already follow most of this; this phase
 codifies it and fills the gaps. Spread across multiple PRs,
 one family at a time. Each PR makes the audits greener.
 
-Phase ships when `cargo test -p alint-e2e --test
-coverage_audit_*` is green for all four audits across the
+Phase ships when `cargo test -p alint-e2e --test it --
+coverage_audit` is green for all four audits across the
 full registry.
 
 ## v0.9.8 — Bench-scale extension

@@ -186,7 +186,7 @@ thread-local override.
   and `crates/alint-e2e/tests/fingerprint_golden.rs` (including its failure messages),
   `crates/alint-e2e/fixtures/smoke/README.md`, `docs/benchmarks/RUNNING.md`, and
   `docs/development/rule-authoring.md`. Under nextest, select with
-  `-E 'binary(it) & test(/^cli::/)'`.
+  `-E 'package(alint) & binary(it) & test(/^cli::/)'` (every crate's binary is now named `it`).
 - Risk: tests that touch process-global state (environment variables, the working directory,
   global loggers, process-wide hooks) now share one process under `cargo test`. nextest still
   runs each test in its own process. At `61edcde97` a grep of the test trees finds no
@@ -215,7 +215,9 @@ crate root resolves `mod cli;` to the sibling `tests/cli.rs`, so no file moved, 
 attribute was needed, and the relative `include_str!` paths are untouched. The shared helpers are
 declared once in `main.rs` (`support` in alint-e2e, `#[cfg(unix)] lsp_common` in alint), and the
 13 files that declared them now import them with `use crate::...`. Every `--test <name>` reference
-now reads `--test it -- <name>::`.
+now reads `--test it -- <name>::`. libtest filters by substring, so `cli::` also runs the seven
+`*_cli` modules; the trycmd regeneration command uses `--exact cli::cli_tests`, and the contributor
+docs say how to anchor a filter.
 
 Without Cargo's discovery, a new `tests/*.rs` file would never be compiled. xtask's `test_layout`
 test reads `cargo metadata` and fails when a crate with integration tests has any test target
@@ -238,6 +240,26 @@ Every test executable's `--list` output, keyed by crate and source file, is iden
 after (3,831 tests), apart from the gate's two new tests. `cargo test --workspace` passed in the
 old layout once and in the new layout three times in a row, and `cargo nextest run --workspace`
 passed all 3,833 tests. No test depended on running in its own process.
+
+A follow-up review (#361) found one regression and three risks the list comparison cannot see:
+
+- **proptest seeds.** proptest's default seed file location searches upward from the test file for
+  a `lib.rs` or `main.rs`. `tests/main.rs` now satisfies that, so the e2e invariants moved from the
+  committed `tests/invariants.proptest-regressions` to an untracked
+  `proptest-regressions/invariants.txt` and silently stopped replaying the committed seed. The
+  location is now pinned, and a test asserts that the committed seeds load.
+- **Quiet-period waits.** The LSP audit tests waited for 1.5 s without a message, which a loaded
+  run with the whole crate's tests alongside could end before the first publish. They now wait
+  for each URI they assert on first.
+- **Shared fate.** An abort or stack overflow in one test now ends the crate's whole run under
+  `cargo test` (nextest still isolates each test). A pty opened by `pty_color` can briefly leak into
+  a process another test spawns before portable-pty marks it close-on-exec, which delays that
+  test's read but does not fail it.
+
+The layout gate now also rejects `tests/<dir>/main.rs` (a separate binary that Cargo no longer
+builds), `#[path]` declarations, file names that are not valid module names, and an unreadable
+`tests/` directory, and it reads declarations of any visibility, with attributes on the same line,
+outside comments.
 
 ### Effort
 

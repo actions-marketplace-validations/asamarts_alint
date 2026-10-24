@@ -283,10 +283,10 @@ on it for adoption, they can lint without it.
   complete notes, redaction, related locations, reproducible analysis time,
   and duplicate-aware spanned extraction, alongside seven gap-study kinds
   and the versioning and toolchain consistency bundles. The accepted
-  [`v0.20` authoring-loop design](v0.20/README.md) follows with `alint test`,
+  [`v0.20` authoring-loop design](https://github.com/asamarts/alint/blob/main/docs/design/v0.20/README.md) follows with `alint test`,
   selected-rule `explain --trace`, and per-source compatibility requirements;
   the internal relation layer with the `key_parity` pilot and the plugin
-  contract follow in the accepted [`v0.21` design](v0.21/README.md), then `version: 2` selectors and constraints, with
+  contract follow in the accepted [`v0.21` design](https://github.com/asamarts/alint/blob/main/docs/design/v0.21/README.md), then `version: 2` selectors and constraints, with
   plugin hosts as a parallel track. Staged in
   [`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md)
   section 11, decided in
@@ -1664,7 +1664,7 @@ with detailed policy-test, rule-trace, and config-requirement contracts.
   extend v1 sources; v1 consumers can never extend v2.
 
 ## v0.21: Internal relation layer
-<!-- roadmap-public: blurb="The go/no-go proof for the general-linter program: an internal relation layer with typed rows and source provenance, a key_parity kind that keeps locale and environment files in step across JSON, YAML, TOML, dotenv, INI, Java properties, Android string resources, and .resx, a byte-identical shadow port of one existing check, and a first design of the plugin contract." -->
+<!-- roadmap-public: blurb="The groundwork for cross-file constraints: an internal relation layer with typed values and source locations, a new key_parity rule that keeps locale and environment files in step across JSON, YAML, TOML, dotenv, INI, Java properties, Android string resources, and .resx, a second implementation of one existing check that must match it exactly, and a first draft of the plugin contract." -->
 
 Phase 2 of
 [`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md)
@@ -1673,20 +1673,21 @@ is specified by the accepted
 and [ADR-0023](https://github.com/asamarts/alint/blob/main/docs/adr/0023-relation-ir-key-parity-and-plugin-contract-0x.md).
 Nothing public changes shape except one new rule kind.
 
-- **Measurement first.** Record v0.18.2's instruction and syscall counts and make the
-  deterministic gate blocking for relation-layer pull requests (+3% cumulative, no added
-  `read` or `stat` calls).
+- **Measurement first.** Compare relation-layer changes with v0.18.2 on the deterministic
+  scenarios S1-S3, blocking above +3% instructions or any added `read` or `stat` call.
 - **Internal relation layer.** Typed rows (lexeme-preserving numbers, normalized paths, lists,
   records) with source provenance, distinct missing, `null`, and error states, explicit limits,
-  and byte-exact path comparison on every operating system. Files are still read once per run.
+  and byte-exact path comparison on every operating system. A file that several relations and
+  per-file rules select is read once.
 - **`key_parity`.** A reference file and a glob of peers must declare the same keys, nested
   included, across JSON, YAML, TOML, dotenv, INI, Java properties, Android string resources,
   and `.resx`, with an opt-in CLDR plural mode for locale files.
 - **Shadow port.** A second implementation of `cross_file`'s `equals` relation on the new layer,
-  compared byte for byte in tests and against the 110-repository case-study corpus. The
-  existing implementation stays authoritative until a zero-difference release.
-- **Plugin contract 0.x.** Internal adapter and analyzer traits that the built-in formats and
-  `key_parity` implement, an injectable rule registry, and a draft WIT contract.
+  compared byte for byte in tests and against the 110 case-study configurations at their
+  pinned commits. The existing implementation stays authoritative until a zero-difference
+  release.
+- **Plugin contract 0.x.** Internal adapter and analyzer traits that the built-in row adapters
+  and `key_parity` implement, an injectable rule registry, and a draft WIT contract.
 
 ## v1.0: Stability
 <!-- roadmap-public: blurb="A committed DSL and plugin ABI, a frozen alint-core public API, and a versioned documentation site." -->
@@ -1775,7 +1776,7 @@ Evidence, fix directions, and acceptance criteria are in
   core 2, dsl 2, output 2, xtask 2, testkit 1) now build as one `it`
   binary per crate, rooted at `tests/main.rs`, and xtask's `test_layout`
   test fails if a test file is left out. Touching `alint-core` then
-  `cargo test --no-run` fell from 121.5 to 56.1 CPU-s (-54%) at
+  `cargo test --workspace --no-run` fell from 121.5 to 56.1 CPU-s (-54%) at
   `ed9e7620b`, with an identical test list. The prototype measured on
   `635b6a91`: editing `alint-core` then `cargo test --no-run`
   fell from 158 to 50 CPU-s (-69%) with full debuginfo and from 67 to 33

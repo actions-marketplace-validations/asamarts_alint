@@ -404,7 +404,7 @@ Ongoing cost: about a day per quarter for `wit-parser` bumps, plus issue triage.
 | Component | Weeks | Notes |
 |---|---|---|
 | Contract design in WIT | 1 to 2 | designed with the Phase 2 relation layer |
-| `alint-plugin-api` crate (generated types, narrow traits, context snapshot) | 2 to 3 | API design dominates; the current `Rule` trait is far wider than a plugin boundary should be |
+| `alint-plugin-api` crate (generated types, narrow traits, context snapshot) | 2 to 3 | API design dominates; the current `Rule` trait is far wider than a plugin boundary should be. In v0.21 the traits live in a doc-hidden `alint-core` module; the crate is published with P2 (ADR-0023) |
 | Registry injection and namespaced plugin kinds | 1.5 to 2.5 | replaces the hard-coded `builtin_registry()` call sites |
 | `alint build` | 2 to 3 | |
 | Process host | 4 to 6 | spawn, handshake, framing, multiplexing, batching, timeouts, cancellation, crash handling, Windows |
@@ -425,7 +425,7 @@ slice that runs a first real external plugin is **about 12 to 18**.
 | Slice | Target | Contents | Done when |
 |---|---|---|---|
 | P0 | now, parallel | contract-compiler repository: subset checker, Rust and protobuf emitters, lockfile, gates | it generates a sample contract's Rust and protobuf bindings with all gates green |
-| P1 | v0.21, with Phase 2 | contract `0.x` in WIT; `alint-plugin-api`; registry injection; built-in formats and the `key_parity` pilot on the same traits | a built-in adapter and analyzer run through the plugin traits with no behaviour change |
+| P1 | v0.21, with Phase 2 | contract `0.x` in WIT; the plugin traits in a doc-hidden `alint-core` module (ADR-0023); registry injection; the built-in row adapters and the `key_parity` pilot on the same traits | a built-in adapter and analyzer run through the plugin traits with no behaviour change |
 | P2 | about v0.22 | native Rust plugins and `alint build` | an external crate adds a kind and an adapter to a custom binary, with scenarios |
 | P3 | about v0.23 | process host (Linux and macOS, then Windows), Rust process SDK, trust and `alint.lock` | the same plugin crate runs as a process with identical findings |
 | P4 | after P3 | WASM host and glue | the same plugin runs as a component with identical findings |
