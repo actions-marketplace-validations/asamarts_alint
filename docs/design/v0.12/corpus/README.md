@@ -16,7 +16,11 @@ reference). This directory is `ignore:`d by the repo's own `.alint.yml` — thes
 are other repos' configs, so dogfooding alint over them is meaningless.
 
 The configs are pinned to the study's clone SHAs; re-running them targets those
-trees, not current upstream.
+trees, not current upstream. [`pins.tsv`](pins.tsv) lists each config's
+repository and full 40-character commit, and `cargo run -p xtask --
+corpus-replay` replays the whole corpus at those commits (with spawning rules
+removed), optionally diffing two alint binaries' reports. The `Corpus Replay`
+workflow runs it on the canonical bench host.
 
 ## Contents
 

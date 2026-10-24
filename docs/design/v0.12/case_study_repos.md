@@ -19,7 +19,9 @@ this fixes.
 
 - **Pin date: 2026-06-01.** Each row's `Pinned HEAD` is the default-branch
   HEAD commit SHA at that date, resolved **read-only** via the GitHub
-  GraphQL API (no clones). Stage A clones target this SHA.
+  GraphQL API (no clones). Stage A clones target this SHA. The table shows
+  10-character prefixes; the full SHAs are in
+  [`corpus/pins.tsv`](corpus/pins.tsv) (resolved 2026-10-24).
 - **Evidence-backed, not asserted.** All 111 were resolved against the API
   and screened on the four bars this list is curated for:
   - **Active** — every repo's last push is within the ~3 months before the
