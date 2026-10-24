@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use regex::Regex;
 use serde_json::Value;
 
 fn workspace_root() -> PathBuf {
@@ -46,43 +47,107 @@ fn workspace_packages(root: &Path) -> Vec<Value> {
         .clone()
 }
 
-/// The modules `tests/main.rs` must declare, each with its file: every
-/// top-level `tests/*.rs` file other than `main.rs`, and every
-/// `tests/<dir>/mod.rs` helper.
-fn test_modules(tests_dir: &Path) -> BTreeMap<String, String> {
-    let mut modules = BTreeMap::new();
-    let Ok(entries) = std::fs::read_dir(tests_dir) else {
-        return modules;
+/// What a crate's `tests/` directory requires of `tests/main.rs`.
+#[derive(Default)]
+struct TestDir {
+    /// Module name to its file, for every top-level `tests/*.rs` file other
+    /// than `main.rs` and every `tests/<dir>/mod.rs` helper.
+    modules: BTreeMap<String, String>,
+    /// Files that can never be a module of `tests/main.rs` as they stand.
+    problems: Vec<String>,
+}
+
+fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn scan_tests_dir(tests_dir: &Path) -> TestDir {
+    let mut found = TestDir::default();
+    let entries = match std::fs::read_dir(tests_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return found,
+        Err(error) => {
+            found
+                .problems
+                .push(format!("cannot read {}: {error}", tests_dir.display()));
+            return found;
+        }
     };
     for entry in entries {
         let path = entry.expect("read tests dir entry").path();
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if path.is_dir() {
-            if path.join("mod.rs").is_file() {
-                modules.insert(name.clone(), format!("tests/{name}/mod.rs"));
+        let module = if path.is_dir() {
+            if path.join("main.rs").is_file() {
+                found.problems.push(format!(
+                    "tests/{name}/main.rs is a separate test binary, which `autotests = false` \
+                     never builds; rename it to tests/{name}/mod.rs and declare `mod {name};`"
+                ));
             }
+            if !path.join("mod.rs").is_file() {
+                continue;
+            }
+            (name.clone(), format!("tests/{name}/mod.rs"))
         } else if let Some(stem) = name.strip_suffix(".rs")
             && stem != "main"
         {
-            modules.insert(stem.to_string(), format!("tests/{name}"));
+            (stem.to_string(), format!("tests/{name}"))
+        } else {
+            continue;
+        };
+        if is_identifier(&module.0) {
+            found.modules.insert(module.0, module.1);
+        } else {
+            found.problems.push(format!(
+                "{} cannot be a module; rename it to a valid Rust identifier",
+                module.1
+            ));
         }
     }
-    modules
+    found
 }
 
-/// Module names declared by `mod name;` lines. Attributes on earlier lines and
-/// trailing comments are allowed.
-fn declared_modules(main_rs: &str) -> BTreeSet<String> {
-    main_rs
-        .lines()
-        .filter_map(|line| {
-            let line = line.split("//").next().unwrap_or_default().trim();
-            let rest = line.strip_prefix("pub ").unwrap_or(line);
-            rest.strip_prefix("mod ")?
-                .strip_suffix(';')
-                .map(|name| name.trim().to_string())
-        })
-        .collect()
+/// `src` without `//` and `/* */` comments, enough for a list of modules.
+fn strip_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut rest = src;
+    while !rest.is_empty() {
+        if let Some(after) = rest.strip_prefix("//") {
+            rest = after.find('\n').map_or("", |at| &after[at..]);
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            rest = after.find("*/").map_or("", |at| &after[at + 2..]);
+            out.push(' ');
+        } else {
+            let c = rest.chars().next().unwrap();
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
+}
+
+/// The modules `main.rs` declares as `mod name;` (any visibility, attributes
+/// on the same or earlier lines), and those declared with `#[path]`, which
+/// would compile a file other than the one the module is named after.
+fn declared_modules(main_rs: &str) -> (BTreeSet<String>, Vec<String>) {
+    let declaration = Regex::new(
+        r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?\bmod\s+(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*;",
+    )
+    .unwrap();
+    let path_attribute = Regex::new(r"#\[\s*path\b").unwrap();
+    let mut declared = BTreeSet::new();
+    let mut with_path = Vec::new();
+    for capture in declaration.captures_iter(&strip_comments(main_rs)) {
+        let name = capture[2].to_string();
+        if path_attribute.is_match(&capture[1]) {
+            with_path.push(name.clone());
+        }
+        declared.insert(name);
+    }
+    (declared, with_path)
 }
 
 #[test]
@@ -95,7 +160,13 @@ fn every_crate_builds_its_integration_tests_as_one_binary() {
         let manifest = PathBuf::from(package["manifest_path"].as_str().unwrap());
         let crate_dir = manifest.parent().unwrap();
         let tests_dir = crate_dir.join("tests");
-        let expected = test_modules(&tests_dir);
+        let found = scan_tests_dir(&tests_dir);
+        problems.extend(
+            found
+                .problems
+                .iter()
+                .map(|problem| format!("{name}: {problem}")),
+        );
         let test_targets: Vec<&Value> = package["targets"]
             .as_array()
             .unwrap()
@@ -106,7 +177,7 @@ fn every_crate_builds_its_integration_tests_as_one_binary() {
                     .is_some_and(|kinds| kinds.iter().any(|kind| kind == "test"))
             })
             .collect();
-        if expected.is_empty() && test_targets.is_empty() {
+        if found.modules.is_empty() && test_targets.is_empty() {
             continue;
         }
         checked += 1;
@@ -130,8 +201,15 @@ fn every_crate_builds_its_integration_tests_as_one_binary() {
             continue;
         }
 
-        let declared = declared_modules(&std::fs::read_to_string(&main_rs).unwrap());
-        for (module, file) in &expected {
+        let (declared, with_path) = declared_modules(&std::fs::read_to_string(&main_rs).unwrap());
+        for module in with_path {
+            problems.push(format!(
+                "{name}: `mod {module};` in {} uses #[path]; declare each test file by its own \
+                 name",
+                main_rs.display()
+            ));
+        }
+        for (module, file) in &found.modules {
             if !declared.contains(module) {
                 problems.push(format!(
                     "{name}: {file} is never compiled; add `mod {module};` to {}",
@@ -148,11 +226,39 @@ fn every_crate_builds_its_integration_tests_as_one_binary() {
 }
 
 #[test]
-fn declared_modules_reads_attributed_and_public_declarations() {
-    let main_rs = "//! doc\n\n#[cfg(unix)]\nmod lsp_common;\npub mod cli;\nmod a; // note\n";
-    let declared = declared_modules(main_rs);
-    assert!(declared.contains("lsp_common"));
-    assert!(declared.contains("cli"));
-    assert!(declared.contains("a"));
-    assert!(!declared.contains("doc"));
+fn declared_modules_reads_every_declaration_form() {
+    let main_rs = "//! doc mentioning mod fake;\n\n#[cfg(unix)]\nmod lsp_common;\npub mod cli;\n\
+                   mod a; // note\npub(crate) mod b;\n#[cfg(unix)] mod c;\nmod\td ;\nmod r#e;\n\
+                   /* mod hidden;\n mod also_hidden; */\n#[path = \"other.rs\"]\nmod f;\n";
+    let (declared, with_path) = declared_modules(main_rs);
+    let expected = ["a", "b", "c", "cli", "d", "e", "f", "lsp_common"];
+    assert_eq!(declared, expected.iter().map(ToString::to_string).collect());
+    assert_eq!(with_path, ["f"]);
+}
+
+#[test]
+fn scan_flags_files_that_cannot_be_modules() {
+    let dir = tempfile::tempdir().unwrap();
+    let tests = dir.path();
+    std::fs::write(tests.join("main.rs"), "").unwrap();
+    std::fs::write(tests.join("ok_file.rs"), "").unwrap();
+    std::fs::write(tests.join("bad-name.rs"), "").unwrap();
+    std::fs::create_dir_all(tests.join("helper")).unwrap();
+    std::fs::write(tests.join("helper/mod.rs"), "").unwrap();
+    std::fs::create_dir_all(tests.join("multi")).unwrap();
+    std::fs::write(tests.join("multi/main.rs"), "").unwrap();
+    std::fs::create_dir_all(tests.join("fixtures/src")).unwrap();
+    std::fs::write(tests.join("fixtures/src/lib.rs"), "").unwrap();
+    let found = scan_tests_dir(tests);
+    assert_eq!(
+        found.modules.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["helper", "ok_file"]
+    );
+    assert_eq!(found.problems.len(), 2, "{:?}", found.problems);
+    assert!(found.problems.iter().any(|p| p.contains("bad-name.rs")));
+    assert!(found.problems.iter().any(|p| p.contains("multi/main.rs")));
+    assert_eq!(
+        scan_tests_dir(&tests.join("absent")).problems,
+        Vec::<String>::new()
+    );
 }

@@ -2,8 +2,8 @@
 //! complete scenario corpus and compare it with the checked-in golden file.
 //!
 //! The canonical corpus run is Linux-only because some scenarios intentionally
-//! exercise Unix metadata, shell commands, and case-sensitive filenames. CI runs
-//! this target on Linux. Refresh after an intentional fingerprint migration with:
+//! exercise Unix metadata, shell commands, and case-sensitive filenames, so this
+//! module compiles only on Linux. Refresh after an intentional fingerprint migration with:
 //!
 //! `UPDATE_SNAPSHOTS=1 cargo test -p alint-e2e --test it -- fingerprint_golden::`
 

@@ -3,8 +3,10 @@
 //! Each module is one file in this directory. `autotests = false` in
 //! `Cargo.toml` turns off Cargo's one-binary-per-file discovery, so a new
 //! test file runs only once it is declared here; xtask's `test_layout` test
-//! fails when one is missing. To run one file's tests:
-//! `cargo test -p alint --test it -- <module>::`.
+//! fails when one is missing. `cargo test -p alint --test it -- <module>::`
+//! runs one file's tests; the filter matches substrings, so it also runs any
+//! module whose name ends in `<module>` (nextest can anchor it:
+//! `-E 'test(/^<module>::/)'`).
 
 // Shared by several modules: LSP JSON-RPC harness for the `lsp_*` modules.
 #[cfg(unix)]

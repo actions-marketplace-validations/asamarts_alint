@@ -2,8 +2,8 @@
 //! one invocation of the `alint` binary, paired with sandbox input
 //! (`*.in/`), expected post-run tree (`*.out/`), and expected
 //! stdout / stderr / exit status. Run via `cargo test -p alint
-//! --test it -- cli::`; regenerate expected output with
-//! `TRYCMD=overwrite cargo test -p alint --test it -- cli::`.
+//! --test it -- --exact cli::cli_tests`; regenerate expected output with
+//! `TRYCMD=overwrite cargo test -p alint --test it -- --exact cli::cli_tests`.
 
 #[test]
 fn cli_tests() {

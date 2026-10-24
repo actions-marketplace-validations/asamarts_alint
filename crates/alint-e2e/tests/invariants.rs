@@ -55,6 +55,7 @@ use alint_testkit::strategies::{
 use alint_testkit::treespec::{VerifyMode, verify};
 use alint_testkit::{PolicyTest, PolicyTestRun, Runner, RunnerOptions, StepObservation, TestStep};
 use proptest::prelude::*;
+use proptest::test_runner::FileFailurePersistence;
 
 fn run_policy_test(test: &PolicyTest) -> alint_testkit::Result<PolicyTestRun> {
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/invariants.rs");
@@ -68,14 +69,40 @@ fn inline_config(test: &PolicyTest) -> &str {
         .expect("strategy uses inline config")
 }
 
-proptest! {
-    // Keep the per-invariant case count small; each case spins up
-    // a tempdir and runs alint end-to-end, which is ~5–10 ms.
-    #![proptest_config(ProptestConfig {
+/// Keep the per-invariant case count small; each case spins up a tempdir and
+/// runs alint end-to-end, which is ~5–10 ms.
+///
+/// Failure seeds persist beside this file, in
+/// `invariants.proptest-regressions`. proptest's default location searches
+/// upward for a `lib.rs` or `main.rs` and, now that `tests/main.rs` exists,
+/// would use `crates/alint-e2e/proptest-regressions/` and skip the committed
+/// seeds, so the location is pinned.
+fn invariant_config() -> ProptestConfig {
+    ProptestConfig {
         cases: 48,
         max_shrink_iters: 64,
+        failure_persistence: Some(Box::new(FileFailurePersistence::WithSource(
+            "proptest-regressions",
+        ))),
         ..ProptestConfig::default()
-    })]
+    }
+}
+
+#[test]
+fn committed_regression_seeds_are_replayed() {
+    let persistence = invariant_config()
+        .failure_persistence
+        .expect("failure persistence is configured");
+    assert!(
+        !persistence
+            .load_persisted_failures2(Some(file!()))
+            .is_empty(),
+        "no seeds load from tests/invariants.proptest-regressions"
+    );
+}
+
+proptest! {
+    #![proptest_config(invariant_config())]
 
     #[test]
     fn check_never_panics(base in any_policy_test()) {

@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Each integration-test crate uses one of the shared loader helpers.
-
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
