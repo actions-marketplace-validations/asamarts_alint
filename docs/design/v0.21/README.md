@@ -81,8 +81,9 @@ Checked against the code at `6a75eb4d1` and rechecked at `fb9820f5e` (2026-10-24
 - **The v0.12 corpus was not replayable.** Its 110 configs (111 repositories were studied; tokio's
   config lives in `examples/`) are in `docs/design/v0.12/corpus/`, pinned in
   `docs/design/v0.12/case_study_repos.md` by 10-character SHA prefixes, which GitHub will not
-  fetch by. 54 configs use the `equals` path (89 `cross_file_value_equals` and 8 `cross_file`
-  rules in all), and 22 contain rules that run commands. Since R5, `corpus/pins.tsv` holds the
+  fetch by. 51 configs use the `equals` path (90 rules: 89 `cross_file_value_equals` and one
+  explicit `relation: equals`), and 20 contain rules that run commands (83 rules). Since R5,
+  `corpus/pins.tsv` holds the
   full SHAs.
 - **Performance gating does not meet DEC-13.** The deterministic gate
   (`crates/alint-bench/benches/det_check.rs`, scenarios S1-S3) is advisory in CI and compares
@@ -429,7 +430,23 @@ v0.21 is complete only when all of the following are observed:
    `main` over budget against v0.18.2 before any relation-layer change, the gate cannot be set as
    written; the numbers go back for a decision (V21-6).
 
-## Next step
+## Status and next steps
 
-Start R0 (v0.18.2 baselines and the blocking gate mode) and R5 (corpus replay) in parallel. R1
-starts once R0's baselines are recorded.
+- **R0, done.** On every S1-S3 cell, `main` at `fb9820f5e` uses no more instructions than v0.18.2
+  (S1 -7% to -8%, S2 about -3%, S3 -0.04% to -0.2%), and its read/stat-family syscall counts match
+  within fixed per-run probes, so the budget is not already spent. S3 has the least headroom, and
+  S3 at 10k varies by up to about 0.8% between identical runs on a 24-thread host. The blocking
+  `perf-gate-reference` job and `ci/scripts/reference-perf-gate.sh` implement the gate; a
+  synthetic regression of +5.2% on S1 fails it, and one that stays under v0.18.2 passes. Details
+  and the recorded counts: [`docs/benchmarks/REFERENCE-v0.18.2.md`](../../benchmarks/REFERENCE-v0.18.2.md).
+- **R5, done** (#362). The first full replay on the bench host (run 40144052081, 2026-10-24)
+  replayed 106 of the 110 configs at their pins in under ten minutes, with 83 spawning rules
+  removed from 20 configs. Four configs no longer load on the current release and are reported
+  as skipped: three override a bundled rule whose options changed (`gin-gonic/gin`,
+  `neovim/neovim`, `spring-projects/spring-boot`), and `facebook/react` sets
+  `scope_filter.changed_since` on `git_commit_no_fixup`, which takes `since` instead. Its error
+  reads only `<redacted>`: a rule with an env-interpolated field has every validation error
+  redacted, even one that quotes no value, which is a usability bug of its own. 49 of the
+  replayed configs carry 87 `equals`-path rules.
+- **Next:** R1 (relation types), then R2, with R3, R4, and R9 in parallel after R2. R6 and R7
+  can start once R1's types exist.

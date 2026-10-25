@@ -58,6 +58,7 @@ row() {
   echo "| Supply chain          | ${SUPPLY_CHAIN_CHANGED} |"
   echo "| Packaging             | ${PACKAGING_CHANGED:-false} |"
   echo "| Shell harnesses       | ${SHELL_CHANGED:-false} |"
+  echo "| Relation layer        | ${RELATION_CHANGED:-false} |"
   echo ""
 
   echo "### Rust Pipeline"
@@ -83,6 +84,12 @@ row() {
   echo "| Check | Result |"
   echo "|-------|--------|"
   row "Bench smoke" "$BENCH_SMOKE_RESULT" "$BENCH_CHANGED"
+  echo ""
+
+  echo "### Performance (relation layer)"
+  echo "| Check | Result |"
+  echo "|-------|--------|"
+  row "Perf gate (v0.18.2 reference)" "${PERF_REFERENCE_RESULT:-skipped}" "${RELATION_CHANGED:-false}"
   echo ""
 
   echo "### Examples Pipeline"
@@ -119,7 +126,8 @@ for result in \
   "$FMT_RESULT" "$MSRV_RESULT" "$CLIPPY_RESULT" "$TEST_RESULT" "$AUDIT_RESULT" \
   "$DENY_RESULT" "$SUPPLY_CHAIN_RESULT" "$BUILD_RESULT" "$DOCS_JOB_RESULT" \
   "$DOGFOOD_RESULT" "$BENCH_SMOKE_RESULT" "$EXAMPLES_RESULT" \
-  "$SHELL_TESTS_RESULT" "$EDITORS_RESULT" "${PACKAGING_RESULT:-skipped}"; do
+  "$SHELL_TESTS_RESULT" "$EDITORS_RESULT" "${PACKAGING_RESULT:-skipped}" \
+  "${PERF_REFERENCE_RESULT:-skipped}"; do
   if [[ "$result" == "failure" ]]; then
     FAILED=true
   fi

@@ -52,6 +52,7 @@ jobs:
       supply_chain: ${{ steps.detect.outputs.supply_chain }}
       packaging: ${{ steps.detect.outputs.packaging }}
       shell: ${{ steps.detect.outputs.shell }}
+      relation: ${{ steps.detect.outputs.relation }}
       runner: ${{ steps.route.outputs.runner }}
       hosted: ${{ steps.route.outputs.hosted }}
     steps:
@@ -417,6 +418,36 @@ jobs:
           PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: ci/scripts/micro-det-gate.sh
 
+  # ── Reference perf gate (relation layer) ─────────────────────────
+  # ADR-0023 decision V21-6 / ADR-0019 DEC-13: a relation-layer change may not
+  # cost more than +3% instructions on S1-S3, or grow the alint process's
+  # read/stat calls with the tree, against the frozen v0.18.2 release. Both
+  # binaries are measured by HEAD's harness in this job, so nothing committed can
+  # drift. Blocking, and counted in the Summary. Runs on pull requests and on
+  # pushes to main (direct pushes are how most engine changes land).
+  perf-gate-reference:
+    name: Perf Gate (v0.18.2 reference)
+    needs: [changes, build]
+    if: >-
+      !cancelled() && !failure()
+      && (github.event_name == 'pull_request'
+          || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+      && needs.changes.outputs.relation == 'true'
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
+    # Two release builds (the reference and HEAD) and two Valgrind runs of S1-S3.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: ci-perf-gate-reference
+      - run: ci/scripts/reference-perf-gate.sh
+
   # ── Examples validate ────────────────────────────────────────────
   # Run `alint validate-config` against every examples/*/.alint.yml.
   # Catches schema regressions in the 30 case-study configs (visible
@@ -537,6 +568,7 @@ jobs:
       - shell-tests
       - packaging
       - editors
+      - perf-gate-reference
     # Keep this bookkeeping job hosted even after local capacity returns. An
     # always-run summary must not remain queued on an unavailable local runner
     # and hold the workflow's concurrency slot indefinitely.
@@ -553,6 +585,7 @@ jobs:
           SUPPLY_CHAIN_CHANGED: ${{ needs.changes.outputs.supply_chain }}
           PACKAGING_CHANGED: ${{ needs.changes.outputs.packaging }}
           SHELL_CHANGED: ${{ needs.changes.outputs.shell }}
+          RELATION_CHANGED: ${{ needs.changes.outputs.relation }}
           SECRETS_INVENTORY_RESULT: ${{ needs.secrets-inventory.result }}
           FMT_RESULT: ${{ needs.fmt.result }}
           MSRV_RESULT: ${{ needs.msrv.result }}
@@ -569,4 +602,5 @@ jobs:
           SHELL_TESTS_RESULT: ${{ needs.shell-tests.result }}
           EDITORS_RESULT: ${{ needs.editors.result }}
           PACKAGING_RESULT: ${{ needs.packaging.result }}
+          PERF_REFERENCE_RESULT: ${{ needs.perf-gate-reference.result }}
         run: ci/scripts/summary.sh

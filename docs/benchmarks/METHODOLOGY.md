@@ -371,6 +371,11 @@ auto` (macro gating cells, `min_ms`) and `micro-det --anchor auto`
 Accepting a deliberate cost means bumping the anchor in a reviewed commit, with
 the reason in the file, so creep becomes a recorded decision.
 
+The relation layer has its own, stricter reference: v0.18.2 at +3% on the
+deterministic S1-S3 cells, blocking for relation-layer changes (ADR-0023). It
+is described, with its recorded measurement, in
+[`REFERENCE-v0.18.2.md`](REFERENCE-v0.18.2.md).
+
 `xtask bench-compare` (micro vs the v0.7.0 floor) is a **local** helper,
 not wired into any workflow. Wall-clock regression is gated
 **per-release** (manual, before tag) by `xtask bench-gate`

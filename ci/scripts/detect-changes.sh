@@ -4,7 +4,7 @@ set -euo pipefail
 # Detect which components changed to enable conditional CI pipelines.
 # Outputs: rust=true/false, docs=true/false, bench=true/false,
 #          examples=true/false, editors=true/false, supply_chain=true/false,
-#          packaging=true/false, shell=true/false
+#          packaging=true/false, shell=true/false, relation=true/false
 #
 # Environment variables (set by the workflow):
 #   GH_EVENT         - github.event_name (push | pull_request)
@@ -50,6 +50,7 @@ EDITORS=false
 SUPPLY_CHAIN=false
 PACKAGING=false
 SHELL_TESTS=false
+RELATION=false
 
 # CI infrastructure or workspace manifest changes trigger all pipelines.
 if echo "$CHANGED" | grep -qE '^(\.github/workflows/|ci/|Cargo\.toml$|Cargo\.lock$|rust-toolchain\.toml$)'; then
@@ -151,8 +152,16 @@ if [[ "$RUST" == true || "$DOCS" == true || "$PACKAGING" == true || "$SUPPLY_CHA
   SHELL_TESTS=true
 fi
 
+# Relation-layer changes (ADR-0023, V21-6) run the blocking v0.18.2 reference
+# perf gate. So do changes to that gate and to what it measures. Deliberately
+# not triggered by every CI change: the gate costs two release builds and two
+# Valgrind runs.
+if echo "$CHANGED" | grep -qE '^crates/alint-core/src/(relation/|plugin_api/|extract\.rs$|engine/)|^crates/alint-rules/src/(cross_file/|key_parity)|^ci/scripts/(reference-perf-gate\.sh|syscall-counts\.py)$|^crates/alint-bench/benches/det_check\.rs$|^xtask/src/bench/scenarios/s[123]_'; then
+  RELATION=true
+fi
+
 echo ""
-echo "==> rust=${RUST}  docs=${DOCS}  bench=${BENCH}  examples=${EXAMPLES}  editors=${EDITORS}  supply_chain=${SUPPLY_CHAIN}  packaging=${PACKAGING}  shell=${SHELL_TESTS}"
+echo "==> rust=${RUST}  docs=${DOCS}  bench=${BENCH}  examples=${EXAMPLES}  editors=${EDITORS}  supply_chain=${SUPPLY_CHAIN}  packaging=${PACKAGING}  shell=${SHELL_TESTS}  relation=${RELATION}"
 
 # ── Write GitHub Actions outputs ─────────────────────────────────────
 
@@ -166,5 +175,6 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "supply_chain=${SUPPLY_CHAIN}"
     echo "packaging=${PACKAGING}"
     echo "shell=${SHELL_TESTS}"
+    echo "relation=${RELATION}"
   } >> "$GITHUB_OUTPUT"
 fi
