@@ -2,8 +2,8 @@
 
 Status: Accepted (2026-10-24). The eight decisions in "Decisions" are recorded in
 [ADR-0023](../../adr/0023-relation-ir-key-parity-and-plugin-contract-0x.md); the corrections
-review found are proposed in [ADR-0024](../../adr/0024-relation-ir-decisions-after-review.md),
-which this document follows.
+review found are recorded in [ADR-0024](../../adr/0024-relation-ir-decisions-after-review.md),
+which supersedes it and which this document follows.
 Decisions it builds on: [ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md)
 (DEC-2, DEC-5, DEC-7, DEC-8, DEC-10, DEC-13, DEC-14). Questions it decides: Q4, Q10, and Q13;
 the port's results feed Q8, which is decided per kind later.
@@ -360,8 +360,8 @@ are the authoritative, non-IR implementation), so they cannot.
 
 Taken one at a time on 2026-10-24 and recorded in
 [ADR-0023](../../adr/0023-relation-ir-key-parity-and-plugin-contract-0x.md), which also lists the
-rejected options. [ADR-0024](../../adr/0024-relation-ir-decisions-after-review.md) (proposed)
-records the corrections review found, including how decision V21-6's budget is measured.
+rejected options. [ADR-0024](../../adr/0024-relation-ir-decisions-after-review.md) supersedes it,
+recording the corrections review found, including how decision V21-6's budget is measured.
 
 | ID | Question | Decision |
 |---|---|---|
@@ -496,8 +496,8 @@ v0.21 is complete only when all of the following are observed:
 - **Review round 2026-10-25.** A second audit corrected the replay (no false passes, no command
   execution, fingerprints and proposed edits compared, expectations), the gate (the engine root
   module, untraceable runs, frozen-source lints, attribution), and this design (resource origins,
-  row order, the module visibility, the R2/R3 cycle, the R6 split). The decisions are proposed in
-  ADR-0024.
+  row order, the module visibility, the R2/R3 cycle, the R6 split). ADR-0024 records the
+  decisions; it was accepted on 2026-10-25, including decision 6's measurement of the budget.
 - **R1, done.** `alint_core::relation` holds the types: normalized paths that order like the
   walked index; structural pointers with the one injective rendering; resources with origins (index
   entry or literal path) and a read outcome that keeps "missing" distinct; selectors; values with

@@ -1429,7 +1429,7 @@ these budgets (decision DEC-13):
 New capabilities (relations, constraints) are budgeted separately as new scenarios; the
 budgets above protect configurations that do not use them.
 
-As measured from v0.21 (proposed [ADR-0024](../adr/0024-relation-ir-decisions-after-review.md),
+As measured from v0.21 ([ADR-0024](../adr/0024-relation-ir-decisions-after-review.md),
 decision 6), three details differ from this table: S4 is not compared with v0.18.2 (it extends
 bundles that arrived in v0.19, so the reference binary cannot load it); the syscall check allows
 32 extra calls per family at 10k files, the noise of fixed per-run probes; and the 1M wall-clock
@@ -1562,7 +1562,7 @@ Phase 1 as a whole has standalone value and reduces the risk of every later phas
 The accepted v0.21 design, with its starting point checked against the code, is
 [`v0.21/README.md`](v0.21/README.md); its decisions are recorded in
 [ADR-0023](../adr/0023-relation-ir-key-parity-and-plugin-contract-0x.md), with the corrections
-review found proposed in [ADR-0024](../adr/0024-relation-ir-decisions-after-review.md).
+review found recorded in [ADR-0024](../adr/0024-relation-ir-decisions-after-review.md), which supersedes it.
 
 - Implement internal resource, selector, adapter, and relation types, with lazy spans (section
   6.2) and file-major read coalescing (section 9.1). Constraint types arrive with Phase 3.

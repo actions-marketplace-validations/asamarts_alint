@@ -2,7 +2,7 @@
 
 ADR-0019 decision DEC-13 holds the general-linter program to cumulative budgets against the frozen
 v0.18.2 release, and ADR-0023 decision V21-6 makes that reference blocking for relation-layer
-changes, measured as proposed ADR-0024 decision 6 describes. This file records the reference measurement (v0.21 work item R0) and how the gate uses
+changes, measured as ADR-0024 decision 6 describes. This file records the reference measurement (v0.21 work item R0) and how the gate uses
 it. `docs/benchmarks/ANCHOR` (v0.20.0, +10%) is a separate reference that every release's bench
 gates use; it is unchanged.
 

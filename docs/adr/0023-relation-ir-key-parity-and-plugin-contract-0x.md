@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0024
 date: 2026-10-24
 decision-makers: asamarts
 ---
@@ -8,10 +8,10 @@ decision-makers: asamarts
 
 ## Status
 
-Accepted (2026-10-24). This records the Phase 2 outcomes for ADR-0019 decisions 7, 8, 10, 13,
-and 14, and questions Q4, Q10, and Q13. Q8 is decided later, per kind, from the shadow-port
-results. Review found parts of this record wrong or incomplete; the corrections are proposed in
-[ADR-0024](0024-relation-ir-decisions-after-review.md), which supersedes this ADR once accepted.
+Superseded by [ADR-0024](0024-relation-ir-decisions-after-review.md) (2026-10-25). Accepted
+2026-10-24; this records the Phase 2 outcomes for ADR-0019 decisions 7, 8, 10, 13, and 14, and
+questions Q4, Q10, and Q13. Q8 is decided later, per kind, from the shadow-port results. Review
+found parts of this record wrong or incomplete; ADR-0024 records the corrections.
 
 ## Context
 
