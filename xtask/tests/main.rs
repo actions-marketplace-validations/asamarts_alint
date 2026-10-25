@@ -8,6 +8,7 @@
 //! module whose name ends in `<module>` (nextest can anchor it:
 //! `-E 'test(/^<module>::/)'`).
 
+mod proptest_seeds;
 mod publish_order;
 mod test_layout;
 mod testkit_package;

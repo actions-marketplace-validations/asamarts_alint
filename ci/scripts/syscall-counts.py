@@ -6,6 +6,10 @@ the first one is a spawned child (`git`, `true`), whose calls vary by host, so
 its lines are skipped. The resumed half of an interrupted call (`<... read
 resumed>`) was already counted where it started.
 
+A log that cannot be a measurement fails (exit 1) rather than counting zero:
+no syscall lines, no initial `execve` of the traced program, or a family with
+no calls at all (every alint run reads, stats, opens, and lists directories).
+
     syscall-counts.py --syscalls   print the strace `-e trace=` list
     syscall-counts.py LOG          print `family count` lines for LOG
 
@@ -16,28 +20,36 @@ import re
 import sys
 
 FAMILIES = {
-    "read": {"read", "pread64", "readv"},
+    "read": {"read", "pread64", "readv", "preadv", "preadv2"},
     "stat": {
         "newfstatat", "fstat", "statx", "lstat", "stat",
-        "access", "faccessat2", "readlink", "readlinkat",
+        "access", "faccessat", "faccessat2", "readlink", "readlinkat",
+        "statfs", "fstatfs", "getxattr", "lgetxattr", "fgetxattr",
     },
-    "open": {"openat"},
-    "dents": {"getdents64"},
+    "open": {"openat", "openat2", "open"},
+    "dents": {"getdents64", "getdents"},
 }
-TRACED = sorted(set().union(*FAMILIES.values()) | {"execve"})
+# `?` tells strace to ignore a name this architecture does not have.
+TRACED = ["execve"] + sorted("?" + name for name in set().union(*FAMILIES.values()))
+
+
+class NotAMeasurement(Exception):
+    pass
 
 
 def count(lines):
     rows = [line.rstrip("\n") for line in lines if re.match(r"^\d+ ", line)]
-    totals = {family: 0 for family in FAMILIES}
     if not rows:
-        return totals
-    main = rows[0].split(" ", 1)[0]
+        raise NotAMeasurement("the trace has no system calls")
+    main, first = rows[0].split(" ", 1)
+    if not first.lstrip().startswith("execve("):
+        raise NotAMeasurement("the trace does not start with the program's execve")
     children = {
         row.split(" ", 1)[0]
         for row in rows
         if " execve(" in row and row.split(" ", 1)[0] != main
     }
+    totals = {family: 0 for family in FAMILIES}
     for row in rows:
         pid, rest = row.split(" ", 1)
         rest = rest.lstrip()
@@ -49,6 +61,9 @@ def count(lines):
         for family, names in FAMILIES.items():
             if call.group(1) in names:
                 totals[family] += 1
+    empty = [family for family, total in totals.items() if total == 0]
+    if empty:
+        raise NotAMeasurement(f"no {', '.join(empty)} calls: the run did not do its work")
     return totals
 
 
@@ -60,8 +75,13 @@ def main(argv):
         print(__doc__, file=sys.stderr)
         return 2
     with open(argv[0], encoding="utf-8", errors="replace") as log:
-        for family, total in count(log).items():
-            print(family, total)
+        try:
+            totals = count(log)
+        except NotAMeasurement as error:
+            print(f"syscall-counts: {argv[0]}: {error}", file=sys.stderr)
+            return 1
+    for family, total in totals.items():
+        print(family, total)
     return 0
 
 

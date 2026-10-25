@@ -88,17 +88,66 @@ fn invariant_config() -> ProptestConfig {
     }
 }
 
+/// The committed seeds are replayed by proptest itself, not merely readable: a
+/// runner with no new cases still runs every persisted seed first, through the
+/// same configuration the invariants use.
 #[test]
-fn committed_regression_seeds_are_replayed() {
-    let persistence = invariant_config()
-        .failure_persistence
-        .expect("failure persistence is configured");
+fn committed_regression_seeds_are_replayed_by_the_runner() {
+    let mut config = invariant_config();
+    config.cases = 0;
+    config.source_file = Some(file!());
+    let replayed = std::sync::atomic::AtomicUsize::new(0);
+    let mut runner = proptest::test_runner::TestRunner::new(config);
+    let outcome = runner.run(&single_fixable_policy_test(), |_| {
+        replayed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    });
+    assert!(outcome.is_ok(), "{outcome:?}");
     assert!(
-        !persistence
-            .load_persisted_failures2(Some(file!()))
-            .is_empty(),
-        "no seeds load from tests/invariants.proptest-regressions"
+        replayed.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+        "no seed from tests/invariants.proptest-regressions was replayed"
     );
+}
+
+/// The case the committed seed recorded (2026-09-12), kept as an explicit test:
+/// the strategies have changed since, so the seed alone no longer regenerates
+/// it. A `file_remove` fix (Unsafe) on a tree that also trips the hygiene
+/// fixers' edge cases (BOM, bidi and zero-width characters, CRLF, blank runs).
+fn recorded_file_remove_case() -> PolicyTest {
+    PolicyTest::from_yaml(
+        r##"test_version: 1
+name: property-single-fixable (recorded seed)
+tags: [proptest]
+given:
+  tree:
+    _trig:
+      Pascal.md: "# doc\n"
+      Pascal.rs: "fn x() {}\n"
+      junk.bak: "junk\n"
+      sink.txt: "\ufeffa\u202e\u200b  \r\n\n\n\n\nb"
+  config: |
+    version: 1
+    rules:
+      - id: fa-a
+        kind: file_absent
+        paths: "**/*.bak"
+        level: warning
+        fix:
+          file_remove: {}
+when: [check]
+expect:
+  - exit: success
+    violations: []
+"##,
+    )
+    .expect("the recorded case parses")
+}
+
+#[test]
+fn recorded_seed_case_holds_both_unsafe_tier_laws() {
+    let case = recorded_file_remove_case();
+    check_fixable_never_overlaps_a_suggestion_law(case.clone()).unwrap();
+    fix_unsafe_converges_law(case).unwrap();
 }
 
 proptest! {
@@ -224,72 +273,84 @@ proptest! {
 
     #[test]
     fn check_fixable_never_overlaps_a_suggestion(base in single_fixable_policy_test()) {
-        // Honesty law (round-7): `check` tags a violation `is_fixable` only when a
-        // bare `alint fix` would RESOLVE it. A single-rule tree shares one fixer
-        // tier, so if that bare fix produced ANY `Suggested` (a below-Safe-threshold
-        // fixer such as the now-Unsafe `file_remove`), then NONE of its violations
-        // may be tagged fixable by `check` -- otherwise `check` promises a
-        // resolution the bare `fix` withholds (it needs `--unsafe-fixes`). This is
-        // the net that would have caught the pre-fix regression where an Unsafe
-        // `file_remove` was still counted "auto-fixable" in `check`.
-        let scenario = with_steps(base, vec![TestStep::Check, TestStep::Fix]);
-        let Ok(run) = run_policy_test(&scenario) else { return Ok(()); };
-        let (Some(check), Some(fix)) =
-            (run.observations.first(), run.observations.get(1))
-        else {
-            return Ok(());
-        };
-        if fix.suggested.is_empty() {
-            return Ok(()); // no below-threshold fixer in play; nothing to assert
-        }
-        let check_fixable = check
-            .violations
-            .iter()
-            .filter(|violation| violation.is_fixable)
-            .count();
-        prop_assert_eq!(
-            check_fixable,
-            0,
-            "check tagged {} violation(s) auto-fixable, but a bare fix only SUGGESTED \
-             (did not resolve) them; config:\n{}",
-            check_fixable,
-            inline_config(&scenario),
-        );
+        check_fixable_never_overlaps_a_suggestion_law(base)?;
     }
 
     #[test]
     fn fix_unsafe_converges_when_fully_resolved(base in single_fixable_policy_test()) {
-        // Convergence under `--unsafe-fixes` (round-7): the Safe-threshold
-        // convergence law early-returns on a `Suggested` below-threshold fixer, so
-        // since `file_remove` became Unsafe that op got ZERO apply/convergence
-        // coverage from the property net. At the Unsafe threshold every shipped
-        // fixer applies (`Safe <= Unsafe`, `Unsafe == Unsafe`), so a single
-        // fully-applied `fix --unsafe-fixes` must leave `check` finding nothing --
-        // restoring file_remove's apply + convergence coverage.
-        let scenario = with_steps(base, vec![TestStep::FixUnsafe, TestStep::Check]);
-        let Ok(run) = run_policy_test(&scenario) else { return Ok(()); };
-        let Some((fix_report, check_report)) = extract_fix_then_check(&run) else {
-            return Ok(());
-        };
-        // Same guard as the Safe law: a genuine skip/unfixable leaves a real
-        // violation. No Suggestion-tier fixer is generated, so `suggested` is 0 at
-        // the Unsafe threshold; guard it anyway for parity.
-        if !fix_report.skipped.is_empty()
-            || !fix_report.unfixable.is_empty()
-            || !fix_report.suggested.is_empty()
-        {
-            return Ok(());
-        }
-        let residual = check_report.violations.len();
-        prop_assert_eq!(
-            residual,
-            0,
-            "check still reported {} violation(s) after a fully-applied single-rule \
-             `fix --unsafe-fixes` (non-convergent fixer); config:\n{}",
-            residual,
-            inline_config(&scenario),
-        );
+        fix_unsafe_converges_law(base)?;
     }
+}
+
+fn check_fixable_never_overlaps_a_suggestion_law(base: PolicyTest) -> Result<(), TestCaseError> {
+    // Honesty law (round-7): `check` tags a violation `is_fixable` only when a
+    // bare `alint fix` would RESOLVE it. A single-rule tree shares one fixer
+    // tier, so if that bare fix produced ANY `Suggested` (a below-Safe-threshold
+    // fixer such as the now-Unsafe `file_remove`), then NONE of its violations
+    // may be tagged fixable by `check` -- otherwise `check` promises a
+    // resolution the bare `fix` withholds (it needs `--unsafe-fixes`). This is
+    // the net that would have caught the pre-fix regression where an Unsafe
+    // `file_remove` was still counted "auto-fixable" in `check`.
+    let scenario = with_steps(base, vec![TestStep::Check, TestStep::Fix]);
+    let Ok(run) = run_policy_test(&scenario) else {
+        return Ok(());
+    };
+    let (Some(check), Some(fix)) = (run.observations.first(), run.observations.get(1)) else {
+        return Ok(());
+    };
+    if fix.suggested.is_empty() {
+        return Ok(()); // no below-threshold fixer in play; nothing to assert
+    }
+    let check_fixable = check
+        .violations
+        .iter()
+        .filter(|violation| violation.is_fixable)
+        .count();
+    prop_assert_eq!(
+        check_fixable,
+        0,
+        "check tagged {} violation(s) auto-fixable, but a bare fix only SUGGESTED \
+         (did not resolve) them; config:\n{}",
+        check_fixable,
+        inline_config(&scenario),
+    );
+    Ok(())
+}
+
+fn fix_unsafe_converges_law(base: PolicyTest) -> Result<(), TestCaseError> {
+    // Convergence under `--unsafe-fixes` (round-7): the Safe-threshold
+    // convergence law early-returns on a `Suggested` below-threshold fixer, so
+    // since `file_remove` became Unsafe that op got ZERO apply/convergence
+    // coverage from the property net. At the Unsafe threshold every shipped
+    // fixer applies (`Safe <= Unsafe`, `Unsafe == Unsafe`), so a single
+    // fully-applied `fix --unsafe-fixes` must leave `check` finding nothing --
+    // restoring file_remove's apply + convergence coverage.
+    let scenario = with_steps(base, vec![TestStep::FixUnsafe, TestStep::Check]);
+    let Ok(run) = run_policy_test(&scenario) else {
+        return Ok(());
+    };
+    let Some((fix_report, check_report)) = extract_fix_then_check(&run) else {
+        return Ok(());
+    };
+    // Same guard as the Safe law: a genuine skip/unfixable leaves a real
+    // violation. No Suggestion-tier fixer is generated, so `suggested` is 0 at
+    // the Unsafe threshold; guard it anyway for parity.
+    if !fix_report.skipped.is_empty()
+        || !fix_report.unfixable.is_empty()
+        || !fix_report.suggested.is_empty()
+    {
+        return Ok(());
+    }
+    let residual = check_report.violations.len();
+    prop_assert_eq!(
+        residual,
+        0,
+        "check still reported {} violation(s) after a fully-applied single-rule \
+         `fix --unsafe-fixes` (non-convergent fixer); config:\n{}",
+        residual,
+        inline_config(&scenario),
+    );
+    Ok(())
 }
 
 fn extract_fix_then_check(run: &PolicyTestRun) -> Option<(&StepObservation, &StepObservation)> {

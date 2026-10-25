@@ -372,7 +372,8 @@ Accepting a deliberate cost means bumping the anchor in a reviewed commit, with
 the reason in the file, so creep becomes a recorded decision.
 
 The relation layer has its own, stricter reference: v0.18.2 at +3% on the
-deterministic S1-S3 cells, blocking for relation-layer changes (ADR-0023). It
+deterministic S1-S3 cells, run on relation-layer pull requests and every Rust push to
+main (ADR-0023, ADR-0024). It
 is described, with its recorded measurement, in
 [`REFERENCE-v0.18.2.md`](REFERENCE-v0.18.2.md).
 

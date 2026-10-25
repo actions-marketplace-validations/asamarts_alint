@@ -437,8 +437,9 @@ slice that runs a first real external plugin is **about 12 to 18**.
 Facts from the 2026-10-14 code map, each a work item for P1 to P3:
 
 - Every runtime build site uses `alint_rules::builtin_registry()` directly (the CLI's check, fix,
-  and validate-config paths and the LSP); there is no injection hook, though `Engine::new` already
-  accepts any `RuleRegistry`.
+  and validate-config paths, the LSP, `alint test`'s runner, `rules`, `init`, `suggest`, and
+  `export-agents-md`); there is no injection hook, though `Engine::new` already accepts any
+  `RuleRegistry`.
 - `RuleBuilder` is a plain function pointer; plugin kinds need closures or trait objects carrying
   plugin state.
 - `Format` is a closed enum with exhaustive matches and parity gates over `Format::ALL`;
@@ -480,7 +481,7 @@ These belong to the slices above and are decided in their design documents, one 
 
 | ID | Question | Slice | Recommendation |
 |---|---|---|---|
-| Q10 | Exact shape of the adapter, analyzer, and fixer worlds in contract `0.x` | P1 | separate worlds; inputs pushed; no host callbacks in `0.x` |
+| Q10 | Exact shape of the adapter, analyzer, and fixer worlds in contract `0.x` | P1 | **Decided 2026-10-24 (ADR-0023, corrected in ADR-0024):** separate worlds; inputs pushed; no host callbacks in `0.x`; `adapter` and `analyzer` in v0.21, `fixer` with P2 |
 | Q16 | Name and repository of the contract compiler, and its first-release scope | P0 | **Decided 2026-10-14:** `witforge`, at `asamarts/witforge`, private until alint's contract `0.x` consumes it, then public with 0.1; MVP scope as section 6.2. The name was free on crates.io, npm, and PyPI with no GitHub collision on that date |
 | Q17 | Plugin manifest, `alint build` manifest, and kind namespacing in `.alint.yml` | P2 | `<plugin>/<kind>` names; YAML `plugins:` in config; TOML build manifest |
 | PA-1 | Host callbacks (embedded-region parsing through another adapter, as dprint offers) | after P4 | a versioned feature flag, not in `0.x` |

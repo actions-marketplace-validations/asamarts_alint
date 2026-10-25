@@ -250,16 +250,25 @@ A follow-up review (#361) found one regression and three risks the list comparis
   location is now pinned, and a test asserts that the committed seeds load.
 - **Quiet-period waits.** The LSP audit tests waited for 1.5 s without a message, which a loaded
   run with the whole crate's tests alongside could end before the first publish. They now wait
-  for each URI they assert on first.
+  for each URI they assert on first, under one overall deadline, and the one negative check
+  ("no publish from the stale engine") waits for a positive barrier instead of a quiet window.
 - **Shared fate.** An abort or stack overflow in one test now ends the crate's whole run under
   `cargo test` (nextest still isolates each test). A pty opened by `pty_color` can briefly leak into
   a process another test spawns before portable-pty marks it close-on-exec, which delays that
   test's read but does not fail it.
 
 The layout gate now also rejects `tests/<dir>/main.rs` (a separate binary that Cargo no longer
-builds), `#[path]` declarations, file names that are not valid module names, and an unreadable
-`tests/` directory, and it reads declarations of any visibility, with attributes on the same line,
-outside comments.
+builds), `#[path]` and `cfg_attr` declarations, a `cfg` other than a platform CI runs, file names
+that are not valid module names, a `required-features` or `test = false` `it` target, and an
+unreadable `tests/` directory. It reads top-level declarations of any visibility, ignoring
+comments (nested ones included) and string literals, and checks every module directory's
+`mod.rs` the same way.
+
+A second review found the same seed-location bug twice more, from earlier module splits:
+`alint-rules`' `cross_file` and `alint-core`'s `xml_scan` seeds no longer matched their tests'
+paths. Both moved, and xtask's `proptest_seeds` test now fails when any committed seed file does
+not sit where proptest reads it. The e2e invariants also gained a test that proptest's runner
+replays the committed seed, and the case that seed recorded is now an explicit test.
 
 ### Effort
 

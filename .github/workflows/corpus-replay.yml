@@ -1,12 +1,16 @@
 # Corpus replay: `alint check` over the 110-repository v0.12 case-study corpus
-# at its pinned commits (docs/design/v0.12/corpus/pins.tsv), with every
-# spawning rule removed so no third-party command runs. See
+# at its pinned commits (docs/design/v0.12/corpus/pins.tsv). Nothing from a
+# corpus repository runs: spawning and keyring rules, spawning fix operations,
+# and configs with custom facts are removed or refused first. See
 # `cargo run -p xtask -- corpus-replay --help`.
 #
-# v0.21's shadow port of `cross_file` `equals` is checked here (ADR-0023,
-# decision V21-7): before each release that contains IR changes, dispatch this
-# workflow and require zero differences (RELEASING.md). `compare_ref` builds a
-# second binary from that ref and fails on any report that differs.
+# Every run fails on a crash, and on any skipped or unavailable repository not
+# listed in docs/design/v0.12/corpus/replay-expectations.tsv (or a listed one
+# that replays again). `compare_ref` builds a second binary from that ref and
+# fails on any report, proposed edit, or baseline fingerprint that differs:
+# RELEASING.md dispatches it with the previous release before a release that
+# changes the relation layer, and each difference must be explained there.
+# v0.21's shadow comparison (ADR-0023, V21-7) joins once work item R4 lands.
 #
 # It runs on the canonical bench host's runner, which executes one job at a
 # time, so a replay never overlaps a benchmark. The repository cache lives on
@@ -54,7 +58,10 @@ jobs:
         env:
           COMPARE_REF: ${{ inputs.compare_ref }}
         run: |
-          git worktree add --detach "$RUNNER_TEMP/compare" "$COMPARE_REF"
+          # A worktree registration left by a crashed run would block the add.
+          git worktree prune
+          git rev-parse --verify --end-of-options "${COMPARE_REF}^{commit}" >/dev/null
+          git worktree add --detach "$RUNNER_TEMP/compare" "${COMPARE_REF}^{commit}"
           (cd "$RUNNER_TEMP/compare" && cargo build --release --locked -p alint)
           echo "COMPARE_BIN=$RUNNER_TEMP/compare/target/release/alint" >> "$GITHUB_ENV"
       - name: replay
@@ -62,6 +69,7 @@ jobs:
           args=(--alint target/release/alint
                 --cache "$HOME/.cache/alint-corpus-replay"
                 --jobs 4
+                --expect docs/design/v0.12/corpus/replay-expectations.tsv
                 --out-json "$RUNNER_TEMP/corpus-replay.json"
                 --summary "$GITHUB_STEP_SUMMARY")
           if [[ -n "${COMPARE_BIN:-}" ]]; then

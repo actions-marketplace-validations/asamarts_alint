@@ -419,20 +419,23 @@ jobs:
         run: ci/scripts/micro-det-gate.sh
 
   # ── Reference perf gate (relation layer) ─────────────────────────
-  # ADR-0023 decision V21-6 / ADR-0019 DEC-13: a relation-layer change may not
-  # cost more than +3% instructions on S1-S3, or grow the alint process's
-  # read/stat calls with the tree, against the frozen v0.18.2 release. Both
-  # binaries are measured by HEAD's harness in this job, so nothing committed can
-  # drift. Blocking, and counted in the Summary. Runs on pull requests and on
-  # pushes to main (direct pushes are how most engine changes land).
+  # ADR-0023 decision V21-6 / ADR-0019 DEC-13: HEAD may not cost more than +3%
+  # instructions on S1-S3, or grow the alint process's read/stat calls with the
+  # tree, against the frozen v0.18.2 release. Both binaries are measured by
+  # HEAD's harness in this job, so nothing committed can drift. On pull requests
+  # it runs for relation-layer changes. On pushes to main it runs for every Rust
+  # change: the budget is cumulative and the comparison absolute, so whatever
+  # pushed HEAD over it is caught where it landed, even when an earlier run was
+  # cancelled by a newer push. Fails red and counts in the Summary (main has no
+  # required checks, so on a push it reports after the merge).
   perf-gate-reference:
     name: Perf Gate (v0.18.2 reference)
     needs: [changes, build]
     if: >-
       !cancelled() && !failure()
-      && (github.event_name == 'pull_request'
-          || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
-      && needs.changes.outputs.relation == 'true'
+      && ((github.event_name == 'pull_request' && needs.changes.outputs.relation == 'true')
+          || (github.event_name == 'push' && github.ref == 'refs/heads/main'
+              && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.relation == 'true')))
     runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     # Two release builds (the reference and HEAD) and two Valgrind runs of S1-S3.
     timeout-minutes: 180

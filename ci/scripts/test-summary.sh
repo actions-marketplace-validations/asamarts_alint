@@ -47,6 +47,9 @@ expect "changes result missing"      fail
 expect "a job failed"                fail CHANGES_RESULT=success DENY_RESULT=failure
 expect "packaging failed"            fail CHANGES_RESULT=success PACKAGING_RESULT=failure
 expect "shell-only route, harness failed" fail CHANGES_RESULT=success SHELL_CHANGED=true SHELL_TESTS_RESULT=failure
+expect "reference perf gate failed"   fail CHANGES_RESULT=success PERF_REFERENCE_RESULT=failure
+expect "reference perf gate cancelled" fail CHANGES_RESULT=success PERF_REFERENCE_RESULT=cancelled
+expect "reference perf gate passed"   pass CHANGES_RESULT=success PERF_REFERENCE_RESULT=success
 
 # A shell-only route must render as a real result, not "(no changes)".
 row=$(env -i PATH="$PATH" CHANGES_RESULT=success RUST_CHANGED=false DOCS_CHANGED=false \

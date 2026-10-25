@@ -29,16 +29,18 @@ use lsp_common::{Server, recv_response, spawn_server, wait_for_diagnostics};
 /// per URI — the state the editor ends up showing. Waiting for the expected
 /// publishes first keeps a slow server (a loaded host, or the crate's other
 /// tests running alongside in the same binary) from ending the quiet window
-/// before the first one arrives.
+/// before the first one arrives. One 60 s deadline bounds the whole wait, so a
+/// server that never goes quiet fails the test instead of hanging it.
 fn settle(rx: &Receiver<Value>, expect: &[&str], quiet: Duration) -> HashMap<String, Vec<Value>> {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut last: HashMap<String, Vec<Value>> = HashMap::new();
     loop {
         let waiting = expect.iter().any(|uri| !last.contains_key(*uri));
+        let remaining = deadline.saturating_duration_since(Instant::now());
         let timeout = if waiting {
-            deadline.saturating_duration_since(Instant::now())
+            remaining
         } else {
-            quiet
+            quiet.min(remaining)
         };
         let Ok(msg) = rx.recv_timeout(timeout) else {
             break;
@@ -316,12 +318,33 @@ fn lsp_broken_config_disables_stale_engine() {
     );
 
     change(&mut server, &a, 2, "TODO TODO\n");
-    let after_edit = settle(&server.rx, &[], QUIET);
-    if let Some(diags) = after_edit.get(&a) {
+    // Barrier: repair the config with the rule renamed. Every publish for a.txt
+    // until the repaired engine's arrives must carry nothing from the stale
+    // engine's `no-todo` rule; a quiet window alone could end before a late
+    // stale publish.
+    std::fs::write(&cfg, NO_TODO.replace("no-todo", "no-todo-repaired")).unwrap();
+    server.send(&json!({
+        "jsonrpc": "2.0", "method": "workspace/didChangeWatchedFiles",
+        "params": { "changes": [{ "uri": cfg_uri, "type": 2 }] }
+    }));
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let msg = server
+            .rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("a.txt is republished once the config is repaired");
+        if msg["method"] != "textDocument/publishDiagnostics" || msg["params"]["uri"] != a.as_str()
+        {
+            continue;
+        }
+        let got = codes(msg["params"]["diagnostics"].as_array().unwrap());
         assert!(
-            diags.is_empty(),
-            "no diagnostics from the stale engine: {diags:?}"
+            !got.iter().any(|code| code == "no-todo"),
+            "the stale engine published diagnostics after the config broke: {got:?}"
         );
+        if got.iter().any(|code| code == "no-todo-repaired") {
+            break;
+        }
     }
     server.shutdown();
 }
