@@ -498,4 +498,18 @@ v0.21 is complete only when all of the following are observed:
   module, untraceable runs, frozen-source lints, attribution), and this design (resource origins,
   row order, the module visibility, the R2/R3 cycle, the R6 split). The decisions are proposed in
   ADR-0024.
-- **Next:** R1 (relation types), then R2, with R3, R4, R6a, and R9 in parallel after R2.
+- **R1, done.** `alint_core::relation` holds the types: normalized paths that order like the
+  walked index; structural pointers with the one injective rendering; resources with origins (index
+  entry or literal path) and a read outcome that keeps "missing" distinct; selectors; values with
+  lexeme-preserving numbers; rows with an optional pointer, emission ordinal, optional span, the
+  three absence states, and the original value; relations in canonical order with explicit set
+  conversion and deterministic truncation; cardinality; every limit with its default and hard cap,
+  plus the shared run budget; and the internal `Adapter` trait. The flat contract form of a value
+  is in `alint_core::plugin_api`, which a test keeps free of engine imports, and `relation`
+  converts to and from it (iteratively, so value depth cannot exhaust the stack). Both modules are
+  `#[doc(hidden)] pub`, which tests check. Unit and property tests cover canonical order and its
+  independence from input order, the absence states, every limit, the nested-to-flat round trip,
+  and rejection of malformed node lists (shared or backward children, cycles, unreachable nodes,
+  size and depth limits).
+- **Next:** R2 (built-in row adapters and the `Extract` wrapper on the IR, with read coalescing),
+  then R3, R4, R6a, and R9 in parallel after R2.
