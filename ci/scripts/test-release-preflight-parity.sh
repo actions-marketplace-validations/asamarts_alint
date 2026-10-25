@@ -30,6 +30,7 @@ EXEMPT = {
     'ci/scripts/bench-smoke.sh': 'perf smoke, not a correctness gate',
     'ci/scripts/det-perf-gate.sh': 'advisory PR-vs-merge-base perf gate (needs a base)',
     'ci/scripts/micro-det-gate.sh': 'advisory micro subset of the perf gate (needs a base); the full suite gates releases in bench-record.yml',
+    'ci/scripts/reference-perf-gate.sh': 'relation-layer perf gate against v0.18.2, run on the change itself; a release re-measures wall-clock on the bench host',
     'ci/scripts/supply-chain-artifacts.sh': 'release.yml runs it in its own supply-chain job',
     'ci/scripts/check-secrets-inventory.sh': 'repo-config drift gate; ci.yml runs it unconditionally on the tag',
 }
