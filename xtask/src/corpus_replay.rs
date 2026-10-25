@@ -871,9 +871,8 @@ fn ensure_pristine(dir: &Path) -> Result<(), String> {
 
 /// `PATH` without empty, relative, or `.` entries, so a tracked executable in
 /// the checkout (the working directory) can never shadow a real tool.
-fn absolute_path_entries() -> std::ffi::OsString {
-    let entries = std::env::var_os("PATH").unwrap_or_default();
-    std::env::join_paths(std::env::split_paths(&entries).filter(|entry| entry.is_absolute()))
+fn absolute_path_entries(entries: &std::ffi::OsStr) -> std::ffi::OsString {
+    std::env::join_paths(std::env::split_paths(entries).filter(|entry| entry.is_absolute()))
         .unwrap_or_default()
 }
 
@@ -894,7 +893,10 @@ fn run_alint(
         .args(args)
         .current_dir(checkout)
         .env_clear()
-        .env("PATH", absolute_path_entries())
+        .env(
+            "PATH",
+            absolute_path_entries(&std::env::var_os("PATH").unwrap_or_default()),
+        )
         .env("HOME", home.path())
         .env("LANG", "C.UTF-8")
         .env("NO_COLOR", "1");
@@ -1412,11 +1414,12 @@ rules:
 
     #[test]
     fn path_keeps_only_absolute_entries() {
-        let joined = std::env::join_paths(["/usr/bin", "", ".", "rel/bin", "/bin"]).unwrap();
-        // SAFETY-free: read the filter through a copy of the logic on this input.
-        let kept: Vec<PathBuf> = std::env::split_paths(&joined)
-            .filter(|entry| entry.is_absolute())
-            .collect();
-        assert_eq!(kept, [PathBuf::from("/usr/bin"), PathBuf::from("/bin")]);
+        // Absolute on every platform (a drive letter on Windows, `/` elsewhere).
+        let absolute = std::env::temp_dir();
+        let joined =
+            std::env::join_paths([absolute.clone(), "".into(), ".".into(), "rel/bin".into()])
+                .unwrap();
+        let kept: Vec<PathBuf> = std::env::split_paths(&absolute_path_entries(&joined)).collect();
+        assert_eq!(kept, [absolute]);
     }
 }
