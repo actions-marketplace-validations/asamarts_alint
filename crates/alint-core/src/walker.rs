@@ -250,6 +250,12 @@ pub struct FileIndex {
     /// for its lifetime (true in alint — an index is walked fresh per
     /// run / per LSP session). Read lock-free after `set`.
     facts: OnceLock<crate::facts::FactValues>,
+    /// Run-scoped relation read and decode caches. Enabled only when at least
+    /// one configured rule consumes the relation layer, so a relation-free run
+    /// keeps the direct read path and allocates no cache entries. Filtered
+    /// indexes share the full index's caches.
+    reads: OnceLock<std::sync::Arc<crate::relation::ReadCache>>,
+    decodes: OnceLock<std::sync::Arc<crate::relation::DecodeCache>>,
 }
 
 impl FileIndex {
@@ -280,6 +286,8 @@ impl FileIndex {
             manifest_paths: OnceLock::new(),
             manifest_failures: OnceLock::new(),
             facts: OnceLock::new(),
+            reads: OnceLock::new(),
+            decodes: OnceLock::new(),
         }
     }
 
@@ -296,6 +304,43 @@ impl FileIndex {
     #[must_use]
     pub fn cached_facts(&self) -> Option<&crate::facts::FactValues> {
         self.facts.get()
+    }
+
+    /// The run-scoped relation read cache, if a relation consumer enabled it.
+    ///
+    /// The ordinary per-file path checks this once per file and reads directly
+    /// when it is `None`; it allocates no cache entry or retained bytes, so a
+    /// relation-free run is unchanged.
+    #[must_use]
+    pub fn read_cache(&self) -> Option<&crate::relation::ReadCache> {
+        self.reads.get().map(std::sync::Arc::as_ref)
+    }
+
+    /// The run-scoped relation decode cache, if a relation consumer enabled it.
+    #[must_use]
+    pub fn decode_cache(&self) -> Option<&crate::relation::DecodeCache> {
+        self.decodes.get().map(std::sync::Arc::as_ref)
+    }
+
+    /// Enable both relation caches. Idempotent: every caller shares the first
+    /// pair, so two relation rules cannot decode one `(adapter, resource)` pair
+    /// twice. The caches belong to this index's snapshot; a caller that
+    /// re-walks a changed tree gets a fresh index and fresh caches.
+    pub fn enable_relation_caches(&self) {
+        self.reads
+            .get_or_init(|| std::sync::Arc::new(crate::relation::ReadCache::new()));
+        self.decodes
+            .get_or_init(|| std::sync::Arc::new(crate::relation::DecodeCache::new()));
+    }
+
+    /// Share this index's relation caches with a filtered index built from it.
+    pub(crate) fn share_relation_caches(&self, other: &Self) {
+        if let Some(cache) = self.reads.get() {
+            let _ = other.reads.set(std::sync::Arc::clone(cache));
+        }
+        if let Some(cache) = self.decodes.get() {
+            let _ = other.decodes.set(std::sync::Arc::clone(cache));
+        }
     }
 
     /// Cache the evaluated facts (no-op if already set). The engine

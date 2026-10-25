@@ -67,7 +67,8 @@ pub use error::{Error, Result};
 pub use extract::{
     ByteSpan, EntryPathSegment, EntryRowsError, Extract, ExtractSpec, ExtractedValues, LinesOpts,
     NonStringValueKind, StructuredEntryRow, StructuredExtract, WholeFileOpts, extract_entry_rows,
-    extract_values, extract_values_bounded, is_non_literal,
+    extract_entry_rows_bounded, extract_entry_rows_strict_yaml,
+    extract_entry_rows_strict_yaml_bounded, extract_values, extract_values_bounded, is_non_literal,
 };
 pub use facts::{FactKind, FactSpec, FactValue, FactValues, evaluate_facts};
 pub use kind_meta::{
@@ -77,7 +78,7 @@ pub use kind_meta::{
 };
 pub use level::Level;
 pub use location::{MAX_RELATED_LOCATIONS, RelatedLocation, SourceRange, physical_lines};
-pub use pathsafe::{derive_target, normalize_confined};
+pub use pathsafe::{derive_target, normalize_confined, resolved_within_root};
 pub use proposed_fix::{EditRegion, ProposedEdit, attach_proposed_edits, byte_to_line_col};
 pub use redaction::{redact_evidence, redaction_marker};
 pub use registry::{

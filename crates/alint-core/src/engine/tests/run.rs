@@ -640,3 +640,179 @@ fn dispatch_flip_preserves_cross_file_rules_unchanged() {
     assert_eq!(&*report.results[0].rule_id, "cross");
     assert_eq!(&*report.results[1].rule_id, "needs-magic");
 }
+
+/// Test-only relation consumer: reads through the run-scoped cache and decodes
+/// the file, proving the relation path and the per-file path share one read.
+#[derive(Debug)]
+struct RelationConsumer;
+
+impl Rule for RelationConsumer {
+    fn id(&self) -> &'static str {
+        "relation-consumer"
+    }
+
+    fn level(&self) -> Level {
+        Level::Error
+    }
+
+    fn uses_relations(&self) -> bool {
+        true
+    }
+
+    fn requires_full_index(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&self, ctx: &Context<'_>) -> crate::error::Result<Vec<Violation>> {
+        let cache = ctx
+            .index
+            .read_cache()
+            .expect("a relation consumer enables the run cache");
+        let resource = crate::relation::Resource::literal(
+            crate::relation::RelPath::parse("a.txt").expect("a literal test path"),
+        );
+        if let crate::relation::ResourceRead::Present(bytes) =
+            cache.read(ctx.root, &resource, 0).as_ref()
+        {
+            ctx.index
+                .decode_cache()
+                .expect("a relation consumer enables the run decode cache")
+                .decode(
+                    &crate::relation::ExtractAdapter::new(crate::extract::Extract::WholeFile),
+                    &resource,
+                    bytes,
+                    &crate::relation::Limits::default(),
+                )
+                .expect("the test document decodes");
+        }
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn filtered_index_shares_the_full_index_read_cache() {
+    let mut changed = HashSet::new();
+    changed.insert(std::path::PathBuf::from("a.txt"));
+    let engine = Engine::new(vec![], RuleRegistry::new()).with_changed_paths(changed);
+    let full = idx(&["a.txt", "b.txt"]);
+    full.enable_relation_caches();
+    let cache = full.read_cache().expect("full cache enabled");
+    let decodes = full.decode_cache().expect("full decode cache enabled");
+    let filtered = engine
+        .build_filtered_index(&full, None)
+        .expect("a changed set is present");
+    assert!(
+        std::ptr::eq(filtered.read_cache().expect("filtered cache shared"), cache),
+        "a --changed filtered index must read through the full index's cache"
+    );
+    assert!(
+        std::ptr::eq(
+            filtered
+                .decode_cache()
+                .expect("filtered decode cache shared"),
+            decodes
+        ),
+        "a --changed filtered index must decode through the full index's cache"
+    );
+}
+
+#[test]
+fn a_relation_free_run_does_not_enable_the_read_cache() {
+    let tmp = tempfile::Builder::new()
+        .prefix("alint-no-relation-cache-")
+        .tempdir()
+        .unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"hello").unwrap();
+    let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+    let engine = Engine::new(
+        vec![Box::new(PerFileStub {
+            id: "per-file".into(),
+            scope: Scope::from_patterns(&["a.txt".to_string()]).unwrap(),
+            prefix: b"x".to_vec(),
+        })],
+        RuleRegistry::new(),
+    );
+    engine.run(tmp.path(), &index).unwrap();
+    assert!(
+        index.read_cache().is_none(),
+        "a run without relation consumers must keep the direct read path"
+    );
+    assert!(
+        index.decode_cache().is_none(),
+        "a run without relation consumers must not allocate a decode cache"
+    );
+}
+
+#[test]
+fn run_for_file_and_fix_enable_the_relation_cache() {
+    let tmp = tempfile::Builder::new()
+        .prefix("alint-relation-cache-paths-")
+        .tempdir()
+        .unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"hello").unwrap();
+    let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+    let engine = Engine::new(vec![Box::new(RelationConsumer)], RuleRegistry::new());
+    engine
+        .run_for_file(tmp.path(), &index, std::path::Path::new("a.txt"), b"hello")
+        .unwrap();
+    assert!(index.read_cache().is_some(), "run_for_file enables it");
+    assert!(
+        index.decode_cache().is_some(),
+        "run_for_file enables decodes"
+    );
+
+    let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+    engine
+        .fix(
+            tmp.path(),
+            &index,
+            &crate::WalkOptions::default(),
+            true,
+            crate::Applicability::Safe,
+        )
+        .unwrap();
+    assert!(index.read_cache().is_some(), "fix enables it");
+    assert!(index.decode_cache().is_some(), "fix enables decodes");
+}
+
+#[test]
+fn relation_consumer_and_per_file_rule_share_one_read_and_decode() {
+    let tmp = tempfile::Builder::new()
+        .prefix("alint-relation-cache-")
+        .tempdir()
+        .unwrap();
+    std::fs::write(tmp.path().join("a.txt"), b"hello").unwrap();
+    let index = crate::walk(tmp.path(), &crate::WalkOptions::default()).unwrap();
+    let engine = Engine::new(
+        vec![
+            Box::new(PerFileStub {
+                id: "per-file".into(),
+                scope: Scope::from_patterns(&["a.txt".to_string()]).unwrap(),
+                prefix: b"x".to_vec(),
+            }),
+            Box::new(RelationConsumer),
+        ],
+        RuleRegistry::new(),
+    );
+    let report = engine.run(tmp.path(), &index).unwrap();
+
+    assert_eq!(report.total_violations(), 1);
+    assert_eq!(
+        index
+            .read_cache()
+            .expect("the run enabled the relation cache")
+            .reads(),
+        1,
+        "the relation consumer and the per-file rule must share one read"
+    );
+    assert_eq!(
+        index.read_cache().unwrap().hits(),
+        1,
+        "the second consumer must hit the cached read"
+    );
+    assert_eq!(
+        index.decode_cache().unwrap().decodes(),
+        1,
+        "the document must be decoded once"
+    );
+}
