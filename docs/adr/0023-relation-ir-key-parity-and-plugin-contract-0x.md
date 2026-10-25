@@ -10,7 +10,8 @@ decision-makers: asamarts
 
 Accepted (2026-10-24). This records the Phase 2 outcomes for ADR-0019 decisions 7, 8, 10, 13,
 and 14, and questions Q4, Q10, and Q13. Q8 is decided later, per kind, from the shadow-port
-results.
+results. Review found parts of this record wrong or incomplete; the corrections are proposed in
+[ADR-0024](0024-relation-ir-decisions-after-review.md), which supersedes this ADR once accepted.
 
 ## Context
 
@@ -27,28 +28,20 @@ the WIT draft are built on it.
 
 1. **Value types (V21-1, Q4).** Rows carry `null`, boolean, a number that keeps its source
    lexeme, string, bytes, a normalized repository path, lists, and records. Semantic scalars
-   (`semver`, SPDX) are added, as tagged domain scalars, only once several kinds consume them.
-   Adding one is additive inside alint but needs a new contract minor version, because a new
-   variant case breaks a WIT contract. In memory a value nests; across the contract it is a flat
-   node list with indices, because WIT has no recursive types. C4 `semver_range` lands first as a
-   standalone library.
+   (`semver`, SPDX) are added, as tagged domain scalars, only once several kinds consume them;
+   adding one is additive. C4 `semver_range` lands first as a standalone library.
 2. **Path comparison (V21-2, Q13).** Paths in relations are forward-slash, root-relative, with
    `./`, `..`, and trailing slashes resolved, and are compared byte for byte on every operating
    system. Case folding is an explicit per-comparison opt-in and never follows the host file
-   system. `cross_file` `resolves` already looks paths up exactly after `normalize_confined`, but
-   by `Path` components, so a Windows separator resolves differently there today; normalizing to
-   forward slashes removes that difference for the relations ported after `equals`.
+   system. This is what `cross_file` `resolves` already does (an exact index lookup after
+   `normalize_confined`), so the shadow port stays byte-identical.
 3. **`key_parity` formats (V21-3).** v0.21 covers the five formats that already have spanned rows
    (JSON, YAML, dotenv, INI, Java properties), plus TOML through a new lossless row adapter on
    `toml_edit`, plus two XML resource-bundle dialects: Android string resources (`<string>`,
-   `<string-array>`, and `<plurals>`, keyed by element type and `name`, with
-   `translatable="false"` entries skipped) and .NET `.resx` (string `<data>` entries keyed by
-   `name`). The dialects are `key_parity`'s own format names, not new variants of the public
-   `Format` enum. Generic XML has no key model and is rejected at config load, as are HCL and any
-   other format. The XML dialects parse through the existing guarded XML path.
-4. **Key model (V21-4).** A key is a leaf path, identified by its segment list; arrays are values
-   and are not descended. `strip_root: true` compares below a single top-level key (Rails'
-   `en:`). YAML aliases and merge keys are an analysis failure in a compared file. An
+   `<string-array>`, and `<plurals>` keyed by `name`) and .NET `.resx` (`<data>` keyed by
+   `name`). Generic XML has no key model and is rejected at config load, as are HCL and any other
+   format. The XML dialects parse through the existing guarded XML path.
+4. **Key model (V21-4).** A key is a leaf path; arrays are values and are not descended. An
    opt-in `plurals: cldr` option (default `exact`) treats a CLDR plural group as one key: an
    object whose keys are all CLDR categories (`zero`, `one`, `two`, `few`, `many`, `other`) and
    include `other`, or sibling keys `<base>_<category>` that include `<base>_other` (the i18next
@@ -60,36 +53,26 @@ the WIT draft are built on it.
    promise. A test fails if that module imports anything but `std`, `core`, `alloc`, and its own
    items, so engine internals cannot cross the boundary. The built-in row adapters and
    `key_parity` implement the traits. The `alint:plugin@0.1.0` WIT draft is committed with one
-   world per role it covers (`adapter` and `analyzer`; `fixer` with slice P2), host-pushed inputs,
-   and no host callbacks, and witforge's subset checker must accept it. The traits and the WIT
-   draft are part of v0.21, not deferrable. Bindings are generated once witforge's emitters (slice P0) exist; the module moves
+   world per role, host-pushed inputs, and no host callbacks, and witforge's subset checker must
+   accept it. Bindings are generated once witforge's emitters (slice P0) exist; the module moves
    into a published `alint-plugin-api` crate with slice P2. A separate crate now would have to be
    published, because the published `alint-core` would depend on it, and would need the
    new-crate bootstrap in `RELEASING.md`.
-6. **Performance references (V21-6, DEC-13).** v0.18.2 is the blocking reference for
-   relation-layer changes (a path classification in `ci/scripts/detect-changes.sh`), on pull
-   requests and on pushes to `main`: S1-S3 instruction counts at most +3%, and no `read` or
-   `stat` syscall growth with the tree for the alint process (a fixed allowance of 32 calls per
-   family at 10k files absorbs per-run probes). The v0.18.2 binary is rebuilt in the same job
-   and measured by the current harness, so no committed baseline can drift with the host or the
-   toolchain. S4 is not compared, because it extends bundles that arrived in v0.19. v0.21's
-   release check adds the S1-S3 x {full, changed} wall-clock (+3%; 30 runs at 100k, bench-scale's
-   sampling at 1M) and 1M peak RSS (+10%) budgets on the canonical bench host. Relations get
-   their own scenario, budgeted separately as section 9.6 requires for new capabilities.
-   `docs/benchmarks/ANCHOR` (v0.20.0, +10%) keeps serving every release's bench gates unchanged.
-   Work item R0 measures v0.18.2 first; if `main` already exceeds a budget before any
-   relation-layer change, the numbers go back to the decision-maker before the gate is set.
+6. **Performance references (V21-6, DEC-13).** v0.18.2 is the blocking reference for IR pull
+   requests: S1-S3 instruction counts at most +3%, and no increase in `read` or `stat` syscalls;
+   v0.21's release check adds the 100k and 1M wall-clock (+3%) and peak RSS (+10%) budgets on
+   the canonical bench host. `docs/benchmarks/ANCHOR` (v0.20.0, +10%) keeps serving every
+   release's bench gates unchanged. Work item R0 records v0.18.2's counts first; if `main`
+   already exceeds +3% against v0.18.2 before any IR change, the numbers go back to the
+   decision-maker before the gate is set.
 7. **Corpus replay (V21-7).** `xtask corpus-replay` runs as a workflow on the canonical bench
    host's runner (`[self-hosted, linux, bench]`), dispatched before each release that contains
    IR changes and on a weekly schedule, with its repository cache on that host. That runner
-   executes one job at a time, so a replay never overlaps a benchmark. Every rule whose kind
-   spawns a process is removed before a config runs, so no third-party command executes. A
-   release with relation-layer changes requires zero shadow differences.
-8. **Shadow scope (V21-8).** The shadow implementation is compiled only under a `shadow-ir`
-   feature on `alint-rules`, enabled only from `publish = false` crates for the scenario suite,
-   the property generator, and corpus replay. Release binaries contain only the authoritative
-   implementation, which CI asserts from the release targets' feature trees; there is no runtime
-   flag.
+   executes one job at a time, so a replay never overlaps a benchmark. A release with IR changes
+   requires zero differences.
+8. **Shadow scope (V21-8).** The shadow implementation is compiled only under a test-only
+   `shadow-ir` feature, used by the scenario suite, the property generator, and corpus replay.
+   Release binaries contain only the authoritative implementation; there is no runtime flag.
 
 The work items, invariants, and acceptance tests are normative in
 [`docs/design/v0.21/`](../design/v0.21/README.md).
@@ -105,11 +88,10 @@ The work items, invariants, and acceptance tests are normative in
   needs its own scenarios.
 - Pluralized locale sets get a quiet mode without suppressing real misses through
   `ignore_keys`; exact per-locale category checking remains a later option.
-- No plugin API crate is published before slice P2, and v0.21 needs no crates.io bootstrap.
-  The boundary is enforced by a test rather than by the dependency graph until P2.
-- Relation-layer changes cannot accumulate cost unnoticed, while ordinary releases keep the
-  anchor, which was re-based to v0.20.0 after the v0.18-v0.20 regression fixes. Two references
-  are documented side by side.
+- No public crate exists before the plugin contract is stable, and v0.21 needs no crates.io
+  bootstrap. The boundary is enforced by a test rather than by the dependency graph until P2.
+- IR pull requests cannot accumulate cost unnoticed, while ordinary releases keep the anchor
+  that accepted the v0.18-v0.20 costs. Two references are documented side by side.
 - A `cross_file` difference that only the corpus exposes is found within a week of merging, and
   always before a release.
 - Users pay nothing for the shadow. Differences that appear only in users' own configurations
@@ -122,13 +104,12 @@ The work items, invariants, and acceptance tests are normative in
 - **Keeping string-only values:** rejected because nested records and the distinct missing,
   `null`, and error states do not fit.
 - **Following the host file system, or always folding case:** rejected because findings and
-  baseline fingerprints would differ by machine, and folding would change today's exact
-  lookups.
+  baseline fingerprints would differ by machine, and either would change today's `cross_file`
+  results.
 - **Only the five existing row formats:** rejected in favour of covering TOML and the two XML
   dialects at launch.
 - **Every object path, or descending arrays by index:** rejected because a missing section
-  would report the section as well as each key under it, and reordered or resized locale arrays
-  would look like drift.
+  reports once per key under it, and reordered or resized locale arrays would look like drift.
 - **Plural handling through `ignore_keys` only:** rejected because ignoring `few` or `many` also
   hides genuinely missing plural forms.
 - **Blocking the contract on witforge P0, or deferring it to v0.22:** rejected because the first
@@ -137,8 +118,8 @@ The work items, invariants, and acceptance tests are normative in
   rejected because the first needs a release bootstrap for an unstable crate and the second
   leaves the built-ins not implementing the traits.
 - **Moving the anchor to v0.18.2 at +3% for everything, or re-basing the IR budget on v0.20.1:**
-  rejected because the first would hold every non-relation release to the program's tight
-  budget and the second lets the costs of program Phases 0 and 1 escape the program budget.
+  rejected because the first un-accepts deliberate v0.18-v0.20 costs and the second lets the
+  costs of program Phases 0 and 1 escape the program budget.
 - **Hosted scheduled replay, or replay on every IR pull request:** rejected because hosted runs
   are unreliable and cache-limited, and per-PR replays would hold the bench runner.
 - **An opt-in `ALINT_SHADOW_IR` runtime flag:** rejected because it ships a second

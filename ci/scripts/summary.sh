@@ -133,6 +133,13 @@ for result in \
   fi
 done
 
+# The reference perf gate is blocking: a timeout cancels the job, and a
+# cancelled gate has not shown the budget holds.
+if [[ "${PERF_REFERENCE_RESULT:-skipped}" == "cancelled" ]]; then
+  echo "==> The v0.18.2 reference perf gate was cancelled (a timeout?); it did not pass" >&2
+  FAILED=true
+fi
+
 echo ""
 if [[ "$FAILED" == "true" ]]; then
   echo "==> One or more checks failed"

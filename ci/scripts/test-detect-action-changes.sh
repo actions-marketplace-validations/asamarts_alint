@@ -78,6 +78,19 @@ expect_routes "Gradle wrapper reaches shell tests" \
 expect_routes "RELEASING.md reaches shell tests" RELEASING.md shell=true
 expect_routes "deny.toml reaches shell tests" deny.toml shell=true
 expect_routes "action.yml reaches shell tests" action.yml shell=true
+# Relation-layer paths reach the v0.18.2 reference perf gate, in both module
+# styles; an ordinary rule kind does not.
+expect_routes "engine root reaches the reference gate" crates/alint-core/src/engine.rs relation=true
+expect_routes "engine submodule reaches the reference gate" crates/alint-core/src/engine/run.rs relation=true
+expect_routes "relation root reaches the reference gate" crates/alint-core/src/relation.rs relation=true
+expect_routes "relation submodule reaches the reference gate" crates/alint-core/src/relation/row.rs relation=true
+expect_routes "plugin traits reach the reference gate" crates/alint-core/src/plugin_api/mod.rs relation=true
+expect_routes "extraction reaches the reference gate" crates/alint-core/src/extract.rs relation=true
+expect_routes "format parsers reach the reference gate" crates/alint-core/src/structured_format.rs relation=true
+expect_routes "cross_file reaches the reference gate" crates/alint-rules/src/cross_file/eval.rs relation=true
+expect_routes "the shared reader reaches the reference gate" crates/alint-rules/src/io.rs relation=true
+expect_routes "the gate's tree generator reaches it" crates/alint-bench/src/tree.rs relation=true
+expect_routes "an ordinary kind does not reach the reference gate" crates/alint-rules/src/file_exists.rs relation=false
 expect_routes "a crate change reaches shell tests" crates/alint/src/main.rs shell=true
 
 # Static half: the jobs those flags feed must gate on them.

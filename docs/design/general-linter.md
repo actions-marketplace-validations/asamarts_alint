@@ -1216,7 +1216,8 @@ Two engine invariants constrain the planner:
   (ADR-0003). A relation-major schedule that reads a file once per relation would repeat the
   v0.18.0 content-scan regression class. The planner keeps file-major read coalescing for every
   extractor over a per-file selector, and the deterministic benchmark gains a scenario with at
-  least three relations over one glob.
+  least three relations over one glob (in v0.21, work item R3's relation scenario, where
+  `key_parity` and per-file rules select the same files).
 
 ### 9.2 Cache parsed resources and relations, not verdicts only
 
@@ -1428,6 +1429,12 @@ these budgets (decision DEC-13):
 New capabilities (relations, constraints) are budgeted separately as new scenarios; the
 budgets above protect configurations that do not use them.
 
+As measured from v0.21 (proposed [ADR-0024](../adr/0024-relation-ir-decisions-after-review.md),
+decision 6), three details differ from this table: S4 is not compared with v0.18.2 (it extends
+bundles that arrived in v0.19, so the reference binary cannot load it); the syscall check allows
+32 extra calls per family at 10k files, the noise of fixed per-run probes; and the 1M wall-clock
+check uses bench-scale's three runs, since 30 would take about 16 hours for S3 alone.
+
 ### 9.7 Capability inventory as a source of truth
 
 Phase 0's per-kind capability inventory needs a defined source. Today `RuleRegistry` stores only
@@ -1486,7 +1493,7 @@ v0.20. Later targets stay provisional until each phase's design document.
 | 0. Terminology and capability inventory | v0.19 | S | `KindMeta` declared for every kind, emitted into `facts.json`, the spawn and Git lists derived from it, and the audit gate green |
 | 1a. Fail-loud and finding foundations | v0.19 | L | every row of section 4.12 closed or explicitly recorded as accepted, each with a gate asserting its invariant |
 | 1b. Authoring loop | v0.20 | M | `alint test` public with a published schema; selected-rule `explain --trace`; bundled rulesets own tests; each composed config source validates `version` and optional `requires.alint` before merge |
-| 2. Internal relation IR (go / no-go) | v0.21 | L | the IR pilot ships as a v1 kind, one existing kind is ported with zero shadow diffs over one release, and the section 9.6 budgets hold |
+| 2. Internal relation IR (go / no-go) | v0.21 | L | the IR pilot ships as a v1 kind, one existing kind is ported with zero shadow diffs over one release, and the section 9.6 budgets hold (as measured per ADR-0024 decision 6) |
 | 3. Selectors, report-only constraints, and `version: 2` | v0.22 or later | L | the section 12.1 measures met on the Phase 3 conformance policies (locale key parity, dependency version consistency, toolchain-pin consistency; stale exceptions are measured at Phase 4); the version-boundary ADR accepted |
 | 4. Typed modules and exception data | unscheduled | M | decided after Phase 3 by measured reuse pressure |
 | 5. Snapshot views | unscheduled | L | the LSP overlay part first; Git index and tree views only with demand |
@@ -1554,10 +1561,11 @@ Phase 1 as a whole has standalone value and reduces the risk of every later phas
 
 The accepted v0.21 design, with its starting point checked against the code, is
 [`v0.21/README.md`](v0.21/README.md); its decisions are recorded in
-[ADR-0023](../adr/0023-relation-ir-key-parity-and-plugin-contract-0x.md).
+[ADR-0023](../adr/0023-relation-ir-key-parity-and-plugin-contract-0x.md), with the corrections
+review found proposed in [ADR-0024](../adr/0024-relation-ir-decisions-after-review.md).
 
-- Implement internal resource, selector, adapter, relation, and constraint types, with lazy spans
-  (section 6.2) and file-major read coalescing (section 9.1).
+- Implement internal resource, selector, adapter, and relation types, with lazy spans (section
+  6.2) and file-major read coalescing (section 9.1). Constraint types arrive with Phase 3.
 - **Pilot on a new kind, not a port.** The first user of the IR is a new v1 kind with no
   existing users, `key_parity` (a reference file plus a glob of peers, covering locale files and
   `.env.example`), so the IR delivers user value with zero migration risk (decision DEC-7).

@@ -1,0 +1,9 @@
+# Corpus configs that are expected not to replay (`xtask corpus-replay --expect`).
+# A repository missing from this list that is skipped or unavailable fails the
+# replay, and so does a listed one that replays again: update the list in the
+# same change. Columns: repository, verdict (skipped | unavailable), why.
+#
+facebook/react	skipped	sets scope_filter.changed_since on git_commit_no_fixup, which takes `since`
+gin-gonic/gin	skipped	overrides the bundled gha-pin-actions-to-sha rule with another kind; the bundled rule has a `format` option the new kind rejects
+neovim/neovim	skipped	overrides the bundled gha-pin-actions-to-sha rule with another kind (as gin-gonic/gin)
+spring-projects/spring-boot	skipped	overrides the bundled gha-pin-actions-to-sha rule with another kind (as gin-gonic/gin)

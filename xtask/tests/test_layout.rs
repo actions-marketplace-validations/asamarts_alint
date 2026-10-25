@@ -5,7 +5,8 @@
 //! as one `it` target rooted at `tests/main.rs`, which declares each test file
 //! as a module. Without Cargo's discovery a new `tests/*.rs` file is silently
 //! never compiled, and a crate that drops `autotests = false` goes back to one
-//! binary per file; this test catches both through `cargo metadata`.
+//! binary per file; this test catches both through `cargo metadata`, and
+//! checks every module directory's `mod.rs` the same way.
 //!
 //! Runs in plain `cargo test --workspace`, with no network.
 
@@ -47,13 +48,13 @@ fn workspace_packages(root: &Path) -> Vec<Value> {
         .clone()
 }
 
-/// What a crate's `tests/` directory requires of `tests/main.rs`.
+/// The modules a module directory must declare, and files that cannot be one.
 #[derive(Default)]
-struct TestDir {
-    /// Module name to its file, for every top-level `tests/*.rs` file other
-    /// than `main.rs` and every `tests/<dir>/mod.rs` helper.
-    modules: BTreeMap<String, String>,
-    /// Files that can never be a module of `tests/main.rs` as they stand.
+struct ModuleDir {
+    /// Module name to its file, for every `*.rs` file other than the root
+    /// (`main.rs` or `mod.rs`) and every subdirectory with a `mod.rs`.
+    modules: BTreeMap<String, PathBuf>,
+    /// Files that can never be a module of the root as they stand.
     problems: Vec<String>,
 }
 
@@ -65,15 +66,17 @@ fn is_identifier(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn scan_tests_dir(tests_dir: &Path) -> TestDir {
-    let mut found = TestDir::default();
-    let entries = match std::fs::read_dir(tests_dir) {
+/// Scan `dir`, whose root file is `root` (`main.rs` or `mod.rs`). `shown` is
+/// how the directory is named in messages.
+fn scan_module_dir(dir: &Path, root: &str, shown: &str) -> ModuleDir {
+    let mut found = ModuleDir::default();
+    let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return found,
         Err(error) => {
             found
                 .problems
-                .push(format!("cannot read {}: {error}", tests_dir.display()));
+                .push(format!("cannot read {}: {error}", dir.display()));
             return found;
         }
     };
@@ -83,18 +86,18 @@ fn scan_tests_dir(tests_dir: &Path) -> TestDir {
         let module = if path.is_dir() {
             if path.join("main.rs").is_file() {
                 found.problems.push(format!(
-                    "tests/{name}/main.rs is a separate test binary, which `autotests = false` \
-                     never builds; rename it to tests/{name}/mod.rs and declare `mod {name};`"
+                    "{shown}/{name}/main.rs is a separate test binary, which `autotests = false` \
+                     never builds; rename it to {shown}/{name}/mod.rs and declare `mod {name};`"
                 ));
             }
             if !path.join("mod.rs").is_file() {
                 continue;
             }
-            (name.clone(), format!("tests/{name}/mod.rs"))
+            (name.clone(), path.join("mod.rs"))
         } else if let Some(stem) = name.strip_suffix(".rs")
-            && stem != "main"
+            && name != root
         {
-            (stem.to_string(), format!("tests/{name}"))
+            (stem.to_string(), path.clone())
         } else {
             continue;
         };
@@ -102,52 +105,251 @@ fn scan_tests_dir(tests_dir: &Path) -> TestDir {
             found.modules.insert(module.0, module.1);
         } else {
             found.problems.push(format!(
-                "{} cannot be a module; rename it to a valid Rust identifier",
-                module.1
+                "{shown}/{} cannot be a module; rename it to a valid Rust identifier",
+                path.file_name().unwrap().to_string_lossy()
             ));
         }
     }
     found
 }
 
-/// `src` without `//` and `/* */` comments, enough for a list of modules.
-fn strip_comments(src: &str) -> String {
+/// `src` with comments removed (block comments nest), string literals reduced
+/// to their alphanumeric and simple punctuation characters (so `"linux"` stays
+/// readable but a quoted `mod x;`, `*/` or `]` cannot be mistaken for code),
+/// and everything inside braces blanked, leaving only top-level items.
+fn top_level_code(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(src.len());
-    let mut rest = src;
-    while !rest.is_empty() {
-        if let Some(after) = rest.strip_prefix("//") {
-            rest = after.find('\n').map_or("", |at| &after[at..]);
-        } else if let Some(after) = rest.strip_prefix("/*") {
-            rest = after.find("*/").map_or("", |at| &after[at + 2..]);
-            out.push(' ');
-        } else {
-            let c = rest.chars().next().unwrap();
-            out.push(c);
-            rest = &rest[c.len_utf8()..];
+    let mut depth = 0usize;
+    let mut i = 0;
+    let push = |out: &mut String, depth: usize, c: char| {
+        out.push(if depth == 0 || c == '\n' { c } else { ' ' });
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        if c == '/' && next == Some('/') {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
         }
+        if c == '/' && next == Some('*') {
+            let mut nesting = 0usize;
+            while i < chars.len() {
+                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                    nesting += 1;
+                    i += 2;
+                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
+                    nesting -= 1;
+                    i += 2;
+                    if nesting == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            out.push(' ');
+            continue;
+        }
+        // Raw strings: r"..", r#".."#, br#".."#.
+        let raw_start = if c == 'r' {
+            Some(i + 1)
+        } else if c == 'b' && next == Some('r') {
+            Some(i + 2)
+        } else {
+            None
+        };
+        if let Some(mut j) = raw_start {
+            let mut hashes = 0;
+            while chars.get(j) == Some(&'#') {
+                hashes += 1;
+                j += 1;
+            }
+            let ident_before = i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+            if chars.get(j) == Some(&'"') && !ident_before {
+                let mut k = j + 1;
+                let body_start = k;
+                while k < chars.len() {
+                    if chars[k] == '"' && (0..hashes).all(|h| chars.get(k + 1 + h) == Some(&'#')) {
+                        break;
+                    }
+                    k += 1;
+                }
+                push_string(&mut out, depth, &chars[body_start..k.min(chars.len())]);
+                i = k + 1 + hashes;
+                continue;
+            }
+        }
+        if c == '"' {
+            let mut k = i + 1;
+            let body_start = k;
+            while k < chars.len() && chars[k] != '"' {
+                k += if chars[k] == '\\' { 2 } else { 1 };
+            }
+            push_string(&mut out, depth, &chars[body_start..k.min(chars.len())]);
+            i = k + 1;
+            continue;
+        }
+        // A character literal such as '"' or '{' (a lifetime has no closing quote).
+        if c == '\'' {
+            let len = if next == Some('\\') { 4 } else { 3 };
+            if chars.get(i + len - 1) == Some(&'\'') {
+                i += len;
+                continue;
+            }
+        }
+        match c {
+            '{' => {
+                push(&mut out, depth, ' ');
+                depth += 1;
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                push(&mut out, depth, ' ');
+            }
+            _ => push(&mut out, depth, c),
+        }
+        i += 1;
     }
     out
 }
 
-/// The modules `main.rs` declares as `mod name;` (any visibility, attributes
-/// on the same or earlier lines), and those declared with `#[path]`, which
-/// would compile a file other than the one the module is named after.
-fn declared_modules(main_rs: &str) -> (BTreeSet<String>, Vec<String>) {
+fn push_string(out: &mut String, depth: usize, body: &[char]) {
+    if depth > 0 {
+        out.push_str("\"\"");
+        return;
+    }
+    out.push('"');
+    out.extend(
+        body.iter()
+            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')),
+    );
+    out.push('"');
+}
+
+/// How one `mod name;` declaration is written.
+#[derive(Debug, PartialEq, Eq)]
+struct Declaration {
+    name: String,
+    /// Why the declaration does not reliably compile the file named after it.
+    problem: Option<String>,
+}
+
+/// The `cfg` predicates a test module may sit behind: platforms CI runs.
+const ALLOWED_CFGS: &[&str] = &[
+    "unix",
+    "windows",
+    "not(unix)",
+    "not(windows)",
+    "target_os=\"linux\"",
+    "target_os=\"macos\"",
+    "target_os=\"windows\"",
+];
+
+/// The top-level `mod name;` declarations in a module root, any visibility,
+/// with attributes on the same or earlier lines.
+fn declarations(src: &str) -> Vec<Declaration> {
     let declaration = Regex::new(
         r"((?:#\[[^\]]*\]\s*)*)(?:pub(?:\s*\([^)]*\))?\s+)?\bmod\s+(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*;",
     )
     .unwrap();
-    let path_attribute = Regex::new(r"#\[\s*path\b").unwrap();
-    let mut declared = BTreeSet::new();
-    let mut with_path = Vec::new();
-    for capture in declaration.captures_iter(&strip_comments(main_rs)) {
+    let attribute = Regex::new(r"#\[\s*([A-Za-z_]+)\s*(.*?)\]\s*$").unwrap();
+    let path_argument = Regex::new(r"\bpath\s*=").unwrap();
+    let mut found = Vec::new();
+    for capture in declaration.captures_iter(&top_level_code(src)) {
         let name = capture[2].to_string();
-        if path_attribute.is_match(&capture[1]) {
-            with_path.push(name.clone());
+        let mut problem = None;
+        for attr in capture[1].split("#[").filter(|a| !a.trim().is_empty()) {
+            let attr = format!("#[{attr}");
+            let Some(parts) = attribute.captures(attr.trim()) else {
+                continue;
+            };
+            let args: String = parts[2].chars().filter(|c| !c.is_whitespace()).collect();
+            match &parts[1] {
+                "cfg" => {
+                    let predicate = args.trim_start_matches('(').trim_end_matches(')');
+                    if !ALLOWED_CFGS.contains(&predicate) {
+                        problem = Some(format!(
+                            "is behind #[cfg({predicate})], which CI may never enable; gate the \
+                             file's contents with an inner #![cfg] on a platform instead"
+                        ));
+                    }
+                }
+                "cfg_attr" | "path" => {
+                    problem = Some(format!(
+                        "uses #[{}], which can compile a file other than the one the module is \
+                         named after",
+                        &parts[1]
+                    ));
+                }
+                _ if path_argument.is_match(&parts[2]) => {
+                    problem = Some("sets a module path".to_string());
+                }
+                _ => {}
+            }
         }
-        declared.insert(name);
+        found.push(Declaration { name, problem });
     }
-    (declared, with_path)
+    found
+}
+
+/// Check one module root (`main.rs` or `mod.rs`) and, recursively, every
+/// directory module it declares.
+fn check_module_root(
+    package: &str,
+    root_file: &Path,
+    dir: &Path,
+    shown: &str,
+    problems: &mut Vec<String>,
+) {
+    let root_name = root_file
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let found = scan_module_dir(dir, &root_name, shown);
+    problems.extend(found.problems.iter().map(|p| format!("{package}: {p}")));
+    let source = match std::fs::read_to_string(root_file) {
+        Ok(source) => source,
+        Err(error) => {
+            problems.push(format!(
+                "{package}: cannot read {}: {error}",
+                root_file.display()
+            ));
+            return;
+        }
+    };
+    let declared = declarations(&source);
+    let mut names = BTreeSet::new();
+    for declaration in &declared {
+        if !names.insert(declaration.name.as_str()) {
+            problems.push(format!(
+                "{package}: {shown}/{root_name} declares `mod {};` twice",
+                declaration.name
+            ));
+        }
+        if let Some(problem) = &declaration.problem {
+            problems.push(format!(
+                "{package}: `mod {};` in {shown}/{root_name} {problem}",
+                declaration.name
+            ));
+        }
+    }
+    for (module, file) in &found.modules {
+        if !names.contains(module.as_str()) {
+            problems.push(format!(
+                "{package}: {} is never compiled; add `mod {module};` to {shown}/{root_name}",
+                file.strip_prefix(dir.parent().unwrap_or(dir))
+                    .unwrap_or(file)
+                    .display()
+            ));
+        } else if file.file_name().is_some_and(|f| f == "mod.rs") {
+            let child = file.parent().unwrap();
+            check_module_root(package, file, child, &format!("{shown}/{module}"), problems);
+        }
+    }
 }
 
 #[test]
@@ -160,13 +362,7 @@ fn every_crate_builds_its_integration_tests_as_one_binary() {
         let manifest = PathBuf::from(package["manifest_path"].as_str().unwrap());
         let crate_dir = manifest.parent().unwrap();
         let tests_dir = crate_dir.join("tests");
-        let found = scan_tests_dir(&tests_dir);
-        problems.extend(
-            found
-                .problems
-                .iter()
-                .map(|problem| format!("{name}: {problem}")),
-        );
+        let top = scan_module_dir(&tests_dir, "main.rs", "tests");
         let test_targets: Vec<&Value> = package["targets"]
             .as_array()
             .unwrap()
@@ -177,7 +373,7 @@ fn every_crate_builds_its_integration_tests_as_one_binary() {
                     .is_some_and(|kinds| kinds.iter().any(|kind| kind == "test"))
             })
             .collect();
-        if found.modules.is_empty() && test_targets.is_empty() {
+        if top.modules.is_empty() && top.problems.is_empty() && test_targets.is_empty() {
             continue;
         }
         checked += 1;
@@ -200,23 +396,19 @@ fn every_crate_builds_its_integration_tests_as_one_binary() {
             ));
             continue;
         }
-
-        let (declared, with_path) = declared_modules(&std::fs::read_to_string(&main_rs).unwrap());
-        for module in with_path {
+        let target = test_targets[0];
+        if target["required-features"]
+            .as_array()
+            .is_some_and(|features| !features.is_empty())
+        {
             problems.push(format!(
-                "{name}: `mod {module};` in {} uses #[path]; declare each test file by its own \
-                 name",
-                main_rs.display()
+                "{name}: the `it` target has required-features, so a plain test run skips it"
             ));
         }
-        for (module, file) in &found.modules {
-            if !declared.contains(module) {
-                problems.push(format!(
-                    "{name}: {file} is never compiled; add `mod {module};` to {}",
-                    main_rs.display()
-                ));
-            }
+        if target["test"] == Value::Bool(false) {
+            problems.push(format!("{name}: the `it` target sets `test = false`"));
         }
+        check_module_root(name, &main_rs, &tests_dir, "tests", &mut problems);
     }
     assert!(
         checked >= 8,
@@ -226,14 +418,56 @@ fn every_crate_builds_its_integration_tests_as_one_binary() {
 }
 
 #[test]
-fn declared_modules_reads_every_declaration_form() {
-    let main_rs = "//! doc mentioning mod fake;\n\n#[cfg(unix)]\nmod lsp_common;\npub mod cli;\n\
-                   mod a; // note\npub(crate) mod b;\n#[cfg(unix)] mod c;\nmod\td ;\nmod r#e;\n\
-                   /* mod hidden;\n mod also_hidden; */\n#[path = \"other.rs\"]\nmod f;\n";
-    let (declared, with_path) = declared_modules(main_rs);
-    let expected = ["a", "b", "c", "cli", "d", "e", "f", "lsp_common"];
-    assert_eq!(declared, expected.iter().map(ToString::to_string).collect());
-    assert_eq!(with_path, ["f"]);
+fn declarations_read_every_form_and_flag_unreliable_ones() {
+    let src = r##"//! doc mentioning mod fake;
+#[cfg(unix)]
+mod lsp_common;
+pub mod cli;
+mod a; // note
+pub(crate) mod b;
+#[cfg(unix)] mod c;
+mod	d ;
+mod r#e;
+/* mod hidden; /* nested */ mod also_hidden; */
+#[path = "other.rs"]
+mod f;
+#[cfg(any())]
+mod g;
+#[cfg_attr(unix, path = "o.rs")]
+mod h;
+#[cfg(target_os = "linux")]
+mod i;
+const S: &str = "mod ghost; */ #[";
+const R: &str = r#"mod raw_ghost;"#;
+mod outer { mod inner; }
+#[doc = "see https://example.com/x]"]
+mod j;
+"##;
+    let found = declarations(src);
+    let names: Vec<&str> = found.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "lsp_common",
+            "cli",
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+            "f",
+            "g",
+            "h",
+            "i",
+            "j"
+        ]
+    );
+    let flagged: Vec<&str> = found
+        .iter()
+        .filter(|d| d.problem.is_some())
+        .map(|d| d.name.as_str())
+        .collect();
+    assert_eq!(flagged, ["f", "g", "h"]);
 }
 
 #[test]
@@ -249,7 +483,7 @@ fn scan_flags_files_that_cannot_be_modules() {
     std::fs::write(tests.join("multi/main.rs"), "").unwrap();
     std::fs::create_dir_all(tests.join("fixtures/src")).unwrap();
     std::fs::write(tests.join("fixtures/src/lib.rs"), "").unwrap();
-    let found = scan_tests_dir(tests);
+    let found = scan_module_dir(tests, "main.rs", "tests");
     assert_eq!(
         found.modules.keys().map(String::as_str).collect::<Vec<_>>(),
         ["helper", "ok_file"]
@@ -258,7 +492,23 @@ fn scan_flags_files_that_cannot_be_modules() {
     assert!(found.problems.iter().any(|p| p.contains("bad-name.rs")));
     assert!(found.problems.iter().any(|p| p.contains("multi/main.rs")));
     assert_eq!(
-        scan_tests_dir(&tests.join("absent")).problems,
+        scan_module_dir(&tests.join("absent"), "main.rs", "tests").problems,
         Vec::<String>::new()
     );
+}
+
+#[test]
+fn nested_module_directories_are_checked_against_their_mod_rs() {
+    let dir = tempfile::tempdir().unwrap();
+    let tests = dir.path();
+    std::fs::write(tests.join("main.rs"), "mod helper;\n").unwrap();
+    std::fs::create_dir_all(tests.join("helper")).unwrap();
+    std::fs::write(tests.join("helper/mod.rs"), "mod declared;\n").unwrap();
+    std::fs::write(tests.join("helper/declared.rs"), "").unwrap();
+    std::fs::write(tests.join("helper/forgotten.rs"), "").unwrap();
+    let mut problems = Vec::new();
+    check_module_root("pkg", &tests.join("main.rs"), tests, "tests", &mut problems);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("forgotten.rs is never compiled"));
+    assert!(problems[0].contains("tests/helper/mod.rs"));
 }

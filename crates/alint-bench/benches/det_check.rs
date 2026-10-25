@@ -76,8 +76,12 @@ fn workspace_target() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target")
 }
 
+/// The binary under measurement: `ALINT_DET_BIN` when set (the reference perf
+/// gate measures another release this way without touching `target/`), else
+/// the workspace's release build.
 fn alint_bin() -> PathBuf {
-    workspace_target().join("release/alint")
+    std::env::var_os("ALINT_DET_BIN")
+        .map_or_else(|| workspace_target().join("release/alint"), PathBuf::from)
 }
 
 /// `(packages, files_per_package)` for a size, matching the bench tree shapes.

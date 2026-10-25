@@ -126,8 +126,8 @@ regressions surface at PR time, deterministically — not 5 h later in a
 contaminated tag bench.
 
 **Reference gate (relation layer).** ADR-0023 adds a second, blocking job,
-`perf-gate-reference`, for changes `detect-changes.sh` classifies as
-relation-layer. It builds the frozen v0.18.2 release binary and HEAD's, runs
+`perf-gate-reference`, on pull requests `detect-changes.sh` classifies as
+relation-layer and on every Rust push to main. It builds the frozen v0.18.2 release binary and HEAD's, runs
 both through HEAD's `det_check` S1-S3 cells (only the binary differs), fails
 above +3% `Ir`, and fails when the alint process's read/stat-family syscalls on
 the 10k trees grow by more than 32 calls. See

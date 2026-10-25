@@ -153,10 +153,13 @@ if [[ "$RUST" == true || "$DOCS" == true || "$PACKAGING" == true || "$SUPPLY_CHA
 fi
 
 # Relation-layer changes (ADR-0023, V21-6) run the blocking v0.18.2 reference
-# perf gate. So do changes to that gate and to what it measures. Deliberately
-# not triggered by every CI change: the gate costs two release builds and two
-# Valgrind runs.
-if echo "$CHANGED" | grep -qE '^crates/alint-core/src/(relation/|plugin_api/|extract\.rs$|engine/)|^crates/alint-rules/src/(cross_file/|key_parity)|^ci/scripts/(reference-perf-gate\.sh|syscall-counts\.py)$|^crates/alint-bench/benches/det_check\.rs$|^xtask/src/bench/scenarios/s[123]_'; then
+# perf gate on pull requests: the relation layer and plugin traits, the engine,
+# extraction and its parsers, the cross_file and key_parity kinds and the
+# shared reader, plus the gate itself and everything it measures with. Each
+# module root is matched in both `foo.rs` and `foo/` forms. (On pushes to main
+# the gate runs for every Rust change; see ci.yml.) Deliberately not triggered
+# by every CI change: the gate costs two release builds and two Valgrind runs.
+if echo "$CHANGED" | grep -qE '^crates/alint-core/src/((relation|plugin_api|engine)(\.rs$|/)|extract\.rs$|structured_format)|^crates/alint-rules/src/(cross_file(\.rs$|/)|key_parity|io\.rs$)|^ci/scripts/(reference-perf-gate\.sh|syscall-counts\.py|detect-changes\.sh)$|^crates/alint-bench/(benches/det_check\.rs|src/tree\.rs)$|^xtask/src/bench/scenarios/s[123]_'; then
   RELATION=true
 fi
 

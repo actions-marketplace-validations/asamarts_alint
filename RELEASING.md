@@ -86,10 +86,10 @@ points are explicit.
    script automatically once opted in via
    `git config core.hooksPath ci/githooks`.
 
-   **Corpus replay (releases with relation-layer changes).** Before tagging
-   a release that changes the relation layer (v0.21 onward), run the
-   `Corpus Replay` workflow on the release commit with the previous release
-   as the comparison:
+   **Corpus replay (releases with relation-layer changes).** Before the bump
+   commit of a release that changes the relation layer (v0.21 onward), run the
+   `Corpus Replay` workflow on main's tip (the bump changes only versions) with
+   the previous release as the comparison:
 
    ```sh
    gh workflow run corpus-replay.yml --ref main -f compare_ref=v<previous>

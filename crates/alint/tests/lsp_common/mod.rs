@@ -1,6 +1,7 @@
 //! Shared LSP test harness: spawns the real `alint lsp` binary and
 //! speaks framed JSON-RPC over stdio. Used by `lsp_smoke.rs` (the full
-//! linear e2e script) and `lsp_protocol.rs` (focused contract tests).
+//! linear e2e script), `lsp_protocol.rs` (focused contract tests), and
+//! `lsp_audit.rs` (regression tests from the LSP audit).
 //!
 //! Unix-only: callers build `file://` URIs by hand, which would need
 //! drive-letter handling on Windows. The server itself is
