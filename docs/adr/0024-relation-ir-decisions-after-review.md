@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-10-25
 decision-makers: asamarts
 ---
@@ -8,10 +8,9 @@ decision-makers: asamarts
 
 ## Status
 
-Proposed (2026-10-25). Supersedes [ADR-0023](0023-relation-ir-key-parity-and-plugin-contract-0x.md)
-once accepted. Decision 6 relaxes how ADR-0019 DEC-13's budget is measured and needs the
-decision-maker's confirmation; the other decisions correct or complete ADR-0023 without changing
-what was chosen.
+Accepted (2026-10-25). Supersedes [ADR-0023](0023-relation-ir-key-parity-and-plugin-contract-0x.md).
+Decision 6 relaxes how ADR-0019 DEC-13's budget is measured, and the decision-maker confirmed it;
+the other decisions correct or complete ADR-0023 without changing what was chosen.
 
 ## Context
 
