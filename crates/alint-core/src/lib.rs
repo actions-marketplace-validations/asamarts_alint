@@ -24,10 +24,14 @@ pub mod located_fix;
 mod location;
 mod pathsafe;
 pub mod pattern_hints;
+#[doc(hidden)]
+pub mod plugin_api;
 pub mod process;
 pub mod proposed_fix;
 mod redaction;
 mod registry;
+#[doc(hidden)]
+pub mod relation;
 mod report;
 mod rule;
 mod scope;
