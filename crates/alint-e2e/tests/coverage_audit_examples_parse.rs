@@ -30,6 +30,8 @@
 //!   as a when-language parse error
 //! - `JSONPath` dashed-key dot-notation — surfaces as a `JSONPath`
 //!   parse error
+//! - README paragraphs labelled as current validation but carrying a stale
+//!   effective-rule count
 //!
 //! What it deliberately does NOT catch:
 //! - Tool-not-on-PATH errors from `command:` rules — those would
@@ -41,6 +43,8 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+
+use crate::support;
 
 #[test]
 fn every_examples_alint_yml_parses_and_builds() {
@@ -86,7 +90,7 @@ fn every_examples_alint_yml_parses_and_builds() {
             .unwrap_or("<unknown>");
 
         // Step 1: load the YAML + resolve `extends:`.
-        let config = match alint_dsl::load(config_path) {
+        let config = match support::load(config_path) {
             Ok(c) => c,
             Err(e) => {
                 failures.push(format!(
@@ -114,15 +118,15 @@ fn every_examples_alint_yml_parses_and_builds() {
                 ));
             }
             // Step 2b: parse `when:` if present.
-            if let Some(when_src) = &spec.when {
-                if let Err(e) = alint_core::when::parse(when_src) {
-                    failures.push(format!(
-                        "{case_study}: rule {:?}: parsing `when:` \
+            if let Some(when_src) = &spec.when
+                && let Err(e) = alint_core::when::parse(when_src)
+            {
+                failures.push(format!(
+                    "{case_study}: rule {:?}: parsing `when:` \
                          failed — {e}\n  (use keywords `and`/`or`/`not`, \
                          not `&&`/`||`/`!`)",
-                        spec.id,
-                    ));
-                }
+                    spec.id,
+                ));
             }
         }
     }
@@ -184,5 +188,197 @@ fn every_example_carries_the_yaml_language_server_directive() {
          Documented in `docs/development/CONFIG-AUTHORING.md` § \"Editor LSP via the JSON Schema\".",
         missing.len(),
         missing.join("\n  - "),
+    );
+}
+
+/// A historical validation count may remain in a dated case-study section,
+/// but a paragraph explicitly labelled "Current validation" must agree with
+/// the effective config that ships beside it. This catches documentation drift
+/// when rules are added, retired, or deduplicated through `extends:`.
+#[test]
+fn current_example_readme_validation_counts_match_configs() {
+    let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples");
+    let markers = ["**Current validation", "**Current config validation"];
+    let mut checked = 0;
+    let mut stale = Vec::new();
+
+    for entry in fs::read_dir(examples_dir).unwrap() {
+        let case_study_dir = entry.unwrap().path();
+        let config_path = case_study_dir.join(".alint.yml");
+        let readme_path = case_study_dir.join("README.md");
+        if !config_path.is_file() || !readme_path.is_file() {
+            continue;
+        }
+
+        let effective_count = support::load(&config_path).unwrap().rules.len();
+        let readme = fs::read_to_string(&readme_path).unwrap();
+        for marker in markers {
+            let mut remainder = readme.as_str();
+            while let Some(marker_offset) = remainder.find(marker) {
+                let from_marker = &remainder[marker_offset..];
+                let excerpt_end = [from_marker.find("\n\n"), from_marker.find("\n- ")]
+                    .into_iter()
+                    .flatten()
+                    .min()
+                    .unwrap_or(from_marker.len());
+                let excerpt = &from_marker[..excerpt_end];
+                let normalized = excerpt.split_whitespace().collect::<Vec<_>>().join(" ");
+                let Some((_, after_label)) = normalized.split_once("Config valid:") else {
+                    stale.push(format!(
+                        "{}: {marker:?} paragraph has no `Config valid: N rule(s) loaded` claim",
+                        case_study_dir.file_name().unwrap().to_string_lossy(),
+                    ));
+                    break;
+                };
+                let digits: String = after_label
+                    .trim_start()
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                let documented_count = digits.parse::<usize>().unwrap_or_else(|_| {
+                    panic!(
+                        "{}: could not parse current validation count after `Config valid:`",
+                        readme_path.display(),
+                    )
+                });
+                checked += 1;
+                if documented_count != effective_count {
+                    stale.push(format!(
+                        "{}: current README says {documented_count} rules, config loads {effective_count}",
+                        case_study_dir.file_name().unwrap().to_string_lossy(),
+                    ));
+                }
+                remainder = &from_marker[marker.len()..];
+            }
+        }
+    }
+
+    assert!(
+        checked >= 4,
+        "expected at least the four reconciled case studies to carry current validation claims",
+    );
+    assert!(
+        stale.is_empty(),
+        "current case-study validation claims drifted from their configs:\n  - {}",
+        stale.join("\n  - "),
+    );
+}
+
+/// `ordered_block` markers are exact trimmed lines. Regex-looking markers
+/// silently match nothing, which made several published case-study rules
+/// appear to pass without checking a block at all.
+#[test]
+fn example_ordered_block_markers_are_literal_lines() {
+    let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples");
+    let mut invalid = Vec::new();
+
+    for entry in fs::read_dir(examples_dir).unwrap() {
+        let config_path = entry.unwrap().path().join(".alint.yml");
+        if !config_path.is_file() {
+            continue;
+        }
+        let config = support::load(&config_path).unwrap();
+        for rule in config
+            .rules
+            .iter()
+            .filter(|rule| rule.kind == "ordered_block")
+        {
+            for key in ["start", "end"] {
+                let Some(marker) = rule
+                    .extra
+                    .get(yaml_serde::Value::String(key.to_owned()))
+                    .and_then(yaml_serde::Value::as_str)
+                else {
+                    continue;
+                };
+                if marker.starts_with('^')
+                    || marker.ends_with('$')
+                    || marker == r"\z"
+                    || marker.contains(r"\s")
+                {
+                    invalid.push(format!("{}: {key}: {marker:?}", rule.id));
+                }
+            }
+        }
+    }
+
+    assert!(
+        invalid.is_empty(),
+        "ordered_block start/end markers are literal trimmed lines, not regexes:\n  - {}",
+        invalid.join("\n  - "),
+    );
+}
+
+/// These rules were retired after validation against pinned upstream trees:
+/// they either targeted generated-only files, depended on deleted manifests,
+/// encoded a convention the project did not follow, or used a rule kind that
+/// cannot express the upstream check. Reintroducing one requires a new rule
+/// kind or a fixture that demonstrates the repaired semantics.
+#[test]
+fn known_misfiring_example_rules_stay_retired() {
+    let retired = [
+        "bazel-version-matches-bazelci",
+        "react-error-codes-fresh",
+        "react-pkg-files-resolve",
+        "flutter-engine-version-coherent",
+        "ts-baseline-errors-pair-with-js",
+        "ts-libs-manifest-sources-resolve",
+        "nixpkgs-maintainers-keep-sorted",
+        "nixpkgs-team-list-keep-sorted",
+        "protobuf-failure-lists-sorted",
+        "pytorch-build-variables-paths-resolve",
+        "rust-tidy-alphabetical-rust",
+        "rust-tidy-alphabetical-toml",
+        "rust-tidy-proc-macro-deps-fresh",
+        "tensorflow-bazel-files-declare-license",
+        "tokio-readme-mirror",
+        "tokio-spellcheck-dic-sorted",
+        "tokio-util-dep-major-matches",
+        "turbo-crate-denies-clippy-all",
+        "turbo-crate-inherits-edition",
+        "turbo-crate-inherits-workspace-lints",
+        "turbo-npm-versions-track-version-txt",
+        "turbo-package-declares-repository-directory",
+        "nextjs-check-manifests",
+        "nextjs-errors-manifest-paths-resolve",
+        "nextjs-errors-manifest-present",
+        "nextjs-tsconfig-strict-mode",
+        "nextjs-typos-check",
+    ];
+    let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples");
+    let mut found = Vec::new();
+
+    for entry in fs::read_dir(examples_dir).unwrap() {
+        let config_path = entry.unwrap().path().join(".alint.yml");
+        if !config_path.is_file() {
+            continue;
+        }
+        let config = support::load(&config_path).unwrap();
+        for rule in &config.rules {
+            if retired.contains(&rule.id.as_str()) {
+                found.push(rule.id.clone());
+            }
+        }
+    }
+
+    assert!(
+        found.is_empty(),
+        "known-misfiring example rules were reintroduced without repaired semantics: {}",
+        found.join(", "),
     );
 }

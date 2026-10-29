@@ -29,16 +29,9 @@ use alint_core::{
 
 use crate::fixers::FileStripZeroWidthFixer;
 
-/// Returns true if `c` is a zero-width character that this rule
-/// flags. `is_leading_feff == true` means U+FEFF at byte 0 of
-/// the file (the BOM case) — that's deliberately NOT flagged.
-pub fn is_flagged_zero_width(c: char, is_leading_feff: bool) -> bool {
-    match c {
-        '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{2060}' | '\u{180E}' => true,
-        '\u{FEFF}' => !is_leading_feff,
-        _ => false,
-    }
-}
+/// Re-exported from [`alint_core::invisible`], the single definition the
+/// terminal sanitizer also uses.
+pub use alint_core::invisible::is_flagged_zero_width;
 
 #[derive(Debug)]
 pub struct NoZeroWidthCharsRule {
@@ -77,43 +70,86 @@ impl PerFileRule for NoZeroWidthCharsRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        // Lossily decode rather than abandon the file on the first invalid byte:
-        // this is a security-posture rule, so a stray non-UTF-8 byte must NOT
-        // suppress detection of a zero-width char elsewhere (fail-open evasion).
-        let text = String::from_utf8_lossy(bytes);
-        let Some((line_no, col, codepoint)) = first_zero_width(&text) else {
+        // Same binary policy as no_bidi_controls (see there): a binary-looking
+        // file is scanned only when it is valid UTF-8 (so a NUL cannot hide a
+        // char, but random image/font bytes are not lossily decoded into false
+        // positives); a stray invalid byte in a text file is one U+FFFD.
+        let binary = match crate::io::char_scan_mode(bytes) {
+            crate::io::CharScan::Skip => return Ok(Vec::new()),
+            crate::io::CharScan::BinaryUtf8 => true,
+            crate::io::CharScan::Text => false,
+        };
+        let Some((line_no, col, codepoint)) = first_zero_width(bytes) else {
             return Ok(Vec::new());
         };
         let msg = self.message.clone().unwrap_or_else(|| {
-            format!("zero-width character U+{codepoint:04X} at line {line_no} col {col}")
+            format!(
+                "zero-width character U+{codepoint:04X} at line {line_no} col {col}{}",
+                if binary {
+                    crate::no_bidi_controls::BINARY_NOTE
+                } else {
+                    ""
+                }
+            )
         });
         Ok(vec![
             Violation::new(msg)
                 .with_path(std::sync::Arc::<Path>::from(path))
-                .with_location(line_no, col),
+                .with_location(line_no, col)
+                // First-offender rule with a WHOLE-FILE fixer (it strips every
+                // occurrence). The file is the unit of accepted debt: key on the
+                // path so `fix --baseline` grandfathers the whole file and never
+                // strips a grandfathered char when a NEW one precedes it (audit
+                // F3, 2026-09-20). Matches no_trailing_whitespace.
+                .with_baseline_key(crate::slash(path))
+                // The strip fixer refuses binary content (see no_bidi_controls).
+                .with_not_fixable_if(binary),
         ])
     }
 }
 
-fn first_zero_width(text: &str) -> Option<(usize, usize, u32)> {
-    let mut line = 1usize;
-    let mut col = 1usize;
-    let mut first_char = true;
-    for c in text.chars() {
-        let is_leading = first_char && c == '\u{FEFF}';
-        if !is_leading && is_flagged_zero_width(c, false) {
-            return Some((line, col, c as u32));
-        }
-        first_char = false;
-        if c == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    None
+/// The UTF-8 lead bytes of every flagged char: 0xE1 (U+180E), 0xE2
+/// (U+200B..U+200D, U+2060) and 0xEF (U+FEFF). An invalid sequence decodes to
+/// U+FFFD, which is never flagged, so a file with none of these bytes has no
+/// finding. `lead_bytes_cover_every_flagged_char` holds this set to
+/// [`is_flagged_zero_width`].
+const LEAD_BYTES: [u8; 3] = [0xE1, 0xE2, 0xEF];
+
+fn first_zero_width(bytes: impl AsRef<[u8]>) -> Option<(usize, usize, u32)> {
+    // Skip the per-char decode for the (overwhelmingly common) clean file.
+    let bytes = bytes.as_ref();
+    let [a, b, c] = LEAD_BYTES;
+    memchr::memchr3(a, b, c, bytes)?;
+    scan_zero_width(bytes)
 }
+
+/// The full per-char scan behind [`first_zero_width`]'s prefilter.
+fn scan_zero_width(bytes: &[u8]) -> Option<(usize, usize, u32)> {
+    // A leading U+FEFF is a BOM (no_bom's job), not a zero-width char.
+    crate::io::first_char_where(bytes, |c, first| {
+        !(first && c == '\u{FEFF}') && is_flagged_zero_width(c, false)
+    })
+    .map(|(l, c, ch)| (l, c, ch as u32))
+}
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_strip_zero_width")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec.paths.as_ref().ok_or_else(|| {
@@ -145,6 +181,70 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lead_bytes_cover_every_flagged_char() {
+        let mut buf = [0u8; 4];
+        for c in (0..=u32::from(char::MAX)).filter_map(char::from_u32) {
+            if is_flagged_zero_width(c, false) || is_flagged_zero_width(c, true) {
+                let lead = c.encode_utf8(&mut buf).as_bytes()[0];
+                assert!(
+                    LEAD_BYTES.contains(&lead),
+                    "U+{:04X} lead 0x{lead:02X}",
+                    c as u32
+                );
+            }
+        }
+    }
+
+    /// Whole encodings of every flagged char, near-misses sharing their lead
+    /// bytes, truncated sequences, newlines, ASCII and arbitrary bytes.
+    fn atoms() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
+        use proptest::strategy::Strategy as _;
+        let mut fixed: Vec<Vec<u8>> = [
+            "\u{200B}", "\u{200C}", "\u{200D}", "\u{2060}", "\u{180E}", "\u{FEFF}", "\u{2014}",
+            "\u{2026}", "\u{1800}", "\u{FFFD}", "\u{FEFE}", "\n", "a",
+        ]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+        // Each flagged char's encoding cut short, so invalid runs border it.
+        for c in [
+            '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{180E}', '\u{FEFF}',
+        ] {
+            let mut buf = [0u8; 4];
+            let enc = c.encode_utf8(&mut buf).as_bytes();
+            fixed.push(enc[..enc.len() - 1].to_vec());
+        }
+        proptest::prop_oneof![
+            proptest::sample::select(fixed),
+            proptest::prelude::any::<u8>().prop_map(|b| vec![b]),
+        ]
+    }
+
+    proptest::proptest! {
+        /// The prefilter never changes the answer: on any mix of the atoms,
+        /// the prefiltered scan equals the full scan, finding and line/column
+        /// alike.
+        #[test]
+        fn prefilter_matches_the_full_scan(
+            parts in proptest::collection::vec(atoms(), 0..48)
+        ) {
+            let bytes = parts.concat();
+            proptest::prop_assert_eq!(first_zero_width(&bytes), scan_zero_width(&bytes));
+        }
+    }
+
+    #[test]
+    fn lead_byte_without_a_flagged_char_is_clean() {
+        // An em-dash shares the 0xE2 lead byte; invalid bytes decode to U+FFFD.
+        assert_eq!(first_zero_width("a \u{2014} b\n\u{2026}".as_bytes()), None);
+        assert_eq!(first_zero_width(b"\xE2\xE1\xEF\xFF x"), None);
+        assert_eq!(
+            first_zero_width("\u{2014}a\u{200B}".as_bytes()),
+            Some((1, 3, 0x200B))
+        );
+    }
 
     #[test]
     fn flags_zwsp() {
@@ -206,6 +306,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         let mut bytes = vec![0xFFu8];
         bytes.extend_from_slice("a\u{200B}b".as_bytes());
@@ -217,5 +320,114 @@ mod tests {
             1,
             "the ZWSP after a bad byte must still be flagged"
         );
+    }
+}
+
+#[cfg(test)]
+mod binary_evasion_tests {
+    use super::*;
+
+    #[test]
+    fn a_nul_byte_does_not_hide_a_zero_width_char() {
+        // Evasion regression (mirrors no_bidi_controls): a NUL byte must not
+        // make the rule skip the file. The finding is reported but not marked
+        // auto-fixable, since the strip fixer refuses binary content.
+        let idx = alint_core::FileIndex::from_entries(Vec::new());
+        let ctx = Context {
+            root: Path::new("/r"),
+            index: &idx,
+            registry: None,
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
+        };
+        let rule = NoZeroWidthCharsRule {
+            id: "no-zw".to_string(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::match_all(),
+            fixer: Some(FileStripZeroWidthFixer),
+        };
+        let vs = rule
+            .evaluate_file(&ctx, Path::new("a.rs"), "x\u{0}a\u{200B}b".as_bytes())
+            .unwrap();
+        assert_eq!(
+            vs.len(),
+            1,
+            "the ZWSP in a NUL-bearing file must be flagged"
+        );
+        assert!(vs[0].not_fixable);
+        let vs = rule
+            .evaluate_file(&ctx, Path::new("a.rs"), "a\u{200B}b".as_bytes())
+            .unwrap();
+        assert!(!vs[0].not_fixable);
+        assert_eq!(vs[0].baseline_key.as_deref(), Some("a.rs"));
+    }
+
+    fn rule() -> NoZeroWidthCharsRule {
+        NoZeroWidthCharsRule {
+            id: "no-zw".to_string(),
+            level: Level::Error,
+            policy_url: None,
+            message: None,
+            scope: Scope::match_all(),
+            fixer: Some(FileStripZeroWidthFixer),
+        }
+    }
+
+    fn eval(bytes: &[u8]) -> Vec<Violation> {
+        let idx = alint_core::FileIndex::from_entries(Vec::new());
+        let ctx = Context {
+            root: Path::new("/r"),
+            index: &idx,
+            registry: None,
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
+        };
+        rule().evaluate_file(&ctx, Path::new("f"), bytes).unwrap()
+    }
+
+    #[test]
+    fn crafted_valid_utf8_with_nul_is_still_scanned() {
+        // NUL is valid UTF-8: a source file with a NUL is binary-looking but
+        // still scanned, so the NUL cannot hide the char.
+        let vs = eval("int x;\u{0}// \u{200B} evil\n".as_bytes());
+        assert_eq!(vs.len(), 1);
+        assert!(vs[0].not_fixable);
+        assert_eq!(vs[0].baseline_key.as_deref(), Some("f"));
+    }
+
+    #[test]
+    fn png_like_invalid_utf8_binary_is_skipped() {
+        // Real binaries (images, fonts) are invalid UTF-8; a lossy decode would
+        // turn random bytes into controls (`D8 9C` -> U+061C; `E2 80 8B` is a
+        // ZWSP). Such files are skipped, as before the evasion fix.
+        let mut png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xfe".to_vec();
+        png.extend_from_slice(b"\xd8\x9c\x00\xe2\x80\x8b\xe2\x80\xae\x00\xc3");
+        assert!(
+            eval(&png).is_empty(),
+            "invalid-UTF-8 binary must be skipped"
+        );
+    }
+
+    #[test]
+    fn stray_invalid_byte_counts_as_one_column() {
+        // A text file with a lone invalid byte is scanned; the bad run counts as
+        // one U+FFFD column, matching a lossy decode.
+        let mut b = b"a\xffb".to_vec();
+        b.extend_from_slice("\u{200B}".as_bytes());
+        let vs = eval(&b);
+        assert_eq!(vs.len(), 1);
+        assert_eq!(vs[0].column, Some(4));
     }
 }

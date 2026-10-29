@@ -7,9 +7,15 @@
 > coverage classification, performance numbers, and gap-discovery findings.
 > Same facts, different language.
 
+> **Snapshot status.** Sections 1–9 preserve the original v0.9.20-era study and
+> its 27/106 coverage accounting; labels such as `alint-today`, `alint-future`,
+> and "ship-target" are historical as of 2026-05-10. The later re-analysis at
+> the end of this file is the latest re-analysis conclusion: 34 of 51
+> in-scope surfaces covered (about 67%) by the checked-in 58-rule config.
+
 Inventory of the structural-validation tooling in `kubernetes/kubernetes` and
-an alint config that replaces the rules alint can express today, plus a
-catalogue of the rules that need new alint primitives.
+an alint config that replaced the rules alint could express at the time, plus a
+catalogue of the rule primitives that were still missing.
 
 **Repo state captured:** 2026-05-07 latest tip of master via
 `git ls-remote https://github.com/kubernetes/kubernetes HEAD`. Sparse-clone at
@@ -20,7 +26,7 @@ files; 291 in-tree shell scripts; 578 markdown files; 66
 log captured an earlier SHA; no public k8s tag was pinned, so all numbers
 below are against this 2026-05-07 walk.
 
-**alint version:** 0.9.20 (current as of 2026-05-10). The original walk
+**alint version at this snapshot:** 0.9.20 (current on 2026-05-10). The original walk
 was performed against v0.9.17; intermediate v0.9.18 (deep-analysis pilot
 + pitfall #22 + 3 `.alint.yml` fixes via commit c5b6df32 + bundled-rule
 refinements A1-A6 that eliminated ~10k FPs) and v0.9.19/v0.9.20 (width-
@@ -182,14 +188,14 @@ socially rather than mechanically.
 
 ---
 
-## 2. Coverage classification
+## 2. Original coverage classification (v0.9.20 snapshot)
 
 Every row from §1 tagged with one of:
 
-- **alint-today** — name the rule kind + ruleset (`oss-baseline` / `go` /
+- **alint-today** — available at the time: name the rule kind + ruleset (`oss-baseline` / `go` /
   `ci/github-actions` / `hygiene/no-tracked-artifacts`) OR the per-rule
   entry in this directory's `.alint.yml`.
-- **alint-future** — name the v0.10 / v0.11+ candidate from
+- **alint-future** — not yet available at the time: name the v0.10 / v0.11+ candidate from
   [`docs/development/launch-evidence.md`](../../docs/development/launch-evidence.md).
 - **out-of-scope** — explain why (AST-aware analysis, runtime probe,
   codegen drift, Go module-graph resolution, …). The "out-of-scope" label
@@ -273,7 +279,11 @@ helpers). The `update-*.sh` family is the partner side of the
 
 ---
 
-## 3. Quantified coverage
+## 3. Original quantified coverage (v0.9.20 snapshot)
+
+These figures deliberately retain the original 106-surface denominator. They
+are evidence of what the first study found, not the current checked-in config's
+coverage; see the v0.11 re-analysis at the end for the updated 34/51 result.
 
 Counted across the **50 verify scripts** + **45 non-verify hack scripts** +
 **11 governance artefact families** = **106 distinct surfaces**.
@@ -315,7 +325,7 @@ governance artefacts (11 families):
    language-specific AST checkers is the right call — these tools must
    stay in `hack/`.
 
-2. **`import_gate` is the single highest-leverage v0.10 ship-target for
+2. **`import_gate` was the single highest-leverage v0.10 ship-target for
    k8s.** 7 of the 50 verify scripts (verify-import-aliases,
    verify-import-boss, verify-imports, verify-prometheus-imports,
    verify-internal-modules, verify-testing-import, plus the alias
@@ -325,7 +335,7 @@ governance artefacts (11 families):
    sources (k8s + airflow + golang/go + pytorch). Ship status: v0.10
    ship-target.
 
-3. **`generated_file_fresh` (codegen drift) is the second-densest cluster
+3. **`generated_file_fresh` (codegen drift) was the second-densest cluster
    — 7 of 50 — but tension with alint's no-codegen non-goal makes it
    opt-in.** verify-codegen, verify-conformance-yaml, verify-featuregates,
    verify-generated-docs, verify-internal-modules, verify-openapi-spec,
@@ -379,21 +389,17 @@ rules:
     require: [{ kind: command, command: ["golangci-lint", "run", "{dir}/..."] }]
 ```
 
-**Repo-specific vs bundled split:**
+**Current config split:**
 
-- **13 repo-specific rules** in `.alint.yml` (the `k8s-*` prefix
-  identifies them in `alint list` output): boilerplate (×2), file-sizes,
-  staging meta files, package names, shellcheck, spelling, gofmt,
-  golangci-lint, golangci-lint-config-shape, govulncheck, owners-fmt,
-  mock-source-pair.
-- **36 bundled rules** from the 4 extended rulesets (some IDs overlap,
-  which is why `alint list` reports 49 not 50): 15 from oss-baseline + 8
-  from go + 3 from ci/github-actions + 11 from hygiene/no-tracked-artifacts
-  − overlap = 36 effective rule IDs after dedup.
+- **25 repository-specific rules** are declared in `.alint.yml`.
+- **33 bundled rules** come from the 3 extended rulesets: 15 from
+  `oss-baseline`, 7 from `go`, and 11 from
+  `hygiene/no-tracked-artifacts`.
 
-**Validation:** `alint validate-config` reports `✓ Config valid: 49 rule(s)
-loaded`. Pitfall checks: the magic comment is present (line 1); the
-`command:` rules use `command:` (not `argv:`) and integer `timeout:`
+**Current validation (alint 0.17.0, 2026-10-06):** `alint
+validate-config` reports `✓ Config valid: 58 rule(s) loaded`. Pitfall
+checks: the magic comment is present (line 1); the `command:` rules use
+`command:` (not `argv:`) and integer `timeout:`
 (not duration strings); the `pair` rule uses `partner:` (not
 `secondary:`). The 3 regex pitfalls that surfaced 34,420 FPs against
 the v0.9.17 walk were fixed in v0.9.18 (commit c5b6df32) — current
@@ -418,7 +424,7 @@ exact reproduction command.
 
 | Check | Existing tool | Existing wall-clock | alint wall-clock | Ratio |
 |---|---|---|---|---|
-| `verify-staging-meta-files.sh` (34 staging dirs × 4 file-exists) | bash file-exists loop | **277 ms** ± 2 ms | **89 ms** ± 2 ms | **3.1× alint faster** |
+| `verify-staging-meta-files.sh` (33 staging dirs; the historical timed rule checked 4 files, the corrected rule checks all 6) | bash file-exists loop | **277 ms** ± 2 ms | **89 ms** ± 2 ms | **3.1× alint faster** on the historical 4-file comparison |
 | `verify-pkg-names.sh` (git grep over in-tree Go) | `git grep -E` | **439 ms** ± 12 ms | included in 320ms full pass | n/a — full alint pass already runs the rule |
 | `verify-boilerplate.sh` (license headers, full tree) | python `boilerplate.py` | **1.60 s** ± 0.004 s | included in 320 ms full pass | **5× alint faster** (full alint pass replaces this script + ~7 others simultaneously) |
 | `verify-file-sizes.sh` (git ls-files + size loop) | bash + `git ls-files --eol` | **4.05 s** ± 0.003 s | included in 320 ms full pass | **12.7× alint faster** |
@@ -458,7 +464,7 @@ run on a CI-class image.
 
 ## 6. Gap discovery — what alint surfaces against the live tree
 
-Run: `alint check --config /home/kaminsod/projects/alint/examples/kubernetes-kubernetes/.alint.yml /tmp/kubernetes` (live run, JSON-format; counts captured against alint v0.9.17 + the 2026-05-07 SHA — absolute counts drift with upstream tip).
+Run: `alint check --config examples/kubernetes-kubernetes/.alint.yml /tmp/kubernetes` (live run, JSON-format; counts captured against alint v0.9.17 + the 2026-05-07 SHA — absolute counts drift with upstream tip).
 
 **Headline (v0.9.17 walk, historical).** alint surfaced **34,696 violations**
 across the live tree; of those, **34,420 were false positives traceable to 3
@@ -622,19 +628,23 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 
 ---
 
-## 9. Validation status (2026-05-10, alint v0.9.20)
+## 9. Original validation status (2026-05-10, alint v0.9.20)
 
-- **alint version:** `0.9.20` (current). The §6 walk and absolute counts
+- **alint version:** `0.9.20` (current at the time). The §6 walk and absolute counts
   were captured against `0.9.17 (1dbd9b218a0e, built 2026-05-07)`;
   intermediate v0.9.18 fixed the 3 `.alint.yml` regex bugs (commit
   c5b6df32) and shipped bundled-rule refinements A1-A6 that eliminated
   ~10k FPs across the case-study set; v0.9.19/v0.9.20 added width-aware
   human output and the bundled-rule message audit.
-- **Rule count:** **49** (13 custom + 4 bundled rulesets — `oss-baseline`
+- **Historical rule count:** **49** (13 custom + 4 bundled rulesets — `oss-baseline`
   15, `go` 8, `ci/github-actions` 3, `hygiene/no-tracked-artifacts` 11;
   some rule IDs overlap which is why the grand total is 49 rather than
   the arithmetic sum of 50)
-- **`alint validate-config`:** ✓ Config valid: 49 rule(s) loaded
+- **Historical `alint validate-config`:** ✓ Config valid: 49 rule(s) loaded
+- **Current config validation (alint 0.17.0, 2026-10-06):** ✓ Config
+  valid: 58 rule(s) loaded (25 declared rules + 3 current bundled
+  rulesets). This is a config/schema revalidation, not a new live-tree
+  findings measurement.
 - **Live-tree recheck status:** Counts in §6 reflect the 2026-05-07
   v0.9.17 walk; the 34,420 FPs from the 3 pitfall-#22-class regex bugs
   are RESOLVED in v0.9.18 (current `.alint.yml` carries the corrected
@@ -649,13 +659,14 @@ Three candidate refinements worth evaluating in subsequent sweeps:
   - Pitfall **#22** (YAML `|` block-scalar trailing-newline trap on
     `file_header` patterns) — codified in v0.9.18; the 3 affected
     rules in this `.alint.yml` were updated to `|-` in commit c5b6df32.
-- **Open gaps (unchanged):** `import_gate` (v0.10 ship-target — covers
+- **Snapshot gaps (subsequently implemented):** `import_gate` (v0.10 ship-target — covers
   7 verify scripts here including prometheus-imports), `pair_hash`
   (v0.10 ship-target — covers `verify-readonly-packages.sh`),
   `generated_file_fresh` (v0.10 ship-target — codegen drift cluster),
   `registry_paths_resolve` (v0.10 ship-target — `build/dependencies.yaml`
   refPaths + `staging/publishing/import-restrictions.yaml`
-  baseImportPath values). No new rule-kind gaps surfaced.
+  baseImportPath values). These labels record the v0.9.20 finding; the v0.11
+  re-analysis below adopts the shipped capabilities. No new rule-kind gaps surfaced.
 - **Open suspected bugs in this directory's `.alint.yml`:** None.
   All 3 historical bugs documented in §6.2 have been resolved in
   v0.9.18; the current config is clean.
@@ -665,7 +676,7 @@ Three candidate refinements worth evaluating in subsequent sweeps:
 Re-derived against the current upstream + everything alint shipped since
 this study was written (v0.10 rule kinds + v0.11 commit-validation /
 `changed_since` / `{{env.X}}`). The `.alint.yml` here was rewritten
-accordingly (58 rules, ~67% coverage). +10 surfaces, headlined by the
+accordingly (58 rules; 34 of 51 in-scope surfaces, about 67% coverage). +10 surfaces, headlined by the
 66 per-directory `.import-restrictions` files -> import_gate (preset go),
 the per-language boilerplate sweep -> file_header (year-optional, since
 post-2025 k8s drops the year), and codegen/vendor freshness ->

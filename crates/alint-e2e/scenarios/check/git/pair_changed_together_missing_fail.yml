@@ -1,3 +1,4 @@
+test_version: 1
 name: pair_changed_together fires when the paired file is not updated
 tags: [check, pair_changed_together]
 
@@ -20,6 +21,7 @@ given:
         since: HEAD~1
         level: error
   git:
+    init: true
     commits:
       - "chore: base"
       - { message: "change the format struct", add: [src/format.rs] }
@@ -27,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: format-version, level: error}

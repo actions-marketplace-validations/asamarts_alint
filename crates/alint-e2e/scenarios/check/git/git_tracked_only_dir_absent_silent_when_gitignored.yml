@@ -1,3 +1,4 @@
+test_version: 1
 name: dir_absent + git_tracked_only stays silent on a gitignored target/
 tags: [check, dir_absent, git_tracked_only, git]
 
@@ -36,4 +37,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

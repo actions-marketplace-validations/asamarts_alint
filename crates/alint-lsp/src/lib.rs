@@ -5,26 +5,46 @@
 //! It is driven by the `alint lsp` subcommand, speaking LSP over stdio
 //! (see [`run_stdio`]).
 //!
+//! Config discovery is **per document**: each open file is linted by the
+//! nearest `.alint.yml` found walking up from its directory (the same
+//! search the CLI does from its working directory), so a monorepo with
+//! nested package configs gets one session per config. Every workspace
+//! folder the client reports (multi-root) is honored; a file outside all
+//! of them is not linted.
+//!
 //! Evaluation paths:
 //!
-//! - **Open / save** run the full [`alint_core::Engine`] over the
-//!   workspace (cross-file rules included) and publish per-file
-//!   diagnostics for every open document.
+//! - **Open / save** run the full [`alint_core::Engine`] for every
+//!   relevant config (cross-file rules included) and publish per-file
+//!   diagnostics for every open document. An open document whose
+//!   unsaved buffer differs from disk has its per-file rules re-run
+//!   against the buffer (an overlay), so a save elsewhere never paints
+//!   stale on-disk results over unsaved edits.
 //! - **Change** uses the single-file hot path
 //!   ([`alint_core::Engine::run_for_file`]) against the editor's
 //!   in-memory bytes, so per-keystroke feedback costs one file's
 //!   evaluation, not the whole tree's. Cross-file rules are not
 //!   re-run on change (they refresh on the next save), matching
 //!   `docs/design/v0.11/single_file_reevaluation.md`.
+//! - **Baseline**: a config's `baseline:` file is honored exactly as
+//!   `alint check` honors it, so grandfathered findings stay hidden.
 //! - **Hover** over a violation marker renders the rule id, message,
-//!   and `policy_url` from the per-file cache of the last-published
-//!   findings.
+//!   the rule kind's description, fix availability, a rule-reference
+//!   link, and the `policy_url` from the per-file cache of the
+//!   last-published findings.
 //! - **Code actions** offer an "Apply fix" quick-fix for any violation
-//!   whose rule declares a fixer, returning a `WorkspaceEdit`
-//!   ([`alint_core::Fixer::fix_edit`] → [`alint_core::FixEdit`]) the
-//!   editor applies to the buffer.
+//!   whose rule declares a fixer, returning a `WorkspaceEdit` the editor
+//!   applies to the buffer. A whole-file fixer maps via
+//!   [`alint_core::Fixer::fix_edit`] → [`alint_core::FixEdit`]; a *located*
+//!   fixer (e.g. `replace`) maps its `collect_edits` byte ranges to UTF-16
+//!   `TextEdit`s (one per match) so a single action rewrites every occurrence.
+//!   A buffer larger than the config's `fix_size_limit` gets no fix, as
+//!   `alint fix` would skip it.
 //! - **Watched files** (`didChangeWatchedFiles`) reload the session, so
 //!   `.alint.yml` edits take effect without saving an open document.
+//!
+//! Diagnostic positions use the LSP default UTF-16 encoding: alint's
+//! 1-based character columns are converted against the document text.
 //!
 //! The "add rule to ignore" action is deferred to a later slice of the
 //! LSP epic.
@@ -33,23 +53,58 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context as TaskContext, Poll};
 
+use tower_lsp::jsonrpc::Request;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams,
-    CodeActionProviderCapability, CodeActionResponse, CodeDescription, CreateFile, DeleteFile,
-    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentChangeOperation, DocumentChanges, Hover, HoverContents, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MarkupContent,
-    MarkupKind, MessageType, NumberOrString, OneOf, OptionalVersionedTextDocumentIdentifier,
-    Position, Range, RenameFile, ResourceOp, ServerCapabilities, ServerInfo, TextDocumentEdit,
-    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit,
+    CodeActionProviderCapability, CodeActionResponse, Diagnostic, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesParams, DidChangeWorkspaceFoldersParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams, Hover,
+    HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    InitializedParams, MarkupContent, MarkupKind, MessageType, OneOf, Position, Range,
+    ServerCapabilities, ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    WorkspaceFoldersServerCapabilities, WorkspaceServerCapabilities,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server, jsonrpc::Result as JsonRpcResult};
 
-use alint_core::{
-    Engine, Error, FileIndex, FixEdit, Level, RuleEntry, RuleResult, Violation, WalkOptions, walk,
-};
+use alint_core::baseline::Baseline;
+use alint_core::located_fix::{self, LocatedEdit, LocatedOutcome};
+use alint_core::{Applicability, CollectedEdit, Engine, Error, FileIndex, Violation};
+
+mod config;
+mod diagnostics;
+mod edits;
+mod render;
+
+#[cfg(test)]
+mod tests;
+
+use config::{check_workspace, eval_buffer, workspace_folders};
+use diagnostics::{GroupCtx, finding_to_diagnostic, range_contains, ranges_overlap};
+use edits::{fix_edit_to_workspace_edit, located_edits_to_workspace_edit};
+use render::{render_finding, render_notes};
+
+/// Server options, set from the `alint lsp` command line.
+#[derive(Debug, Clone, Default)]
+pub struct LspOptions {
+    /// `--show-notes`: list every informational note on stderr after a
+    /// full check, instead of the default one-line count.
+    pub show_notes: bool,
+    /// Explicit reference date shared by full checks and buffer re-evaluation.
+    pub analysis_time: Option<alint_core::AnalysisTime>,
+    /// Injected rule registry, or the built-in catalog when `None`.
+    pub registry: Option<alint_core::RuleRegistry>,
+}
+
+impl LspOptions {
+    fn registry(&self) -> alint_core::RuleRegistry {
+        self.registry
+            .clone()
+            .unwrap_or_else(alint_rules::builtin_registry)
+    }
+}
 
 /// One cached finding for a file: enough to publish a diagnostic and to
 /// render a hover. Kept per URI in [`State::diagnostics`] so `hover`
@@ -70,74 +125,195 @@ struct Finding {
     /// Whether the rule declares a fixer — gates the "Apply fix" code
     /// action without re-deriving the rule set.
     fixable: bool,
+    /// Sensitive findings expose diagnostics but never public replacement bytes.
+    sensitive: bool,
     /// Whether this came from a per-file rule (re-evaluated on every
     /// edit) vs a cross-file rule (only on save). On `didChange` we keep
     /// the cached cross-file findings and replace only the per-file ones,
     /// so cross-file markers don't flicker away while typing.
     per_file: bool,
+    /// The rule kind's one-sentence description, for the hover.
+    description: Option<&'static str>,
+    /// The rule kind's alint.org reference page, for the hover.
+    docs_url: Option<String>,
+    related_information: Vec<tower_lsp::lsp_types::DiagnosticRelatedInformation>,
 }
 
 /// Per-file findings keyed by absolute path.
 type FindingsByPath = HashMap<PathBuf, Vec<Finding>>;
 
-/// A loaded workspace: the config-built engine plus the walked index.
+/// A loaded config: the config-built engine plus the walked index.
 /// Cached on open/save and reused by the change hot path so a keystroke
-/// doesn't re-load the config or re-walk the tree.
+/// doesn't re-load the config or re-walk the tree. One per discovered
+/// config file.
 #[derive(Debug)]
 struct Session {
     root: PathBuf,
     engine: Engine,
     index: FileIndex,
-    /// The discovered `.alint.yml` (relative to root). Used to anchor
-    /// path-less findings and config errors as diagnostics.
+    /// The discovered `.alint.yml` (absolute). Used to anchor path-less
+    /// findings and config errors as diagnostics.
     config_path: PathBuf,
+    /// The config's `baseline:` file, loaded — grandfathered findings
+    /// are filtered out exactly as `alint check` filters them.
+    baseline: Option<Baseline>,
+    /// Rule id → rule kind, for the hover's description + docs link.
+    kinds: HashMap<String, String>,
+    /// Load-time pattern hints, shown as warnings on the config file.
+    pattern_hints: Vec<alint_core::pattern_hints::ConfigHint>,
 }
 
-/// A failure building the session, carrying the config file (if known)
-/// so the server can surface it as a diagnostic on `.alint.yml`.
+impl Session {
+    fn group_ctx(&self) -> GroupCtx<'_> {
+        GroupCtx {
+            root: &self.root,
+            engine: &self.engine,
+            config_path: &self.config_path,
+            kinds: &self.kinds,
+        }
+    }
+}
+
+/// The outcome of one config's full check.
 #[derive(Debug)]
-struct BuildError {
-    config_path: Option<PathBuf>,
-    message: String,
+struct ConfigRun {
+    session: Arc<Session>,
+    by_path: FindingsByPath,
+    /// Informational notes, rendered `path: message` (for stderr).
+    notes: Vec<String>,
+}
+
+/// One full workspace check: which config governs each open document,
+/// and each config's run (or its load/build error message).
+#[derive(Debug, Default)]
+struct WorkspaceCheck {
+    doc_config: HashMap<Url, PathBuf>,
+    runs: Vec<(PathBuf, Result<ConfigRun, String>)>,
 }
 
 /// Build a tokio runtime and serve the alint language server over
-/// stdio until the client disconnects. Called by the `alint lsp`
-/// subcommand so the CLI itself stays synchronous.
-pub fn run_stdio() -> std::io::Result<()> {
+/// stdio until the client sends `exit` (or disconnects). Called by the
+/// `alint lsp` subcommand so the CLI itself stays synchronous.
+///
+/// Returns the process exit code the LSP specification mandates: `0`
+/// when `exit` follows a `shutdown` request (or the client simply
+/// closed the stream), `1` when `exit` arrives without a prior
+/// `shutdown`. The runtime is shut down without waiting on the blocked
+/// stdin reader, so the process terminates promptly on `exit` even
+/// while the client keeps stdin open.
+pub fn run_stdio(options: LspOptions) -> std::io::Result<i32> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(async {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_flag = Arc::clone(&shutdown);
+    let exit_received = runtime.block_on(async move {
         let stdin = tokio::io::stdin();
         let stdout = tokio::io::stdout();
-        let (service, socket) = LspService::new(Backend::new);
-        Server::new(stdin, stdout, socket).serve(service).await;
+        let (service, socket) = LspService::new(move |client| Backend::new(client, options));
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+        let service = ExitInterceptor {
+            inner: service,
+            shutdown: shutdown_flag,
+            exit: Some(exit_tx),
+        };
+        tokio::select! {
+            () = Server::new(stdin, stdout, socket).serve(service) => false,
+            Ok(()) = exit_rx => true,
+        }
     });
-    Ok(())
+    // `tokio::io::stdin` reads on a blocking thread that can't be
+    // interrupted; waiting for it would hang until the client closes
+    // stdin. Detach it instead.
+    runtime.shutdown_background();
+    Ok(exit_code(exit_received, shutdown.load(Ordering::SeqCst)))
 }
 
-#[derive(Debug)]
+/// The LSP-mandated process exit code: `1` for an `exit` notification
+/// that was not preceded by `shutdown`, else `0`.
+fn exit_code(exit_received: bool, shutdown_received: bool) -> i32 {
+    i32::from(exit_received && !shutdown_received)
+}
+
+/// A pass-through `tower` service that records the client's `shutdown`
+/// request and signals when its `exit` notification has been handed to
+/// the inner `tower-lsp` service. `tower-lsp` itself only stops serving
+/// when the *next* message is read after `exit`, so without this the
+/// server lingers while stdin is open. `shutdown` is recorded here, by
+/// method, because `tower-lsp` answers a `shutdown` carrying
+/// `"params": null` with an error without reaching the backend — the
+/// client still asked to shut down.
+struct ExitInterceptor<S> {
+    inner: S,
+    shutdown: Arc<AtomicBool>,
+    exit: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl<S> tower_service::Service<Request> for ExitInterceptor<S>
+where
+    S: tower_service::Service<Request>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut TaskContext<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        let is_exit = req.method() == "exit";
+        if req.method() == "shutdown" {
+            self.shutdown.store(true, Ordering::SeqCst);
+        }
+        let fut = self.inner.call(req);
+        if is_exit && let Some(tx) = self.exit.take() {
+            let _ = tx.send(());
+        }
+        fut
+    }
+}
+
+#[derive(Debug, Default)]
 struct State {
-    /// Workspace root, from the `initialize` handshake.
-    root: Option<PathBuf>,
+    /// Workspace folders, from the `initialize` handshake (and
+    /// `didChangeWorkspaceFolders`).
+    folders: Vec<PathBuf>,
+    /// Whether the client accepts `Diagnostic.relatedInformation`.
+    related_information_supported: bool,
     /// URIs of documents the editor currently has open. Diagnostics
     /// are published (and cleared) for these.
     open: HashSet<Url>,
-    /// Cached engine + index from the last full check. `None` until the
-    /// first open/save; the change hot path needs it.
-    session: Option<Arc<Session>>,
-    /// Last-published findings per open URI, so `hover` can answer by
+    /// Cached engine + index per config path from the last full check.
+    /// The change hot path and code actions need them.
+    sessions: HashMap<PathBuf, Arc<Session>>,
+    /// Configs that failed to load/build, with the error. Documents
+    /// governed by a broken config show no findings (only the config
+    /// error, on the config file) until it loads again.
+    broken: HashMap<PathBuf, String>,
+    /// Which config governs each open document (nearest ancestor).
+    doc_config: HashMap<Url, PathBuf>,
+    /// Config-file URIs we published diagnostics to (findings anchored
+    /// there, or a config error) — cleared when no longer relevant.
+    config_uris: HashSet<Url>,
+    /// Last-published findings per URI, so `hover` can answer by
     /// position without re-running rules.
     diagnostics: HashMap<Url, Vec<Finding>>,
     /// In-memory text per open URI (the editor's authoritative buffer),
-    /// so `codeAction` can compute a fix edit against unsaved content.
+    /// so `codeAction` can compute a fix edit against unsaved content
+    /// and full checks can overlay unsaved edits.
     documents: HashMap<Url, String>,
+    /// The editor's version per open URI.
+    versions: HashMap<Url, i32>,
+    /// The last notes block printed per config, so an unchanged set
+    /// isn't re-printed on every save.
+    last_notes: HashMap<PathBuf, String>,
 }
 
 #[derive(Debug)]
 struct Backend {
     client: Client,
+    options: LspOptions,
     /// Shared server state behind a `parking_lot::Mutex` (no poisoning), so a
     /// panic in one async handler can't permanently wedge the session the way
     /// a poisoned `std::sync::Mutex` would. Note the trade-off: `parking_lot`
@@ -148,87 +324,76 @@ struct Backend {
     /// and infallible (map inserts/clones) to keep that window closed; the
     /// engine runs off-lock inside `spawn_blocking`.
     state: Mutex<State>,
+    /// Serialises the "is this result still current?" check with the
+    /// publish that follows it in [`Backend::reeval_file`], so an older
+    /// buffer's diagnostics can never reach the client after a newer
+    /// buffer's.
+    reeval_publish: tokio::sync::Mutex<()>,
+}
+
+/// A document to publish: URI, diagnostics, and the buffer version they
+/// were computed against (if any).
+type Publication = (Url, Vec<Diagnostic>, Option<i32>);
+
+/// What applying a [`WorkspaceCheck`] to the state produced.
+#[derive(Debug, Default)]
+struct Applied {
+    publish: Vec<Publication>,
+    /// Config errors to log to the client.
+    logs: Vec<String>,
+    /// Notes blocks to print on stderr.
+    notes: Vec<String>,
+    /// Open documents edited while the full check ran: re-evaluate
+    /// their current buffer afterwards so the newest edit wins.
+    reeval: Vec<(Url, String, i32)>,
 }
 
 impl Backend {
-    fn new(client: Client) -> Self {
+    fn new(client: Client, options: LspOptions) -> Self {
         Self {
             client,
-            state: Mutex::new(State {
-                root: None,
-                open: HashSet::new(),
-                session: None,
-                diagnostics: HashMap::new(),
-                documents: HashMap::new(),
-            }),
+            options,
+            state: Mutex::new(State::default()),
+            reeval_publish: tokio::sync::Mutex::new(()),
         }
     }
 
-    /// Full check: (re)build the session and publish per-file
-    /// diagnostics for every open document, clearing those that no
-    /// longer have findings. Runs on open and save.
+    /// Full check: (re)build every relevant session and publish per-file
+    /// diagnostics for every open document (plus each config file),
+    /// clearing those that no longer have findings. Runs on open, save,
+    /// watched-file changes, and workspace-folder changes.
     async fn check_and_publish(&self) {
-        let (root, open) = {
+        let (folders, docs) = {
             let state = self.state.lock();
-            (
-                state.root.clone(),
-                state.open.iter().cloned().collect::<Vec<_>>(),
-            )
-        };
-        let Some(root) = root else {
-            return;
-        };
-
-        match tokio::task::spawn_blocking(move || build_and_run(&root)).await {
-            Ok(Ok(Some((session, by_path)))) => {
-                let config_uri = Url::from_file_path(&session.config_path).ok();
-                let to_publish = {
-                    let mut state = self.state.lock();
-                    state.session = Some(session);
-                    cache_and_collect(&mut state, &open, &by_path)
-                };
-                self.publish_all(to_publish).await;
-                // Clear any stale "config error" diagnostic now that the
-                // config loaded cleanly.
-                if let Some(uri) = config_uri {
-                    self.client.publish_diagnostics(uri, Vec::new(), None).await;
-                }
-            }
-            Ok(Ok(None)) => {
-                // No `.alint.yml` — clear any stale diagnostics.
-                let to_publish = {
-                    let mut state = self.state.lock();
-                    state.session = None;
-                    cache_and_collect(&mut state, &open, &FindingsByPath::new())
-                };
-                self.publish_all(to_publish).await;
-            }
-            Ok(Err(build_err)) => {
-                self.client
-                    .log_message(
-                        MessageType::WARNING,
-                        format!("alint: {}", build_err.message),
+            let docs: Vec<(Url, Option<String>, Option<i32>)> = state
+                .open
+                .iter()
+                .map(|u| {
+                    (
+                        u.clone(),
+                        state.documents.get(u).cloned(),
+                        state.versions.get(u).copied(),
                     )
-                    .await;
-                // Surface a malformed/unbuildable config as a diagnostic
-                // on `.alint.yml` so it's visible, not just logged.
-                if let Some(uri) = build_err
-                    .config_path
-                    .as_ref()
-                    .and_then(|p| Url::from_file_path(p).ok())
-                {
-                    let diagnostic = Diagnostic {
-                        range: Range::new(Position::new(0, 0), Position::new(0, 1)),
-                        severity: Some(DiagnosticSeverity::ERROR),
-                        source: Some("alint".to_string()),
-                        message: build_err.message,
-                        ..Diagnostic::default()
-                    };
-                    self.client
-                        .publish_diagnostics(uri, vec![diagnostic], None)
-                        .await;
-                }
-            }
+                })
+                .collect();
+            (state.folders.clone(), docs)
+        };
+        if folders.is_empty() {
+            return;
+        }
+
+        let task_docs: Vec<(Url, Option<String>)> = docs
+            .iter()
+            .map(|(u, t, _)| (u.clone(), t.clone()))
+            .collect();
+        let analysis_time = self.options.analysis_time;
+        let registry = self.options.registry();
+        let check = match tokio::task::spawn_blocking(move || {
+            check_workspace(&folders, &task_docs, analysis_time, &registry)
+        })
+        .await
+        {
+            Ok(check) => check,
             Err(join_err) => {
                 self.client
                     .log_message(
@@ -236,7 +401,25 @@ impl Backend {
                         format!("alint: check panicked: {join_err}"),
                     )
                     .await;
+                return;
             }
+        };
+
+        let applied = {
+            let mut state = self.state.lock();
+            apply_check(&mut state, &docs, check, &self.options)
+        };
+        for message in applied.logs {
+            self.client
+                .log_message(MessageType::WARNING, format!("alint: {message}"))
+                .await;
+        }
+        for block in applied.notes {
+            eprintln!("{block}");
+        }
+        self.publish_all(applied.publish).await;
+        for (uri, text, version) in applied.reeval {
+            self.reeval_file(uri, text, version).await;
         }
     }
 
@@ -247,9 +430,18 @@ impl Backend {
     /// preserved so they don't flicker away while typing — they refresh
     /// on the next save. `version` ties the diagnostics to the edit.
     async fn reeval_file(&self, uri: Url, text: String, version: i32) {
-        let session = self.state.lock().session.clone();
+        let session = {
+            let state = self.state.lock();
+            state
+                .doc_config
+                .get(&uri)
+                .filter(|c| !state.broken.contains_key(*c))
+                .and_then(|c| state.sessions.get(c).cloned())
+        };
         let Some(session) = session else {
-            return; // No cached session yet — open/save will populate it.
+            // No session yet (open/save will populate it), or the
+            // governing config is broken (only its error is shown).
+            return;
         };
         let Ok(abs) = uri.to_file_path() else {
             return;
@@ -258,27 +450,25 @@ impl Backend {
             return;
         };
 
-        let abs_key = abs.clone();
-        let outcome = tokio::task::spawn_blocking(move || {
-            session
-                .engine
-                .run_for_file(&session.root, &session.index, &rel, text.as_bytes())
-                .map(|results| {
-                    group_findings(
-                        &session.root,
-                        &results,
-                        &session.engine,
-                        &session.config_path,
-                    )
-                })
-        })
-        .await;
+        let outcome =
+            tokio::task::spawn_blocking(move || eval_buffer(&session, &abs, &rel, text)).await;
+
+        // tower-lsp runs `didChange` handlers concurrently, so a slow
+        // evaluation of an older buffer can finish after a newer one. Drop
+        // a result whose version is no longer the document's current one
+        // (or whose document closed): publishing or caching it would leave
+        // stale diagnostics on screen and in the state hover / code
+        // actions read.
+        let is_current = |state: &State| state.versions.get(&uri).copied() == Some(version);
+        let _publish_guard = self.reeval_publish.lock().await;
 
         match outcome {
-            Ok(Ok(by_path)) => {
-                let per_file = by_path.get(&abs_key).cloned().unwrap_or_default();
+            Ok(Ok(per_file)) => {
                 let diagnostics = {
                     let mut state = self.state.lock();
+                    if !is_current(&state) {
+                        return;
+                    }
                     // Keep cross-file findings from the last full run;
                     // replace the per-file ones with the fresh results.
                     let mut merged: Vec<Finding> = state
@@ -287,7 +477,12 @@ impl Backend {
                         .map(|prev| prev.iter().filter(|f| !f.per_file).cloned().collect())
                         .unwrap_or_default();
                     merged.extend(per_file);
-                    let diags: Vec<Diagnostic> = merged.iter().map(finding_to_diagnostic).collect();
+                    let diags: Vec<Diagnostic> = merged
+                        .iter()
+                        .map(|finding| {
+                            finding_to_diagnostic(finding, state.related_information_supported)
+                        })
+                        .collect();
                     state.diagnostics.insert(uri.clone(), merged);
                     diags
                 };
@@ -297,7 +492,13 @@ impl Backend {
             }
             Ok(Err(Error::FileNotInIndex { .. })) => {
                 // Excluded from linting (or not yet walked) — clear.
-                self.state.lock().diagnostics.remove(&uri);
+                {
+                    let mut state = self.state.lock();
+                    if !is_current(&state) {
+                        return;
+                    }
+                    state.diagnostics.remove(&uri);
+                }
                 self.client
                     .publish_diagnostics(uri, Vec::new(), Some(version))
                     .await;
@@ -318,21 +519,46 @@ impl Backend {
         }
     }
 
-    async fn publish_all(&self, items: Vec<(Url, Vec<Diagnostic>)>) {
-        for (uri, diagnostics) in items {
+    /// The governing session, cached findings, and buffer for `uri` —
+    /// everything `codeAction` needs, or `None` when any is missing.
+    fn code_action_inputs(&self, uri: &Url) -> Option<(Arc<Session>, Vec<Finding>, String, bool)> {
+        let state = self.state.lock();
+        let session = state
+            .doc_config
+            .get(uri)
+            .and_then(|c| state.sessions.get(c).cloned())?;
+        Some((
+            session,
+            state.diagnostics.get(uri).cloned()?,
+            state.documents.get(uri).cloned()?,
+            state.related_information_supported,
+        ))
+    }
+
+    async fn publish_all(&self, items: Vec<Publication>) {
+        for (uri, diagnostics, version) in items {
             self.client
-                .publish_diagnostics(uri, diagnostics, None)
+                .publish_diagnostics(uri, diagnostics, version)
                 .await;
         }
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> JsonRpcResult<InitializeResult> {
-        if let Some(root) = workspace_root(&params) {
-            self.state.lock().root = Some(root);
-        }
+        let related_information_supported = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|text| text.publish_diagnostics.as_ref())
+            .and_then(|publish| publish.related_information)
+            .unwrap_or(false);
+        let mut state = self.state.lock();
+        state.folders = workspace_folders(&params);
+        state.related_information_supported = related_information_supported;
+        drop(state);
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -340,6 +566,13 @@ impl LanguageServer for Backend {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    file_operations: None,
+                }),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -362,10 +595,12 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         {
             let mut state = self.state.lock();
-            state.open.insert(params.text_document.uri.clone());
+            let uri = params.text_document.uri;
+            state.open.insert(uri.clone());
             state
-                .documents
-                .insert(params.text_document.uri, params.text_document.text);
+                .versions
+                .insert(uri.clone(), params.text_document.version);
+            state.documents.insert(uri, params.text_document.text);
         }
         self.check_and_publish().await;
     }
@@ -378,10 +613,11 @@ impl LanguageServer for Backend {
         };
         let uri = params.text_document.uri;
         let version = params.text_document.version;
-        self.state
-            .lock()
-            .documents
-            .insert(uri.clone(), change.text.clone());
+        {
+            let mut state = self.state.lock();
+            state.documents.insert(uri.clone(), change.text.clone());
+            state.versions.insert(uri.clone(), version);
+        }
         self.reeval_file(uri, change.text, version).await;
     }
 
@@ -398,16 +634,47 @@ impl LanguageServer for Backend {
         self.check_and_publish().await;
     }
 
-    async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let uri = params.text_document.uri;
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
         {
             let mut state = self.state.lock();
-            state.open.remove(&uri);
-            state.diagnostics.remove(&uri);
-            state.documents.remove(&uri);
+            let removed: Vec<PathBuf> = params
+                .event
+                .removed
+                .iter()
+                .filter_map(|f| f.uri.to_file_path().ok())
+                .collect();
+            state.folders.retain(|f| !removed.contains(f));
+            for added in &params.event.added {
+                if let Ok(path) = added.uri.to_file_path()
+                    && !state.folders.contains(&path)
+                {
+                    state.folders.push(path);
+                }
+            }
         }
-        // Clear any diagnostics the editor is still showing.
-        self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        self.check_and_publish().await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+        let is_config = {
+            let mut state = self.state.lock();
+            state.open.remove(&uri);
+            state.documents.remove(&uri);
+            state.versions.remove(&uri);
+            state.doc_config.remove(&uri);
+            let is_config = state.config_uris.contains(&uri);
+            if !is_config {
+                state.diagnostics.remove(&uri);
+            }
+            is_config
+        };
+        // Clear any diagnostics the editor is still showing — except on a
+        // config file, whose anchored findings / load error stay visible
+        // whether or not it is open.
+        if !is_config {
+            self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        }
     }
 
     async fn hover(&self, params: HoverParams) -> JsonRpcResult<Option<Hover>> {
@@ -461,15 +728,9 @@ impl LanguageServer for Backend {
             }
         }
 
-        let (session, findings, text) = {
-            let state = self.state.lock();
-            (
-                state.session.clone(),
-                state.diagnostics.get(&uri).cloned(),
-                state.documents.get(&uri).cloned(),
-            )
-        };
-        let (Some(session), Some(findings), Some(text)) = (session, findings, text) else {
+        let Some((session, findings, text, related_information_supported)) =
+            self.code_action_inputs(&uri)
+        else {
             return Ok(None);
         };
         let Ok(abs) = uri.to_file_path() else {
@@ -478,647 +739,266 @@ impl LanguageServer for Backend {
         let Ok(rel) = abs.strip_prefix(&session.root).map(Path::to_path_buf) else {
             return Ok(None);
         };
+        // A sibling rule may have read secret-bearing evidence from this file
+        // even when the selected diagnostic itself is ordinary. Whole-file and
+        // spanning fixes can otherwise copy unchanged secret bytes into the LSP
+        // response, so suppress every public edit for a sensitive input path.
+        if session
+            .engine
+            .path_contains_sensitive_evidence(&session.root, &session.index, &rel)
+        {
+            return Ok(None);
+        }
 
         let bytes = text.as_bytes();
+        // Honor the config's `fix_size_limit`: `alint fix` skips a file
+        // this large, so the editor must not offer to fix it either.
+        if let Some(limit) = session.engine.fix_size_limit()
+            && u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit
+        {
+            return Ok(None);
+        }
         let mut actions: CodeActionResponse = Vec::new();
+        // Parallel to `actions`: whether each offered fix is Unsafe-tier. An Unsafe
+        // quick-fix is labeled `(unsafe)` and never auto-preferred, so the click is
+        // a visible, explicit opt-in (the LSP analogue of `--unsafe-fixes`) rather
+        // than a silent one-click apply of a behavior-changing edit (e.g. a file
+        // delete). Only Safe and Unsafe tiers reach here -- Suggestion / demoted
+        // fixes are already filtered out below.
+        let mut unsafe_flags: Vec<bool> = Vec::new();
         for finding in &findings {
-            if !finding.fixable || !ranges_overlap(finding.range, selection) {
+            if !finding.fixable || finding.sensitive || !ranges_overlap(finding.range, selection) {
                 continue;
             }
             let Some(fixer) = session.engine.fixer_for(&finding.rule_id) else {
                 continue;
             };
+            let unsafe_fix = fixer.applicability() == Applicability::Unsafe;
             let mut violation = Violation::new(finding.message.clone()).with_path(rel.clone());
             // Preserve the reported location so range-scoped fixers act on
             // the right line/column (not just whole-file fixers).
             violation.line = finding.line;
             violation.column = finding.column;
-            let Some(edit) = fixer.fix_edit(&violation, bytes, &session.root) else {
-                continue;
+            // A LOCATED fixer (Phase 1 `replace`) emits byte-range edits via
+            // `collect_edits`, not `fix_edit`. Collect ALL of them for this file and
+            // map each byte range to a UTF-16 `TextEdit` -- one multi-edit
+            // `WorkspaceEdit`, so the code action rewrites every occurrence, matching
+            // `alint fix` (the diagnostic is one-per-file but the located fix is
+            // per-match). The synthetic `violation` carries NO baseline_key, so the
+            // structured fixer's W4 violation-set correlation finds an empty budget
+            // and falls back to fixing every occurrence -- exactly the "fix all"
+            // action wanted here. A whole-file fixer keeps the `fix_edit` -> edit path.
+            let workspace_edit = if fixer.collects_located_edits() {
+                // Run the SAME pipeline `alint fix` uses (tier-filter -> overlap-skip
+                // -> post-splice verify/demote) and offer ONLY the surviving edits.
+                // Without this the LSP would one-click-apply a fix the engine
+                // refuses -- a partial removal that leaves the violation, an
+                // unverifiable `replace`, or a below-threshold / W2-demoted
+                // (Suggestion-tier) untrusted-remote content fixer.
+                let batch: Vec<LocatedEdit> = fixer
+                    .collect_edits(std::slice::from_ref(&violation), &rel, bytes, &session.root)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, ce)| LocatedEdit {
+                        rule_index: 0,
+                        violation_index: i,
+                        sensitive: false,
+                        collected: ce,
+                    })
+                    .collect();
+                let (_, outcomes) =
+                    located_fix::apply_file_edits(bytes, batch, Applicability::Unsafe);
+                let applied: Vec<CollectedEdit> = outcomes
+                    .into_iter()
+                    .filter(|(_, outcome)| *outcome == LocatedOutcome::Applied)
+                    .map(|(le, _)| le.collected)
+                    .collect();
+                match located_edits_to_workspace_edit(&applied, &text, &rel, &session.root) {
+                    Some(we) => we,
+                    None => continue,
+                }
+            } else {
+                // Whole-file / file-op fixer: gate on its tier so a Suggestion-tier
+                // fixer -- notably a W2-demoted content fixer from an untrusted
+                // remote `extends:` -- is not offered as an ordinary quick-fix
+                // (demotion drops it to Suggestion; a bare `alint fix` only
+                // suggests it, never auto-writes).
+                if !fixer.applicability().applies_at(Applicability::Unsafe) {
+                    continue;
+                }
+                let Some(edit) = fixer.fix_edit(&violation, bytes, &session.root) else {
+                    continue;
+                };
+                match fix_edit_to_workspace_edit(&edit, &session.root) {
+                    Some(we) => we,
+                    None => continue,
+                }
             };
-            let Some(workspace_edit) = fix_edit_to_workspace_edit(&edit, &session.root) else {
-                continue;
+            let title = if unsafe_fix {
+                format!("alint: fix `{}` (unsafe)", finding.rule_id)
+            } else {
+                format!("alint: fix `{}`", finding.rule_id)
             };
             actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: format!("alint: fix `{}`", finding.rule_id),
+                title,
                 kind: Some(CodeActionKind::QUICKFIX),
-                diagnostics: Some(vec![finding_to_diagnostic(finding)]),
+                diagnostics: Some(vec![finding_to_diagnostic(
+                    finding,
+                    related_information_supported,
+                )]),
                 edit: Some(workspace_edit),
                 ..CodeAction::default()
             }));
+            unsafe_flags.push(unsafe_fix);
         }
         if actions.is_empty() {
             return Ok(None);
         }
-        // A single fix is the obvious one to apply.
-        if actions.len() == 1 {
-            if let CodeActionOrCommand::CodeAction(action) = &mut actions[0] {
-                action.is_preferred = Some(true);
-            }
+        // A single SAFE fix is the obvious one to apply (some clients auto-apply
+        // the preferred action); an Unsafe fix is never auto-preferred -- applying
+        // it must stay a deliberate choice.
+        if actions.len() == 1
+            && !unsafe_flags[0]
+            && let CodeActionOrCommand::CodeAction(action) = &mut actions[0]
+        {
+            action.is_preferred = Some(true);
         }
         Ok(Some(actions))
     }
 }
 
-/// Cache the findings for each open document and collect the
-/// `(uri, diagnostics)` pairs to publish. Documents absent from
-/// `by_path` are cached empty and cleared.
-fn cache_and_collect(
-    state: &mut State,
-    open: &[Url],
-    by_path: &FindingsByPath,
-) -> Vec<(Url, Vec<Diagnostic>)> {
-    let mut out = Vec::with_capacity(open.len());
-    for uri in open {
-        let findings = uri
-            .to_file_path()
-            .ok()
-            .and_then(|abs| by_path.get(&abs).cloned())
-            .unwrap_or_default();
-        let diagnostics = findings.iter().map(finding_to_diagnostic).collect();
-        state.diagnostics.insert(uri.clone(), findings);
-        out.push((uri.clone(), diagnostics));
-    }
-    out
+/// Fold a finished [`WorkspaceCheck`] into the server state and work out
+/// what to publish. `docs` is the `(uri, buffer, version)` snapshot the
+/// check ran against.
+///
+/// Every open document gets the findings of the config that governs it;
+/// a document under a broken config gets none (the config error is
+/// shown on the config file instead of stale findings from the old
+/// engine). Each config file gets its own anchored findings — published
+/// in the SAME message, so clearing a previous config error can never
+/// wipe them.
+fn findings_to_diagnostics(
+    findings: &[Finding],
+    related_information_supported: bool,
+) -> Vec<Diagnostic> {
+    findings
+        .iter()
+        .map(|finding| finding_to_diagnostic(finding, related_information_supported))
+        .collect()
 }
 
-/// Resolve the workspace root from the `initialize` params, preferring
-/// the first workspace folder and falling back to the (deprecated)
-/// `root_uri`.
-fn workspace_root(params: &InitializeParams) -> Option<PathBuf> {
-    if let Some(folders) = &params.workspace_folders {
-        if let Some(first) = folders.first() {
-            if let Ok(path) = first.uri.to_file_path() {
-                return Some(path);
+fn apply_check(
+    state: &mut State,
+    docs: &[(Url, Option<String>, Option<i32>)],
+    check: WorkspaceCheck,
+    options: &LspOptions,
+) -> Applied {
+    let mut applied = Applied::default();
+    let mut by_config: HashMap<PathBuf, FindingsByPath> = HashMap::new();
+    state.sessions.clear();
+    state.broken.clear();
+    for (config, run) in check.runs {
+        match run {
+            Ok(run) => {
+                let block = render_notes(&config, &run.notes, options.show_notes);
+                if state.last_notes.get(&config) != Some(&block) {
+                    if !block.is_empty() {
+                        applied.notes.push(block.clone());
+                    }
+                    state.last_notes.insert(config.clone(), block);
+                }
+                state.sessions.insert(config.clone(), run.session);
+                by_config.insert(config, run.by_path);
+            }
+            Err(message) => {
+                applied.logs.push(message.clone());
+                state.broken.insert(config, message);
             }
         }
     }
-    #[allow(deprecated)]
-    params.root_uri.as_ref().and_then(|u| u.to_file_path().ok())
-}
+    state.doc_config = check.doc_config;
 
-/// Load the workspace config and build the engine + index. Returns
-/// `Ok(None)` (not an error) when no config is present so callers clear
-/// stale diagnostics.
-fn build_session(root: &Path) -> Result<Option<Session>, String> {
-    let Some(config_path) = alint_dsl::discover(root) else {
-        return Ok(None);
-    };
-    // The discovered config's directory is the effective repo root.
-    // `discover` walks up from the client-provided root, so a client that
-    // rooted at a subfolder (Sublime/Eglot/Helix have no uniform root
-    // marker) still gets the ancestor `.alint.yml` governing the whole
-    // repo — and relative paths in rules resolve from there, matching the
-    // CLI. When the client already rooted at the config's dir (the common
-    // case), this is a no-op.
-    let effective_root = config_path.parent().unwrap_or(root).to_path_buf();
-    let config = alint_dsl::load(&config_path).map_err(|e| format!("loading config: {e}"))?;
-
-    let registry = alint_rules::builtin_registry();
-    let mut entries: Vec<RuleEntry> = Vec::with_capacity(config.rules.len());
-    for spec in &config.rules {
-        if matches!(spec.level, Level::Off) {
-            continue;
+    let mut published: HashSet<Url> = HashSet::new();
+    for (uri, _, snapshot_version) in docs {
+        if !state.open.contains(uri) {
+            continue; // closed while the check ran
         }
-        let mut rule = registry
-            .build(spec)
-            .map_err(|e| format!("building rule {:?}: {e}", spec.id))?;
-        // Apply the top-level `allow_out_of_root:` policy (top-level
-        // config only; never via `extends:`). No-op for kinds that
-        // don't honor the flag.
-        let allow_out_of_root = config.allow_out_of_root.allows(&spec.id, &spec.kind);
-        rule.set_allow_out_of_root(allow_out_of_root);
-        let mut entry = RuleEntry::new(rule).with_allow_out_of_root(allow_out_of_root);
-        if let Some(when_src) = &spec.when {
-            let expr = alint_core::when::parse(when_src)
-                .map_err(|e| format!("rule {:?}: parsing `when`: {e}", spec.id))?;
-            entry = entry.with_when(expr);
-        }
-        entries.push(entry);
-    }
-
-    let engine = Engine::from_entries(entries, registry)
-        .with_facts(config.facts)
-        .with_vars(config.vars);
-
-    let walk_opts = WalkOptions {
-        respect_gitignore: config.respect_gitignore,
-        extra_ignores: config.ignore,
-    };
-    let index =
-        walk(&effective_root, &walk_opts).map_err(|e| format!("walking repository: {e}"))?;
-
-    Ok(Some(Session {
-        root: effective_root,
-        engine,
-        index,
-        config_path,
-    }))
-}
-
-/// Build a session and run the full engine over it. `Ok(None)` ⇒ no
-/// config (caller clears diagnostics). `Err` carries the config path so
-/// the caller can surface a load/build failure as a diagnostic.
-fn build_and_run(root: &Path) -> Result<Option<(Arc<Session>, FindingsByPath)>, BuildError> {
-    let config_path = alint_dsl::discover(root);
-    let session = match build_session(root) {
-        Ok(Some(s)) => s,
-        Ok(None) => return Ok(None),
-        Err(message) => {
-            return Err(BuildError {
-                config_path,
-                message,
-            });
-        }
-    };
-    let report = session
-        .engine
-        .run(&session.root, &session.index)
-        .map_err(|e| BuildError {
-            config_path: Some(session.config_path.clone()),
-            message: format!("running rules: {e}"),
-        })?;
-    let by_path = group_findings(
-        &session.root,
-        &report.results,
-        &session.engine,
-        &session.config_path,
-    );
-    Ok(Some((Arc::new(session), by_path)))
-}
-
-/// Group rule-result violations into per-file findings keyed by absolute
-/// path. Path-less findings (existence / tree-level rules) are anchored
-/// to the config file so they're still visible in the editor. Each
-/// finding is tagged `per_file` so the change hot path can preserve
-/// cross-file findings.
-fn group_findings(
-    root: &Path,
-    results: &[RuleResult],
-    engine: &Engine,
-    config_path: &Path,
-) -> FindingsByPath {
-    let mut by_path = FindingsByPath::new();
-    for result in results {
-        let Some(severity) = severity_of(result.level) else {
-            continue;
-        };
-        let policy_url = result.policy_url.as_ref().map(ToString::to_string);
-        let per_file = engine.is_per_file(&result.rule_id);
-        for violation in &result.violations {
-            // Anchor path-less (tree/file-level) findings to the config
-            // file so a "missing required file" still shows somewhere.
-            let abs = match &violation.path {
-                Some(rel) => root.join(rel.as_ref()),
-                None => config_path.to_path_buf(),
-            };
-            by_path.entry(abs).or_default().push(Finding {
-                range: violation_range(violation),
-                severity,
-                rule_id: result.rule_id.to_string(),
-                message: violation.message.to_string(),
-                line: violation.line,
-                column: violation.column,
-                policy_url: policy_url.clone(),
-                fixable: result.is_fixable,
-                per_file,
-            });
-        }
-    }
-    by_path
-}
-
-fn severity_of(level: Level) -> Option<DiagnosticSeverity> {
-    match level {
-        Level::Error => Some(DiagnosticSeverity::ERROR),
-        Level::Warning => Some(DiagnosticSeverity::WARNING),
-        Level::Info => Some(DiagnosticSeverity::INFORMATION),
-        Level::Off => None,
-    }
-}
-
-fn severity_label(severity: DiagnosticSeverity) -> &'static str {
-    match severity {
-        DiagnosticSeverity::ERROR => "error",
-        DiagnosticSeverity::WARNING => "warning",
-        _ => "info",
-    }
-}
-
-/// alint line/column are 1-indexed and optional; LSP positions are
-/// 0-indexed. File- and tree-level findings (no line) anchor at the
-/// start of the file. The range is one character wide so the editor has
-/// something to attach the marker (and hover) to.
-fn violation_range(violation: &Violation) -> Range {
-    let line = violation
-        .line
-        .map_or(0, |l| u32::try_from(l.saturating_sub(1)).unwrap_or(0));
-    let col = violation
-        .column
-        .map_or(0, |c| u32::try_from(c.saturating_sub(1)).unwrap_or(0));
-    Range::new(
-        Position::new(line, col),
-        Position::new(line, col.saturating_add(1)),
-    )
-}
-
-fn finding_to_diagnostic(f: &Finding) -> Diagnostic {
-    let code_description = f
-        .policy_url
-        .as_deref()
-        .and_then(|u| Url::parse(u).ok())
-        .map(|href| CodeDescription { href });
-    Diagnostic {
-        range: f.range,
-        severity: Some(f.severity),
-        code: Some(NumberOrString::String(f.rule_id.clone())),
-        code_description,
-        source: Some("alint".to_string()),
-        message: f.message.clone(),
-        ..Diagnostic::default()
-    }
-}
-
-/// True when `pos` falls within `range` (inclusive of both ends so a
-/// hover on the single-character marker registers).
-fn range_contains(range: Range, pos: Position) -> bool {
-    let after_start = (pos.line, pos.character) >= (range.start.line, range.start.character);
-    let before_end = (pos.line, pos.character) <= (range.end.line, range.end.character);
-    after_start && before_end
-}
-
-/// True when two ranges intersect (the code-action selection vs. a
-/// finding's marker).
-fn ranges_overlap(a: Range, b: Range) -> bool {
-    let a_start = (a.start.line, a.start.character);
-    let a_end = (a.end.line, a.end.character);
-    let b_start = (b.start.line, b.start.character);
-    let b_end = (b.end.line, b.end.character);
-    a_start <= b_end && b_start <= a_end
-}
-
-/// A range that covers any whole document. LSP clients clamp positions
-/// past EOF, so this replaces the full file regardless of its length —
-/// sidestepping UTF-16 column counting for a full-document edit.
-fn whole_document() -> Range {
-    Range::new(Position::new(0, 0), Position::new(u32::MAX, u32::MAX))
-}
-
-/// Map a core [`FixEdit`] to an LSP [`WorkspaceEdit`]. Content edits use
-/// the widely-supported `changes` map; create/delete/rename use resource
-/// operations (the client must advertise `resourceOperations` support).
-/// Returns `None` when content isn't UTF-8 or a path can't become a URI.
-fn fix_edit_to_workspace_edit(edit: &FixEdit, root: &Path) -> Option<WorkspaceEdit> {
-    match edit {
-        FixEdit::SetContent { path, content } => {
-            let new_text = String::from_utf8(content.clone()).ok()?;
-            let uri = Url::from_file_path(root.join(path)).ok()?;
-            let mut changes = HashMap::new();
-            changes.insert(
-                uri,
-                vec![TextEdit {
-                    range: whole_document(),
-                    new_text,
-                }],
-            );
-            Some(WorkspaceEdit {
-                changes: Some(changes),
-                document_changes: None,
-                change_annotations: None,
+        let findings = uri
+            .to_file_path()
+            .ok()
+            .and_then(|abs| {
+                let config = state.doc_config.get(uri)?;
+                by_config.get(config)?.get(&abs).cloned()
             })
-        }
-        FixEdit::CreateFile { path, content } => {
-            let new_text = String::from_utf8(content.clone()).ok()?;
-            let uri = Url::from_file_path(root.join(path)).ok()?;
-            let ops = vec![
-                DocumentChangeOperation::Op(ResourceOp::Create(CreateFile {
-                    uri: uri.clone(),
-                    options: None,
-                    annotation_id: None,
-                })),
-                DocumentChangeOperation::Edit(TextDocumentEdit {
-                    text_document: OptionalVersionedTextDocumentIdentifier { uri, version: None },
-                    edits: vec![OneOf::Left(TextEdit {
-                        range: Range::new(Position::new(0, 0), Position::new(0, 0)),
-                        new_text,
-                    })],
-                }),
-            ];
-            Some(operations(ops))
-        }
-        FixEdit::DeleteFile { path } => {
-            let uri = Url::from_file_path(root.join(path)).ok()?;
-            Some(operations(vec![DocumentChangeOperation::Op(
-                ResourceOp::Delete(DeleteFile { uri, options: None }),
-            )]))
-        }
-        FixEdit::RenameFile { from, to } => {
-            let old_uri = Url::from_file_path(root.join(from)).ok()?;
-            let new_uri = Url::from_file_path(root.join(to)).ok()?;
-            Some(operations(vec![DocumentChangeOperation::Op(
-                ResourceOp::Rename(RenameFile {
-                    old_uri,
-                    new_uri,
-                    options: None,
-                    annotation_id: None,
-                }),
-            )]))
-        }
-    }
-}
-
-fn operations(ops: Vec<DocumentChangeOperation>) -> WorkspaceEdit {
-    WorkspaceEdit {
-        changes: None,
-        document_changes: Some(DocumentChanges::Operations(ops)),
-        change_annotations: None,
-    }
-}
-
-/// Markdown hover body for one finding: rule id + severity, the
-/// message, and a policy link when the rule declares one.
-fn render_finding(f: &Finding) -> String {
-    let mut s = format!(
-        "**alint** · `{}` ({})\n\n{}",
-        f.rule_id,
-        severity_label(f.severity),
-        f.message
-    );
-    if let Some(url) = &f.policy_url {
-        s.push_str("\n\n[Policy →](");
-        s.push_str(url);
-        s.push(')');
-    }
-    s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::borrow::Cow;
-
-    fn violation(line: Option<usize>, column: Option<usize>) -> Violation {
-        Violation {
-            path: None,
-            message: Cow::Borrowed("boom"),
-            line,
-            column,
-            is_note: false,
-            baseline_key: None,
+            .unwrap_or_default();
+        let diagnostics = findings_to_diagnostics(&findings, state.related_information_supported);
+        state.diagnostics.insert(uri.clone(), findings);
+        published.insert(uri.clone());
+        applied
+            .publish
+            .push((uri.clone(), diagnostics, *snapshot_version));
+        // The buffer moved on while the check ran: re-evaluate the
+        // current text so the newest edit's per-file findings win.
+        let current = state.versions.get(uri).copied();
+        if current != *snapshot_version
+            && let (Some(version), Some(text)) = (current, state.documents.get(uri))
+        {
+            applied.reeval.push((uri.clone(), text.clone(), version));
         }
     }
 
-    fn finding(policy_url: Option<&str>) -> Finding {
-        Finding {
-            range: Range::new(Position::new(3, 6), Position::new(3, 7)),
-            severity: DiagnosticSeverity::ERROR,
-            rule_id: "my-rule".to_string(),
-            message: "boom".to_string(),
-            // 1-indexed location matching the 0-indexed range above.
-            line: Some(4),
-            column: Some(7),
-            policy_url: policy_url.map(ToString::to_string),
-            fixable: false,
-            per_file: true,
-        }
-    }
-
-    #[test]
-    fn severity_maps_levels_and_drops_off() {
-        assert_eq!(severity_of(Level::Error), Some(DiagnosticSeverity::ERROR));
-        assert_eq!(
-            severity_of(Level::Warning),
-            Some(DiagnosticSeverity::WARNING)
-        );
-        assert_eq!(
-            severity_of(Level::Info),
-            Some(DiagnosticSeverity::INFORMATION)
-        );
-        assert_eq!(severity_of(Level::Off), None);
-    }
-
-    #[test]
-    fn violation_range_converts_one_indexed_to_zero_indexed() {
-        let r = violation_range(&violation(Some(4), Some(7)));
-        assert_eq!(r.start, Position::new(3, 6));
-        assert_eq!(r.end, Position::new(3, 7));
-    }
-
-    #[test]
-    fn violation_range_without_line_anchors_at_file_start() {
-        let r = violation_range(&violation(None, None));
-        assert_eq!(r.start, Position::new(0, 0));
-        assert_eq!(r.end, Position::new(0, 1));
-    }
-
-    #[test]
-    fn finding_to_diagnostic_carries_rule_and_policy_link() {
-        let d = finding_to_diagnostic(&finding(Some("https://example.com/policy")));
-        assert_eq!(d.code, Some(NumberOrString::String("my-rule".to_string())));
-        assert_eq!(d.source.as_deref(), Some("alint"));
-        assert_eq!(d.message, "boom");
-        assert_eq!(
-            d.code_description.unwrap().href.as_str(),
-            "https://example.com/policy"
-        );
-    }
-
-    #[test]
-    fn finding_to_diagnostic_omits_code_description_for_non_url_policy() {
-        let d = finding_to_diagnostic(&finding(Some("not a url")));
-        assert!(d.code_description.is_none());
-    }
-
-    #[test]
-    fn range_contains_is_inclusive_of_both_ends() {
-        let r = Range::new(Position::new(3, 6), Position::new(3, 7));
-        assert!(range_contains(r, Position::new(3, 6)));
-        assert!(range_contains(r, Position::new(3, 7)));
-        assert!(!range_contains(r, Position::new(3, 8)));
-        assert!(!range_contains(r, Position::new(2, 6)));
-    }
-
-    #[test]
-    fn render_finding_includes_rule_message_and_policy() {
-        let md = render_finding(&finding(Some("https://example.com/p")));
-        assert!(md.contains("my-rule"), "{md}");
-        assert!(md.contains("(error)"), "{md}");
-        assert!(md.contains("boom"), "{md}");
-        assert!(md.contains("https://example.com/p"), "{md}");
-    }
-
-    #[test]
-    fn render_finding_omits_policy_link_when_absent() {
-        let md = render_finding(&finding(None));
-        assert!(!md.contains("Policy"), "{md}");
-    }
-
-    #[test]
-    fn build_session_returns_none_when_no_config() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(build_session(dir.path()).unwrap().is_none());
-    }
-
-    #[test]
-    fn group_findings_anchors_pathless_to_config() {
-        use alint_core::{Engine, RuleResult};
-        let engine = Engine::new(vec![], alint_core::RuleRegistry::new());
-        let root = repo_root();
-        let config = root.join(".alint.yml");
-        let results = vec![RuleResult {
-            rule_id: std::sync::Arc::from("missing-license"),
-            level: Level::Error,
-            policy_url: None,
-            violations: vec![Violation::new("LICENSE is missing")],
-            notes: Vec::new(),
-            is_fixable: false,
-        }];
-        let by_path = group_findings(&root, &results, &engine, &config);
-        // The path-less violation is anchored to the config file.
-        assert!(
-            by_path.contains_key(&config),
-            "anchored to config: {by_path:?}"
-        );
-        let finding = &by_path[&config][0];
-        assert!(
-            !finding.per_file,
-            "unknown/cross-file rule tagged per_file=false"
-        );
-        assert_eq!(finding.message, "LICENSE is missing");
-        // A path-less finding has no source location.
-        assert_eq!(finding.line, None);
-        assert_eq!(finding.column, None);
-    }
-
-    #[test]
-    fn group_findings_threads_violation_line_and_column() {
-        use alint_core::{Engine, RuleResult};
-        let engine = Engine::new(vec![], alint_core::RuleRegistry::new());
-        let root = repo_root();
-        let config = root.join(".alint.yml");
-        let results = vec![RuleResult {
-            rule_id: std::sync::Arc::from("line-rule"),
-            level: Level::Warning,
-            policy_url: None,
-            violations: vec![
-                Violation::new("bad line")
-                    .with_path(std::path::PathBuf::from("src/x.rs"))
-                    .with_location(12, 3),
-            ],
-            notes: Vec::new(),
-            is_fixable: true,
-        }];
-        let by_path = group_findings(&root, &results, &engine, &config);
-        let finding = &by_path[&root.join("src/x.rs")][0];
-        // The reported location is carried onto the finding (so a
-        // range-scoped code-action fixer sees it), and drives the
-        // 1-indexed -> 0-indexed LSP range.
-        assert_eq!(finding.line, Some(12));
-        assert_eq!(finding.column, Some(3));
-        assert_eq!(finding.range.start.line, 11);
-    }
-
-    #[test]
-    fn ranges_overlap_detects_intersection_and_disjoint() {
-        let a = Range::new(Position::new(2, 0), Position::new(2, 10));
-        assert!(ranges_overlap(
-            a,
-            Range::new(Position::new(2, 5), Position::new(2, 6))
-        ));
-        assert!(ranges_overlap(
-            a,
-            Range::new(Position::new(0, 0), Position::new(5, 0))
-        ));
-        assert!(!ranges_overlap(
-            a,
-            Range::new(Position::new(3, 0), Position::new(3, 1))
-        ));
-    }
-
-    /// An absolute root valid on the test's OS — `Url::from_file_path`
-    /// requires absolute, and `/repo` is NOT absolute on Windows.
-    fn repo_root() -> PathBuf {
-        if cfg!(windows) {
-            PathBuf::from(r"C:\repo")
+    // Config files: anchored findings, or the load/build error.
+    let mut config_uris: HashSet<Url> = HashSet::new();
+    let configs: Vec<PathBuf> = state
+        .sessions
+        .keys()
+        .chain(state.broken.keys())
+        .cloned()
+        .collect();
+    for config in configs {
+        let Ok(uri) = Url::from_file_path(&config) else {
+            continue;
+        };
+        let (findings, diagnostics) = if let Some(message) = state.broken.get(&config) {
+            let diagnostic = Diagnostic {
+                range: Range::new(Position::new(0, 0), Position::new(0, 1)),
+                severity: Some(DiagnosticSeverity::ERROR),
+                source: Some("alint".to_string()),
+                message: message.clone(),
+                ..Diagnostic::default()
+            };
+            (Vec::new(), vec![diagnostic])
         } else {
-            PathBuf::from("/repo")
+            let findings = by_config
+                .get(&config)
+                .and_then(|m| m.get(&config).cloned())
+                .unwrap_or_default();
+            let diagnostics =
+                findings_to_diagnostics(&findings, state.related_information_supported);
+            (findings, diagnostics)
+        };
+        state.diagnostics.insert(uri.clone(), findings);
+        let version = state.versions.get(&uri).copied();
+        if published.insert(uri.clone()) {
+            applied.publish.push((uri.clone(), diagnostics, version));
+        } else if let Some(entry) = applied.publish.iter_mut().find(|(u, _, _)| *u == uri) {
+            // An open config file: its governing config is itself, so the
+            // findings agree; a broken config's error replaces them.
+            entry.1 = diagnostics;
         }
+        config_uris.insert(uri);
     }
-
-    #[test]
-    fn set_content_maps_to_full_document_text_edit() {
-        let root = repo_root();
-        let edit = FixEdit::SetContent {
-            path: PathBuf::from("a.txt"),
-            content: b"fixed\n".to_vec(),
-        };
-        let ws = fix_edit_to_workspace_edit(&edit, &root).unwrap();
-        let changes = ws.changes.expect("content edit uses the changes map");
-        let uri = Url::from_file_path(root.join("a.txt")).unwrap();
-        let edits = &changes[&uri];
-        assert_eq!(edits.len(), 1);
-        assert_eq!(edits[0].new_text, "fixed\n");
-        assert_eq!(edits[0].range.start, Position::new(0, 0));
-        assert!(ws.document_changes.is_none());
+    // Config files we published to before that are no longer relevant.
+    let no_longer_configs: Vec<Url> = state
+        .config_uris
+        .difference(&config_uris)
+        .filter(|u| !state.open.contains(*u))
+        .cloned()
+        .collect();
+    for uri in no_longer_configs {
+        state.diagnostics.remove(&uri);
+        applied.publish.push((uri, Vec::new(), None));
     }
-
-    #[test]
-    fn delete_maps_to_a_resource_operation() {
-        let edit = FixEdit::DeleteFile {
-            path: PathBuf::from("debug.log"),
-        };
-        let ws = fix_edit_to_workspace_edit(&edit, &repo_root()).unwrap();
-        assert!(ws.changes.is_none());
-        let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
-            panic!("delete must use resource operations");
-        };
-        assert_eq!(ops.len(), 1);
-        assert!(matches!(
-            ops[0],
-            DocumentChangeOperation::Op(ResourceOp::Delete(_))
-        ));
-    }
-
-    #[test]
-    fn create_maps_to_create_op_plus_insert_edit() {
-        let edit = FixEdit::CreateFile {
-            path: PathBuf::from("LICENSE"),
-            content: b"Apache-2.0\n".to_vec(),
-        };
-        let ws = fix_edit_to_workspace_edit(&edit, &repo_root()).unwrap();
-        let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
-            panic!("create must use resource operations");
-        };
-        assert_eq!(ops.len(), 2);
-        assert!(matches!(
-            ops[0],
-            DocumentChangeOperation::Op(ResourceOp::Create(_))
-        ));
-        assert!(matches!(ops[1], DocumentChangeOperation::Edit(_)));
-    }
-
-    #[test]
-    fn rename_maps_to_rename_op() {
-        let edit = FixEdit::RenameFile {
-            from: PathBuf::from("FooBar.rs"),
-            to: PathBuf::from("foo_bar.rs"),
-        };
-        let ws = fix_edit_to_workspace_edit(&edit, &repo_root()).unwrap();
-        let Some(DocumentChanges::Operations(ops)) = ws.document_changes else {
-            panic!("rename must use resource operations");
-        };
-        assert!(matches!(
-            ops[0],
-            DocumentChangeOperation::Op(ResourceOp::Rename(_))
-        ));
-    }
-
-    #[test]
-    fn set_content_with_non_utf8_yields_no_edit() {
-        let edit = FixEdit::SetContent {
-            path: PathBuf::from("a.bin"),
-            content: vec![0xff, 0xfe],
-        };
-        assert!(fix_edit_to_workspace_edit(&edit, &repo_root()).is_none());
-    }
+    state.config_uris = config_uris;
+    applied
 }

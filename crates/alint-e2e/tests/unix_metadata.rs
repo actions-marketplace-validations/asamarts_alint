@@ -19,6 +19,8 @@ use std::path::Path;
 use alint_core::{Engine, Level, Report, RuleEntry, WalkOptions, walk};
 use alint_testkit::treespec::{TreeSpec, materialize};
 
+use crate::support;
+
 fn chmod(path: &Path, mode: u32) {
     let mut perms = std::fs::metadata(path).unwrap().permissions();
     perms.set_mode(mode);
@@ -30,7 +32,7 @@ fn load_config(root: &Path, config_yaml: &str) -> alint_core::Config {
     std::fs::write(&config_path, config_yaml).unwrap();
     let cache = alint_dsl::extends::Cache::at(root.join(".alint-cache"));
     let opts = alint_dsl::LoadOptions::with_cache(cache);
-    alint_dsl::load_with(&config_path, &opts).unwrap()
+    support::load_with(&config_path, &opts).unwrap()
 }
 
 fn build_engine(
@@ -63,11 +65,22 @@ fn run_check(root: &Path, config_yaml: &str) -> Report {
     engine.run(root, &index).unwrap()
 }
 
-fn run_fix(root: &Path, config_yaml: &str) -> alint_core::FixReport {
+/// `fix` at the Unsafe threshold, i.e. what `--unsafe-fixes` selects.
+/// The only fixer exercised here is `file_remove`, which is Unsafe-tier:
+/// a Safe-tier bare `fix` would only *suggest* it, not apply it.
+fn run_fix_unsafe(root: &Path, config_yaml: &str) -> alint_core::FixReport {
     let config = load_config(root, config_yaml);
     let (engine, walk_opts) = build_engine(&config, alint_rules::builtin_registry());
     let index = walk(root, &walk_opts).unwrap();
-    engine.fix(root, &index, false).unwrap()
+    engine
+        .fix(
+            root,
+            &index,
+            &walk_opts,
+            false,
+            alint_core::Applicability::Unsafe,
+        )
+        .unwrap()
 }
 
 fn tempdir() -> tempfile::TempDir {
@@ -78,7 +91,7 @@ fn tempdir() -> tempfile::TempDir {
 }
 
 fn tree_from(yaml: &str) -> TreeSpec {
-    serde_yaml_ng::from_str(yaml).unwrap()
+    yaml_serde::from_str(yaml).unwrap()
 }
 
 fn violation_count(report: &Report, rule_id: &str) -> usize {
@@ -115,7 +128,10 @@ fn no_symlinks_fix_removes_the_link_but_keeps_the_target() {
     materialize(&tree_from("target.txt: \"real file\"\n"), root).unwrap();
     symlink("target.txt", root.join("alias.txt")).unwrap();
 
-    let report = run_fix(
+    // `file_remove` is an Unsafe-tier fixer, so it applies only under
+    // `--unsafe-fixes`. The property under test is a Unix safety guarantee:
+    // removing the offending *link* must not follow it and delete the *target*.
+    let report = run_fix_unsafe(
         root,
         "version: 1\nrules:\n  - id: no-links\n    kind: no_symlinks\n    paths: \"**\"\n    level: error\n    fix:\n      file_remove: {}\n",
     );

@@ -99,6 +99,9 @@ entries, sorted by `(rule_id, path, fingerprint)`:
   collision; resolves §7-Q6). It is the **only** field used for matching.
 - `count` — collapses identical fingerprints (§3.2).
 - `path` — repo-relative, forward-slashed, or `null` for repo-level violations.
+  (Only Windows `\` separators are rewritten to `/`; on unix a `\` is a legal
+  filename byte and is kept, so `a\b.txt` and `a/b.txt` never share a
+  fingerprint.)
   **Advisory only** (for human review and the sort key); not matched on (the path
   is already inside the fingerprint).
 - `message` — the rendered violation text. **Advisory only, never matched.** It
@@ -177,7 +180,7 @@ violation (§3.1 branch 3), a rule sets `baseline_key` **only** when its identit
 genuinely isn't `(rule_id, path)` — i.e. when it emits *more than one* finding per
 `(rule_id, path)`, has *no* path, or is a *first-offender* line rule:
 
-- **Structured-query** (`json/yaml/toml/xml_path_*`): emit N path-only violations
+- **Structured-query** (`json/yaml/toml/xml/dotenv/properties/ini/hcl_path_*`): emit N path-only violations
   per file, so the empty default would collapse them — and the message embeds the
   matched *value*, which churns. Key = the JSONPath + operator (+ expected value
   for `_equals`). *(This was the headline review bug.)*
@@ -249,9 +252,9 @@ per violation, in order:
 
 `column` is never in the hash (line-granular is the right churn/precision balance).
 `level` is never in the hash (§4 — a baseline accepts the *finding*, not its
-severity). `is_note` violations are notes, not violations, and are never
-fingerprinted (the transform runs on `RuleResult.violations` only, after the
-existing notes partition).
+severity). Findings with `note_kind.is_some()` are notes, not violations, and are
+never fingerprinted (the transform runs on `RuleResult.violations` only, after
+the notes partition).
 
 Self-referential rules (`line_endings`, `no_trailing_whitespace`) take branch 1
 via a path key, so the terminator-stripping in branch 2 never erases the bytes
@@ -433,9 +436,9 @@ By failure mode:
   load/save, `schema_version` gate), `violation_fingerprint(&Violation, content:
   Option<&[u8]>) -> [u8; 32]`, and `apply(&mut Report, &Baseline, strict) ->
   Suppressed` (marks `RuleResult.suppressed`, returns the summary + stale list).
-  CLI (`crates/alint/src/main.rs`) gains `cmd_baseline`, threads `--baseline` /
+  CLI (`crates/alint/src/check.rs`) owns `cmd_baseline` and threads `--baseline` /
   `baseline:` key / `--strict-baseline` / `--show-baselined` into `cmd_check`,
-  at the same post-load layer as the existing `apply_only_filter`.
+  at the same post-load layer as `apply_only_filter`.
 - **Unify the fingerprint (review H1). — RESOLVED (v0.14 deferral close-out,
   2026-07-05).** `gitlab.rs` used to ship its own
   `fingerprint(rule_id|path|message|occurrence)` (SHA-256, bare `|` separator)
@@ -493,8 +496,8 @@ line-number independence (insert above → same hash); trailing-`\r?\n` strippin
 (CRLF↔LF → same hash); edited offending line → different hash; `baseline_key`
 takes precedence over content; identical-content count collapse; length-prefix
 domain separation (no `a‖bc` vs `ab‖c` collision; `baseline_key` path-sets with
-spaces don't collide); `is_note` never fingerprinted; full-hash (no truncation);
-JSON-Lines round-trip + `schema_version` gate + malformed/empty handling;
+spaces don't collide); notes (`note_kind.is_some()`) never fingerprinted;
+full-hash (no truncation); JSON-Lines round-trip + `schema_version` gate +
 deterministic sort/serialization.
 
 **Coverage-audit test — the structural collision-invariant (anti-drift floor):**

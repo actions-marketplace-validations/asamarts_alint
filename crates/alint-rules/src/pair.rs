@@ -19,8 +19,10 @@
 
 use std::path::{Path, PathBuf};
 
-use alint_core::template::{PathTokens, render_message, render_path};
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::template::{PathTokens, TokenSet, render_message, render_path};
+use alint_core::{
+    Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -59,11 +61,12 @@ impl Rule for PairRule {
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
+        let needed = TokenSet::of(&self.partner_template);
         for entry in ctx.index.files() {
             if !self.primary_scope.matches(&entry.path, ctx.index) {
                 continue;
             }
-            let tokens = PathTokens::from_path(&entry.path);
+            let tokens = PathTokens::from_path_with(&entry.path, needed);
             let partner_rel = render_path(&self.partner_template, &tokens);
             if partner_rel.is_empty() {
                 violations.push(
@@ -76,11 +79,28 @@ impl Rule for PairRule {
                 );
                 continue;
             }
-            let partner_path = PathBuf::from(&partner_rel);
+            // Lexically normalize `.` / `..` / empty segments so a template like
+            // `{dir}/../include/{stem}.h` resolves to the in-index path. A `..`
+            // that climbs above the repository root is never a valid partner.
+            let partner_path = match normalize_rel_owned(partner_rel) {
+                Ok(path) => path,
+                Err(partner_rel) => {
+                    violations.push(
+                        Violation::new(format!(
+                            "partner template {:?} resolves outside the repository root for {} \
+                         ({partner_rel})",
+                            self.partner_template,
+                            entry.path.display(),
+                        ))
+                        .with_path(entry.path.clone()),
+                    );
+                    continue;
+                }
+            };
             if resolves_to_self(&partner_path, &entry.path) {
                 violations.push(
                     Violation::new(format!(
-                        "partner template {:?} resolves to the primary file itself ({}) — \
+                        "partner template {:?} resolves to the primary file itself ({}) - \
                          check that the template differs from the primary",
                         self.partner_template,
                         entry.path.display(),
@@ -93,10 +113,59 @@ impl Rule for PairRule {
                 continue;
             }
             let message = self.format_message(&entry.path, &partner_path);
-            violations.push(Violation::new(message).with_path(entry.path.clone()));
+            violations.push(
+                Violation::new(message)
+                    .with_path(entry.path.clone())
+                    .with_related_location(RelatedLocation::new(partner_path, "expected partner")),
+            );
         }
         Ok(violations)
     }
+}
+
+/// Lexically normalize a rendered repo-relative partner path: drop empty and
+/// `.` segments and resolve `..` against the preceding segment. Returns `None`
+/// when a `..` would climb above the root (or nothing is left), so the lookup
+/// stays confined to the repository. No filesystem access: symlinks are not
+/// followed, matching the index's own lexical paths. `\` is a separator only on
+/// Windows (elsewhere it is a legal filename byte).
+fn normalize_rel(rel: &str) -> Option<PathBuf> {
+    // Almost every rendered partner is already normal: return it without the
+    // segment vector and join.
+    if is_normal_rel(rel) {
+        return Some(PathBuf::from(rel));
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in rel.split(|c: char| c == '/' || (cfg!(windows) && c == '\\')) {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s),
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    // Re-join with `/`, not the OS separator: messages show this path, and
+    // Windows `Path` equality already treats `/` and `\` alike for the lookup.
+    Some(PathBuf::from(parts.join("/")))
+}
+
+/// No empty, `.` or `..` segment (and, on Windows, no `\\` separator).
+fn is_normal_rel(rel: &str) -> bool {
+    !(cfg!(windows) && rel.contains('\\'))
+        && rel.split('/').all(|seg| !matches!(seg, "" | "." | ".."))
+}
+
+/// [`normalize_rel`] for an owned rendering: an already-normal path becomes the
+/// `PathBuf` without a copy. `Err` hands the rendering back for the message.
+fn normalize_rel_owned(rel: String) -> std::result::Result<PathBuf, String> {
+    if is_normal_rel(&rel) {
+        return Ok(PathBuf::from(rel));
+    }
+    normalize_rel(&rel).ok_or(rel)
 }
 
 fn resolves_to_self(partner: &Path, primary: &Path) -> bool {
@@ -120,6 +189,38 @@ impl PairRule {
         )
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("primary"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: true,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("partner"),
+            selector_type: alint_core::SelectorType::PathTemplate,
+            rerootable: true,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "pair")?;
@@ -184,6 +285,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         rule.evaluate(&ctx).unwrap()
     }
@@ -202,6 +306,9 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].path.as_deref(), Some(Path::new("src/mod/foo.c")));
         assert!(v[0].message.contains("src/mod/foo.h"));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("src/mod/foo.h"));
+        assert_eq!(v[0].related_locations[0].label, "expected partner");
     }
 
     #[test]
@@ -211,7 +318,7 @@ mod tests {
             &r,
             &[
                 "src/mod/foo.c",
-                "src/mod/foo.h", // has partner — OK
+                "src/mod/foo.h", // has partner - OK
                 "src/mod/bar.c", // no bar.h
                 "src/mod/baz.c", // no baz.h
             ],
@@ -258,6 +365,82 @@ mod tests {
         let v = eval(&r, &["src/foo.c"]);
         assert_eq!(v.len(), 1);
         assert!(v[0].message.contains("empty path"));
+    }
+
+    #[test]
+    fn root_level_primary_with_dir_template_finds_its_partner() {
+        // Audit 2026-10 finding 3: `{dir}` is empty for a root-level file, so
+        // `{dir}/{stem}.h` used to resolve to `/top.h` and never matched.
+        let r = rule("**/*.c", "{dir}/{stem}.h", None);
+        assert!(eval(&r, &["top.c", "top.h"]).is_empty());
+        let v = eval(&r, &["top.c"]);
+        assert_eq!(v.len(), 1);
+        assert!(v[0].message.contains("at top.h"), "{}", v[0].message);
+    }
+
+    #[test]
+    fn partner_template_with_dot_dot_is_lexically_normalized() {
+        // `{dir}/../include/{stem}.h` must resolve to `include/foo.h` (the index
+        // holds normalized paths, so the raw `src/../include/foo.h` never hit).
+        let r = rule("src/*.c", "{dir}/../include/{stem}.h", None);
+        assert!(eval(&r, &["src/foo.c", "include/foo.h"]).is_empty());
+        let r = rule("**/*.c", "{dir}/./{stem}.h", None);
+        assert!(eval(&r, &["a/foo.c", "a/foo.h"]).is_empty());
+    }
+
+    #[test]
+    fn partner_template_escaping_the_root_is_a_violation() {
+        let r = rule("**/*.c", "{dir}/../../{stem}.h", None);
+        let v = eval(&r, &["src/foo.c", "foo.h"]);
+        assert_eq!(v.len(), 1);
+        assert!(v[0].message.contains("outside the repository root"));
+    }
+
+    #[test]
+    fn normalize_rel_fast_path_matches_the_segment_walk() {
+        fn reference(rel: &str) -> Option<PathBuf> {
+            let mut parts: Vec<&str> = Vec::new();
+            for seg in rel.split(|c: char| c == '/' || (cfg!(windows) && c == '\\')) {
+                match seg {
+                    "" | "." => {}
+                    ".." => {
+                        parts.pop()?;
+                    }
+                    s => parts.push(s),
+                }
+            }
+            if parts.is_empty() {
+                return None;
+            }
+            Some(PathBuf::from(parts.join("/")))
+        }
+        let segs = ["", ".", "..", "a", "b.h", "\\x"];
+        let mut cases = Vec::new();
+        for a in segs {
+            for b in segs {
+                for c in segs {
+                    cases.push(format!("{a}/{b}/{c}"));
+                    cases.push(format!("{a}/{b}"));
+                }
+                cases.push(a.to_string());
+            }
+        }
+        for rel in &cases {
+            assert_eq!(normalize_rel(rel), reference(rel), "{rel:?}");
+            assert_eq!(
+                normalize_rel_owned(rel.clone()).ok(),
+                reference(rel),
+                "owned {rel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_rel_cases() {
+        assert_eq!(normalize_rel("a/./b//c"), Some(PathBuf::from("a/b/c")));
+        assert_eq!(normalize_rel("a/../b"), Some(PathBuf::from("b")));
+        assert_eq!(normalize_rel("../b"), None);
+        assert_eq!(normalize_rel("a/.."), None);
     }
 
     #[test]

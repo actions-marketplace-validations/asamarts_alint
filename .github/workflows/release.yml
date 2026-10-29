@@ -7,13 +7,23 @@ on:
     # it must NOT re-run this release pipeline.
     tags: ["v*.*.*"]
 
-permissions:
-  contents: write   # required to create GitHub Releases
-  packages: write   # required to push to ghcr.io/asamarts/alint
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  # The ONE pinned Rust toolchain every release job builds, tests and publishes
+  # with (exact x.y.z, never `stable`), so a release is reproducible and a new
+  # stable cannot change the shipped binaries between `main` going green and the
+  # tag. Dev and ci.yml keep rust-toolchain.toml's floating `stable`. Each job
+  # installs it via dtolnay/rust-toolchain and then runs
+  # ci/scripts/pin-release-toolchain.sh, which exports RUSTUP_TOOLCHAIN (that
+  # beats rust-toolchain.toml) and fails unless rustc really is this version.
+  # test-release-toolchain-pin.sh enforces the wiring. Bump procedure:
+  # RELEASING.md "Release toolchain".
+  RELEASE_RUST: "1.98.1"
 
 jobs:
   # ── Preflight gate ──────────────────────────────────────────────
@@ -29,16 +39,16 @@ jobs:
   # change-gates jobs (needs.changes.outputs.*) to keep PRs fast,
   # but a release must verify the whole tree regardless of the diff.
   #
-  # Parity with ci.yml correctness jobs: fmt, clippy, test, build,
-  # docs, dogfood, examples, shell-tests, deny. deny.sh bootstraps
-  # cargo-deny on demand so the license / supply-chain gate works on
-  # ubuntu-latest too. Deliberately NOT here:
-  #   audit       — audit.sh is advisory-only by design (never fails
-  #                 the pipeline) and cargo-audit is absent on
-  #                 ubuntu-latest; ci.yml's dedicated Audit job
-  #                 (self-hosted) also runs on tag-push and still
-  #                 surfaces the advisory. (deny.sh runs its own
-  #                 advisory pass too, likewise non-blocking.)
+  # Parity with ci.yml correctness jobs: fmt, msrv (+ dep-floors), clippy,
+  # test, build, docs, dogfood (+ demo-drift), examples, shell-tests, deny,
+  # audit.
+  # The MSRV leg matters most here: every published crate advertises
+  # `rust-version` from [workspace.package], so it must actually compile on
+  # that toolchain before publish-crates runs. deny.sh and audit.sh
+  # bootstrap cargo-deny / cargo-audit on demand so the license,
+  # supply-chain and RustSec gates work on ubuntu-latest too; both FAIL on a
+  # vulnerability advisory (waivers: deny.toml [advisories].ignore), so a
+  # release cannot ship a known-vulnerable dependency. Deliberately NOT here:
   #   bench-smoke — a perf smoke check, not a correctness gate.
   # `cargo doc` warnings bypass cargo check/test/clippy, so the
   # rustdoc gate (docs.sh) must run in every release preflight.
@@ -46,8 +56,10 @@ jobs:
   # homebrew, publish-crates) `needs:` this job; if it fails, no
   # artefacts are published.
   preflight:
-    name: preflight (fmt/clippy/test/build/docs/dogfood/examples/shell/deny)
+    name: preflight (fmt/msrv/clippy/test/build/docs/dogfood/examples/shell/deny)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       # Mirrored verbatim across ci.yml / coverage.yml / release.yml
       # / cross-platform.yml — keep identical (see ci.yml rationale).
@@ -56,25 +68,25 @@ jobs:
       RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: verify tag matches workspace version
+        with:
+          # The documentation pin gate below verifies the previous published
+          # Action SHA against its tag; a release-tag checkout alone does not
+          # necessarily contain that older tag.
+          fetch-depth: 0
+      - name: verify release version contract
         # release.yml triggers only on `push: tags: ["v*"]`, so
         # GITHUB_REF_NAME is the tag. Fail fast if the tag doesn't match the
         # Cargo.toml version publish-crates.sh reads, otherwise a forgotten
         # bump-version.sh ships a split-brain release (crates.io no-ops on the
         # already-published version while npm/Docker/GH-Release ship the tag).
-        run: |
-          set -euo pipefail
-          TAG_VER="${GITHUB_REF_NAME#v}"
-          CARGO_VER="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          if [ "$TAG_VER" != "$CARGO_VER" ]; then
-            echo "::error::release tag ${GITHUB_REF_NAME} (=> ${TAG_VER}) != Cargo.toml version ${CARGO_VER}. Run ci/scripts/bump-version.sh and re-tag the bumped commit." >&2
-            exit 1
-          fi
-          echo "tag ${GITHUB_REF_NAME} matches Cargo.toml version ${CARGO_VER}."
+        run: bash ci/scripts/check-release-version.sh "$GITHUB_REF_NAME"
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          toolchain: stable
+          toolchain: ${{ env.RELEASE_RUST }}
           components: rustfmt,clippy
+      - name: pin the release toolchain (overrides rust-toolchain.toml)
+        shell: bash
+        run: ci/scripts/pin-release-toolchain.sh
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: release-preflight
@@ -86,16 +98,35 @@ jobs:
         run: ci/scripts/test.sh
       - name: build (cargo build --workspace --locked)
         run: ci/scripts/build.sh
+      - name: shadow feature tree (release/bench builds exclude shadow-ir)
+        run: ci/scripts/check-shadow-feature-tree.sh
       - name: docs (cargo doc with -D warnings)
         run: ci/scripts/docs.sh
+      - name: verify published Action documentation pin
+        run: bash ci/scripts/check-version-pins.sh --verify-action-tag
       - name: dogfood (alint check on its own repo)
         run: ci/scripts/dogfood.sh
+      - name: demo-drift (README demo GIF still tells the truth)
+        # dogfood.sh has just built target/release/alint; same pairing as
+        # ci.yml's Dogfood job.
+        run: ci/scripts/demo-drift.sh
       - name: examples-validate (every examples/*/.alint.yml)
         run: ci/scripts/examples-validate.sh
       - name: shell-tests (test-*.sh harnesses incl. homebrew golden)
         run: ci/scripts/shell-tests.sh
-      - name: deny (licenses + bans + sources; advisories advisory)
+      - name: packaging (install.sh / npm shim / Dockerfile / pre-commit hooks)
+        run: ci/scripts/packaging-check.sh
+      - name: deny (licenses + bans + sources + advisories, blocking)
         run: ci/scripts/deny.sh
+      - name: audit (RustSec via cargo audit, blocking on vulnerabilities)
+        run: ci/scripts/audit.sh
+      - name: workspace dependency floors (<= workspace.package.version)
+        run: bash ci/scripts/check-workspace-dep-floors.sh
+      - name: msrv (cargo check on [workspace.package].rust-version)
+        # Last on purpose: msrv.sh installs the MSRV toolchain and checks with
+        # `cargo +<msrv>`, leaving the stable default untouched for the steps
+        # above. Gates build -> publish-crates via `needs: preflight`.
+        run: ci/scripts/msrv.sh
 
   build:
     name: build (${{ matrix.target }})
@@ -118,24 +149,31 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-15-intel
             use_cross: false
+            macos_deployment_target: "10.12"
           - target: aarch64-apple-darwin
             os: macos-latest
             use_cross: false
+            macos_deployment_target: "11.0"
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             use_cross: false
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          toolchain: stable
+          toolchain: ${{ env.RELEASE_RUST }}
+      - name: pin the release toolchain (overrides rust-toolchain.toml)
+        shell: bash
+        run: ci/scripts/pin-release-toolchain.sh
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: release-${{ matrix.target }}
 
       - name: download supply-chain bundle (staged into each tarball)
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: supply-chain
           path: supply-chain
@@ -150,13 +188,18 @@ jobs:
           TARGET: ${{ matrix.target }}
           USE_CROSS: ${{ matrix.use_cross }}
           VERSION: ${{ github.ref_name }}
+          # Pin the macOS deployment-target floor (MP-L7) so the PyPI wheel
+          # platform tags (macosx_10_12 / macosx_11_0) stay stable across rustc
+          # toolchain bumps -- a wheel tag must not move silently. Empty (and
+          # ignored) on the Linux/Windows matrix rows.
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
           # release-binary.sh copies this into the tarball; set here (not for
           # local runs) so a missing bundle fails the release fail-closed.
           THIRD_PARTY_BUNDLE: ${{ github.workspace }}/supply-chain/THIRD-PARTY-LICENSES.html
         run: ci/scripts/release-binary.sh
 
       - name: upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: alint-${{ matrix.target }}
           path: |
@@ -181,14 +224,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          toolchain: stable
+          toolchain: ${{ env.RELEASE_RUST }}
+      - name: pin the release toolchain (overrides rust-toolchain.toml)
+        shell: bash
+        run: ci/scripts/pin-release-toolchain.sh
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: release-supply-chain
       - name: generate SBOM + third-party license bundle
         run: ci/scripts/supply-chain-artifacts.sh sc-out
       - name: upload supply-chain bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: supply-chain
           path: |
@@ -208,8 +254,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Rollback guard: a backport (v0.16.2 after v0.17.0) or a re-run of an old
+      # tag must not move the floating pointers backwards. Decided once, here,
+      # from every published tag; the GitHub "Latest" badge and the major tag
+      # below only move when this tag is the highest release overall.
+      - name: decide floating-pointer moves (rollback guard)
+        id: pointers
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ci/scripts/release-pointer-guard.sh "$TAG"
+
       - name: download all artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: release-artifacts
           merge-multiple: true
@@ -229,7 +285,7 @@ jobs:
           # append the same-format hash of every other published asset so a later
           # `cosign sign-blob SHA256SUMS` covers the whole release -- installer
           # and attribution bundle included, not just the tarballs.
-          cat *.tar.gz.sha256 > SHA256SUMS
+          cat -- ./*.tar.gz.sha256 > SHA256SUMS
           sha256sum install.sh THIRD-PARTY-LICENSES.html alint.cdx.json >> SHA256SUMS
           echo "=== SHA256SUMS ==="
           cat SHA256SUMS
@@ -263,11 +319,23 @@ jobs:
       # lesson of v0.15.1, where a rejected SBOM attestation -- ordered BEFORE this
       # step -- skipped the Release even though crates.io + Docker had already
       # published, stranding a half-released version.
-      - name: create GitHub Release
+      #
+      # IDEMPOTENT for `gh run rerun <id> --failed`: if a LATER step of this job
+      # failed (docs-bundle dispatch, major-tag move) the Release already exists,
+      # and an unconditional `gh release create` would die here on the re-run,
+      # so the `needs: release` publishers (npm / PyPI / Homebrew / VS Code /
+      # JetBrains) would never run. When the Release exists, re-upload the same
+      # asset set with --clobber instead (the tarballs are the same build
+      # artifacts; SHA256SUMS + its fresh cosign bundle are regenerated above),
+      # then assert the published asset set is exactly the expected one.
+      - name: create (or, on re-run, refresh) the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
+          # "Latest" drives install.sh's and the Action's default version, so a
+          # backport must not take it (rollback guard, see `pointers`).
+          HIGHEST_OVERALL: ${{ steps.pointers.outputs.highest_overall }}
         shell: bash
         run: |
           set -euo pipefail
@@ -276,13 +344,43 @@ jobs:
           # alint.cdx.json) were staged / downloaded above and are already
           # recorded in SHA256SUMS by the aggregate step. SHA256SUMS.cosign.bundle
           # is the keyless signature over SHA256SUMS produced just above.
-          gh release create "$TAG" \
-            --repo "$REPO" \
-            --title "alint $TAG" \
-            --generate-notes \
-            install.sh SHA256SUMS SHA256SUMS.cosign.bundle \
-            THIRD-PARTY-LICENSES.html alint.cdx.json \
-            alint-*.tar.gz alint-*.tar.gz.sha256
+          assets=(install.sh SHA256SUMS SHA256SUMS.cosign.bundle
+                  THIRD-PARTY-LICENSES.html alint.cdx.json
+                  alint-*.tar.gz alint-*.tar.gz.sha256)
+          latest=false
+          if [[ "$HIGHEST_OVERALL" == "true" ]]; then latest=true; fi
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "::notice::Release ${TAG} already exists (job re-run); refreshing its assets with --clobber"
+            gh release upload "$TAG" --repo "$REPO" --clobber "${assets[@]}"
+          else
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "alint $TAG" \
+              --generate-notes \
+              --latest="$latest" \
+              "${assets[@]}"
+          fi
+          expected="$(printf '%s\n' "${assets[@]}" | sort)"
+          actual="$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | sort)"
+          if [[ "$expected" != "$actual" ]]; then
+            echo "::error::Release ${TAG} asset set drifted from the expected set"
+            diff <(echo "$expected") <(echo "$actual") || true
+            exit 1
+          fi
+          echo "Release ${TAG} carries exactly the $(echo "$expected" | wc -l) expected assets."
+          # `gh release view` above also succeeds for a DRAFT (a hand-made or
+          # interrupted Release), and a draft stays a draft through
+          # `upload --clobber`: invisible to install.sh, `releases/latest` and
+          # the npm postinstall download (they 404). Publish it now that its
+          # asset set is verified complete.
+          is_draft="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft')"
+          if [[ "$is_draft" == "true" ]]; then
+            echo "::notice::Release ${TAG} was a draft; publishing it now that its assets are complete"
+            gh release edit "$TAG" --repo "$REPO" --draft=false --latest="$latest"
+          elif [[ "$is_draft" != "false" ]]; then
+            echo "::error::could not read the draft state of Release ${TAG} (got '${is_draft}')"
+            exit 1
+          fi
 
       - name: attest build provenance for every asset in SHA256SUMS
         id: attest_provenance
@@ -328,11 +426,19 @@ jobs:
           # corrective build explicitly: docs-bundle always checks out the latest
           # *published* Release (now this one), rebuilds the bundle at the new
           # version, and pings the deploy hook -- so the guard clears on its own.
-          gh workflow run docs-bundle.yml --ref main
+          #
+          # NON-FATAL: the Release already exists at this point, and a failed
+          # dispatch must not fail this job (which would skip every `needs:
+          # release` publisher). The manual fallback is one command:
+          #   gh workflow run docs-bundle.yml --ref main
+          if ! gh workflow run docs-bundle.yml --ref main; then
+            echo "::warning::docs-bundle.yml dispatch failed; run 'gh workflow run docs-bundle.yml --ref main' manually or alint.org's STALE DOCS BUNDLE guard will block deploys."
+          fi
 
       - name: move the major tag (e.g. v0) to this release
         env:
           GH_TOKEN: ${{ github.token }}
+          HIGHEST_OVERALL: ${{ steps.pointers.outputs.highest_overall }}
         run: |
           set -euo pipefail
           # Consumers pin `asamarts/alint@v<major>` (e.g. @v0) to always track the
@@ -342,6 +448,11 @@ jobs:
           # with GITHUB_TOKEN, so it does NOT re-trigger this workflow
           # (anti-recursion); the `v*.*.*` filter above also excludes bare major tags.
           MAJOR="${GITHUB_REF_NAME%%.*}"   # v0.14.1 -> v0
+          # Rollback guard: only the highest release overall moves the pointer.
+          if [[ "$HIGHEST_OVERALL" != "true" ]]; then
+            echo "::notice::${GITHUB_REF_NAME} is not the highest release (backport or old-tag re-run); leaving ${MAJOR} where it is."
+            exit 0
+          fi
           echo "Moving major tag ${MAJOR} -> ${GITHUB_SHA} (from ${GITHUB_REF_NAME})"
           git tag -f "$MAJOR" "$GITHUB_SHA"
           git push -f origin "refs/tags/${MAJOR}"
@@ -361,7 +472,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: download linux artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: release-artifacts
           pattern: alint-*-unknown-linux-musl
@@ -394,7 +505,7 @@ jobs:
         # THIRD-PARTY-LICENSES.html lands at the build-context root so the
         # Dockerfile COPY (un-ignored in .dockerignore) picks it up. alint.cdx.json
         # rides along unused and stays ignored.
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: supply-chain
           path: .
@@ -403,8 +514,8 @@ jobs:
       # any docker/* major-version bump. Dependabot raises a PR
       # on the comment-tagged ref so the human can vet the diff
       # before the SHA flips.
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -413,12 +524,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: decide floating-pointer moves (rollback guard)
+        id: pointers
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ci/scripts/release-pointer-guard.sh "$TAG"
+
       - name: derive image tags
         id: tags
         shell: bash
         env:
           TAG: ${{ github.ref_name }}
           OWNER: ${{ github.repository_owner }}
+          HIGHEST_OVERALL: ${{ steps.pointers.outputs.highest_overall }}
+          HIGHEST_IN_MINOR: ${{ steps.pointers.outputs.highest_in_minor }}
         run: |
           set -euo pipefail
           # Lowercase the owner for the image reference (OCI requires
@@ -428,17 +547,30 @@ jobs:
           image="ghcr.io/${owner_lc}/alint"
           # Strip the leading `v` for semver-style tags: v0.4.7 →
           # 0.4.7 + 0.4 + latest. Keep the v-prefixed tag too for
-          # users who pin to the exact git tag.
+          # users who pin to the exact git tag. The exact-version tags are
+          # immutable; the floating :X.Y and :latest move only when this is
+          # the highest release in its minor line / overall (rollback guard).
           ver="${TAG#v}"
           minor="${ver%.*}"
+          tags="${image}:${TAG},${image}:${ver}"
+          if [[ "$HIGHEST_IN_MINOR" == "true" ]]; then
+            tags="${tags},${image}:${minor}"
+          else
+            echo "::notice::${TAG} is not the highest ${minor}.x release; not moving :${minor}."
+          fi
+          if [[ "$HIGHEST_OVERALL" == "true" ]]; then
+            tags="${tags},${image}:latest"
+          else
+            echo "::notice::${TAG} is not the highest release; not moving :latest."
+          fi
           {
             echo "image=${image}"
-            echo "tags=${image}:${TAG},${image}:${ver},${image}:${minor},${image}:latest"
+            echo "tags=${tags}"
           } >> "$GITHUB_OUTPUT"
 
       - name: build + push multi-arch image
         id: build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -503,7 +635,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
-          toolchain: stable
+          toolchain: ${{ env.RELEASE_RUST }}
+      - name: pin the release toolchain (overrides rust-toolchain.toml)
+        shell: bash
+        run: ci/scripts/pin-release-toolchain.sh
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: publish-crates
@@ -530,12 +665,20 @@ jobs:
       contents: read    # checkout only; no writes needed here
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "22"   # Trusted Publishing needs Node >= 22.14
           registry-url: "https://registry.npmjs.org"
       - name: use an OIDC-capable npm (Trusted Publishing needs npm >= 11.5.1; pin the latest 11.x)
         run: npm install -g npm@11.19.0   # not 12.x: it may drop Node 22 support
+      # The version itself is immutable, but npm's `latest` dist-tag is a moving
+      # pointer (and npm refuses to implicitly move it below the current one), so
+      # a backport publishes under a per-minor dist-tag instead (rollback guard).
+      - name: decide floating-pointer moves (rollback guard)
+        id: pointers
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ci/scripts/release-pointer-guard.sh "$TAG"
       - name: stamp package version from tag + publish
         env:
           # Tokenless publish via npm Trusted Publishing (OIDC): no NPM_TOKEN, so
@@ -548,6 +691,7 @@ jobs:
           # build-provenance. The optionalDependencies migration (ADR-0015 / P2) will
           # ship native bytes so the same provenance covers real payload.
           TAG: ${{ github.ref_name }}
+          HIGHEST_OVERALL: ${{ steps.pointers.outputs.highest_overall }}
         shell: bash
         run: |
           set -euo pipefail
@@ -565,16 +709,103 @@ jobs:
             fs.writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           echo "==> package.json version set to $ver"
+          # Re-run safe: `npm publish` of an already-published version fails
+          # (E403), so a `gh run rerun --failed` after a later failure would red
+          # here. Skip when the registry already serves this exact version.
+          if [[ "$(npm view "@asamarts/alint@${ver}" version 2>/dev/null || true)" == "$ver" ]]; then
+            echo "::notice::@asamarts/alint@${ver} is already on npm; skipping publish (re-run)."
+            exit 0
+          fi
+          # Only the highest release moves the `latest` dist-tag; a backport
+          # lands on `release-<major>.<minor>` (rollback guard).
+          dist_tag=latest
+          if [[ "$HIGHEST_OVERALL" != "true" ]]; then
+            dist_tag="release-${ver%.*}"
+            echo "::notice::${TAG} is not the highest release; publishing under dist-tag ${dist_tag}, leaving 'latest' alone."
+          fi
           # --provenance rides the OIDC id-token; with Trusted Publishing npm also
           # generates provenance automatically, so this is explicit-and-belt.
-          npm publish --access public --provenance
+          npm publish --access public --provenance --tag "$dist_tag"
+
+  publish-pypi:
+    name: publish alint to PyPI
+    # `needs: release` so the wheels repackage the exact tarballs that are live on
+    # the GitHub Release -- Path B: byte-identical, attested bytes, so the release's
+    # own build-provenance transitively covers the wheel payload (ADR-0015 /
+    # docs/design/distribution-pypi.md, section 7). Tokenless via PyPI Trusted
+    # Publishing (OIDC), mirroring publish-crates / publish-npm; no PYPI_API_TOKEN,
+    # so nothing here can expire mid-release. A missing Trusted Publisher fails THIS
+    # job on the next release (register it on PyPI, then `gh run rerun --failed`);
+    # like npm/crates, it must never be fixed by re-tagging.
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC for PyPI Trusted Publishing + PEP 740 attestation signing
+      contents: read    # `gh release download` only; no writes
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: download the release tarballs (the attested Path B payload)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-tarballs
+          # The .sha256 sidecars ride along; build_wheels.py verifies each tarball
+          # against its sidecar (fail-closed) before repackaging.
+          gh release download "$TAG" --repo "$REPO" \
+            --pattern 'alint-*.tar.gz' --pattern 'alint-*.tar.gz.sha256' \
+            --dir release-tarballs
+          ls -la release-tarballs
+      - name: assemble wheels (Path B, byte-identical repackage)
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ci/scripts/build_wheels.py --tag "$TAG" \
+            --tarball-dir release-tarballs --out dist
+          ls -la dist
+      - name: twine check (metadata renders on PyPI)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --disable-pip-version-check twine
+          python3 -m twine check dist/*
+      - name: publish to PyPI (Trusted Publishing + PEP 740 attestations)
+        # id-token: write above covers BOTH the OIDC publish exchange and the PEP 740
+        # attestation signing (Sigstore, PyPI OIDC identity); this action does NOT
+        # need GitHub's attestations: write (that belongs to attest-build-provenance,
+        # unused here). Attestations are generated by default (action >= 1.11.0); set
+        # explicitly as belt-and-suspenders. Reads wheels from dist/ (the default).
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+          # Re-run safe: wheels already on PyPI for this version are skipped
+          # instead of failing the job (PyPI files are immutable anyway).
+          skip-existing: true
 
   homebrew:
     name: bump Homebrew tap (asamarts/homebrew-alint)
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The tap serves ONE formula (the latest); a backport or an old-tag re-run
+      # must not overwrite it with an older version (rollback guard).
+      - name: decide floating-pointer moves (rollback guard)
+        id: pointers
+        env:
+          TAG: ${{ github.ref_name }}
+        run: ci/scripts/release-pointer-guard.sh "$TAG"
 
       - name: download SHA256SUMS from this release
         env:
@@ -595,11 +826,19 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
 
-      - name: trust github.com host key
+      - name: trust github.com host key (pinned, not keyscanned)
+        # GitHub's PUBLISHED SSH host keys (docs.github.com "GitHub's SSH key
+        # fingerprints"; also `gh api meta --jq .ssh_keys`). Pinned rather than
+        # `ssh-keyscan`, which trusts whatever answers on first contact. If
+        # GitHub rotates a key, update these lines from that page.
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
-          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/known_hosts <<'KNOWN_HOSTS'
+          github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+          github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
+          github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
+          KNOWN_HOSTS
 
       - name: clone tap
         run: git clone git@github.com:asamarts/homebrew-alint.git tap
@@ -613,8 +852,13 @@ jobs:
       - name: commit + push
         env:
           TAG: ${{ github.ref_name }}
+          HIGHEST_OVERALL: ${{ steps.pointers.outputs.highest_overall }}
         run: |
           set -euo pipefail
+          if [[ "$HIGHEST_OVERALL" != "true" ]]; then
+            echo "::notice::${TAG} is not the highest release (backport or old-tag re-run); leaving the Homebrew formula alone."
+            exit 0
+          fi
           cd tap
           git config user.name "alint release bot"
           git config user.email "asamarts@alint.org"
@@ -634,11 +878,13 @@ jobs:
     # build matrix is irrelevant; we gate on the GH Release being live.
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "20"
+          node-version: "22"   # @vscode/vsce 4 + ovsx 1.2 require Node >= 22
       - name: stamp version from tag + publish to both registries
         env:
           # Repo secrets (Settings → Secrets → Actions):
@@ -647,7 +893,9 @@ jobs:
           #   OVSX_PAT — Open VSX access token (open-vsx.org → settings).
           # Expiring PATs (unlike the keyless crates.io / npm OIDC
           # publishes): if either 401s, rotate it and `gh run rerun <id>
-          # --failed` — no new tag needed (the .vsix is idempotent per version).
+          # --failed` — no new tag needed. Both publishes pass
+          # --skip-duplicate, so a registry that already has this version
+          # (the other one 401'd, or a later job failed) is a no-op, not a red.
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
           TAG: ${{ github.ref_name }}
@@ -667,11 +915,12 @@ jobs:
           "
           echo "==> extension version set to $ver"
           npm ci
+          npm run audit
           npm run check-types
           npm run build
           # vsce/ovsx read VSCE_PAT/OVSX_PAT from the environment.
-          npx --no-install vsce publish --no-dependencies
-          npx --no-install ovsx publish --no-dependencies
+          npx --no-install vsce publish --no-dependencies --skip-duplicate
+          npx --no-install ovsx publish --no-dependencies --skip-duplicate
 
   publish-jetbrains:
     name: publish JetBrains plugin (Marketplace)
@@ -681,13 +930,15 @@ jobs:
     # Release being live, not the build matrix.
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
       - name: stamp version from tag + publish
         env:
           # Repo secrets (Settings → Secrets → Actions):
@@ -711,6 +962,15 @@ jobs:
           ver="${TAG#v}"
           # Pass the version to Gradle without editing the build file.
           echo "==> plugin version set to $ver"
+          # Re-run safe: the Marketplace rejects a duplicate version upload, so
+          # skip when its public plugin feed already lists this version. A feed
+          # lookup failure falls through to the publish (fail-open to the
+          # pre-guard behaviour, never to a silent skip).
+          feed="$(curl -fsS --retry 3 'https://plugins.jetbrains.com/plugins/list?pluginId=org.alint.lsp' || true)"
+          if grep -qF "<version>${ver}</version>" <<<"$feed"; then
+            echo "::notice::org.alint.lsp ${ver} is already on the JetBrains Marketplace; skipping publish (re-run)."
+            exit 0
+          fi
           # Use the pinned wrapper (./gradlew) so release matches what CI
           # validates, not the setup-action's provisioned Gradle.
           ./gradlew -PpluginVersion="$ver" publishPlugin
@@ -724,7 +984,7 @@ jobs:
     # Not gated by editor channels (vscode/jetbrains), which the smoke doesn't
     # cover. workflow_dispatch is the documented anti-recursion exception (same
     # pattern as the docs-bundle dispatch), so the token-triggered run fires.
-    needs: [release, docker, publish-crates, publish-npm, homebrew]
+    needs: [release, docker, publish-crates, publish-npm, publish-pypi, homebrew]
     # Fire even if a publisher failed (partial publish) -- the smoke then reds on
     # exactly the un-published channel instead of the monitor going dark. Only a
     # cancelled run skips it.

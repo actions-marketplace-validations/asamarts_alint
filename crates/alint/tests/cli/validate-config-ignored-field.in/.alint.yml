@@ -1,0 +1,7 @@
+version: 1
+rules:
+  - id: format-once
+    kind: command_idempotent
+    paths: "**/*.rs"
+    command: ["cargo", "fmt", "--check"]
+    level: error

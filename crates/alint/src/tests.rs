@@ -5,8 +5,16 @@
 //! tests under `tests/cli/`.
 
 use super::*;
-use alint_core::{FactKind, FactSpec, FactValue, FactValues, facts::OneOrMany};
+use std::io::Write;
+
+use alint_core::{FactKind, FactSpec, FactValue, FactValues, FixReport, facts::OneOrMany};
 use alint_output::Format;
+
+use crate::check::write_report_notes;
+use crate::fix::fix_exit_status;
+use crate::inspect::{
+    fact_value_display, fact_value_json, render_facts, render_facts_human, render_facts_json,
+};
 
 #[test]
 fn error_is_internal_classifies_the_exit_code() {
@@ -29,6 +37,15 @@ fn error_is_internal_classifies_the_exit_code() {
 }
 
 #[test]
+fn terminal_errors_prefix_every_physical_line() {
+    assert_eq!(
+        terminal_error("first\nforged: all rules passed").to_string(),
+        "first\nalint: forged: all rules passed"
+    );
+    assert_eq!(terminal_error("bad\rclear").to_string(), "bad\\x0dclear");
+}
+
+#[test]
 fn url_encode_passes_through_unreserved_chars() {
     assert_eq!(url_encode("abcXYZ012-_.~"), "abcXYZ012-_.~");
 }
@@ -46,6 +63,98 @@ fn url_encode_handles_unicode() {
     // Multi-byte UTF-8 sequences each percent-encode their bytes.
     // "ñ" is 0xC3 0xB1.
     assert_eq!(url_encode("ñ"), "%C3%B1");
+}
+
+#[test]
+fn fix_exit_status_maps_the_fix_contract() {
+    use alint_core::{FixItem, FixRuleResult, FixStatus, Level, Violation};
+
+    let report = |results, non_convergent| FixReport {
+        results,
+        non_convergent,
+    };
+    let rule = |level, status| FixRuleResult {
+        rule_id: "r".into(),
+        level,
+        items: vec![FixItem {
+            violation: Violation::new("v"),
+            status,
+        }],
+        analysis_failures: Vec::new(),
+    };
+    let err_rule = || rule(Level::Error, FixStatus::Unfixable);
+    // A fix that was ATTEMPTED and errored (a `Skipped` of kind `Errored`).
+    let fix_error = || {
+        rule(
+            Level::Warning,
+            FixStatus::errored(format!(
+                "{} permission denied",
+                alint_core::FIX_ERROR_PREFIX
+            )),
+        )
+    };
+    // An unresolved WARNING-level residual (no error).
+    let warn_residual = || rule(Level::Warning, FixStatus::Unfixable);
+
+    // Converged + clean -> 0.
+    assert_eq!(fix_exit_status(&report(vec![], false), false, false), 0);
+    // An unfixable error-level residual -> 1.
+    assert_eq!(
+        fix_exit_status(&report(vec![err_rule()], false), false, false),
+        1
+    );
+    // `--fix-only` suppresses that benign residual -> 0.
+    assert_eq!(
+        fix_exit_status(&report(vec![err_rule()], false), true, false),
+        0
+    );
+    // A DECLINED error-level Skip (a located fixer collected no edit, or a
+    // size-skip) is NOT a fix error but a standing violation -> exit 1. This is
+    // the exit-code half of BUG B (the located declined-skip): the report set is
+    // gated by a scenario, the exit code here.
+    assert_eq!(
+        fix_exit_status(
+            &report(
+                vec![rule(Level::Error, FixStatus::declined("no applicable fix"))],
+                false
+            ),
+            false,
+            false
+        ),
+        1,
+        "an error-level declined skip is a standing violation -> exit 1"
+    );
+    // A warning-level residual is 0 by default, 1 under --fail-on-warning.
+    assert_eq!(
+        fix_exit_status(&report(vec![warn_residual()], false), false, false),
+        0
+    );
+    assert_eq!(
+        fix_exit_status(&report(vec![warn_residual()], false), false, true),
+        1,
+        "an unfixable warning fails under --fail-on-warning"
+    );
+    // A genuine fix ERROR fails (exit 1) regardless of level, and even under
+    // `--fix-only` (which suppresses only BENIGN residuals).
+    assert_eq!(
+        fix_exit_status(&report(vec![fix_error()], false), false, false),
+        1
+    );
+    assert_eq!(
+        fix_exit_status(&report(vec![fix_error()], false), true, false),
+        1,
+        "--fix-only still fails on an attempted-and-errored fix"
+    );
+
+    // Non-convergence -> 2, and it OUTRANKS everything: a clean report, and even
+    // `--fix-only` (which otherwise suppresses residuals) still yields 2.
+    assert_eq!(fix_exit_status(&report(vec![], true), false, false), 2);
+    assert_eq!(fix_exit_status(&report(vec![], true), true, false), 2);
+    assert_eq!(
+        fix_exit_status(&report(vec![err_rule()], true), true, true),
+        2,
+        "non-convergence (exit 2) outranks a residual (exit 1) and --fix-only suppression"
+    );
 }
 
 fn fact_spec(id: &str, kind: FactKind) -> FactSpec {
@@ -98,6 +207,7 @@ fn fact_kind_name_covers_every_variant() {
         FactKind::FileContentMatches {
             file_content_matches: alint_core::facts::FileContentMatchesFact {
                 paths: OneOrMany::One("X".into()),
+                extract: None,
                 pattern: ".".into(),
             },
         }
@@ -249,4 +359,60 @@ fn render_facts_dispatches_on_format() {
     let sarif_out = render_to_string(|w| render_facts(&facts, &values, Format::Sarif, w));
     assert!(sarif_out.contains("is_py"));
     assert!(!sarif_out.contains("\"facts\""));
+}
+
+#[test]
+fn human_note_stderr_summarizes_by_default_and_lists_structural_kinds_on_request() {
+    let report = alint_core::Report {
+        results: vec![alint_core::RuleResult::new(
+            "bounded-scan".into(),
+            alint_core::Level::Error,
+            None,
+            vec![
+                alint_core::Violation::new("dynamic value skipped")
+                    .with_path(Path::new("Cargo.toml"))
+                    .as_note(),
+                alint_core::Violation::new("stopped at 64 KiB").as_analysis_truncated_note(),
+            ],
+            false,
+        )],
+    };
+
+    let mut summary = Vec::new();
+    write_report_notes(&report, false, &mut summary).unwrap();
+    let summary = String::from_utf8(summary).unwrap();
+    assert_eq!(
+        summary,
+        "alint: 2 informational note(s); run with --show-notes to list.\n"
+    );
+
+    let mut details = Vec::new();
+    write_report_notes(&report, true, &mut details).unwrap();
+    let details = String::from_utf8(details).unwrap();
+    assert!(details.contains("note: Cargo.toml: dynamic value skipped"));
+    assert!(details.contains("analysis truncated: stopped at 64 KiB"));
+}
+
+#[test]
+fn tracing_ansi_follows_color_choice_no_color_and_tty() {
+    // Without CLICOLOR_FORCE in the environment (the resolve step only
+    // upgrades `auto`), the decision table is:
+    if std::env::var_os("CLICOLOR_FORCE").is_none() {
+        assert!(!tracing_ansi("auto", false, false), "piped stderr");
+        assert!(tracing_ansi("auto", false, true), "stderr TTY");
+        assert!(!tracing_ansi("auto", true, true), "NO_COLOR");
+        assert!(!tracing_ansi("bogus", false, false), "unparsable = auto");
+    }
+    assert!(tracing_ansi("always", true, false));
+    assert!(!tracing_ansi("never", false, true));
+}
+
+#[test]
+fn broken_pipe_is_detected_through_context_and_tolerated() {
+    let epipe = || std::io::Error::from(std::io::ErrorKind::BrokenPipe);
+    let wrapped = anyhow::Error::new(epipe()).context("writing output");
+    assert!(is_broken_pipe(&wrapped));
+    assert!(!is_broken_pipe(&anyhow::anyhow!("no config")));
+    assert!(tolerate_broken_pipe(Err(epipe())).is_ok());
+    assert!(tolerate_broken_pipe(Err(std::io::Error::other("disk full"))).is_err());
 }

@@ -10,7 +10,76 @@
 > markers. See [`v0.11/roadmap_generator.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.11/roadmap_generator.md)
 > for the marker syntax and the v0.9.22 migration plan.
 
-**Latest release: v0.15.2** (2026-08-22): a release-infrastructure patch, binaries
+**Latest release: v0.20.1** (2026-10-23): a performance and diagnostics patch. Rule path checks,
+nested-rule kinds, `pair`, `unique_by`, terminal output, YAML guards and `extends:` loading are
+cheaper, so structured-query and cross-file checks run 3-5% faster end to end; alint warns when a
+content pattern's `^` or `$` anchors to the whole file where a line was almost certainly meant
+(#343); and releases gain a deterministic micro-benchmark gate and a long-horizon performance
+anchor. The prior v0.20.0 (2026-10-21) was the policy-authoring loop. A public, versioned
+`alint test` runner executes hermetic fixture repositories through the production engine;
+`alint explain <rule-id> --trace` reports bounded, deterministic, redaction-safe evidence for one
+effective rule; and every configuration source validates its language version and optional
+`requires.alint` floor before composition. The release also moved exact-path repository facts onto
+the lazy file index, replaced the archived YAML parser without changing accepted input, gave every
+bundled ruleset executable ownership tests, and hardened diagnostics, installers, benchmark
+comparisons, and release documentation. The prior v0.19.0 (2026-10-18) was the first general-linter
+delivery phase. The rule registry became the authoritative, serializable capability catalog for all
+102 canonical kinds and generated schema/discovery surfaces; incomplete analysis fails loudly;
+findings preserve source ranges and related locations; sensitive evidence is redacted; and
+time-dependent checks use a reproducible reference date. Seven standalone policy kinds cover
+EditorConfig, Markdown accessibility and structure, SPDX expressions, and immutable build
+references, while opt-in versioning and toolchain bundles enforce cross-file consistency.
+Duplicate-preserving structured rows prepare the next rule families, and the release also hardened
+dotenv editing, LSP encoding and teardown, installers, and release tooling. The prior v0.18.4
+(2026-10-15) was a performance and correctness patch:
+`--changed` runs no longer build whole-tree lookups that no rule uses, and `.env`
+fixes take their edits from adotenv 0.1.1's verified `set` and `remove`, fixing two
+cases where a fix silently changed a file's meaning. The prior v0.18.3 (2026-10-15)
+was a correctness and security patch:
+`check --changed` and `fix --changed` judge changed files against the whole
+repository, `alint fix` no longer edits files that `scope_filter` excludes,
+nested configs confine every repository-relative field (including through root
+templates and `require:` blocks), and rustls is updated for four new RustSec
+advisories. The prior v0.18.2 (2026-10-13) was a security and correctness patch:
+alint's terminal output escapes every invisible character its own bidi and
+zero-width rules flag (one shared definition), `.env` parsing and editing moved
+to the new dependency-free `adotenv` crate, and a leading BOM no longer shifts
+columns. The prior v0.18.1 (2026-10-12) was a performance and installer patch:
+per-file content checks (the zero-width, bidi and blank-line rules) skip clean files
+with a SIMD byte search and are now faster than in v0.17, `check --changed` runs its
+two git reads concurrently, and `install.sh` resolves the latest release without the
+rate-limited GitHub API. The prior v0.18.0 (2026-10-11) was security and correctness hardening from a
+whole-repository audit and an adversarial re-review of its fixes. The config trust
+gates now judge the rule that actually runs (YAML tags, merge keys, and placeholder
+kinds can no longer hide a field from them), untrusted remote rulesets lose `ignore:`
+and environment access, crafted YAML and XML files are bounded in memory and CPU,
+and RustSec advisories block CI and releases. It adds the `markdown_links_resolve`
+rule kind and per-rule `expect_matches:` scope assertions, and the LSP resolves the
+nearest config per file. Breaking: three config tightenings, MSRV 1.88, and VS Code
+1.91 for the extension. The prior v0.17.0 (2026-10-01) was the auto-fix arc. `alint fix` now repairs
+violations across 26 fix ops (up from 12), spanning located `replace`, structured
+`set_value` / `remove_value`, metadata (`chmod`), VCS (`git_untrack`), plugin
+`command`, cross-file (`sync_from`, `relocate`, `create_and_register`), and ordering
+/ header ops (`sort`, `indent_style`, `insert_line`, `insert_header`), each on a Safe
+or Unsafe tier gated by `--unsafe-fixes`. A three-way trust partition keeps
+content-injecting and spawning fixers out of untrusted remote or nested rulesets, the
+LSP offers the located `replace` as a code action, and the benchmark harness is
+consolidated to 5 scenarios including a dedicated auto-fix pass. The prior v0.16.1
+(2026-09-04) added the PyPI distribution channel: alint is
+now installable via `uvx` / `pipx` / `uv tool` / `pip`, with a fast `language: python`
+pre-commit hook, each wheel embedding the prebuilt attested binary. It builds on the
+v0.16.0 config-format coverage arc plus a parser-hardening cycle: XML becomes a
+first-class target across every format-aware
+rule, and dotenv (`.env`), Java `.properties`, INI / `.cfg`, and HCL (Terraform /
+Nomad / Packer) join as new config formats, each with a
+`*_path_{equals,matches,absent}` family, `json_schema_passes` support, and
+`extract:` in the cross-file rules; a new `*_path_absent` kind family (JSON / YAML /
+TOML / XML) asserts a query matches nothing. A multi-round adversarial audit then
+bounded every parser against crafted-file denial-of-service (recursion, nesting,
+size, alias-expansion, and attribute-count caps, robust to quote- and
+terminator-based evasion, with an HCL depth pre-scan that matches hcl-rs at every
+content boundary), so an untrusted config or repo file can no longer hang or abort a
+run. The prior v0.15.2 (2026-08-22) was a release-infrastructure patch, binaries
 unchanged from v0.15.1. npm now publishes via keyless OIDC Trusted Publishing
 (tokenless, with a provenance attestation), retiring the `NPM_TOKEN` PAT. The
 prior v0.15.1 (2026-08-21) was a supply-chain-hardening release: every release is
@@ -209,11 +278,28 @@ on it for adoption, they can lint without it.
   symlink-aware) and the follow-on e2e-sweep + adversarial-review
   fixes. See `v0.14/README.md`.
 
-- **Future / backlog, WASM plugins.** A `wasm` plugin kind on a
-  `wasmtime` host with a stable WIT interface, a filesystem sandbox, a
-  signed plugin registry, and blessed examples (mock-ratio checker,
-  near-dup detector, debug-statement stripper). Unpinned from a
-  version until the engine work is scheduled.
+- **v0.19 to v1.0, general-linter program (adopted 2026-10-14).** Phases
+  0 and 1a in v0.19 deliver the capability inventory, fail-loud analysis,
+  complete notes, redaction, related locations, reproducible analysis time,
+  and duplicate-aware spanned extraction, alongside seven gap-study kinds
+  and the versioning and toolchain consistency bundles. The accepted
+  [`v0.20` authoring-loop design](https://github.com/asamarts/alint/blob/main/docs/design/v0.20/README.md) shipped `alint test`,
+  selected-rule `explain --trace`, and per-source compatibility requirements;
+  the internal relation layer with the `key_parity` pilot and the plugin
+  contract follow in the accepted [`v0.21` design](https://github.com/asamarts/alint/blob/main/docs/design/v0.21/README.md), then `version: 2` selectors and constraints, with
+  plugin hosts as a parallel track. Staged in
+  [`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md)
+  section 11, decided in
+  [ADR-0019](https://github.com/asamarts/alint/blob/main/docs/adr/0019-general-linter-program-and-plugin-architecture.md),
+  with detection gaps in
+  [`rule-coverage-gaps.md`](https://github.com/asamarts/alint/blob/main/docs/design/rule-coverage-gaps.md).
+
+- **Plugins (parallel track).** Format adapters, checkers, and fixers
+  as compiled-in Rust crates (`alint build`), out-of-process plugins in
+  any language over protobuf frames on stdio, and sandboxed WASM
+  components, all on one WIT-defined contract compiled by a separate
+  open-source project. See [`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md)
+  section 9.4 and [`plugin-architecture.md`](https://github.com/asamarts/alint/blob/main/docs/design/plugin-architecture.md).
 
 - **v1.0, Stability.** DSL committed, plugin ABI committed,
   `alint-core` public API frozen, docs site committed.
@@ -231,7 +317,9 @@ so post-launch users can vote with their adoption.
 ## Positioning
 
 alint's scope is **the filesystem shape and contents of a
-repository**, not the semantics of the code inside it. Sweet
+repository**, not the semantics of the code inside it. Precisely, it
+is a general linter for finite, inspectable project state (see
+[`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md) section 1). Sweet
 spot: workspace-tier monorepos (Cargo, pnpm, yarn, Lerna) and
 OSS-style polyglot monorepos. Honest limits: dependency-graph
 problems (`cargo deny`, `bazel mod`, `buildifier`) and
@@ -269,7 +357,7 @@ The smallest scope that is usefully adoptable.
 <!-- roadmap-public: blurb="Cross-file primitives like pair and for_each_dir, the facts system, the when expression language, extends with SRI, and the fix subcommand." -->
 
 - Cross-file primitives: ✅ `pair`, ✅ `for_each_dir`, ✅ `for_each_file`, ✅ `every_matching_has`, ✅ `dir_contains`, ✅ `dir_only_contains`, ✅ `unique_by`. **(complete)**
-- Facts system: ✅ `any_file_exists`, ✅ `all_files_exist`, ✅ `count_files`, ✅ `file_content_matches`, ✅ `git_branch`, ✅ `custom` (security-gated; only allowed in the top-level config, never in `extends:`); ⏳ `detect: linguist`, ⏳ `detect: askalono`, both likely v0.5 alongside bundled rulesets.
+- Facts system: ✅ `any_file_exists`, ✅ `all_files_exist`, ✅ `count_files`, ✅ `file_content_matches`, ✅ `git_branch`, ✅ `custom` (security-gated; only allowed in the top-level config, never in `extends:`); `detect: linguist` and `detect: askalono` never shipped (an offline license heuristic is now gap F1 in [`rule-coverage-gaps.md`](https://github.com/asamarts/alint/blob/main/docs/design/rule-coverage-gaps.md)).
 - ✅ `when` expression language, bounded grammar with `and`/`or`/`not`, comparison ops (`==` `!=` `<` `<=` `>` `>=`), `in` (list/substring), `matches` (regex), literal types (bool/int/string/list/null), and `facts.X` / `vars.X` identifiers. Parsed at rule-build time; gates rules in Engine + nested rules in `for_each_*`.
 - ✅ `extends`: local files (recursive resolution, cycle detection, child-overrides-parent merge) + HTTPS URLs with SHA-256 SRI and caching under the platform user cache dir (`~/.cache/alint/rulesets/` on Linux). Nested remote extends deferred to v0.3, a relative path inside a fetched config has no principled base.
 - ✅ `fix` subcommand with `file_create`, `file_remove`, `file_prepend`, `file_append`, `file_rename` (the latter wired to `filename_case`, target name derived from the rule's `case:` setting; extension preserved).
@@ -461,7 +549,8 @@ Ranked by leverage.
   1M-file size opt-in via `--include-1m`.
 - ✅ **Competitive comparisons**, shipped in v0.5.7
   (2026-04-26). Same harness now drives ls-lint,
-  Repolinter, and `find` + `ripgrep` pipelines alongside
+  Repolinter, and shell pipelines (`find` + grep for S1; `test`, `find`, and
+  ripgrep for S2) alongside
   alint, gated to the scenarios each tool can sanely
   express. Reproducibility via the
   `ghcr.io/asamarts/alint-bench` Docker image (pinned
@@ -539,8 +628,8 @@ without changing the underlying tool.
   carries an `agent_instruction` field templated from the
   rule's `message` + `fix` block: a remediation phrasing
   optimised for an agent to act on, not for a human to read.
-  Closes the "agents already consume our JSON, but the SARIF
-  shape is awkward in their context" feedback gap.
+  Closes a feedback gap: agents already read the JSON output,
+  but the SARIF shape was awkward in their context.
 
 Out-of-scope for v0.6 (deliberately): new rule kinds, semantic
 analysis, secret-entropy scanning, AGENTS.md export. All of
@@ -1138,8 +1227,8 @@ four. **All four shipped in v0.11.0.**
   Foundation contribution convention; demand surface includes
   every CNCF / LF-hosted project that requires DCO.
 - **`git_commit_no_fixup`**, fail on residual `fixup!` /
-  `squash!` / `amend!` commits left after rebase. Catches the
-  "I forgot to rebase before push" PR shape.
+  `squash!` / `amend!` commits left after rebase. Catches a
+  contributor who forgot to rebase before pushing.
 - **`git_commit_author_allowlist`**, author email or name
   matches a pattern. Use cases: enforce committer identity
   against an org domain, exclude bot accounts, gate against
@@ -1443,11 +1532,173 @@ via `derive_target:`. See
 - `scope_filter` correctness: resolves under `--changed`, applies on rule-major
   kinds, and diagnostics stay off stdout.
 
+## v0.16: Config-format coverage + parser hardening
+<!-- roadmap-public: blurb="XML becomes a first-class target across every format-aware rule, and dotenv, Java .properties, INI, and HCL join as new config formats with their own path-query rule families, alongside a new *_path_absent kind family and a multi-round audit that bounds every config parser against crafted-file denial-of-service." -->
+
+The cut that finishes config-format coverage and hardens the parsers behind it.
+XML is now a first-class target across `json_schema_passes` and the cross-file
+rules (`extract:`), and dotenv (`.env`), Java `.properties`, INI / `.cfg`, and HCL
+(Terraform / Nomad / Packer) join as config formats, each with a
+`*_path_{equals,matches,absent}` rule family. A new `*_path_absent` kind family
+(JSON / YAML / TOML / XML) asserts a query matches nothing. A multi-round
+adversarial audit then bounded every config parser against crafted-file
+denial-of-service. See
+[`format-coverage.md`](format-coverage.md) and CHANGELOG `[0.16.0]`.
+
+- XML across every format-aware rule; dotenv, `.properties`, INI, and HCL as new
+  config formats, each with a `*_path_{equals,matches,absent}` family,
+  `json_schema_passes`, and `extract:` support.
+- A `*_path_absent` kind family (JSON / YAML / TOML / XML): assert a query matches
+  nothing.
+- Parser DoS hardening across every format: bounded recursion / nesting / size,
+  YAML flow-depth and alias-expansion caps (robust to quote-based evasion), an HCL
+  depth pre-scan matching hcl-rs at each content boundary, an XML attribute-count
+  cap, a 32 MiB structured-input cap, and graceful worker-pool fallback.
+
+## v0.17: Auto-fix
+<!-- roadmap-public: blurb="alint learns to fix what it flags through a tiered fix engine that applies safe fixes by default and gates unsafe and suggestion tiers behind explicit flags, rewriting file content in place, setting or removing structured values across JSON, YAML, TOML, and XML with formatting preserved, repairing file permissions and shebangs, and canonicalizing ordering and headers, with every applied edit verified against the rule that requested it and a bounded fixpoint that either converges or reports exactly what it left unresolved." -->
+
+The release that makes `alint` a fixer, not just a checker. `alint --fix`
+applies the Safe tier; the Unsafe and Suggestion tiers stay opt-in
+(`--unsafe-fixes`, `--diff`, `--fix-only`). Every edit is re-checked against
+the rule that requested it, and a bounded fixpoint either converges or reports
+exactly what it could not resolve. The whole phased arc lands together in one
+minor. See [`auto-fix.md`](auto-fix.md),
+[ADR-0017](../adr/0017-auto-fix-edit-model-and-applicability.md), and the
+[implementation plan](auto-fix-implementation-plan.md).
+
+- A tiered fix engine and the `FixEdit` primitives, with a verify-after-apply
+  contract and an iterate-to-fixpoint driver that stays a genuine no-op for
+  configs that request no fixes.
+- Located content replacement for `file_content_forbidden` and
+  `file_content_matches`, driven by the host rule's `pattern:`.
+- Format-preserving `set_value` / `remove_value` for the `*_path_equals` and
+  `*_path_absent` kinds across JSON, YAML, TOML, and XML, plus templated
+  `*_path_matches` replacement: 24 of the 25 structured-query kinds become
+  fixable.
+- Permission and VCS repair: `chmod`, executable-bit, and shebang fixers, plus
+  the first repo-scale cross-file fixers.
+- Ordering, canonicalization, and header insertion.
+
+## v0.18: Audit hardening
+<!-- roadmap-public: blurb="A whole-repository security and correctness audit, then an adversarial re-review of its fixes: the config trust gates judge the rule that actually runs, untrusted remote rulesets lose ignore and environment access, crafted YAML and XML files are bounded, RustSec advisories block releases, and the new markdown_links_resolve kind and expect_matches scope assertions land alongside." -->
+
+A release built from the 2026-10 audit and its second, adversarial review round.
+See [`audit-2026-10.md`](audit-2026-10.md) for the findings, the maintainer
+decisions, and the known limits.
+
+- Config trust gates evaluate the effective rule: YAML tags, merge keys, and
+  `{{vars.*}}` placeholders in `kind:` or `applicability:` are refused, and an
+  `extends:`'d config can no longer reshape a process-spawning rule.
+- Untrusted remote rulesets may not declare `ignore:`, read the environment in
+  `when:`, or splice environment-derived values into messages.
+- YAML and XML pre-scan guards match their parsers at every boundary and bound
+  alias expansion, flow depth, and namespace work.
+- Release pipeline: blocking RustSec advisories, a pinned release toolchain,
+  release pointers that never move backwards, and a script-injection gate.
+- New: `markdown_links_resolve`, per-rule `expect_matches:`, and per-file config
+  resolution in the LSP.
+
+## v0.19: Fail-loud findings and the capability inventory
+<!-- roadmap-public: blurb="The first phase of the general-linter program: a generated per-kind capability inventory that drives trust gates, fail-loud analysis outcomes, secret-bearing evidence redaction, related finding locations, reproducible analysis time, duplicate-aware spanned extraction, seven standalone policy kinds, and version and toolchain consistency bundles." -->
+
+Phases 0 and 1a of [`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md) (section 11),
+broken into work items W1-W10 in [`v0.19/README.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.19/README.md),
+decided in [ADR-0019](https://github.com/asamarts/alint/blob/main/docs/adr/0019-general-linter-program-and-plugin-architecture.md). Each item graduates to a
+`docs/design/v0.19/` design doc before its code lands.
+Current status and the ordered next steps are kept in that file's
+"Status and next steps" section.
+
+- **Capability inventory (complete 2026-10-16).** A static `KindMeta` per
+  canonical kind (dispatch, selectors, host capabilities, content/formats,
+  changed dependencies, fixes, nested rules), emitted into `facts.json` and the
+  CLI discovery surfaces. Trust/audit gates and load-time common-field rejection
+  derive from it; the generated per-kind schema is parity-gated against it.
+- **Fail-loud analysis.** A rule that cannot evaluate a repository file
+  reports an error-level finding that is never baselinable, whatever the
+  rule's level; manifest parse failures, missing Git, and non-string
+  extraction results become explicit outcomes.
+- **Notes in every format** (SARIF `note` results, summary lines in
+  GitHub, GitLab, and Markdown output).
+- **Redaction.** Values from `.env` and `.properties` files are redacted
+  by default, with an opt-in `sensitive:` marker elsewhere; baseline files
+  never store raw values.
+- **Related locations** on findings in SARIF and the LSP; the JSON report
+  schema is relaxed to accept additive fields one release before they
+  appear there. Existing baseline fingerprints are frozen behind a golden
+  gate.
+- **`--as-of`** (and `ALINT_AS_OF`) for time-dependent rules, defaulting
+  to the HEAD commit time; `git_blame_age` moves onto it.
+- **Duplicate-aware spanned extraction.** Dotenv, JSON/JSONC, YAML, INI, and
+  Java properties expose source-ordered rows with duplicate keys and exact
+  key/value byte spans, without changing existing last-wins extraction.
+- **Seven standalone detection kinds.** `editorconfig_conforms`, four CommonMark
+  structure checks, `spdx_identifier_valid`, and `pinned_references` cover the
+  selected A1, E2, E3, E5, E7, F2, and H1 gaps. `pinned_references` checks
+  immutable executable references across GitHub Actions, pre-commit, CircleCI,
+  GitLab CI, Cloud Build, and Dockerfiles.
+- **Version and toolchain consistency bundles.** Opt-in `versioning@v1` and
+  `toolchain-pins@v1` rulesets align release versions and exact Node, Rust,
+  Python, Ruby, JVM, and .NET pins across local, container, and CI declarations.
+
+## v0.20: Policy authoring loop
+<!-- roadmap-public: blurb="The policy authoring loop: a published, versioned alint test runner for isolated fixture repositories; selected-rule explain traces with bounded redaction-safe previews; and per-source config version and minimum-alint requirement checks." -->
+
+Phase 1b of
+[`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md)
+is specified by the accepted
+[`v0.20/README.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.20/README.md)
+and [ADR-0022](https://github.com/asamarts/alint/blob/main/docs/adr/0022-policy-authoring-loop-contracts.md),
+with detailed policy-test, rule-trace, and config-requirement contracts.
+
+- **Public policy tests and bundle ownership.** The versioned model, schema, published runner
+  crate, `alint test` CLI, isolated directory/config fixtures, two-key process/keyring grants, and
+  578-test migration are implemented. All 24 shipped v1 bundles own whole-bundle pass/fail tests;
+  the runtime catalog, ownership tree, and public parser/runner corpus are parity-gated.
+- **Selected-rule trace.** `alint explain <rule-id> --trace` follows production engine dispatch
+  and reports gates, selector/extraction/cardinality counts, assertions, and terminal outcomes.
+  Opt-in previews are deterministic, bounded, and redaction-safe; JSON remains experimental until
+  v2 stabilizes.
+- **Config compatibility.** Validate each complete source's `version` before composition and add
+  source-local `requires.alint` minimum stable release metadata to v1. Future v2 consumers may
+  extend v1 sources; v1 consumers can never extend v2.
+
+## v0.21: Internal relation layer
+<!-- roadmap-public: blurb="The groundwork for cross-file constraints: an internal relation layer with typed values and source locations, a new key_parity rule that keeps locale and environment files in step across JSON, YAML, TOML, dotenv, INI, Java properties, Android string resources, and .resx, a second implementation of one existing check that must match it exactly, and a first draft of the plugin contract." -->
+
+Phase 2 of
+[`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md)
+is specified by the accepted
+[`v0.21/README.md`](https://github.com/asamarts/alint/blob/main/docs/design/v0.21/README.md)
+and [ADR-0023](https://github.com/asamarts/alint/blob/main/docs/adr/0023-relation-ir-key-parity-and-plugin-contract-0x.md).
+The only new user-facing surface is one rule kind.
+
+- **Measurement first.** Compare relation-layer changes with v0.18.2 on the deterministic
+  scenarios S1-S3, failing above +3% instructions or on file-system call growth beyond a small
+  fixed allowance.
+- **Internal relation layer.** Typed rows (lexeme-preserving numbers, normalized paths, lists,
+  records) with source provenance, distinct missing, `null`, and error states, explicit limits,
+  and byte-exact path comparison on every operating system. A file that several relations and
+  per-file rules select is read once.
+- **`key_parity`.** A reference file and a glob of peers must declare the same keys, nested
+  included, across JSON, YAML, TOML, dotenv, INI, Java properties, Android string resources,
+  and `.resx`, with an opt-in CLDR plural mode for locale files.
+- **Shadow port.** A second implementation of `cross_file`'s `equals` relation on the new layer,
+  compared byte for byte in tests and against the 110 case-study configurations at their
+  pinned commits. The existing implementation stays authoritative until a zero-difference
+  release.
+- **Plugin contract 0.x.** Internal adapter and analyzer traits that the built-in row adapters
+  and `key_parity` implement, an injectable rule registry, and a draft WIT contract.
+
 ## v1.0: Stability
 <!-- roadmap-public: blurb="A committed DSL and plugin ABI, a frozen alint-core public API, and a versioned documentation site." -->
 
-- DSL schema committed; semver on `version: 1`.
-- Plugin ABI committed.
+- DSL schema committed; semver on both `version: 1` and `version: 2`
+  (`version: 2` ships before this milestone, per decision DEC-9 in
+  [`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md)).
+- Plugin contract 1.0 committed (the WIT contract and its generated Rust
+  and protobuf bindings; see [`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md)
+  section 9.4).
 - `alint-core` public API frozen; breaking changes follow semver-major.
 - Documentation site.
 - **Remove the deprecated `${VAR}` interpolation path** in
@@ -1458,7 +1709,7 @@ via `derive_target:`. See
   successor.
 
 ## Future / backlog
-<!-- roadmap-public: blurb="A wasm plugin kind on a wasmtime host with a stable WIT interface, a filesystem sandbox, and a signed plugin registry, plus a language-agnostic duplicate-code detector, all unpinned from a numbered release until the engine work is scheduled." -->
+<!-- roadmap-public: blurb="A language-agnostic duplicate-code detector and the original WASM plugin sketch, now superseded by the plugin track of the general-linter program: compiled-in Rust plugins, out-of-process plugins in any language, and sandboxed WASM components on one typed contract." -->
 
 Scope that is real but deliberately unpinned from a numbered cut, sequenced
 against demand rather than a date.
@@ -1466,7 +1717,14 @@ against demand rather than a date.
 ### WASM plugins
 
 Held the v0.14 slot until the security + correctness hardening pass took it;
-now unversioned until the engine work is scheduled.
+now scheduled as a parallel track of the general-linter program. **Superseded:**
+the sketch below predates the 2026-10 audit and the general-linter decisions;
+[`general-linter.md`](https://github.com/asamarts/alint/blob/main/docs/design/general-linter.md) section 9.4 is the plan of record
+(DEC-14): three hosts on one WIT contract (compiled-in Rust, out-of-process
+over protobuf on stdio, sandboxed WASM), no environment-derived values for
+plugins inherited through `extends:`, grants through `trusted_extends:`, an
+all-platform `alint.lock`, and no registry before validation. The bullets
+below are kept as the historical sketch.
 
 - `wasm` plugin kind with a `wasmtime` host, stable WIT interface. Plugins
   receive their config *post-interpolation* per the v0.11 variable-expansion
@@ -1497,3 +1755,35 @@ similarity threshold, in the spirit of jscpd or PMD CPD but language-agnostic.
   plugins above, to keep the core binary lean. Either way it must stay
   near-linear (fingerprint hashing, not pairwise comparison) so it does not
   erode the sub-second structural floor.
+
+<!-- alint:internal-start -->
+### Build and dev-loop hygiene
+
+Contributor-loop costs that change nothing alint ships: each one makes the
+edit, build, and test cycle recompile or relink work it does not need to.
+Evidence, fix directions, and acceptance criteria are in
+[`build-dev-loop.md`](https://github.com/asamarts/alint/blob/main/docs/design/build-dev-loop.md).
+
+- **Build-script rerun in git worktrees.** Fixed in #356 (unreleased).
+  `crates/alint/build.rs` emitted `cargo:rerun-if-changed=../../.git/HEAD`.
+  In a git worktree `.git` is a file, so the path was missing and cargo
+  treated the build script as stale on every build: the `alint` crate
+  recompiled and its 39 integration-test binaries relinked each time. The
+  script now resolves the real git dir and watches only paths that exist,
+  as aplan did (A1-629); `ci/scripts/test-build-script-freshness.sh` gates
+  it with real cargo builds.
+- **One integration-test binary per crate.** Done in #360 (unreleased).
+  The 87 top-level `tests/*.rs` binaries (alint 39, alint-e2e 33, rules 6,
+  core 2, dsl 2, output 2, xtask 2, testkit 1) now build as one `it`
+  binary per crate, rooted at `tests/main.rs`, and xtask's `test_layout`
+  test fails if a test file is left out. Touching `alint-core` then
+  `cargo test --workspace --no-run` fell from 121.5 to 56.1 CPU-s (-54%) at
+  `ed9e7620b`, with an identical test list. The prototype measured on
+  `635b6a91`: editing `alint-core` then `cargo test --no-run`
+  fell from 158 to 50 CPU-s (-69%) with full debuginfo and from 67 to 33
+  (-51%) trimmed; integration-test binaries went from 77 to 7; nextest ran
+  3,303 tests with no new failures. aplan made the same change on 2026-10-21
+  (A1-630, 134 integration-test binaries to 9). With the build-script fix
+  and three smaller build tasks, aplan's compile load on the host fell
+  65-88% over the next two days at unchanged commit volume.
+<!-- alint:internal-end -->

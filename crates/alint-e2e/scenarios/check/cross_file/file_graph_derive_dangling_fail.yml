@@ -1,3 +1,4 @@
+test_version: 1
 name: file_graph derive_target + no_dangling fires when a derived sibling is missing
 tags: [check, file_graph, cross_file]
 
@@ -26,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: license-has-notice, level: error, path: licenses/lucene-LICENSE.txt}

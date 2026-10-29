@@ -1,34 +1,180 @@
-//! Best-effort git-tracking integration.
+//! Bounded Git integration.
 //!
-//! `git_tracked_only` rules opt in to filtering matches against the
-//! repo's tracked-paths set — i.e. the output of `git ls-files`.
-//! That set is computed once per [`Engine::run`](crate::Engine::run)
-//! when at least one rule wants it and stashed on the rule
-//! [`Context`](crate::Context).
-//!
-//! The set is *advisory*: alint never refuses to run because a
-//! `git` invocation failed. If the directory isn't a git repo, or
-//! `git` isn't on PATH, or the repo is empty, the set is `None`
-//! and rules that consult it treat every walked entry as
-//! "untracked." Rules opting into `git_tracked_only` therefore
-//! become silent no-ops in non-git settings — which is the right
-//! default for "absence-style" rules whose intent is "don't let
-//! this be committed."
+//! The engine derives active Git dependencies from rule capability metadata,
+//! probes repository usability once, and routes probe failure to one typed
+//! analysis failure per active owning rule. The helpers in this module retain
+//! `Option`-based, best-effort results for operation-specific absence
+//! (unborn HEAD, untracked files, unblameable paths) and direct library use.
+//! `git_tracked_only` filtering reuses the probe's `git ls-files` set through
+//! the rule [`Context`](crate::Context).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::{AnalysisTime, AnalysisTimeUnavailable};
+
+type ProcessEnvironment = BTreeMap<String, String>;
+type ScopedEnvironmentRegistry = Mutex<HashMap<PathBuf, Arc<ProcessEnvironment>>>;
+
+static SCOPED_PROCESS_ENVIRONMENTS: LazyLock<ScopedEnvironmentRegistry> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// RAII registration for a complete Git child-process environment at one
+/// repository root.
+///
+/// This is intended for hermetic embedders such as `alint-testkit`: every Git
+/// helper in this module consults the registration before spawning. Distinct
+/// roots can run concurrently. Dropping the guard restores normal host
+/// inheritance for that root.
+#[derive(Debug)]
+pub struct ScopedProcessEnvironment {
+    root: PathBuf,
+}
+
+impl Drop for ScopedProcessEnvironment {
+    fn drop(&mut self) {
+        if let Ok(mut environments) = SCOPED_PROCESS_ENVIRONMENTS.lock() {
+            environments.remove(&self.root);
+        }
+    }
+}
+
+#[must_use]
+pub fn scoped_process_environment(
+    root: &Path,
+    environment: BTreeMap<String, String>,
+) -> ScopedProcessEnvironment {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    SCOPED_PROCESS_ENVIRONMENTS
+        .lock()
+        .expect("Git process-environment registry lock poisoned")
+        .insert(root.clone(), Arc::new(environment));
+    ScopedProcessEnvironment { root }
+}
+
+/// Environment variables that can redirect a Git command away from the
+/// repository selected by `-C`, replace its object/ref view, alter repository
+/// discovery, or change literal path interpretation. This includes Git's
+/// `rev-parse --local-env-vars` set plus the pathspec-mode controls; clearing it
+/// keeps repository identity and path inputs explicit.
+const GIT_LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_NAMESPACE",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_COMMON_DIR",
+    "GIT_LITERAL_PATHSPECS",
+    "GIT_GLOB_PATHSPECS",
+    "GIT_NOGLOB_PATHSPECS",
+    "GIT_ICASE_PATHSPECS",
+];
+
+fn clear_git_repository_env(
+    command: &mut Command,
+    scoped_environment: Option<&ProcessEnvironment>,
+) {
+    for name in GIT_LOCAL_ENV_VARS {
+        // `Command::env_remove` forces Rust to copy the complete process
+        // environment at spawn time, even when the named variable is absent.
+        // Preserve the direct-inheritance fast path without weakening scoped
+        // runners: inspect whichever environment the child will inherit.
+        let is_present = scoped_environment.map_or_else(
+            || std::env::var_os(name).is_some(),
+            |environment| environment.contains_key(*name),
+        );
+        if is_present {
+            command.env_remove(name);
+        }
+    }
+}
+
+fn git_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    let environment = SCOPED_PROCESS_ENVIRONMENTS
+        .lock()
+        .ok()
+        .and_then(|environments| {
+            if environments.is_empty() {
+                return None;
+            }
+            let key = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+            environments.get(&key).cloned()
+        });
+    if let Some(environment) = environment.as_deref() {
+        command.env_clear().envs(environment);
+    }
+    clear_git_repository_env(&mut command, environment.as_deref());
+    // Repository paths are byte-exact inputs, never user-authored pathspecs;
+    // replacement refs are clone-local state, never repository history; log
+    // display preferences must not invoke signature verifiers or alter stdout.
+    command.args([
+        "--literal-pathspecs",
+        "--no-replace-objects",
+        "-c",
+        "log.showSignature=false",
+    ]);
+    command
+}
+/// Resolve the current HEAD commit's committer timestamp.
+///
+/// The command emits only `%ct`; raw Git stderr is deliberately excluded from
+/// the stable error returned to rule evaluation and machine formats.
+pub fn head_commit_time(root: &Path) -> Result<AnalysisTime, AnalysisTimeUnavailable> {
+    let mut command = git_command(root);
+    let output = command
+        .arg("-C")
+        .arg(root)
+        .args(["log", "-1", "--format=%ct", "--end-of-options", "HEAD"])
+        .output()
+        .map_err(|_| AnalysisTimeUnavailable::GitUnavailable)?;
+    if !output.status.success() {
+        return Err(AnalysisTimeUnavailable::HeadUnavailable);
+    }
+    parse_head_commit_time(&output.stdout)
+}
+
+fn parse_head_commit_time(stdout: &[u8]) -> Result<AnalysisTime, AnalysisTimeUnavailable> {
+    let digits = stdout
+        .strip_suffix(b"\n")
+        .unwrap_or(stdout)
+        .strip_suffix(b"\r")
+        .unwrap_or_else(|| stdout.strip_suffix(b"\n").unwrap_or(stdout));
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return Err(AnalysisTimeUnavailable::InvalidHeadTime);
+    }
+    let text = std::str::from_utf8(digits).map_err(|_| AnalysisTimeUnavailable::InvalidHeadTime)?;
+    let seconds = text
+        .parse::<u64>()
+        .map_err(|_| AnalysisTimeUnavailable::InvalidHeadTime)?;
+    AnalysisTime::from_unix_seconds(seconds).ok_or(AnalysisTimeUnavailable::InvalidHeadTime)
+}
 
 /// Resolve the repo's tracked-paths set, relative to `root`.
 ///
 /// `root` should be the alint root (the path passed to
-/// `alint check`). When `root` IS the git root, this returns the
-/// full set of tracked files (no path translation needed). When
-/// `root` is a subdirectory of the git root, the implementation
-/// uses `git ls-files -- <root>` so the returned paths are still
-/// relative to `root`.
+/// `alint check`). The implementation runs `git -C <root> ls-files
+/// -z` with NO pathspec, so git returns paths relative to `root`
+/// whether `root` is the git root or a subdirectory of it (git's
+/// `-C <dir>` default). No pathspec means no globbing, so this
+/// reader is immune to the pathspec-magic hazard the mutating
+/// [`untrack_path`] guards against.
 ///
 /// Returns `None` when:
 /// - `git` isn't on PATH
@@ -61,7 +207,7 @@ pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
     // exotic bytes round-trip correctly. `--full-name` would force
     // repo-root-relative paths, but we want CWD-relative — git's
     // default with `-C <dir>` already gives that.
-    let output = Command::new("git")
+    let output = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["ls-files", "-z"])
@@ -80,6 +226,72 @@ pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
     Some(out)
 }
 
+/// The result of a [`untrack_path`] attempt.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UntrackOutcome {
+    /// The path was removed from git's index (it stays on disk).
+    Untracked,
+    /// `root` is not inside a git repo, or `git` is unavailable — nothing done.
+    NotAGitRepo,
+    /// The path is already absent from the index — nothing done (idempotent).
+    NotTracked,
+    /// `git rm --cached` ran but exited non-zero (e.g. staged content differs
+    /// from HEAD, so a non-forced remove is refused); carries the stderr tail.
+    Failed(String),
+}
+
+/// Remove `rel_path` from git's index WITHOUT deleting it from the working tree
+/// (`git rm --cached -- <path>`), running in `root`. `rel_path` is
+/// root-relative (a rule's violation path). Unlike the advisory readers above,
+/// this MUTATES the repo (unless `dry_run`), so the caller (the `git_untrack`
+/// fixer) reports Applied / Skipped / error from the returned [`UntrackOutcome`].
+///
+/// `dry_run` adds git's own `--dry-run`: git runs its FULL safety check (incl.
+/// refusing a path whose staged content differs from both HEAD and the worktree)
+/// but changes nothing, so the fixer's dry-run / `--diff` preview predicts EXACTLY
+/// what a real run would do -- `Untracked` = "would untrack", `Failed` = "would
+/// fail". The round-4 dry-run-faithfulness invariant then holds by construction
+/// (the preview and the real run are the same code path with the same git checks),
+/// rather than via a separately-maintained prediction that could drift.
+///
+/// Safety and idempotence:
+/// - the shared `git_command` passes `--literal-pathspecs`, disabling git's
+///   pathspec globbing/magic so a path containing `*` / `?` / `[` / `]` (a
+///   Next.js `[id].tsx` route, or a file literally named `*`) is matched
+///   LITERALLY. `--` only ends OPTION parsing, NOT globbing, so without this a
+///   single flagged path would collaterally untrack every sibling git globs it
+///   against -- up to the WHOLE index for a `*` -- all hidden behind a "1
+///   applied" report. Preferred over a `:(literal)` prefix: it needs no UTF-8
+///   round-trip, so a non-UTF-8 path (which this module preserves) stays intact.
+///   `collect_tracked_paths` takes no pathspec, so it is unaffected.
+/// - the path is passed after `--`, never as an option, so a path beginning with
+///   `-` can never be read as a git flag (option-injection guard);
+/// - outside a repo it returns `NotAGitRepo` and an already-untracked path returns
+///   `NotTracked` (both no-ops), so a second run is a clean skip, not a `git` error;
+/// - it does NOT pass `-f`: a path with staged content differing from HEAD is left
+///   untouched and reported as `Failed`, never force-removed.
+pub fn untrack_path(root: &Path, rel_path: &Path, dry_run: bool) -> UntrackOutcome {
+    // Pre-classify by reusing the advisory reader: outside a repo -> NotAGitRepo;
+    // not in the index -> NotTracked (the idempotent no-op). This also means the
+    // real `git rm` only runs on a path we have already confirmed is tracked.
+    match collect_tracked_paths(root) {
+        None => return UntrackOutcome::NotAGitRepo,
+        Some(tracked) if !tracked.contains(rel_path) => return UntrackOutcome::NotTracked,
+        Some(_) => {}
+    }
+    let mut cmd = git_command(root);
+    cmd.arg("-C").arg(root).args(["rm", "--cached", "--quiet"]);
+    if dry_run {
+        cmd.arg("--dry-run");
+    }
+    cmd.arg("--").arg(rel_path);
+    match cmd.output() {
+        Ok(o) if o.status.success() => UntrackOutcome::Untracked,
+        Ok(o) => UntrackOutcome::Failed(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => UntrackOutcome::Failed(e.to_string()),
+    }
+}
+
 /// Resolve the set of paths that have changed in the working tree
 /// (and optionally relative to a base ref), expressed as paths
 /// relative to `root`.
@@ -88,13 +300,13 @@ pub fn collect_tracked_paths(root: &Path) -> Option<HashSet<PathBuf>> {
 /// - `Some("main")` — `git diff --name-only --relative main...HEAD`
 ///   (three-dot — diff against the merge-base of `main` and
 ///   `HEAD`). Right shape for PR-check use cases.
-/// - `None` — `git ls-files --modified --others --exclude-standard`
-///   from `root`. Right shape for pre-commit / local-dev use
-///   cases. Untracked-but-not-gitignored files are included so a
-///   freshly-added `.env` in the working tree shows up; deleted
-///   files are also returned (they're in the diff but not on
-///   disk, so the engine's intersect-with-walked-index step
-///   filters them out naturally).
+/// - `None` — the union of `git diff --cached --name-only --relative`
+///   and `git ls-files --modified --others --exclude-standard` from
+///   `root`. This includes staged, unstaged, and untracked changes,
+///   which is the right shape for pre-commit / local-dev use cases.
+///   Deleted files are also returned (they're in the diff but not on
+///   disk, so the engine's intersect-with-walked-index step filters
+///   them out naturally).
 ///
 /// Returns `None` on the same conditions as
 /// [`collect_tracked_paths`]: `git` not on PATH, `root` outside
@@ -107,27 +319,49 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
     // Two distinct invocations: ref-based diff vs. working-tree
     // status. Both emit NUL-separated output so paths with
     // newlines / non-UTF-8 bytes round-trip.
-    let output = match base {
-        Some(base) => {
-            // Defense-in-depth, matching `diff_name_only`: reject a `base`
-            // starting with `-` explicitly (treat as "no changed-set"), in
-            // addition to the `--end-of-options` guard below.
-            if base.starts_with('-') {
-                return None;
-            }
-            Command::new("git")
-                .arg("-C")
-                .arg(root)
-                .args(["diff", "--name-only", "--relative", "-z"])
-                // `--end-of-options` so a `base`/`since` starting with `-`
-                // can't be parsed as a git OPTION (e.g. `--output=…`, which
-                // would write/truncate an arbitrary file).
-                .arg("--end-of-options")
-                .arg(format!("{base}...HEAD"))
-                .output()
-                .ok()?
+    let outputs = if let Some(base) = base {
+        // Defense-in-depth, matching `diff_name_only`: reject a `base`
+        // starting with `-` explicitly (treat as "no changed-set"), in
+        // addition to the `--end-of-options` guard below.
+        if base.starts_with('-') {
+            return None;
         }
-        None => Command::new("git")
+        let output = git_command(root)
+            .arg("-C")
+            .arg(root)
+            .args(["diff", "--name-only", "--relative", "-z"])
+            // `--end-of-options` so a `base`/`since` starting with `-`
+            // can't be parsed as a git OPTION (e.g. `--output=…`, which
+            // would write/truncate an arbitrary file).
+            .arg("--end-of-options")
+            .arg(format!("{base}...HEAD"))
+            .output()
+            .ok()?;
+        vec![output]
+    } else {
+        // `ls-files --modified` compares the worktree with the index, so a
+        // staged edit disappears from it. Union the index-vs-HEAD diff with
+        // the working-tree/untracked set; otherwise a pre-commit hook can
+        // silently check zero files after the framework stashes unstaged
+        // changes. `--cached` also works for an unborn HEAD.
+        //
+        // The two reads are independent, so the staged diff runs in the
+        // background while `ls-files` runs: one process's latency instead of
+        // two, on every `--changed` run. A staged list too big for the pipe
+        // buffer (64 KiB on Linux, 4 KiB on Windows) makes the child wait for
+        // `ls-files` to finish, which is no slower than running them in turn.
+        // `wait_with_output` then drains both pipes, so the child can't wedge,
+        // and it is always reaped, even when `ls-files` fails to spawn.
+        let staged = git_command(root)
+            .arg("-C")
+            .arg(root)
+            .args(["diff", "--cached", "--name-only", "--relative", "-z"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .ok()?;
+        let working = git_command(root)
             .arg("-C")
             .arg(root)
             .args([
@@ -137,30 +371,33 @@ pub fn collect_changed_paths(root: &Path, base: Option<&str>) -> Option<HashSet<
                 "--exclude-standard",
                 "-z",
             ])
-            .output()
-            .ok()?,
+            .output();
+        let staged = staged.wait_with_output().ok()?;
+        vec![staged, working.ok()?]
     };
-    if !output.status.success() {
+    if outputs.iter().any(|output| !output.status.success()) {
         return None;
     }
     let mut out = HashSet::new();
-    for chunk in output.stdout.split(|&b| b == 0) {
-        if chunk.is_empty() {
-            continue;
+    for output in outputs {
+        for chunk in output.stdout.split(|&b| b == 0) {
+            if chunk.is_empty() {
+                continue;
+            }
+            out.insert(path_from_git_chunk(chunk));
         }
-        out.insert(path_from_git_chunk(chunk));
     }
     Some(out)
 }
 
 /// Like [`collect_changed_paths`] with a `base` ref, but distinguishes
-/// "not a git repo" (silent) from "ref doesn't resolve" (hard error) —
-/// the contract `scope_filter.changed_since:` needs. Returns the set of
-/// paths changed in `<since>...HEAD` (three-dot, merge-base diff —
-/// matching `alint check --changed`), relative to `root`.
+/// repository unavailability from a ref that does not resolve — the contract
+/// `scope_filter.changed_since:` needs. Returns the set of paths changed in
+/// `<since>...HEAD` (three-dot, merge-base diff — matching
+/// `alint check --changed`), relative to `root`.
 ///
 /// - `Ok(Some(set))` — resolved.
-/// - `Ok(None)`       — not a git repo / `git` not on PATH (silent).
+/// - `Ok(None)`       — the repository or Git executable is unavailable.
 /// - `Err(BadRange)`  — in a repo, but `<since>` didn't resolve (e.g.
 ///   a shallow-clone gotcha). The caller surfaces a fetch-depth hint.
 pub fn collect_changed_paths_checked(
@@ -194,7 +431,7 @@ fn diff_name_only(
 ) -> Result<Option<HashSet<PathBuf>>, CommitRangeError> {
     // Probe: are we in a git repo at all? If not, silent None —
     // matching the advisory posture of the rest of this module.
-    let Ok(probe) = Command::new("git")
+    let Ok(probe) = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -205,7 +442,7 @@ fn diff_name_only(
     if !probe.status.success() {
         return Ok(None);
     }
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command(root);
     cmd.arg("-C")
         .arg(root)
         .args(["diff", "--name-only", "--relative", "-z"]);
@@ -254,11 +491,11 @@ fn diff_name_only(
 /// - the repo has no commits yet (HEAD is unborn)
 /// - the `git log` invocation otherwise exits non-zero
 ///
-/// Used by the `git_commit_message` rule kind. Same advisory
-/// posture as the rest of the git module: a non-git workspace
-/// silently no-ops the rule rather than raising a hard error.
+/// Used by the `git_commit_message` rule kind. The engine handles repository
+/// unavailability before dispatch; `None` remains valid for an unborn HEAD or
+/// an operation-specific failure.
 pub fn head_commit_message(root: &Path) -> Option<String> {
-    let output = Command::new("git")
+    let output = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["log", "-1", "--format=%B"])
@@ -285,18 +522,19 @@ pub fn head_commit_message(root: &Path) -> Option<String> {
 /// addition to the message.
 ///
 /// Returns `None` on the same conditions as [`head_commit_message`]
-/// (no `git`, not a repo, unborn HEAD), so the rule silently no-ops.
+/// (no `git`, not a repo, unborn HEAD). The engine gates the first two before
+/// rule dispatch; an unborn HEAD has no commit policy input.
 /// Uses the same NUL-separated `--format` encoding as
 /// [`commit_messages_in_range`] so a single commit round-trips
 /// through the shared commit-log parser.
 pub fn head_commit_record(root: &Path) -> Option<CommitRecord> {
-    let output = Command::new("git")
+    let output = git_command(root)
         .arg("-C")
         .arg(root)
         .args([
             "log",
             "-1",
-            "--abbrev-commit",
+            "--abbrev=7",
             "--format=%h%x00%an%x00%ae%x00%B%x1e",
         ])
         .output()
@@ -308,12 +546,10 @@ pub fn head_commit_record(root: &Path) -> Option<CommitRecord> {
 }
 
 /// One commit in a `<since>..HEAD` range, as returned by
-/// [`commit_messages_in_range`]. `sha` is the abbreviated SHA from
-/// `git log --abbrev-commit` (typically 7 chars; git auto-extends if
-/// the prefix is ambiguous in the local repo). `message` is the full
-/// commit message (subject + body, separated by a blank line) with
-/// the trailing newline that `git log --format=%B` appends already
-/// trimmed.
+/// [`commit_messages_in_range`]. `sha` uses a requested seven-hex abbreviation;
+/// Git extends it only when that prefix is ambiguous in the repository. `message`
+/// is the full commit message (subject + body, separated by a blank line) with the
+/// trailing newline that `git log --format=%B` appends already trimmed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitRecord {
     pub sha: String,
@@ -325,11 +561,9 @@ pub struct CommitRecord {
     pub author_email: String,
 }
 
-/// Errors that distinguish "git is here but the range is invalid"
-/// from "git isn't here at all." The rule layer uses this to hard-
-/// fail on misconfiguration (a bad `since:` ref, often a shallow-
-/// clone gotcha in CI) while silently no-op'ing in non-git
-/// directories.
+/// Errors that distinguish an invalid range from an unavailable repository.
+/// The engine gates repository availability from capability metadata; the rule
+/// layer uses `BadRange` to preserve the specific shallow-clone migration hint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitRangeError {
     /// The `<since>` ref doesn't resolve, or the range itself is
@@ -359,10 +593,9 @@ pub enum CommitRangeError {
 /// - `Ok(Some(records))` on success. The vec may be empty if the
 ///   range itself is empty (`since` == HEAD on a force-push PR, or
 ///   no non-merge commits in the range).
-/// - `Ok(None)` if `git` isn't on PATH or `root` isn't inside a git
-///   repo. Matches the advisory posture of the rest of this module;
-///   rules that consult this helper silently no-op in non-git
-///   settings.
+/// - `Ok(None)` if `git` isn't on PATH or `root` isn't inside a Git repository.
+///   The engine normally gates this before rule dispatch; the explicit shape
+///   keeps this low-level helper total for direct callers.
 /// - `Err(CommitRangeError::BadRange)` if `git` is present and the
 ///   repo is valid but the range couldn't be resolved. Rules
 ///   surface this as a hard error so the user sees the
@@ -380,11 +613,10 @@ pub fn commit_messages_in_range(
     since: &str,
     include_merges: bool,
 ) -> Result<Option<Vec<CommitRecord>>, CommitRangeError> {
-    // First check `git rev-parse` (no range syntax) confirms we're
-    // in a git repo at all. If not, this returns Ok(None) (the
-    // "silent" branch) without surfacing the BadRange error,
-    // matching head_commit_message's posture.
-    let probe = Command::new("git")
+    // First check `git rev-parse` (no range syntax) confirms repository
+    // availability. If it fails, return the distinct `Ok(None)` shape that
+    // engine capability routing promotes before normal rule dispatch.
+    let probe = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -405,11 +637,11 @@ pub fn commit_messages_in_range(
         });
     }
     let range = format!("{since}..HEAD");
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command(root);
     cmd.arg("-C").arg(root).args([
         "log",
         "--reverse",
-        "--abbrev-commit",
+        "--abbrev=7",
         "--format=%h%x00%an%x00%ae%x00%B%x1e",
     ]);
     if !include_merges {
@@ -493,7 +725,7 @@ fn parse_commit_log(stdout: &[u8]) -> Vec<CommitRecord> {
 /// trust is the user's GPG config / `.git/allowed_signers`, not this
 /// rule's job.
 pub fn verify_commit(root: &Path, sha: &str) -> Option<bool> {
-    let output = Command::new("git")
+    let output = git_command(root)
         .arg("-C")
         .arg(root)
         .args(["verify-commit", sha])
@@ -519,14 +751,17 @@ pub struct BlameLine {
     pub content: String,
 }
 
+const DEFAULT_BLAME_IGNORE_REVS_FILE: &str = ".git-blame-ignore-revs";
+
 /// Run `git blame --line-porcelain` for `rel_path` (relative to
 /// `root`) and return one [`BlameLine`] per source line.
 ///
 /// `--line-porcelain` repeats the full per-commit metadata block
 /// for every line so we don't have to track the most-recent
 /// commit across runs — every line carries its own
-/// `author-time`. Honors `.git-blame-ignore-revs` automatically
-/// (git applies it before producing porcelain output).
+/// `author-time`. When the repository contains a regular
+/// `.git-blame-ignore-revs` file, alint passes it explicitly rather than
+/// depending on clone-local Git configuration.
 ///
 /// Returns `None` when:
 /// - `git` isn't on PATH
@@ -538,13 +773,32 @@ pub struct BlameLine {
 /// non-blameable file silently no-ops the rule rather than
 /// raising a hard error.
 pub fn blame_lines(root: &Path, rel_path: &Path) -> Option<Vec<BlameLine>> {
-    let output = Command::new("git")
+    blame_lines_with_ignore_revs(root, rel_path, default_ignore_revs_is_tracked_regular(root))
+}
+
+fn blame_lines_with_ignore_revs(
+    root: &Path,
+    rel_path: &Path,
+    use_default_ignore_revs: bool,
+) -> Option<Vec<BlameLine>> {
+    let mut command = git_command(root);
+    command
+        // Clone-local/global ignore lists are ambient machine state. A command-line
+        // empty file name clears their revisions before the repository convention
+        // is added below. A malformed configured file can still make Git fail while
+        // loading its config; W2 will promote that existing advisory failure path.
+        // The documented `diff.algorithm` setting changes blame attribution, so pin
+        // Myers rather than inheriting user/global configuration.
+        .args(["-c", "diff.algorithm=myers"])
         .arg("-C")
         .arg(root)
-        .args(["blame", "--line-porcelain", "--"])
-        .arg(rel_path)
-        .output()
-        .ok()?;
+        .args(["blame", "--ignore-revs-file", "", "--line-porcelain"]);
+    if use_default_ignore_revs {
+        // Apply only the repository-tracked regular-file convention, independent
+        // of each clone's `blame.ignoreRevsFile`.
+        command.args(["--ignore-revs-file", DEFAULT_BLAME_IGNORE_REVS_FILE]);
+    }
+    let output = command.arg("--").arg(rel_path).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -587,6 +841,7 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
     let mut out = Vec::new();
     let mut final_line: Option<usize> = None;
     let mut author_time: Option<SystemTime> = None;
+    let mut uncommitted = false;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix('\t') {
             // Source line. Emit a BlameLine when we have both a
@@ -601,13 +856,13 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
             }
             continue;
         }
-        // Header lines start with the 40-hex sha; subsequent
-        // lines are `key value` pairs we may care about.
+        // Header lines start with a full SHA-1 (40 hex digits) or SHA-256
+        // object ID (64 hex digits); subsequent lines are `key value` pairs.
         let mut parts = line.splitn(2, ' ');
         let key = parts.next().unwrap_or("");
         let value = parts.next().unwrap_or("");
         match key {
-            "author-time" => {
+            "author-time" if !uncommitted => {
                 if let Ok(secs) = value.parse::<u64>() {
                     // `checked_add`: a crafted commit can carry a 19-digit
                     // author-time that parses as u64 but overflows SystemTime
@@ -617,19 +872,19 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
                     author_time = UNIX_EPOCH.checked_add(Duration::from_secs(secs));
                 }
             }
-            // SHA header: 40 hex digits + space + 3 numbers. We
-            // detect by length and hex-ness; cheap heuristic.
-            sha if sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()) => {
+            // Full object-id header + 3 numbers. Accept both repository object
+            // formats; hard-coding SHA-1 silently drops every line in a SHA-256
+            // repository.
+            sha if matches!(sha.len(), 40 | 64) && sha.chars().all(|c| c.is_ascii_hexdigit()) => {
+                // Git assigns working-tree-only lines the all-zero pseudo SHA and
+                // may synthesize their author time from the wall clock. They are
+                // not ageable committed history, so omit them deterministically.
+                uncommitted = sha.bytes().all(|b| b == b'0');
+                author_time = None;
                 // The header line is `<sha> <orig> <final> [<num_lines>]`.
-                // We want the third field — the final line number.
-                // (Already in `value`; split off the `<orig>` first.)
                 let mut cols = value.split(' ');
                 let _orig = cols.next();
-                if let Some(final_str) = cols.next()
-                    && let Ok(n) = final_str.parse::<usize>()
-                {
-                    final_line = Some(n);
-                }
+                final_line = cols.next().and_then(|s| s.parse::<usize>().ok());
             }
             _ => {}
         }
@@ -651,6 +906,7 @@ fn parse_porcelain(text: &str) -> Vec<BlameLine> {
 #[derive(Debug)]
 pub struct BlameCache {
     root: PathBuf,
+    use_default_ignore_revs: bool,
     inner: Mutex<HashMap<PathBuf, CacheEntry>>,
 }
 
@@ -660,18 +916,56 @@ enum CacheEntry {
     Failed,
 }
 
+fn default_ignore_revs_is_tracked_regular(root: &Path) -> bool {
+    let ignore_revs = root.join(DEFAULT_BLAME_IGNORE_REVS_FILE);
+    if !ignore_revs
+        .symlink_metadata()
+        .is_ok_and(|metadata| metadata.file_type().is_file())
+    {
+        return false;
+    }
+    git_command(root)
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            DEFAULT_BLAME_IGNORE_REVS_FILE,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 impl BlameCache {
     pub fn new(root: PathBuf) -> Self {
+        let use_default_ignore_revs = default_ignore_revs_is_tracked_regular(&root);
+        Self::with_default_ignore_revs(root, use_default_ignore_revs)
+    }
+
+    pub(crate) fn new_with_tracked_paths(root: PathBuf, tracked: &HashSet<PathBuf>) -> Self {
+        let ignore_revs = root.join(DEFAULT_BLAME_IGNORE_REVS_FILE);
+        let use_default_ignore_revs = tracked.contains(Path::new(DEFAULT_BLAME_IGNORE_REVS_FILE))
+            && ignore_revs
+                .symlink_metadata()
+                .is_ok_and(|metadata| metadata.file_type().is_file());
+        Self::with_default_ignore_revs(root, use_default_ignore_revs)
+    }
+
+    fn with_default_ignore_revs(root: PathBuf, use_default_ignore_revs: bool) -> Self {
         Self {
             root,
+            use_default_ignore_revs,
             inner: Mutex::new(HashMap::new()),
         }
     }
 
     /// Return the blame for `rel_path`, computing once and
-    /// caching forever (within this run). `None` means blame
-    /// failed for this path — the caller silently no-ops, by
-    /// the rule-kind's advisory posture.
+    /// caching forever (within this run). `None` means this individual path
+    /// could not be blamed, so the caller skips it; repository-wide
+    /// unavailability is handled before dispatch.
     pub fn get(&self, rel_path: &Path) -> Option<Arc<Vec<BlameLine>>> {
         // Hold the lock through the shell-out: the `git blame`
         // process spawn is the dominant cost, so contention from
@@ -686,7 +980,8 @@ impl BlameCache {
                 CacheEntry::Failed => None,
             };
         }
-        let computed = blame_lines(&self.root, rel_path);
+        let computed =
+            blame_lines_with_ignore_revs(&self.root, rel_path, self.use_default_ignore_revs);
         if let Some(v) = computed {
             let arc = Arc::new(v);
             guard.insert(rel_path.to_path_buf(), CacheEntry::Ok(Arc::clone(&arc)));
@@ -720,515 +1015,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn collect_returns_none_outside_git() {
-        let tmp = tempfile::tempdir().unwrap();
-        // `git ls-files` in a non-git directory exits non-zero;
-        // we report None. Tests that need a populated set
-        // construct a real repo via fixtures elsewhere.
-        let result = collect_tracked_paths(tmp.path());
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn collect_changed_returns_none_outside_git() {
-        let tmp = tempfile::tempdir().unwrap();
-        // Both diff modes shell out to git; both should report
-        // None outside a repo so callers can decide between
-        // hard-error (CLI's `--changed`) and silent fallback.
-        assert!(collect_changed_paths(tmp.path(), None).is_none());
-        assert!(collect_changed_paths(tmp.path(), Some("main")).is_none());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn path_from_git_chunk_preserves_non_utf8() {
-        use std::os::unix::ffi::OsStrExt as _;
-        // M6: a non-UTF-8 tracked/changed path must survive as its exact bytes,
-        // not collapse the whole set to None (which made `git_tracked_only`
-        // over-permissive by not recognizing the file as tracked).
-        let raw: &[u8] = b"dir/\xff\xfe_file";
-        let p = path_from_git_chunk(raw);
-        assert_eq!(p.as_os_str().as_bytes(), raw);
-    }
-
-    #[test]
-    fn head_message_returns_none_outside_git() {
-        let tmp = tempfile::tempdir().unwrap();
-        // Same advisory posture: the `git_commit_message` rule
-        // silently no-ops outside a repo rather than failing
-        // a check on workspaces that don't track in git yet.
-        assert!(head_commit_message(tmp.path()).is_none());
-    }
-
-    #[test]
-    fn parse_porcelain_two_lines_two_commits() {
-        // Two source lines, each in its own porcelain block. The
-        // first line is from an old commit (1700000000 = 2023-11-15);
-        // the second is from a more recent one (1750000000 =
-        // 2025-06-15). Both blocks repeat the full metadata per
-        // line-porcelain semantics.
-        let porcelain = "\
-abcd1234abcd1234abcd1234abcd1234abcd1234 1 1 1
-author Old Author
-author-mail <old@example.com>
-author-time 1700000000
-author-tz +0000
-committer Old Author
-committer-mail <old@example.com>
-committer-time 1700000000
-committer-tz +0000
-summary first commit
-filename src/main.rs
-\told line content
-ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01 2 2 1
-author New Author
-author-mail <new@example.com>
-author-time 1750000000
-author-tz +0000
-committer New Author
-committer-mail <new@example.com>
-committer-time 1750000000
-committer-tz +0000
-summary recent commit
-filename src/main.rs
-\tnew line content
-";
-        let lines = parse_porcelain(porcelain);
-        assert_eq!(lines.len(), 2);
-        assert_eq!(lines[0].line_number, 1);
-        assert_eq!(lines[0].content, "old line content");
-        assert_eq!(
-            lines[0].author_time,
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000)
-        );
-        assert_eq!(lines[1].line_number, 2);
-        assert_eq!(lines[1].content, "new line content");
-        assert_eq!(
-            lines[1].author_time,
-            UNIX_EPOCH + Duration::from_secs(1_750_000_000)
-        );
-    }
-
-    #[test]
-    fn parse_porcelain_handles_previous_marker() {
-        // The optional `previous <sha> <name>` line shows up when
-        // the line was rewritten — the parser must not get
-        // confused by it.
-        let porcelain = "\
-abcd1234abcd1234abcd1234abcd1234abcd1234 5 5 1
-author X
-author-mail <x@example.com>
-author-time 1700000000
-author-tz +0000
-committer X
-committer-mail <x@example.com>
-committer-time 1700000000
-committer-tz +0000
-summary did a thing
-previous 1111111111111111111111111111111111111111 src/old.rs
-filename src/main.rs
-\tline body
-";
-        let lines = parse_porcelain(porcelain);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].line_number, 5);
-        assert_eq!(lines[0].content, "line body");
-    }
-
-    #[test]
-    fn parse_porcelain_skips_blocks_missing_metadata() {
-        // A block whose author-time line is corrupt (non-numeric)
-        // should drop that line rather than panic. The next valid
-        // block still emits.
-        let porcelain = "\
-abcd1234abcd1234abcd1234abcd1234abcd1234 1 1 1
-author X
-author-time not-a-number
-filename a.rs
-\tbroken
-ef01ef01ef01ef01ef01ef01ef01ef01ef01ef01 2 2 1
-author Y
-author-time 1700000000
-filename a.rs
-\tworks
-";
-        let lines = parse_porcelain(porcelain);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].content, "works");
-    }
-
-    #[test]
-    fn blame_lines_returns_none_outside_git() {
-        let tmp = tempfile::tempdir().unwrap();
-        // No repo, so blame on anything (existing or not) fails.
-        let result = blame_lines(tmp.path(), Path::new("missing.rs"));
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn blame_cache_memoises_failure() {
-        // Calling `get` twice on a non-existent file in a
-        // non-git directory must short-circuit on the second
-        // call. We can't observe the cache directly from outside,
-        // but we can verify both calls return None and the cache
-        // ends up with an entry for the path.
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = BlameCache::new(tmp.path().to_path_buf());
-        assert!(cache.get(Path::new("missing.rs")).is_none());
-        assert!(cache.get(Path::new("missing.rs")).is_none());
-        let guard = cache.inner.lock().unwrap();
-        assert!(matches!(
-            guard.get(Path::new("missing.rs")),
-            Some(CacheEntry::Failed)
-        ));
-    }
-
-    #[test]
-    fn dir_has_tracked_files_walks_prefix() {
-        let mut set = HashSet::new();
-        set.insert(PathBuf::from("src/main.rs"));
-        set.insert(PathBuf::from("README.md"));
-        assert!(dir_has_tracked_files(Path::new("src"), &set));
-        assert!(!dir_has_tracked_files(Path::new("target"), &set));
-        // `src` matches `src/main.rs` via prefix; `tar` does not
-        // match `target/foo` because no tracked path is under
-        // `tar/`.
-        assert!(!dir_has_tracked_files(Path::new("tar"), &set));
-    }
-
-    // ----- commit_messages_in_range -----------------------------
-
-    /// Build a temp dir into a git repo with the given list of
-    /// empty commits in order (commit N is HEAD~(len-1-N)). Returns
-    /// the tempdir so the caller controls its lifetime.
-    ///
-    /// Uses `git commit --allow-empty` so the test doesn't need to
-    /// write fixture files. Disables GPG signing and sets a fixed
-    /// author so the commits are deterministic.
-    #[test]
-    fn commit_range_rejects_dash_since_and_writes_no_file() {
-        // Security regression (git arg-injection): a config-controlled
-        // `since` starting with `-` (e.g. `--output=…`) must be rejected
-        // before git runs — it must never write/truncate a file. (Affects
-        // the released `git_commit_message` `since:` path.)
-        let outdir = tempfile::tempdir().unwrap();
-        let stem = outdir.path().join("sentinel");
-        let would_write = outdir.path().join("sentinel..HEAD");
-        let evil = format!("--output={}", stem.display());
-        let err = commit_messages_in_range(Path::new("."), &evil, false).unwrap_err();
-        assert!(matches!(err, CommitRangeError::BadRange { .. }), "{err:?}");
-        assert!(
-            !would_write.exists(),
-            "git must not have written {would_write:?}"
-        );
-    }
-
-    #[test]
-    fn collect_changed_paths_dash_base_writes_no_file() {
-        // The `--changed` / `changed_since` diff path: `--end-of-options`
-        // forces a dash-leading base into the revision slot, so git never
-        // parses `--output=…` and writes nothing.
-        let outdir = tempfile::tempdir().unwrap();
-        let stem = outdir.path().join("sentinel");
-        let would_write = outdir.path().join("sentinel...HEAD");
-        let evil = format!("--output={}", stem.display());
-        let _ = collect_changed_paths(Path::new("."), Some(&evil));
-        assert!(
-            !would_write.exists(),
-            "git diff must not have written {would_write:?}"
-        );
-    }
-
-    fn make_repo_with_commits(subjects: &[&str]) -> tempfile::TempDir {
-        let tmp = tempfile::tempdir().unwrap();
-        let init_dir = tmp.path();
-        for args in [
-            vec!["init", "-q", "-b", "main"],
-            vec!["config", "user.email", "test@example.com"],
-            vec!["config", "user.name", "Test"],
-            vec!["config", "commit.gpgsign", "false"],
-        ] {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(init_dir)
-                .args(&args)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?} failed");
-        }
-        for subject in subjects {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(init_dir)
-                .args(["commit", "--allow-empty", "-m", subject])
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "git commit failed: stderr={}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-        tmp
-    }
-
-    #[test]
-    fn head_commit_message_lossily_decodes_non_utf8() {
-        // A non-UTF-8 HEAD commit message must NOT make `head_commit_message`
-        // return `None` — that would silently no-op the `git_commit_message`
-        // rule, letting a non-UTF-8 message bypass subject/pattern/length checks
-        // (M6 fail-open, the sibling of the range-mode path already hardened).
-        let tmp = make_repo_with_commits(&[]);
-        let dir = tmp.path();
-        let msg = dir.join("MSG");
-        // Raw non-UTF-8 bytes (0xFF/0xFE are never valid UTF-8) in the subject.
-        std::fs::write(&msg, b"fix: \xff\xfe non-utf8 subject\n").unwrap();
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["commit", "--allow-empty", "-F"])
-            .arg(&msg)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "commit failed");
-        let got = head_commit_message(dir);
-        assert!(
-            got.is_some(),
-            "a non-UTF-8 HEAD message must decode lossily, not collapse to None"
-        );
-        assert!(
-            got.unwrap().contains("non-utf8 subject"),
-            "the (lossily-decoded) message body should survive"
-        );
-    }
-
-    #[test]
-    fn parse_commit_log_empty_input() {
-        assert!(parse_commit_log(b"").is_empty());
-    }
-
-    #[test]
-    fn parse_commit_log_single_commit() {
-        // sha NUL name NUL email NUL body-with-trailing-newline RS.
-        let raw =
-            b"abc1234\0Jane Doe\0jane@example.com\0subject line\n\nbody line one\nbody line two\n\x1e";
-        let records = parse_commit_log(raw);
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].sha, "abc1234");
-        assert_eq!(records[0].author_name, "Jane Doe");
-        assert_eq!(records[0].author_email, "jane@example.com");
-        assert_eq!(
-            records[0].message,
-            "subject line\n\nbody line one\nbody line two"
-        );
-    }
-
-    #[test]
-    fn parse_commit_log_multiple_commits() {
-        // Two commits, oldest first (matches --reverse). Between
-        // records, git inserts a newline before the next SHA; the
-        // parser strips it.
-        let raw = b"a1\0A\0a@x.test\0first\n\x1e\nb2\0B\0b@x.test\0second\n\x1e";
-        let records = parse_commit_log(raw);
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].sha, "a1");
-        assert_eq!(records[0].author_email, "a@x.test");
-        assert_eq!(records[0].message, "first");
-        assert_eq!(records[1].sha, "b2");
-        assert_eq!(records[1].message, "second");
-    }
-
-    #[test]
-    fn parse_commit_log_subject_only_no_body() {
-        let raw = b"deadbef\0N\0n@x.test\0just the subject\n\x1e";
-        let records = parse_commit_log(raw);
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].message, "just the subject");
-    }
-
-    #[test]
-    fn parse_commit_log_preserves_blank_lines_in_body() {
-        // A real commit body with multiple paragraphs survives the
-        // round-trip unchanged.
-        let raw = b"sha7777\0N\0n@x.test\0fix: thing\n\nfirst paragraph.\n\nsecond paragraph.\n\nthird.\n\x1e";
-        let records = parse_commit_log(raw);
-        assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].message,
-            "fix: thing\n\nfirst paragraph.\n\nsecond paragraph.\n\nthird."
-        );
-    }
-
-    #[test]
-    fn parse_commit_log_lossily_decodes_invalid_utf8_rather_than_dropping() {
-        // A record whose message field is invalid UTF-8. The parser must NOT
-        // drop it — silently skipping the commit would let a contributor
-        // bypass commit linting (conventional-subject / author-allowlist /
-        // forbidden-pattern) just by using a non-UTF-8 message or author.
-        // It now lossily decodes so the commit is still linted; the sha is
-        // always hex, so it survives intact.
-        let mut raw: Vec<u8> = b"abc1234\0N\0n@x.test\0".to_vec();
-        raw.extend_from_slice(&[0xff, 0xfe, 0xfd]); // invalid UTF-8
-        raw.push(0x1e);
-        let records = parse_commit_log(&raw);
-        assert_eq!(records.len(), 1, "the commit must be parsed, not dropped");
-        assert_eq!(records[0].sha, "abc1234");
-        assert_eq!(records[0].author_name, "N");
-        // The invalid bytes become U+FFFD replacement chars (not silently lost).
-        assert!(records[0].message.contains('\u{FFFD}'));
-    }
-
-    #[test]
-    fn commit_range_returns_none_outside_git() {
-        let tmp = tempfile::tempdir().unwrap();
-        // Non-git directory: silent None. Distinguishes from the
-        // BadRange error (which a bad ref inside a real repo
-        // produces) so the rule layer can decide between "skip
-        // silently" and "hard fail."
-        let result = commit_messages_in_range(tmp.path(), "main", false);
-        assert!(matches!(result, Ok(None)));
-    }
-
-    #[test]
-    fn commit_range_returns_empty_vec_for_head_to_head() {
-        let repo = make_repo_with_commits(&["feat: first commit"]);
-        let result = commit_messages_in_range(repo.path(), "HEAD", false).unwrap();
-        // HEAD..HEAD is the empty range. Some(empty), not None.
-        assert_eq!(result, Some(Vec::new()));
-    }
-
-    #[test]
-    fn commit_range_enumerates_real_commits_oldest_first() {
-        // Four commits. Use the root commit's full SHA as the
-        // `since` base; the range then yields the three later
-        // commits, oldest first.
-        let repo =
-            make_repo_with_commits(&["root: zero", "feat: alpha", "fix: beta", "chore: gamma"]);
-        let root_sha = String::from_utf8(
-            Command::new("git")
-                .arg("-C")
-                .arg(repo.path())
-                .args(["rev-parse", "HEAD~3"])
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
-        let records = commit_messages_in_range(repo.path(), &root_sha, false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(records.len(), 3);
-        assert_eq!(records[0].message, "feat: alpha");
-        assert_eq!(records[1].message, "fix: beta");
-        assert_eq!(records[2].message, "chore: gamma");
-        // SHAs are abbreviated (7+ chars, hex).
-        for r in &records {
-            assert!(r.sha.len() >= 7);
-            assert!(r.sha.chars().all(|c| c.is_ascii_hexdigit()));
-        }
-    }
-
-    #[test]
-    fn commit_range_skips_merges_by_default() {
-        // Build the canonical PR-CI shape: a base branch with one
-        // commit, a feature branch off it with two commits, then a
-        // merge commit on the base branch. The merge is what
-        // actions/checkout produces at HEAD on a pull_request
-        // trigger.
-        let repo = make_repo_with_commits(&["init commit on main"]);
-        let root = repo.path();
-        let run = |args: &[&str]| {
-            let out = Command::new("git")
-                .arg("-C")
-                .arg(root)
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "git {args:?} failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-            String::from_utf8(out.stdout).unwrap()
-        };
-        let base_sha = run(&["rev-parse", "HEAD"]).trim().to_string();
-        run(&["checkout", "-q", "-b", "feature"]);
-        run(&["commit", "--allow-empty", "-m", "feat: A"]);
-        run(&["commit", "--allow-empty", "-m", "fix: B"]);
-        run(&["checkout", "-q", "main"]);
-        run(&["merge", "--no-ff", "--no-edit", "feature"]);
-
-        // Range main-base..HEAD: includes feat:A, fix:B, and the
-        // merge commit. Default skips the merge.
-        let records = commit_messages_in_range(root, &base_sha, false)
-            .unwrap()
-            .unwrap();
-        let subjects: Vec<&str> = records.iter().map(|r| r.message.as_str()).collect();
-        assert_eq!(subjects, vec!["feat: A", "fix: B"]);
-
-        // Same range with include_merges: true picks up the merge.
-        let with_merge = commit_messages_in_range(root, &base_sha, true)
-            .unwrap()
-            .unwrap();
-        assert_eq!(with_merge.len(), 3);
-        assert!(with_merge.iter().any(|r| r.message.starts_with("Merge ")));
-    }
-
-    #[test]
-    fn changed_paths_checked_none_outside_git_and_bad_range_inside() {
-        // Outside a git repo: silent None (so changed_since no-ops).
-        let tmp = tempfile::tempdir().unwrap();
-        assert!(matches!(
-            collect_changed_paths_checked(tmp.path(), "origin/main"),
-            Ok(None)
-        ));
-        // Inside a repo, an unresolvable ref hard-errors.
-        let repo = make_repo_with_commits(&["init"]);
-        assert!(matches!(
-            collect_changed_paths_checked(repo.path(), "no-such-ref"),
-            Err(CommitRangeError::BadRange { .. })
-        ));
-    }
-
-    #[test]
-    fn verify_commit_returns_false_for_unsigned_commit() {
-        // make_repo_with_commits disables gpg signing, so HEAD is
-        // unsigned; verify-commit exits non-zero → Some(false).
-        let repo = make_repo_with_commits(&["init: unsigned commit"]);
-        let head = String::from_utf8(
-            Command::new("git")
-                .arg("-C")
-                .arg(repo.path())
-                .args(["rev-parse", "HEAD"])
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
-        assert_eq!(verify_commit(repo.path(), &head), Some(false));
-    }
-
-    #[test]
-    fn commit_range_returns_bad_range_for_unknown_ref() {
-        let repo = make_repo_with_commits(&["init"]);
-        let result = commit_messages_in_range(repo.path(), "does-not-exist-ref", false);
-        match result {
-            Err(CommitRangeError::BadRange { stderr }) => {
-                // Git typically says "unknown revision or path not
-                // in the working tree." We don't assert the exact
-                // wording (varies across git versions); just that
-                // we got a non-empty stderr.
-                assert!(!stderr.is_empty());
-            }
-            other => panic!("expected BadRange, got {other:?}"),
-        }
-    }
-}
+#[path = "git_tests.rs"]
+mod tests;

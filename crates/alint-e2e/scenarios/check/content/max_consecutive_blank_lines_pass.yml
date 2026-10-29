@@ -1,3 +1,4 @@
+test_version: 1
 name: max_consecutive_blank_lines is silent within the limit
 tags: [check, max_consecutive_blank_lines, content, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

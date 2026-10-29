@@ -1,5 +1,5 @@
 //! Hard audit: every `docs/site/**/*.md` page MUST have a YAML
-//! frontmatter block that parses cleanly via `serde_yaml_ng::from_str`.
+//! frontmatter block that parses cleanly via `yaml_serde::from_str`.
 //!
 //! Why this exists. The `docs/site/` subtree is copied verbatim into
 //! the docs-bundle artifact that alint.org pulls at build time. Each
@@ -36,7 +36,7 @@
 //! - Missing/extra `---` frontmatter delimiters.
 //! - Bad indentation inside multi-line list/mapping values.
 //! - Tab-vs-spaces mixing inside frontmatter.
-//! - Any other malformation `serde_yaml_ng` rejects.
+//! - Any other malformation `yaml_serde` rejects.
 //!
 //! What it deliberately does NOT catch:
 //! - Astro/Starlight-specific frontmatter schema (e.g. `sidebar.order`
@@ -51,8 +51,6 @@
 //! Phase 2 of the alint.org drift-audit follow-up (alint side).
 
 use std::path::PathBuf;
-
-use serde_yaml_ng as serde_yaml;
 
 /// Walk `docs/site/` (relative to the alint repo root) for every `.md`
 /// file. The relative path is what gets surfaced in failure messages,
@@ -136,9 +134,9 @@ fn every_site_doc_has_parseable_yaml_frontmatter() {
             ));
             continue;
         };
-        if let Err(e) = serde_yaml::from_str::<serde_yaml::Value>(fm) {
+        if let Err(e) = yaml_serde::from_str::<yaml_serde::Value>(fm) {
             failures.push(format!(
-                "{}: YAML frontmatter rejected by serde_yaml_ng: {}\n\
+                "{}: YAML frontmatter rejected by yaml_serde: {}\n\
                  frontmatter source (between --- delimiters):\n{}",
                 rel.display(),
                 e,
@@ -154,6 +152,73 @@ fn every_site_doc_has_parseable_yaml_frontmatter() {
          for context and the docs/site/concepts/variable-interpolation.md \
          worked example",
         failures.join("\n\n"),
+    );
+}
+
+/// Every site page declares its own `description:`. A page without one
+/// gets Starlight's site-wide description, so it shares its search
+/// snippet with every other such page, and two pages that declare the
+/// same text have the same problem: in alint.org's Search Console
+/// (2026-09) five pages shared the site-wide text. The CLI prose files
+/// under `docs/site/cli/` count too: their description becomes the
+/// generated page's.
+#[test]
+fn every_site_doc_has_its_own_description() {
+    const MAX_DESCRIPTION_CHARS: usize = 158;
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .unwrap()
+        .to_path_buf();
+    let mut missing: Vec<String> = Vec::new();
+    let mut invalid: Vec<String> = Vec::new();
+    let mut by_description: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for rel in collect_site_docs() {
+        let src = std::fs::read_to_string(root.join(&rel)).unwrap();
+        // A missing or unparseable block is reported by the test above.
+        let Some(Ok(front)) =
+            extract_frontmatter(&src).map(yaml_serde::from_str::<yaml_serde::Value>)
+        else {
+            continue;
+        };
+        let rel = rel.display().to_string();
+        match front
+            .get("description")
+            .and_then(yaml_serde::Value::as_str)
+            .map(str::trim)
+        {
+            Some(description) if !description.is_empty() => {
+                let chars = description.chars().count();
+                if chars > MAX_DESCRIPTION_CHARS {
+                    invalid.push(format!(
+                        "{rel}: description is {chars} characters (maximum {MAX_DESCRIPTION_CHARS})"
+                    ));
+                }
+                if description.contains('`') {
+                    invalid.push(format!(
+                        "{rel}: description contains a Markdown backtick, which renders literally in search snippets"
+                    ));
+                }
+                by_description
+                    .entry(description.to_string())
+                    .or_default()
+                    .push(rel);
+            }
+            _ => missing.push(rel),
+        }
+    }
+    let shared: Vec<String> = by_description
+        .into_iter()
+        .filter(|(_, pages)| pages.len() > 1)
+        .map(|(description, pages)| format!("{pages:?} share {description:?}"))
+        .collect();
+    assert!(
+        missing.is_empty() && shared.is_empty() && invalid.is_empty(),
+        "site docs need a unique, plain-text `description:` of at most \
+         {MAX_DESCRIPTION_CHARS} characters (the search snippet):\n\
+         without one: {missing:?}\nshared: {shared:#?}\ninvalid: {invalid:#?}",
     );
 }
 
@@ -184,12 +249,12 @@ fn extract_frontmatter_tolerates_crlf_line_endings() {
     let src = "---\r\ntitle: hello\r\nfoo: bar\r\n---\r\n\r\nbody\r\n";
     let fm = extract_frontmatter(src).expect("CRLF frontmatter should be found");
     assert_eq!(fm, "title: hello\r\nfoo: bar");
-    serde_yaml::from_str::<serde_yaml::Value>(fm).expect("CRLF frontmatter should parse");
+    yaml_serde::from_str::<yaml_serde::Value>(fm).expect("CRLF frontmatter should parse");
 }
 
 /// Regression specifically for the `variable-interpolation.md` failure
 /// shape: unquoted scalar value containing `:<space>`. If
-/// `serde_yaml_ng` ever changes its behaviour to accept this (it
+/// `yaml_serde` ever changes its behaviour to accept this (it
 /// shouldn't — the YAML 1.2 spec is unambiguous), we want to know.
 #[test]
 fn unquoted_scalar_with_colon_space_is_rejected_by_yaml_parser() {
@@ -197,10 +262,10 @@ fn unquoted_scalar_with_colon_space_is_rejected_by_yaml_parser() {
     // description: ... The when: language gains ...
     let fm = "title: ok\n\
               description: lead-in text. The when: language continues.\n";
-    let parsed: Result<serde_yaml::Value, _> = serde_yaml::from_str(fm);
+    let parsed: Result<yaml_serde::Value, _> = yaml_serde::from_str(fm);
     assert!(
         parsed.is_err(),
-        "serde_yaml_ng started accepting unquoted scalars with embedded \
+        "yaml_serde started accepting unquoted scalars with embedded \
          `:<space>`; this test's premise (and the alint.org-side bug it \
          exists to prevent) needs revisiting"
     );

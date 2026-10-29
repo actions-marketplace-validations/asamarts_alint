@@ -1,3 +1,4 @@
+test_version: 1
 name: executable_bit is silent when require=false matches the default mode
 tags: [check, executable_bit, unix_metadata, passing]
 
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

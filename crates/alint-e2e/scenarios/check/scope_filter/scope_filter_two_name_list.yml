@@ -1,3 +1,4 @@
+test_version: 1
 name: scope_filter has_ancestor accepts a list of marker names
 tags: [check, scope_filter, no_trailing_whitespace]
 
@@ -31,5 +32,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: nws, level: warning, path: app/main.py}

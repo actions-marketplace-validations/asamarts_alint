@@ -5,31 +5,124 @@
 //!
 //! Falls back gracefully when git isn't available (e.g. when
 //! the crate is built from a published tarball without a git
-//! tree). In that case, both env vars are set to `unknown` and
-//! `--version` prints just the workspace version.
+//! tree). In that case the SHA is set to `unknown` and
+//! `--version` prints the workspace version with it.
+//!
+//! Rerun tracking: cargo reruns this script when a path named by
+//! `rerun-if-changed` changes, and treats a path that does not exist
+//! as changed on every build. A linked git worktree's `.git` is a file,
+//! so a fixed `../../.git/HEAD` made every worktree build rerun the
+//! script and recompile the crate. The script asks git where this
+//! checkout's files live and names only paths that exist: the
+//! checkout's `HEAD` and the branch ref it points to. A commit on the
+//! checked-out branch reruns it; commits on other branches or in other
+//! worktrees do not. `ci/scripts/test-build-script-freshness.sh` drives
+//! real cargo builds through each case.
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Repository-local variables (the list `git rev-parse --local-env-vars`
+/// prints). Git hooks and wrapper scripts export some of them: a linked
+/// worktree's hooks get an absolute `GIT_DIR`, so a hook in one checkout
+/// that builds another would bake the first checkout's commit, and a
+/// relative `GIT_DIR` makes git fail from the crate directory. The git
+/// subprocesses below run without them and discover the repository from
+/// the crate directory.
+const GIT_LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+];
+
 fn main() {
-    let sha = git_short_sha().unwrap_or_else(|| "unknown".to_string());
+    let sha = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".to_string());
     let date = build_date_utc();
     println!("cargo:rustc-env=ALINT_GIT_SHA={sha}");
     println!("cargo:rustc-env=ALINT_BUILD_DATE={date}");
-    // Re-run when the HEAD changes so the SHA stays fresh.
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    // Naming any path turns off cargo's default of rerunning on every
+    // package file change; outside a git tree this is the only one.
+    println!("cargo:rerun-if-changed=build.rs");
+    for path in head_watch_paths() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
 }
 
-fn git_short_sha() -> Option<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--short=12", "HEAD"])
-        .output()
-        .ok()?;
+/// The files whose change can move `HEAD`'s commit, limited to the ones
+/// that exist. Empty outside a git tree.
+fn head_watch_paths() -> Vec<PathBuf> {
+    let Some(dirs) = git(&["rev-parse", "--git-dir", "--git-common-dir"]) else {
+        return Vec::new();
+    };
+    let mut dirs = dirs.lines().map(absolute);
+    let (Some(git_dir), Some(common_dir)) = (dirs.next(), dirs.next()) else {
+        return Vec::new();
+    };
+
+    // `HEAD` is per worktree; it changes on a branch switch and on every
+    // commit while detached.
+    let mut paths = vec![git_dir.join("HEAD")];
+    // Branch refs are shared by every worktree, under the common dir.
+    if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        let loose = common_dir.join(&branch);
+        if loose.is_file() {
+            paths.push(loose);
+        } else {
+            // A packed ref has no loose file to watch. A commit on it
+            // appends to the branch's reflog (and writes the loose file,
+            // which the rerun then picks up); `git pack-refs` rewrites
+            // `packed-refs`. Never watch the whole `refs/heads`
+            // directory: every worktree's commits touch it.
+            paths.push(common_dir.join("logs").join(&branch));
+            paths.push(common_dir.join("packed-refs"));
+        }
+    }
+    // The reftable backend keeps every ref in one table stack, so any
+    // ref update reruns the script there.
+    paths.push(common_dir.join("reftable").join("tables.list"));
+    paths.retain(|path| path.exists());
+    paths
+}
+
+/// Run git from the crate directory with the repository-local
+/// environment cleared; `None` when git is missing or fails.
+fn git(args: &[&str]) -> Option<String> {
+    let mut command = Command::new("git");
+    command.args(args);
+    for var in GIT_LOCAL_ENV_VARS {
+        command.env_remove(var);
+    }
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
     let s = String::from_utf8(output.stdout).ok()?.trim().to_string();
     if s.is_empty() { None } else { Some(s) }
+}
+
+/// git prints these paths relative to the current directory, which for
+/// a build script is the crate directory.
+fn absolute(path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
+    }
 }
 
 fn build_date_utc() -> String {

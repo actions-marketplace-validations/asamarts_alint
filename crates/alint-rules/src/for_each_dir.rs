@@ -29,11 +29,13 @@
 //!   level: error
 //! ```
 
-use alint_core::template::PathTokens;
+use std::path::Path;
+
+use alint_core::template::{PathTokens, TokenSet};
 use alint_core::when::{IterEnv, WhenExpr};
 use alint_core::{
-    CompiledNestedSpec, Context, Error, Level, NestedRuleSpec, Result, Rule, RuleSpec, Scope,
-    Violation,
+    AnalysisFailureKind, CompiledNestedSpec, Context, Error, Level, NestedRuleSpec, Result, Rule,
+    RuleSpec, Scope, Violation,
 };
 use serde::Deserialize;
 
@@ -75,24 +77,39 @@ pub(crate) fn resolve_select(spec: SelectSpec, rule_id: &str) -> Result<Scope> {
     Scope::from_patterns(&patterns)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     select: SelectSpec,
-    /// Optional per-iteration filter — evaluated against each
-    /// iterated entry's `iter` context. Common shape:
-    /// `iter.has_file("Cargo.toml")` to scope the iteration to
-    /// directories that look like a workspace member.
+    /// Per-iteration `when:` filter - evaluated against `iter.*` in the iterated
+    /// entry's context. Iterations whose verdict is false are skipped before any
+    /// nested rule is built. Examples: `iter.has_file("Cargo.toml")`,
+    /// `iter.basename matches "^pkg-"`.
     #[serde(default)]
     when_iter: Option<String>,
+    #[schemars(schema_with = "require_schema")]
     require: Vec<NestedRuleSpec>,
 }
+
+/// Preserve the shared recursive nested-rule schema instead of deriving the
+/// flattened `NestedRuleSpec` option map.
+fn require_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "Nested rules evaluated against each matched directory.",
+        "type": "array",
+        "minItems": 1,
+        "items": { "$ref": "#/$defs/nested_rule" }
+    })
+}
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct ForEachDirRule {
     id: String,
     level: Level,
     policy_url: Option<String>,
+    message: Option<String>,
     select_scope: Scope,
     when_iter: Option<WhenExpr>,
     require: Vec<CompiledNestedSpec>,
@@ -114,10 +131,32 @@ impl Rule for ForEachDirRule {
         validate_nested_require(&self.id, self.level, &self.require, registry)
     }
 
-    fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        evaluate_for_each(
+    fn nested_rule_specs(&self) -> &[CompiledNestedSpec] {
+        &self.require
+    }
+
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        visit_sensitive_for_each(
             &self.id,
             self.level,
+            explicit,
+            &self.select_scope,
+            self.when_iter.as_ref(),
+            &self.require,
+            ctx,
+            IterateMode::Dirs,
+            visit,
+        );
+    }
+
+    fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        evaluate_for_each(
+            ForEachParent::new(&self.id, self.level, self.message.as_deref()),
             &self.select_scope,
             self.when_iter.as_ref(),
             &self.require,
@@ -126,6 +165,31 @@ impl Rule for ForEachDirRule {
         )
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("select"),
+        selector_type: alint_core::SelectorType::GlobList,
+        rerootable: true,
+    }]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::Delegated,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::NESTED,
+    nested_rules: true,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "for_each_dir")?;
@@ -145,6 +209,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         id: spec.id.clone(),
         level: spec.level,
         policy_url: spec.policy_url.clone(),
+        message: spec.message.clone(),
         select_scope,
         when_iter,
         require,
@@ -154,7 +219,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 /// Pre-compile each `NestedRuleSpec` in `require:` so its
 /// `when:` source is parsed exactly once at rule-build time.
 /// Shared by `for_each_dir`, `for_each_file`, and
-/// `every_matching_has` — all three accept nested rules with
+/// `every_matching_has` - all three accept nested rules with
 /// optional `when:` clauses, and all three pre-v0.9.12 re-
 /// parsed the source per iteration. This helper is the single
 /// place new cross-file iteration rules thread their require
@@ -172,13 +237,13 @@ pub(crate) fn compile_nested_require(
 
 /// Dry-build each nested `require:` spec against the registry so a
 /// nested rule with an unknown kind, an unknown option, or a missing
-/// required field fails at config-load time — not lazily on the first
+/// required field fails at config-load time - not lazily on the first
 /// matching iteration, and not silently when the selector matches
 /// nothing. Shared by `for_each_dir`, `for_each_file`, and
 /// `every_matching_has` via their `Rule::validate_nested` impls.
 ///
 /// A placeholder path token set is used: only structural errors
-/// (kind / option / required-field) surface here — the per-iteration
+/// (kind / option / required-field) surface here - the per-iteration
 /// path *values* are irrelevant to whether a nested spec builds.
 pub(crate) fn validate_nested_require(
     parent_id: &str,
@@ -188,8 +253,36 @@ pub(crate) fn validate_nested_require(
 ) -> Result<()> {
     let tokens = alint_core::template::PathTokens::from_path(std::path::Path::new("_"));
     for (idx, compiled) in require.iter().enumerate() {
+        // These parent-only fields are stripped before the leaf rule is built
+        // (`NestedRuleSpec::instantiate`), so they never take effect. Reject
+        // them instead of silently changing a nested rule's identity, level,
+        // tracked-file scope, or remediation behavior.
+        for field in [
+            "id",
+            "level",
+            "fix",
+            "git_tracked_only",
+            "respect_gitignore",
+        ] {
+            if compiled.spec.extra.contains_key(field) {
+                return Err(Error::rule_config(
+                    parent_id,
+                    format!(
+                        "nested rule #{idx} (`{}`): `{field}` is not supported on a nested \
+                         rule and would be ignored; declare a top-level rule instead",
+                        compiled.spec.kind
+                    ),
+                ));
+            }
+        }
         let synthesized = compiled.spec.instantiate(parent_id, idx, level, &tokens);
-        registry.build(&synthesized).map_err(|e| {
+        let nested_rule = registry.build(&synthesized).map_err(|e| {
+            Error::rule_config(
+                parent_id,
+                format!("nested rule #{idx} (`{}`): {e}", compiled.spec.kind),
+            )
+        })?;
+        nested_rule.validate_nested(registry).map_err(|e| {
             Error::rule_config(
                 parent_id,
                 format!("nested rule #{idx} (`{}`): {e}", compiled.spec.kind),
@@ -215,8 +308,24 @@ pub(crate) fn parse_when_iter(spec: &RuleSpec, src: Option<&str>) -> Result<Opti
 pub(crate) enum IterateMode {
     Dirs,
     Files,
-    /// Both files and dirs (dirs first) — used by `every_matching_has`.
+    /// Both files and dirs (dirs first) - used by `every_matching_has`.
     Both,
+}
+
+/// Parent-rule fields shared by the three nested iteration kinds. Keeping
+/// these together makes it explicit which values are inherited by nested
+/// findings and keeps the evaluator's call surface manageable.
+#[derive(Clone, Copy)]
+pub(crate) struct ForEachParent<'a> {
+    id: &'a str,
+    level: Level,
+    message: Option<&'a str>,
+}
+
+impl<'a> ForEachParent<'a> {
+    pub(crate) fn new(id: &'a str, level: Level, message: Option<&'a str>) -> Self {
+        Self { id, level, message }
+    }
 }
 
 /// Shared evaluation logic for `for_each_dir`, `for_each_file`, and
@@ -225,28 +334,160 @@ pub(crate) enum IterateMode {
 /// when present and false for an entry, that entry is skipped
 /// before any nested rule is built or evaluated.
 ///
-/// 108 lines after the v0.9.8 literal-path bypass landed —
+/// 108 lines after the v0.9.8 literal-path bypass landed -
 /// extracting the bypass into a separate helper would require
 /// threading the `parent_id` / level / current entry / nested
 /// spec through 5 args, and the bypass and the fallback path
 /// share the violation-attribution loop. Reads better
 /// top-to-bottom as one phased dispatcher.
-#[allow(clippy::too_many_lines)]
-pub(crate) fn evaluate_for_each(
+fn apply_parent_message(
+    violation: &mut Violation,
+    parent_message: &str,
+    analysis_time: Option<&alint_core::AnalysisTimeResolution>,
+) {
+    // A nested time-dependent rule has already attached this exact,
+    // engine-supplied suffix. Preserve it when the wrapper replaces the body
+    // with its own message; do not recognize arbitrary date-looking text.
+    let Some(time) = analysis_time.and_then(|resolution| resolution.time()) else {
+        violation.message = parent_message.to_string().into();
+        return;
+    };
+    let suffix = format!(" (as of {time})");
+    if violation.message.ends_with(&suffix) {
+        violation.message = format!("{parent_message}{suffix}").into();
+    } else {
+        violation.message = parent_message.to_string().into();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn visit_sensitive_for_each(
     parent_id: &str,
     level: Level,
+    parent_explicit: bool,
+    select_scope: &Scope,
+    when_iter: Option<&WhenExpr>,
+    require: &[CompiledNestedSpec],
+    ctx: &Context<'_>,
+    mode: IterateMode,
+    visit: &mut dyn FnMut(&Path),
+) {
+    let Some(registry) = ctx.registry else {
+        return;
+    };
+    let entries: Box<dyn Iterator<Item = _>> = match mode {
+        IterateMode::Dirs => Box::new(ctx.index.dirs()),
+        IterateMode::Files => Box::new(ctx.index.files()),
+        IterateMode::Both => Box::new(ctx.index.dirs().chain(ctx.index.files())),
+    };
+
+    let needed_tokens = nested_path_tokens(require);
+    for entry in entries {
+        if !select_scope.matches(&entry.path, ctx.index) {
+            continue;
+        }
+        let iter_env = IterEnv {
+            path: &entry.path,
+            is_dir: entry.is_dir,
+            index: ctx.index,
+        };
+        if let Some(expr) = when_iter
+            && let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars)
+        {
+            let env = alint_core::WhenEnv {
+                facts,
+                vars,
+                iter: Some(iter_env),
+                env: None,
+            };
+            if !matches!(expr.evaluate(&env), Ok(true)) {
+                continue;
+            }
+        }
+
+        let tokens = PathTokens::from_path_with(&entry.path, needed_tokens);
+        for (index, nested) in require.iter().enumerate() {
+            if let Some(expr) = &nested.when
+                && let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars)
+            {
+                let env = alint_core::WhenEnv {
+                    facts,
+                    vars,
+                    iter: Some(iter_env),
+                    env: None,
+                };
+                if !matches!(expr.evaluate(&env), Ok(true)) {
+                    continue;
+                }
+            }
+            let spec = nested.spec.instantiate(parent_id, index, level, &tokens);
+            let Ok(rule) = registry.build_instantiated(&spec) else {
+                continue;
+            };
+            rule.visit_sensitive_paths(parent_explicit || spec.sensitive, ctx, visit);
+        }
+    }
+}
+
+/// The path tokens any nested spec renders, derived once per entry.
+fn nested_path_tokens(require: &[CompiledNestedSpec]) -> TokenSet {
+    require.iter().fold(TokenSet::NONE, |acc, nested| {
+        acc.union(nested.spec.path_tokens())
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn evaluate_for_each(
+    parent: ForEachParent<'_>,
     select_scope: &Scope,
     when_iter: Option<&WhenExpr>,
     require: &[CompiledNestedSpec],
     ctx: &Context<'_>,
     mode: IterateMode,
 ) -> Result<Vec<Violation>> {
+    if ctx.trace.is_some() {
+        evaluate_for_each_inner::<true>(parent, select_scope, when_iter, require, ctx, mode)
+    } else {
+        evaluate_for_each_inner::<false>(parent, select_scope, when_iter, require, ctx, mode)
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn evaluate_for_each_inner<const TRACE: bool>(
+    parent: ForEachParent<'_>,
+    select_scope: &Scope,
+    when_iter: Option<&WhenExpr>,
+    require: &[CompiledNestedSpec],
+    ctx: &Context<'_>,
+    mode: IterateMode,
+) -> Result<Vec<Violation>> {
+    let ForEachParent {
+        id: parent_id,
+        level,
+        message: parent_message,
+    } = parent;
     let Some(registry) = ctx.registry else {
         return Err(Error::Other(format!(
             "rule {parent_id}: nested-rule evaluation needs a RuleRegistry in the Context \
              (likely an Engine constructed without one)",
         )));
     };
+    // Child kinds may have their own trace protocol (for example structured
+    // extraction). The parent owns this selected-rule trace and records one
+    // bounded aggregate `nested` stage, so child stages must not enter it.
+    let child_context = TRACE.then_some(Context {
+        root: ctx.root,
+        index: ctx.index,
+        registry: ctx.registry,
+        facts: ctx.facts,
+        vars: ctx.vars,
+        git_tracked: ctx.git_tracked,
+        git_blame: ctx.git_blame,
+        analysis_time: ctx.analysis_time,
+        process_environment: ctx.process_environment,
+        trace: None,
+    });
+    let nested_ctx = child_context.as_ref().unwrap_or(ctx);
 
     let entries: Box<dyn Iterator<Item = _>> = match mode {
         IterateMode::Dirs => Box::new(ctx.index.dirs()),
@@ -255,9 +496,30 @@ pub(crate) fn evaluate_for_each(
     };
 
     let mut violations = Vec::new();
+    let needed_tokens = nested_path_tokens(require);
+    let mut trace_counts = alint_core::TraceCounts::default();
+    let mut trace_children = if TRACE {
+        ctx.trace_preview_limit()
+            .map(alint_core::TracePreviewCollector::new)
+            .transpose()?
+    } else {
+        None
+    };
     for entry in entries {
+        if TRACE {
+            alint_core::TraceCounts::checked_increment(
+                &mut trace_counts.considered,
+                "nested.selection.considered",
+            )?;
+        }
         if !select_scope.matches(&entry.path, ctx.index) {
             continue;
+        }
+        if TRACE {
+            alint_core::TraceCounts::checked_increment(
+                &mut trace_counts.matched,
+                "nested.selection.matched",
+            )?;
         }
 
         // Per-iteration `when_iter:` filter. Cheap to evaluate
@@ -269,29 +531,37 @@ pub(crate) fn evaluate_for_each(
             is_dir: entry.is_dir,
             index: ctx.index,
         };
-        if let Some(expr) = when_iter {
-            if let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars) {
-                let env = alint_core::WhenEnv {
-                    facts,
-                    vars,
-                    iter: Some(iter_env),
-                    env: None,
-                };
-                match expr.evaluate(&env) {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(e) => {
-                        violations.push(
-                            Violation::new(format!("{parent_id}: when_iter error: {e}"))
-                                .with_path(entry.path.clone()),
-                        );
-                        continue;
+        if let Some(expr) = when_iter
+            && let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars)
+        {
+            let env = alint_core::WhenEnv {
+                facts,
+                vars,
+                iter: Some(iter_env),
+                env: None,
+            };
+            match expr.evaluate(&env) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(e) => {
+                    if TRACE {
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.analysis_failures,
+                            "nested.analysis_failures",
+                        )?;
                     }
+                    violations.push(
+                        Violation::new(format!("{parent_id}: when_iter error: {e}"))
+                            .with_path(entry.path.clone())
+                            .as_analysis_failure(AnalysisFailureKind::Condition),
+                    );
+                    continue;
                 }
             }
         }
 
-        let tokens = PathTokens::from_path(&entry.path);
+        let tokens = PathTokens::from_path_with(&entry.path, needed_tokens);
+        let entry_start = violations.len();
         for (i, nested) in require.iter().enumerate() {
             // v0.9.12: nested `when:` is pre-compiled at rule-
             // build time (`CompiledNestedSpec`) — gate on the
@@ -302,43 +572,167 @@ pub(crate) fn evaluate_for_each(
             // does. We instantiate the per-iteration spec only
             // AFTER the gate so a falsy `when:` skips both the
             // template-render work AND the registry build.
-            if let Some(expr) = &nested.when {
-                if let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars) {
-                    let env = alint_core::WhenEnv {
-                        facts,
-                        vars,
-                        iter: Some(iter_env),
-                        env: None,
-                    };
-                    match expr.evaluate(&env) {
-                        Ok(true) => {}
-                        Ok(false) => continue,
-                        Err(e) => {
-                            violations.push(
-                                Violation::new(format!(
-                                    "{parent_id}: nested rule #{i} when error: {e}"
-                                ))
-                                .with_path(entry.path.clone()),
-                            );
-                            continue;
+            if let Some(expr) = &nested.when
+                && let (Some(facts), Some(vars)) = (ctx.facts, ctx.vars)
+            {
+                let env = alint_core::WhenEnv {
+                    facts,
+                    vars,
+                    iter: Some(iter_env),
+                    env: None,
+                };
+                match expr.evaluate(&env) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if TRACE {
+                            alint_core::TraceCounts::checked_increment(
+                                &mut trace_counts.children,
+                                "nested.children",
+                            )?;
+                            alint_core::TraceCounts::checked_increment(
+                                &mut trace_counts.skipped_children,
+                                "nested.skipped_children",
+                            )?;
+                            record_nested_child_preview(
+                                trace_children.as_mut(),
+                                ctx,
+                                &entry.path,
+                                i,
+                                nested.spec.sensitive,
+                                alint_core::TraceStatus::Skipped,
+                            )?;
                         }
+                        continue;
+                    }
+                    Err(e) => {
+                        if TRACE {
+                            alint_core::TraceCounts::checked_increment(
+                                &mut trace_counts.children,
+                                "nested.children",
+                            )?;
+                            alint_core::TraceCounts::checked_increment(
+                                &mut trace_counts.failed_children,
+                                "nested.failed_children",
+                            )?;
+                            record_nested_child_preview(
+                                trace_children.as_mut(),
+                                ctx,
+                                &entry.path,
+                                i,
+                                nested.spec.sensitive,
+                                alint_core::TraceStatus::AnalysisFailure,
+                            )?;
+                        }
+                        let mut violation = Violation::new(format!(
+                            "{parent_id}: nested rule #{i} when error: {e}"
+                        ))
+                        .with_path(entry.path.clone())
+                        .as_analysis_failure(AnalysisFailureKind::Condition);
+                        redact_nested_finding(nested, parent_id, i, &mut violation);
+                        violations.push(violation);
+                        continue;
                     }
                 }
             }
             let nested_spec = nested.spec.instantiate(parent_id, i, level, &tokens);
-            let nested_rule = match registry.build(&nested_spec) {
+            let nested_rule = match registry.build_instantiated(&nested_spec) {
                 Ok(r) => r,
                 Err(e) => {
-                    violations.push(
-                        Violation::new(format!(
-                            "{parent_id}: failed to build nested rule #{i} for {}: {e}",
-                            entry.path.display()
-                        ))
-                        .with_path(entry.path.clone()),
-                    );
+                    if TRACE {
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.children,
+                            "nested.children",
+                        )?;
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.failed_children,
+                            "nested.failed_children",
+                        )?;
+                        record_nested_child_preview(
+                            trace_children.as_mut(),
+                            ctx,
+                            &entry.path,
+                            i,
+                            nested.spec.sensitive,
+                            alint_core::TraceStatus::AnalysisFailure,
+                        )?;
+                    }
+                    let mut violation = Violation::new(format!(
+                        "{parent_id}: failed to build nested rule #{i} for {}: {e}",
+                        entry.path.display()
+                    ))
+                    .with_path(entry.path.clone())
+                    .as_analysis_failure(AnalysisFailureKind::NestedRuleBuild);
+                    redact_nested_finding(nested, parent_id, i, &mut violation);
+                    violations.push(violation);
                     continue;
                 }
             };
+            let scope_violation = match alint_core::expect_matches_violation(
+                nested_rule.as_ref(),
+                &nested_spec,
+                ctx.index,
+                ctx,
+            ) {
+                Ok(violation) => violation,
+                Err(error) => {
+                    if TRACE {
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.children,
+                            "nested.children",
+                        )?;
+                        alint_core::TraceCounts::checked_increment(
+                            &mut trace_counts.failed_children,
+                            "nested.failed_children",
+                        )?;
+                        record_nested_child_preview(
+                            trace_children.as_mut(),
+                            ctx,
+                            &entry.path,
+                            i,
+                            nested.spec.sensitive,
+                            alint_core::TraceStatus::AnalysisFailure,
+                        )?;
+                    }
+                    let mut violation = Violation::new(format!(
+                        "{parent_id}: nested rule #{i} scope assertion failed for {}: {error}",
+                        entry.path.display(),
+                    ))
+                    .with_path(entry.path.clone())
+                    .as_analysis_failure(AnalysisFailureKind::Evaluation);
+                    redact_nested_finding(nested, parent_id, i, &mut violation);
+                    violations.push(violation);
+                    continue;
+                }
+            };
+            if let Some(mut violation) = scope_violation {
+                if TRACE {
+                    alint_core::TraceCounts::checked_increment(
+                        &mut trace_counts.children,
+                        "nested.children",
+                    )?;
+                    alint_core::TraceCounts::checked_increment(
+                        &mut trace_counts.violated_children,
+                        "nested.violated_children",
+                    )?;
+                    record_nested_child_preview(
+                        trace_children.as_mut(),
+                        ctx,
+                        &entry.path,
+                        i,
+                        nested.spec.sensitive,
+                        alint_core::TraceStatus::Violated,
+                    )?;
+                }
+                // Attribute a pathless scope-assertion failure to the selected
+                // parent entry, like other nested pathless findings.
+                violation.path = Some(entry.path.clone());
+                if let Some(message) = parent_message {
+                    apply_parent_message(&mut violation, message, ctx.analysis_time);
+                }
+                redact_nested_finding(nested, parent_id, i, &mut violation);
+                violations.push(violation);
+                continue;
+            }
             // v0.9.8: when the nested rule's `paths:` template
             // resolved to a single literal path AND the rule is
             // a per-file rule, bypass `rule.evaluate(ctx)` —
@@ -368,25 +762,230 @@ pub(crate) fn evaluate_for_each(
                 && let Some(pf) = nested_rule.as_per_file()
                 && pf.path_scope().matches(&literal, ctx.index)
             {
-                let nested_violations = evaluate_one_per_file_rule(parent_id, i, &literal, pf, ctx);
+                let nested_violations =
+                    evaluate_one_per_file_rule(parent_id, i, &literal, pf, nested_ctx);
+                if TRACE {
+                    let status = record_nested_child(&mut trace_counts, &nested_violations)?;
+                    record_nested_child_preview(
+                        trace_children.as_mut(),
+                        ctx,
+                        &entry.path,
+                        i,
+                        nested.spec.sensitive,
+                        status,
+                    )?;
+                }
                 for mut v in nested_violations {
                     if v.path.is_none() {
                         v.path = Some(entry.path.clone());
                     }
+                    if v.analysis_failure_kind().is_none()
+                        && let Some(message) = parent_message
+                    {
+                        apply_parent_message(&mut v, message, ctx.analysis_time);
+                    }
+                    redact_manifest_scoped_finding(nested_rule.as_ref(), &mut v);
+                    redact_nested_finding(nested, parent_id, i, &mut v);
                     violations.push(v);
                 }
                 continue;
             }
-            let nested_violations = nested_rule.evaluate(ctx)?;
+            let nested_violations = match nested_rule.evaluate(nested_ctx) {
+                Ok(violations) => violations,
+                Err(error) => vec![
+                    Violation::new(format!(
+                        "{parent_id}: nested rule #{i} error on {}: {error}",
+                        entry.path.display(),
+                    ))
+                    .with_path(entry.path.clone())
+                    .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                ],
+            };
+            if TRACE {
+                let status = record_nested_child(&mut trace_counts, &nested_violations)?;
+                record_nested_child_preview(
+                    trace_children.as_mut(),
+                    ctx,
+                    &entry.path,
+                    i,
+                    nested.spec.sensitive,
+                    status,
+                )?;
+            }
             for mut v in nested_violations {
                 if v.path.is_none() {
                     v.path = Some(entry.path.clone());
                 }
+                if v.analysis_failure_kind().is_none()
+                    && let Some(message) = parent_message
+                {
+                    apply_parent_message(&mut v, message, ctx.analysis_time);
+                }
+                redact_nested_finding(nested, parent_id, i, &mut v);
+                redact_manifest_scoped_finding(nested_rule.as_ref(), &mut v);
                 violations.push(v);
             }
         }
+        // Nested `paths:` / glob options were built with this entry's token
+        // values glob-escaped; show the reader the real path in messages.
+        if parent_message.is_none() {
+            for v in &mut violations[entry_start..] {
+                if let Some(m) = alint_core::template::unescape_token_values(&v.message, &tokens) {
+                    v.message = m.into();
+                }
+            }
+        }
+    }
+    if TRACE {
+        let selection_reason = if trace_counts.matched == 0 {
+            alint_core::TraceReason::SelectorNoMatch
+        } else {
+            alint_core::TraceReason::SelectorMatched
+        };
+        ctx.record_trace(
+            alint_core::TraceStage::new(
+                alint_core::TraceStageClass::Selection,
+                "select",
+                alint_core::TraceStatus::Satisfied,
+                selection_reason,
+            )
+            .with_counts(alint_core::TraceCounts {
+                considered: trace_counts.considered,
+                matched: trace_counts.matched,
+                ..alint_core::TraceCounts::default()
+            }),
+        );
+        let (status, reason) =
+            if trace_counts.failed_children > 0 || trace_counts.analysis_failures > 0 {
+                (
+                    alint_core::TraceStatus::AnalysisFailure,
+                    alint_core::TraceReason::NestedFailed,
+                )
+            } else if trace_counts.violated_children > 0 {
+                (
+                    alint_core::TraceStatus::Violated,
+                    alint_core::TraceReason::NestedViolated,
+                )
+            } else {
+                (
+                    alint_core::TraceStatus::Satisfied,
+                    alint_core::TraceReason::NestedSatisfied,
+                )
+            };
+        let mut nested_stage = alint_core::TraceStage::new(
+            alint_core::TraceStageClass::Nested,
+            "require",
+            status,
+            reason,
+        )
+        .with_counts(alint_core::TraceCounts {
+            children: trace_counts.children,
+            satisfied_children: trace_counts.satisfied_children,
+            violated_children: trace_counts.violated_children,
+            failed_children: trace_counts.failed_children,
+            skipped_children: trace_counts.skipped_children,
+            analysis_failures: trace_counts.analysis_failures,
+            ..alint_core::TraceCounts::default()
+        });
+        if let Some(preview) = trace_children {
+            nested_stage = nested_stage.with_preview(preview.finish());
+        }
+        ctx.record_trace(nested_stage);
     }
     Ok(violations)
+}
+
+fn record_nested_child(
+    counts: &mut alint_core::TraceCounts,
+    findings: &[Violation],
+) -> Result<alint_core::TraceStatus> {
+    alint_core::TraceCounts::checked_increment(&mut counts.children, "nested.children")?;
+    if findings.iter().any(|finding| {
+        matches!(
+            finding.disposition,
+            alint_core::FindingDisposition::AnalysisFailure(_)
+        )
+    }) {
+        alint_core::TraceCounts::checked_increment(
+            &mut counts.failed_children,
+            "nested.failed_children",
+        )?;
+        Ok(alint_core::TraceStatus::AnalysisFailure)
+    } else if findings.iter().any(|finding| {
+        matches!(
+            finding.disposition,
+            alint_core::FindingDisposition::Violation
+        )
+    }) {
+        alint_core::TraceCounts::checked_increment(
+            &mut counts.violated_children,
+            "nested.violated_children",
+        )?;
+        Ok(alint_core::TraceStatus::Violated)
+    } else {
+        alint_core::TraceCounts::checked_increment(
+            &mut counts.satisfied_children,
+            "nested.satisfied_children",
+        )?;
+        Ok(alint_core::TraceStatus::Satisfied)
+    }
+}
+
+fn record_nested_child_preview(
+    preview: Option<&mut alint_core::TracePreviewCollector>,
+    ctx: &Context<'_>,
+    path: &Path,
+    index: usize,
+    sensitive: bool,
+    status: alint_core::TraceStatus,
+) -> Result<()> {
+    let Some(preview) = preview else {
+        return Ok(());
+    };
+    let display = match status {
+        alint_core::TraceStatus::Satisfied => "satisfied",
+        alint_core::TraceStatus::Violated => "violated",
+        alint_core::TraceStatus::Skipped => "skipped",
+        alint_core::TraceStatus::AnalysisFailure => "analysis_failure",
+        alint_core::TraceStatus::NotEvaluated => "not_evaluated",
+    };
+    preview.push(alint_core::TracePreviewRow::new(
+        path,
+        ctx.trace_path_origin(),
+        None,
+        Some(format!("/require/{index}")),
+        u64::try_from(index)
+            .map_err(|_| Error::internal("nested rule index does not fit trace occurrence"))?,
+        alint_core::TraceProvenance::Derived,
+        ctx.trace_evidence_sensitivity(sensitive),
+        alint_core::TraceValueType::String,
+        display,
+    )?)
+}
+
+fn redact_manifest_scoped_finding(rule: &dyn Rule, finding: &mut Violation) {
+    let scope = rule
+        .path_scope()
+        .or_else(|| rule.as_per_file().map(alint_core::PerFileRule::path_scope));
+    if scope.is_none_or(|scope| scope.sensitive_manifest_sources().next().is_none()) {
+        return;
+    }
+    let path = finding
+        .path
+        .as_deref()
+        .map(|path| path.to_string_lossy().into_owned());
+    finding.redact_evidence(rule.id(), "manifest_scope", path.as_deref());
+}
+
+fn redact_nested_finding(
+    nested: &alint_core::CompiledNestedSpec,
+    parent_id: &str,
+    index: usize,
+    finding: &mut Violation,
+) {
+    if nested.spec.sensitive {
+        finding.redact_message(&format!("{parent_id}.require[{index}]"));
+    }
 }
 
 /// Extract a single literal relative path from a nested rule
@@ -397,12 +996,12 @@ pub(crate) fn evaluate_for_each(
 /// in-index entry instead of going through the rule's own
 /// O(N) full-index scan.
 ///
-/// Conservative: returns `None` for any pattern containing a
-/// glob metacharacter, even when the metacharacter is escaped —
-/// the bench cliff this exists to fix is the canonical
-/// `paths: "{path}/<basename>"` shape, which always resolves to
-/// a literal post-template-expansion. False positives here
-/// would silently bypass the rule's own glob handling.
+/// Returns `None` for any pattern with real glob syntax. A pattern
+/// whose only metacharacters are escapes (a `{path}` token holding
+/// `app/[slug]`) is decoded exactly by `literal_glob_path`, so the
+/// canonical `paths: "{path}/<basename>"` shape keeps the fast path.
+/// False positives here would silently bypass the rule's own glob
+/// handling.
 fn nested_spec_single_literal(spec: &alint_core::RuleSpec) -> Option<std::path::PathBuf> {
     use alint_core::PathsSpec;
     let paths = spec.paths.as_ref()?;
@@ -411,16 +1010,12 @@ fn nested_spec_single_literal(spec: &alint_core::RuleSpec) -> Option<std::path::
         PathsSpec::Many(v) if v.len() == 1 => &v[0],
         _ => return None,
     };
-    if single.is_empty() || single.starts_with('!') {
+    if single.is_empty() {
         return None;
     }
-    if single
-        .chars()
-        .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'))
-    {
-        return None;
-    }
-    Some(std::path::PathBuf::from(single))
+    // Resolve the escapes `render_path_glob` added (a directory literally named
+    // `a\b` renders as `a\\b`); `None` for a real glob or a `!` exclude.
+    alint_core::template::literal_glob_path(single).map(std::path::PathBuf::from)
 }
 
 /// Read the in-index file at `literal` once, dispatch to the
@@ -444,40 +1039,21 @@ fn evaluate_one_per_file_rule(
     let bytes = match crate::io::read_capped(&abs) {
         Ok(b) => b,
         Err(crate::io::ReadCapError::TooLarge(n)) => {
-            // Over the 256 MiB whole-file cap — surface a clear
-            // violation rather than silently skipping (which used
-            // to mask an OOM-DoS surface on hostile / accidental
-            // multi-GB files reached via a `for_each_dir` literal
-            // path).
-            return vec![
-                Violation::new(format!(
-                    "{parent_id}: nested rule #{nested_i} cannot analyze {} \
-                     — file is too large ({})",
-                    literal.display(),
-                    crate::io::over_cap(n),
-                ))
-                .with_path(literal),
-            ];
+            return vec![alint_core::too_large_file_violation(literal, n)];
         }
-        Err(crate::io::ReadCapError::Io(_)) => {
-            // Mirror the rule-major behaviour: silent skip on read
-            // failure (permission flake, race with mid-walk delete).
-            return Vec::new();
+        Err(crate::io::ReadCapError::Io(e)) => {
+            return vec![crate::io::io_error_violation(literal, &e)];
         }
     };
     match pf.evaluate_file(ctx, literal, &bytes) {
         Ok(vs) => vs,
         Err(e) => vec![
-            // No path; the message embeds a volatile error string, so key on
-            // the (dir, nested-rule index) identity instead of the message.
             Violation::new(format!(
                 "{parent_id}: nested rule #{nested_i} error on {}: {e}",
                 literal.display()
             ))
-            .with_baseline_key(format!(
-                "for-each-dir-nested-error\u{0}{}\u{0}{nested_i}",
-                crate::slash(literal)
-            )),
+            .with_path(literal)
+            .as_analysis_failure(AnalysisFailureKind::Evaluation),
         ],
     }
 }
@@ -516,6 +1092,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         rule.evaluate(&ctx).unwrap()
     }
@@ -526,6 +1105,7 @@ mod tests {
             id: "t".into(),
             level: Level::Error,
             policy_url: None,
+            message: None,
             select_scope: Scope::from_patterns(&[select.to_string()]).unwrap(),
             when_iter: None,
             require,
@@ -535,7 +1115,22 @@ mod tests {
     fn require_file_exists(path: &str) -> NestedRuleSpec {
         // Build via YAML to exercise the same path production users take.
         let yaml = format!("kind: file_exists\npaths: \"{path}\"\n");
-        serde_yaml_ng::from_str(&yaml).unwrap()
+        yaml_serde::from_str(&yaml).unwrap()
+    }
+
+    #[test]
+    fn nested_sensitive_rule_redacts_before_parent_reporting() {
+        const SECRET: &str = "NESTED_TOKEN_VALUE_DO_NOT_REPORT";
+        let nested: NestedRuleSpec = yaml_serde::from_str(&format!(
+            "kind: file_exists\npaths: \"{{path}}/missing\"\n\
+             message: \"nested evidence: {SECRET}\"\nsensitive: true\n"
+        ))
+        .unwrap();
+        let findings = eval_with(&rule("src/*", vec![nested]), &[("src/foo", true)]);
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].is_sensitive());
+        assert!(!findings[0].message.contains(SECRET));
+        assert!(findings[0].message.contains("<redacted:"));
     }
 
     #[test]
@@ -552,6 +1147,66 @@ mod tests {
             ],
         );
         assert!(v.is_empty(), "unexpected: {v:?}");
+    }
+
+    // A `\` in a directory name is only legal off Windows (it is the separator
+    // there).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_backslash_in_a_dir_name_does_not_break_the_literal_fast_paths() {
+        // Regression: `{path}` renders `app/a\b` as the glob `app/a\\b` (a `\` is
+        // globset's escape), but the literal fast paths only scanned for
+        // `* ? [ ] { }`, so they looked up `app/a\\b/page.tsx` verbatim: a
+        // false "missing" for file_exists, and a silent pass for a structured
+        // rule that never found the file to check.
+        let r = rule("app/*", vec![require_file_exists("{path}/page.tsx")]);
+        let v = eval_with(
+            &r,
+            &[
+                ("app", true),
+                ("app/a\\b", true),
+                ("app/a\\b/page.tsx", false),
+            ],
+        );
+        assert!(v.is_empty(), "unexpected: {v:?}");
+
+        let (tmp, idx) = crate::test_support::tempdir_with_files(&[(
+            "pkgs/a\\b/package.json",
+            br#"{"private": false}"#,
+        )]);
+        let mut entries: Vec<FileEntry> = idx.entries.clone();
+        entries.push(FileEntry {
+            path: Path::new("pkgs").into(),
+            is_dir: true,
+            size: 0,
+        });
+        entries.push(FileEntry {
+            path: Path::new("pkgs/a\\b").into(),
+            is_dir: true,
+            size: 0,
+        });
+        let idx = FileIndex::from_entries(entries);
+        let nested: NestedRuleSpec = yaml_serde::from_str(
+            "kind: json_path_equals\npaths: \"{path}/package.json\"\n\
+             path: \"$.private\"\nequals: true\n",
+        )
+        .unwrap();
+        let r = rule("pkgs/*", vec![nested]);
+        let reg = registry();
+        let ctx = Context {
+            root: tmp.path(),
+            index: &idx,
+            registry: Some(&reg),
+            facts: None,
+            vars: None,
+            git_tracked: None,
+            git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
+        };
+        let v = r.evaluate(&ctx).unwrap();
+        assert_eq!(v.len(), 1, "the wrong value must be reported: {v:?}");
     }
 
     #[test]
@@ -578,6 +1233,45 @@ mod tests {
     }
 
     #[test]
+    fn validate_nested_rejects_fields_a_nested_rule_would_ignore() {
+        // Parent-only fields are stripped from a nested rule before it is built,
+        // so they must be load errors rather than silent no-ops.
+        let reg = registry();
+        for extra in [
+            "id: ignored",
+            "level: warning",
+            "git_tracked_only: true",
+            "respect_gitignore: false",
+            "fix:\n  file_create:\n    content: x",
+        ] {
+            let yaml = format!("kind: file_exists\npaths: \"{{path}}/LICENSE\"\n{extra}\n");
+            let nested: NestedRuleSpec = yaml_serde::from_str(&yaml).unwrap();
+            let err = rule("pkgs/*", vec![nested])
+                .validate_nested(&reg)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("not supported on a nested rule"),
+                "{extra}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_nested_uses_leaf_kind_metadata_for_common_fields() {
+        let nested: NestedRuleSpec = yaml_serde::from_str(
+            "kind: dir_contains\npaths: packages/*\nselect: packages/*\nrequire: README.md\n",
+        )
+        .unwrap();
+        let error = rule("src/*", vec![nested])
+            .validate_nested(&registry())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("nested rule #0 (`dir_contains`)"), "{error}");
+        assert!(error.contains("`paths` is not supported"), "{error}");
+    }
+
+    #[test]
     fn validate_nested_rejects_unknown_kind_and_option() {
         let reg = registry();
 
@@ -590,20 +1284,85 @@ mod tests {
         // a nested typo is caught even when no directory would be iterated
         // (the gap where `check` previously reported "passed").
         let bad_kind: NestedRuleSpec =
-            serde_yaml_ng::from_str("kind: totally_fake_kind\npaths: \"{path}/x\"\n").unwrap();
+            yaml_serde::from_str("kind: totally_fake_kind\npaths: \"{path}/x\"\n").unwrap();
         let r = rule("matches-nothing/*", vec![bad_kind]);
         let err = r.validate_nested(&reg).unwrap_err().to_string();
         assert!(err.contains("totally_fake_kind"), "{err}");
 
         // Unknown nested OPTION → Err.
         let bad_opt: NestedRuleSpec =
-            serde_yaml_ng::from_str("kind: file_exists\npaths: \"{path}/x\"\nbogusopt: true\n")
+            yaml_serde::from_str("kind: file_exists\npaths: \"{path}/x\"\nbogusopt: true\n")
                 .unwrap();
         let r = rule("src/*", vec![bad_opt]);
         let err = r.validate_nested(&reg).unwrap_err().to_string();
         assert!(
             err.contains("bogusopt") || err.contains("unknown field"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn runtime_nested_failures_are_structural_and_ordered() {
+        let build_failure: NestedRuleSpec = yaml_serde::from_str(
+            "kind: filename_regex\npaths: \"{path}/**\"\npattern: \"{basename}\"\n",
+        )
+        .unwrap();
+        let condition_failure: NestedRuleSpec = yaml_serde::from_str(
+            "kind: file_exists\npaths: \"{path}/README.md\"\nwhen: '1 < \"x\"'\n",
+        )
+        .unwrap();
+        let evaluation_failure: NestedRuleSpec = yaml_serde::from_str(
+            "kind: git_blame_age\npaths: \"{path}/**/*.rs\"\npattern: TODO\nmax_age_days: 1\n",
+        )
+        .unwrap();
+        let rule = rule(
+            "src/*",
+            vec![build_failure, condition_failure, evaluation_failure],
+        );
+        assert!(
+            rule.validate_nested(&registry()).is_ok(),
+            "placeholder values must validate before repository substitution",
+        );
+
+        let idx = index(&[("src", true), ("src/(", true), ("src/(/a.rs", false)]);
+        let registry = registry();
+        let facts = alint_core::FactValues::new();
+        let vars = std::collections::HashMap::new();
+        let analysis_time = alint_core::AnalysisTimeResolution::Unavailable(
+            alint_core::AnalysisTimeUnavailable::HeadUnavailable,
+        );
+        let ctx = Context {
+            root: Path::new("/"),
+            index: &idx,
+            registry: Some(&registry),
+            facts: Some(&facts),
+            vars: Some(&vars),
+            git_tracked: None,
+            git_blame: None,
+            analysis_time: Some(&analysis_time),
+            process_environment: None,
+            trace: None,
+        };
+        let raw = rule.evaluate(&ctx).unwrap();
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty(), "{result:?}");
+        assert_eq!(
+            result
+                .analysis_failures
+                .iter()
+                .map(|failure| failure.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                AnalysisFailureKind::NestedRuleBuild,
+                AnalysisFailureKind::Condition,
+                AnalysisFailureKind::Evaluation,
+            ],
+        );
+        assert!(
+            result
+                .analysis_failures
+                .iter()
+                .all(|failure| failure.path.as_deref() == Some(Path::new("src/(")))
         );
     }
 
@@ -628,6 +1387,40 @@ mod tests {
         assert!(
             v[0].message.contains("README"),
             "expected README in message; got {:?}",
+            v[0].message
+        );
+    }
+
+    #[test]
+    fn glob_options_of_nested_rules_escape_the_iterated_path() {
+        // `app/[slug]` (Next.js) reached a nested `dir_contains` `select:
+        // "{path}"` unescaped, compiled as a character class matching `app/s`:
+        // `app/[slug]` (no .tsx) was never checked (false negative) and `app/s`
+        // was checked twice. Only `paths:` was escaped.
+        let nested: NestedRuleSpec =
+            yaml_serde::from_str("kind: dir_contains\nselect: \"{path}\"\nrequire: [\"*.tsx\"]\n")
+                .unwrap();
+        let files = [
+            ("app", true),
+            ("app/[slug]", true),
+            ("app/[slug]/page.ts", false),
+            ("app/s", true),
+            ("app/s/page.tsx", false),
+        ];
+        let v = eval_with(&rule("app/*", vec![nested]), &files);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert_eq!(v[0].path.as_deref(), Some(Path::new("app/[slug]")));
+
+        // A nested `paths:` finding names the real directory, not the escaped
+        // glob it was built from.
+        let v = eval_with(
+            &rule("app/*", vec![require_file_exists("{path}/*.tsx")]),
+            &files,
+        );
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].message.contains("app/[slug]/*.tsx") && !v[0].message.contains("[[]"),
+            "{}",
             v[0].message
         );
     }
@@ -659,5 +1452,167 @@ scope_filter:
             err.contains("for_each_dir"),
             "expected message to name the cross-file kind, got: {err}",
         );
+    }
+    #[test]
+    fn nested_trace_aggregates_pass_and_fail_children_from_production_evaluation() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("pkg-a")).unwrap();
+        std::fs::create_dir(tmp.path().join("pkg-b")).unwrap();
+        std::fs::write(tmp.path().join("pkg-a/marker"), b"ok").unwrap();
+        let spec: std::sync::Arc<RuleSpec> = std::sync::Arc::new(
+            yaml_serde::from_str(
+                r#"
+id: nested
+kind: for_each_dir
+level: error
+select: pkg-*
+require:
+  - kind: file_exists
+    paths: "{path}/marker"
+"#,
+            )
+            .unwrap(),
+        );
+        let registry = crate::builtin_registry();
+        let built = registry.build(&spec).unwrap();
+        let engine = alint_core::Engine::from_entries(
+            vec![alint_core::RuleEntry::new(built).with_spec(spec)],
+            registry,
+        );
+
+        let failing_index =
+            alint_core::walk(tmp.path(), &alint_core::WalkOptions::default()).unwrap();
+        let failing = engine
+            .trace_rule_with_options(
+                "nested",
+                tmp.path(),
+                &failing_index,
+                alint_core::TraceOptions::with_preview(1).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(failing.outcome, alint_core::TraceStatus::Violated);
+        let nested = failing
+            .stages
+            .iter()
+            .find(|stage| stage.class == alint_core::TraceStageClass::Nested)
+            .unwrap();
+        assert_eq!(nested.counts.children, 2);
+        assert_eq!(nested.counts.satisfied_children, 1);
+        assert_eq!(nested.counts.violated_children, 1);
+        assert_eq!(nested.reason, alint_core::TraceReason::NestedViolated);
+        let preview = nested.preview().expect("nested preview");
+        assert_eq!(preview.total(), 2);
+        assert_eq!(preview.shown(), 1);
+        assert_eq!(preview.omitted(), 1);
+        assert_eq!(preview.rows()[0].path(), Path::new("pkg-a"));
+        assert_eq!(preview.rows()[0].display_value(), "satisfied");
+
+        std::fs::write(tmp.path().join("pkg-b/marker"), b"ok").unwrap();
+        let passing_index =
+            alint_core::walk(tmp.path(), &alint_core::WalkOptions::default()).unwrap();
+        let passing = engine
+            .trace_rule("nested", tmp.path(), &passing_index)
+            .unwrap();
+        assert_eq!(passing.outcome, alint_core::TraceStatus::Satisfied);
+        let nested = passing
+            .stages
+            .iter()
+            .find(|stage| stage.class == alint_core::TraceStageClass::Nested)
+            .unwrap();
+        assert_eq!(nested.counts.children, 2);
+        assert_eq!(nested.counts.satisfied_children, 2);
+        assert_eq!(nested.reason, alint_core::TraceReason::NestedSatisfied);
+        assert_eq!(
+            passing
+                .stages
+                .iter()
+                .filter(|stage| stage.class == alint_core::TraceStageClass::Outcome)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn nested_trace_does_not_mix_child_kind_protocol_stages() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("pkg")).unwrap();
+        std::fs::write(tmp.path().join("pkg/data.json"), br#"{"ok":true}"#).unwrap();
+        let spec: std::sync::Arc<RuleSpec> = std::sync::Arc::new(
+            yaml_serde::from_str(
+                r#"
+id: nested-structured
+kind: for_each_dir
+level: error
+select: pkg
+require:
+  - kind: json_path_equals
+    paths: "{path}/data.json"
+    path: "$.ok"
+    equals: true
+"#,
+            )
+            .unwrap(),
+        );
+        let registry = crate::builtin_registry();
+        let built = registry.build(&spec).unwrap();
+        let engine = alint_core::Engine::from_entries(
+            vec![alint_core::RuleEntry::new(built).with_spec(spec)],
+            registry,
+        );
+        let index = alint_core::walk(tmp.path(), &alint_core::WalkOptions::default()).unwrap();
+
+        let trace = engine
+            .trace_rule("nested-structured", tmp.path(), &index)
+            .unwrap();
+        assert_eq!(trace.outcome, alint_core::TraceStatus::Satisfied);
+        assert!(trace.stages.iter().any(|stage| {
+            stage.class == alint_core::TraceStageClass::Nested
+                && stage.counts.satisfied_children == 1
+        }));
+        assert!(!trace.stages.iter().any(|stage| {
+            matches!(
+                stage.class,
+                alint_core::TraceStageClass::Extraction | alint_core::TraceStageClass::Cardinality
+            )
+        }));
+    }
+    #[test]
+    fn nested_trace_does_not_misclassify_iteration_gate_failures_as_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("pkg")).unwrap();
+        let spec: std::sync::Arc<RuleSpec> = std::sync::Arc::new(
+            yaml_serde::from_str(
+                r#"
+id: nested
+kind: for_each_dir
+level: error
+select: pkg
+when_iter: '1 < "x"'
+require:
+  - kind: file_exists
+    paths: "{path}/marker"
+"#,
+            )
+            .unwrap(),
+        );
+        let registry = crate::builtin_registry();
+        let built = registry.build(&spec).unwrap();
+        let engine = alint_core::Engine::from_entries(
+            vec![alint_core::RuleEntry::new(built).with_spec(spec)],
+            registry,
+        );
+        let index = alint_core::walk(tmp.path(), &alint_core::WalkOptions::default()).unwrap();
+
+        let trace = engine.trace_rule("nested", tmp.path(), &index).unwrap();
+        assert_eq!(trace.outcome, alint_core::TraceStatus::AnalysisFailure);
+        let nested = trace
+            .stages
+            .iter()
+            .find(|stage| stage.class == alint_core::TraceStageClass::Nested)
+            .unwrap();
+        assert_eq!(nested.counts.children, 0);
+        assert_eq!(nested.counts.failed_children, 0);
+        assert_eq!(nested.counts.analysis_failures, 1);
+        assert_eq!(nested.reason, alint_core::TraceReason::NestedFailed);
     }
 }

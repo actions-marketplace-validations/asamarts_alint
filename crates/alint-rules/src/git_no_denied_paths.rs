@@ -13,13 +13,11 @@
 //! generated artefacts that don't belong in version control
 //! (`*.log`, `dist/**`), legacy "do not commit" sentinels.
 //!
-//! Outside a git repo (no `git` on PATH, `root` not inside a
-//! repo, etc.) the rule silently no-ops — same advisory posture
-//! as `git_tracked_only`. Check-only — fixing means
-//! `git rm --cached`, which is a sensitive operation alint
-//! should never automate.
+//! Git or repository unavailability is an analysis failure. Check-only —
+//! fixing means `git rm --cached`, which is a sensitive operation alint should
+//! never automate.
 
-use alint_core::git::{CommitRangeError, collect_changed_paths_checked, collect_tracked_paths};
+use alint_core::git::{CommitRangeError, collect_changed_paths_checked};
 use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
@@ -62,10 +60,9 @@ impl Rule for GitNoDeniedPathsRule {
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
-        let Some(tracked) = collect_tracked_paths(ctx.root) else {
-            // Not a git repo, or git not on PATH — silent
-            // no-op, by design. The rule's intent only makes
-            // sense inside a tracked working tree.
+        let Some(tracked) = ctx.git_tracked else {
+            // Defensive direct-evaluation fallback; Engine capability routing
+            // reports repository unavailability before dispatch.
             return Ok(violations);
         };
 
@@ -90,7 +87,7 @@ impl Rule for GitNoDeniedPathsRule {
             },
         };
 
-        for path in &tracked {
+        for path in tracked {
             if let Some(diff) = &diff
                 && !diff.contains(path)
             {
@@ -126,7 +123,7 @@ impl Rule for GitNoDeniedPathsRule {
 /// `**/` matches zero or more segments, so the anchored form still catches
 /// the root-level file. This is the secure default for a denylist: a bare
 /// *literal* like `id_rsa` should ban that file anywhere in the tree, not only
-/// at the root — globset root-anchors a bare literal. (A bare *wildcard* like
+/// at the root - globset root-anchors a bare literal. (A bare *wildcard* like
 /// `*.pem` already spans depths in globset, so anchoring it is a no-op.)
 fn anchor_denied_pattern(pattern: &str) -> std::borrow::Cow<'_, str> {
     if pattern.contains('/') {
@@ -135,6 +132,46 @@ fn anchor_denied_pattern(pattern: &str) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Owned(format!("**/{pattern}"))
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::SingleShot,
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("denied"),
+        selector_type: alint_core::SelectorType::DiffGlob,
+        rerootable: false,
+    }]),
+    since: alint_core::SinceSupport::Optional,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::TrackedSet]),
+            },
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::Diff]),
+            },
+            condition: alint_core::CapabilityCondition::OptionSet {
+                option: std::borrow::Cow::Borrowed("since"),
+            },
+        },
+    ]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
@@ -150,7 +187,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "git_no_denied_paths has no fix op — `git rm --cached` is too destructive to automate",
+            "git_no_denied_paths has no fix op - `git rm --cached` is too destructive to automate",
         ));
     }
 
@@ -240,7 +277,10 @@ mod tests {
                 .is_empty(),
             "unmatched by suffix"
         );
-        assert!(wild.matches(std::path::Path::new("README.md")).is_empty());
+        assert_eq!(
+            wild.matches(std::path::Path::new("README.md")),
+            Vec::<usize>::new()
+        );
 
         let lit = build_set(&["id_rsa"]);
         assert!(
@@ -250,34 +290,37 @@ mod tests {
         assert!(
             lit.matches(std::path::Path::new("secrets/id_rsa"))
                 .is_empty(),
-            "a bare literal is root-anchored — the real M5 gap"
+            "a bare literal is root-anchored - the real M5 gap"
         );
     }
 
     #[test]
     fn double_star_glob_matches_under_any_directory() {
         let set = build_set(&["**/.env"]);
-        assert!(!set.matches(std::path::Path::new(".env")).is_empty());
-        assert!(
-            !set.matches(std::path::Path::new("apps/api/.env"))
-                .is_empty()
+        assert_ne!(
+            set.matches(std::path::Path::new(".env")),
+            Vec::<usize>::new()
+        );
+        assert_ne!(
+            set.matches(std::path::Path::new("apps/api/.env")),
+            Vec::<usize>::new()
         );
     }
 
     #[test]
     fn directory_glob_matches_under_directory() {
         let set = build_set(&["secrets/**"]);
-        assert!(
-            !set.matches(std::path::Path::new("secrets/keys.txt"))
-                .is_empty()
+        assert_ne!(
+            set.matches(std::path::Path::new("secrets/keys.txt")),
+            Vec::<usize>::new()
         );
-        assert!(
-            !set.matches(std::path::Path::new("secrets/nested/deep.txt"))
-                .is_empty()
+        assert_ne!(
+            set.matches(std::path::Path::new("secrets/nested/deep.txt")),
+            Vec::<usize>::new()
         );
-        assert!(
-            set.matches(std::path::Path::new("public/secrets-doc.md"))
-                .is_empty()
+        assert_eq!(
+            set.matches(std::path::Path::new("public/secrets-doc.md")),
+            Vec::<usize>::new()
         );
     }
 

@@ -8,10 +8,14 @@
 //! `bash script.sh` instead of `./script.sh`, which is usually
 //! not the author's intent.
 //!
-//! Non-Unix platforms: rule is a no-op. No fix op — `chmod`
-//! auto-apply is deferred to a later release (see ROADMAP).
+//! Non-Unix platforms: rule is a no-op. Fix op: `chmod` (`fix: { chmod: {} }`),
+//! which sets the executable bit; Safe by default, applied only on Unix.
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Applicability, Context, Error, FixSpec, Fixer, Level, Result, Rule, RuleSpec, Scope, Violation,
+};
+
+use crate::fixers::ChmodFixer;
 
 #[cfg(unix)]
 use crate::io::read_prefix_n;
@@ -26,6 +30,7 @@ pub struct ShebangHasExecutableRule {
     policy_url: Option<String>,
     message: Option<String>,
     scope: Scope,
+    fixer: Option<ChmodFixer>,
 }
 
 impl Rule for ShebangHasExecutableRule {
@@ -76,24 +81,66 @@ impl Rule for ShebangHasExecutableRule {
     fn evaluate(&self, _ctx: &Context<'_>) -> Result<Vec<Violation>> {
         Ok(Vec::new())
     }
+
+    fn fixer(&self) -> Option<&dyn Fixer> {
+        self.fixer.as_ref().map(|f| f as &dyn Fixer)
+    }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::RuleMajorScoped,
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::UnixOnly,
+        condition: alint_core::CapabilityCondition::Always,
+    }]),
+    content: alint_core::ContentAccess::Prefix {
+        max_bytes: Some(2),
+        metadata: true,
+    },
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("chmod")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec.paths.as_ref().ok_or_else(|| {
         Error::rule_config(&spec.id, "shebang_has_executable requires a `paths` field")
     })?;
-    if spec.fix.is_some() {
-        return Err(Error::rule_config(
-            &spec.id,
-            "shebang_has_executable has no fix op — chmod auto-apply is deferred (see ROADMAP)",
-        ));
-    }
+    // The only supported fix op is `chmod`, which sets +x (a shebang script must be
+    // executable).
+    let fixer = match &spec.fix {
+        None => None,
+        Some(FixSpec::Chmod { chmod }) => Some(ChmodFixer::new(
+            /* desired_exec */ true,
+            chmod.applicability.unwrap_or(Applicability::Safe),
+        )),
+        Some(other) => {
+            return Err(Error::rule_config(
+                &spec.id,
+                format!(
+                    "fix.{} is not compatible with shebang_has_executable (only `chmod`)",
+                    other.op_name()
+                ),
+            ));
+        }
+    };
     Ok(Box::new(ShebangHasExecutableRule {
         id: spec.id.clone(),
         level: spec.level,
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
         scope: Scope::from_spec(spec)?,
+        fixer,
     }))
 }
 
@@ -125,6 +172,19 @@ mod tests {
                file_remove: {}\n",
         );
         assert!(build(&spec).is_err());
+    }
+
+    #[test]
+    fn build_accepts_a_chmod_fix() {
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: shebang_has_executable\n\
+             paths: \"scripts/**\"\n\
+             level: error\n\
+             fix: { chmod: {} }\n",
+        );
+        let rule = build(&spec).expect("chmod fix builds");
+        assert!(rule.fixer().is_some(), "the rule exposes a chmod fixer");
     }
 
     #[cfg(unix)]

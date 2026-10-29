@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,13 +28,18 @@ env:
 jobs:
 
   # ── Change detection + runner routing ─────────────────────────────
-  # SECURITY (audit H6): this entry job runs on ubuntu-latest, never the
-  # self-hosted box — it's the first job a fork PR reaches and it checks out
-  # (untrusted) PR code. It routes every downstream job's runner from the
-  # IMMUTABLE `head.repo.fork` context: a fork PR → ephemeral ubuntu-latest;
-  # anything trusted (push / tag / same-repo PR) → the warm self-hosted box.
-  # The decision is taken from context, NOT from a checked-out script — see
-  # docs/design/v0.14/ci-fork-pr-isolation.md.
+  # SECURITY (audit H6): this entry job always runs on ubuntu-latest. The route
+  # step executes before checkout and fails closed for a PR unless the event,
+  # base/head repositories, PR author and event sender have exact admitted
+  # numeric IDs. This fixes canonical routing for same-repository bots as well
+  # as forks. It is defence in depth, not the scheduling security boundary:
+  # pull_request workflow YAML comes from the PR merge context and can itself
+  # be edited. The legacy fixed-label listener therefore stays offline until a
+  # base-controlled broker creates a unique disposable one-job registration.
+  # While it is offline, non-PR runs use hosted capacity too; otherwise a main
+  # push can queue indefinitely and block every newer run in this concurrency
+  # group.
+  # See docs/design/v0.14/ci-fork-pr-isolation.md.
   changes:
     name: Detect Changes
     runs-on: ubuntu-latest
@@ -42,32 +50,52 @@ jobs:
       examples: ${{ steps.detect.outputs.examples }}
       editors: ${{ steps.detect.outputs.editors }}
       supply_chain: ${{ steps.detect.outputs.supply_chain }}
+      packaging: ${{ steps.detect.outputs.packaging }}
+      shell: ${{ steps.detect.outputs.shell }}
+      relation: ${{ steps.detect.outputs.relation }}
       runner: ${{ steps.route.outputs.runner }}
-      untrusted: ${{ steps.route.outputs.untrusted }}
+      hosted: ${{ steps.route.outputs.hosted }}
     steps:
+      # Keep this before checkout. IDs survive login/repository renames and a
+      # null/missing payload field formats as an empty string, failing closed.
+      # Requiring the event sender as well as the PR author catches bot/App or
+      # otherwise unapproved synchronize events on an approved author's branch.
+      # The github.actor_id equality is an additional stable-ID consistency
+      # check; a later base-controlled broker must also validate rerun metadata.
+      - id: route
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IS_ADMITTED_PR: >-
+            ${{
+              github.event_name == 'pull_request' &&
+              (
+                format('{0}', github.event.repository.id) == '1214597864' &&
+                format('{0}', github.event.pull_request.base.repo.id) == '1214597864' &&
+                format('{0}', github.event.pull_request.head.repo.id) == '1214597864' &&
+                contains(fromJSON('["11239806"]'), format('{0}', github.event.pull_request.user.id)) &&
+                contains(fromJSON('["11239806"]'), format('{0}', github.event.sender.id)) &&
+                contains(fromJSON('["11239806"]'), format('{0}', github.actor_id))
+              )
+            }}
+          # PR capacity switch, not an authorization boundary. Keep false while
+          # the fixed-label listener is held; a later change may replace this only
+          # after base-controlled disposable admission passes its canaries.
+          LOCAL_PR_CAPACITY_ENABLED: "false"
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo 'runner=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'hosted=true' >> "$GITHUB_OUTPUT"
+          elif [ "$IS_ADMITTED_PR" = "true" ] &&
+               [ "$LOCAL_PR_CAPACITY_ENABLED" = "true" ]; then
+            echo 'runner=["self-hosted","linux","alint"]' >> "$GITHUB_OUTPUT"
+            echo 'hosted=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'runner=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'hosted=true' >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      # Routing runs FIRST and writes to its OWN step output, which the
-      # (untrusted) detect step below cannot touch — so a fork's
-      # detect-changes.sh can never force the downstream jobs onto the box.
-      # Trust is decided by full_name equality and fails CLOSED: a non-PR
-      # event (push/tag), or a PR whose head repo IS this repo (a collaborator
-      # branch), is trusted → self-hosted. A fork — OR a null/absent head.repo
-      # (a deleted/detached fork) — is untrusted → ephemeral ubuntu-latest.
-      # (`== github.repository`, not the `fork` bit, so it also stays correct
-      # were this repo itself a fork.)
-      - id: route
-        env:
-          IS_TRUSTED: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-        run: |
-          if [ "$IS_TRUSTED" = "true" ]; then
-            echo 'runner=["self-hosted","linux","alint"]' >> "$GITHUB_OUTPUT"
-            echo 'untrusted=false' >> "$GITHUB_OUTPUT"
-          else
-            echo 'runner=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
-            echo 'untrusted=true' >> "$GITHUB_OUTPUT"
-          fi
       - id: detect
         env:
           GH_EVENT: ${{ github.event_name }}
@@ -104,6 +132,35 @@ jobs:
           key: ci-fmt
       - run: ci/scripts/fmt.sh
 
+  # Cargo's MSRV-aware resolver can only protect this contract when every
+  # dependency declares an accurate rust-version. Compile the full workspace
+  # with the exact minimum so an undeclared dependency bump cannot make the
+  # documented `rust-version` silently untrue. The toolchain is DERIVED from
+  # Cargo.toml's [workspace.package].rust-version by msrv.sh (never
+  # hand-copied here; test-ci-pr-routing.sh rejects a literal pin). The same
+  # script runs in release.yml's preflight. This job also owns the other
+  # workspace-manifest contract, the [workspace.dependencies] API floors.
+  msrv:
+    name: MSRV
+    needs: [changes, fmt]
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.rust == 'true'
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - id: msrv
+        run: echo "toolchain=$(ci/scripts/msrv.sh --print)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: ${{ steps.msrv.outputs.toolchain }}
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: ci-msrv
+      - run: ci/scripts/msrv.sh
+      - name: workspace dependency floors (<= workspace.package.version)
+        run: bash ci/scripts/check-workspace-dep-floors.sh
+
   clippy:
     name: Clippy
     needs: [changes, fmt]
@@ -138,12 +195,15 @@ jobs:
           key: ci-test
       - run: ci/scripts/test.sh
 
+  # Blocking on RustSec vulnerabilities, like Deny's advisories pass. Also on
+  # `supply_chain`: its waiver list is deny.toml [advisories].ignore, so a PR
+  # adding a waiver must run the gate that honours it.
   audit:
     name: Audit
     needs: [changes, fmt]
     if: >-
       !cancelled() && !failure()
-      && needs.changes.outputs.rust == 'true'
+      && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.supply_chain == 'true')
     runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -155,12 +215,15 @@ jobs:
           key: ci-audit
       - run: ci/scripts/audit.sh
 
+  # Also on `supply_chain`: deny.toml (the license / bans / sources / advisory
+  # policy) flips only supply_chain, so a PR loosening the policy must still
+  # run it.
   deny:
     name: Deny
     needs: [changes, fmt]
     if: >-
       !cancelled() && !failure()
-      && needs.changes.outputs.rust == 'true'
+      && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.supply_chain == 'true')
     runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -211,6 +274,7 @@ jobs:
         with:
           key: ci-build
       - run: ci/scripts/build.sh
+      - run: ci/scripts/check-shadow-feature-tree.sh
 
   docs:
     name: Docs
@@ -228,23 +292,32 @@ jobs:
     runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # check-version-pins.sh proves the documented Action SHA is the
+          # commit behind its release tag, so the Docs job needs tags/history.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-docs
-      # Ephemeral fork-PR path only: the box's runner image already ships
-      # Node 22, but a fresh ubuntu-latest needs it so docs.sh's
+      # Ephemeral hosted path: the box's runner image already ships Node 22,
+      # but a fresh ubuntu-latest needs it so docs.sh's
       # `likec4 validate` + `gen-mermaid --check` gates run (they fetch
       # likec4 via `npx -y likec4@<pin>`). Skipped on the box.
-      - if: needs.changes.outputs.untrusted == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - if: needs.changes.outputs.hosted == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "22"
       # Load-bearing for schema/parser/contract correctness; must catch drift
       # on a PR, not only post-merge.
       - run: ci/scripts/docs.sh
+      - name: verify published Action documentation pin
+        # docs.sh performs the shallow-safe snippet checks. This integration
+        # check additionally proves the recorded SHA and baked binary version
+        # against the release tag fetched above.
+        run: bash ci/scripts/check-version-pins.sh --verify-action-tag
 
   dogfood:
     name: Dogfood
@@ -272,12 +345,12 @@ jobs:
   bench-smoke:
     name: Bench Smoke
     needs: [changes, build]
-    # `untrusted != 'true'` keeps this box-only job off fork PRs (they route
-    # to ubuntu-latest, where a bench job is meaningless).
+    # `hosted != 'true'` keeps this box-only job off every hosted PR while the
+    # local route is held; a hosted bench result would not match its corpus.
     if: >-
       !cancelled() && !failure()
       && needs.changes.outputs.bench == 'true'
-      && needs.changes.outputs.untrusted != 'true'
+      && needs.changes.outputs.hosted != 'true'
     runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -292,20 +365,31 @@ jobs:
   # ── Deterministic perf gate ───────────────────────────────────────
   # Load-immune instruction / cache / branch counts (Valgrind) for the PR vs its
   # merge-base, built + benched in this same run. Unlike wall-clock bench-scale,
-  # it is NOT affected by the shared runner's co-tenant load, so it can gate
-  # every rust-touching PR deterministically. Advisory (DET_PERF_ADVISORY=1)
-  # during rollout — flip to "0" to enforce. Design:
-  # docs/design/deterministic-perf-gating.md.
+  # it is NOT affected by runner load, so it can gate every rust-touching PR
+  # deterministically. Advisory (DET_PERF_ADVISORY=1) during rollout — flip to
+  # "0" to enforce. Design: docs/design/deterministic-perf-gating.md.
+  #
+  # Portable, not box-only: Valgrind counts don't depend on the machine's load,
+  # and the job needs no secrets or local state, so it runs on whichever
+  # executor `changes` selects (GitHub-hosted while local PR capacity is held).
+  # It used to require `hosted != 'true'`, which silently skipped it on every PR
+  # once PRs moved to hosted capacity. A tooling failure fails this job (see the
+  # script); it is not in `summary.needs`, so it never blocks a merge.
+  # Also runs on pushes to main, comparing the pushed range (the tip before the
+  # push vs the new one): most engine changes land as direct pushes, which a
+  # PR-only gate never saw (28 of v0.20's 29 commits). Same advisory policy.
   perf-gate:
     name: Perf Gate (deterministic)
     needs: [changes, build]
-    # `untrusted != 'true'` keeps this box-only (Valgrind) job off fork PRs.
     if: >-
       !cancelled() && !failure()
-      && github.event_name == 'pull_request'
+      && (github.event_name == 'pull_request'
+          || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
       && needs.changes.outputs.rust == 'true'
-      && needs.changes.outputs.untrusted != 'true'
     runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
+    # Two release builds (base + head) and the Valgrind benches, then two
+    # bench-profile builds and the micro subset under Callgrind.
+    timeout-minutes: 180
     env:
       # Advisory: a perf regression annotates but does not fail the job. When
       # flipping this to "0" (enforcing), also add `perf-gate` to the `summary`
@@ -321,9 +405,52 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: ci-perf-gate
-      - env:
+      - name: det_engine + det_check
+        env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: ci/scripts/det-perf-gate.sh
+      # The curated micro subset (`xtask micro-det --suite pr`), advisory. The
+      # full suite gates releases in bench-record.yml.
+      - name: micro benches (subset)
+        if: ${{ !cancelled() }}
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: ci/scripts/micro-det-gate.sh
+
+  # ── Reference perf gate (relation layer) ─────────────────────────
+  # ADR-0023 decision V21-6 / ADR-0019 DEC-13: HEAD may not cost more than +3%
+  # instructions on S1-S3, or grow the alint process's read/stat calls with the
+  # tree, against the frozen v0.18.2 release. Both binaries are measured by
+  # HEAD's harness in this job, so nothing committed can drift. On pull requests
+  # it runs for relation-layer changes. On pushes to main it runs for every Rust
+  # change: the budget is cumulative and the comparison absolute, so whatever
+  # pushed HEAD over it is caught where it landed, even when an earlier run was
+  # cancelled by a newer push. Fails red and counts in the Summary (main has no
+  # required checks, so on a push it reports after the merge).
+  perf-gate-reference:
+    name: Perf Gate (v0.18.2 reference)
+    needs: [changes, build]
+    if: >-
+      !cancelled() && !failure()
+      && ((github.event_name == 'pull_request' && needs.changes.outputs.relation == 'true')
+          || (github.event_name == 'push' && github.ref == 'refs/heads/main'
+              && (needs.changes.outputs.rust == 'true' || needs.changes.outputs.relation == 'true')))
+    runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
+    # Two release builds (the reference and HEAD) and two Valgrind runs of S1-S3.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: ci-perf-gate-reference
+      - run: ci/scripts/reference-perf-gate.sh
 
   # ── Examples validate ────────────────────────────────────────────
   # Run `alint validate-config` against every examples/*/.alint.yml.
@@ -350,24 +477,44 @@ jobs:
   # ── Shell tests ───────────────────────────────────────────────────
   # Run shell-script test harnesses (test-*.sh under ci/scripts/) in
   # their own job. Split out from the Rust `Test` job so a homebrew-
-  # formula golden drift doesn't blame the Rust test suite.
+  # formula golden drift doesn't blame the Rust test suite. Gated on the
+  # `shell` flag, which detect-changes.sh raises for every path a harness
+  # guards (install.sh, Dockerfile, npm/, .github/dependabot.yml, the Gradle
+  # wrapper, docs, deny.toml, ...), not only for Rust changes.
   shell-tests:
     name: Shell Tests
     needs: changes
     if: >-
       !cancelled() && !failure()
-      && needs.changes.outputs.rust == 'true'
+      && needs.changes.outputs.shell == 'true'
     runs-on: ${{ fromJSON(needs.changes.outputs.runner) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: ci/scripts/shell-tests.sh
+
+  # ── Distribution packaging ───────────────────────────────────────
+  # install.sh, npm/**, Dockerfile (+ .dockerignore) and .pre-commit-hooks.yaml
+  # trigger no Rust/docs pipeline, so they get their own cheap hosted job:
+  # shellcheck + syntax, node --check, hook-manifest schema, and a docker build
+  # against a placeholder-staged context. release.yml's preflight runs the same
+  # script unconditionally.
+  packaging:
+    name: Packaging
+    needs: changes
+    if: >-
+      !cancelled() && !failure()
+      && needs.changes.outputs.packaging == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: ci/scripts/packaging-check.sh
 
   # ── Editor extensions ─────────────────────────────────────────────
   # Build the packaged extensions that otherwise only build at release
   # time: typecheck + bundle the VS Code TS extension, wasm-build the Zed
   # extension, and build the JetBrains plugin (compiles against LSP4IJ +
   # the IntelliJ SDK). GitHub-hosted runner (needs Node + the wasm target
-  # + a full JDK 17). setup-gradle caches the IntelliJ SDK between runs.
+  # + a full JDK 21). setup-gradle caches the IntelliJ SDK between runs.
   editors:
     name: Editors (VS Code + Zed + JetBrains)
     needs: changes
@@ -377,13 +524,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "20"
+          node-version: "22"
       - name: VS Code — install, typecheck, bundle
         working-directory: editors/vscode
         run: |
           npm ci
+          npm run audit
           npm run check-types
           npm run build
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
@@ -393,11 +541,11 @@ jobs:
       - name: Zed — wasm build
         working-directory: editors/zed
         run: cargo build --release --target wasm32-wasip1
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
       - name: JetBrains — build + verify plugin
         working-directory: editors/jetbrains
         run: ./gradlew buildPlugin verifyPlugin --no-daemon
@@ -410,6 +558,7 @@ jobs:
       - changes
       - secrets-inventory
       - fmt
+      - msrv
       - clippy
       - test
       - audit
@@ -421,22 +570,29 @@ jobs:
       - bench-smoke
       - examples
       - shell-tests
+      - packaging
       - editors
-    # Defensive default: `summary` is `if: always()`, so it evaluates runs-on
-    # even when `changes` is cancelled before the route step (empty `runner`);
-    # fall back to ubuntu-latest so a clean cancel can't fail on fromJSON('').
-    runs-on: ${{ needs.changes.outputs.runner && fromJSON(needs.changes.outputs.runner) || 'ubuntu-latest' }}
+      - perf-gate-reference
+    # Keep this bookkeeping job hosted even after local capacity returns. An
+    # always-run summary must not remain queued on an unavailable local runner
+    # and hold the workflow's concurrency slot indefinitely.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           RUST_CHANGED: ${{ needs.changes.outputs.rust }}
           DOCS_CHANGED: ${{ needs.changes.outputs.docs }}
           BENCH_CHANGED: ${{ needs.changes.outputs.bench }}
           EXAMPLES_CHANGED: ${{ needs.changes.outputs.examples }}
           EDITORS_CHANGED: ${{ needs.changes.outputs.editors }}
           SUPPLY_CHAIN_CHANGED: ${{ needs.changes.outputs.supply_chain }}
+          PACKAGING_CHANGED: ${{ needs.changes.outputs.packaging }}
+          SHELL_CHANGED: ${{ needs.changes.outputs.shell }}
+          RELATION_CHANGED: ${{ needs.changes.outputs.relation }}
           SECRETS_INVENTORY_RESULT: ${{ needs.secrets-inventory.result }}
           FMT_RESULT: ${{ needs.fmt.result }}
+          MSRV_RESULT: ${{ needs.msrv.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
           AUDIT_RESULT: ${{ needs.audit.result }}
@@ -449,4 +605,6 @@ jobs:
           EXAMPLES_RESULT: ${{ needs.examples.result }}
           SHELL_TESTS_RESULT: ${{ needs.shell-tests.result }}
           EDITORS_RESULT: ${{ needs.editors.result }}
+          PACKAGING_RESULT: ${{ needs.packaging.result }}
+          PERF_REFERENCE_RESULT: ${{ needs.perf-gate-reference.result }}
         run: ci/scripts/summary.sh

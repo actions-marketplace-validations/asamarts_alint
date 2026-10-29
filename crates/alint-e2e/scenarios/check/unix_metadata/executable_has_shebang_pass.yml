@@ -1,3 +1,4 @@
+test_version: 1
 name: executable_has_shebang is silent when the executable carries a shebang
 tags: [check, executable_has_shebang, unix_metadata, unix-only, passing]
 
@@ -22,4 +23,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -74,9 +74,9 @@ pub(crate) fn build_kind_branch_index(
     index
 }
 
-/// Render the `## Options` section for one rule branch. Omits the
-/// universal `kind`/`paths` fields from the table (`paths` is noted
-/// in the trailing common-fields line when the kind accepts it).
+/// Render the `## Options` section for one rule branch. Omits common
+/// metadata-injected fields from the kind-specific table and lists only the
+/// common fields this kind accepts in the trailing sentence.
 pub(crate) fn options_section(
     branch: &serde_json::Value,
     schema: &serde_json::Value,
@@ -85,7 +85,6 @@ pub(crate) fn options_section(
     use std::collections::HashSet;
 
     let props = branch.get("properties").and_then(|p| p.as_object());
-    let has_paths = props.is_some_and(|p| p.contains_key("paths"));
     let required: HashSet<&str> = branch
         .get("required")
         .and_then(|r| r.as_array())
@@ -95,7 +94,12 @@ pub(crate) fn options_section(
     let mut rows: Vec<(&String, &serde_json::Value)> = props
         .map(|p| {
             p.iter()
-                .filter(|(k, _)| k.as_str() != "kind" && k.as_str() != "paths")
+                .filter(|(name, _)| {
+                    !matches!(
+                        name.as_str(),
+                        "kind" | "paths" | "scope_filter" | "fix" | "expect_matches"
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -144,18 +148,71 @@ pub(crate) fn options_section(
         }
     }
     let _ = writeln!(&mut out);
+    write_common_fields_footer(&mut out, props, released);
+    out
+}
+
+fn write_common_fields_footer(
+    out: &mut String,
+    props: Option<&serde_json::Map<String, serde_json::Value>>,
+    released: Option<Version>,
+) {
+    let has_paths = props.is_some_and(|p| p.contains_key("paths"));
+    let has_scope_filter = props.is_some_and(|p| p.contains_key("scope_filter"));
+    let has_fix = props.is_some_and(|p| p.contains_key("fix"));
+    let has_expect_matches = props.is_some_and(|p| p.contains_key("expect_matches"));
+    let expect_matches_visible = released.is_none_or(|rel| rel >= (0, 18, 0));
+    let mut common_fields = Vec::with_capacity(7);
     if has_paths {
-        let _ = writeln!(
-            &mut out,
-            "Plus the common `paths`, `level`, `id`, and `when` fields. This table is generated from the JSON Schema; option types and defaults are authoritative."
+        common_fields.push("paths");
+    }
+    common_fields.extend(["level", "id", "when"]);
+    if has_scope_filter {
+        common_fields.push("scope_filter");
+    }
+    if has_fix {
+        common_fields.push("fix");
+    }
+    if expect_matches_visible && has_expect_matches {
+        common_fields.push("expect_matches");
+    }
+
+    let _ = write!(
+        out,
+        "Plus the common {} fields.",
+        code_field_list(&common_fields)
+    );
+    if !has_paths {
+        let _ = write!(
+            out,
+            " This rule analyses the whole repository, so it takes no `paths`{}.",
+            if expect_matches_visible && !has_expect_matches {
+                " or `expect_matches`"
+            } else {
+                ""
+            }
         );
-    } else {
-        let _ = writeln!(
-            &mut out,
-            "Plus the common `level`, `id`, and `when` fields. This rule analyses the whole repository, so it takes no `paths`. This table is generated from the JSON Schema; option types and defaults are authoritative."
+    } else if expect_matches_visible && !has_expect_matches {
+        let _ = write!(
+            out,
+            " This kind does not support `expect_matches`; its empty-scope semantics are \
+             kind-specific."
         );
     }
-    out
+    let _ = writeln!(
+        out,
+        " This table is generated from the JSON Schema; option types and defaults are authoritative."
+    );
+}
+
+fn code_field_list(fields: &[&str]) -> String {
+    let mut rendered: Vec<String> = fields.iter().map(|field| format!("`{field}`")).collect();
+    let last = rendered.pop().expect("every rule has common fields");
+    if rendered.is_empty() {
+        last
+    } else {
+        format!("{}, and {last}", rendered.join(", "))
+    }
 }
 
 /// Short, human-readable type label for a property schema. Enum-like
@@ -190,7 +247,7 @@ fn schema_type_label(prop: &serde_json::Value, schema: &serde_json::Value) -> St
     }
     // 4. A `$ref` to a structured (non-enum) sub-shape.
     if let Some(rf) = prop.get("$ref").and_then(serde_json::Value::as_str) {
-        return humanize_ref_name(rf);
+        return structured_ref_label(rf, schema);
     }
     // 5. No type information at all — an untyped `serde_json::Value`
     //    option that accepts any JSON.
@@ -334,8 +391,65 @@ fn humanize_ref_name(rf: &str) -> String {
         "scope_filter" => "scope filter".to_string(),
         "fix" => "fix spec".to_string(),
         "if_present" | "template" | "fact" => "object".to_string(),
-        other => other.replace('_', " "),
+        other => split_identifier_words(other),
     }
+}
+
+/// Render small referenced objects inline so a rule page never points readers
+/// at an internal schema type name it does not define (`OrphansSpec`,
+/// `SourceSpec`, and friends). Larger/shared objects keep their friendly name.
+fn structured_ref_label(rf: &str, schema: &serde_json::Value) -> String {
+    let friendly = humanize_ref_name(rf);
+    if matches!(
+        rf.rsplit('/').next().unwrap_or(rf),
+        "string_or_string_array"
+            | "nested_rule"
+            | "extract_spec"
+            | "scope_filter"
+            | "fix"
+            | "if_present"
+            | "template"
+            | "fact"
+    ) {
+        return friendly;
+    }
+    let Some(target) = resolve_local_ref(schema, rf) else {
+        return friendly;
+    };
+    let Some(props) = target
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return friendly;
+    };
+    if props.is_empty() || props.len() > 6 {
+        return friendly;
+    }
+    let mut fields: Vec<&str> = props.keys().map(String::as_str).collect();
+    fields.sort_unstable();
+    format!(
+        "object {{ {} }}",
+        fields
+            .iter()
+            .map(|field| format!("`{field}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn split_identifier_words(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (idx, ch) in name.chars().enumerate() {
+        if ch == '_' {
+            out.push(' ');
+        } else {
+            if idx > 0 && ch.is_ascii_uppercase() {
+                out.push(' ');
+            }
+            out.extend(ch.to_lowercase());
+        }
+    }
+    out
 }
 
 /// A ` (>= N)` / ` (<= N)` / ` (N..M)` note from a property's numeric
@@ -414,7 +528,11 @@ mod tests {
                     { "type": "string", "const": "generic", "description": "explicit" }
                 ]},
                 // A structured (non-enum) sub-shape.
-                "extract_spec": { "type": "object", "properties": { "regex": { "type": "string" } } }
+                "extract_spec": { "type": "object", "properties": { "regex": { "type": "string" } } },
+                "OrphansSpec": { "type": "object", "properties": {
+                    "include": { "type": "array" },
+                    "exclude": { "type": "array" }
+                } }
             }
         })
     }
@@ -482,6 +600,10 @@ mod tests {
             label(&json!({"$ref": "#/$defs/extract_spec"})),
             "extract spec"
         );
+        assert_eq!(
+            label(&json!({"$ref": "#/$defs/OrphansSpec"})),
+            "object { `exclude`, `include` }"
+        );
 
         // Untyped `serde_json::Value` -> "any value".
         assert_eq!(label(&json!({"description": "anything"})), "any value");
@@ -494,6 +616,9 @@ mod tests {
             "properties": {
                 "kind": { "const": "demo" },
                 "paths": { "$ref": "#/$defs/paths_spec" },
+                "scope_filter": { "$ref": "#/$defs/scope_filter" },
+                "fix": { "$ref": "#/$defs/fix" },
+                "expect_matches": { "type": "boolean" },
                 "threshold": { "type": "number", "default": 0.5, "description": "Density floor." },
                 "name": { "type": "string", "description": "Required name." }
             },
@@ -502,15 +627,18 @@ mod tests {
         let out = options_section(&branch, &schema, None);
 
         assert!(out.starts_with("## Options"));
-        // `kind` and `paths` are dropped from the table.
-        assert!(!out.contains("| `kind` |"));
-        assert!(!out.contains("| `paths` |"));
+        // Metadata-injected common fields are dropped from the kind-specific table.
+        for common in ["kind", "paths", "scope_filter", "fix", "expect_matches"] {
+            assert!(!out.contains(&format!("| `{common}` |")));
+        }
         // Required marker + default rendering + alphabetical order.
         assert!(out.contains("| `name` | string | yes |  | Required name. |"));
         assert!(out.contains("| `threshold` | number |  | `0.5` | Density floor. |"));
         assert!(out.find("`name`") < out.find("`threshold`"));
-        // Has-`paths` branch advertises the `paths` common field.
-        assert!(out.contains("Plus the common `paths`, `level`, `id`, and `when` fields."));
+        assert!(out.contains(
+            "Plus the common `paths`, `level`, `id`, `when`, `scope_filter`, `fix`, and \
+             `expect_matches` fields."
+        ));
     }
 
     #[test]
@@ -549,6 +677,41 @@ mod tests {
         );
         // No released version (local/dev preview): nothing is gated.
         assert!(options_section(&branch, &schema, None).contains("`root_only`"));
+
+        // The common-field footer obeys the same release gate as table rows.
+        let with_paths = json!({
+            "properties": {
+                "kind": { "const": "demo" },
+                "paths": { "$ref": "#/$defs/paths_spec" },
+                "expect_matches": { "type": "boolean" }
+            }
+        });
+        assert!(
+            !options_section(&with_paths, &schema, Some((0, 17, 0))).contains("expect_matches")
+        );
+        assert!(options_section(&with_paths, &schema, Some((0, 18, 0))).contains("expect_matches"));
+    }
+
+    #[test]
+    fn options_section_does_not_advertise_expect_matches_for_existence_rules() {
+        let schema = json!({});
+        for kind in ["file_exists", "file_absent", "dir_exists", "dir_absent"] {
+            let branch = json!({
+                "properties": {
+                    "kind": { "const": kind },
+                    "paths": { "$ref": "#/$defs/paths_spec" }
+                }
+            });
+            let out = options_section(&branch, &schema, None);
+            assert!(
+                out.contains("does not support `expect_matches`"),
+                "{kind}: {out}"
+            );
+            assert!(
+                !out.contains("and `expect_matches` fields"),
+                "{kind}: {out}"
+            );
+        }
     }
 
     #[test]
@@ -559,8 +722,11 @@ mod tests {
         let out = options_section(&branch, &schema, None);
         assert!(out.contains("_This rule takes no kind-specific options._"));
         assert!(
-            out.contains("this rule analyses the whole repository, so it takes no `paths`")
-                || out.contains("This rule analyses the whole repository, so it takes no `paths`.")
+            out.contains(
+                "this rule analyses the whole repository, so it takes no `paths` or `expect_matches`"
+            ) || out.contains(
+                "This rule analyses the whole repository, so it takes no `paths` or `expect_matches`."
+            )
         );
     }
 

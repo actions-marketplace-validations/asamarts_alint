@@ -1,0 +1,26 @@
+test_version: 1
+name: pair_changed_together fails closed outside a Git repository
+tags: [check, pair_changed_together, git]
+
+# The unconditional diff capability must be available before dispatch.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: format-version-bumped
+        kind: pair_changed_together
+        if_changed: "src/format.rs"
+        then_changed: "FORMAT_VERSION"
+        since: HEAD~1
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: format-version-bumped, kind: resource_read}

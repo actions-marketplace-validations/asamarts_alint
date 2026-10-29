@@ -1,0 +1,451 @@
+# v0.19: Fail-loud findings and the capability inventory
+
+Status: Released as v0.19.0 (2026-10-18). See
+[Status and next steps](#status-and-next-steps-as-of-2026-10-18). This is the first release of the
+general-linter program: Phase 0 and Phase 1a of
+[`../general-linter.md`](../general-linter.md) section 11, decided in
+[ADR-0019](../../adr/0019-general-linter-program-and-plugin-architecture.md). Each work item
+below gets its own design document in this directory (in the [`../TEMPLATE.md`](../TEMPLATE.md)
+shape, including the false-positive section) before its code lands, and the item's open
+questions are decided there, one at a time.
+
+v0.19 is a minor release with deliberate behaviour changes: W1 turns silently ignored fields into
+load errors; W2 and W3 turn false passes into failures; W4 adds notes to machine reports; W5
+redacts sensitive evidence; W6 adds ranges and related locations to human, SARIF, and LSP output;
+and W7 makes analysis time reproducible. Every behaviour change is listed in the changelog with
+its migration note.
+
+## Status and next steps (as of 2026-10-18)
+
+This section is the hand-off point for whoever picks the program up next. Update it when an item
+moves.
+
+### Where things stand
+
+- **Planning is done.** The general-linter program is adopted (ADR-0019); every DEC-1 to DEC-14
+  outcome is recorded in [`../general-linter.md`](../general-linter.md) section 13.1, the remaining
+  later-phase questions in section 13.2, and the plugin design in
+  [`../plugin-architecture.md`](../plugin-architecture.md). Phase 1b has graduated to the accepted
+  [`../v0.20/`](../v0.20/README.md) design and
+  [ADR-0022](../../adr/0022-policy-authoring-loop-contracts.md). W1's design
+  ([`kind-meta.md`](kind-meta.md)) was accepted with K1 to K5 decided (its section 7).
+- **v0.18.3 shipped** (tag `v0.18.3`, commit `b02109b8`): the four K2 bugs plus the ten review
+  findings described below (#327).
+- **v0.18.4 shipped** (tag `v0.18.4`, commit `18e1a66d`): the `--changed` performance fix (#329;
+  the shared tree file set is built only when a rule looks ancestors up on the filtered index)
+  and adotenv 0.1.1 with verified `.env` fix edits (#330). All release jobs, the post-publish
+  smoke channels, the Action pin (`e3c9a85b`), and alint.org (#92) are done.
+- **W1, `KindMeta`, is complete.** The serializable `KindMeta` / `FixOpMeta` types and
+  metadata-taking registry APIs are in `alint-core`; metadata is mandatory for every canonical
+  registration; all 95 corrected per-kind records are declared beside their builders; and all 11
+  aliases resolve the exact canonical record. Every DSL loader receives the borrowed
+  `KindCatalog`. Runtime trust, nested confinement, Git coverage, docs fail-only decisions, and
+  configured-field validation derive from metadata; unsupported common fields fail in both
+  `check` and `validate-config`, including under `require:` and after composition. All 95 JSON
+  Schema option surfaces now derive from Rust option models; top-level and recursively nested
+  rules share the generated kind dispatch and metadata-driven common-field restrictions, covered
+  by a record/schema parity gate. `facts.json` format v4
+  carries the canonical `kind_meta` inventory. `rules show` and `explain` expose capabilities,
+  accepted selectors, and fix operations in human and JSON output. Completeness,
+  typed-selector transition parity, spawn-source parity, rule-instance conformance,
+  field-enforcement, schema parity, facts, and ADR-0012 output-completeness gates are in place.
+  The v0.19.0 changelog contains the exhaustive migration matrix for all 57 formerly
+  ignored canonical kind/field pairs. All bundled rulesets, shipped examples, documentation
+  examples, and scenarios pass under enforcement.
+- **W2, fail-loud analysis failures, is complete.** `RuleResult` and `FixRuleResult` now carry
+  typed `analysis_failures` separately from policy violations, notes, and fix items. Evaluation,
+  runtime-condition, resource-read, resource-parse, and repository-derived nested-rule build
+  failures always count as errors at every configured level. Engine rule-major, file-major,
+  single-file, `expect_matches`, nested, command spawn/timeout, and structured-parse paths use the
+  structural contract. Baselines cannot record, suppress, or fingerprint failures; all fix modes
+  preserve them without invoking a fixer. All eight check formats, human and JSON fix reports, and
+  LSP diagnostics expose failures with the required error semantics. The JSON, agent, and fix
+  schemas were updated atomically, and the ADR-0012 positive-completeness gate plus CLI, baseline,
+  fix, LSP, and migrated scenario regressions are in place.
+- **W3, the remaining fail-open sites, is complete.** Manifest-derived scope now gives every
+  owning rule one typed resource read/parse failure when its manifest cannot produce a trustworthy
+  path set. Active Git dependencies derive from each configured kind's conditional capability
+  metadata, including nested rules; the engine probes once and gives each dependent top-level rule
+  one resource-read failure when Git or the repository is unavailable, while unrelated rules
+  continue. Shared structured extraction preserves non-string matches separately: path-set
+  consumers fail explicitly, and relation consumers report a policy violation instead of silently
+  dropping the selected values.
+- **W4, notes in every output format, is complete.** `RuleResult` partitions ordinary
+  informational notes from bounded-analysis truncation; all eight check formats preserve them
+  through either full structured detail or the accepted count-and-pointer projection. SARIF maps
+  informational notes to `note` results and truncation to execution notifications. The JSON and
+  agent schemas, CLI `--show-notes` behavior, baseline/fix exclusion, and ADR-0012 cross-format
+  completeness gate are covered.
+- **W5, evidence redaction and the leak gate, is complete.** Every rule and nested rule accepts
+  `sensitive: true`; dotenv and Java properties extraction enable the same policy automatically.
+  Sensitive findings preserve structural identity and location while replacing complete explicit
+  messages, extracted implicit values, parser detail, and fix-report detail before reports or
+  baselines are exposed. Sensitive fingerprints exclude evidence bytes and proposed report edits
+  are suppressed without changing real fix execution. Focused relation, structured-path,
+  registry, graph, nested, fingerprint, and fix regressions cover the producer paths. The
+  end-to-end leak gate scans all eight check formats, baseline bytes, human/JSON fix output, and
+  LSP diagnostics; sensitive LSP code actions and same-file composed report edits are suppressed.
+- **W6, related locations and ranges, is complete.** Findings can carry a half-open primary range
+  and up to 20 labeled, deterministically ordered related locations. Human output lists the
+  relationships; SARIF emits primary regions and `relatedLocations`; and the LSP emits
+  `Diagnostic.relatedInformation` only when the client advertises support. The first producers
+  are `cross_file`, `registry_paths_resolve`, `unique_by`, `pair`, and `file_graph`, with the pair
+  hash and changed-together kinds covered too. The v1 JSON report schema now accepts additive
+  fields while retaining every required field and value-type check; report payload fields remain
+  deferred by DEC-4. Ranges and relationships are excluded from baseline identity, enforced by a
+  Linux corpus gate that recomputes every policy-finding fingerprint.
+- **W7, deterministic analysis time, is complete.** `--as-of YYYY-MM-DD` overrides
+  `ALINT_AS_OF`, with the HEAD committer timestamp as the fallback resolved once per engine.
+  `git_blame_age` no longer reads wall time; findings and human/JSON `explain` expose the
+  reference date and source. HEAD and blame ignore repository redirects and clone-local
+  replacement refs; blame pins its diff algorithm, accepts SHA-1 and SHA-256 repositories, and
+  uses only a tracked, regular `.git-blame-ignore-revs` instead of configured ignore lists.
+  Without explicit input, an unavailable repository or unborn HEAD produces the typed,
+  always-error analysis failure described by W2. An explicit date removes that HEAD lookup but
+  does not satisfy `git_blame_age`'s independent W3 Git/blame dependency. Capability metadata says
+  `analysis_time`, and ADR-0020 supersedes the affected part of constitution invariant 1.
+- **W8, duplicate-aware spanned extraction, is complete.** `alint_core::extract` exposes
+  source-ordered `StructuredEntryRow` values with structural parent paths, duplicate keys, and
+  exact key/value byte spans for dotenv, JSON/JSONC, YAML, INI, and Java properties. TOML, XML,
+  and HCL return an explicit unsupported result. The adapters share the structured-input byte
+  bound, preserve source order and duplicates, and do not change the existing last-wins
+  extraction or any shipped kind's results.
+- **The W1-W8 audit is complete and pushed** (2026-10-17, `8e85bc16`). It closed two
+  consumer-visible gaps found by the final review: every discovered-file read failure, including
+  a mid-walk removal or an over-limit file, now remains a typed `resource_read` analysis failure
+  in both file-major and rule-major dispatch; and sensitive findings now drop evidence-derived
+  related-location paths before any CLI, SARIF, baseline, fix, or LSP boundary. Targeted
+  regressions, direct CLI and LSP leak smokes, the full workspace suite, preflight, shell,
+  packaging, example, advisory, and benchmark-smoke gates passed.
+- **W9 is complete.** Six standalone kinds enforce repository EditorConfig policy, Markdown
+  image alt text, required and duplicate headings, Markdown fragment targets, and SPDX license
+  expressions. H1 `pinned_references` checks immutable executable references across GitHub
+  Actions, pre-commit, CircleCI, GitLab CI, Cloud Build, and Dockerfiles; the shipped GitHub
+  Actions ruleset retains its rule id and existing workflow-step fingerprint while gaining
+  reusable-workflow, composite-action, and image coverage. C1 now ships as the opt-in
+  `alint://bundled/versioning@v1` policy with a root `VERSION` authority and exact checks for ten
+  manifest/release surfaces. C2 ships as `alint://bundled/toolchain-pins@v1`: 24 source-validation
+  and consistency rules for exact Node, Rust, Python, Ruby, JVM, and .NET pins across local
+  declarations, supported Docker images, and GitHub Actions. Both bundles use existing built-in
+  facts, extraction, `cross_file equals`, optional targets, and Unsafe `sync_from`; they add no
+  kind or execution capability. Their accepted designs, full-surface drift/pass/boundary
+  scenarios, public docs, generated facts, and S4 benchmark coverage are in place. Final review
+  made the selectors syntax-aware for inert TOML, Python, Ruby, Markdown, and Dockerfile text;
+  made duplicate same-value repairs occurrence-specific so baseline-suppressed siblings remain
+  untouched; and bounded extraction, syntax scanning, edit counts, and projected repair output.
+  The completion audit also moved seven large inline test modules into focused companion files;
+  every source file that crossed the repository's 2,000-line maintainability limit during the
+  increment is back below it without changing production code or test coverage.
+- **W10 is complete.** The cookbook now documents exact dotenv key parity with the existing
+  `cross_file` `set_equals` relation. Both current `register_as` field comments name all six
+  path-template tokens. The roadmap records the delivered extraction substrate, seven standalone
+  kinds, and two consistency bundles, and its generated JSON contract is current. The stale,
+  unsourced getting-started ruleset count was removed; the root README already had the correct
+  generated-contract counts and did not need a count edit.
+
+### Completed release item: the v0.18.4 benchmark record
+
+The v0.18.3 bench record (#328) was closed without merging: it failed the release regression gate
+on S2 1m `changed` (+16% `min_ms` against the +15% limit), which is the regression #329 fixed. Its
+branch `bench-record/v0.18.3` is kept as the measured record, and
+[`../../benchmarks/investigations/2026-10-v0.18.3-changed-mode/`](../../benchmarks/investigations/2026-10-v0.18.3-changed-mode/README.md)
+holds the analysis. v0.18.3 therefore has no published results directory.
+
+The v0.18.4 record passed the documented gate against v0.18.2 and merged in #331. The machine
+fingerprint matches the canonical host and v0.18.2 baseline exactly. The largest gating-cell CV
+is 3.67%, and the largest gating `min_ms` regression is +2.0%, both inside their 10% and +15%
+limits. S4 10k `changed` is +48.0%; that small changed-mode cell is advisory under the documented
+host-wakeup artifact and does not weaken the 100k/1m gate. The generated benchmark history and
+all 744 Criterion estimate files were reviewed before merge.
+
+The docs bundle was refreshed by workflow run
+[`38805585052`](https://github.com/asamarts/alint/actions/runs/38805585052), so the trajectory
+starts at v0.18.4. The 36-cell website snapshot and head-parity baseline merged in
+[`asamarts/alint.org#94`](https://github.com/asamarts/alint.org/pull/94); the production
+[`/benchmarks/`](https://alint.org/benchmarks/) page now shows the v0.18.4 headline and
+release-by-release row.
+
+### Follow-up status
+
+1. **Phase 1b for v0.20:** P1-P7 are complete; P8 documentation, release notes, packaging, and
+   generated-artifact closure is next in [`../v0.20/README.md`](../v0.20/README.md).
+2. **YAML supply-chain warning:** resolved through the YAML organization's maintained
+   `yaml_serde`/`libyaml-rs` stack. The compatibility corpus, adversarial limits, candidate
+   measurements, buy-versus-build decision, and re-evaluation triggers are recorded in
+   [`../yaml-parser.md`](../yaml-parser.md) and [#334](https://github.com/asamarts/alint/issues/334).
+3. **Next rule-gap slice:** select from `rule-coverage-gaps.md` after P8 closes the Phase 1b public
+   metadata and test conventions, so new kinds do not create a second convention.
+
+Every implementation item W1-W10 has its design document in this directory. No v0.19 code or
+documentation work item remains open.
+
+### Parallel tracks
+
+- **witforge** (`asamarts/witforge`, private): the plugin contract compiler. The skeleton
+  (WIT loading, the subset checker, the wire lock, a `check` / `lock` CLI) is in place with CI
+  green; next are the Rust and protobuf emitters. Nothing is published to crates.io until it has
+  real functionality (crates.io does not allow name-only placeholder releases).
+- **Phase 1b implementation**: the accepted policy-test, trace/preview, and config-compatibility
+  contracts in [`../v0.20/`](../v0.20/README.md).
+- **adotenv 0.2 adoption is complete.** alint uses the lossless strict parser, maps bare
+  declarations to JSON `null`, and consumes native verified `TextEdit` batches in
+  `crates/alint-core/src/structured_fix/mod.rs`.
+
+## Before v0.19: the v0.18.3 patch
+
+The W1 inventory ([`kind-inventory.md`](kind-inventory.md)) reproduced four bugs. Decision K2
+([`kind-meta.md`](kind-meta.md) section 7) ships all four as a v0.18.3 correctness patch, ahead of
+W1:
+
+1. a nested `git_blame_age` never fires unless a top-level rule also uses blame;
+2. structured `*_path_*` kinds with literal `paths:` skip `scope_filter` in the rule-by-rule path,
+   so `alint fix` can edit a file the filter excluded;
+3. nested configs re-root every `select` as a path glob, corrupting the regex `select` of
+   `for_each_match` and `ordered_block` and admitting kinds whose selectors are never re-rooted;
+4. under `--changed`, `no_case_conflicts` and `max_files_per_directory` miss violations caused by
+   a change (they now evaluate on the full index).
+
+Review of the patch found ten more instances of the same classes, fixed in the same patch (see
+[`kind-meta.md`](kind-meta.md) section 1 and the v0.18.3 changelog): nested confinement now runs
+after template expansion and inside `require:` blocks and covers kind-specific path fields;
+`--changed` judges changed files against the whole repository; `json_schema_passes` re-validates
+on a schema-only change; and `file_exists`'s literal stat honours `git_tracked_only`.
+
+## Work items
+
+| ID | Item | Decisions | Size | Depends on |
+|---|---|---|---|---|
+| W1 | `KindMeta` capability inventory | Phase 0, K1-K5 | L | none |
+| W2 | Analysis failures become error findings | DEC-2 | M | W1 (for the reject-at-load half of W3) |
+| W3 | Close the remaining fail-open sites | section 4.12 | M | W1, W2 |
+| W4 | Notes in every output format | section 8.1 | S | none |
+| W5 | Evidence redaction and the leak gate | DEC-3 | M | none |
+| W6 | Related locations and ranges on findings | DEC-4, DEC-5 | L | W4 |
+| W7 | `--as-of` input | DEC-11 | S | none |
+| W8 | Duplicate-aware spanned extraction (substrate) | Q5 | M | W6 (span model) |
+| W9 | Standalone detection kinds, as capacity allows | section 11.8 | per kind | W1 |
+| W10 | Documentation, recipes, and roadmap updates | n/a | S | all |
+
+Suggested order: W1, W4, W7 (small, independent) first; then W2 and W3; W5 alongside; W6, then
+W8; W9 interleaved; W10 last.
+
+### W1. `KindMeta` capability inventory
+
+**Status: complete (2026-10-16).**
+
+- Add a static `KindMeta` declared at registration for every kind: dispatch
+  class, accepted selectors (`paths`, `scope_filter`, `git_tracked_only`, change selectors),
+  capabilities (spawn, Git, environment, time, host keyring), formats, and fix operations.
+- Emit it into `facts.json` (a new section; the facts gate covers it).
+- Derive the spawn and Git trust lists (`SPAWNING_RULE_KINDS`, the Git-required kind list) from
+  it, keeping the existing audits as cross-checks during the transition.
+- Add a coverage audit: every scenario-built rule instance behaves within its declared
+  `KindMeta` (for example, a kind that declares no spawn capability never spawns).
+
+Design: [`kind-meta.md`](kind-meta.md) (accepted; decisions K1 to K5), with the per-kind
+snapshot in [`kind-inventory.md`](kind-inventory.md). W1 also covers: load-time rejection of every
+configured field a kind ignores (K1, a hard error), a `KindCatalog` injected into the DSL loader
+(K3), per-kind JSON Schema restrictions plus migrating the 20 hand-written kind schemas (K4), and
+a capabilities line in `alint rules show` and `explain` (K5).
+
+Acceptance: complete. `KindMeta` exists for all 95 kinds and resolves through all 11 aliases;
+trust and audit lists derive from it (the Git-required list is the corrected 10); ignored fields
+are load errors in `check` and `validate-config`; generated schema restrictions match the loader;
+the instance-conformance, facts, and all-kinds output-completeness gates pass.
+
+### W2. Analysis failures become error findings (DEC-2)
+
+**Status: complete (2026-10-16).**
+
+
+- Separate "the rule could not evaluate this resource" from violations in the engine's result
+  type, at every site that today wraps an `Err` as `Violation::new("rule error: ...")`.
+- A failure caused by repository content is reported as a finding that always counts as error,
+  regardless of the rule's `level`, with a stable message naming the resource and the reason.
+- `alint baseline` refuses to record such findings, and an existing baseline cannot suppress
+  them.
+- Configuration failures keep exit 2 and internal errors keep exit 3; no new exit code.
+- Every format renders them (an ADR-0012 positive-completeness gate).
+
+Acceptance: complete. A warning-level rule over malformed configured input exits 1 while a
+successfully parsed policy mismatch remains a warning violation; baseline generation refuses
+incomplete analysis; every former engine wrapper and continued-scan producer has structural
+coverage; all check and fix projections preserve failures; the schemas validate; and the v0.19.0
+changelog carries migration guidance.
+
+### W3. Close the remaining fail-open sites
+
+**Completed 2026-10-16.**
+
+From [`../general-linter.md`](../general-linter.md) section 4.12:
+
+- **`scope_filter` on kinds that ignore it**: done in W1 (K1), which rejects every ignored field at
+  load and in `validate-config`, including manifest predicates.
+- **Manifest-derived scope failures** are typed resource read/parse failures for every owning rule,
+  never an empty member set or a fallback to full scope.
+- **Git unavailable**: active conditional capabilities are evaluated from `KindMeta`; each
+  dependent top-level rule reports one resource-read failure, including when the dependency comes
+  from a nested rule. Unrelated and conditionally inactive rules continue.
+- **Non-string extraction results** remain separate from strings. Manifest path sets reject them
+  as unusable input; `cross_file`, `file_graph`, and `registry_paths_resolve` report a stable
+  policy violation with the selected type counts rather than silently dropping them.
+
+Acceptance: complete. Firing scenarios cover missing and malformed manifest inputs, native
+non-string manifest members, every structured extraction consumer, an unavailable repository,
+effective conditional Git options, unrelated-rule continuation, nested ownership, and fix mode.
+The v0.19.0 changelog carries migration guidance.
+
+### W4. Notes in every output format
+
+**Completed 2026-10-16.**
+
+- SARIF: notes become `level: note` results; truncated analysis becomes
+  `toolExecutionNotifications`.
+- GitHub, GitLab, and Markdown outputs: a summary line with the note count and a pointer to the
+  full list; JUnit and agent formats get an equivalent.
+- Human output keeps `--show-notes`.
+
+Acceptance: complete. The ADR-0012 positive-completeness gate proves a note reaches every format.
+
+Design: [`notes-output-completeness.md`](notes-output-completeness.md) (implemented; all format
+projections and truncation semantics decided).
+
+### W5. Evidence redaction and the leak gate (DEC-3)
+
+**Completed 2026-10-16.**
+
+- Values extracted from dotenv and properties files are redacted by default in every message
+  and format (rendered as a short marker plus a digest).
+- A new `sensitive: true` rule option opts any other rule into redaction.
+- Baseline files never store raw values: the advisory message is redacted, and the fingerprint
+  hashes structural identity without the value or its digest, so low-entropy evidence cannot be
+  recovered by enumerating candidate values.
+- The leak gate plants unique sentinels in dotenv, properties, and explicitly sensitive inputs and
+  scans every public report surface for their bytes.
+
+Acceptance: complete. The byte-scanning leak gate covers all eight formats, the baseline, human
+and JSON fix reports, and LSP diagnostics; existing non-sensitive fingerprint pins are unchanged.
+Actual fixes still execute, while sensitive report-side proposed edits and status detail do not
+expose values.
+
+Design: [`evidence-redaction.md`](evidence-redaction.md) (implemented; implicit and explicit
+sensitivity, value-free fingerprints, remediation, and leak-gate scope decided).
+
+### W6. Related locations and ranges on findings (DEC-4, DEC-5)
+
+**Completed 2026-10-16.**
+
+- Extend the finding model with a primary range and labeled related locations, with deterministic
+  ordering and caps (at most a fixed number of related locations, then "and N more").
+- Primary-location rule: the rule's declared report anchor, else the non-canonical side, else the
+  first in canonical order; existing kinds keep today's anchor.
+- Emit related locations in SARIF (`relatedLocations`) and the LSP (`relatedInformation`, only when
+  the client advertises support) in v0.19. Relax `schemas/v1/check-report.json`'s
+  `additionalProperties: false` in v0.19, announced in the changelog; the JSON report gains the
+  new fields in the next release (DEC-4).
+- Freeze baseline fingerprints: a golden file of every fingerprint over the whole scenario corpus,
+  recomputed in CI; related locations never enter a fingerprint; the baseline schema stays at
+  version 1 (DEC-5).
+- Populate related locations first for `cross_file`, `registry_paths_resolve`, `unique_by`,
+  `pair`, and `file_graph`.
+
+Acceptance: the golden fingerprint gate is green with zero changes; SARIF and LSP gates prove
+related locations reach both; the JSON schema relaxation ships with its changelog notice.
+
+Design: [`related-locations.md`](related-locations.md) (implemented; model, ordering, cap,
+projections, schema timing, and fingerprint identity decided).
+
+### W7. `--as-of` input (DEC-11)
+
+**Completed 2026-10-16.**
+
+- A global `--as-of <date>` flag and an `ALINT_AS_OF` environment variable.
+- Without either, time-dependent kinds use the HEAD commit time; an unavailable repository or
+  unborn HEAD produces an analysis failure (W2). `--as-of` removes only that HEAD-time lookup:
+  kinds such as `git_blame_age` can still require Git for their policy input under W3.
+- `git_blame_age` moves onto it; the reference time is shown in `explain` and in its findings.
+- A superseding ADR records the time input in constitution invariant 1.
+
+Acceptance: the same commit yields byte-identical `git_blame_age` output on different days; the
+ADR is accepted; changelog entry under "Changed".
+
+Design: [`analysis-time.md`](analysis-time.md) (accepted; input, fallback, display, and failure
+semantics decided). Decision: [ADR-0020](../../adr/0020-explicit-analysis-time.md).
+
+### W8. Duplicate-aware spanned extraction (substrate)
+
+**Completed 2026-10-16.**
+
+- Extraction gains ordered entry rows with spans for the formats whose parsers can provide them
+  (dotenv through `adotenv`; JSON through the `jsonc-parser` AST; YAML, INI, and properties
+  through the fix bridge's locators), instead of flattening to a last-wins object.
+- This is the substrate for B1 `no_duplicate_keys` and B3 `structured_key_sort`
+  ([`../rule-coverage-gaps.md`](../rule-coverage-gaps.md)); the kinds themselves are deferred to
+  v0.20 or later.
+- Question Q5 (how keys and duplicates are represented across the eight formats) is decided in
+  this item's design document.
+
+Acceptance: extraction exposes duplicates with spans for the listed formats; no change to
+existing kinds' results.
+
+Design: [`spanned-extraction.md`](spanned-extraction.md) (implemented; row model, duplicate
+semantics, format support, and compatibility boundary decided).
+
+### W9. Standalone detection kinds, as capacity allows
+
+**Completed 2026-10-17: A1, E2, E3, E5, E7, F2, H1, C1, and C2.**
+
+From the "ship now" bucket of [`../general-linter.md`](../general-linter.md) section 11.8, in
+value order:
+
+1. A1 `editorconfig_conforms`, after the policy-source-files ADR (DEC-12);
+2. the Markdown structure kinds on the shipped CommonMark parser (E2 alt text, E3 required
+   headings, E5 duplicate headings, E7 fragment resolution);
+3. the SPDX id table with F2 `spdx_identifier_valid`;
+4. H1 `pinned_references`, which also closes the reusable-workflow and composite-action holes in
+   `ci/github-actions@v1`;
+5. the C1 version-SSOT ([`version-ssot-ruleset.md`](version-ssot-ruleset.md),
+   `versioning@v1`) and C2 exact toolchain-pin
+   ([`toolchain-pins-ruleset.md`](toolchain-pins-ruleset.md), `toolchain-pins@v1`) bundled rulesets.
+
+The seven standalone kinds follow the normal cascade (rules.md section, schema, firing and silent
+scenarios, rule-page fixtures, facts) and declare `KindMeta`. C1 and C2 use the documented
+existing-primitive bundle path: accepted design, canonical bundle YAML, embedded registry entry,
+firing/silent/fix/boundary scenarios, bundle documentation, generated facts, and benchmark
+coverage. Final review added two narrow reusable options—structured extraction for
+`file_content_matches` facts and per-target `matches` filtering in `cross_file`—plus
+syntax-aware selectors, occurrence-specific fix correlation, and resource ceilings. It added no
+rule kind, fix operation, dependency, subprocess, or network access.
+
+### W10. Documentation, recipes, and roadmap
+
+**Completed 2026-10-17.**
+
+- The flat key-parity recipe uses `cross_file` `set_equals` over a `regex:` key extract for
+  `.env` against `.env.example`.
+- README surface counts remain sourced from `facts.json`; the getting-started prose does not
+  duplicate them; ROADMAP's "Latest release" remains a release-time update.
+- Both current `register_as` field comments and their generated schema descriptions list all six
+  path-template tokens.
+
+Design: [`documentation-and-roadmap.md`](documentation-and-roadmap.md) (implemented; recipe,
+generated-source boundaries, release-time roadmap update, and validation plan decided).
+
+## Parallel tracks during v0.19
+
+- **Plugin contract compiler (P0).** The separate project of
+  [`../plugin-architecture.md`](../plugin-architecture.md) section 6 starts in parallel as
+  `witforge` (`asamarts/witforge`, private until alint's contract `0.x` consumes it; Q16,
+  decided 2026-10-14).
+- **Phase 1b design (completed 2026-10-18).** The accepted
+  [`../v0.20/`](../v0.20/README.md) documents specify `alint test` (DEC-6), selected-rule trace and
+  preview (Q7/Q14), and per-source config requirements (Q11) for v0.20 implementation.
+
+## Gates for the release
+
+- every behaviour change listed in the changelog with a migration note;
+- the frozen-fingerprint golden gate (W6) and the leak gate (W5) green;
+- ADR-0012 completeness gates for notes, analysis failures, related locations, and redaction;
+- the deterministic performance gate within the program budget (cumulative against v0.18.2,
+  DEC-13), plus wall-clock benchmarks on the canonical bench host for W2, W3, and W6;
+- the usual release flow in `RELEASING.md`, including the alint.org pin bump.

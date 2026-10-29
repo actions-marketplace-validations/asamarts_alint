@@ -1,0 +1,25 @@
+test_version: 1
+name: scope_filter changed_since fails closed outside Git
+tags: [check, scope_filter, changed_since, git]
+
+given:
+  tree:
+    src:
+      lib.rs: "pub fn demo() {} \n"
+  config: |
+    version: 1
+    rules:
+      - id: changed-lines-clean
+        kind: no_trailing_whitespace
+        paths: "**/*.rs"
+        scope_filter:
+          changed_since: origin/main
+        level: warning
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: changed-lines-clean, kind: resource_read}

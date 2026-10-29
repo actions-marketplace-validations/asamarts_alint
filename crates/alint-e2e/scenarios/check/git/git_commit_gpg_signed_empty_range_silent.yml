@@ -1,0 +1,30 @@
+test_version: 1
+name: git_commit_gpg_signed stays silent when the range is empty
+tags: [check, git_commit_gpg_signed, git, passing]
+
+# `since: HEAD` means `HEAD..HEAD`, so there are no commits to verify and no
+# host-keyring dependency is exercised by the scenario.
+
+capabilities:
+  host_keyring: true
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: signed-commits
+        kind: git_commit_gpg_signed
+        since: HEAD
+        level: error
+  git:
+    init: true
+    commits:
+      - "feat: unsigned but outside the empty range"
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

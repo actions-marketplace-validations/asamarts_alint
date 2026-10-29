@@ -1,3 +1,4 @@
+test_version: 1
 name: no_bidi_controls flags Trojan-Source codepoints
 tags: [check, no_bidi_controls, security]
 
@@ -24,5 +25,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-bidi, level: error, path: src/sneaky.rs}

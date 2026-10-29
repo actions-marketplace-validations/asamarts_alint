@@ -39,13 +39,13 @@ enum Language {
     Java,
     Dart,
     Nix,
-    /// No preset — an explicit `import_pattern` is required.
+    /// No preset - an explicit `import_pattern` is required.
     Generic,
 }
 
 impl Language {
     /// Default import-line regex; **capture group 1 is the
-    /// imported target**. Line-based (not a grammar — see the
+    /// imported target**. Line-based (not a grammar - see the
     /// design doc's false-positive section); users override with
     /// `import_pattern` for edge cases.
     fn default_pattern(self) -> Option<&'static str> {
@@ -114,11 +114,15 @@ pub struct ImportGateRule {
     allow: Option<Scope>,
     /// Blank `//` and `/* … */` comments before matching. Set only
     /// for the `language: js` preset, whose pattern is unanchored and
-    /// so matches `import("…")` inside a `JSDoc` `@typedef {import(…)}`
-    /// — a type-only annotation, not a real import (eslint / svelte).
+    /// so matches `import("…")` inside a `JSDoc` `@typedef {import(…)}`,
+    /// a type-only annotation, not a real import (eslint / svelte).
     /// The anchored presets (`^\s*import …`) can't match a comment
     /// line, so they don't need it.
     strip_comments: bool,
+    /// Optional literal that must occur before the import regex can match.
+    /// Default Rust imports always contain `use`; skipping empty scans is a
+    /// large win on generated/minified source with no imports.
+    prefilter: Option<&'static str>,
 }
 
 impl Rule for ImportGateRule {
@@ -169,6 +173,12 @@ impl PerFileRule for ImportGateRule {
         } else {
             text
         };
+        if self
+            .prefilter
+            .is_some_and(|needle| !scan_text.contains(needle))
+        {
+            return Ok(Vec::new());
+        }
         let mut violations = Vec::new();
         for (i, line) in scan_text.lines().enumerate() {
             let Some(caps) = self.import_re.captures(line) else {
@@ -198,7 +208,7 @@ impl PerFileRule for ImportGateRule {
 /// Replace `//` line comments and `/* … */` block comments (incl.
 /// `JSDoc` `/** … */`) with spaces, preserving newlines so line
 /// numbers and the per-line scanner are unaffected. String literals
-/// (`'…'`, `"…"`, `` `…` ``) are passed through verbatim — the import
+/// (`'…'`, `"…"`, `` `…` ``) are passed through verbatim - the import
 /// *target* is itself a quoted string, so blanking strings would
 /// erase what we extract. Not a full JS lexer: regex literals are
 /// treated as code, so a regex containing `//` or `/*` could be
@@ -267,6 +277,29 @@ fn strip_js_comments(src: &str) -> String {
     out
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("allow"),
+        selector_type: alint_core::SelectorType::GlobList,
+        rerootable: true,
+    }]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.paths.is_none() {
         return Err(Error::rule_config(
@@ -316,6 +349,9 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     // custom `import_pattern` or any other (anchored) preset opts out.
     let strip_comments =
         opts.import_pattern.is_none() && matches!(opts.language, Some(Language::Js));
+    let prefilter = (opts.import_pattern.is_none()
+        && matches!(opts.language, Some(Language::Rust)))
+    .then_some("use");
 
     Ok(Box::new(ImportGateRule {
         id: spec.id.clone(),
@@ -328,6 +364,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         import_re,
         allow,
         strip_comments,
+        prefilter,
     }))
 }
 
@@ -357,6 +394,7 @@ mod tests {
                 )
             },
             strip_comments: matches!(language, Language::Js),
+            prefilter: matches!(language, Language::Rust).then_some("use"),
         }
     }
 
@@ -374,6 +412,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         r.evaluate_file(&ctx, Path::new(path), src.as_bytes())
             .unwrap()
@@ -515,6 +556,20 @@ mod tests {
         let v = eval(&r, "default.nix", src);
         assert_eq!(v.len(), 1, "{v:?}");
         assert!(v[0].message.contains("nixpkgs"));
+    }
+
+    #[test]
+    fn rust_prefilter_skips_files_without_the_use_literal() {
+        let r = rule(Language::Rust, r"^internal::", &[]);
+        assert!(eval(&r, "src/a.rs", "pub fn f() {}\n").is_empty());
+        assert!(eval(&r, "src/a.rs", "// no import here\nlet x = 1;\n").is_empty());
+    }
+
+    #[test]
+    fn rust_prefilter_never_hides_a_real_import() {
+        let r = rule(Language::Rust, r"^internal::", &[]);
+        let v = eval(&r, "src/a.rs", "use internal::secret;\n");
+        assert_eq!(v.len(), 1, "{v:?}");
     }
 
     #[test]

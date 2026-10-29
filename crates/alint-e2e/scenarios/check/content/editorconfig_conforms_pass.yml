@@ -1,0 +1,38 @@
+test_version: 1
+name: editorconfig_conforms accepts files matching inherited policy
+
+tags: [check, editorconfig_conforms, content, passing]
+
+docs:
+  title: Nested EditorConfig sections merge and unset inherited policy
+  case: pass
+  kind: editorconfig_conforms
+
+given:
+  tree:
+    ".editorconfig": |
+      root = true
+
+      [*.txt]
+      indent_style = space
+      indent_size = 2
+      trim_trailing_whitespace = true
+      insert_final_newline = true
+    docs:
+      ".editorconfig": |
+        [*.txt]
+        trim_trailing_whitespace = unset
+      guide.txt: "  aligned trailing spaces   \n"
+  config: |
+    version: 1
+    rules:
+      - id: editor-policy
+        kind: editorconfig_conforms
+        paths: "**/*.txt"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

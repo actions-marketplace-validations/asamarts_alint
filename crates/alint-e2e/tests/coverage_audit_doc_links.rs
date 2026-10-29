@@ -1,27 +1,25 @@
 //! Repo-side documentation link integrity (external-evaluation §3.1).
 //!
-//! A reader browsing the docs on GitHub hit two classes of dead link:
-//!
-//!   1. **Broken relative links** — a markdown link to a repo file that
-//!      moved or was misspelt (e.g. `crates/alint-core/src/when.rs`
-//!      after the `when` module became a directory).
-//!   2. **Root-absolute site links** — `](/docs/concepts/…)`. On GitHub
+//! A reader browsing the docs on GitHub can hit **root-absolute site
+//! links** — `](/docs/concepts/…)`. On GitHub
 //!      a `/…` link resolves against `github.com`, not the repo or the
 //!      site, so it dead-ends. These belong to the rendered site at
 //!      alint.org, not to a repo reader.
 //!
-//! This gate enforces both on the actively-maintained docs:
-//!
-//!   * every relative file link resolves to a real path, and
-//!   * no doc introduces a root-absolute `/…` link, EXCEPT the few
+//! This gate enforces that no actively-maintained repo doc introduces a
+//! root-absolute `/…` link, EXCEPT the few
 //!     dual-purpose files that are sliced/copied into the alint.org
 //!     site (where `/docs/…` is the correct, resolvable form) and that
 //!     carry a "reading this on GitHub? the full reference is at
 //!     alint.org" banner for repo readers.
 //!
-//! Out of scope (different link-resolution semantics, not browsed as
-//! repo docs): the site-content tree `docs/site/**`, the benchmark
-//! result/▸archive snapshots, and the versioned `docs/design/v*/`
+//! Relative-link resolution and the opposite `docs/site/**` policy are now
+//! dogfooded through `markdown_links_resolve` rules in `.alint.yml`. This
+//! Rust audit retains only the banner policy that is not a link-resolution
+//! concern.
+//!
+//! Out of scope (not browsed as repo docs): the benchmark
+//! result/▸archive snapshots and the versioned `docs/design/v*/`
 //! design records.
 
 use std::fmt::Write as _;
@@ -60,19 +58,19 @@ fn is_governed(rel: &str) -> bool {
     true
 }
 
-fn walk_md(base: &Path, dir: &Path, out: &mut Vec<String>) {
+fn walk_md(base: &Path, dir: &Path, keep: fn(&str) -> bool, out: &mut Vec<String>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
     for e in rd.flatten() {
         let p = e.path();
         if p.is_dir() {
-            walk_md(base, &p, out);
+            walk_md(base, &p, keep, out);
         } else if p.extension().is_some_and(|x| x == "md")
             && let Ok(rel) = p.strip_prefix(base)
         {
             let rel = rel.to_string_lossy().replace('\\', "/");
-            if is_governed(&rel) {
+            if keep(&rel) {
                 out.push(rel);
             }
         }
@@ -81,9 +79,12 @@ fn walk_md(base: &Path, dir: &Path, out: &mut Vec<String>) {
 
 fn collect_docs(root: &Path) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    // Top-level governance/readme docs.
+    // Top-level governance/readme docs. CHANGELOG.md is also exported to
+    // alint.org (/docs/changelog/), whose build turns its relative links
+    // into GitHub links, so they have to resolve in the repo either way.
     for top in [
         "README.md",
+        "CHANGELOG.md",
         "CONTRIBUTING.md",
         "SECURITY.md",
         "GOVERNANCE.md",
@@ -94,7 +95,7 @@ fn collect_docs(root: &Path) -> Vec<String> {
             out.push(top.to_string());
         }
     }
-    walk_md(root, &root.join("docs"), &mut out);
+    walk_md(root, &root.join("docs"), is_governed, &mut out);
     out
 }
 
@@ -105,25 +106,70 @@ fn links(text: &str) -> Vec<String> {
     let mut urls = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b']' && i + 1 < bytes.len() && bytes[i + 1] == b'(' {
-            if let Some(end) = text[i + 2..].find(')') {
-                urls.push(text[i + 2..i + 2 + end].trim().to_string());
-                i = i + 2 + end + 1;
-                continue;
-            }
+        if bytes[i] == b']'
+            && i + 1 < bytes.len()
+            && bytes[i + 1] == b'('
+            && let Some(end) = text[i + 2..].find(')')
+        {
+            urls.push(text[i + 2..i + 2 + end].trim().to_string());
+            i = i + 2 + end + 1;
+            continue;
         }
         i += 1;
     }
     urls
 }
 
+/// Remove fenced code blocks and inline code spans before link
+/// extraction. A `[text](./path)` shown as an EXAMPLE inside backticks
+/// renders as literal text on GitHub, not a live link, so the gate must
+/// not treat it as one (rule-coverage-gaps.md documents markdown-link
+/// syntax this way). Only the bytes *between* backticks are dropped, so
+/// a real link whose visible text is code-formatted keeps its
+/// `](target)` and is still checked.
+fn strip_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_fence = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            in_fence = !in_fence;
+            out.push('\n');
+            continue;
+        }
+        if in_fence {
+            out.push('\n');
+            continue;
+        }
+        let mut in_code = false;
+        for ch in line.chars() {
+            if ch == '`' {
+                in_code = !in_code;
+            } else if !in_code {
+                out.push(ch);
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 #[test]
-fn repo_doc_links_are_not_dead_on_github() {
+fn strip_code_drops_example_links_but_keeps_real_ones() {
+    // A whole link inside one code span is an example -> dropped.
+    assert!(!strip_code("see `[text](./path)` here").contains("]("));
+    // A real link whose visible text is code-formatted -> kept + checked.
+    assert!(strip_code("see [`auto-fix.md`](auto-fix.md)").contains("](auto-fix.md)"));
+    // Fenced code blocks are dropped wholesale.
+    assert!(!strip_code("```\n[x](./nope)\n```").contains("]("));
+}
+
+#[test]
+fn repo_docs_do_not_use_dead_root_absolute_links_on_github() {
     let root = repo_root();
     let docs = collect_docs(&root);
     assert!(!docs.is_empty(), "no governed docs found");
 
-    let mut broken_relative: Vec<String> = Vec::new();
     let mut root_absolute: Vec<String> = Vec::new();
     let mut missing_banner: Vec<String> = Vec::new();
 
@@ -143,7 +189,7 @@ fn repo_doc_links_are_not_dead_on_github() {
             }
         }
 
-        for url in links(&text) {
+        for url in links(&strip_code(&text)) {
             // Anchors, externals, mail/other schemes: not our concern.
             if url.starts_with('#') || url.starts_with("mailto:") {
                 continue;
@@ -155,37 +201,26 @@ fn repo_doc_links_are_not_dead_on_github() {
             if regexish_scheme(&url) {
                 continue;
             }
-            if url.starts_with('/') {
-                if !allow_site_links {
-                    root_absolute.push(format!(
-                        "{rel}: ]({url}) — dead on GitHub; use https://alint.org{url}"
-                    ));
-                }
-                continue;
+            if url.starts_with('/') && !allow_site_links {
+                root_absolute.push(format!(
+                    "{rel}: ]({url}) — dead on GitHub; use https://alint.org{url}"
+                ));
             }
-            // Relative link: resolve the path part (drop anchor/query).
-            let target = url.split(['#', '?']).next().unwrap_or("");
-            if target.is_empty() || target.contains(' ') {
-                continue; // prose / placeholder, not a real path
-            }
-            let resolved = path.parent().unwrap().join(target);
-            if !resolved.exists() {
-                broken_relative.push(format!("{rel}: ]({url}) — target not found"));
-            }
+            // Relative links need no work here: the dogfood
+            // `repository-markdown-links-resolve` rule in `.alint.yml`
+            // validates them.
         }
     }
 
     let mut problems = String::new();
-    for v in [&broken_relative, &root_absolute, &missing_banner] {
+    for v in [&root_absolute, &missing_banner] {
         for line in v {
             writeln!(problems, "  - {line}").unwrap();
         }
     }
     assert!(
-        broken_relative.is_empty() && root_absolute.is_empty() && missing_banner.is_empty(),
-        "documentation link problems ({} broken relative, {} dead root-absolute, \
-         {} missing banner):\n{problems}",
-        broken_relative.len(),
+        root_absolute.is_empty() && missing_banner.is_empty(),
+        "documentation link problems ({} dead root-absolute, {} missing banner):\n{problems}",
         root_absolute.len(),
         missing_banner.len(),
     );

@@ -68,15 +68,17 @@ impl PerFileRule for MaxConsecutiveBlankLinesRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        // The blank-line check uses `line_is_blank` (str-based,
-        // matches the fixer's logic — they share the helper) so
-        // we keep the UTF-8 validation pass here. Non-UTF-8
-        // files are silently skipped, matching the rule-major
-        // path's behaviour.
-        let Ok(text) = std::str::from_utf8(bytes) else {
+        // Skip binary content: a NUL byte is valid UTF-8 (U+0000), so the
+        // `from_utf8` gate below does NOT catch a NUL-bearing binary, but the
+        // `file_collapse_blank_lines` fixer refuses it via `looks_binary`. Guard
+        // here too so `check` and `fix` agree on scope.
+        if crate::io::looks_binary(bytes) {
             return Ok(Vec::new());
-        };
-        let Some(line_no) = first_over_limit(text, self.max) else {
+        }
+        // Blank-line structure is pure ASCII (spaces, tabs, CR, LF), so the
+        // check runs on the raw bytes -- a non-UTF-8 file is no longer skipped
+        // -- sharing `line_is_blank` with the (equally byte-level) fixer.
+        let Some(line_no) = first_over_limit(bytes, self.max) else {
             return Ok(Vec::new());
         };
         let msg = self
@@ -86,28 +88,35 @@ impl PerFileRule for MaxConsecutiveBlankLinesRule {
         Ok(vec![
             Violation::new(msg)
                 .with_path(std::sync::Arc::<Path>::from(path))
-                .with_location(line_no, 1),
+                .with_location(line_no, 1)
+                // First-offender rule with a WHOLE-FILE fixer (it collapses every
+                // over-limit run). The file is the unit of accepted debt: key on
+                // the path so `fix --baseline` grandfathers the whole file and
+                // never collapses a grandfathered run when a NEW one precedes it
+                // (audit F3, 2026-09-20). Matches no_trailing_whitespace.
+                .with_baseline_key(crate::slash(path)),
         ])
     }
 }
 
 /// Return the 1-based line number of the first blank line that
 /// pushes the consecutive-blank counter above `max`. Only counts
-/// blank lines that lie between file content — the trailing slot
+/// blank lines that lie between file content - the trailing slot
 /// after the final newline is ignored so a regular `foo\n` file
 /// doesn't trip max=0.
-fn first_over_limit(text: &str, max: u32) -> Option<usize> {
+fn first_over_limit(text: &[u8], max: u32) -> Option<usize> {
     let mut blank_run: u32 = 0;
     let mut remaining = text;
     let mut line_no: usize = 0;
     loop {
-        let (body, has_ending, rest) = match remaining.find('\n') {
+        let (body, has_ending, rest): (&[u8], bool, &[u8]) = match memchr::memchr(b'\n', remaining)
+        {
             Some(i) => {
                 let before = &remaining[..i];
-                let body = before.strip_suffix('\r').unwrap_or(before);
+                let body = before.strip_suffix(b"\r").unwrap_or(before);
                 (body, true, &remaining[i + 1..])
             }
-            None => (remaining, false, ""),
+            None => (remaining, false, b""),
         };
         if !has_ending && body.is_empty() {
             // The tail after the last newline; not a real line.
@@ -129,6 +138,25 @@ fn first_over_limit(text: &str, max: u32) -> Option<usize> {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_collapse_blank_lines")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec.paths.as_ref().ok_or_else(|| {
         Error::rule_config(
@@ -140,9 +168,15 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .deserialize_options()
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
     let fixer = match &spec.fix {
-        Some(FixSpec::FileCollapseBlankLines { .. }) => {
-            Some(FileCollapseBlankLinesFixer::new(opts.max))
-        }
+        Some(FixSpec::FileCollapseBlankLines {
+            file_collapse_blank_lines,
+        }) => Some(
+            FileCollapseBlankLinesFixer::new(opts.max).with_applicability(
+                file_collapse_blank_lines
+                    .applicability
+                    .unwrap_or(alint_core::Applicability::Safe),
+            ),
+        ),
         Some(other) => {
             return Err(Error::rule_config(
                 &spec.id,
@@ -171,31 +205,62 @@ mod tests {
 
     #[test]
     fn within_limit_is_ok() {
-        assert_eq!(first_over_limit("a\n\nb\n", 1), None);
+        assert_eq!(first_over_limit(b"a\n\nb\n", 1), None);
     }
 
     #[test]
     fn one_over_limit_is_flagged() {
-        assert_eq!(first_over_limit("a\n\n\nb\n", 1), Some(3));
+        assert_eq!(first_over_limit(b"a\n\n\nb\n", 1), Some(3));
     }
 
     #[test]
     fn max_zero_flags_any_blank() {
-        assert_eq!(first_over_limit("a\n\nb\n", 0), Some(2));
+        assert_eq!(first_over_limit(b"a\n\nb\n", 0), Some(2));
     }
 
     #[test]
     fn trailing_newline_is_not_a_blank_line() {
-        assert_eq!(first_over_limit("a\n", 0), None);
+        assert_eq!(first_over_limit(b"a\n", 0), None);
     }
 
     #[test]
     fn whitespace_only_line_counts_as_blank() {
-        assert_eq!(first_over_limit("a\n  \n\t\nb\n", 1), Some(3));
+        assert_eq!(first_over_limit(b"a\n  \n\t\nb\n", 1), Some(3));
     }
 
     #[test]
     fn crlf_endings_are_counted() {
-        assert_eq!(first_over_limit("a\r\n\r\n\r\n\r\nb\r\n", 1), Some(3));
+        assert_eq!(first_over_limit(b"a\r\n\r\n\r\n\r\nb\r\n", 1), Some(3));
+    }
+}
+
+#[cfg(test)]
+mod non_utf8_tests {
+    use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
+
+    #[test]
+    fn non_utf8_text_is_flagged_and_fixed_byte_for_byte() {
+        // Fail-closed regression: one Latin-1 byte used to skip the whole file
+        // (and the collapse fixer refused it). Blank-line structure is ASCII, so
+        // both sides now work on raw bytes and the invalid byte survives intact.
+        let rule = super::build(&spec_yaml(
+            "id: t\nkind: max_consecutive_blank_lines\npaths: \"**/*\"\nmax: 1\n\
+             level: error\nfix:\n  file_collapse_blank_lines: {}\n",
+        ))
+        .unwrap();
+        let body: &[u8] = b"caf\xe9\n\n\n\nb\n";
+        let (tmp, idx) = tempdir_with_files(&[("a.txt", body)]);
+        let vs = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(vs.len(), 1);
+        assert_eq!(vs[0].line, Some(3));
+        let edit = rule
+            .fixer()
+            .unwrap()
+            .fix_edit(&vs[0], body, tmp.path())
+            .expect("the fixer collapses a non-UTF-8 file too");
+        let alint_core::FixEdit::SetContent { content, .. } = edit else {
+            panic!("expected SetContent");
+        };
+        assert_eq!(content.as_slice(), b"caf\xe9\n\nb\n");
     }
 }

@@ -4,6 +4,7 @@
     "failing_rules": 1,
     "passing_rules": 0,
     "total_violations": 1,
+    "total_analysis_failures": 0,
     "has_errors": false,
     "has_warnings": true
   },
@@ -15,9 +16,11 @@
       "fixable": false,
       "violations": [
         {
-          "message": "expected a file matching [LICENSE]"
+          "message": "expected a file matching [LICENSE]",
+          "fixable": false
         }
-      ]
+      ],
+      "analysis_failures": []
     }
   ]
 }

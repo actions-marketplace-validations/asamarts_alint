@@ -1,3 +1,4 @@
+test_version: 1
 name: file_graph fresh fires when the generated file's hash marker is stale
 tags: [check, file_graph, cross_file]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: generated-stays-fresh, level: error, path: proto/a.pb.go}

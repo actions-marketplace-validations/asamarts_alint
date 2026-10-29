@@ -1,3 +1,4 @@
+test_version: 1
 name: file_is_ascii allow exempts listed codepoints but still flags others
 tags: [check, file_is_ascii, encoding]
 
@@ -18,5 +19,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: ascii-with-accents, level: error, path: src/cold.rs}

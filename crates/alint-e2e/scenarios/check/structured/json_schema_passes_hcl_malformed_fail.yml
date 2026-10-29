@@ -1,0 +1,35 @@
+test_version: 1
+name: json_schema_passes flags malformed HCL as one parse analysis failure
+tags: [check, json_schema_passes, structured, hcl, failing]
+
+# The HCL parse-error path (symmetry with the dotenv/properties/INI/XML malformed
+# scenarios): an incomplete block fails to parse and yields exactly ONE parse
+# analysis failure, not a flood.
+
+given:
+  tree:
+    schemas:
+      any.schema.json: |
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object"
+        }
+    "main.tf": |
+      resource "aws_instance" "web" {
+        ami =
+  config: |
+    version: 1
+    rules:
+      - id: hcl-parse
+        kind: json_schema_passes
+        paths: "main.tf"
+        schema_path: "schemas/any.schema.json"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: hcl-parse, kind: resource_parse, path: main.tf}

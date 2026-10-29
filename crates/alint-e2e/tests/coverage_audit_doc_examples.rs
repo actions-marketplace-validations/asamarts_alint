@@ -31,6 +31,8 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use crate::support;
+
 /// Docs whose fenced config examples must load. Scoped to the
 /// drift-prone hand-written docs the evaluation flagged; extend as new
 /// config-bearing prose is added.
@@ -48,13 +50,14 @@ fn repo_root() -> PathBuf {
         .join("..")
 }
 
-/// Every documented scenario's `given.config` — the post-ADR-0014 home of the
-/// rule-config examples that used to live inline in docs/rules.md. Harvested so
-/// the two doc-example gates keep covering every migrated kind (the rendered
-/// pages now pull their config from these fixtures). Returns `(source, config)`.
+/// Every documented policy test's `given.config` from both public corpora.
+/// Returns `(source, config)`.
 fn fixture_configs(root: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let mut stack = vec![root.join("crates/alint-e2e/scenarios")];
+    let mut stack = vec![
+        root.join("crates/alint-e2e/scenarios"),
+        root.join("crates/alint-dsl/ruleset-tests/v1"),
+    ];
     while let Some(dir) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
@@ -71,7 +74,7 @@ fn fixture_configs(root: &Path) -> Vec<(String, String)> {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let Ok(v) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text) else {
+            let Ok(v) = yaml_serde::from_str::<yaml_serde::Value>(&text) else {
                 continue;
             };
             if v.get("docs").is_none() {
@@ -80,7 +83,7 @@ fn fixture_configs(root: &Path) -> Vec<(String, String)> {
             if let Some(config) = v
                 .get("given")
                 .and_then(|g| g.get("config"))
-                .and_then(serde_yaml_ng::Value::as_str)
+                .and_then(yaml_serde::Value::as_str)
             {
                 let src = path
                     .strip_prefix(root)
@@ -109,10 +112,10 @@ struct Block {
 /// dropped decorated fences from the gate.
 fn is_yaml_open_fence(trimmed: &str) -> bool {
     for tag in ["```yaml", "```yml"] {
-        if let Some(rest) = trimmed.strip_prefix(tag) {
-            if rest.is_empty() || rest.starts_with(char::is_whitespace) {
-                return true;
-            }
+        if let Some(rest) = trimmed.strip_prefix(tag)
+            && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            return true;
         }
     }
     false
@@ -166,6 +169,7 @@ fn is_deliberately_invalid(b: &Block) -> bool {
 /// `deny_unknown_fields` field list.
 const TOP_KEYS: &[&str] = &[
     "version:",
+    "requires:",
     "rules:",
     "extends:",
     "facts:",
@@ -177,6 +181,7 @@ const TOP_KEYS: &[&str] = &[
     "fix_size_limit:",
     "allow_out_of_root:",
     "baseline:",
+    "trusted_extends:",
 ];
 
 /// Normalise a block into a full `.alint.yml` document, or `None` if it
@@ -224,21 +229,21 @@ fn to_config(body: &str) -> Option<String> {
 /// silently dropped. A config that doesn't parse here returns `false` so the
 /// loader still runs and reports the structural error.
 fn has_network_extends(config: &str) -> bool {
-    let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(config) else {
+    let Ok(doc) = yaml_serde::from_str::<yaml_serde::Value>(config) else {
         return false;
     };
-    let entry_is_network = |e: &serde_yaml_ng::Value| {
+    let entry_is_network = |e: &yaml_serde::Value| {
         let url = match e {
-            serde_yaml_ng::Value::String(s) => Some(s.as_str()),
-            serde_yaml_ng::Value::Mapping(m) => m
-                .get(serde_yaml_ng::Value::String("url".into()))
-                .and_then(serde_yaml_ng::Value::as_str),
+            yaml_serde::Value::String(s) => Some(s.as_str()),
+            yaml_serde::Value::Mapping(m) => m
+                .get(yaml_serde::Value::String("url".into()))
+                .and_then(yaml_serde::Value::as_str),
             _ => None,
         };
         url.is_some_and(|u| u.starts_with("http://") || u.starts_with("https://"))
     };
     match doc.get("extends") {
-        Some(serde_yaml_ng::Value::Sequence(seq)) => seq.iter().any(entry_is_network),
+        Some(yaml_serde::Value::Sequence(seq)) => seq.iter().any(entry_is_network),
         Some(other) => entry_is_network(other),
         None => false,
     }
@@ -255,22 +260,22 @@ fn has_network_extends(config: &str) -> bool {
 /// map-vs-sequence `rules:` bug) won't parse here; we return it
 /// unchanged so the loader still reports the structural error.
 fn inject_default_levels(config: &str) -> String {
-    let Ok(mut doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(config) else {
+    let Ok(mut doc) = yaml_serde::from_str::<yaml_serde::Value>(config) else {
         return config.to_string();
     };
     if let Some(rules) = doc
         .get_mut("rules")
-        .and_then(serde_yaml_ng::Value::as_sequence_mut)
+        .and_then(yaml_serde::Value::as_sequence_mut)
     {
         for rule in rules.iter_mut() {
             if let Some(map) = rule.as_mapping_mut() {
-                let key = serde_yaml_ng::Value::String("level".into());
+                let key = yaml_serde::Value::String("level".into());
                 map.entry(key)
-                    .or_insert_with(|| serde_yaml_ng::Value::String("error".into()));
+                    .or_insert_with(|| yaml_serde::Value::String("error".into()));
             }
         }
     }
-    serde_yaml_ng::to_string(&doc).unwrap_or_else(|_| config.to_string())
+    yaml_serde::to_string(&doc).unwrap_or_else(|_| config.to_string())
 }
 
 #[test]
@@ -316,7 +321,7 @@ fn every_doc_config_example_loads() {
             let dir = tempfile::tempdir().expect("tempdir");
             std::fs::write(dir.path().join(".alint.yml"), &config).unwrap();
 
-            match alint_dsl::load(&dir.path().join(".alint.yml")) {
+            match support::load(&dir.path().join(".alint.yml")) {
                 Ok(cfg) => {
                     for spec in &cfg.rules {
                         if matches!(spec.level, alint_core::Level::Off) {
@@ -349,7 +354,7 @@ fn every_doc_config_example_loads() {
         let config = inject_default_levels(&config);
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join(".alint.yml"), &config).unwrap();
-        match alint_dsl::load(&dir.path().join(".alint.yml")) {
+        match support::load(&dir.path().join(".alint.yml")) {
             Ok(cfg) => {
                 for spec in &cfg.rules {
                     if matches!(spec.level, alint_core::Level::Off) {
@@ -410,7 +415,7 @@ fn top_keys_track_the_loader() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = dir.path().join(".alint.yml");
     std::fs::write(&cfg, "version: 1\n__definitely_not_a_key__: 1\n").unwrap();
-    let err = alint_dsl::load(&cfg)
+    let err = support::load(&cfg)
         .expect_err("an unknown top-level field must be rejected")
         .to_string();
     // "... expected one of `version`, `extends`, `ignore`, ..." → the
@@ -471,7 +476,7 @@ fn every_rule_kind_rejects_an_unknown_option() {
             let config = inject_default_levels(&config);
             let dir = tempfile::tempdir().expect("tempdir");
             std::fs::write(dir.path().join(".alint.yml"), &config).unwrap();
-            let Ok(cfg) = alint_dsl::load(&dir.path().join(".alint.yml")) else {
+            let Ok(cfg) = support::load(&dir.path().join(".alint.yml")) else {
                 continue;
             };
             for spec in &cfg.rules {
@@ -486,8 +491,8 @@ fn every_rule_kind_rejects_an_unknown_option() {
                 }
                 let mut bogus = spec.clone();
                 bogus.extra.insert(
-                    serde_yaml_ng::Value::String("__alint_unknown_option_probe__".into()),
-                    serde_yaml_ng::Value::Bool(true),
+                    yaml_serde::Value::String("__alint_unknown_option_probe__".into()),
+                    yaml_serde::Value::Bool(true),
                 );
                 probed.insert(spec.kind.clone());
                 if registry.build(&bogus).is_ok() {
@@ -508,7 +513,7 @@ fn every_rule_kind_rejects_an_unknown_option() {
         let config = inject_default_levels(&config);
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join(".alint.yml"), &config).unwrap();
-        let Ok(cfg) = alint_dsl::load(&dir.path().join(".alint.yml")) else {
+        let Ok(cfg) = support::load(&dir.path().join(".alint.yml")) else {
             continue;
         };
         for spec in &cfg.rules {
@@ -520,8 +525,8 @@ fn every_rule_kind_rejects_an_unknown_option() {
             }
             let mut bogus = spec.clone();
             bogus.extra.insert(
-                serde_yaml_ng::Value::String("__alint_unknown_option_probe__".into()),
-                serde_yaml_ng::Value::Bool(true),
+                yaml_serde::Value::String("__alint_unknown_option_probe__".into()),
+                yaml_serde::Value::Bool(true),
             );
             probed.insert(spec.kind.clone());
             if registry.build(&bogus).is_ok() {
@@ -545,4 +550,122 @@ fn every_rule_kind_rejects_an_unknown_option() {
          `register_optionless` if it takes none.",
         swallowers.len(),
     );
+}
+
+/// Load-time pattern hints (`alint_core::pattern_hints`, issue #343) must stay
+/// silent on everything alint publishes as guidance: a mis-anchored `^` or `$`
+/// in a docs example teaches the very mistake the hint warns about. Covers the
+/// fenced configs in the governed docs, every site page and example README,
+/// the example configs, every bundled ruleset, and the documented scenarios.
+/// A block that does not load is the schema gate's business and is skipped.
+#[test]
+fn published_patterns_raise_no_anchor_hints() {
+    let root = repo_root();
+    let registry = alint_rules::builtin_registry();
+    // (source, config path): inline blocks are written to a temp dir; files load in place.
+    let mut sources: Vec<(String, PathBuf, Option<tempfile::TempDir>)> = Vec::new();
+    let mut inline = |src: String, config: &str| {
+        if has_network_extends(config) {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(".alint.yml");
+        std::fs::write(&path, inject_default_levels(config)).unwrap();
+        sources.push((src, path, Some(dir)));
+    };
+
+    let mut docs: Vec<PathBuf> = DOC_FILES.iter().map(|rel| root.join(rel)).collect();
+    docs.extend(files_under(&root.join("docs/site"), |p| {
+        p.extension().is_some_and(|e| e == "md")
+    }));
+    docs.extend(files_under(&root.join("examples"), |p| {
+        p.file_name().is_some_and(|n| n == "README.md")
+    }));
+    for path in &docs {
+        let text = std::fs::read_to_string(path).unwrap();
+        let rel = path.strip_prefix(&root).unwrap().display().to_string();
+        for block in yaml_blocks(&text) {
+            if !is_deliberately_invalid(&block)
+                && let Some(config) = to_config(&block.body)
+            {
+                inline(format!("{rel}:{}", block.start_line), &config);
+            }
+        }
+    }
+    let rulesets = root.join("crates/alint-dsl/rulesets/v1");
+    for path in files_under(&rulesets, |p| p.extension().is_some_and(|e| e == "yml")) {
+        let name = path.strip_prefix(&rulesets).unwrap().with_extension("");
+        let name = name.to_string_lossy().replace('\\', "/");
+        inline(
+            format!("bundled ruleset {name}"),
+            &format!("version: 1\nextends:\n  - alint://bundled/{name}@v1\n"),
+        );
+    }
+    for (src, config) in fixture_configs(&root) {
+        inline(src, &config);
+    }
+    for path in files_under(&root.join("examples"), |p| {
+        p.file_name().is_some_and(|n| n == ".alint.yml")
+    }) {
+        let src = path.strip_prefix(&root).unwrap().display().to_string();
+        sources.push((src, path, None));
+    }
+
+    let mut checked = 0usize;
+    let mut hints: Vec<String> = Vec::new();
+    for (src, path, _dir) in &sources {
+        let Ok(cfg) = support::load(path) else {
+            continue;
+        };
+        checked += 1;
+        for spec in &cfg.rules {
+            if matches!(spec.level, alint_core::Level::Off) {
+                continue;
+            }
+            let Ok(rule) = registry.build(spec) else {
+                continue;
+            };
+            let tree =
+                alint_core::pattern_hints::rule_tree_hints(&registry, rule.as_ref(), Some(spec));
+            hints.extend(tree.into_iter().map(|hint| format!("{src}: {hint}")));
+        }
+        let facts = alint_core::pattern_hints::fact_hints(&cfg.facts);
+        hints.extend(facts.into_iter().map(|hint| format!("{src}: {hint}")));
+    }
+
+    eprintln!("anchor-hint gate: {checked} published configs checked");
+    assert!(
+        checked >= 300,
+        "only {checked} published configs loaded (far below the usual count) \
+         — the extractor or the loader likely regressed"
+    );
+    assert!(
+        hints.is_empty(),
+        "{} published pattern(s) raise an anchor hint. Fix the pattern (see \
+         docs/site/configuration/patterns.md), or mark a deliberate counter-example \
+         with `<!-- alint:ignore-example -->`.\n  - {}",
+        hints.len(),
+        hints.join("\n  - ")
+    );
+}
+
+/// Files under `dir` (recursively) that `keep` accepts, in a stable order.
+fn files_under(dir: &Path, keep: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if keep(&path) {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
 }

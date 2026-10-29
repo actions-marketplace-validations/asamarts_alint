@@ -11,14 +11,28 @@
       "const": 1,
       "description": "Report schema version. Always 1 for this schema."
     },
+    "dry_run": {
+      "type": "boolean",
+      "description": "True for `alint fix --dry-run`: nothing was written, and each `applied` item is a fix the first pass would apply. A dry run is a single pass: it predicts a create the real run cannot make stick (an ignored or out-of-scope path, reported `skipped` with `skip_kind: unresolved`), but a fix whose failure only the real run's re-check reveals can still be `applied` here. Always emitted by current alint, but optional in the schema (an additive field within schema_version 1): reports from releases before it was added omit it, which means a real run."
+    },
     "summary": {
       "type": "object",
-      "required": ["applied", "skipped", "unfixable"],
+      "required": ["applied", "skipped", "unfixable", "suggested", "non_convergent"],
       "additionalProperties": false,
       "properties": {
         "applied": { "type": "integer", "minimum": 0 },
         "skipped": { "type": "integer", "minimum": 0 },
-        "unfixable": { "type": "integer", "minimum": 0 }
+        "unfixable": { "type": "integer", "minimum": 0 },
+        "suggested": { "type": "integer", "minimum": 0 },
+        "total_analysis_failures": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of evaluation failures. Failures have no fix status and force exit 1."
+        },
+        "non_convergent": {
+          "type": "boolean",
+          "description": "True when the fix loop hit its pass cap without converging (exit 2, 'fix could not complete')."
+        }
       }
     },
     "results": {
@@ -33,7 +47,7 @@
     },
     "status": {
       "type": "string",
-      "enum": ["applied", "skipped", "unfixable"]
+      "enum": ["applied", "skipped", "unfixable", "suggested"]
     },
     "rule_result": {
       "type": "object",
@@ -45,6 +59,10 @@
         "items": {
           "type": "array",
           "items": { "$ref": "#/$defs/item" }
+        },
+        "analysis_failures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/analysis_failure" }
         }
       }
     },
@@ -61,7 +79,27 @@
         "detail": {
           "type": "string",
           "description": "Free-form human-readable explanation paired with `status`."
+        },
+        "skip_kind": {
+          "type": "string",
+          "enum": ["declined", "errored", "baselined", "unresolved"],
+          "description": "Present when `status` is `skipped`: why the violation was not fixed. `declined` = the fixer declined (nothing to do, size limit, isolation conflict); `errored` = the fix was attempted and hit an I/O error; `baselined` = grandfathered by `fix --baseline` (benign); `unresolved` = the fix ran (or, under `--dry-run`, would run) but the rule still reports the violation, e.g. a created file the walk ignores or one outside the rule's `paths:`."
         }
+      }
+    },
+    "analysis_failure": {
+      "type": "object",
+      "required": ["kind", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["evaluation", "condition", "resource_read", "resource_parse", "nested_rule_build"]
+        },
+        "path": { "type": "string" },
+        "message": { "type": "string" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 1 }
       }
     }
   }

@@ -1,3 +1,4 @@
+test_version: 1
 name: file_max_lines passes files at or under the threshold
 tags: [check, file_max_lines, metadata]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

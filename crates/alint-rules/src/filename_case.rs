@@ -12,11 +12,18 @@ use serde::Deserialize;
 use crate::case::CaseConvention;
 use crate::fixers::FileRenameFixer;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
+    #[schemars(schema_with = "case_schema")]
     case: CaseConvention,
 }
+
+fn case_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "$ref": "#/$defs/case_convention" })
+}
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct FilenameCaseRule {
@@ -52,6 +59,20 @@ impl Rule for FilenameCaseRule {
             let Some(stem) = entry.path.file_stem().and_then(|s| s.to_str()) else {
                 continue;
             };
+            // A dot ANYWHERE in the stem is structural, not a case concern, and
+            // `tokenize` would DROP it -- so a rename corrupts the file:
+            //   * a dotfile (`.gitignore` -> `gitignore`) loses its leading dot
+            //     and changes meaning (git stops honoring it; a secrets `.env`
+            //     becomes committable);
+            //   * a compound extension (`index.d.ts` -> `index-d.ts`,
+            //     `Button.test.tsx` -> `button-test.tsx`) loses the sub-extension
+            //     delimiter and breaks TS declaration / test discovery / etc.
+            // `file_stem` only strips the LAST extension, so both cases leave a
+            // `.` in the stem. Exempt them entirely so `check` and `fix` agree
+            // and no rename ever mangles a structural dot.
+            if stem.contains('.') {
+                continue;
+            }
             if !self.case.check(stem) {
                 let msg = self.message.clone().unwrap_or_else(|| {
                     format!(
@@ -67,6 +88,25 @@ impl Rule for FilenameCaseRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::RuleMajorScoped,
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_rename")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(_paths) = &spec.paths else {
         return Err(Error::rule_config(
@@ -78,7 +118,13 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .deserialize_options()
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
     let fixer = match &spec.fix {
-        Some(FixSpec::FileRename { .. }) => Some(FileRenameFixer::new(opts.case)),
+        Some(FixSpec::FileRename { file_rename }) => Some(
+            FileRenameFixer::new(opts.case).with_applicability(
+                file_rename
+                    .applicability
+                    .unwrap_or(alint_core::Applicability::Safe),
+            ),
+        ),
         Some(other) => {
             return Err(Error::rule_config(
                 &spec.id,
@@ -189,6 +235,37 @@ mod tests {
         let idx = index(&["docs/MainDoc.md"]);
         let v = rule.evaluate(&ctx(Path::new("/fake"), &idx)).unwrap();
         assert!(v.is_empty(), "out-of-scope shouldn't fire: {v:?}");
+    }
+
+    #[test]
+    fn evaluate_exempts_structural_dots() {
+        // Round-5 (A2) + round-6 (Finding 1): a dot ANYWHERE in the stem is
+        // structural, not a case concern -- a dotfile (`.gitignore`) or a compound
+        // extension (`index.d.ts`, `Button.test.tsx`). `tokenize` would drop it,
+        // so a rename corrupts the file (`.gitignore`->`gitignore` un-ignores;
+        // `index.d.ts`->`index-d.ts` breaks TS). Both are exempt, but a normal
+        // mis-cased file alongside them still fires (targeted, not a blanket off).
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: filename_case\n\
+             paths: \"**/*\"\n\
+             case: snake_case\n\
+             level: error\n",
+        );
+        let rule = build(&spec).unwrap();
+        let idx = index(&[
+            ".gitignore",      // dotfile
+            ".env",            // dotfile
+            "index.d.ts",      // compound extension (stem `index.d`)
+            "Button.test.tsx", // compound extension (stem `Button.test`)
+            "Foo.rs",          // normal mis-cased -> the only one that fires
+        ]);
+        let v = rule.evaluate(&ctx(Path::new("/fake"), &idx)).unwrap();
+        assert_eq!(
+            v.len(),
+            1,
+            "only the plain PascalCase file fires; dotfiles + compound exts exempt: {v:?}"
+        );
     }
 
     #[test]

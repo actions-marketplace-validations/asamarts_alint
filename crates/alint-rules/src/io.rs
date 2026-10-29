@@ -22,13 +22,29 @@ fn not_regular_file(path: &Path) -> std::io::Error {
 /// skips these at index time (`result_to_entry`); the direct-read helpers that
 /// bypass the walker must apply the same guard. The `metadata` stat follows
 /// symlinks, so a symlink-to-FIFO is rejected too. (A vanishingly small TOCTOU
-/// window remains between the stat and the open — the real threat is a
+/// window remains between the stat and the open - the real threat is a
 /// committed / planted special file, which the stat catches.)
 fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
     if !std::fs::metadata(path)?.is_file() {
         return Err(not_regular_file(path));
     }
     std::fs::File::open(path)
+}
+
+/// The fail-loud outcome of a per-file content rule's own read (the
+/// rule-major `evaluate` loop used by `alint fix`). Because these paths came
+/// from the repository index, every I/O error, including a mid-walk removal,
+/// prevents a policy verdict and becomes a `resource_read` analysis failure.
+pub(crate) fn io_error_violation(rel: &Path, err: &std::io::Error) -> alint_core::Violation {
+    alint_core::unreadable_file_violation(rel, err)
+}
+
+/// Structural failure conversion for a bounded whole-file read.
+pub(crate) fn read_cap_error_violation(rel: &Path, err: &ReadCapError) -> alint_core::Violation {
+    match err {
+        ReadCapError::TooLarge(size) => alint_core::too_large_file_violation(rel, *size),
+        ReadCapError::Io(e) => io_error_violation(rel, e),
+    }
 }
 
 /// Read up to `TEXT_INSPECT_LEN` bytes from the start of a file. Returned
@@ -38,7 +54,7 @@ pub fn read_prefix(path: &Path) -> std::io::Result<Vec<u8>> {
 }
 
 /// Read up to `n` bytes from the start of `path`. Used by rules that
-/// only need to inspect a leading window — `executable_has_shebang`
+/// only need to inspect a leading window - `executable_has_shebang`
 /// (2 bytes for `#!`), `file_starts_with` (`pattern.len()` bytes).
 /// Reads less than `n` if the file is shorter; returns the actual byte
 /// count in the returned `Vec`'s length.
@@ -51,7 +67,7 @@ pub fn read_prefix_n(path: &Path, n: usize) -> std::io::Result<Vec<u8>> {
 }
 
 /// Read up to `n` bytes from the END of `path`. Used by rules that
-/// only need to inspect the tail — `file_ends_with` (`pattern.len()`
+/// only need to inspect the tail - `file_ends_with` (`pattern.len()`
 /// bytes). Returns the actual byte count in the returned `Vec`'s
 /// length; fewer than `n` bytes if the file is shorter. Files smaller
 /// than `n` are read whole.
@@ -69,7 +85,7 @@ pub fn read_suffix_n(path: &Path, n: usize) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Classification of a file's contents. Computed lazily — callers check the
+/// Classification of a file's contents. Computed lazily - callers check the
 /// subset they care about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Classification {
@@ -84,81 +100,140 @@ pub fn classify_bytes(bytes: &[u8]) -> Classification {
     }
 }
 
-/// Whether `bytes` look like binary content (per `content_inspector`,
-/// sampling the same leading window as `file_is_text`). The byte-level
-/// fixers consult this and refuse to rewrite a binary file — a line-ending,
-/// BOM, final-newline, or prepend/append edit on a binary corrupts it.
+/// Whether `bytes` look like binary content. The byte-level fixers (and their
+/// detectors) consult this and refuse to touch a binary file -- a reorder,
+/// reindent, line-ending, BOM, final-newline, or prepend/append edit on a binary
+/// corrupts it.
+///
+/// A NUL byte ANYWHERE is the definitive binary marker, so the WHOLE slice is
+/// scanned for one (a cheap `memchr`). This is not redundant with
+/// `content_inspector`: that crate caps its own NUL scan at its `MAX_SCAN_SIZE`
+/// (1024 bytes as of 0.2.4) -- so a file that is clean text through the first KiB
+/// but carries a NUL LATER (e.g. a 40 KB text file with a NUL at 28 KB) is
+/// classified TEXT by `content_inspector` and a content fixer silently corrupts it
+/// (reorder / reindent / splice). The explicit full scan closes that (audit R2).
+/// `content_inspector` still supplies the broader statistical heuristics (encoding,
+/// control-char density) over its leading window.
+///
+/// A file that opens with a UTF-16 / UTF-32 byte-order mark counts too, NUL or
+/// not: its code units are 2 / 4 bytes wide, so every byte-level edit these
+/// fixers make (append a `\n`, drop a `0x20` byte, strip the 2-byte mark without
+/// transcoding) desynchronizes or corrupts it -- and UTF-16 text in non-Latin
+/// scripts (`中文` is `2D 4E 87 65`) carries no NUL for the check above to see.
 pub fn looks_binary(bytes: &[u8]) -> bool {
+    if bytes.contains(&0) {
+        return true;
+    }
+    if crate::no_bom::detect_bom(bytes).is_some_and(|k| k != crate::no_bom::BomKind::Utf8) {
+        return true;
+    }
     let window = &bytes[..bytes.len().min(TEXT_INSPECT_LEN)];
     classify_bytes(window) == Classification::Binary
 }
 
-/// Write `bytes` to `path` atomically: write a uniquely-named sibling temp
-/// file, copy the original's permissions onto it (so an existing mode —
-/// notably the executable bit — survives), `fsync`, then rename it over
-/// `path`. Unlike `std::fs::write` (open-truncate-then-write), a crash or
-/// I/O error mid-write leaves the original intact rather than truncated or
-/// destroyed. The temp is a sibling so the rename is atomic on the same
-/// filesystem, and it is cleaned up on failure. (Manual temp, no `tempfile`
-/// runtime dependency — matching the extends cache.)
-pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    // Unique sibling name: the pid distinguishes concurrent processes, the
-    // atomic counter distinguishes concurrent threads in this process.
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    // Write THROUGH a symlink to its (canonical) target, preserving the link —
-    // matching the prior `fs::write`/append behavior. A bare temp+rename on the
-    // link path would replace the link NODE with a regular file, silently
-    // diverging it from its target (common for a symlinked LICENSE / README in
-    // a monorepo). `canonicalize` needs the target to exist, which it does:
-    // every caller has just read the file via `read_for_fix`.
-    let resolved = match std::fs::symlink_metadata(path) {
-        Ok(m) if m.file_type().is_symlink() => std::fs::canonicalize(path)?,
-        _ => path.to_path_buf(),
-    };
-    let path = resolved.as_path();
-    let dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .map_or_else(|| std::path::PathBuf::from("."), Path::to_path_buf);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let stem = path.file_name().and_then(|f| f.to_str()).unwrap_or("tmp");
-    let tmp = dir.join(format!(".{stem}.alint-fix.{}.{n}", std::process::id()));
-    let write = || -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp)?;
-        // Preserve the original file's mode when it exists (a rewrite).
-        if let Ok(meta) = std::fs::metadata(path) {
-            f.set_permissions(meta.permissions())?;
-        }
-        f.write_all(bytes)?;
-        f.sync_all()
-    };
-    if let Err(e) = write().and_then(|()| std::fs::rename(&tmp, path)) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
-    }
-    Ok(())
+/// How a security-posture character scan (`no_bidi_controls`,
+/// `no_zero_width_chars`) treats a file, decided from its bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CharScan {
+    /// Not binary-looking: scan (lossily; invalid bytes count as one U+FFFD).
+    Text,
+    /// Binary-looking (a NUL, a UTF-16/32 BOM, ...) but VALID UTF-8: scan it.
+    /// NUL is valid UTF-8, so a crafted source file cannot hide a control
+    /// behind one NUL byte. Findings are reported but not auto-fixed (the
+    /// byte-strip fixers refuse binary content).
+    BinaryUtf8,
+    /// Binary-looking AND invalid UTF-8 (a PNG, a font, a JPEG): skipped. A
+    /// lossy decode of random bytes manufactures controls out of noise
+    /// (`D8 9C` decodes to U+061C), so scanning these is all false positives.
+    Skip,
 }
 
+/// Classify `bytes` for a [`CharScan`].
+pub(crate) fn char_scan_mode(bytes: &[u8]) -> CharScan {
+    if !looks_binary(bytes) {
+        CharScan::Text
+    } else if std::str::from_utf8(bytes).is_ok() {
+        CharScan::BinaryUtf8
+    } else {
+        CharScan::Skip
+    }
+}
+
+/// `text` without a leading byte-order mark. Editors hide the BOM, so a
+/// column or width counted from the start of line 1 must not include it.
+pub(crate) fn without_leading_bom(text: &str) -> &str {
+    text.strip_prefix('\u{FEFF}').unwrap_or(text)
+}
+
+/// Iterate physical lines separated by LF, CRLF, or CR without allocating.
+/// Each item carries the byte offset of its first character in `text`.
+pub(crate) fn physical_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    alint_core::physical_lines(text)
+}
+
+/// Find the first char of `bytes` (decoded as UTF-8, lossily) for which
+/// `pred(char, is_first_char)` holds, returning `(1-based line, 1-based
+/// column in chars, char)`. Each maximal invalid byte sequence counts as ONE
+/// U+FFFD, exactly as `String::from_utf8_lossy` would decode it, but nothing is
+/// allocated -- a big file is walked in place.
+pub(crate) fn first_char_where(
+    bytes: &[u8],
+    mut pred: impl FnMut(char, bool) -> bool,
+) -> Option<(usize, usize, char)> {
+    let mut line = 1usize;
+    let mut col = 1usize;
+    let mut first = true;
+    let mut previous_was_cr = false;
+    for chunk in bytes.utf8_chunks() {
+        let invalid = (!chunk.invalid().is_empty()).then_some('\u{FFFD}');
+        for c in chunk.valid().chars().chain(invalid) {
+            if pred(c, first) {
+                return Some((line, col, c));
+            }
+            // A leading BOM is invisible in every editor, so it takes no column.
+            let leading_bom = first && c == '\u{FEFF}';
+            first = false;
+            match c {
+                '\r' => {
+                    line += 1;
+                    col = 1;
+                    previous_was_cr = true;
+                }
+                '\n' if previous_was_cr => previous_was_cr = false,
+                '\n' => {
+                    line += 1;
+                    col = 1;
+                }
+                _ => {
+                    if !leading_bom {
+                        col += 1;
+                    }
+                    previous_was_cr = false;
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Atomic whole-file write, re-exported from `alint-core` so the fixers and the
+/// engine's compose flush share one implementation. See
+/// [`alint_core::write_atomic`].
+pub use alint_core::write_atomic;
+
 /// Hard cap on a single whole-file read across the rule/engine read paths.
-/// Generous — every realistic manifest / source / generated file is orders of
-/// magnitude smaller — yet bounded so a hostile or accidental multi-GB file in
-/// a linted repo can't OOM the run. The over-cap *outcome* varies by read
-/// site: the cross-file kinds (`registry_paths_resolve`, `pair_hash`, …) and
-/// the `for_each` single-literal path yield a clear over-cap violation
-/// (fail-closed); the per-file engine/rule loops and the per-file content
-/// rules skip the file (fail-open, resilient — a file too big to analyze is
-/// left un-analyzed rather than failing the build), logging at `warn` where a
-/// `tracing` sink is available (the `alint-core` loops).
+/// Generous - every realistic manifest / source / generated file is orders of
+/// magnitude smaller - yet bounded so a hostile or accidental multi-GB file in
+/// a linted repo cannot OOM the run. An over-cap file produces a typed
+/// `resource_read` analysis failure wherever its bytes are required for a
+/// policy verdict.
 ///
 /// Re-exported from `alint-core` so every read path shares one cap (M3).
 pub use alint_core::MAX_ANALYZE_BYTES;
 
 /// Failure of [`read_capped`]: the file exceeds
 /// [`MAX_ANALYZE_BYTES`] (carrying its size), or an ordinary I/O
-/// error (kept distinct so callers turn "too large" into a clear
-/// violation rather than reusing their not-found / skip path).
+/// error. Callers preserve this distinction in the analysis-failure message.
 #[derive(Debug)]
 pub enum ReadCapError {
     TooLarge(u64),
@@ -270,6 +345,29 @@ mod tests {
     }
 
     #[test]
+    fn looks_binary_detects_a_nul_past_the_inspect_window() {
+        // AUDIT R2: a NUL byte ANYWHERE means binary -- not just within the leading
+        // `TEXT_INSPECT_LEN` window. A file that is clean text through the window but
+        // has a NUL later must still be refused, or a content fixer corrupts it.
+        let mut buf = vec![b'a'; TEXT_INSPECT_LEN * 2]; // clean text well past the window
+        for chunk in buf.chunks_mut(64) {
+            if let Some(last) = chunk.last_mut() {
+                *last = b'\n';
+            }
+        }
+        assert!(
+            !looks_binary(&buf),
+            "an all-text buffer past the window must NOT be binary"
+        );
+        let nul_pos = TEXT_INSPECT_LEN + 100; // past the leading window
+        buf[nul_pos] = 0;
+        assert!(
+            looks_binary(&buf),
+            "a NUL past the inspect window must still be detected as binary"
+        );
+    }
+
+    #[test]
     fn write_atomic_replaces_content_preserves_mode_and_leaves_no_temp() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("f.txt");
@@ -296,6 +394,36 @@ mod tests {
             .filter_map(std::result::Result::ok)
             .any(|e| e.file_name().to_string_lossy().contains("alint-fix"));
         assert!(!leaked, "atomic write leaked a temp file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_preserves_setuid_and_setgid_bits() {
+        // Round-5 audit: `write_atomic` set the temp file's mode BEFORE writing,
+        // and a `write()` clears S_ISUID/S_ISGID (the kernel's
+        // `should_remove_suid`), silently stripping setuid/setgid from a fixed
+        // file. The plain executable bit survived, which is why the test above
+        // missed it. Now the mode is applied AFTER the last write, preserving the
+        // full mode word. `2775` = setgid + rwxrwxr-x is the tell (setgid is
+        // cleared on write only when group-executable).
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("helper.sh");
+        std::fs::write(&p, b"echo old").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o6755)).unwrap();
+        // Re-read: the FS may already mask bits we can't set unprivileged; assert
+        // against what actually stuck so the test is meaningful either way.
+        let before = std::fs::metadata(&p).unwrap().permissions().mode() & 0o7777;
+        write_atomic(&p, b"echo new").unwrap();
+        let after = std::fs::metadata(&p).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(
+            after, before,
+            "the full mode word (incl. setuid/setgid) must survive an atomic write"
+        );
+        // And specifically: if setgid stuck before, it must still be set.
+        if before & 0o2000 != 0 {
+            assert_ne!(after & 0o2000, 0, "setgid must survive an atomic write");
+        }
     }
 
     #[cfg(unix)]
@@ -346,5 +474,20 @@ mod tests {
             Err(ReadCapError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput),
             _ => panic!("read_capped_with must reject a directory as an Io error"),
         }
+    }
+
+    #[test]
+    fn a_leading_bom_takes_no_column() {
+        let find = |b: &[u8]| first_char_where(b, |c, _| c == 'x');
+        assert_eq!(find(b"\xEF\xBB\xBFabx"), find(b"abx"));
+        assert_eq!(find(b"\xEF\xBB\xBFabx"), Some((1, 3, 'x')));
+        // Only at the very start: a BOM mid-line is a real character.
+        assert_eq!(find(b"a\xEF\xBB\xBFx"), Some((1, 3, 'x')));
+    }
+
+    #[test]
+    fn character_locations_recognize_cr_and_crlf_line_endings() {
+        let find = |b: &[u8]| first_char_where(b, |c, _| c == 'x');
+        assert_eq!(find(b"a\rb\r\nx"), Some((3, 1, 'x')));
     }
 }

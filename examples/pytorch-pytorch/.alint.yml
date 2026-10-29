@@ -15,17 +15,15 @@
 #          indent_style  (already covered in v0.9.17 baseline)
 #   * 9 FORMATTERS (is_formatter=true): CLANGFORMAT NATIVEFUNCTIONS NEWLINE
 #     CODESPELL PYFMT RUFF MERGE_CONFLICTLESS_CSV ATEN_CPU_GPU_AGNOSTIC
-#     SET_LINTER -> command_idempotent  (NEW: was `command` shellouts in
-#     v0.9.17; now we can assert the formatter is a no-op = nothing to fix)
+#     SET_LINTER -> non-mutating `command_idempotent` or path-scoped
+#     `command` checks (NEW; replaces loose shellouts that only proved a tool ran)
 #   * ~12 mature-tool shellouts (clang-tidy/mypy/flake8/ruff/pyrefly/
 #     shellcheck/actionlint/cmakelint/codespell) -> command / command_idempotent
 #   * ~8 AST-aware/semantic -> STAY on lintrunner (non-replaceable, see end)
 #
 # WHAT'S NEW SINCE v0.9.17 (the point of this re-analysis):
-#   + command_idempotent  -> the 9 is_formatter adapters become "running
-#     the formatter in --check mode must be a clean no-op" (the single
-#     biggest collapse; replaces the loose `command` shellouts that only
-#     proved "tool ran", not "tree is already formatted").
+#   + formatter checks -> the is_formatter adapters run in --check mode and
+#     assert that the tree is already formatted.
 #   + generated_file_fresh -> torchgen / generate_ci_workflows.py codegen
 #     freshness (was a hard non-replaceable in v0.9.17).
 #   + cross_file_value_equals -> version.txt coherence.
@@ -33,8 +31,8 @@
 #     resolve to real files (the BUILD<->CMake "sync" — see note below).
 #   + import_gate -> the IMPORT_LINTER banned-third-party check.
 #   + ordered_block -> sorted blocks (testowners / allowlist) where present.
-#   + scope_filter.changed_since -> PR-scope the ~80k-file tree so the
-#     expensive command rules only touch changed files.
+#   + command_idempotent runs each expensive formatter/checker once over
+#     its repository-defined target set.
 #
 # This config SITS BENEATH lintrunner as the structural floor; it does
 # not replace the AST tail. extends: pulls the bundled OSS baselines.
@@ -94,7 +92,7 @@ rules:
     paths:
       include: [".github/**"]
       exclude: ["**/*.rst","**/*.py","**/*.md","**/*.diff","**/fb/**"]
-    pattern: '(pip|pip3|python -m pip|python3 -m pip) install [a-zA-Z0-9][A-Za-z0-9._\-]+([^/=<>~!]+)[A-Za-z0-9._\-*+!]*$'
+    pattern: '(?m)(pip|pip3|python -m pip|python3 -m pip|python3 -mpip|python -mpip) install ([a-zA-Z0-9][A-Za-z0-9._\-]+)([^/=<>~!]+)[A-Za-z0-9._\-*+!]*$'
     level: error
 
   - id: pytorch-typeignore-must-be-qualified  # lintrunner TYPEIGNORE
@@ -122,7 +120,7 @@ rules:
   # baseline. Two representative entries shown; the rest are identical shape.
   - id: pytorch-no-std-call-once              # lintrunner CALL_ONCE
     kind: file_content_forbidden
-    paths: { include: ["c10/**/*.cpp","c10/**/*.h"], exclude: ["c10/util/CallOnce.h","**/fb/**"] }
+    paths: { include: ["c10/**","aten/**","torch/csrc/**","torch/nativert/**"], exclude: ["c10/util/CallOnce.h","**/fb/**"] }
     pattern: 'std::call_once'
     level: warning
   - id: pytorch-no-quoted-include             # lintrunner INCLUDE
@@ -132,16 +130,11 @@ rules:
     level: warning
 
   # ══════════════════════════════════════════════════════════════════
-  # SECTION B — FORMATTERS as command_idempotent  (NEW vs v0.9.17)
+  # SECTION B — FORMATTER CHECKS  (NEW vs v0.9.17)
   #
-  # The 9 is_formatter=true adapters previously could only be wrapped as
-  # `command` shellouts (proves the tool RAN). command_idempotent proves
-  # the stronger invariant the formatters actually enforce in CI:
-  # "running the formatter changes nothing" — i.e. the tree is already
-  # formatted. This is exactly `lintrunner -a` (apply) being a no-op.
-  #
-  # scope_filter.changed_since PR-scopes these so a PR touching 3 files
-  # doesn't re-run ruff/clang-format over the whole 80k-file tree.
+  # The is_formatter adapters run in non-mutating check mode. Tools that
+  # accept a repository-wide invocation use `command_idempotent`; clang-format
+  # receives one selected path through `command` so its filters take effect.
   # ══════════════════════════════════════════════════════════════════
 
   - id: pytorch-pyfmt-idempotent              # lintrunner PYFMT (formatter)
@@ -152,45 +145,30 @@ rules:
     files_from: stdout
     files_pattern: 'Would reformat: (.+)$'
     timeout: 300
-    paths:
-      include: ["**/*.py","**/*.pyi"]
-      exclude: ["caffe2/**","fb/**","**/fb/**","third_party/**","torch/_vendor/**","torch/_inductor/fx_passes/serialized_patterns/**"]
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     level: warning
 
   - id: pytorch-ruff-idempotent               # lintrunner RUFF (formatter)
     kind: command_idempotent
     command: ["ruff", "check", "--no-cache"]
     timeout: 300
-    paths:
-      include: ["**/*.py"]
-      exclude: ["caffe2/**","fb/**","**/fb/**","third_party/**","torch/_vendor/**"]
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     level: warning
 
   - id: pytorch-clang-format-idempotent       # lintrunner CLANGFORMAT (formatter)
-    kind: command_idempotent
-    # --dry-run --Werror is non-mutating and fails iff reformatting needed.
-    command: ["clang-format", "--dry-run", "--Werror"]
-    timeout: 120
+    kind: command
+    # --dry-run --Werror is non-mutating and fails iff reformatting is needed.
     paths:
       include: ["c10/**/*.h","c10/**/*.cpp","torch/headeronly/**/*.h"]
       exclude: ["c10/util/strong_type.h","**/fb/**"]
     scope_filter:
       changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
+    command: ["clang-format", "--dry-run", "--Werror", "{path}"]
+    timeout: 120
     level: warning
 
   - id: pytorch-codespell-idempotent          # lintrunner CODESPELL (formatter)
     kind: command_idempotent
     command: ["codespell", "--toml", "pyproject.toml"]
     timeout: 300
-    paths:
-      include: ["**/*.py","**/*.md","**/*.rst","**/*.cpp","**/*.h"]
-      exclude: ["caffe2/**","fb/**","**/fb/**","third_party/**","torch/_vendor/**","torch/_inductor/fx_passes/serialized_patterns/**"]
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     level: warning
 
   # ══════════════════════════════════════════════════════════════════
@@ -246,23 +224,9 @@ rules:
   # differ. Shown for the libtorch core list (path_prefix="torch/csrc/").
   # ══════════════════════════════════════════════════════════════════
 
-  - id: pytorch-build-variables-paths-resolve # build_variables.bzl integrity
-    kind: registry_paths_resolve
-    source: "build_variables.bzl"
-    extract:
-      # Quoted "*.cpp"/"*.h" path tokens (one capture group). The .bzl is
-      # valid-Python-and-Starlark; this catches the literal source members.
-      regex: '"([A-Za-z0-9_./]+\.(?:cpp|h|cu|cuh))"'
-    base: "torch/csrc"
-    entries_are_globs: false
-    expect: file
-    level: warning
-    message: |
-      A source file listed in build_variables.bzl does not resolve under
-      torch/csrc/. CMake exec()s this .bzl directly (cmake/Codegen.cmake);
-      a dangling entry silently drops a translation unit from the build.
-      (Some lists use a different path_prefix — add a sibling rule with
-      the matching base: if you see false positives.)
+  # build_variables.bzl mixes paths rooted at the repository with paths
+  # rooted under torch/csrc. One registry_paths_resolve base cannot model
+  # both groups, so CMake's direct execution of the file remains authoritative.
 
   # ══════════════════════════════════════════════════════════════════
   # SECTION E — version.txt coherence via cross_file_value_equals  (NEW)
@@ -278,7 +242,7 @@ rules:
   # ══════════════════════════════════════════════════════════════════
 
   - id: pytorch-version-coherence
-    kind: cross_file_value_equals
+    kind: cross_file
     source:
       file: "version.txt"
       extract: { regex: '^([0-9]+\.[0-9]+)' }   # MAJOR.MINOR

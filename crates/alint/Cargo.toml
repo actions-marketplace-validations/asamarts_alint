@@ -11,10 +11,17 @@ readme = "../../README.md"
 keywords = ["linter", "policy", "repository", "structure", "cli"]
 categories = ["development-tools", "command-line-utilities"]
 authors.workspace = true
+autotests = false
 
 [[bin]]
 name = "alint"
 path = "src/main.rs"
+
+# All integration tests build into one binary: tests/main.rs declares each
+# file as a module (docs/design/build-dev-loop.md, section 2).
+[[test]]
+name = "it"
+path = "tests/main.rs"
 
 [dependencies]
 alint-core.workspace = true
@@ -22,6 +29,7 @@ alint-dsl.workspace = true
 alint-rules.workspace = true
 alint-output.workspace = true
 alint-lsp.workspace = true
+alint-testkit.workspace = true
 anstream.workspace = true
 anyhow.workspace = true
 clap.workspace = true
@@ -29,7 +37,7 @@ miette.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
+yaml_serde.workspace = true
 supports-hyperlinks.workspace = true
 terminal_size.workspace = true
 indicatif.workspace = true
@@ -37,6 +45,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 tempfile.workspace = true
 trycmd.workspace = true
 

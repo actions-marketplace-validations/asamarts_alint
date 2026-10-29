@@ -1,3 +1,4 @@
+test_version: 1
 name: ordered_block select sorts only matching lines, ignoring the rest
 tags: [check, ordered_block, content, passing]
 
@@ -25,4 +26,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

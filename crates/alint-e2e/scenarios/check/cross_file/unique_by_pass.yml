@@ -1,3 +1,4 @@
+test_version: 1
 name: unique_by is silent when every key is distinct
 tags: [check, unique_by, cross_file, passing]
 
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

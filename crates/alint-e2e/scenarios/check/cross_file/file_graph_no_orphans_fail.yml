@@ -1,3 +1,4 @@
+test_version: 1
 name: file_graph no_orphans fires on a node with no inbound reference
 tags: [check, file_graph, cross_file]
 
@@ -26,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-orphan-proto, level: error, path: proto/a.proto}

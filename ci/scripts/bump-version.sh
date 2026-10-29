@@ -53,11 +53,20 @@ fi
 echo "==> bump: $CUR -> $NEW"
 
 # 1. Workspace version (single line under [workspace.package]).
-#    We anchor on the literal old version to avoid bumping the
-#    [workspace.dependencies] internal-crate pins (those are the
-#    inter-crate API compat floor — bumped separately when an
-#    inter-crate API breaks).
+#    The workspace dependencies use Cargo caret requirements. Before 1.0, a
+#    new minor is a new compatibility line (`0.18` does not accept `0.19`), and
+#    a new major is always a new compatibility line. Advance the internal-crate
+#    floors in those cases before asking Cargo to resolve the bumped workspace.
 sed -i "s|^version = \"$CUR\"$|version = \"$NEW\"|" Cargo.toml
+
+IFS=. read -r CUR_MAJOR CUR_MINOR _ <<<"$CUR"
+IFS=. read -r NEW_MAJOR NEW_MINOR _ <<<"$NEW"
+if [[ "$CUR_MAJOR" != "$NEW_MAJOR" || ( "$CUR_MAJOR" == "0" && "$CUR_MINOR" != "$NEW_MINOR" ) ]]; then
+  NEW_FLOOR="${NEW_MAJOR}.${NEW_MINOR}.0"
+  sed -i -E \
+    "s#^(alint-[a-z-]+ = \\{ path = \"[^\"]+\", version = \")[0-9]+\\.[0-9]+\\.[0-9]+(\" \\})\$#\\1${NEW_FLOOR}\\2#" \
+    Cargo.toml
+fi
 
 # 1b. Refresh Cargo.lock workspace-crate version entries to match
 #     the new workspace.package.version. Without this explicit
@@ -75,17 +84,25 @@ sed -i "s|^version = \"$CUR\"$|version = \"$NEW\"|" Cargo.toml
 echo "==> refreshing Cargo.lock (cargo metadata --offline)"
 cargo metadata --offline --format-version 1 > /dev/null
 
-# 2. Install snippets across user-facing files. The version
-#    appears as `vX.Y.Z` (GHA ref, pre-commit rev, docker tag with
+# 1c. `facts.json` embeds the workspace version and is generated source. Refresh
+#     it here so the release commit cannot carry a stale discovery contract.
+echo "==> refreshing facts.json (xtask gen-facts)"
+cargo run -q -p xtask -- gen-facts
+
+# 2. Install snippets across user-facing files, plus action.yml's private
+#    ALINT_BAKED_VERSION. Keeping the baked value on the release commit lets a
+#    commit-SHA Action pin select the matching binary without a network lookup;
+#    check-release-version.sh fails a tag whose value was not updated here.
+#    The version appears as `vX.Y.Z` (GHA ref, pre-commit rev, docker tag with
 #    'v'), `:X.Y.Z` (docker tag, bare semver), and once in the
 #    SECURITY.md sentence "as of the vX.Y.Z release". One sed
 #    handles all forms because the regex's `(v|:)` alternation
 #    plus a word boundary on the trailing side covers them.
 SNIPPET_FILES=(
+  action.yml
   README.md
   SECURITY.md
   docs/site/integrations/docker.md
-  docs/site/integrations/github-actions.md
   docs/site/integrations/pre-commit.md
   docs/site/getting-started/installation.md
 )
@@ -185,5 +202,6 @@ echo "  3. alint.org repo (separate): bump src/pages/index.astro JSON-LD softwar
 echo "  4. alint.org repo (separate): bump src/pages/roadmap.astro 'Latest release: vX.Y.Z'"
 echo "  5. alint.org repo (separate): bump src/content/docs/docs/index.mdx 'vX.Y.Z latest' badge"
 echo "  6. verify (alint.org): bash scripts/check-version-pins.sh"
+echo "  7. after publishing the tag, update ci/action-doc-pin.env and the GitHub Action snippets"
 echo
 echo "==> ok to commit + release"

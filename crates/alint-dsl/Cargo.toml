@@ -9,6 +9,7 @@ repository.workspace = true
 homepage = "https://github.com/asamarts/alint"
 readme = "../../README.md"
 authors.workspace = true
+autotests = false
 # Implementation-detail crate of the alint binary, but cargo
 # requires every workspace dep of a published crate to have a
 # resolvable `version =` on crates.io. So this crate publishes
@@ -19,11 +20,17 @@ authors.workspace = true
 # manifest depends on this crate at the workspace version,
 # unresolvable from crates.io. Reverted in v0.8.1.
 
+# All integration tests build into one binary: tests/main.rs declares each
+# file as a module (docs/design/build-dev-loop.md, section 2).
+[[test]]
+name = "it"
+path = "tests/main.rs"
+
 [dependencies]
 alint-core.workspace = true
 directories.workspace = true
 serde.workspace = true
-serde_yaml_ng.workspace = true
+yaml_serde.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

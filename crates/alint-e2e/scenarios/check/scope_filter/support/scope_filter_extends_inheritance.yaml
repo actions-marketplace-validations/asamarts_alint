@@ -1,0 +1,8 @@
+version: 1
+rules:
+  - id: nws
+    kind: no_trailing_whitespace
+    paths: "**/*.rs"
+    scope_filter:
+      has_ancestor: Cargo.toml
+    level: warning

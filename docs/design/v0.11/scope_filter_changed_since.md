@@ -128,7 +128,8 @@ shuffled commits but kept the bad one in history).
 
 Same shape as v0.9.21's `git_commit_message.since:`:
 
-- **No git, or `git` not on PATH**: silent no-op.
+- **No Git, or `git` not on PATH**: originally shipped as a silent no-op; v0.19 W3
+  supersedes this with one `resource_read` analysis failure for the owning rule.
 - **`changed_since:` ref doesn't resolve**: hard error with the
   fetch-depth: 0 hint. Reuses the v0.9.21 error message.
 - **Range is empty** (force-push where base == HEAD): silent

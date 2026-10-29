@@ -1,3 +1,4 @@
+test_version: 1
 name: json_path_equals catches a package.json with the wrong license
 tags: [check, json_path_equals, structured]
 
@@ -26,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: require-mit-license, level: error, path: packages/bad/package.json}

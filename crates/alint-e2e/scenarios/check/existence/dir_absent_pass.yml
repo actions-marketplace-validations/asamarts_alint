@@ -1,3 +1,4 @@
+test_version: 1
 name: dir_absent is silent when the forbidden directory is absent
 tags: [check, dir_absent, passing]
 
@@ -22,4 +23,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

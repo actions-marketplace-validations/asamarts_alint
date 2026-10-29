@@ -1,3 +1,4 @@
+test_version: 1
 name: toml_path_equals catches Cargo.toml with the wrong edition
 tags: [check, toml_path_equals, structured]
 
@@ -32,5 +33,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: rust-edition-2024, level: warning, path: crates/bad/Cargo.toml}

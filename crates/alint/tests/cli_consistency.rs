@@ -51,6 +51,7 @@ const NON_ONLY_SUBCOMMANDS: &[&[&str]] = &[
     &["validate-config"],
     &["suggest"],
     &["baseline"],
+    &["test"],
 ];
 
 #[test]

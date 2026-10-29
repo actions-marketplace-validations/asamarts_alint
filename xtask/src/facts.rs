@@ -2,12 +2,10 @@
 //! contract.
 //!
 //! `facts.json` is the single machine-readable manifest of alint's
-//! surface area: version, the six headline counts (rule kinds,
-//! families, bundled rulesets, auto-fix ops, output formats,
-//! subcommands), and catalogue lists the README, docs, and alint.org
-//! render from instead of restating numbers in prose. Every field
-//! derives from the same canonical source `coverage_audit_readme_claims`
-//! pins the README to, so the contract can't disagree with the README.
+//! surface area: version, headline counts, catalogue lists, and the canonical
+//! per-kind capability inventory. Every field derives from the same canonical
+//! sources that the README and runtime registry use, so the contracts cannot
+//! drift independently.
 //!
 //! Mirrors `gen_schema`: `run(false)` rewrites the file, `run(true)`
 //! content-diffs the committed copy and fails on drift. Carries no
@@ -19,6 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
@@ -26,7 +25,17 @@ use serde::Serialize;
 
 /// Bumped when the `facts.json` shape changes, so a downstream
 /// consumer (alint.org) can pin the schema it understands.
-const FORMAT_VERSION: u32 = 2;
+const FORMAT_VERSION: u32 = 6;
+
+static RULE_REGISTRY: LazyLock<alint_core::RuleRegistry> =
+    LazyLock::new(alint_rules::builtin_registry);
+
+fn load_config(path: &Path) -> Result<alint_core::Config> {
+    Ok(alint_dsl::load_with(
+        path,
+        &alint_dsl::LoadOptions::with_catalog(RULE_REGISTRY.catalog()),
+    )?)
+}
 
 #[derive(Serialize)]
 struct Facts {
@@ -38,6 +47,8 @@ struct Facts {
     categories: Vec<CategoryEntry>,
     rule_categories: BTreeMap<String, Vec<String>>,
     rule_aliases: BTreeMap<String, String>,
+    kind_meta: BTreeMap<String, alint_core::KindMeta>,
+    compatibility: Compatibility,
     rule_source_files: BTreeMap<String, String>,
     example_rule_counts: BTreeMap<String, usize>,
     bench_scenario_rule_counts: BTreeMap<String, usize>,
@@ -51,11 +62,18 @@ struct Facts {
 #[derive(Serialize)]
 struct Counts {
     rule_kinds: usize,
+    rule_aliases: usize,
     families: usize,
     bundled_rulesets: usize,
     auto_fix_ops: usize,
     output_formats: usize,
     subcommands: usize,
+}
+
+#[derive(Serialize)]
+struct Compatibility {
+    config_versions: Vec<u32>,
+    policy_test_versions: Vec<u32>,
 }
 
 /// A category in the taxonomy vocabulary: URL slug, display title, and
@@ -86,7 +104,9 @@ fn build_facts() -> Result<Facts> {
         .collect();
     subcommands.sort();
     let fact_predicates = fact_predicates();
-    let auto_fix_ops = auto_fix_ops_count(&root)?;
+    // The canonical fix-op list, not the `*Fixer` struct count: one fixer can
+    // back several ops (`StructuredFixer` serves `set_value` + `remove_value`).
+    let auto_fix_ops = alint_core::FixSpec::ALL_OP_NAMES.len();
     let categories: Vec<CategoryEntry> = alint_core::Category::ALL
         .iter()
         .map(|c| CategoryEntry {
@@ -115,12 +135,23 @@ fn build_facts() -> Result<Facts> {
         .iter()
         .map(|(alias, canon)| ((*alias).to_string(), (*canon).to_string()))
         .collect();
+    let kind_meta: BTreeMap<String, alint_core::KindMeta> = RULE_REGISTRY
+        .kind_metadata()
+        .map(|(kind, meta)| (kind.to_string(), meta.clone()))
+        .collect();
+    let compatibility = Compatibility {
+        config_versions: (alint_core::Config::MIN_SUPPORTED_VERSION
+            ..=alint_core::Config::CURRENT_VERSION)
+            .collect(),
+        policy_test_versions: vec![alint_testkit::POLICY_TEST_VERSION],
+    };
     let rule_source_files = rule_source_files(&root)?;
     let example_rule_counts = example_rule_counts(&root)?;
     let bench_scenario_rule_counts = bench_scenario_rule_counts(&root)?;
 
     let counts = Counts {
-        rule_kinds: rule_kinds.len(),
+        rule_kinds: alint_rules::categories::KIND_CATEGORIES.len(),
+        rule_aliases: rule_aliases.len(),
         families: families.len(),
         bundled_rulesets: bundled_rulesets.len(),
         auto_fix_ops,
@@ -138,6 +169,8 @@ fn build_facts() -> Result<Facts> {
         rule_categories,
         rule_aliases,
         rule_source_files,
+        kind_meta,
+        compatibility,
         example_rule_counts,
         bench_scenario_rule_counts,
         bundled_rulesets,
@@ -202,20 +235,21 @@ fn rule_kinds(root: &Path) -> Result<Vec<String>> {
 }
 
 /// Map every registered rule kind (canonical **and** alias) to the stem of the
-/// Rust source file it lives in — the module before `::` in each
-/// `registry.register("<kind>", <module>::<builder>)` line of `register_builtin`.
+/// Rust source file it lives in — the module before `::` in each canonical
+/// registration call in `register_builtin`.
 ///
 /// This is the authoritative, drift-proof input for alint.org's `sourceUrlOf`:
-/// a kind whose source is NOT `<kind>.rs` (the 8 structured-query kinds share
-/// `structured_path`, `cross_file_value_equals` aliases `cross_file`, the legacy
-/// short-name aliases reuse their `file_*` file) resolves deterministically with
-/// no network probe. The site gate asserts its resolution equals this map, so a
-/// new shared-source or aliased kind can never silently 404 (audit P4.2 /
-/// documentation-drift.md W3/W4).
+/// a kind whose source is NOT `<kind>.rs` (the 24 structured-query kinds share
+/// `structured_path`, aliases reuse their canonical kind's file) resolves
+/// deterministically with no network probe. The site gate asserts its resolution
+/// equals this map, so a new shared-source or aliased kind can never silently 404
+/// (audit P4.2 / documentation-drift.md W3/W4).
 ///
-/// Parsed from `register_builtin` — the single kind→builder table — rather than
-/// a hand-kept list, and each stem is verified to exist on disk so a rename that
-/// desyncs the table from the tree fails `gen-facts` here, not on the live site.
+/// Parsed from `register_builtin` — the single canonical kind→builder table —
+/// rather than a hand-kept list, and each stem is verified to exist on disk so a
+/// rename that desyncs the table from the tree fails `gen-facts` here, not on the
+/// live site. Alias sources are derived from the registry mapping, not duplicated
+/// in each `register_alias` call.
 fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
     let path = root.join("crates/alint-rules/src/lib.rs");
     let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
@@ -230,16 +264,12 @@ fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
         .context("register_builtin closing brace not found")?;
     let body = &body[..end];
 
-    // `registry.register("<kind>", <module>::<builder>)`, its
-    // `.register_optionless(…)` variant, OR the alias forms
-    // `.register_alias("<alias>", "<canonical>", <module>::<builder>)` /
-    // `.register_alias_optionless(…)`. The captured kind is the FIRST string
-    // literal (the alias name, for the alias forms); the optional second string
-    // literal (the canonical) is skipped; the source stem is the builder's module
-    // segment before `::` (so an alias maps to its canonical rule's file). `\s`
-    // spans the newline in the multi-line register calls.
+    // Canonical registrations use `register` / `register_optionless`. Capture
+    // both the metadata and builder module: decision K3 requires the record to
+    // live beside the builder, and the module is also the source mapping. `\s`
+    // spans multi-line calls.
     let re = Regex::new(
-        r#"\.register(?:_alias_optionless|_optionless|_alias)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*(?:"[A-Za-z0-9_]+"\s*,\s*)?([a-z0-9_]+)::"#,
+        r#"\.register(?:_optionless)?\(\s*"([A-Za-z0-9_]+)"\s*,\s*&([a-z0-9_]+)::[A-Z0-9_]+\s*,\s*([a-z0-9_]+)::"#,
     )
     .expect("static regex compiles");
     let src_dir = root.join("crates/alint-rules/src");
@@ -247,16 +277,50 @@ fn rule_source_files(root: &Path) -> Result<BTreeMap<String, String>> {
     for cap in re.captures_iter(body) {
         let kind = cap[1].to_string();
         let stem = cap[2].to_string();
+        let builder_stem = &cap[3];
         anyhow::ensure!(
-            src_dir.join(format!("{stem}.rs")).exists(),
-            "register_builtin maps kind `{kind}` to `{stem}::…` but \
-             crates/alint-rules/src/{stem}.rs does not exist (rename drift)"
+            stem == builder_stem,
+            "register_builtin maps kind `{kind}` to metadata in `{stem}` but its builder is in \
+             `{builder_stem}`; decision K3 requires them beside each other"
         );
-        map.insert(kind, stem);
+        // A rule module is either a flat `<stem>.rs` or a directory module
+        // `<stem>/mod.rs` (e.g. `cross_file`, split into spec/eval/mod). Resolve to
+        // the path stem whose `.rs` exists, so `sourceUrlOf` links the real file
+        // (`cross_file/mod.rs`, not a phantom `cross_file.rs`).
+        let resolved = if src_dir.join(format!("{stem}.rs")).exists() {
+            stem
+        } else if src_dir.join(&stem).join("mod.rs").exists() {
+            format!("{stem}/mod")
+        } else {
+            anyhow::bail!(
+                "register_builtin maps kind `{kind}` to `{stem}::…` but neither \
+                 crates/alint-rules/src/{stem}.rs nor crates/alint-rules/src/{stem}/mod.rs \
+                 exists (rename drift)"
+            );
+        };
+        map.insert(kind, resolved);
     }
+
+    let registry = alint_rules::builtin_registry();
+    for (alias, canonical) in registry.aliases() {
+        let resolved = map
+            .get(canonical)
+            .with_context(|| {
+                format!(
+                    "registry alias `{alias}` targets `{canonical}`, which has no parsed source"
+                )
+            })?
+            .clone();
+        map.insert(alias.to_string(), resolved);
+    }
+
+    let registered: BTreeSet<String> = registry.known_kinds().map(str::to_string).collect();
+    let mapped: BTreeSet<String> = map.keys().cloned().collect();
     anyhow::ensure!(
-        !map.is_empty(),
-        "parsed zero register() entries from register_builtin"
+        mapped == registered,
+        "source-map coverage mismatch vs registry.\n  missing: {:?}\n  extra: {:?}",
+        registered.difference(&mapped).collect::<Vec<_>>(),
+        mapped.difference(&registered).collect::<Vec<_>>()
     );
     Ok(map)
 }
@@ -288,7 +352,7 @@ fn example_rule_counts(root: &Path) -> Result<BTreeMap<String, usize>> {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        let loaded = alint_dsl::load(&config)
+        let loaded = load_config(&config)
             .with_context(|| format!("load examples/{name}/.alint.yml for its rule count"))?;
         map.insert(name, loaded.rules.len());
     }
@@ -307,7 +371,7 @@ fn example_rule_counts(root: &Path) -> Result<BTreeMap<String, usize>> {
 /// Lets the benchmarks page interpolate each scenario's "N rules" label from
 /// the current ruleset instead of a hand-typed `~34` that silently drifts as
 /// the bundled rulesets a scenario `extends:` grow (P3 bench-count contract /
-/// documentation-drift.md). Only the stable synthetic S1-S14 configs are
+/// documentation-drift.md). Only the stable synthetic S1-S4 configs are
 /// counted; a real-repo pass's rule count (e.g. the nixpkgs run) is a
 /// point-in-time measurement, tracked like the case-study historical numbers.
 fn bench_scenario_rule_counts(root: &Path) -> Result<BTreeMap<String, usize>> {
@@ -322,7 +386,7 @@ fn bench_scenario_rule_counts(root: &Path) -> Result<BTreeMap<String, usize>> {
             continue;
         };
         let id = format!("S{}", &cap[1]);
-        let loaded = alint_dsl::load(&entry.path())
+        let loaded = load_config(&entry.path())
             .with_context(|| format!("load bench scenario {name} for its rule count"))?;
         map.insert(id, loaded.rules.len());
     }
@@ -406,11 +470,11 @@ fn bundled_ruleset_sizes(root: &Path) -> Result<BTreeMap<String, usize>> {
                     .replace('\\', "/");
                 let src = fs::read_to_string(&path)
                     .with_context(|| format!("read {}", path.display()))?;
-                let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&src)
+                let doc: yaml_serde::Value = yaml_serde::from_str(&src)
                     .with_context(|| format!("parse {} as YAML", path.display()))?;
                 let count = doc
                     .get("rules")
-                    .and_then(serde_yaml_ng::Value::as_sequence)
+                    .and_then(yaml_serde::Value::as_sequence)
                     .map_or(0, Vec::len);
                 out.insert(rel, count);
             }
@@ -433,30 +497,6 @@ fn output_formats(root: &Path) -> Result<Vec<String>> {
         .collect();
     names.sort();
     Ok(names)
-}
-
-/// `pub struct *Fixer` declarations (recursive) under `fixers/`.
-fn auto_fix_ops_count(root: &Path) -> Result<usize> {
-    fn walk(dir: &Path) -> Result<usize> {
-        let mut n = 0;
-        for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
-            let path = entry?.path();
-            if path.is_dir() {
-                n += walk(&path)?;
-            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-                let src = fs::read_to_string(&path)
-                    .with_context(|| format!("read {}", path.display()))?;
-                for line in src.lines() {
-                    let line = line.trim_start();
-                    if line.starts_with("pub struct ") && line.contains("Fixer") {
-                        n += 1;
-                    }
-                }
-            }
-        }
-        Ok(n)
-    }
-    walk(&root.join("crates/alint-rules/src/fixers"))
 }
 
 /// The built-in fact-kind names, taken from `alint_core::FactKind::ALL_NAMES`
@@ -577,6 +617,61 @@ mod tests {
         );
     }
 
+    /// The serialized capability inventory covers exactly the canonical kinds
+    /// and preserves structured conditions/operations for machine consumers.
+    #[test]
+    fn kind_meta_covers_canonical_kinds_with_structured_capabilities() {
+        let facts = build_facts().expect("build facts");
+        let canonical: BTreeSet<String> = RULE_REGISTRY
+            .canonical_kinds()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(
+            facts.kind_meta.keys().cloned().collect::<BTreeSet<_>>(),
+            canonical
+        );
+        assert!(
+            facts
+                .rule_aliases
+                .keys()
+                .all(|alias| !facts.kind_meta.contains_key(alias)),
+            "aliases must resolve through rule_aliases rather than duplicate KindMeta records"
+        );
+
+        let json = serde_json::to_value(&facts).expect("facts serialize");
+        let command = &json["kind_meta"]["command_idempotent"];
+        assert_eq!(
+            command["capabilities"][0]["capability"]["kind"],
+            "spawn_user_command"
+        );
+        assert_eq!(command["selectors"][0]["name"], "workdir");
+        assert_eq!(command["selectors"][0]["type"], "literal_path");
+
+        let absent = &json["kind_meta"]["file_absent"];
+        assert_eq!(
+            absent["capabilities"][0]["condition"]["option"],
+            "git_tracked_only"
+        );
+        assert_eq!(
+            absent["fix_ops"],
+            serde_json::json!(["file_remove", "git_untrack", "relocate"])
+        );
+    }
+
+    #[test]
+    fn compatibility_inventory_comes_from_runtime_constants() {
+        let facts = build_facts().expect("build facts");
+        assert_eq!(facts.format_version, 6);
+        assert_eq!(
+            facts.compatibility.config_versions,
+            vec![alint_core::Config::CURRENT_VERSION]
+        );
+        assert_eq!(
+            facts.compatibility.policy_test_versions,
+            vec![alint_testkit::POLICY_TEST_VERSION]
+        );
+    }
+
     /// `rule_source_files` covers EVERY registered kind and alias (so
     /// alint.org's `sourceUrlOf` can resolve any of them without a hand-map),
     /// each mapped stem's `.rs` exists, and the known shared-source / alias
@@ -640,7 +735,7 @@ mod tests {
         for (kind, expected) in [
             ("json_path_equals", "structured_path"),
             ("xml_path_matches", "structured_path"),
-            ("cross_file_value_equals", "cross_file"),
+            ("cross_file_value_equals", "cross_file/mod"),
             ("content_matches", "file_content_matches"),
             ("header", "file_header"),
             ("max_size", "file_max_size"),
@@ -686,7 +781,7 @@ mod tests {
                 "example_rule_counts[{study}] is 0 — the config resolved to no rules"
             );
             // The count must equal a fresh load's resolved rule count.
-            let loaded = alint_dsl::load(&examples.join(study).join(".alint.yml"))
+            let loaded = load_config(&examples.join(study).join(".alint.yml"))
                 .unwrap_or_else(|e| panic!("reload {study}: {e}"));
             assert_eq!(
                 *count,
@@ -722,8 +817,9 @@ mod tests {
         );
         assert_eq!(
             on_disk.len(),
-            14,
-            "expected the 14 synthetic bench scenarios"
+            4,
+            "expected the 4 numbered synthetic bench scenarios (S1-S4; the fix-only \
+             sfix_all.yml is excluded by the s<N>_ regex)"
         );
 
         for (id, count) in &f.bench_scenario_rule_counts {
@@ -731,12 +827,23 @@ mod tests {
         }
     }
 
-    /// The five list-backed counts equal their list lengths, and every
-    /// list is sorted + de-duplicated.
+    /// Canonical kinds plus aliases equal the accepted-name list; the other
+    /// list-backed counts equal their list lengths. Every list is sorted and
+    /// de-duplicated.
     #[test]
     fn counts_equal_list_lengths_and_lists_are_sorted() {
         let f = build_facts().expect("build facts");
-        assert_eq!(f.counts.rule_kinds, f.rule_kinds.len());
+        assert_eq!(
+            f.counts.rule_kinds + f.counts.rule_aliases,
+            f.rule_kinds.len()
+        );
+        assert_eq!(f.counts.rule_aliases, f.rule_aliases.len());
+        assert!(
+            f.rule_aliases
+                .keys()
+                .all(|alias| f.rule_kinds.contains(alias)),
+            "every alias must remain in the accepted-name rule_kinds list"
+        );
         assert_eq!(f.counts.families, f.families.len());
         assert_eq!(f.counts.bundled_rulesets, f.bundled_rulesets.len());
         assert_eq!(f.counts.output_formats, f.output_formats.len());

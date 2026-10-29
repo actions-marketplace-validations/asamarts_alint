@@ -1,3 +1,4 @@
+test_version: 1
 name: scope_filter on nested per-file rule under for_each_dir literal-path bypass
 tags: [check, scope_filter, for_each_dir, nested, regression]
 
@@ -35,12 +36,10 @@ given:
         kind: for_each_dir
         select: "pkg/*"
         require:
-          - id: nws-data
-            kind: no_trailing_whitespace
+          - kind: no_trailing_whitespace
             paths: "{path}/data.txt"
             scope_filter:
               has_ancestor: marker.lock
-            level: warning
         level: warning
 
 when: [check]
@@ -49,5 +48,6 @@ expect:
   # Only the in-scope file fires. If the bypass dropped the
   # scope_filter (the v0.9.8 bug), `pkg/no-marker/data.txt`
   # would also produce a violation and this assertion fails.
-  - violations:
+  - exit: success
+    violations:
       - {rule: nws-per-pkg, level: warning, path: pkg/with-marker/data.txt}

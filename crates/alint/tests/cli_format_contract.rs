@@ -27,6 +27,7 @@
 //! All gates drive the actual binary (`CARGO_BIN_EXE_alint`) so they
 //! exercise the same clap surface and renderers users hit.
 
+use alint_output::Format;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -619,14 +620,14 @@ fn help_wraps_to_narrow_terminal_width() {
     }
 }
 
-// ─── Explain surfaces a summary + docs link for every kind (ADR-0011) ─
+// ─── Explain catalog detail for every kind (ADRs 0011, 0012; v0.19 W1) ─
 //
-// The generated per-kind summary bridge must yield a non-empty `summary:` line
-// and a `docs:` deep link for EVERY registered kind. Drives `all_kinds.yaml`
-// (the same all-kinds driver ADR-0012 established) so a newly registered kind
-// missing a `docs/rules.md` summary can't ship silently.
+// The generated per-kind bridges must yield a non-empty summary, docs deep
+// link, and KindMeta discovery fields for EVERY registered kind. Drives
+// `all_kinds.yaml` (the all-kinds driver ADR-0012 established) so a newly
+// registered kind cannot silently lose catalog detail.
 #[test]
-fn explain_surfaces_summary_and_docs_for_every_kind() {
+fn explain_surfaces_catalog_detail_for_every_kind() {
     let fixture = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../alint-dsl/tests/fixtures/all_kinds.yaml"
@@ -659,8 +660,14 @@ fn explain_surfaces_summary_and_docs_for_every_kind() {
             docs.starts_with("https://alint.org/docs/rules/") && docs.contains(family),
             "explain {id} json docs link is wrong (family {family:?}): {docs:?}"
         );
+        for field in ["capabilities", "selectors", "fix_ops"] {
+            assert!(
+                v[field].is_array(),
+                "explain {id} json has no {field} array: {v}"
+            );
+        }
 
-        // Human: the same summary and the same docs link must be visible.
+        // Human: the same summary, docs link, and metadata fields are visible.
         let human = String::from_utf8_lossy(&run(dir.path(), &["explain", id]).stdout).into_owned();
         assert!(
             human.lines().any(|l| {
@@ -674,6 +681,14 @@ fn explain_surfaces_summary_and_docs_for_every_kind() {
             human.contains(docs),
             "explain {id} human is missing its docs link:\n{human}"
         );
+        for label in ["capabilities:", "selectors:", "fix_ops:"] {
+            assert!(
+                human
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(label)),
+                "explain {id} human is missing {label:?}:\n{human}"
+            );
+        }
     }
 }
 
@@ -689,17 +704,38 @@ fn rules_show_and_search_over_summaries() {
     let out =
         String::from_utf8_lossy(&run(dir.path(), &["rules", "show", "content_matches"]).stdout)
             .into_owned();
-    assert!(
-        out.contains("file_content_matches")
-            && out.contains("https://alint.org/docs/rules/content/file_content_matches/"),
-        "rules show must resolve the alias and print the canonical docs link:\n{out}"
-    );
+    for expected in [
+        "file_content_matches",
+        "https://alint.org/docs/rules/content/file_content_matches/",
+        "capabilities: git(diff) [when scope_filter.changed_since is set]",
+    ] {
+        assert!(
+            out.contains(expected),
+            "rules show must resolve the alias and include derived capabilities ({expected:?}):\n{out}"
+        );
+    }
 
-    // JSON: a summary + docs link.
+    let capabilities =
+        String::from_utf8_lossy(&run(dir.path(), &["rules", "show", "command_idempotent"]).stdout)
+            .into_owned();
+    for expected in [
+        "capabilities: spawn_user_command, env_export",
+        "selectors:    workdir (literal_path, rerootable), files_pattern (regex)",
+        "fix_ops:      none",
+        "trace:        required=selection,assertion; optional=none; preview=false; nested=false",
+    ] {
+        assert!(
+            capabilities.contains(expected),
+            "rules show human output is missing {expected:?}:\n{capabilities}"
+        );
+    }
+
+    // JSON carries the structured metadata, including capability conditions and
+    // every accepted fix operation.
     let v: serde_json::Value = serde_json::from_slice(
         &run(
             dir.path(),
-            &["rules", "show", "file_hash", "--format", "json"],
+            &["rules", "show", "file_absent", "--format", "json"],
         )
         .stdout,
     )
@@ -714,6 +750,22 @@ fn rules_show_and_search_over_summaries() {
             .is_some_and(|s| s.starts_with("https://")),
         "rules show json must carry a docs link: {v}"
     );
+    assert_eq!(v["capabilities"][0]["capability"]["kind"], "git");
+    assert_eq!(
+        v["capabilities"][0]["condition"]["option"],
+        "git_tracked_only"
+    );
+    assert_eq!(
+        v["fix_ops"],
+        serde_json::json!(["file_remove", "git_untrack", "relocate"])
+    );
+    assert_eq!(v["selectors"], serde_json::json!([]));
+    assert_eq!(
+        v["trace"]["required_stages"],
+        serde_json::json!(["selection", "assertion"])
+    );
+    assert_eq!(v["trace"]["emits_preview_rows"], false);
+    assert_eq!(v["trace"]["nested_evaluation"], false);
 
     // `list --search` matches summary text: "digest" is in file_hash's summary,
     // not its name.
@@ -843,6 +895,130 @@ fn agent_format_only_emits_runnable_commands() {
         checked_prose,
         "fixture produced no agent_instruction with an `alint …` command"
     );
+}
+
+fn note_only_fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("crates/core")).unwrap();
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/core\", \"${DYNAMIC}/generated\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("crates/core/Cargo.toml"),
+        "[package]\nname = \"core\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        "version: 1\n\
+         rules:\n\
+        \x20 - id: note-sentinel\n\
+        \x20   kind: registry_paths_resolve\n\
+        \x20   source: Cargo.toml\n\
+        \x20   extract: { toml: \"$.workspace.members[*]\" }\n\
+        \x20   expect: dir\n\
+        \x20   level: error\n",
+    )
+    .unwrap();
+    dir
+}
+
+// ─── ADR-0012 / W4 — notes reach every check format ────────────────
+
+#[test]
+fn note_only_run_is_successful_and_visible_in_every_check_format() {
+    let dir = note_only_fixture();
+
+    for (format, name) in [
+        (Format::Human, "human"),
+        (Format::Json, "json"),
+        (Format::Sarif, "sarif"),
+        (Format::Github, "github"),
+        (Format::Markdown, "markdown"),
+        (Format::Junit, "junit"),
+        (Format::Gitlab, "gitlab"),
+        (Format::Agent, "agent"),
+    ] {
+        let mut args = vec!["check", "--format", name];
+        if format == Format::Human {
+            args.push("--show-notes");
+        }
+        let out = run(dir.path(), &args);
+        assert!(
+            out.status.success(),
+            "{name} escalated a note-only report: stdout={}\nstderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        match format {
+            Format::Human => {
+                assert!(stdout.contains("All 1 rule(s) passed"));
+                assert!(stderr.contains("skipped non-literal entry"));
+                assert!(stderr.contains("${DYNAMIC}/generated"));
+            }
+            Format::Json => {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                assert_eq!(value["summary"]["total_violations"], 0);
+                assert_eq!(value["summary"]["passing_rules"], 1);
+                assert_eq!(value["results"][0]["notes"][0]["kind"], "informational");
+                assert!(
+                    value["results"][0]["notes"][0]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("${DYNAMIC}/generated")
+                );
+            }
+            Format::Sarif => {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                let results = value["runs"][0]["results"].as_array().unwrap();
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0]["level"], "note");
+                assert!(
+                    results[0]["message"]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("${DYNAMIC}/generated")
+                );
+            }
+            Format::Github => {
+                assert!(stdout.contains("::notice title=alint notes::1 note;"));
+                assert!(stdout.contains("--format json"));
+                assert!(!stdout.contains("${DYNAMIC}/generated"));
+            }
+            Format::Markdown => {
+                assert!(stdout.contains("No violations found."));
+                assert!(stdout.contains("> 1 note;"));
+                assert!(stdout.contains("--format json"));
+                assert!(!stdout.contains("${DYNAMIC}/generated"));
+            }
+            Format::Junit => {
+                assert!(stdout.contains("tests=\"1\" failures=\"0\""));
+                assert!(stdout.contains("<system-out>1 note;"));
+                assert!(!stdout.contains("${DYNAMIC}/generated"));
+            }
+            Format::Gitlab => {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                assert_eq!(value.as_array().unwrap().len(), 1);
+                assert_eq!(value[0]["check_name"], "alint-informational-notes");
+                assert_eq!(value[0]["severity"], "info");
+            }
+            Format::Agent => {
+                let value: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+                assert_eq!(value["summary"]["total_violations"], 0);
+                assert_eq!(value["notes"]["count"], 1);
+                assert_eq!(value["notes"]["details_format"], "json");
+                assert_eq!(
+                    value["violations"].as_array().unwrap().as_slice(),
+                    &[] as &[serde_json::Value]
+                );
+            }
+        }
+    }
 }
 
 // ─── G1c — `fix` rejects formats it can't render, before mutating ───
@@ -1080,6 +1256,7 @@ fn explain_surfaces_manifest_scope_filter() {
     // half of that fix unguarded (a Windows-only regression). A member resolves
     // relative to the manifest's dir, so `a` becomes `pkg/a`.
     std::fs::create_dir(dir.path().join("pkg")).unwrap();
+    std::fs::create_dir(dir.path().join("nested")).unwrap();
     std::fs::write(
         dir.path().join("pkg/Cargo.toml"),
         "[workspace]\nmembers = [\"a\"]\n",
@@ -1100,7 +1277,10 @@ fn explain_surfaces_manifest_scope_filter() {
     )
     .unwrap();
 
-    let out = run(dir.path(), &["explain", "rs-members", "--format", "json"]);
+    let out = run(
+        &dir.path().join("nested"),
+        &["explain", "rs-members", "--format", "json"],
+    );
     let v: serde_json::Value =
         serde_json::from_slice(&out.stdout).expect("explain --format json must be JSON");
     let scopes = v["scope_filter"]["manifest_scopes"]
@@ -1117,9 +1297,41 @@ fn explain_surfaces_manifest_scope_filter() {
         "explain json didn't resolve the manifest scope to pkg/a: {v}"
     );
 
-    let out = run(dir.path(), &["explain", "rs-members"]);
+    let out = run(&dir.path().join("nested"), &["explain", "rs-members"]);
     let s = String::from_utf8_lossy(&out.stdout);
     for needle in ["include_manifest_paths", "pkg/Cargo.toml", "pkg/a"] {
         assert!(s.contains(needle), "explain human dropped {needle:?}:\n{s}");
+    }
+}
+
+#[test]
+fn explain_redacts_secret_bearing_manifest_scope_values() {
+    const SECRET: &str = "EXPLAIN_SCOPE_SECRET_DO_NOT_REPORT";
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join(".env"), format!("FILES={SECRET}\n")).unwrap();
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        "version: 1\n\
+         rules:\n\
+        \x20 - id: selected-files\n\
+        \x20   kind: no_trailing_whitespace\n\
+        \x20   paths: \"**\"\n\
+        \x20   level: warning\n\
+        \x20   scope_filter:\n\
+        \x20     include_manifest_paths:\n\
+        \x20       source: .env\n\
+        \x20       extract: { dotenv: \"$.FILES\" }\n",
+    )
+    .unwrap();
+
+    for args in [
+        &["explain", "selected-files"][..],
+        &["explain", "selected-files", "--format", "json"][..],
+    ] {
+        let output = run(dir.path(), args);
+        assert!(output.status.success(), "{output:?}");
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        assert!(!rendered.contains(SECRET), "{rendered}");
+        assert!(rendered.contains("<redacted:"), "{rendered}");
     }
 }

@@ -1,0 +1,35 @@
+test_version: 1
+name: json_schema_passes flags malformed properties as one parse analysis failure
+tags: [check, json_schema_passes, structured, properties, failing]
+
+# The properties parse-error path (symmetry with the dotenv/XML malformed
+# scenarios): a `.properties` file with an invalid `\uXXXX` escape fails to parse
+# and yields exactly ONE parse analysis failure, not a flood.
+
+given:
+  tree:
+    schemas:
+      any.schema.json: |
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object"
+        }
+    "application.properties": |
+      server.port=8080
+      bad=\uZZZZ
+  config: |
+    version: 1
+    rules:
+      - id: props-parse
+        kind: json_schema_passes
+        paths: "application.properties"
+        schema_path: "schemas/any.schema.json"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: props-parse, kind: resource_parse, path: application.properties}

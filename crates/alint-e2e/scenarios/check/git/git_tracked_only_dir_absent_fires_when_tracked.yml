@@ -1,3 +1,4 @@
+test_version: 1
 name: dir_absent + git_tracked_only fires when target/ has tracked content
 tags: [check, dir_absent, git_tracked_only, git]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-tracked-target, level: error, path: target}

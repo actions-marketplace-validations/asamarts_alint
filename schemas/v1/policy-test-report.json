@@ -1,0 +1,556 @@
+{
+  "$id": "https://alint.org/schemas/v1/policy-test-report.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "alint policy-test report v1",
+  "description": "Stable JSON report emitted by `alint test --format json`.",
+  "type": "object",
+  "properties": {
+    "issues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PolicyTestIssue"
+      }
+    },
+    "kind": {
+      "type": "string",
+      "const": "policy-test-report"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "summary": {
+      "$ref": "#/$defs/PolicyTestSummary"
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PolicyTestRecord"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "tests",
+    "summary"
+  ],
+  "$defs": {
+    "ExpectedExit": {
+      "description": "Expected command-level outcome for a step.",
+      "type": "string",
+      "enum": [
+        "success",
+        "policy_failure",
+        "fix_non_convergent",
+        "configuration_error"
+      ]
+    },
+    "Mismatch": {
+      "type": "object",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/MismatchChannel"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "step": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "channel",
+        "detail"
+      ]
+    },
+    "MismatchChannel": {
+      "type": "string",
+      "enum": [
+        "exit",
+        "violations",
+        "analysis_failures",
+        "notes",
+        "applied",
+        "skipped",
+        "suggested",
+        "unfixable",
+        "non_convergent",
+        "diff",
+        "configuration_error",
+        "tree",
+        "snapshot",
+        "platform"
+      ]
+    },
+    "ObservedAnalysisFailure": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "end_column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "end_line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "kind",
+        "message"
+      ]
+    },
+    "ObservedNote": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "end_column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "end_line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ]
+    },
+    "ObservedRelatedLocation": {
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "end_column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "end_line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "label": {
+          "type": "string"
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "path"
+      ]
+    },
+    "ObservedViolation": {
+      "type": "object",
+      "properties": {
+        "baseline_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "end_column": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "end_line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "is_fixable": {
+          "type": "boolean"
+        },
+        "level": {
+          "type": "string"
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObservedRelatedLocation"
+          }
+        },
+        "rule": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "level",
+        "message",
+        "is_fixable",
+        "fingerprint",
+        "related"
+      ]
+    },
+    "PolicyTestIssue": {
+      "description": "Definition, discovery, or runner-preflight problem for one selected test.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "field": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "PolicyTestRecord": {
+      "description": "One selected policy test and its deterministic outcome.",
+      "type": "object",
+      "properties": {
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PolicyTestIssue"
+          }
+        },
+        "mismatches": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Mismatch"
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/PolicyTestStatus"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PolicyTestStepReport"
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "name",
+        "tags",
+        "status",
+        "steps",
+        "mismatches",
+        "issues"
+      ]
+    },
+    "PolicyTestStatus": {
+      "type": "string",
+      "enum": [
+        "passed",
+        "failed",
+        "invalid",
+        "skipped"
+      ]
+    },
+    "PolicyTestStepReport": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "observation": {
+          "$ref": "#/$defs/StepObservation"
+        },
+        "operation": {
+          "$ref": "#/$defs/TestStep"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "operation",
+        "observation"
+      ]
+    },
+    "PolicyTestSummary": {
+      "type": "object",
+      "properties": {
+        "failed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "invalid": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "passed": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "selected": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "selected",
+        "passed",
+        "failed",
+        "invalid",
+        "skipped"
+      ]
+    },
+    "StepObservation": {
+      "type": "object",
+      "properties": {
+        "analysis_failures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObservedAnalysisFailure"
+          }
+        },
+        "applied": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "configuration_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diff": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exit": {
+          "$ref": "#/$defs/ExpectedExit"
+        },
+        "non_convergent": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObservedNote"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "suggested": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "unfixable": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ObservedViolation"
+          }
+        }
+      },
+      "required": [
+        "exit",
+        "violations",
+        "analysis_failures",
+        "notes",
+        "applied",
+        "skipped",
+        "suggested",
+        "unfixable",
+        "non_convergent"
+      ]
+    },
+    "TestStep": {
+      "description": "Operation executed by one test step.",
+      "type": "string",
+      "enum": [
+        "check",
+        "fix",
+        "fix_unsafe",
+        "fix_dry_run",
+        "check_changed"
+      ]
+    }
+  }
+}

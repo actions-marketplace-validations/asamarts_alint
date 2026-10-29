@@ -18,7 +18,7 @@ rules:
   # --- Required top-level documents ---------------------------------
   - id: oss-readme-exists
     kind: file_exists
-    paths: ["README.md", "README", "README.rst"]
+    paths: ["README.md", "README", "README.rst", "readme.md", "readme"]
     root_only: true
     level: warning
     message: "An open-source repo should have a README at the root."
@@ -36,6 +36,8 @@ rules:
     paths:
       - "LICENSE"
       - "LICENSE.{md,txt,TXT,rst}"
+      - "license"
+      - "license.{md,txt,rst}"
       - "LICENSE-APACHE"
       - "LICENSE-MIT"
       - "LICENSE-BSD"
@@ -58,6 +60,8 @@ rules:
     paths:
       - "LICENSE"
       - "LICENSE.{md,txt,TXT,rst}"
+      - "license"
+      - "license.{md,txt,rst}"
       - "LICENSE-APACHE"
       - "LICENSE-MIT"
       - "LICENSE-BSD"
@@ -73,7 +77,7 @@ rules:
     # lines is intentionally gentle — passes for most real
     # READMEs without nagging early-stage repos.
     kind: file_min_lines
-    paths: ["README.md", "README", "README.rst"]
+    paths: ["README.md", "README", "README.rst", "readme.md", "readme"]
     min_lines: 3
     level: info
     message: "README is very short; add a brief description and at least a usage / install section."
@@ -88,7 +92,7 @@ rules:
   - id: oss-security-policy-non-empty
     # Mirrors OpenSSF Scorecard's Security-Policy check: the file
     # has to actually contain reporting guidance, not be a stub.
-    # 200 bytes is the same floor we use for LICENSE.
+    # 200 bytes is the same floor as the LICENSE rule's.
     kind: file_min_size
     paths: ["SECURITY.md", ".github/SECURITY.md", "docs/SECURITY.md"]
     min_bytes: 200

@@ -16,10 +16,10 @@ use std::path::Path;
 use alint_core::{Context, FileEntry, FileIndex, RuleSpec};
 
 /// Parse a `RuleSpec` from a YAML literal. Panics on parse
-/// errors with a clear message — tests are expected to feed
+/// errors with a clear message - tests are expected to feed
 /// it well-formed input.
 pub fn spec_yaml(yaml: &str) -> RuleSpec {
-    serde_yaml_ng::from_str(yaml)
+    yaml_serde::from_str(yaml)
         .unwrap_or_else(|e| panic!("invalid spec yaml: {e}\n=== input ===\n{yaml}"))
 }
 
@@ -69,6 +69,9 @@ pub fn ctx<'a>(root: &'a Path, idx: &'a FileIndex) -> Context<'a> {
         vars: None,
         git_tracked: None,
         git_blame: None,
+        analysis_time: None,
+        process_environment: None,
+        trace: None,
     }
 }
 

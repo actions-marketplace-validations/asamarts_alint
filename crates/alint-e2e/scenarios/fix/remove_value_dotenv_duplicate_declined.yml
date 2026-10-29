@@ -1,0 +1,42 @@
+test_version: 1
+name: remove_value declines a duplicate dotenv key -- ambiguous, writes nothing
+tags: [fix, dotenv_path_absent, remove_value, dotenv, safety]
+
+# Safety property. JSONPath collapses the two physical declarations to one
+# last-wins key, without selecting a particular occurrence. The native key API
+# requires uniqueness, so the resolver declines rather than invent an occurrence
+# policy. The fix is skipped, the violation stands, and expect_tree proves both
+# declarations remain byte-for-byte intact.
+
+given:
+  tree:
+    .env: |
+      TOKEN=a
+      TOKEN=b
+  config: |
+    version: 1
+    rules:
+      - id: no-token
+        kind: dotenv_path_absent
+        paths: "**/.env"
+        path: "$.TOKEN"
+        level: error
+        fix:
+          remove_value: { applicability: safe }
+
+when: [check, fix, check]
+
+expect:
+  - exit: policy_failure
+    violations:
+      - {rule: no-token, level: error, path: .env}
+  - exit: policy_failure
+    skipped: [no-token]
+  - exit: policy_failure
+    violations:
+      - {rule: no-token, level: error, path: .env}
+
+expect_tree:
+  .env: |
+    TOKEN=a
+    TOKEN=b

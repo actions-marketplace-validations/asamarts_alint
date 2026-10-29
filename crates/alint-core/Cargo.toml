@@ -11,17 +11,26 @@ readme = "../../README.md"
 keywords = ["linter", "policy", "repository", "structure"]
 categories = ["development-tools"]
 authors.workspace = true
+autotests = false
+
+# All integration tests build into one binary: tests/main.rs declares each
+# file as a module (docs/design/build-dev-loop.md, section 2).
+[[test]]
+name = "it"
+path = "tests/main.rs"
 
 [dependencies]
 thiserror.workspace = true
 serde.workspace = true
-serde_yaml_ng.workspace = true
+yaml_serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 globset.workspace = true
 ignore.workspace = true
 rayon.workspace = true
+parking_lot.workspace = true
 regex.workspace = true
+regex-syntax.workspace = true
 tracing.workspace = true
 # Structured-document extract machinery hoisted from alint-rules:
 # TOML/XML/JSONPath parsing behind `Format`/`ExtractSpec`, whose
@@ -29,7 +38,15 @@ tracing.workspace = true
 schemars.workspace = true
 serde_json_path.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
+jsonc-parser.workspace = true
 roxmltree.workspace = true
+java-properties.workspace = true
+encoding_rs.workspace = true
+hcl.workspace = true
+saphyr.workspace = true
+saphyr-parser.workspace = true
+adotenv.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

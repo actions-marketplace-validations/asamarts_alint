@@ -1,0 +1,1031 @@
+{
+  "$id": "https://alint.org/schemas/v1/policy-test.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "alint policy test v1",
+  "description": "A complete `test_version: 1` policy-test document.",
+  "type": "object",
+  "properties": {
+    "capabilities": {
+      "description": "Host capabilities requested by this document. Declarations are not grants.",
+      "$ref": "#/$defs/TestCapabilities",
+      "default": {
+        "host_keyring": false,
+        "spawn": false
+      }
+    },
+    "docs": {
+      "description": "Optional executable documentation metadata.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PolicyDocsExample"
+        }
+      ]
+    },
+    "expect": {
+      "description": "One expectation for each operation in `when`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/StepExpectation"
+      },
+      "minItems": 1
+    },
+    "expect_tree": {
+      "description": "Optional final repository tree assertion.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TreeSpec"
+        }
+      ]
+    },
+    "expect_tree_mode": {
+      "description": "Final-tree assertion mode.",
+      "$ref": "#/$defs/TreeExpectationMode",
+      "default": "strict"
+    },
+    "given": {
+      "description": "Repository, config, environment, time, and Git inputs.",
+      "$ref": "#/$defs/GivenV1"
+    },
+    "name": {
+      "description": "Human-readable policy-test name.",
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "snapshot": {
+      "description": "Optional package-relative JSON snapshot path.",
+      "type": "string",
+      "allOf": [
+        {
+          "not": {
+            "pattern": "^(?:/|[A-Za-z]:)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "\\\\"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(?:^|/)\\.\\.(?:/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "(?:^|/)\\.(?:/|$)"
+          }
+        },
+        {
+          "not": {
+            "pattern": "//|/$"
+          }
+        }
+      ],
+      "minLength": 1,
+      "pattern": "\\.json$"
+    },
+    "tags": {
+      "description": "Selection and explicit platform tags.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "uniqueItems": true
+    },
+    "test_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "when": {
+      "description": "Ordered production operations.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TestStep"
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "test_version",
+    "name",
+    "given",
+    "when",
+    "expect"
+  ],
+  "$defs": {
+    "AnalysisFailureKindMatcher": {
+      "description": "Stable analysis-failure class matcher.",
+      "type": "string",
+      "enum": [
+        "evaluation",
+        "condition",
+        "resource_read",
+        "resource_parse",
+        "nested_rule_build"
+      ]
+    },
+    "AnalysisFailureMatcher": {
+      "description": "Typed analysis-failure matcher.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 1
+        },
+        "end_column": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnalysisFailureKindMatcher"
+            }
+          ]
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageMatcher"
+            }
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rule": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rule"
+      ]
+    },
+    "ConfigurationErrorMatcher": {
+      "description": "Matcher for a configuration error raised before evaluation.",
+      "type": "object",
+      "properties": {
+        "message": {
+          "description": "Redacted diagnostic text matcher.",
+          "$ref": "#/$defs/MessageMatcher"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "message"
+      ]
+    },
+    "ExecNode": {
+      "description": "An executable (`0755`) regular file, written as a reserved-key mapping:\n`{ \"$exec\": \"content\" }`. Serde tries this before [`TreeNode::Dir`], so a\nmapping carrying `$exec` is always this node - `$exec` is therefore a\nreserved filename (a fixture cannot materialise a literal file named\n`$exec`; nothing needs to).",
+      "type": "object",
+      "properties": {
+        "$exec": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "$exec"
+      ]
+    },
+    "ExpectedExit": {
+      "description": "Expected command-level outcome for a step.",
+      "type": "string",
+      "enum": [
+        "success",
+        "policy_failure",
+        "fix_non_convergent",
+        "configuration_error"
+      ]
+    },
+    "GivenV1": {
+      "description": "Inputs owned by one policy test.",
+      "type": "object",
+      "properties": {
+        "as_of": {
+          "description": "Explicit analysis date in `YYYY-MM-DD` form.",
+          "type": "string"
+        },
+        "config": {
+          "description": "Inline `.alint.yml` body. Mutually exclusive with `config_file`.",
+          "type": "string"
+        },
+        "config_file": {
+          "description": "Package-relative config path. Mutually exclusive with `config`.",
+          "type": "string",
+          "allOf": [
+            {
+              "not": {
+                "pattern": "^(?:/|[A-Za-z]:)"
+              }
+            },
+            {
+              "not": {
+                "pattern": "\\\\"
+              }
+            },
+            {
+              "not": {
+                "pattern": "(?:^|/)\\.\\.(?:/|$)"
+              }
+            },
+            {
+              "not": {
+                "pattern": "(?:^|/)\\.(?:/|$)"
+              }
+            },
+            {
+              "not": {
+                "pattern": "//|/$"
+              }
+            }
+          ],
+          "minLength": 1
+        },
+        "env": {
+          "description": "Deterministic environment visible to interpolation and explicitly granted commands.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[^\\u0000]*$"
+          },
+          "default": {},
+          "propertyNames": {
+            "pattern": "^[^=\\u0000]+$"
+          }
+        },
+        "fixture": {
+          "description": "Package-relative repository fixture directory. Mutually exclusive with `tree`.",
+          "type": "string",
+          "allOf": [
+            {
+              "not": {
+                "pattern": "^(?:/|[A-Za-z]:)"
+              }
+            },
+            {
+              "not": {
+                "pattern": "\\\\"
+              }
+            },
+            {
+              "not": {
+                "pattern": "(?:^|/)\\.\\.(?:/|$)"
+              }
+            },
+            {
+              "not": {
+                "pattern": "(?:^|/)\\.(?:/|$)"
+              }
+            },
+            {
+              "not": {
+                "pattern": "//|/$"
+              }
+            }
+          ],
+          "minLength": 1
+        },
+        "git": {
+          "description": "Optional isolated Git history setup.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolicyGit"
+            }
+          ]
+        },
+        "tree": {
+          "description": "Inline repository tree. Mutually exclusive with `fixture`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TreeSpec"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "fixture"
+                ]
+              },
+              "required": [
+                "tree"
+              ]
+            },
+            {
+              "not": {
+                "required": [
+                  "tree"
+                ]
+              },
+              "required": [
+                "fixture"
+              ]
+            }
+          ]
+        },
+        {
+          "oneOf": [
+            {
+              "not": {
+                "required": [
+                  "config_file"
+                ]
+              },
+              "required": [
+                "config"
+              ]
+            },
+            {
+              "not": {
+                "required": [
+                  "config"
+                ]
+              },
+              "required": [
+                "config_file"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "LevelMatcher": {
+      "description": "Finding severity matcher.",
+      "type": "string",
+      "enum": [
+        "error",
+        "warning",
+        "info",
+        "off"
+      ]
+    },
+    "MessageMatcher": {
+      "description": "Exact or regex text matcher. Runtime validation requires exactly one arm.",
+      "type": "object",
+      "properties": {
+        "exact": {
+          "type": "string"
+        },
+        "regex": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "regex"
+            ]
+          },
+          "required": [
+            "exact"
+          ]
+        },
+        {
+          "not": {
+            "required": [
+              "exact"
+            ]
+          },
+          "required": [
+            "regex"
+          ]
+        }
+      ]
+    },
+    "NoteMatcher": {
+      "description": "Informational-note matcher.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 1
+        },
+        "end_column": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "kind": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageMatcher"
+            }
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyCommit": {
+      "description": "One commit in `given.git.commits`.",
+      "anyOf": [
+        {
+          "description": "Empty commit with this subject.",
+          "type": "string",
+          "pattern": "^[^\\u0000]+$"
+        },
+        {
+          "description": "Commit with explicit staged paths and optional date.",
+          "$ref": "#/$defs/PolicyDetailedCommit"
+        }
+      ]
+    },
+    "PolicyDetailedCommit": {
+      "description": "Detailed commit fixture.",
+      "type": "object",
+      "properties": {
+        "add": {
+          "description": "Paths staged before the commit.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "oneOf": [
+              {
+                "const": "."
+              },
+              {
+                "allOf": [
+                  {
+                    "not": {
+                      "pattern": "^(?:/|[A-Za-z]:)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "\\\\"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "(?:^|/)\\.\\.(?:/|$)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "(?:^|/)\\.(?:/|$)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "//|/$"
+                    }
+                  }
+                ],
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "date": {
+          "description": "Git-compatible deterministic author/committer date.",
+          "type": "string",
+          "pattern": "^[^\\u0000]+$"
+        },
+        "message": {
+          "description": "Commit message.",
+          "type": "string",
+          "pattern": "^[^\\u0000]+$"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "message"
+      ]
+    },
+    "PolicyDocsCase": {
+      "description": "Whether an example demonstrates a finding or a compliant repository.",
+      "type": "string",
+      "enum": [
+        "fail",
+        "pass"
+      ]
+    },
+    "PolicyDocsExample": {
+      "description": "Metadata consumed by the executable documentation exporter.",
+      "type": "object",
+      "properties": {
+        "case": {
+          "$ref": "#/$defs/PolicyDocsCase"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "order": {
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "case",
+        "kind"
+      ]
+    },
+    "PolicyGit": {
+      "description": "Git setup for a public policy test.",
+      "type": "object",
+      "properties": {
+        "add": {
+          "description": "Paths staged without force.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "oneOf": [
+              {
+                "const": "."
+              },
+              {
+                "allOf": [
+                  {
+                    "not": {
+                      "pattern": "^(?:/|[A-Za-z]:)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "\\\\"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "(?:^|/)\\.\\.(?:/|$)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "(?:^|/)\\.(?:/|$)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "//|/$"
+                    }
+                  }
+                ],
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "add_force": {
+          "description": "Paths staged with force.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "oneOf": [
+              {
+                "const": "."
+              },
+              {
+                "allOf": [
+                  {
+                    "not": {
+                      "pattern": "^(?:/|[A-Za-z]:)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "\\\\"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "(?:^|/)\\.\\.(?:/|$)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "(?:^|/)\\.(?:/|$)"
+                    }
+                  },
+                  {
+                    "not": {
+                      "pattern": "//|/$"
+                    }
+                  }
+                ],
+                "minLength": 1
+              }
+            ]
+          }
+        },
+        "commit": {
+          "description": "Commit the staged paths in the single-commit form.",
+          "type": "boolean",
+          "default": true
+        },
+        "commits": {
+          "description": "Ordered commit chain, mutually exclusive with `add` and `add_force`.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PolicyCommit"
+          }
+        },
+        "init": {
+          "description": "Initialize a repository before running steps.",
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyTestDocs": {
+      "properties": {
+        "kind": {
+          "pattern": "\\S"
+        },
+        "title": {
+          "pattern": "\\S"
+        }
+      }
+    },
+    "RelatedLocationMatcher": {
+      "description": "Related-location matcher. A present related list is exact after canonical ordering.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "end_column": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
+    "StepExpectation": {
+      "description": "Exact assertions for one step. Omitted result channels are deliberately unasserted.",
+      "type": "object",
+      "properties": {
+        "analysis_failures": {
+          "description": "Exact analysis-failure channel when present.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AnalysisFailureMatcher"
+          }
+        },
+        "applied": {
+          "description": "Rule ids with an applied fix.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "uniqueItems": true
+        },
+        "configuration_error": {
+          "description": "Required diagnostic assertion for `configuration_error`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigurationErrorMatcher"
+            }
+          ]
+        },
+        "diff": {
+          "description": "Exact canonical unified diff when present.",
+          "type": "string"
+        },
+        "exit": {
+          "description": "Required command-level outcome.",
+          "$ref": "#/$defs/ExpectedExit"
+        },
+        "non_convergent": {
+          "description": "Exact non-convergence flag when present.",
+          "type": "boolean"
+        },
+        "notes": {
+          "description": "Exact note channel when present.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NoteMatcher"
+          }
+        },
+        "skipped": {
+          "description": "Rule ids with a skipped fix.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "uniqueItems": true
+        },
+        "suggested": {
+          "description": "Rule ids with a suggested fix.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "uniqueItems": true
+        },
+        "unfixable": {
+          "description": "Rule ids with an unfixable result.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "uniqueItems": true
+        },
+        "violations": {
+          "description": "Exact policy-finding channel when present.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ViolationMatcher"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "exit"
+      ]
+    },
+    "SymlinkNode": {
+      "description": "A symbolic link, written as a reserved-key mapping: `{ \"$symlink\": \"target\" }`.\n`$symlink` is a reserved filename like `$exec`. Unix-only to materialise.",
+      "type": "object",
+      "properties": {
+        "$symlink": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "$symlink"
+      ]
+    },
+    "TestCapabilities": {
+      "description": "Closed capability declaration. The CLI must grant each requested capability separately.",
+      "type": "object",
+      "properties": {
+        "host_keyring": {
+          "description": "Permit rules that read the host keyring.",
+          "type": "boolean",
+          "default": false
+        },
+        "spawn": {
+          "description": "Permit rules/fixers that can execute native processes.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "TestStep": {
+      "description": "Operation executed by one test step.",
+      "type": "string",
+      "enum": [
+        "check",
+        "fix",
+        "fix_unsafe",
+        "fix_dry_run",
+        "check_changed"
+      ]
+    },
+    "TreeExpectationMode": {
+      "description": "Final-tree comparison mode.",
+      "type": "string",
+      "enum": [
+        "strict",
+        "contains"
+      ]
+    },
+    "TreeNode": {
+      "description": "A node in a tree spec: either a file (scalar) or a directory\n(mapping of child names to nodes).\n\nSerde `untagged` round-trip: a YAML scalar deserializes to\n[`TreeNode::File`] and a YAML mapping deserializes to\n[`TreeNode::Dir`].",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/ExecNode"
+        },
+        {
+          "$ref": "#/$defs/SymlinkNode"
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/TreeNode"
+          },
+          "propertyNames": {
+            "allOf": [
+              {
+                "not": {
+                  "enum": [
+                    ".",
+                    ".."
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "pattern": "[/\\\\\\u0000]"
+                }
+              },
+              {
+                "not": {
+                  "pattern": "^[A-Za-z]:"
+                }
+              },
+              {
+                "not": {
+                  "pattern": "^\\.[gG][iI][tT]$"
+                }
+              }
+            ],
+            "minLength": 1
+          }
+        }
+      ]
+    },
+    "TreeSpec": {
+      "description": "A tree-spec root: always a directory at the top level. The\nouter map's keys are the children of the materialization root.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/TreeNode"
+      },
+      "propertyNames": {
+        "allOf": [
+          {
+            "not": {
+              "enum": [
+                ".",
+                ".."
+              ]
+            }
+          },
+          {
+            "not": {
+              "pattern": "[/\\\\\\u0000]"
+            }
+          },
+          {
+            "not": {
+              "pattern": "^[A-Za-z]:"
+            }
+          },
+          {
+            "not": {
+              "pattern": "^\\.[gG][iI][tT]$"
+            }
+          }
+        ],
+        "minLength": 1
+      }
+    },
+    "ViolationMatcher": {
+      "description": "Policy-finding matcher.",
+      "type": "object",
+      "properties": {
+        "column": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 1
+        },
+        "end_column": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "level": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LevelMatcher"
+            }
+          ]
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "message": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageMatcher"
+            }
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RelatedLocationMatcher"
+          }
+        },
+        "rule": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rule"
+      ]
+    }
+  }
+}

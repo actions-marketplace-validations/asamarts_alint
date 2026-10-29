@@ -1,3 +1,4 @@
+test_version: 1
 name: generated_file_fresh fires when the committed file is stale
 tags: [check, generated_file_fresh, plugin]
 
@@ -5,6 +6,9 @@ docs:
   title: A committed generated file gone stale
   case: fail
   kind: generated_file_fresh
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -25,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: list-fresh, level: error, path: gen/list.txt}

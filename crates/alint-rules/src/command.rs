@@ -4,8 +4,8 @@
 //! given `command:` argv with path-template substitution, capture
 //! exit code and stdout/stderr. Exit `0` is a pass; non-zero is
 //! one violation whose message is the (truncated) stdout+stderr.
-//! Spawn / wait failures and timeouts produce a violation with a
-//! clear cause line.
+//! Spawn / wait failures and timeouts produce an `evaluation` analysis
+//! failure because no policy verdict was obtained.
 //!
 //! ```yaml
 //! - id: workflows-clean
@@ -44,14 +44,19 @@
 //! execution simply by being fetched. Mirrors the existing
 //! `custom:` fact gate.
 
-use std::io::Read;
 use std::path::Path;
 use std::process::{Command as StdCommand, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use alint_core::process::{RunOutcome, run_bounded};
 use alint_core::template::{PathTokens, render_path_argv};
-use alint_core::{Context, Error, FactValue, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    AnalysisFailureKind, Applicability, Context, Error, FactValue, FixSpec, Fixer, Level, Result,
+    Rule, RuleSpec, Scope, Violation,
+};
 use serde::Deserialize;
+
+use crate::fixers::CommandFixFixer;
 
 /// Default per-file timeout. Generous for slow tools (kubeconform
 /// pulling schemas, slow shellcheck on large files) but bounded
@@ -61,13 +66,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 30;
 /// Cap on each of stdout / stderr captured into a violation
 /// message. Tools like cargo can emit tens of MB on a single
 /// failed file; bound it to keep reports legible and memory low.
-const OUTPUT_CAP_BYTES: usize = 16 * 1024;
-
-/// Granularity of the wait-loop. 10ms is short enough that fast
-/// tools (10–50ms typical for shellcheck per file) don't see
-/// noticeable polling overhead, and long enough to keep CPU
-/// idle while the child runs.
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const OUTPUT_CAP_BYTES: u64 = 16 * 1024;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -77,7 +76,7 @@ struct Options {
     #[schemars(length(min = 1))]
     command: Vec<String>,
     /// Per-file timeout in seconds. Default 30. Past this, the child is killed
-    /// and a violation reports the timeout.
+    /// and a non-baselinable `evaluation` analysis failure reports the timeout.
     #[serde(default)]
     #[schemars(range(min = 1))]
     timeout: Option<u64>,
@@ -94,6 +93,9 @@ pub struct CommandRule {
     scope: Scope,
     argv: Vec<String>,
     timeout: Duration,
+    /// Optional `command` fix op: a user-supplied `run:` command. Spawning, so
+    /// refused from any non-top-level source before this rule is ever built.
+    fixer: Option<CommandFixFixer>,
 }
 
 impl Rule for CommandRule {
@@ -101,6 +103,10 @@ impl Rule for CommandRule {
 
     fn path_scope(&self) -> Option<&Scope> {
         Some(&self.scope)
+    }
+
+    fn fixer(&self) -> Option<&dyn Fixer> {
+        self.fixer.as_ref().map(|f| f as &dyn Fixer)
     }
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
@@ -116,7 +122,7 @@ impl Rule for CommandRule {
                 .iter()
                 .map(|s| render_path_argv(s, &tokens))
                 .collect();
-            if let Outcome::Fail(msg) = run_one(
+            match run_one(
                 &rendered,
                 ctx.root,
                 &entry.path,
@@ -125,20 +131,30 @@ impl Rule for CommandRule {
                 ctx,
                 self.timeout,
             ) {
-                let final_msg = self.message.clone().unwrap_or(msg);
-                violations.push(Violation::new(final_msg).with_path(entry.path.clone()));
+                Outcome::Pass => {}
+                Outcome::PolicyFailure(message) => {
+                    let message = self.message.clone().unwrap_or(message);
+                    violations.push(Violation::new(message).with_path(entry.path.clone()));
+                }
+                Outcome::AnalysisFailure(message) => {
+                    violations.push(
+                        Violation::new(message)
+                            .with_path(entry.path.clone())
+                            .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                    );
+                }
             }
         }
         Ok(violations)
     }
 }
 
-/// Outcome of one per-file invocation. `Pass` produces no
-/// violation; `Fail(message)` becomes a single violation
-/// anchored on the file path.
+/// Outcome of one per-file invocation. A nonzero process status is the
+/// configured policy verdict; spawn/wait/timeout errors mean no verdict.
 enum Outcome {
     Pass,
-    Fail(String),
+    PolicyFailure(String),
+    AnalysisFailure(String),
 }
 
 #[allow(clippy::too_many_arguments)] // Fewer args = more state-keeping; this is the natural shape.
@@ -152,15 +168,16 @@ fn run_one(
     timeout: Duration,
 ) -> Outcome {
     let Some((program, rest)) = argv.split_first() else {
-        return Outcome::Fail("command rule's argv is empty".to_string());
+        return Outcome::AnalysisFailure("command rule's argv is empty".to_string());
     };
 
     let mut cmd = StdCommand::new(program);
+    if let Some(environment) = ctx.process_environment {
+        cmd.env_clear().envs(environment);
+    }
     cmd.args(rest)
         .current_dir(root)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .env("ALINT_PATH", rel_path.to_string_lossy().as_ref())
         .env("ALINT_ROOT", root.to_string_lossy().as_ref())
         .env("ALINT_RULE_ID", rule_id)
@@ -177,69 +194,37 @@ fn run_one(
         }
     }
 
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            return Outcome::Fail(format!(
-                "could not spawn `{}`: {} \
-                 (is it on PATH? working dir: {})",
-                program,
-                e,
-                root.display()
-            ));
+    // Shared bounded runner (audit 2026-10 findings 4/5): stdout/stderr are
+    // drained CONCURRENTLY (draining only after exit deadlocked a child writing
+    // more than a pipe buffer, which then hit a bogus "did not exit" timeout),
+    // and the wait is bounded even when a grandchild holds the pipe (in a
+    // non-interactive run the timeout kills the whole process group; see
+    // `alint_core::process`). Output past the cap is read and discarded.
+    match run_bounded(cmd, timeout, OUTPUT_CAP_BYTES, true) {
+        RunOutcome::Exited { status, .. } if status.success() => Outcome::Pass,
+        RunOutcome::Exited { status, .. } if status.code().is_none() => {
+            Outcome::AnalysisFailure(format!(
+                "`{program}` terminated without an exit status before producing a policy verdict"
+            ))
         }
-    };
-
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let stdout_bytes = drain(child.stdout.take());
-                let stderr_bytes = drain(child.stderr.take());
-                if status.success() {
-                    return Outcome::Pass;
-                }
-                return Outcome::Fail(format_failure(
-                    program,
-                    status.code(),
-                    &stdout_bytes,
-                    &stderr_bytes,
-                ));
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Outcome::Fail(format!(
-                        "`{}` did not exit within {}s (raise `timeout:` on the rule to extend)",
-                        program,
-                        timeout.as_secs()
-                    ));
-                }
-                std::thread::sleep(POLL_INTERVAL);
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Outcome::Fail(format!("`{program}` wait error: {e}"));
-            }
-        }
+        RunOutcome::Exited {
+            status,
+            stdout,
+            stderr,
+        } => Outcome::PolicyFailure(format_failure(program, status.code(), &stdout, &stderr)),
+        RunOutcome::SpawnError(e) => Outcome::AnalysisFailure(format!(
+            "could not spawn `{}`: {} \
+             (is it on PATH? working dir: {})",
+            program,
+            e,
+            root.display()
+        )),
+        RunOutcome::TimedOut => Outcome::AnalysisFailure(format!(
+            "`{}` did not exit within {}s (raise `timeout:` on the rule to extend)",
+            program,
+            timeout.as_secs()
+        )),
     }
-}
-
-/// Read up to [`OUTPUT_CAP_BYTES`] from a captured pipe. Errors
-/// drain to an empty buffer so the failure-message render still
-/// produces something useful for the user.
-fn drain(pipe: Option<impl Read>) -> Vec<u8> {
-    let Some(mut p) = pipe else {
-        return Vec::new();
-    };
-    let mut buf = Vec::with_capacity(1024);
-    let _ = p
-        .by_ref()
-        .take(OUTPUT_CAP_BYTES as u64)
-        .read_to_end(&mut buf);
-    buf
 }
 
 fn format_failure(program: &str, code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
@@ -266,6 +251,34 @@ fn fact_to_env(v: &FactValue) -> String {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::RuleMajorScoped,
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::SpawnUserCommand,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::EnvExport,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+    ]),
+    content: alint_core::ContentAccess::Delegated,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("command")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(_paths) = &spec.paths else {
         return Err(Error::rule_config(
@@ -282,14 +295,35 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             "command rule's `command:` argv must not be empty",
         ));
     }
-    if spec.fix.is_some() {
-        return Err(Error::rule_config(
-            &spec.id,
-            "command rules do not support `fix:` blocks in v0.5.x — \
-             wire a paired fix-on-save tool via a separate `command` \
-             rule (or another rule kind) for now",
-        ));
-    }
+    // The only supported fix op is `command`: a user-supplied `run:` argv. It is
+    // spawning, so `alint_dsl::reject_spawning_fix_ops_in` already refused it from
+    // any non-top-level source before this builder runs (a ruleset the user
+    // `extends:` can never introduce one).
+    let fixer = match &spec.fix {
+        None => None,
+        Some(FixSpec::Command { command }) => {
+            if command.run.is_empty() {
+                return Err(Error::rule_config(
+                    &spec.id,
+                    "command fix's `run:` argv must not be empty",
+                ));
+            }
+            Some(CommandFixFixer::new(
+                command.run.clone(),
+                Duration::from_secs(command.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS)),
+                command.applicability.unwrap_or(Applicability::Unsafe),
+            ))
+        }
+        Some(other) => {
+            return Err(Error::rule_config(
+                &spec.id,
+                format!(
+                    "fix.{} is not compatible with command (only `command`)",
+                    other.op_name()
+                ),
+            ));
+        }
+    };
     let timeout = Duration::from_secs(opts.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS));
     Ok(Box::new(CommandRule {
         id: spec.id.clone(),
@@ -299,6 +333,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         scope: Scope::from_spec(spec)?,
         argv: opts.command,
         timeout,
+        fixer,
     }))
 }
 
@@ -335,6 +370,7 @@ mod tests {
             scope: Scope::from_patterns(&[scope.to_string()]).unwrap(),
             argv: argv.into_iter().map(String::from).collect(),
             timeout,
+            fixer: None,
         }
     }
 
@@ -347,6 +383,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         }
     }
 
@@ -404,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_emits_violation() {
+    fn timeout_emits_analysis_failure() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
         let index = idx(&["a.txt"]);
@@ -413,6 +452,89 @@ mod tests {
             "*.txt",
             Duration::from_millis(150),
         );
+        let raw = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert_eq!(
+            result.analysis_failures[0].kind,
+            AnalysisFailureKind::Evaluation,
+        );
+        assert!(result.analysis_failures[0].message.contains("did not exit"));
+    }
+
+    #[test]
+    fn signal_termination_emits_analysis_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let index = idx(&["a.txt"]);
+        let r = rule(
+            vec!["/bin/sh", "-c", "kill -TERM $$"],
+            "*.txt",
+            Duration::from_secs(5),
+        );
+        let raw = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert_eq!(
+            result.analysis_failures[0].kind,
+            AnalysisFailureKind::Evaluation,
+        );
+    }
+
+    #[test]
+    fn output_larger_than_a_pipe_buffer_does_not_time_out() {
+        // Audit 2026-10 finding 4: stdout was drained only after `try_wait`
+        // reported exit, so a child writing > 64 KiB blocked on the full pipe
+        // and was reported as "did not exit within 3s".
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let index = idx(&["a.txt"]);
+        let r = rule(
+            vec![
+                "/bin/sh",
+                "-c",
+                "head -c 200000 /dev/zero | tr '\\0' x; exit 0",
+            ],
+            "*.txt",
+            Duration::from_secs(3),
+        );
+        let v = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        assert!(v.is_empty(), "unexpected violations: {v:?}");
+        // A failing run with huge output still reports, with the output capped.
+        let r = rule(
+            vec![
+                "/bin/sh",
+                "-c",
+                "head -c 200000 /dev/zero | tr '\\0' x; exit 3",
+            ],
+            "*.txt",
+            Duration::from_secs(3),
+        );
+        let v = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        assert_eq!(v.len(), 1);
+        assert!(
+            v[0].message.contains("exit 3"),
+            "msg len {}",
+            v[0].message.len()
+        );
+        assert!(v[0].message.len() < 20 * 1024);
+    }
+
+    #[test]
+    fn timeout_is_enforced_when_a_grandchild_holds_the_pipe() {
+        // Audit 2026-10 finding 5: killing only `sh` left `sleep` holding
+        // stdout; the run took the full sleep instead of the timeout.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        let index = idx(&["a.txt"]);
+        let r = rule(
+            vec!["/bin/sh", "-c", "sleep 15; echo x"],
+            "*.txt",
+            Duration::from_millis(500),
+        );
+        let start = std::time::Instant::now();
         let v = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
         assert_eq!(v.len(), 1);
         assert!(
@@ -420,10 +542,15 @@ mod tests {
             "msg: {}",
             v[0].message
         );
+        assert!(
+            start.elapsed() < Duration::from_secs(6),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
-    fn unknown_program_produces_spawn_error_violation() {
+    fn unknown_program_produces_spawn_analysis_failure() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
         let index = idx(&["a.txt"]);
@@ -432,9 +559,15 @@ mod tests {
             "*.txt",
             Duration::from_secs(2),
         );
-        let v = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
-        assert_eq!(v.len(), 1);
-        assert!(v[0].message.contains("could not spawn"));
+        let raw = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
+        let result = alint_core::RuleResult::new("t".into(), Level::Info, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert!(
+            result.analysis_failures[0]
+                .message
+                .contains("could not spawn")
+        );
     }
 
     #[test]
@@ -461,7 +594,7 @@ level: error
 paths: "*.txt"
 command: []
 "#;
-        let spec: RuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
+        let spec: RuleSpec = yaml_serde::from_str(yaml).unwrap();
         let err = build(&spec).expect_err("empty argv must error");
         assert!(format!("{err}").contains("argv must not be empty"));
     }
@@ -474,13 +607,14 @@ kind: command
 level: error
 command: ["/bin/true"]
 "#;
-        let spec: RuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
+        let spec: RuleSpec = yaml_serde::from_str(yaml).unwrap();
         let err = build(&spec).expect_err("missing paths must error");
         assert!(format!("{err}").contains("requires a `paths` field"));
     }
 
     #[test]
-    fn fix_block_rejected_at_build_time() {
+    fn incompatible_fix_block_rejected_at_build_time() {
+        // The only supported fix op is `command`; any other op is a config error.
         let yaml = r#"
 id: t
 kind: command
@@ -490,9 +624,47 @@ command: ["/bin/true"]
 fix:
   file_remove: {}
 "#;
-        let spec: RuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
-        let err = build(&spec).expect_err("fix on command rule must error");
-        assert!(format!("{err}").contains("do not support `fix:`"));
+        let spec: RuleSpec = yaml_serde::from_str(yaml).unwrap();
+        let err = build(&spec).expect_err("an incompatible fix op must error");
+        assert!(format!("{err}").contains("file_remove"), "{err}");
+        assert!(
+            format!("{err}").contains("not compatible with command"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn command_fix_builds_and_attaches_a_fixer() {
+        let yaml = r#"
+id: t
+kind: command
+level: error
+paths: "*.js"
+command: ["eslint", "{path}"]
+fix:
+  command:
+    run: ["eslint", "--fix", "{path}"]
+"#;
+        let spec: RuleSpec = yaml_serde::from_str(yaml).unwrap();
+        let rule = build(&spec).expect("a command fix must build");
+        assert!(rule.fixer().is_some(), "the command fix attaches a fixer");
+    }
+
+    #[test]
+    fn command_fix_rejects_an_empty_run_argv() {
+        let yaml = r#"
+id: t
+kind: command
+level: error
+paths: "*.js"
+command: ["eslint", "{path}"]
+fix:
+  command:
+    run: []
+"#;
+        let spec: RuleSpec = yaml_serde::from_str(yaml).unwrap();
+        let err = build(&spec).expect_err("an empty run argv must error");
+        assert!(format!("{err}").contains("run"), "{err}");
     }
 
     #[test]
@@ -517,7 +689,7 @@ scope_filter:
   has_ancestor: marker.lock
 command: ["/bin/sh", "-c", "exit 1"]
 "#;
-        let spec: RuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
+        let spec: RuleSpec = yaml_serde::from_str(yaml).unwrap();
         let r = build(&spec).unwrap();
         let v = r.evaluate(&ctx(tmp.path(), &index)).unwrap();
         assert_eq!(v.len(), 1, "only in-scope file should fire: {v:?}");

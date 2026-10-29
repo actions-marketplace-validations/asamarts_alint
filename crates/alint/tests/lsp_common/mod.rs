@@ -1,6 +1,7 @@
 //! Shared LSP test harness: spawns the real `alint lsp` binary and
 //! speaks framed JSON-RPC over stdio. Used by `lsp_smoke.rs` (the full
-//! linear e2e script) and `lsp_protocol.rs` (focused contract tests).
+//! linear e2e script), `lsp_protocol.rs` (focused contract tests), and
+//! `lsp_audit.rs` (regression tests from the LSP audit).
 //!
 //! Unix-only: callers build `file://` URIs by hand, which would need
 //! drive-letter handling on Windows. The server itself is
@@ -60,10 +61,10 @@ fn spawn_reader(stdout: std::process::ChildStdout) -> Receiver<Value> {
             if reader.read_exact(&mut buf).is_err() {
                 return;
             }
-            if let Ok(value) = serde_json::from_slice::<Value>(&buf) {
-                if tx.send(value).is_err() {
-                    return;
-                }
+            if let Ok(value) = serde_json::from_slice::<Value>(&buf)
+                && tx.send(value).is_err()
+            {
+                return;
             }
         }
     });
@@ -90,10 +91,40 @@ impl Server {
         self.stdin.write_all(&frame(msg)).unwrap();
         self.stdin.flush().unwrap();
     }
+
+    /// Complete the LSP shutdown handshake. Waiting for the response before
+    /// sending `exit` keeps teardown spec-conformant and lets instrumented
+    /// binaries flush their coverage profile before this harness is dropped.
+    pub fn shutdown(&mut self) {
+        const SHUTDOWN_ID: i64 = i64::MAX;
+        self.send(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": SHUTDOWN_ID,
+            "method": "shutdown",
+            "params": null
+        }));
+        assert!(recv_response(&self.rx, SHUTDOWN_ID).is_null());
+        self.send(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "exit",
+            "params": null
+        }));
+    }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
+        // Normal tests request a graceful exit. Give the server enough time to
+        // finish that request before the fail-safe kill; killing immediately
+        // can leave LLVM coverage profiles truncated.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Err(_) => break,
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

@@ -1,5 +1,5 @@
 //! `json_schema_passes` — assert that a set of JSON / YAML /
-//! TOML files validates against a JSON Schema.
+//! TOML / XML / dotenv / properties / INI / HCL files validates against a JSON Schema.
 //!
 //! Closes the last unshipped structured-query primitive
 //! (`json_path_*` shipped in v0.4.4). JSON Schema sees use far
@@ -14,34 +14,45 @@
 //! - **`schema_path`** points at a JSON Schema file relative to
 //!   the lint root. Schema is loaded + compiled lazily on the
 //!   first `evaluate()` call and cached on the rule struct
-//!   (`OnceLock`); a malformed schema produces one
-//!   repository-level violation rather than one violation per
-//!   target file.
+//!   (`OnceLock`); an unreadable or malformed schema produces one typed
+//!   analysis failure rather than one policy violation per target file.
 //! - The target's format is auto-detected from its extension
-//!   (`.json` / `.yaml` / `.yml` / `.toml`); pass `format:` to
-//!   override. YAML and TOML coerce through serde into the
-//!   same `serde_json::Value` tree the schema validates against
-//!   — same trick `json_path_*` uses.
-//! - Each schema-validation error becomes one violation, with
+//!   (`.json` / `.yaml` / `.yml` / `.toml` / `.properties` / `.ini` /
+//!   `.cfg` / `.hcl` / `.tf` / `.tfvars` / `.nomad` / `.xml` and the `.csproj` /
+//!   `.props` / `.targets` family, or `.env` by filename); pass `format:`
+//!   to override. YAML and TOML coerce through serde into the
+//!   same `serde_json::Value` tree the schema validates against,
+//!   and XML maps in via the xmltodict-style `xml_to_value`
+//!   convention — same trick `json_path_*` uses.
+//! - **XML / properties / INI leaves and assigned dotenv values are
+//!   stringly-typed.** Type assigned fields as `string` (with a `pattern`);
+//!   integer / boolean / number assertions fail against them. A dotenv bare
+//!   declaration is the one exception and maps to JSON `null`. For XML,
+//!   array/object shape additionally depends on cardinality (a single vs.
+//!   repeated element is an object vs. an array). JSON / YAML / TOML / HCL keep
+//!   native types. See the mapping notes in `docs/rules.md`.
+//! - Each schema-validation mismatch becomes one policy violation, with
 //!   the message including the failing instance path and the
 //!   schema's error description. A target that fails to parse
-//!   produces one parse-error violation, not a flood of schema
-//!   errors against junk.
+//!   produces one `resource_parse` analysis failure, not a flood of
+//!   schema errors against junk.
 //!
 //! Check-only — fixing schema violations is a "the user knows
 //! what value belongs there" problem, not alint's.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use alint_core::{Context, Error, Format, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    AnalysisFailureKind, Context, Error, Format, Level, Result, Rule, RuleSpec, Scope, Violation,
+};
 use jsonschema::Validator;
 use serde::Deserialize;
 use serde_json::Value;
 
-/// The `format:` override values for `json_schema_passes`. Distinct from
-/// `structured_path::Format` (which has `xml`, not `yml`): this validator targets
-/// json/yaml/toml documents and accepts `yml` as a `yaml` alias.
+/// The `format:` override values for `json_schema_passes`: the same formats as
+/// `structured_path::Format` (json / yaml / toml / xml / dotenv / properties / ini / hcl), plus `yml`
+/// accepted as a `yaml` alias.
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum TargetFormat {
@@ -49,6 +60,26 @@ enum TargetFormat {
     Yaml,
     Yml,
     Toml,
+    Xml,
+    Dotenv,
+    Properties,
+    Ini,
+    Hcl,
+}
+
+impl TargetFormat {
+    fn to_format(self) -> Format {
+        match self {
+            TargetFormat::Json => Format::Json,
+            TargetFormat::Yaml | TargetFormat::Yml => Format::Yaml,
+            TargetFormat::Toml => Format::Toml,
+            TargetFormat::Xml => Format::Xml,
+            TargetFormat::Dotenv => Format::Dotenv,
+            TargetFormat::Properties => Format::Properties,
+            TargetFormat::Ini => Format::Ini,
+            TargetFormat::Hcl => Format::Hcl,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -58,7 +89,10 @@ struct Options {
     /// itself be JSON even when validating YAML / TOML targets.
     schema_path: PathBuf,
     /// Override the auto-detected target format. When omitted, format is inferred
-    /// from each target file's extension (.json / .yaml / .yml / .toml).
+    /// from each target file's extension (.json / .yaml / .yml / .toml / .properties /
+    /// .ini / .cfg / .hcl / .tf / .tfvars / .nomad / .xml and the .csproj / .props / .targets XML
+    /// family), or by filename
+    /// for the `.env` family.
     #[serde(default)]
     format: Option<TargetFormat>,
 }
@@ -73,7 +107,7 @@ pub struct JsonSchemaPassesRule {
     message: Option<String>,
     scope: Scope,
     schema_path: PathBuf,
-    /// Permit reading a `schema_path:` that escapes the repo root —
+    /// Permit reading a `schema_path:` that escapes the repo root -
     /// set post-build from the top-level `allow_out_of_root:` policy.
     allow_out_of_root: bool,
     /// Explicit format, if the user passed `format:`. When
@@ -85,7 +119,7 @@ pub struct JsonSchemaPassesRule {
     /// missing or malformed schema produces a single
     /// repository-level violation rather than re-attempting the
     /// load per matched file.
-    compiled: OnceLock<std::result::Result<Validator, String>>,
+    compiled: OnceLock<std::result::Result<Validator, (AnalysisFailureKind, String)>>,
 }
 
 impl Rule for JsonSchemaPassesRule {
@@ -96,12 +130,20 @@ impl Rule for JsonSchemaPassesRule {
         Some(&self.scope)
     }
 
+    /// Editing only the schema changes the verdict for every in-scope document, so
+    /// under `--changed` a schema change re-validates them all.
+    fn changed_dependencies(&self) -> Vec<&Path> {
+        vec![self.schema_path.as_path()]
+    }
+
     alint_core::rule_common_impl!();
 
     fn set_allow_out_of_root(&mut self, allow: bool) {
         self.allow_out_of_root = allow;
     }
 
+    // Linear read/parse/validate handling keeps each failure owned by its input file.
+    #[allow(clippy::too_many_lines)]
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
 
@@ -135,19 +177,16 @@ impl Rule for JsonSchemaPassesRule {
             }
         };
         let schema_abs = ctx.root.join(&schema_rel);
-        let validator_res = self.compiled.get_or_init(|| compile_schema(&schema_abs));
+        let validator_res = self
+            .compiled
+            .get_or_init(|| compile_schema(&schema_abs, &self.schema_path));
         let validator = match validator_res {
             Ok(v) => v,
-            Err(msg) => {
-                // Schema unusable → one repository-level
-                // violation, then we're done. Per-file
-                // validation against a broken schema would
-                // dump the same error N times.
-                // No path (a repo-level schema-load failure) → a fixed key so
-                // the fingerprint doesn't fall through to the volatile message.
+            Err((kind, msg)) => {
                 violations.push(
                     Violation::new(msg.clone())
-                        .with_baseline_key("json-schema-passes-schema-unusable"),
+                        .with_path(schema_rel.clone())
+                        .as_analysis_failure(*kind),
                 );
                 return Ok(violations);
             }
@@ -161,23 +200,15 @@ impl Rule for JsonSchemaPassesRule {
             let text = match crate::io::read_capped(&full) {
                 Ok(b) => String::from_utf8_lossy(&b).into_owned(),
                 Err(crate::io::ReadCapError::TooLarge(n)) => {
-                    // Over the 256 MiB whole-file cap — surface
-                    // a clear violation rather than the previous
-                    // silent skip (which masked an OOM-DoS
-                    // surface on hostile / accidental multi-GB
-                    // candidate files).
-                    violations.push(
-                        Violation::new(format!(
-                            "file is too large to analyze ({})",
-                            crate::io::over_cap(n),
-                        ))
-                        .with_path(entry.path.clone()),
-                    );
+                    violations.push(alint_core::too_large_file_violation(&entry.path, n));
                     continue;
                 }
-                Err(crate::io::ReadCapError::Io(_)) => {
-                    // Permission / race — silent skip, like other
-                    // content rules.
+                Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    violations.push(alint_core::missing_file_violation(&entry.path));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    violations.push(alint_core::unreadable_file_violation(&entry.path, &e));
                     continue;
                 }
             };
@@ -189,9 +220,10 @@ impl Rule for JsonSchemaPassesRule {
                 violations.push(
                     Violation::new(
                         "could not detect format from extension; pass `format:` \
-                         (`json` / `yaml` / `toml`) on the rule",
+                         (`json` / `yaml` / `toml` / `xml` / `dotenv` / `properties` / `ini` / `hcl`) on the rule",
                     )
-                    .with_path(entry.path.clone()),
+                    .with_path(entry.path.clone())
+                    .as_analysis_failure(AnalysisFailureKind::ResourceParse),
                 );
                 continue;
             };
@@ -201,7 +233,8 @@ impl Rule for JsonSchemaPassesRule {
                 Err(err) => {
                     violations.push(
                         Violation::new(format!("not a valid {} document: {err}", format.label()))
-                            .with_path(entry.path.clone()),
+                            .with_path(entry.path.clone())
+                            .as_analysis_failure(AnalysisFailureKind::ResourceParse),
                     );
                     continue;
                 }
@@ -231,26 +264,69 @@ impl Rule for JsonSchemaPassesRule {
     }
 }
 
-fn compile_schema(schema_abs: &std::path::Path) -> std::result::Result<Validator, String> {
-    let bytes = crate::io::read_capped(schema_abs).map_err(|e| match e {
-        crate::io::ReadCapError::TooLarge(n) => format!(
-            "schema {} is too large to read ({})",
-            schema_abs.display(),
-            crate::io::over_cap(n),
-        ),
-        crate::io::ReadCapError::Io(e) => {
-            format!("could not read schema {}: {e}", schema_abs.display())
-        }
+fn compile_schema(
+    schema_abs: &std::path::Path,
+    display_path: &std::path::Path,
+) -> std::result::Result<Validator, (AnalysisFailureKind, String)> {
+    let bytes = crate::io::read_capped(schema_abs).map_err(|e| {
+        let message = match e {
+            crate::io::ReadCapError::TooLarge(n) => format!(
+                "schema {} is too large to read ({})",
+                display_path.display(),
+                crate::io::over_cap(n),
+            ),
+            crate::io::ReadCapError::Io(e) => {
+                format!("could not read schema {}: {e}", display_path.display())
+            }
+        };
+        (AnalysisFailureKind::ResourceRead, message)
     })?;
-    let schema_value: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("schema {} is not valid JSON: {e}", schema_abs.display()))?;
+    let schema_value: Value = serde_json::from_slice(&bytes).map_err(|e| {
+        (
+            AnalysisFailureKind::ResourceParse,
+            format!("schema {} is not valid JSON: {e}", display_path.display()),
+        )
+    })?;
     jsonschema::validator_for(&schema_value).map_err(|e| {
-        format!(
-            "schema {} is not a valid JSON Schema: {e}",
-            schema_abs.display()
+        (
+            AnalysisFailureKind::ResourceParse,
+            format!(
+                "schema {} is not a valid JSON Schema: {e}",
+                display_path.display()
+            ),
         )
     })
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::RuleMajorScoped,
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("schema_path"),
+        selector_type: alint_core::SelectorType::LiteralPath,
+        rerootable: true,
+    }]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::OutOfRootRead,
+        condition: alint_core::CapabilityCondition::CommonFieldSet {
+            field: std::borrow::Cow::Borrowed("allow_out_of_root"),
+        },
+    }]),
+    content: alint_core::ContentAccess::OtherFiles,
+    formats: std::borrow::Cow::Borrowed(alint_core::Format::ALL),
+    dependencies: std::borrow::Cow::Borrowed(&[alint_core::DependencyMeta {
+        field: std::borrow::Cow::Borrowed("schema_path"),
+    }]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec.paths.as_ref().ok_or_else(|| {
@@ -260,16 +336,12 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .deserialize_options()
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
 
-    let format_override = opts.format.map(|f| match f {
-        TargetFormat::Json => Format::Json,
-        TargetFormat::Yaml | TargetFormat::Yml => Format::Yaml,
-        TargetFormat::Toml => Format::Toml,
-    });
+    let format_override = opts.format.map(TargetFormat::to_format);
 
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "json_schema_passes has no fix op — alint can't synthesize correct content",
+            "json_schema_passes has no fix op - alint can't synthesize correct content",
         ));
     }
 
@@ -357,7 +429,7 @@ mod tests {
         let (tmp, idx) = tempdir_with_files(&[("data.json", b"{}")]);
         let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert!(
-            v.iter().all(|x| x.is_note),
+            v.iter().all(|x| x.note_kind().is_some()),
             "only an out-of-root note: {v:?}"
         );
         assert!(
@@ -387,6 +459,49 @@ mod tests {
         let instance = json!({ "n": "not an integer" });
         let errors: Vec<_> = v.iter_errors(&instance).collect();
         assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn validator_honors_the_schema_declared_draft() {
+        // Draft 7 ignores siblings of `$ref`; Draft 2020-12 evaluates them.
+        // `validator_for` must therefore select the declared draft instead of
+        // silently applying its default draft to a user's schema.
+        let v = compile(&json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$ref": "#/definitions/text",
+            "type": "integer",
+            "definitions": { "text": { "type": "string" } }
+        }));
+        assert!(v.is_valid(&json!("alint")));
+        assert!(!v.is_valid(&json!(42)));
+    }
+
+    #[test]
+    fn ecma_regex_supports_unicode_space_and_literal_ampersands() {
+        // JSON Schema patterns use ECMA-style regex semantics. In particular,
+        // `\s` includes Unicode space separators/U+2028 and `&&` inside a
+        // character class is two literal ampersands, not Rust set intersection.
+        let whitespace = compile(&json!({ "type": "string", "pattern": r"^\s+$" }));
+        assert!(whitespace.is_valid(&json!("\u{2003}\u{2028}")));
+
+        let ampersands = compile(&json!({ "type": "string", "pattern": r"^[a&&b]+$" }));
+        assert!(ampersands.is_valid(&json!("&")));
+    }
+
+    #[test]
+    fn reference_errors_name_the_target_constraint() {
+        // The rule uses `(instance_path, schema_path)` as its baseline key.
+        // Keep `$ref` failures anchored to the actual target so unrelated
+        // constraints do not collapse onto an imprecise resource-root key.
+        let v = compile(&json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": { "text": { "type": "string" } },
+            "properties": { "name": { "$ref": "#/$defs/text" } }
+        }));
+        let instance = json!({ "name": 42 });
+        let error = v.validate(&instance).unwrap_err();
+        assert_eq!(error.instance_path().to_string(), "/name");
+        assert_eq!(error.schema_path().to_string(), "/$defs/text/type");
     }
 
     #[test]
@@ -421,9 +536,10 @@ mod tests {
     #[test]
     fn compile_fails_loudly_on_missing_file() {
         let bogus = std::path::PathBuf::from("/nonexistent/schema.json");
-        let res = compile_schema(&bogus);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("could not read schema"));
+        let (kind, message) =
+            compile_schema(&bogus, std::path::Path::new("schema.json")).unwrap_err();
+        assert_eq!(kind, AnalysisFailureKind::ResourceRead);
+        assert!(message.contains("could not read schema"));
     }
 
     #[test]
@@ -431,9 +547,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("schema.json");
         std::fs::write(&path, "{ this is not json").unwrap();
-        let res = compile_schema(&path);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("not valid JSON"));
+        let (kind, message) =
+            compile_schema(&path, std::path::Path::new("schema.json")).unwrap_err();
+        assert_eq!(kind, AnalysisFailureKind::ResourceParse);
+        assert!(message.contains("not valid JSON"));
+        assert!(
+            !message.contains(&dir.path().display().to_string()),
+            "failure message leaked the checkout location: {message}",
+        );
     }
 
     #[test]
@@ -443,9 +564,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("schema.json");
         std::fs::write(&path, r#"{"type": 12345}"#).unwrap();
-        let res = compile_schema(&path);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().contains("not a valid JSON Schema"));
+        let (kind, message) =
+            compile_schema(&path, std::path::Path::new("schema.json")).unwrap_err();
+        assert_eq!(kind, AnalysisFailureKind::ResourceParse);
+        assert!(message.contains("not a valid JSON Schema"));
     }
 
     #[test]
@@ -477,6 +599,55 @@ mod tests {
     }
 
     #[test]
+    fn target_format_covers_every_format() {
+        // Parity: every Format::ALL variant is requestable as `format: <label>`
+        // and maps back to it, so json_schema_passes can't silently lack a format.
+        for f in Format::ALL {
+            let label = f.label().to_lowercase();
+            let tf: TargetFormat = serde_json::from_value(json!(label))
+                .unwrap_or_else(|e| panic!("`format: {label}` should deserialize: {e}"));
+            assert_eq!(
+                tf.to_format(),
+                *f,
+                "format: {label} must map to Format::{f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn xml_targets_are_auto_detected() {
+        // The full .csproj / .props / .targets / .vbproj / .fsproj / .nuspec /
+        // .xml family auto-detects as XML -- a formerly-latent path, now
+        // documented and tested (docs/design/format-coverage.md, section 7 Q2).
+        // Every extension in structured_format's XML arm is covered here.
+        for p in [
+            "App.csproj",
+            "Directory.Build.props",
+            "Directory.Build.targets",
+            "Legacy.vbproj",
+            "Lib.fsproj",
+            "Pkg.nuspec",
+            "config.xml",
+        ] {
+            assert_eq!(
+                Format::detect_from_path(std::path::Path::new(p)),
+                Some(Format::Xml),
+                "{p} should detect as XML"
+            );
+        }
+    }
+
+    #[test]
+    fn format_yml_is_a_yaml_alias() {
+        // `format: yml` is a documented alias for YAML. The parity test iterates
+        // Format::ALL, which has no `yml`, so this pins the alias explicitly:
+        // `yml` deserializes and maps to Format::Yaml (not, say, a silent error).
+        let tf: TargetFormat =
+            serde_json::from_value(json!("yml")).expect("`format: yml` should deserialize");
+        assert_eq!(tf.to_format(), Format::Yaml, "`yml` must map to YAML");
+    }
+
+    #[test]
     fn scope_filter_narrows() {
         use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
         // Two JSON files that fail the schema; only the one
@@ -503,6 +674,37 @@ mod tests {
         assert_eq!(
             v[0].path.as_deref(),
             Some(std::path::Path::new("pkg/bad.json"))
+        );
+    }
+
+    #[test]
+    fn empty_file_satisfies_an_object_schema_not_false_fires() {
+        use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
+        // Regression (pre-v0.16 audit): an empty / whitespace-only config file must
+        // parse to `{}` and PASS `{"type":"object"}` -- an empty file is a valid
+        // empty document, not a schema violation. An earlier cut returned `null`
+        // for empty input, so this rule false-fired "null is not of type object",
+        // while a comment-only file of the same format parsed to `{}` and passed --
+        // two semantically-identical "no config" files disagreeing. All three must
+        // now be silent.
+        let (tmp, idx) = tempdir_with_files(&[
+            ("schema.json", br#"{"type":"object"}"#),
+            ("empty.toml", b""),
+            ("blank.toml", b"   \n\t\n"),
+            ("comment.toml", b"# just a comment\n"),
+        ]);
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: json_schema_passes\n\
+             paths: \"**/*.toml\"\n\
+             schema_path: schema.json\n\
+             level: error\n",
+        );
+        let rule = build(&spec).unwrap();
+        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert!(
+            v.is_empty(),
+            "empty / whitespace / comment-only files must satisfy {{\"type\":\"object\"}}: {v:?}"
         );
     }
 }

@@ -1,6 +1,6 @@
 Scan for antipatterns and propose rules that would catch them.
 
-Prints proposals to stdout for review — never edits the user's config. Pairs naturally with `alint
+Prints proposals to stdout for review - never edits the user's config. Pairs naturally with `alint
 init` for a smarter cold-start adoption flow.
 
 Usage: alint[EXE] suggest [OPTIONS] [PATH]
@@ -22,6 +22,10 @@ Options:
           [default: human]
           [possible values: human, yaml, json]
 
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
+
       --confidence <LEVEL>
           Lower bound on signal strength for proposals. `low` is broadest (helpful when
           prospecting); `high` is strict (only ecosystem-marker hits and equivalents)
@@ -32,11 +36,11 @@ Options:
       --include-bundled
           Include bundled-ruleset suggestions even if the existing `.alint.yml` already extends them
 
-      --no-gitignore
-          Disable .gitignore handling (overrides config)
-
       --explain
           Print one-line file-level evidence under each proposal so reviewers can decide quickly
+
+      --no-gitignore
+          Disable .gitignore handling (overrides config)
 
       --fail-on-warning
           Treat warnings as errors for exit-code purposes
@@ -44,7 +48,7 @@ Options:
       --show-notes
           List informational notes in full on stderr.
           
-          Notes are non-violation findings — e.g. entries a rule skipped rather than failed on. By
+          Notes are non-violation findings - e.g. entries a rule skipped rather than failed on. By
           default only a one-line count is shown.
 
       --color <WHEN>
@@ -81,11 +85,21 @@ Options:
           Useful for narrow terminals, screen recordings, and CI logs where long URLs disrupt visual
           alignment. URLs remain in JSON / SARIF / GitHub / markdown output regardless.
 
+      --include-fixes
+          Include the concrete proposed fix edit(s) in `json` output.
+          
+          Adds a `proposed_edit` array (source region + replacement text) to each fixable finding in
+          `--format json`, so a tool can preview/apply the fix without running `alint fix`. Only
+          Safe (auto-applyable) fixes are included -- Unsafe fixes stay suggestions on alint's own
+          `fix`. The `agent` format always carries this; SARIF carries it as `result.fixes[]`. No
+          effect on other formats. Computing the edit re-reads the fixable files during `check`, so
+          it is opt-in here.
+
       --progress <WHEN>
           When to render progress on stderr for slow operations.
           
           Currently just `alint suggest`. `auto` (the default) renders when stderr is a TTY;
-          `always` forces; `never` silences. Progress always lives on stderr — `--format` JSON
+          `always` forces; `never` silences. Progress always lives on stderr - `--format` JSON
           output on stdout stays byte-clean.
           
           [default: auto]
@@ -125,7 +139,7 @@ Options:
           matches no loaded rule is an error, so typos fail loudly rather than silently linting
           nothing. Applies to `check` and `fix` (the `agent` format emits `fix --only <rule-id>`);
           rejected on any other subcommand. Global, so the bare `alint --only <id>` lints the
-          current directory like `alint check --only <id>` — to lint a different path, use the
+          current directory like `alint check --only <id>` - to lint a different path, use the
           explicit form `alint check --only <id> <path>`.
 
   -h, --help

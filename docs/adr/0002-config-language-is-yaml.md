@@ -19,7 +19,9 @@ and that editors can validate. The candidates were YAML, TOML, JSON, and a bespo
 
 ## Decision
 
-We will use YAML for `.alint.yml` and for the bundled rulesets, parsed via `serde_yaml_ng`.
+We will use YAML for `.alint.yml` and bundled rulesets, parsed via the YAML organization's
+maintained `yaml_serde`/`libyaml-rs` stack. The replacement analysis and parser contract are
+recorded in [`../design/yaml-parser.md`](../design/yaml-parser.md).
 
 - A `version: 1` envelope gates the schema generation.
 - Composition is expressed with `extends:` (local paths, HTTPS URLs, and

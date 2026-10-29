@@ -121,13 +121,12 @@ fn detect_workspace(root: &Path) -> Option<WorkspaceFlavor> {
     // Cargo: root Cargo.toml has a `[workspace]` table. Read +
     // grep — full TOML parsing is overkill for a string-shape
     // check.
-    if let Ok(content) = fs::read_to_string(root.join("Cargo.toml")) {
-        if content
+    if let Ok(content) = fs::read_to_string(root.join("Cargo.toml"))
+        && content
             .lines()
             .any(|l| l.trim_start().starts_with("[workspace]"))
-        {
-            return Some(WorkspaceFlavor::Cargo);
-        }
+    {
+        return Some(WorkspaceFlavor::Cargo);
     }
     // pnpm: root pnpm-workspace.yaml / .yml exists. The fact
     // gate inside the bundled ruleset re-checks this; here we
@@ -138,10 +137,10 @@ fn detect_workspace(root: &Path) -> Option<WorkspaceFlavor> {
     // Yarn / npm: root package.json contains a `"workspaces"`
     // field. Same string-shape check rather than full JSON
     // parsing.
-    if let Ok(content) = fs::read_to_string(root.join("package.json")) {
-        if content.contains("\"workspaces\"") {
-            return Some(WorkspaceFlavor::Yarn);
-        }
+    if let Ok(content) = fs::read_to_string(root.join("package.json"))
+        && content.contains("\"workspaces\"")
+    {
+        return Some(WorkspaceFlavor::Yarn);
     }
     None
 }
@@ -181,7 +180,11 @@ pub fn render(detection: &Detection) -> String {
         out.push('\n');
     }
     if let Some(flavor) = detection.workspace {
-        out.push_str("  - alint://bundled/monorepo@v1\n");
+        // The generic ruleset and each workspace overlay both carry a README
+        // check. Prefer the overlay's manifest-aware selector and suppress the
+        // generic copy so a missing README produces one finding, not two.
+        out.push_str("  - url: alint://bundled/monorepo@v1\n");
+        out.push_str("    except: [monorepo-packages-have-readme]\n");
         out.push_str("  - ");
         out.push_str(flavor.ruleset());
         out.push('\n');
@@ -222,7 +225,7 @@ mod tests {
     fn detects_no_languages_in_empty_dir() {
         let tmp = td();
         let det = detect(tmp.path(), false);
-        assert!(det.languages.is_empty());
+        assert_eq!(det.languages, [] as [Language; 0]);
         assert_eq!(det.workspace, None);
     }
 
@@ -389,6 +392,47 @@ mod tests {
         assert!(out.contains("nested_configs: true"));
         assert!(out.contains("alint://bundled/monorepo@v1"));
         assert!(out.contains("alint://bundled/monorepo/cargo-workspace@v1"));
+    }
+
+    #[test]
+    fn every_workspace_scaffold_loads_and_deduplicates_the_readme_rule() {
+        for flavor in [
+            WorkspaceFlavor::Cargo,
+            WorkspaceFlavor::Pnpm,
+            WorkspaceFlavor::Yarn,
+        ] {
+            let tmp = td();
+            let config_path = tmp.path().join(".alint.yml");
+            let rendered = render(&Detection {
+                languages: Vec::new(),
+                workspace: Some(flavor),
+            });
+            std::fs::write(&config_path, rendered).unwrap();
+            let registry = alint_rules::builtin_registry();
+            let loaded = alint_dsl::load_with(
+                &config_path,
+                &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+            )
+            .unwrap_or_else(|error| panic!("{flavor:?} scaffold did not load: {error}"));
+            assert!(
+                loaded
+                    .rules
+                    .iter()
+                    .all(|rule| rule.id != "monorepo-packages-have-readme"),
+                "{flavor:?} scaffold retained the generic README rule"
+            );
+            assert!(
+                loaded.rules.iter().any(|rule| {
+                    rule.id
+                        == match flavor {
+                            WorkspaceFlavor::Cargo => "cargo-workspace-member-has-readme",
+                            WorkspaceFlavor::Pnpm => "pnpm-workspace-member-has-readme",
+                            WorkspaceFlavor::Yarn => "yarn-workspace-member-has-readme",
+                        }
+                }),
+                "{flavor:?} scaffold omitted its manifest-aware README rule"
+            );
+        }
     }
 
     #[test]

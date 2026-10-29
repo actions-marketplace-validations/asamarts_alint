@@ -23,12 +23,12 @@
 #
 # ── CATALOGUE: 41 discrete structural-validation surfaces ──
 # alint-replaceable: 32 / 41 (78%).  Newly replaceable vs v0.9.17: +9.
-#   The +9: pylint/buildifier/clang-format/codespell/api-compat moved from
-#   the OLD blind `command:` kind to `command_idempotent` (real --check
-#   contract + per-file offender parsing); api-golden FRESHNESS now expressible
+#   The +9: pylint/buildifier/clang-format/codespell/api-compat use explicit
+#   non-mutating checker invocations with path attribution; api-golden
+#   FRESHNESS is now expressible
 #   via generated_file_fresh; tf.org/code link integrity via
 #   registry_paths_resolve; requirements-lock cross-version parity via
-#   cross_file_value_equals; per-rule scope_filter PR-scopes the 80k-file tree.
+#   cross_file_value_equals.
 #
 # Genuine non-replaceables (9) stay in bazel/the bats suite — see the
 # NON-REPLACEABLE block at the bottom for each + WHY.
@@ -44,92 +44,39 @@ extends:
   - alint://bundled/ci/github-actions@v1       # 16 workflows: name/permissions/SHA-pinned actions
   - alint://bundled/hygiene/no-tracked-artifacts@v1
 
-  # compliance/apache-2@v1 — VERDICT: PARTIALLY FITS, OVER-FIRES on TF.
-  #   The bundled apache-2-source-has-license-header rule's default include
-  #   set (.py/.cc/.h/.go/.java/.js/.ts/.swift/.sh/...) is correct for TF's
-  #   *hand-written* sources — TF carries the canonical
-  #   "Licensed under the Apache License, Version 2.0" block verbatim on
-  #   every one (confirmed: configure.py line 3).
-  #   BUT TF generates THOUSANDS of files that legitimately lack the header:
-  #   the 1185 api/golden/*.pbtxt textprotos, generated _pb2.py / *_generated.h,
-  #   and the entire third_party/ + bundled-dep tree. The bundled ruleset has
-  #   no TF-aware excludes, so it would false-positive at scale (the v0.9.18
-  #   audit already saw ~700 FPs on the Bazel arm of this).
-  #   DECISION: extend it, but neutralise the over-fire with a same-id
-  #   override below that narrows `paths.exclude`. (If your alint build does
-  #   not support overriding an extended rule's paths, drop this line and use
-  #   the standalone `tensorflow-apache-header` rule instead — also below.)
-  - alint://bundled/compliance/apache-2@v1
+  # compliance/apache-2@v1 is intentionally not extended. TensorFlow's source
+  # set includes generated files and empty package markers that do not carry
+  # headers, and a path-only exclusion cannot model that convention without
+  # either false findings or broad blind spots.
 
 rules:
   # ──────────────────────────────────────────────────────────────────────
-  # Apache header — narrow the bundled rule away from generated/vendored
-  # files. Same id as the bundled rule = override of its paths.
+  # TensorFlow's package manifest is nested rather than at the repository root.
   # ──────────────────────────────────────────────────────────────────────
-  - id: apache-2-source-has-license-header
-    kind: file_header
-    paths:
-      include:
-        - "**/*.py"
-        - "**/*.cc"
-        - "**/*.cpp"
-        - "**/*.h"
-        - "**/*.hpp"
-        - "**/*.go"
-        - "**/*.java"
-        - "**/*.swift"
-        - "**/*.m"
-        - "**/*.mm"
-        - "**/*.sh"
-      exclude:
-        - "third_party/**"
-        - "tensorflow/tools/api/golden/**"      # 1185 generated textprotos
-        - "**/*_pb2.py"                          # protoc output
-        - "**/*_pb2.pyi"
-        - "**/*_generated.h"                     # flatbuffer/proto codegen
-        - "tensorflow/lite/micro/**"             # vendored MCU tree
-    lines: 25
-    pattern: 'Licensed under the Apache License,?\s*Version 2'
+  - id: python-manifest-exists
+    when: facts.has_python
+    kind: file_exists
+    paths: "tensorflow/tools/pip_package/setup.py"
     level: warning
 
-  # Bazel BUILD/.bzl licensing — TF uses per-package `licenses(["notice"])`,
-  # NOT per-file headers (premise repair from v0.9.18; carried forward).
-  - id: tensorflow-bazel-files-declare-license
-    kind: file_header
-    paths:
-      include: ["**/BUILD", "**/BUILD.bazel"]
-      exclude: ["third_party/**"]
-    lines: 25
-    pattern: '(licenses\(.*notice|default_applicable_licenses.*license)'
-    level: info
-
   # ──────────────────────────────────────────────────────────────────────
-  # SANITY-CHECK SUITE → command_idempotent  (BIGGEST WIN, the +9 core)
+  # SANITY-CHECK SUITE → path-scoped command checks
   #
-  # These wrap the EXACT invocations the bats suites run. command_idempotent
-  # (v0.10) replaces the old blind `command:` kind: it asserts the tool makes
-  # NO changes in --check/diff mode, and `files_from: stdout` + `files_pattern`
-  # turn the tool's offender list into per-file alint violations (clickable,
-  # scoped, dedupable) rather than one opaque pass/fail.
-  #
-  # scope_filter.changed_since mirrors code_check_changed_files.bats — only
-  # lints files changed in the PR, which is the ONLY tractable mode on an
-  # 80k-file tree (full-tree clang/pylint is minutes-to-hours).
+  # These wrap the exact non-mutating invocations the bats suites run. Each
+  # checker receives one matched path, so `paths` and `scope_filter` constrain
+  # execution and the resulting finding is attributed to that file.
   # ──────────────────────────────────────────────────────────────────────
 
   # pylint — code_check_changed_files.bats:64 + pylint-presubmit.yml
   - id: tensorflow-pylint
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/*.py"]
       exclude:
         - "third_party/**"
         - "**/*_pb2.py"
         - "tensorflow/lite/micro/**"
-    command: ["python", "-m", "pylint", "--rcfile=tensorflow/tools/ci_build/pylintrc", "--score=false"]
-    files_from: stdout
-    # pylint emits `path/to/file.py:NN: [Cxxxx(...)] msg` — capture the path.
-    files_pattern: '^([^:]+\.py):\d+:'
+    command: ["python", "-m", "pylint", "--rcfile=tensorflow/tools/ci_build/pylintrc", "--score=false", "{path}"]
     timeout: 600
     scope_filter:
       changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
@@ -137,14 +84,11 @@ rules:
 
   # buildifier — code_check_changed_files.bats:40 (Bazel BUILD/.bzl formatter)
   - id: tensorflow-buildifier
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/BUILD", "**/BUILD.bazel", "**/*.bzl", "MODULE.bazel", "WORKSPACE"]
       exclude: ["third_party/**"]
-    command: ["buildifier", "-mode=check", "-lint=warn"]
-    files_from: stdout
-    # buildifier -mode=check prints offending paths one per line.
-    files_pattern: '^(.+)$'
+    command: ["buildifier", "-mode=check", "-lint=warn", "{path}"]
     timeout: 120
     scope_filter:
       changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
@@ -154,14 +98,14 @@ rules:
   # it "doesn't match internal clang-format checker"; offered here info-level
   # for adopters who DO want the public-clang-format gate).
   - id: tensorflow-clang-format
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/*.cc", "**/*.h"]
       exclude:
         - "third_party/**"
         - "tensorflow/lite/micro/**"
         - "**/*_generated.h"
-    command: ["clang-format-12", "--style=Google", "--dry-run", "--Werror"]
+    command: ["clang-format-12", "--style=Google", "--dry-run", "--Werror", "{path}"]
     timeout: 300
     scope_filter:
       changed_since: "{{env.ALINT_BASE_REF | default('origin/master')}}"
@@ -169,16 +113,14 @@ rules:
 
   # codespell — typo sweep (not in TF's bats, but a cheap polyglot win).
   - id: tensorflow-codespell
-    kind: command_idempotent
+    kind: command
     paths:
       include: ["**/*.md", "**/*.py", "**/*.cc", "**/*.h"]
       exclude:
         - "third_party/**"
         - "tensorflow/security/advisory/**"
         - "RELEASE.md"
-    command: ["codespell"]
-    files_from: stdout
-    files_pattern: '^([^:]+):\d+:'
+    command: ["codespell", "{path}"]
     timeout: 120
     level: info
 
@@ -199,7 +141,6 @@ rules:
   # ──────────────────────────────────────────────────────────────────────
   - id: tensorflow-api-goldens-fresh
     kind: command_idempotent
-    paths: "tensorflow/tools/api/tests/api_compatibility_test.py"
     command: ["bazel", "test", "//tensorflow/tools/api/tests:api_compatibility_test"]
     timeout: 1800
     level: info
@@ -220,11 +161,10 @@ rules:
   # ──────────────────────────────────────────────────────────────────────
   - id: tensorflow-org-code-links-resolve
     kind: registry_paths_resolve
-    source: "tensorflow/python/framework/ops.py"
+    source: "tensorflow/**"
     extract:
       regex: 'https://www\.tensorflow\.org/code/([a-zA-Z0-9/._-]+)'
     base: "."
-    expect: file
     level: warning
     message: >-
       A https://www.tensorflow.org/code/<path> link must resolve to a real
@@ -233,15 +173,17 @@ rules:
   # ──────────────────────────────────────────────────────────────────────
   # requirements_lock CROSS-VERSION PARITY → cross_file_value_equals (NEW WIN)
   #
-  # The 5 pip-compile locks (3.10–3.14) should pin shared packages to the
-  # same version (modulo interpreter-conditional pkgs). cross_file_value_equals
-  # extracts one pin from the 3.10 lock and asserts the other 4 agree.
+  # The 3.10–3.13 pip-compile locks should pin shared packages to the same
+  # version (modulo interpreter-conditional pkgs). Python 3.14 intentionally
+  # selects a newer numpy, so it is outside this equality set.
+  # cross_file_value_equals extracts one pin from the 3.10 lock and asserts
+  # the other three agree.
   # Shown for `numpy` as the representative invariant pin; replicate per
   # package you want locked in lockstep. allow_missing_target handles a
   # package legitimately absent on one interpreter.
   # ──────────────────────────────────────────────────────────────────────
   - id: tensorflow-requirements-lock-numpy-parity
-    kind: cross_file_value_equals
+    kind: cross_file
     source:
       file: "requirements_lock_3_10.txt"
       extract:
@@ -252,8 +194,6 @@ rules:
       - file: "requirements_lock_3_12.txt"
         extract: { regex: '(?m)^numpy==([0-9][^ ;\\]+)' }
       - file: "requirements_lock_3_13.txt"
-        extract: { regex: '(?m)^numpy==([0-9][^ ;\\]+)' }
-      - file: "requirements_lock_3_14.txt"
         extract: { regex: '(?m)^numpy==([0-9][^ ;\\]+)' }
     allow_missing_target: true
     level: warning
@@ -304,14 +244,14 @@ rules:
   - id: tensorflow-api-golden-v1-marker
     kind: file_content_matches
     paths: { include: ["tensorflow/tools/api/golden/v1/*.pbtxt"] }
-    pattern: '(?m)^path:\s*"tensorflow\.'
+    pattern: '(?m)^path:\s*"tensorflow[."]'
     level: warning
 
   # tf_version.bzl is the wheel-version source of truth.
   - id: tensorflow-tf-version-bzl-semver
     kind: file_content_matches
     paths: "tensorflow/tf_version.bzl"
-    pattern: 'TF_VERSION_(MAJOR|MINOR|PATCH)\s*=\s*"\d+"'
+    pattern: '(?m)^TF_VERSION\s*=\s*"\d+\.\d+\.\d+(?:-[^"]+)?"\s*$'
     level: warning
 
   # ──────────────────────────────────────────────────────────────────────
@@ -324,6 +264,11 @@ rules:
       exclude: ["third_party/**", "tensorflow/lite/micro/**"]
     level: error
     policy_url: "https://trojansource.codes/"
+
+  - id: tensorflow-no-case-conflicts
+    kind: no_case_conflicts
+    paths: "**"
+    level: error
 
   - id: tensorflow-final-newline
     kind: final_newline

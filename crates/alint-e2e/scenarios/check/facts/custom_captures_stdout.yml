@@ -1,8 +1,12 @@
+test_version: 1
 name: custom fact exposes command stdout to when-gating
 # Tagged unix-only because the fact's argv shells out to
 # `/bin/sh` which doesn't exist on Windows. Linux + macOS
 # both honor the fact path.
 tags: [check, facts, custom, unix, unix-only]
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -23,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: mit-requires-ack, level: error}

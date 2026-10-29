@@ -16,20 +16,19 @@ echo "==> Running xtask docs-export --check"
 cargo run -q -p xtask -- docs-export --check
 
 # `xtask gen-schema --check` regenerates schemas/v1/config.json (+ the in-crate
-# copy) from the Rust option structs (schemars) for the migrated rule kinds and
-# fails if the committed schema drifted from the types that parse configs. The
-# regenerate-and-diff gate for the schema-from-types keystone (ADR-0001 /
-# docs/design/spec-driven-development.md). Run `cargo run -p xtask -- gen-schema`
-# to refresh after changing a migrated kind's Options struct.
+# copy) and schemas/v1/policy-test.json from their canonical Rust models, then
+# applies KindMeta common-field restrictions to config and fails on type, registry,
+# metadata drift. This is the regenerate-and-diff gate for ADR-0001, v0.19 W1,
+# and ADR-0022. Run it after changing option metadata or a public schema model.
 echo "==> Running xtask gen-schema --check"
 cargo run -q -p xtask -- gen-schema --check
 
 # `xtask gen-facts --check` regenerates facts.json (the surface-area contract:
-# version + the six headline counts + catalogue lists) from the same canonical
-# sources coverage_audit_readme_claims pins the README to, and fails if the
-# committed facts.json drifted. Phase 3 / WS1e of the spec-driven program
-# (docs/design/facts-json.md). Run `cargo run -p xtask -- gen-facts` to refresh
-# after adding a rule kind, family, ruleset, fixer, formatter, or subcommand.
+# version, seven headline counts, catalogue lists, and canonical KindMeta
+# inventory) from the same canonical sources coverage_audit_readme_claims pins
+# the README to, and fails if the committed facts.json drifted. Phase 3 / WS1e
+# of the spec-driven program (docs/design/facts-json.md). Run
+# `cargo run -p xtask -- gen-facts` after changing any source it inventories.
 echo "==> Running xtask gen-facts --check"
 cargo run -q -p xtask -- gen-facts --check
 
@@ -49,6 +48,13 @@ cargo run -q -p xtask -- gen-categories --check
 # phase heading or its roadmap-public marker.
 echo "==> Running xtask gen-roadmap --check"
 cargo run -q -p xtask -- gen-roadmap --check
+
+# Validate every Action snippet against the canonical published pin recorded in
+# ci/action-doc-pin.env. This checkout-local mode deliberately needs no tags so
+# docs.sh and dogfood remain usable in shallow clones. CI's Docs job and the
+# release preflight run the full-history --verify-action-tag mode separately.
+echo "==> Running ci/scripts/check-version-pins.sh"
+bash ci/scripts/check-version-pins.sh
 
 # `xtask gen-arch --check` regenerates the crate dependency graph
 # (docs/design/architecture/crate-graph.md) from `cargo metadata` and fails if
@@ -94,3 +100,9 @@ cargo run -q -p xtask -- gen-mermaid --check
 # Needs Node (set up by the Docs job).
 echo "==> Running node --test ci/scripts/strip-since.test.mjs"
 node --test ci/scripts/strip-since.test.mjs
+
+# The count-bearing concepts page is overlaid from main into a release-built
+# docs bundle. Pin every count on that page to the release's facts contract so a
+# post-release rule cannot leak into the published catalogue prose.
+echo "==> Running ci/scripts/test-pin-docs-counts.sh"
+bash ci/scripts/test-pin-docs-counts.sh

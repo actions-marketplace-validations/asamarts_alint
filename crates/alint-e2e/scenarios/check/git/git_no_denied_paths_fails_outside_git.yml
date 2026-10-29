@@ -1,0 +1,28 @@
+test_version: 1
+name: git_no_denied_paths fails closed outside a Git repository
+tags: [check, git_no_denied_paths, git]
+
+# The unconditional tracked-set capability must be available before dispatch.
+
+given:
+  tree:
+    README.md: "# demo\n"
+    secrets:
+      ".env": "DATABASE_URL=postgres://x\n"
+  config: |
+    version: 1
+    rules:
+      - id: no-tracked-secrets
+        kind: git_no_denied_paths
+        denied:
+          - "*.env"
+          - "secrets/**"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: no-tracked-secrets, kind: resource_read}

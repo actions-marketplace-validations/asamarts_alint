@@ -8,10 +8,17 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
+autotests = false
 
 [[bin]]
 name = "xtask"
 path = "src/main.rs"
+
+# All integration tests build into one binary: tests/main.rs declares each
+# file as a module (docs/design/build-dev-loop.md, section 2).
+[[test]]
+name = "it"
+path = "tests/main.rs"
 
 [dependencies]
 alint-bench.workspace = true
@@ -24,7 +31,7 @@ clap.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
+yaml_serde.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]

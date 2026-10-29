@@ -1,3 +1,4 @@
+test_version: 1
 name: a nested manifest '.' entry does not scope the whole subtree
 tags: [check, scope_filter, nested, file_content_forbidden]
 
@@ -34,5 +35,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: forbid, level: error, path: pkg/src/app.ts}

@@ -169,6 +169,25 @@ fn first_non_ascii(bytes: &[u8]) -> Option<usize> {
     bytes.iter().position(|&b| b >= 0x80)
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     spec.paths
         .as_ref()
@@ -176,7 +195,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "file_is_ascii has no fix op — replacement for non-ASCII bytes is ambiguous",
+            "file_is_ascii has no fix op - replacement for non-ASCII bytes is ambiguous",
         ));
     }
     let opts: Options = spec
@@ -224,6 +243,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         r.evaluate_file(&ctx, Path::new("f.txt"), bytes).unwrap()
     }

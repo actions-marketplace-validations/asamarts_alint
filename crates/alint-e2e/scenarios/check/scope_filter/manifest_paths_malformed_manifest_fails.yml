@@ -1,0 +1,42 @@
+test_version: 1
+name: malformed scope manifest fails every owning rule
+
+tags: [check, scope_filter, no_trailing_whitespace, failing]
+
+# Two rules share one cached manifest predicate. A malformed manifest prevents
+# both policy verdicts, so each owner gets exactly one parse analysis failure;
+# neither rule evaluates its candidate file against an invented empty set.
+
+given:
+  tree:
+    package.json: "{not json\n"
+    src:
+      a.rs: "fn a() {} \n"
+  config: |
+    version: 1
+    rules:
+      - id: first
+        kind: no_trailing_whitespace
+        paths: "src/**/*.rs"
+        level: warning
+        scope_filter:
+          include_manifest_paths:
+            source: package.json
+            extract: { json: "$.files[*]" }
+      - id: second
+        kind: no_trailing_whitespace
+        paths: "src/**/*.rs"
+        level: warning
+        scope_filter:
+          include_manifest_paths:
+            source: package.json
+            extract: { json: "$.files[*]" }
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: first, kind: resource_parse, path: package.json}
+      - {rule: second, kind: resource_parse, path: package.json}

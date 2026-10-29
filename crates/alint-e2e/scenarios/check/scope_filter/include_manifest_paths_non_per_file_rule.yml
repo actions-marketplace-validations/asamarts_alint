@@ -1,3 +1,4 @@
+test_version: 1
 name: include_manifest_paths resolves for a non-per-file rule (filename_case)
 tags: [check, scope_filter, filename_case]
 
@@ -35,5 +36,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: names, level: error, path: crates/a/BadName.rs}

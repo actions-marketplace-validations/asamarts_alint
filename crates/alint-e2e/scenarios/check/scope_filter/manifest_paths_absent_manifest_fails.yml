@@ -1,0 +1,32 @@
+test_version: 1
+name: exclude_manifest_paths with an absent manifest fails analysis
+tags: [check, scope_filter, no_trailing_whitespace, failing]
+
+# No package.json exists, so the rule cannot determine which files the manifest
+# excludes. The run fails closed once for the owning rule rather than silently
+# treating the missing manifest as an empty set and checking the full scope.
+
+given:
+  tree:
+    src:
+      a.rs: "fn a() {} \n"
+      b.rs: "fn b() {} \n"
+  config: |
+    version: 1
+    rules:
+      - id: nws
+        kind: no_trailing_whitespace
+        paths: "src/**/*.rs"
+        level: warning
+        scope_filter:
+          exclude_manifest_paths:
+            source: package.json
+            extract: { json: "$.bin.*" }
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: nws, kind: resource_read, path: package.json}

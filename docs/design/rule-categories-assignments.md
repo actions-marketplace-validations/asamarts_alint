@@ -1,6 +1,7 @@
 # Rule category assignments (Phase 0 curated table)
 
-Status: proposed (2026-07-08). Companion to `docs/design/rule-categories.md` (the
+Status: shipped in v0.14.0 (proposed 2026-07-08); the live table is generated from
+`docs/rules.md` and parity-gated against `alint-core`'s `Category` enum. Companion to `docs/design/rule-categories.md` (the
 many-to-many design) and ADR-0009 (the CLI). This is the curated kind-to-category
 table the feature seeds from: Phase 1 lands each kind's PRIMARY only (behavior-neutral),
 and Phase 3 flips the data to the full multi-membership recorded here.
@@ -183,13 +184,13 @@ Nothing carries more than three; the `gen-categories` gate can assert this bound
 
 | Category | Total kinds | (primary / gained as secondary) |
 |---|---|---|
-| Cross-file | 19 | 16 / +3 |
-| Content | 17 | 14 / +3 |
+| Structured query | 25 | 25 / +0 |
+| Cross-file | 20 | 17 / +3 |
+| Content | 18 | 14 / +4 |
 | Security / Unicode sanity | 13 | 3 / +10 |
 | Git hygiene | 13 | 13 / +0 |
 | Structure | 9 | 3 / +6 |
 | Text hygiene | 9 | 6 / +3 |
-| Structured query | 9 | 9 / +0 |
 | Encoding | 5 | 1 / +4 |
 | Unix metadata | 5 | 4 / +1 |
 | Existence | 4 | 4 / +0 |
@@ -198,7 +199,7 @@ Nothing carries more than three; the `gen-categories` gate can assert this bound
 | Plugin (tier 1) | 1 | 1 / +0 |
 
 The biggest discoverability gains are the Security lens (3 -> 13), Encoding (1 -> 5), and
-Structure (3 -> 9). 32 of the 78 canonical kinds are multi-category; 46 stay single, so
+Structure (3 -> 9). 33 of the 95 canonical kinds are multi-category; 62 stay single, so
 the taxonomy is enriched without becoming a everything-tagged-everything soup.
 
 ## Mis-filed-primary flags (future cleanup, not this feature)

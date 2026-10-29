@@ -9,7 +9,7 @@ deterministic profiling (instruction / cache / branch counts via Valgrind) is
 **load-immune**: it gave an airtight regression verdict in ~30 min on a *busy*
 shared box, where the wall-clock `bench-scale` needed a 5-hour quiet window and
 *still* got contaminated by co-tenants (v0.11.1 AND v0.12.0). Wall-clock benches
-on the shared kbox are chronically unreliable as a regression gate.
+on the shared dev box are chronically unreliable as a regression gate.
 
 **Goal:** make deterministic counts the **primary, automated, per-PR regression
 gate**, decoupled from the contaminated self-hosted runner, with minimal drift.
@@ -36,6 +36,11 @@ very-high deltas — RECALIBRATED 2026-06-08 to diagnostic-only + an `EstimatedC
 **Layer 1 — function-level (micro), gungraun library benches**
 (`crates/alint-bench/benches/det_engine.rs`):
 - `Engine::run` over a fixed in-memory `FileIndex` (dispatch + aggregation; H2 class)
+- one time-capable rule against a fixed Git repository, covering capability
+  discovery, root normalization, and cache initialization without folding that
+  one-off work into the common-path cells
+- twenty absent literal facts against a fresh 10k-file index, including the lazy
+  exact-file index build; guards the O(files + facts) fact-evaluation shape
 - the walker over a fixed tree (H1 — the +788k indirect mispredicts found in the
   investigation)
 - `Scope::matches` / the per-file `evaluate_file` dispatch
@@ -44,11 +49,25 @@ very-high deltas — RECALIBRATED 2026-06-08 to diagnostic-only + an `EstimatedC
 (`crates/alint-bench/benches/det_check.rs`):
 - `alint check <tree>` under Callgrind + Cachegrind, setup fn materializes the
   fixed `gen-monorepo` tree (reuse `crates/alint-bench/src/tree.rs`, seed `0xA11E47`)
-- **Scenario coverage (widened per decision 2):** a broad subset of S1–S14 —
-  walk (S1), per-file content (S2, S5, S6), per-file v0.10/v0.12 kinds (S12, S14),
-  cross-file (S7, S11), git (S8), polyglot/scope_filter (S9, S10). Per-PR gate runs
-  **1k + 10k**; the **100k tier is added at release time** (still load-immune, just
-  slower under valgrind).
+- **Scenario coverage:** the consolidated check scenarios (see
+  [bench/scenario-consolidation.md](bench/scenario-consolidation.md)) — walk-bound
+  layout (S1 = `s1_layout`), per-file content (S2 = `s2_content`), and the
+  cross-file / relational / graph mix (S3 = `s3_relational`) — plus the dedicated
+  fix-mode scenario (`sfix_all`, all 24 non-spawning fix ops), which gates the fix
+  engine's determinism. Per-PR gate runs **1k + 10k**; the **100k tier is added at
+  release time** (still load-immune, just slower under valgrind). (Earlier "DONE"
+  notes below name the pre-consolidation S1–S14 ids — historical.)
+- one fixed-repository `alint explain` cell for a time-capable rule, isolating
+  the single HEAD-time lookup so Callgrind also traces the Git child process
+
+**Layer 3 — the criterion micro suite in instructions (`xtask micro-det`, 2026-10)**:
+every criterion micro bench, compiled per ref against a counting stand-in for
+`criterion` and run under Callgrind at two iteration counts; the difference is
+the exact steady-state instructions of one iteration on every thread, with setup
+excluded. A curated low-noise subset runs in the `perf-gate` job (advisory); the
+full suite runs in `bench-record.yml` at release and gates (+3% vs the previous
+release, +10% vs the anchor in `docs/benchmarks/ANCHOR`). Method and policy:
+`docs/benchmarks/METHODOLOGY.md` § "Deterministic micro counts".
 
 ## Gating policy (mirrors `gate.rs` gating-vs-advisory split)
 
@@ -86,17 +105,34 @@ a tracked follow-up.
 
 ## Automation — load-immune per-PR CI gate
 
-`ci.yml` job `perf-gate` (gated on `changes.outputs.rust`, PRs only), on the
-**self-hosted runner** (`[self-hosted, linux, alint]`): the gate is itself
-load-immune, so co-tenant noise doesn't matter and no GitHub-hosted quiescence is
-needed. Install pinned valgrind → build + bench the **merge-base** and the PR head
+`ci.yml` job `perf-gate` (gated on `changes.outputs.rust`, PRs only), on
+whichever executor the `changes` job selects: GitHub-hosted while local PR
+capacity is held (see `docs/design/v0.14/ci-fork-pr-isolation.md`). The gate is
+itself load-immune, so runner noise doesn't matter and no quiescent machine is
+needed. (It used to be box-only, which skipped it on every PR once PRs moved to
+hosted capacity; `ci/scripts/test-ci-pr-routing.sh` now pins it as portable.)
+Install pinned valgrind → build + bench the **merge-base** and the PR head
 (`cargo bench --bench det_engine --bench det_check`) → gungraun compares the two
-**in-CI** (no committed baseline; the raw output is ~18 MB) → on an `Ir` /
-`EstimatedCycles` breach it emits a `::warning` and **exits 0** — advisory while
-`DET_PERF_ADVISORY=1`. Flip `DET_PERF_ADVISORY=0` to make a breach fail the PR
-once the `Ir` limit is calibrated against real PR noise. Each bench runs once ⇒
-fast; regressions surface at PR time, deterministically — not 5 h later in a
+**in-CI** (no committed baseline; the raw output is ~18 MB) → the per-bench `Ir`
+table goes to the job summary, and on an `Ir` / `EstimatedCycles` breach it
+emits a `::warning` and **exits 0** — advisory while `DET_PERF_ADVISORY=1`. Flip
+`DET_PERF_ADVISORY=0` to make a breach fail the PR once the `Ir` limit is
+calibrated against real PR noise. A gate that couldn't run (runner install,
+baseline build or bench, or a PR bench with no comparison) **fails the job** as
+a labelled tooling failure: during the v0.18 audit PR it exited 0 with "NOT
+gating" on every run and a +13.5% S2 `Ir` regression merged unseen.
+`ci/scripts/test-det-perf-gate.sh` pins these outcomes. Each bench runs once ⇒
+regressions surface at PR time, deterministically — not 5 h later in a
 contaminated tag bench.
+
+**Reference gate (relation layer).** ADR-0023 adds a second, blocking job,
+`perf-gate-reference`, on pull requests `detect-changes.sh` classifies as
+relation-layer and on every Rust push to main. It builds the frozen v0.18.2 release binary and HEAD's, runs
+both through HEAD's `det_check` S1-S3 cells (only the binary differs), fails
+above +3% `Ir`, and fails when the alint process's read/stat-family syscalls on
+the 10k trees grow by more than 32 calls. See
+[`docs/benchmarks/REFERENCE-v0.18.2.md`](../benchmarks/REFERENCE-v0.18.2.md)
+and `ci/scripts/test-reference-perf-gate.sh`.
 
 ## Drift control
 
@@ -165,6 +201,20 @@ trustworthy too.
   the bench cells — compile-verified both ways); valgrind pinned in
   `bench/Dockerfile` (bookworm base = 3.19); RELEASING.md demotes wall-clock
   `bench-scale` to characterization + names the deterministic gate primary.
+- **2026-10: `det_engine` was blind to the rule engine, fixed.** `Engine::run`
+  hands rule evaluation to a rayon pool (`with_worker_pool` → `pool.install`),
+  and gungraun collects only the benchmark function's own thread, so `engine_run`
+  counted about 0.06% of the engine's work (`n10k`: 2.25M reported vs 36M real;
+  most of the 2.25M was dropping the fixture). The pool size also made the old
+  count depend on the host's core count (pool start-up was in the measured
+  call). The bench now runs with `RAYON_NUM_THREADS=1` and toggles collection
+  on rayon `StackJob`/`HeapJob::execute`: 99.9% of the work, repeatable to 0.01%.
+  `det-perf-gate.sh` fails as a tooling failure if `engine_run n10k` drops under
+  10M instructions. Investigation:
+  `docs/benchmarks/investigations/2026-10-v0.20-bench-increases/`.
+- **2026-10: the gate also runs on pushes to `main`**, comparing the pushed
+  range (`ci/scripts/perf-gate-base.sh`). 28 of v0.20's 29 commits were direct
+  pushes the PR-only gate never saw.
 - **Remaining:** flip `Ir` advisory→gating (`DET_PERF_ADVISORY=0`) after the
   rollout calibrates against real PR noise; optional strace syscall check;
   runner-isolation (separate track).

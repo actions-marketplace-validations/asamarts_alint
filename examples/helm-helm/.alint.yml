@@ -56,8 +56,7 @@ rules:
   - id: helm-dco-signoff
     kind: git_commit_signed_off
     # Only check commits unique to this branch, not all of history.
-    scope_filter:
-      changed_since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
+    since: "{{env.ALINT_BASE_REF | default('origin/main')}}"
     level: error
     message: >-
       Every commit must carry a `Signed-off-by:` trailer matching the author
@@ -196,7 +195,7 @@ rules:
   # patch level (1.26.0) and .github/env at minor (1.26); we compare the
   # minor-level slice to avoid a false drift.
   - id: helm-go-version-sync
-    kind: cross_file_value_equals
+    kind: cross_file
     source:
       file: ".github/env"
       extract:
@@ -228,10 +227,9 @@ rules:
   - id: helm-golangci-linters-sorted
     kind: ordered_block
     paths: ".golangci.yml"
-    # Region: the `enable:` list under `linters:` (the items just below the
-    # "Keep sorted alphabetically" marker comment).
-    start: '^\s*# Keep sorted alphabetically\s*$'
-    end: '^\s*exclusions:\s*$'
+    # `ordered_block` markers are literal lines, not regular expressions.
+    start: "enable:"
+    end: "exclusions:"
     level: warning
     message: >-
       The .golangci.yml linters.enable list must stay sorted alphabetically

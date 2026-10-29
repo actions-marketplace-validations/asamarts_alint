@@ -2,14 +2,20 @@
 
 use std::path::Path;
 
-use alint_core::{Context, Error, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation};
-use regex::Regex;
+use alint_core::{
+    Context, Error, FixSpec, Fixer, Level, PerFileRule, Result, Rule, RuleSpec, Scope, Violation,
+};
+use regex::bytes::Regex;
 use serde::Deserialize;
+
+use crate::fixers::ReplaceFixer;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    /// Rust regex. File contents must NOT match.
+    /// Rust regex. File contents must NOT match. The whole file is one
+    /// string, so `^` and `$` anchor to its start and end unless the pattern
+    /// turns on multi-line mode with `(?m)`.
     pattern: String,
 }
 
@@ -24,10 +30,15 @@ pub struct FileContentForbiddenRule {
     scope: Scope,
     pattern_src: String,
     pattern: Regex,
+    fixer: Option<ReplaceFixer>,
 }
 
 impl Rule for FileContentForbiddenRule {
     alint_core::rule_common_impl!();
+
+    fn fixer(&self) -> Option<&dyn Fixer> {
+        self.fixer.as_ref().map(|f| f as &dyn Fixer)
+    }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
@@ -36,18 +47,15 @@ impl Rule for FileContentForbiddenRule {
                 continue;
             }
             let full = ctx.root.join(&entry.path);
-            // Cap the read so a multi-GB file matched here can't OOM the run
-            // via the `for_each`-nested path (which bypasses the engine's cap).
-            // Over-cap → skip, matching the engine's per-file batch so the same
-            // rule behaves identically whether top-level or nested (M3-F1).
+            // Cap the read so a multi-GB file matched here cannot OOM the run
+            // through the `for_each`-nested path, which bypasses the engine's
+            // file-major reader. Missing, unreadable, and over-cap files all
+            // become typed `resource_read` analysis failures so `check` and
+            // `fix` agree.
             let bytes = match crate::io::read_capped(&full) {
                 Ok(b) => b,
-                Err(crate::io::ReadCapError::TooLarge(_)) => continue,
-                Err(crate::io::ReadCapError::Io(e)) => {
-                    violations.push(
-                        Violation::new(format!("could not read file: {e}"))
-                            .with_path(entry.path.clone()),
-                    );
+                Err(e) => {
+                    violations.push(crate::io::read_cap_error_violation(&entry.path, &e));
                     continue;
                 }
             };
@@ -58,6 +66,13 @@ impl Rule for FileContentForbiddenRule {
 
     fn as_per_file(&self) -> Option<&dyn PerFileRule> {
         Some(self)
+    }
+
+    fn pattern_hints(&self) -> Vec<alint_core::pattern_hints::PatternHint> {
+        alint_core::pattern_hints::pattern_hints(
+            &self.pattern_src,
+            alint_core::pattern_hints::PatternTarget::ForbiddenFile,
+        )
     }
 }
 
@@ -72,15 +87,26 @@ impl PerFileRule for FileContentForbiddenRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        // Non-UTF-8 files are silently skipped; they can't contain a
-        // text regex match. Use `file_is_text` to flag binaries.
-        let Ok(text) = std::str::from_utf8(bytes) else {
+        // Match the RAW bytes (a `regex::bytes` pattern) so a non-UTF-8 file is
+        // not a free pass: one Latin-1 `\xe9` used to fail `from_utf8` and skip
+        // the whole file, hiding e.g. a secret after it (fail-open). An invalid
+        // byte never matches a Unicode class, but every literal / ASCII match is
+        // still found, and on valid UTF-8 the semantics are unchanged.
+        //
+        // But a binary-looking file that is NOT valid UTF-8 (an image, a font,
+        // an archive) is skipped, as it always was: random bytes match ASCII
+        // patterns by chance, and the `replace` fix would corrupt the binary. A
+        // binary-looking file that IS valid UTF-8 (text with a NUL) is still
+        // searched, as before, but its finding is not auto-fixed.
+        let binary = match crate::io::char_scan_mode(bytes) {
+            crate::io::CharScan::Skip => return Ok(Vec::new()),
+            crate::io::CharScan::BinaryUtf8 => true,
+            crate::io::CharScan::Text => false,
+        };
+        let Some(m) = self.pattern.find(bytes) else {
             return Ok(Vec::new());
         };
-        let Some(m) = self.pattern.find(text) else {
-            return Ok(Vec::new());
-        };
-        let line = text[..m.start()].matches('\n').count() + 1;
+        let line = bytes[..m.start()].split(|&b| b == b'\n').count();
         let msg = self
             .message
             .clone()
@@ -93,10 +119,31 @@ impl PerFileRule for FileContentForbiddenRule {
                 // matched line's content (which would churn on any edit to that
                 // line). Mirrors `no_trailing_whitespace`/`line_endings` (M14).
                 // See `docs/design/baseline.md` §4.
-                .with_baseline_key(crate::slash(path)),
+                .with_baseline_key(crate::slash(path))
+                // The `replace` fixer never edits a binary-looking file.
+                .with_not_fixable_if(binary),
         ])
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(_paths) = &spec.paths else {
@@ -110,6 +157,29 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
     let pattern = Regex::new(&opts.pattern)
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid pattern: {e}")))?;
+    // The `replace` op rewrites each occurrence of the forbidden pattern. It is
+    // the only fix compatible with this rule (Phase 1); any other op is a config
+    // error. `replace` is Unsafe by default (a regex rewrite is not
+    // behaviour-preserving); a user may promote it per-rule in their own config.
+    let fixer = match &spec.fix {
+        Some(FixSpec::Replace { replace }) => Some(ReplaceFixer::new(
+            pattern.clone(), // cheap: Regex is Arc-backed
+            replace.replacement.clone(),
+            replace
+                .applicability
+                .unwrap_or(alint_core::Applicability::Unsafe),
+        )),
+        Some(other) => {
+            return Err(Error::rule_config(
+                &spec.id,
+                format!(
+                    "fix.{} is not compatible with file_content_forbidden (only `replace` is)",
+                    other.op_name()
+                ),
+            ));
+        }
+        None => None,
+    };
     Ok(Box::new(FileContentForbiddenRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -118,6 +188,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         scope: Scope::from_spec(spec)?,
         pattern_src: opts.pattern,
         pattern,
+        fixer,
     }))
 }
 
@@ -147,6 +218,44 @@ mod tests {
              level: error\n",
         );
         assert!(build(&spec).is_err());
+    }
+
+    #[test]
+    fn build_accepts_replace_fix_as_unsafe() {
+        // Phase 1: `replace` is the compatible fix; it builds a fixer that is
+        // Unsafe by default (a regex rewrite is not behaviour-preserving).
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: file_content_forbidden\n\
+             paths: \"**/*.js\"\n\
+             pattern: \"console\\\\.log\"\n\
+             level: error\n\
+             fix:\n  replace:\n    replacement: \"logger.debug\"\n",
+        );
+        let rule = build(&spec).unwrap();
+        let fixer = rule.fixer().expect("replace attaches a fixer");
+        assert_eq!(fixer.applicability(), alint_core::Applicability::Unsafe);
+        assert!(fixer.collects_located_edits(), "replace is a located op");
+    }
+
+    #[test]
+    fn build_rejects_an_incompatible_fix_op() {
+        // Only `replace` is compatible; a whole-file op (e.g. file_append) is a
+        // config error, not a silent ignore.
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: file_content_forbidden\n\
+             paths: \"**/*\"\n\
+             pattern: \"X\"\n\
+             level: error\n\
+             fix:\n  file_append:\n    content: \"y\"\n",
+        );
+        let err = build(&spec).unwrap_err().to_string();
+        assert!(err.contains("file_append"), "names the bad op: {err}");
+        assert!(
+            err.contains("replace"),
+            "points at the compatible op: {err}"
+        );
     }
 
     #[test]
@@ -197,5 +306,143 @@ mod tests {
         let (tmp, idx) = tempdir_with_files(&[("img.bin", &[0xff, 0xfe])]);
         let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert!(v.is_empty());
+    }
+
+    #[test]
+    fn a_leading_caret_raises_a_pattern_hint() {
+        // Issue #343: `^test` only ever looks at line 1 of the file.
+        let rule = build(&spec_yaml(
+            "id: t\nkind: file_content_forbidden\npaths: \"*.txt\"\npattern: \"^test\"\nlevel: warning\n",
+        ))
+        .unwrap();
+        assert_eq!(
+            rule.pattern_hints(),
+            vec![alint_core::pattern_hints::PatternHint::LeadingStart]
+        );
+        let rule = build(&spec_yaml(
+            "id: t\nkind: file_content_forbidden\npaths: \"*.txt\"\npattern: \"(?m)^test\"\nlevel: warning\n",
+        ))
+        .unwrap();
+        assert_eq!(rule.pattern_hints(), Vec::new());
+    }
+
+    #[test]
+    fn content_kinds_report_hints_for_their_own_haystack() {
+        use alint_core::pattern_hints::{PatternHint, PatternTarget};
+        let registry = crate::builtin_registry();
+        for (kind, extra, target) in [
+            ("file_content_matches", "", PatternTarget::File),
+            ("content_matches", "", PatternTarget::File),
+            ("file_content_forbidden", "", PatternTarget::ForbiddenFile),
+            ("file_header", "lines: 2\n", PatternTarget::Lines),
+            ("file_footer", "lines: 2\n", PatternTarget::Lines),
+        ] {
+            let spec = spec_yaml(&format!(
+                "id: t\nkind: {kind}\npaths: VERSION\npattern: '[0-9]$'\n{extra}level: warning\n"
+            ));
+            let rule = registry.build(&spec).unwrap();
+            assert_eq!(
+                rule.pattern_hints(),
+                vec![PatternHint::EndBeforeFinalNewline(target)],
+                "{kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_rules_contribute_their_pattern_hints() {
+        let registry = crate::builtin_registry();
+        let spec = spec_yaml(
+            "id: per-package\nkind: for_each_dir\nselect: \"packages/*\"\nrequire:\n  - kind: file_content_forbidden\n    paths: \"{path}/*.py\"\n    pattern: '^\\s*print\\('\nlevel: warning\n",
+        );
+        let rule = registry.build(&spec).unwrap();
+        let hints =
+            alint_core::pattern_hints::rule_tree_hints(&registry, rule.as_ref(), Some(&spec));
+        assert_eq!(hints.len(), 1, "{hints:?}");
+        assert_eq!(
+            hints[0].hint,
+            alint_core::pattern_hints::PatternHint::LeadingStart
+        );
+        assert!(hints[0].id.starts_with("per-package"), "{}", hints[0].id);
+    }
+}
+
+#[cfg(test)]
+mod non_utf8_tests {
+    use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
+    use alint_core::Fixer as _;
+
+    #[test]
+    fn non_utf8_text_is_not_a_free_pass() {
+        // Fail-closed regression: a Latin-1 `\xe9` made `from_utf8` fail and the
+        // file was silently skipped, so the AWS key after it went unreported.
+        // Matching now runs over the raw bytes.
+        let rule = super::build(&spec_yaml(
+            "id: t\nkind: file_content_forbidden\npaths: \"**/*\"\n\
+             pattern: \"AKIA[0-9A-Z]{16}\"\nlevel: error\n",
+        ))
+        .unwrap();
+        let body: &[u8] = b"caf\xe9\nkey = AKIAABCDEFGHIJKLMNOP\n";
+        let (tmp, idx) = tempdir_with_files(&[("a.txt", body)]);
+        let vs = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(vs.len(), 1, "forbidden content in non-UTF-8 text is found");
+        assert_eq!(vs[0].line, Some(2));
+    }
+
+    #[test]
+    fn replace_fixer_edits_non_utf8_files_at_true_byte_offsets() {
+        // The located `replace` fixer agrees with the detector: it matches the
+        // raw bytes, so its ranges are true byte offsets and the invalid byte
+        // around them survives verbatim.
+        let f = crate::fixers::ReplaceFixer::new(
+            regex::bytes::Regex::new("AKIA[0-9A-Z]{16}").unwrap(),
+            "REDACTED".to_string(),
+            alint_core::Applicability::Unsafe,
+        );
+        let body: &[u8] = b"caf\xe9 AKIAABCDEFGHIJKLMNOP\n";
+        let edits = f.collect_edits(
+            &[],
+            std::path::Path::new("a.txt"),
+            body,
+            std::path::Path::new("/r"),
+        );
+        assert_eq!(edits.len(), 1);
+        let alint_core::FixEdit::ReplaceRange { range, content, .. } = &edits[0].edit else {
+            panic!("expected ReplaceRange");
+        };
+        assert_eq!(range.clone(), 5..25);
+        assert_eq!(content.as_slice(), b"REDACTED");
+    }
+
+    #[test]
+    fn binary_files_are_skipped_and_never_rewritten() {
+        // Regression: matching raw bytes with no binary guard flagged (and the
+        // `replace` fix rewrote) a PNG that happened to contain the pattern.
+        let rule = super::build(&spec_yaml(
+            "id: t\nkind: file_content_forbidden\npaths: \"**/*\"\n\
+             pattern: \"SECRET[0-9]+\"\nlevel: error\n\
+             fix:\n  replace:\n    replacement: \"X\"\n",
+        ))
+        .unwrap();
+        let png: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR SECRET123 \x00\xff\xfe";
+        let nul_text: &[u8] = b"code\0 SECRET9\n";
+        let (tmp, idx) = tempdir_with_files(&[("img.png", png), ("nul.txt", nul_text)]);
+        let vs = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(vs.len(), 1, "{vs:?}");
+        assert_eq!(vs[0].path.as_deref(), Some(std::path::Path::new("nul.txt")));
+        assert!(
+            vs[0].not_fixable,
+            "a binary-looking file is never rewritten"
+        );
+        // Defense in depth: the fixer itself refuses binary bytes.
+        let f = rule.fixer().unwrap();
+        assert!(
+            f.collect_edits(&vs, std::path::Path::new("img.png"), png, tmp.path())
+                .is_empty()
+        );
+        assert!(
+            f.collect_edits(&vs, std::path::Path::new("nul.txt"), nul_text, tmp.path())
+                .is_empty()
+        );
     }
 }

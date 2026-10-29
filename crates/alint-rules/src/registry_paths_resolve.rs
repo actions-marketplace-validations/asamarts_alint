@@ -18,16 +18,17 @@
 //!   expect: dir                 # any (default) | file | dir
 //!   must_contain: Cargo.toml
 //!   exclude_query: "$.workspace.exclude[*]"
-//!   orphans: { space: "crates/*", unreferenced: warn }
+//!   orphans: { space: "crates/*" }
 //!   level: error
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use alint_core::{
-    Context, Error, Extract, ExtractSpec, Level, Result, Rule, RuleSpec, Scope, Violation,
-    extract_values, is_non_literal,
+    AnalysisFailureKind, Context, Error, Extract, ExtractSpec, Format, Level, RelatedLocation,
+    Result, Rule, RuleSpec, Scope, Violation, extract_values, is_non_literal,
+    unreadable_file_violation,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -41,27 +42,15 @@ enum Expect {
     Dir,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
-#[serde(rename_all = "lowercase")]
-enum Severity {
-    #[default]
-    Warn,
-    Error,
-    Off,
-}
-
 /// Enable the reverse-completeness check: on-disk artefacts under the `space`
-/// glob that no entry references (the "new crate not wired into the workspace"
-/// detector).
+/// glob that no entry references. Findings use the rule's top-level `level`;
+/// omit `orphans` to disable the reverse check.
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[schemars(rename = "RegistryOrphansSpec")]
 #[serde(deny_unknown_fields)]
 struct OrphansSpec {
     /// Glob of on-disk artefacts that should each be referenced.
     space: String,
-    /// Severity when an on-disk artefact is unreferenced: `warn` (default),
-    /// `error`, or `off`.
-    #[serde(default)]
-    unreferenced: Severity,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -97,7 +86,8 @@ struct Options {
     /// before resolution is checked.
     #[serde(default)]
     exclude_query: Option<String>,
-    /// Enable the reverse-completeness check (see `OrphansSpec`).
+    /// Enable the reverse-completeness check. Findings use the rule's
+    /// top-level `level`; omit this option to disable the check.
     #[serde(default)]
     orphans: Option<OrphansSpec>,
 }
@@ -126,6 +116,12 @@ impl Base {
     }
 }
 
+type RegistryEntries = (
+    Vec<String>,
+    Vec<String>,
+    Vec<alint_core::NonStringValueKind>,
+);
+
 #[derive(Debug)]
 pub struct RegistryPathsResolveRule {
     id: String,
@@ -139,10 +135,10 @@ pub struct RegistryPathsResolveRule {
     entries_are_globs: bool,
     expect: Expect,
     must_contain: Option<String>,
-    exclude_query: Option<String>,
+    exclude_extract: Option<Extract>,
     orphans: Option<OrphansSpec>,
     /// Permit reading a `source:` registry file that escapes the repo
-    /// root — set post-build from the top-level `allow_out_of_root:`
+    /// root - set post-build from the top-level `allow_out_of_root:`
     /// policy. (The declared *entries* stay confined regardless.)
     allow_out_of_root: bool,
 }
@@ -161,6 +157,38 @@ impl Rule for RegistryPathsResolveRule {
         self.allow_out_of_root = allow;
     }
 
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        let manifest_sensitive = self
+            .registry_scope
+            .as_ref()
+            .is_some_and(|scope| scope.sensitive_manifest_sources().next().is_some());
+        if let Some(scope) = &self.registry_scope {
+            for path in scope.sensitive_manifest_sources() {
+                visit(path);
+            }
+        }
+        if !explicit
+            && !manifest_sensitive
+            && !self.extract.redacts_by_default()
+            && !self
+                .exclude_extract
+                .as_ref()
+                .is_some_and(Extract::redacts_by_default)
+        {
+            return;
+        }
+        for path in self.registry_files(ctx) {
+            visit(&path);
+        }
+    }
+
+    // One pass preserves registry-local parse, exclusion, and orphan ownership.
+    #[allow(clippy::too_many_lines)]
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let mut violations = Vec::new();
 
@@ -187,41 +215,87 @@ impl Rule for RegistryPathsResolveRule {
             let abs = ctx.root.join(&registry_rel);
             let text = match crate::io::read_capped(&abs) {
                 Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-                Err(e) => {
-                    let why = match e {
-                        crate::io::ReadCapError::TooLarge(n) => {
-                            format!("is too large to analyze ({})", crate::io::over_cap(n))
-                        }
-                        crate::io::ReadCapError::Io(e) => {
-                            format!("could not be read: {e}")
-                        }
-                    };
-                    violations.push(
-                        Violation::new(format!("registry file {} {why}", registry_rel.display()))
-                            .with_path(registry_rel.clone()),
-                    );
+                Err(crate::io::ReadCapError::TooLarge(n)) => {
+                    violations.push(alint_core::too_large_file_violation(&registry_rel, n));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    violations.push(alint_core::missing_file_violation(&registry_rel));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    violations.push(unreadable_file_violation(&registry_rel, &e));
                     continue;
                 }
             };
 
-            let (entries, skipped) = match self.extract_entries(&text) {
+            let (entries, skipped, non_strings) = match self.extract_entries(&text) {
                 Ok(v) => v,
                 Err(e) => {
-                    violations.push(
-                        Violation::new(format!(
-                            "registry file {} could not be parsed for `extract`: {e}",
-                            registry_rel.display()
-                        ))
-                        .with_path(registry_rel.clone()),
-                    );
+                    let mut finding = Violation::new(format!(
+                        "registry file {} could not be parsed for `extract`: {e}",
+                        registry_rel.display()
+                    ))
+                    .with_path(registry_rel.clone())
+                    .as_analysis_failure(AnalysisFailureKind::ResourceParse);
+                    if self.extract.redacts_by_default() {
+                        finding.redact_message(&self.id);
+                    }
+                    violations.push(finding);
                     continue;
                 }
             };
-            // Non-literal (computed/interpolated) entries are
-            // intentionally skipped, not failed — surfaced as notes.
-            Self::note_skipped(&registry_rel, &skipped, &mut violations);
+            if let Some(mut violation) =
+                crate::non_string_extract_violation(&registry_rel, "registry extract", &non_strings)
+            {
+                self.redact_extracted(
+                    &mut violation,
+                    &registry_rel,
+                    &self.extract,
+                    "non_string",
+                    std::iter::empty(),
+                );
+                violations.push(violation);
+            }
+            self.note_skipped(&registry_rel, &skipped, &mut violations);
 
-            let excluded = self.excluded_entries(&text);
+            let excluded = match self.excluded_entries(&text) {
+                Ok(values) => values,
+                Err(e) => {
+                    let mut finding = Violation::new(format!(
+                        "registry file {} could not be parsed for `exclude_query`: {e}",
+                        registry_rel.display()
+                    ))
+                    .with_path(registry_rel.clone())
+                    .as_analysis_failure(AnalysisFailureKind::ResourceParse);
+                    if self
+                        .exclude_extract
+                        .as_ref()
+                        .is_some_and(Extract::redacts_by_default)
+                    {
+                        finding.redact_message(&self.id);
+                    }
+                    violations.push(finding);
+                    continue;
+                }
+            };
+            if let Some(mut violation) = crate::non_string_extract_violation(
+                &registry_rel,
+                "exclude query",
+                &excluded.non_strings,
+            ) {
+                if let Some(extract) = &self.exclude_extract {
+                    self.redact_extracted(
+                        &mut violation,
+                        &registry_rel,
+                        extract,
+                        "exclude_non_string",
+                        std::iter::empty(),
+                    );
+                }
+                violations.push(violation);
+            }
+            let excluded: HashSet<String> = excluded.strings.into_iter().collect();
             let base_dir = self.base_dir(&registry_rel);
 
             let mut covered: Vec<PathBuf> = Vec::new();
@@ -239,6 +313,8 @@ impl Rule for RegistryPathsResolveRule {
                 if self.entries_are_globs {
                     let matches = Self::glob_matches(ctx, &resolved);
                     if matches.is_empty() {
+                        // The declaration is a pattern, not a concrete path.
+                        // Keep the violation anchored on the registry only.
                         violations.push(self.violation(
                             &registry_rel,
                             entry,
@@ -251,7 +327,13 @@ impl Rule for RegistryPathsResolveRule {
                 }
                 covered.push(resolved.clone());
                 if let Some(reason) = self.existence_problem(ctx, &resolved, &dir_set) {
-                    violations.push(self.violation(&registry_rel, entry, &reason));
+                    violations.push(
+                        self.violation(&registry_rel, entry, &reason)
+                            .with_related_location(RelatedLocation::new(
+                                &resolved,
+                                "declared target",
+                            )),
+                    );
                 }
             }
 
@@ -261,11 +343,10 @@ impl Rule for RegistryPathsResolveRule {
             if self.entries_are_globs {
                 for p in &covered {
                     if let Some(reason) = self.existence_problem(ctx, p, &dir_set) {
-                        violations.push(self.violation(
-                            &registry_rel,
-                            &p.display().to_string(),
-                            &reason,
-                        ));
+                        violations.push(
+                            self.violation(&registry_rel, &p.display().to_string(), &reason)
+                                .with_related_location(RelatedLocation::new(p, "resolved target")),
+                        );
                     }
                 }
             }
@@ -303,33 +384,23 @@ impl RegistryPathsResolveRule {
         }
     }
 
-    fn extract_entries(
-        &self,
-        text: &str,
-    ) -> std::result::Result<(Vec<String>, Vec<String>), String> {
+    fn extract_entries(&self, text: &str) -> std::result::Result<RegistryEntries, String> {
         let raw = extract_values(&self.extract, text)?;
         // Non-literal (computed/interpolated) entries can't be
         // statically resolved; they're surfaced as notes, not failed.
         let (skipped, kept): (Vec<String>, Vec<String>) =
-            raw.into_iter().partition(|e| is_non_literal(e));
-        Ok((kept, skipped))
+            raw.strings.into_iter().partition(|e| is_non_literal(e));
+        Ok((kept, skipped, raw.non_strings))
     }
 
-    fn excluded_entries(&self, text: &str) -> HashSet<String> {
-        let Some(q) = &self.exclude_query else {
-            return HashSet::new();
+    fn excluded_entries(
+        &self,
+        text: &str,
+    ) -> std::result::Result<alint_core::ExtractedValues, String> {
+        let Some(extract) = &self.exclude_extract else {
+            return Ok(alint_core::ExtractedValues::default());
         };
-        // exclude_query is a structured query; for line/regex
-        // registries it has no meaning, so fall back to a TOML
-        // read (a misconfig surfaces as an empty set, not a panic).
-        let ex = match &self.extract {
-            Extract::Json(_) => Extract::Json(q.clone()),
-            Extract::Yaml(_) => Extract::Yaml(q.clone()),
-            _ => Extract::Toml(q.clone()),
-        };
-        extract_values(&ex, text)
-            .map(|v| v.into_iter().collect())
-            .unwrap_or_default()
+        extract_values(extract, text)
     }
 
     /// Reverse-completeness: on-disk artefacts under `orphans.space`
@@ -344,24 +415,60 @@ impl RegistryPathsResolveRule {
         let Some(orph) = &self.orphans else {
             return;
         };
-        if orph.unreferenced == Severity::Off {
-            return;
-        }
-        let covered_set: HashSet<&Path> = covered.iter().map(PathBuf::as_path).collect();
         let Ok(space) = Scope::from_patterns(std::slice::from_ref(&orph.space)) else {
             return;
         };
-        for e in ctx.index.files() {
-            if space.matches(&e.path, ctx.index) && !covered_set.contains(&*e.path) {
-                out.push(
-                    Violation::new(format!(
-                        "{} is under `{}` but no entry in {} references it",
-                        e.path.display(),
-                        orph.space,
-                        registry_rel.display(),
-                    ))
-                    .with_path(e.path.clone()),
+        // `space` describes artefacts, not only files. Cargo workspaces, for
+        // example, naturally use `space: "crates/*"`, whose candidates are
+        // directories. A manifest entry covers both the exact artefact and any
+        // file underneath a referenced directory (`crates/a` covers
+        // `crates/a/Cargo.toml`).
+        // Ordered collection keeps findings deterministic even though the
+        // file index's internal representation is not part of this contract.
+        let mut candidates: BTreeSet<PathBuf> = BTreeSet::new();
+        for path in ctx
+            .index
+            .files()
+            .map(|entry| &entry.path)
+            .chain(ctx.index.dirs().map(|entry| &entry.path))
+        {
+            if space.matches(path, ctx.index) {
+                candidates.insert(path.to_path_buf());
+            }
+        }
+        for candidate in candidates {
+            let is_covered = covered
+                .iter()
+                .any(|entry| candidate == *entry || candidate.starts_with(entry));
+            if !is_covered {
+                let mut finding = Violation::new(format!(
+                    "{} is under `{}` but no entry in {} references it",
+                    candidate.display(),
+                    orph.space,
+                    registry_rel.display(),
+                ))
+                .with_path(candidate);
+                self.redact_extracted(
+                    &mut finding,
+                    registry_rel,
+                    &self.extract,
+                    "orphan",
+                    std::iter::empty(),
                 );
+                if let Some(extract) = &self.exclude_extract {
+                    self.redact_extracted(
+                        &mut finding,
+                        registry_rel,
+                        extract,
+                        "orphan_exclusion",
+                        std::iter::empty(),
+                    );
+                }
+                finding.set_related_locations(std::iter::once(RelatedLocation::new(
+                    registry_rel,
+                    "registry source",
+                )));
+                out.push(finding);
             }
         }
     }
@@ -456,17 +563,23 @@ impl RegistryPathsResolveRule {
     /// Surface each non-literal (interpolated/computed) entry as an
     /// informational note rather than a silent skip (v0.11; see
     /// `docs/design/v0.11/informational_findings.md`).
-    fn note_skipped(registry: &Path, skipped: &[String], out: &mut Vec<Violation>) {
+    fn note_skipped(&self, registry: &Path, skipped: &[String], out: &mut Vec<Violation>) {
         for entry in skipped {
-            out.push(
-                Violation::new(format!(
-                    "registry {}: skipped non-literal entry {entry:?} \
-                     (cannot statically resolve an interpolated/computed path)",
-                    registry.display()
-                ))
-                .with_path(registry.to_path_buf())
-                .as_note(),
+            let mut finding = Violation::new(format!(
+                "registry {}: skipped non-literal entry {entry:?} \
+                 (cannot statically resolve an interpolated/computed path)",
+                registry.display()
+            ))
+            .with_path(registry.to_path_buf())
+            .as_note();
+            self.redact_extracted(
+                &mut finding,
+                registry,
+                &self.extract,
+                "skipped",
+                std::iter::once(entry.as_str()),
             );
+            out.push(finding);
         }
     }
 
@@ -475,17 +588,97 @@ impl RegistryPathsResolveRule {
             .message
             .clone()
             .unwrap_or_else(|| format!("{}: entry {entry:?} {reason}", registry.display()));
-        // One manifest can enumerate many failing entries → key on the
-        // registry, the offending entry, and the machine reason so a new
-        // broken entry isn't masked by an existing one.
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(registry.to_path_buf())
             .with_baseline_key(format!(
                 "entry\u{0}{}\u{0}{entry}\u{0}{reason}",
                 crate::slash(registry)
-            ))
+            ));
+        self.redact_extracted(
+            &mut finding,
+            registry,
+            &self.extract,
+            reason,
+            std::iter::once(entry),
+        );
+        finding
+    }
+
+    fn redact_extracted<'a>(
+        &self,
+        finding: &mut Violation,
+        source: &Path,
+        extract: &Extract,
+        category: &str,
+        evidence: impl IntoIterator<Item = &'a str>,
+    ) {
+        if !extract.redacts_by_default() {
+            return;
+        }
+        let locator = format!(
+            "registry\0{}\0{extract:?}\0{category}",
+            crate::slash(source)
+        );
+        finding.redact_evidence(&self.id, &locator, evidence);
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("source"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("extract"),
+            selector_type: alint_core::SelectorType::Extract,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("base"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("orphans.space"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("exclude_query"),
+            selector_type: alint_core::SelectorType::Extract,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("must_contain"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::OutOfRootRead,
+        condition: alint_core::CapabilityCondition::CommonFieldSet {
+            field: std::borrow::Cow::Borrowed("allow_out_of_root"),
+        },
+    }]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(alint_core::Format::ALL),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "registry_paths_resolve")?;
@@ -500,12 +693,12 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         ));
     }
     // A glob source is resolved against the index; a literal one
-    // is read directly. `is_glob` mirrors the structured-path /
+    // is read directly. The literal test mirrors the structured-path /
     // file_exists literal test.
-    let is_glob = opts
-        .source
-        .chars()
-        .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'));
+    // `literal_glob_path` resolves escapes, so a `source` rendered from a
+    // directory literally named `a\b` (`a\\b`) reads that file.
+    let literal_source = alint_core::template::literal_glob_path(&opts.source);
+    let is_glob = literal_source.is_none();
     let registry_scope = if is_glob {
         Some(
             Scope::from_patterns(std::slice::from_ref(&opts.source))
@@ -522,20 +715,31 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         Regex::new(p)
             .map_err(|e| Error::rule_config(&spec.id, format!("invalid `extract.regex`: {e}")))?;
     }
+    let exclude_extract = opts
+        .exclude_query
+        .map(|query| {
+            let format = match &extract {
+                Extract::Structured(extract) => extract.format,
+                _ => Format::Toml,
+            };
+            Extract::structured(format, query)
+                .map_err(|e| Error::rule_config(&spec.id, format!("invalid `exclude_query`: {e}")))
+        })
+        .transpose()?;
 
     Ok(Box::new(RegistryPathsResolveRule {
         id: spec.id.clone(),
         level: spec.level,
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
-        source: opts.source,
+        source: literal_source.unwrap_or(opts.source),
         registry_scope,
         extract,
         base: Base::parse(opts.base.as_deref()),
         entries_are_globs: opts.entries_are_globs,
         expect: opts.expect,
         must_contain: opts.must_contain,
-        exclude_query: opts.exclude_query,
+        exclude_extract,
         orphans: opts.orphans,
         allow_out_of_root: false,
     }))
@@ -565,6 +769,14 @@ mod tests {
     }
 
     fn rule(opts: Options) -> RegistryPathsResolveRule {
+        let extract = opts.extract.resolve().expect("test extract valid");
+        let exclude_extract = opts.exclude_query.map(|query| {
+            let format = match &extract {
+                Extract::Structured(extract) => extract.format,
+                _ => Format::Toml,
+            };
+            Extract::structured(format, query).expect("test exclude query valid")
+        });
         RegistryPathsResolveRule {
             id: "t".into(),
             level: Level::Error,
@@ -572,12 +784,12 @@ mod tests {
             message: None,
             source: opts.source,
             registry_scope: None,
-            extract: opts.extract.resolve().expect("test extract valid"),
+            extract,
             base: Base::parse(opts.base.as_deref()),
             entries_are_globs: opts.entries_are_globs,
             expect: opts.expect,
             must_contain: opts.must_contain,
-            exclude_query: opts.exclude_query,
+            exclude_extract,
             orphans: opts.orphans,
             allow_out_of_root: false,
         }
@@ -605,8 +817,47 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         r.evaluate(&ctx).unwrap()
+    }
+
+    #[test]
+    fn dotenv_and_properties_registry_entries_are_redacted() {
+        const SECRET: &str = "TOKEN_VALUE_DO_NOT_REPORT";
+        for (format, file, body) in [
+            (Format::Dotenv, ".env", format!("PATH={SECRET}\n")),
+            (
+                Format::Properties,
+                "registry.properties",
+                format!("PATH={SECRET}\n"),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join(file), body).unwrap();
+            let entry_rule = rule(opts(file, Extract::structured(format, "$.PATH").unwrap()));
+            let findings = eval(&entry_rule, dir.path(), &index(&[file], &[]));
+            assert_eq!(findings.len(), 1);
+            assert!(findings[0].is_sensitive());
+            assert!(!findings[0].message.contains(SECRET), "{findings:?}");
+            assert!(findings[0].message.contains("<redacted:"), "{findings:?}");
+            assert!(findings[0].message.contains(file), "{findings:?}");
+
+            let mut options = opts(file, Extract::structured(format, "$.PATH").unwrap());
+            options.orphans = Some(OrphansSpec {
+                space: "artifacts/*".into(),
+            });
+            let rule = rule(options);
+            let findings = eval(
+                &rule,
+                dir.path(),
+                &index(&[file, SECRET], &["artifacts/orphan"]),
+            );
+            assert_eq!(findings.len(), 1, "{findings:?}");
+            assert!(findings[0].is_sensitive(), "{findings:?}");
+        }
     }
 
     #[test]
@@ -629,6 +880,23 @@ mod tests {
         let v = eval(&r, dir.path(), &index(&["src/a.rs", "MANIFEST"], &[]));
         assert_eq!(v.len(), 1);
         assert!(v[0].message.contains("src/b.rs"));
+        assert_eq!(v[0].path.as_deref(), Some(Path::new("MANIFEST")));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("src/b.rs"));
+        assert_eq!(v[0].related_locations[0].label, "declared target");
+    }
+
+    #[test]
+    fn unmatched_glob_entry_has_no_bogus_file_location() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("MANIFEST"), "src/*.rs\n").unwrap();
+        let mut options = opts("MANIFEST", Extract::Lines(LinesOpts::default()));
+        options.entries_are_globs = true;
+        let findings = eval(&rule(options), dir.path(), &index(&["MANIFEST"], &[]));
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].message.contains("matched no path"));
+        assert_eq!(findings[0].related_locations, Vec::new());
+        assert_eq!(findings[0].related_locations_omitted, 0);
     }
 
     #[test]
@@ -667,7 +935,7 @@ mod tests {
         r.set_allow_out_of_root(true);
         let v = eval(&r, root, &index(&["src/a.rs"], &[]));
         assert!(
-            v.iter().all(|x| x.is_note),
+            v.iter().all(|x| x.note_kind().is_some()),
             "only an out-of-root note: {v:?}"
         );
         assert!(
@@ -684,7 +952,10 @@ mod tests {
             "[workspace]\nmembers = [\"crates/core\", \"crates/cli\"]\n",
         )
         .unwrap();
-        let mut o = opts("Cargo.toml", Extract::Toml("$.workspace.members[*]".into()));
+        let mut o = opts(
+            "Cargo.toml",
+            Extract::structured(Format::Toml, "$.workspace.members[*]").unwrap(),
+        );
         o.expect = Expect::Dir;
         o.must_contain = Some("Cargo.toml".into());
         let r = rule(o);
@@ -730,8 +1001,8 @@ mod tests {
         let v = eval(&r, dir.path(), &idx);
         // The non-literal entry is skipped (not a violation) but
         // surfaces as an informational note (v0.11).
-        let real: Vec<_> = v.iter().filter(|x| !x.is_note).collect();
-        let notes: Vec<_> = v.iter().filter(|x| x.is_note).collect();
+        let real: Vec<_> = v.iter().filter(|x| x.note_kind().is_none()).collect();
+        let notes: Vec<_> = v.iter().filter(|x| x.note_kind().is_some()).collect();
         assert!(
             real.is_empty(),
             "non-literal must not be a violation, got {real:?}"
@@ -752,7 +1023,10 @@ mod tests {
             "[workspace]\nmembers = [\"crates/*\"]\n",
         )
         .unwrap();
-        let mut o = opts("Cargo.toml", Extract::Toml("$.workspace.members[*]".into()));
+        let mut o = opts(
+            "Cargo.toml",
+            Extract::structured(Format::Toml, "$.workspace.members[*]").unwrap(),
+        );
         o.entries_are_globs = true;
         let r = rule(o);
         // No crates/* on disk -> the glob matched nothing.
@@ -762,17 +1036,19 @@ mod tests {
     }
 
     #[test]
-    fn orphans_flags_unreferenced_dir() {
+    fn orphans_flags_unreferenced_dir_without_flagging_a_member() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("Cargo.toml"),
             "[workspace]\nmembers = [\"crates/a\"]\n",
         )
         .unwrap();
-        let mut o = opts("Cargo.toml", Extract::Toml("$.workspace.members[*]".into()));
+        let mut o = opts(
+            "Cargo.toml",
+            Extract::structured(Format::Toml, "$.workspace.members[*]").unwrap(),
+        );
         o.orphans = Some(OrphansSpec {
-            space: "crates/*/Cargo.toml".into(),
-            unreferenced: Severity::Error,
+            space: "crates/*".into(),
         });
         let r = rule(o);
         // crates/b exists on disk but isn't a member -> orphan.
@@ -782,8 +1058,12 @@ mod tests {
         );
         let v = eval(&r, dir.path(), &idx);
         assert!(
-            v.iter().any(|x| x.message.contains("crates/b/Cargo.toml")),
+            v.iter().any(|x| x.message.contains("crates/b")),
             "expected crates/b flagged as orphan, got {v:?}"
+        );
+        assert!(
+            v.iter().all(|x| !x.message.contains("crates/a")),
+            "referenced member crates/a must not be flagged, got {v:?}"
         );
     }
 
@@ -795,7 +1075,10 @@ mod tests {
             "[workspace]\nmembers = [\"a\", \"b\"]\nexclude = [\"b\"]\n",
         )
         .unwrap();
-        let mut o = opts("Cargo.toml", Extract::Toml("$.workspace.members[*]".into()));
+        let mut o = opts(
+            "Cargo.toml",
+            Extract::structured(Format::Toml, "$.workspace.members[*]").unwrap(),
+        );
         o.exclude_query = Some("$.workspace.exclude[*]".into());
         o.expect = Expect::Dir;
         let r = rule(o);

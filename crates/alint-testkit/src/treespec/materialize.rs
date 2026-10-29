@@ -45,9 +45,9 @@ fn write_map(children: &std::collections::BTreeMap<String, TreeNode>, parent: &P
                 })?;
                 // The executable bit is the only mode any consuming rule checks;
                 // it is a Unix concept, so the chmod is Unix-only. The node still
-                // materialises its content on other targets. The exec/symlink
-                // firing scenarios are `unix-only`-tagged: scenarios.rs skips them
-                // off Unix, and docs-export renders only on its Linux host.
+                // materializes its content on other targets. Policy tests which
+                // require executable or symlink semantics use an explicit
+                // platform tag.
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
@@ -71,7 +71,7 @@ fn write_map(children: &std::collections::BTreeMap<String, TreeNode>, parent: &P
                     source,
                 })?;
                 #[cfg(not(unix))]
-                return Err(Error::scenario(format!(
+                return Err(Error::runtime(format!(
                     "cannot materialise symlink {} -> {}: symlinks are unix-only",
                     path.display(),
                     link.target
@@ -120,11 +120,11 @@ empty: {}
 
     #[test]
     fn writes_binary_magic_bytes_via_unicode_escapes() {
-        // Scenario fixtures express raw binary signatures (macOS-junk magic
+        // Policy-test fixtures express raw binary signatures (macOS-junk magic
         // numbers) with YAML \u00NN escapes. Every code point below
         // U+0080 encodes to one byte, so the AppleDouble magic (00 05 16 07)
         // and the .DS_Store "Bud1" prefix round-trip to disk verbatim. Guards
-        // the mechanism the hygiene-no-macos-junk content scenarios rely on.
+        // the mechanism used by the hygiene-no-macos-junk policy tests.
         let tmp = TempDir::new().unwrap();
         let spec = TreeSpec::from_yaml(
             r#"

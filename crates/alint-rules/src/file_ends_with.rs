@@ -51,8 +51,14 @@ impl Rule for FileEndsWithRule {
             // bytes matter. Solo runs (`alint fix --only`,
             // tests) read just those bytes from the end.
             let full = ctx.root.join(&entry.path);
-            let Ok(tail) = read_suffix_n(&full, self.suffix.len()) else {
-                continue;
+            // Every read error, including a mid-walk removal, fails closed to
+            // match `check`'s file-major dispatch.
+            let tail = match read_suffix_n(&full, self.suffix.len()) {
+                Ok(b) => b,
+                Err(e) => {
+                    violations.push(crate::io::io_error_violation(&entry.path, &e));
+                    continue;
+                }
             };
             violations.extend(self.evaluate_file(ctx, &entry.path, &tail)?);
         }
@@ -92,6 +98,28 @@ impl PerFileRule for FileEndsWithRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::Suffix {
+        max_bytes: None,
+        metadata: false,
+    },
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec
         .paths
@@ -109,8 +137,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "file_ends_with has no fix op — pair with an explicit `file_append` rule if you \
-             want auto-append (avoids silently duplicating near-matching suffixes).",
+            "file_ends_with has no fix op - pair with an explicit `file_append` rule if you \
+         want auto-append (avoids silently duplicating near-matching suffixes).",
         ));
     }
     Ok(Box::new(FileEndsWithRule {
@@ -195,5 +223,22 @@ mod tests {
         let (tmp, idx) = tempdir_with_files(&[("a.txt", b"hello\n")]);
         let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn binary_files_are_checked_byte_for_byte() {
+        // Deliberate (docs/rules.md): unlike the text rules these do not skip
+        // binary-looking files, so a file signature can be asserted on images.
+        let rule = build(&spec_yaml(
+            "id: t\nkind: file_ends_with\npaths: \"**/*\"\nsuffix: \"IEND\"\nlevel: error\n",
+        ))
+        .unwrap();
+        let (tmp, idx) = tempdir_with_files(&[
+            ("ok.png", b"\0\0\0\0IEND"),
+            ("bad.bin", b"IEND\0\0trailer\0"),
+        ]);
+        let vs = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        let flagged: Vec<_> = vs.iter().filter_map(|v| v.path.as_deref()).collect();
+        assert_eq!(flagged, [std::path::Path::new("bad.bin")], "{vs:?}");
     }
 }

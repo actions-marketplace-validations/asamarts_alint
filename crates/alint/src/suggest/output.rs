@@ -12,7 +12,9 @@
 
 use std::io::Write;
 
-use alint_output::{HumanOptions, style, wrap_message};
+use alint_output::{
+    HumanOptions, sanitize_terminal, sanitize_terminal_multiline, style, wrap_message,
+};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
@@ -41,7 +43,7 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
         let success = style::SUCCESS;
         writeln!(
             out,
-            "{success}No proposals{success:#} — your existing config already covers what we'd suggest."
+            "{success}No proposals{success:#} - your existing config already covers what we'd suggest."
         )?;
         return Ok(());
     }
@@ -75,15 +77,18 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
             out,
             "  {conf_style}{glyph}{conf_style:#} {dim}[{dim:#}{conf_style}{conf:>6}{conf_style:#}{dim}]{dim:#} {label}",
             conf = p.confidence.label(),
-            label = headline_for(p),
+            // Proposal text can carry repo paths, TODO text and blame
+            // authors: neutralise terminal escapes before printing.
+            label = sanitize_terminal(&headline_for(p)),
         )?;
-        let summary_lines = wrap_message(&p.summary, 4, total_width);
+        let summary_lines = wrap_message(&sanitize_terminal_multiline(&p.summary), 4, total_width);
         for line in &summary_lines {
             writeln!(out, "    {line}")?;
         }
         if opts.explain {
             for e in &p.evidence {
-                let ev_lines = wrap_message(&e.message, 9, total_width);
+                let ev_lines =
+                    wrap_message(&sanitize_terminal_multiline(&e.message), 9, total_width);
                 let (first, rest) = ev_lines
                     .split_first()
                     .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
@@ -111,7 +116,13 @@ fn render_human(proposals: &[Proposal], opts: &RunOptions, out: &mut dyn Write) 
 
 fn headline_for(p: &Proposal) -> String {
     match &p.kind {
-        ProposalKind::BundledRuleset { uri } => uri.clone(),
+        ProposalKind::BundledRuleset { uri, except } => {
+            if except.is_empty() {
+                uri.clone()
+            } else {
+                format!("{uri} (except: {})", except.join(", "))
+            }
+        }
         ProposalKind::Rule { kind, .. } => format!("{} (`{}`)", p.id, kind),
     }
 }
@@ -130,8 +141,13 @@ fn render_yaml(proposals: &[Proposal], out: &mut dyn Write) -> Result<()> {
     if !bundled.is_empty() {
         writeln!(out, "extends:")?;
         for p in &bundled {
-            if let Some(uri) = p.bundled_uri() {
-                writeln!(out, "  - {uri}")?;
+            if let ProposalKind::BundledRuleset { uri, except } = &p.kind {
+                if except.is_empty() {
+                    writeln!(out, "  - {uri}")?;
+                } else {
+                    writeln!(out, "  - url: {uri}")?;
+                    writeln!(out, "    except: [{}]", except.join(", "))?;
+                }
             }
         }
         writeln!(out)?;
@@ -181,8 +197,15 @@ struct JsonProposal<'a> {
 #[serde(tag = "shape")]
 #[serde(rename_all = "snake_case")]
 enum JsonBody<'a> {
-    BundledRuleset { uri: &'a str },
-    Rule { kind: &'a str, yaml: &'a str },
+    BundledRuleset {
+        uri: &'a str,
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
+        except: &'a [String],
+    },
+    Rule {
+        kind: &'a str,
+        yaml: &'a str,
+    },
 }
 
 fn render_json(proposals: &[Proposal], out: &mut dyn Write) -> Result<()> {
@@ -198,7 +221,9 @@ fn render_json(proposals: &[Proposal], out: &mut dyn Write) -> Result<()> {
                 summary: &p.summary,
                 evidence: p.evidence.iter().map(|e| e.message.as_str()).collect(),
                 body: match &p.kind {
-                    ProposalKind::BundledRuleset { uri } => JsonBody::BundledRuleset { uri },
+                    ProposalKind::BundledRuleset { uri, except } => {
+                        JsonBody::BundledRuleset { uri, except }
+                    }
                     ProposalKind::Rule { kind, yaml } => JsonBody::Rule { kind, yaml },
                 },
             })
@@ -277,6 +302,7 @@ mod tests {
             id: "alint://bundled/rust@v1".into(),
             kind: ProposalKind::BundledRuleset {
                 uri: "alint://bundled/rust@v1".into(),
+                except: Vec::new(),
             },
             confidence: Confidence::High,
             evidence: vec![Evidence {
@@ -344,6 +370,37 @@ mod tests {
     }
 
     #[test]
+    fn yaml_renders_a_loadable_filtered_ruleset() {
+        let proposal = Proposal {
+            id: "alint://bundled/monorepo@v1".into(),
+            kind: ProposalKind::BundledRuleset {
+                uri: "alint://bundled/monorepo@v1".into(),
+                except: vec!["monorepo-packages-have-readme".into()],
+            },
+            confidence: Confidence::High,
+            evidence: Vec::new(),
+            summary: "Workspace detected.".into(),
+        };
+        let mut buf = b"version: 1\n".to_vec();
+        render_yaml(&[proposal], &mut buf).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(".alint.yml");
+        std::fs::write(&path, buf).unwrap();
+        let registry = alint_rules::builtin_registry();
+        let loaded = alint_dsl::load_with(
+            &path,
+            &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+        )
+        .expect("suggested YAML must load");
+        assert!(
+            loaded
+                .rules
+                .iter()
+                .all(|rule| rule.id != "monorepo-packages-have-readme")
+        );
+    }
+
+    #[test]
     fn json_emits_stable_envelope() {
         let proposals = vec![bundled_proposal(), rule_proposal()];
         let mut buf = Vec::new();
@@ -357,6 +414,10 @@ mod tests {
         // First proposal is bundled
         assert_eq!(arr[0]["shape"], "bundled_ruleset");
         assert_eq!(arr[0]["uri"], "alint://bundled/rust@v1");
+        assert!(
+            arr[0].get("except").is_none(),
+            "empty filters must not change the stable JSON shape"
+        );
         // Second is rule
         assert_eq!(arr[1]["shape"], "rule");
         assert_eq!(arr[1]["kind"], "git_blame_age");

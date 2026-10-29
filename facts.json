@@ -1,13 +1,14 @@
 {
-  "format_version": 2,
-  "alint_version": "0.15.2",
+  "format_version": 6,
+  "alint_version": "0.20.1",
   "counts": {
-    "rule_kinds": 93,
+    "rule_kinds": 103,
+    "rule_aliases": 11,
     "families": 13,
-    "bundled_rulesets": 22,
-    "auto_fix_ops": 12,
+    "bundled_rulesets": 24,
+    "auto_fix_ops": 26,
     "output_formats": 8,
-    "subcommands": 12
+    "subcommands": 13
   },
   "rule_kinds": [
     "changeset_requires_path",
@@ -22,6 +23,10 @@
     "dir_contains",
     "dir_exists",
     "dir_only_contains",
+    "dotenv_path_absent",
+    "dotenv_path_equals",
+    "dotenv_path_matches",
+    "editorconfig_conforms",
     "every_matching_has",
     "executable_bit",
     "executable_has_shebang",
@@ -58,17 +63,29 @@
     "git_commit_signed_off",
     "git_commit_subject_matches",
     "git_no_denied_paths",
+    "hcl_path_absent",
+    "hcl_path_equals",
+    "hcl_path_matches",
     "header",
     "import_gate",
     "indent_style",
+    "ini_path_absent",
+    "ini_path_equals",
+    "ini_path_matches",
     "is_text",
     "json_path_absent",
     "json_path_equals",
     "json_path_matches",
     "json_schema_passes",
+    "key_parity",
     "line_endings",
     "line_max_width",
+    "markdown_fragments_resolve",
+    "markdown_images_have_alt",
+    "markdown_links_resolve",
+    "markdown_no_duplicate_headings",
     "markdown_paths_resolve",
+    "markdown_required_headings",
     "max_consecutive_blank_lines",
     "max_directory_depth",
     "max_files_per_directory",
@@ -90,9 +107,14 @@
     "pair",
     "pair_changed_together",
     "pair_hash",
+    "pinned_references",
+    "properties_path_absent",
+    "properties_path_equals",
+    "properties_path_matches",
     "registry_paths_resolve",
     "shebang",
     "shebang_has_executable",
+    "spdx_identifier_valid",
     "toml_path_absent",
     "toml_path_equals",
     "toml_path_matches",
@@ -218,6 +240,19 @@
       "cross-file",
       "structure"
     ],
+    "dotenv_path_absent": [
+      "structured-query"
+    ],
+    "dotenv_path_equals": [
+      "structured-query"
+    ],
+    "dotenv_path_matches": [
+      "structured-query"
+    ],
+    "editorconfig_conforms": [
+      "content",
+      "text-hygiene"
+    ],
     "every_matching_has": [
       "cross-file"
     ],
@@ -338,12 +373,30 @@
       "git-hygiene",
       "security-unicode-sanity"
     ],
+    "hcl_path_absent": [
+      "structured-query"
+    ],
+    "hcl_path_equals": [
+      "structured-query"
+    ],
+    "hcl_path_matches": [
+      "structured-query"
+    ],
     "import_gate": [
       "cross-file",
       "security-unicode-sanity"
     ],
     "indent_style": [
       "text-hygiene"
+    ],
+    "ini_path_absent": [
+      "structured-query"
+    ],
+    "ini_path_equals": [
+      "structured-query"
+    ],
+    "ini_path_matches": [
+      "structured-query"
     ],
     "json_path_absent": [
       "structured-query"
@@ -357,6 +410,9 @@
     "json_schema_passes": [
       "structured-query"
     ],
+    "key_parity": [
+      "cross-file"
+    ],
     "line_endings": [
       "text-hygiene",
       "portable-metadata"
@@ -364,9 +420,26 @@
     "line_max_width": [
       "text-hygiene"
     ],
+    "markdown_fragments_resolve": [
+      "cross-file",
+      "content"
+    ],
+    "markdown_images_have_alt": [
+      "content"
+    ],
+    "markdown_links_resolve": [
+      "cross-file",
+      "content"
+    ],
+    "markdown_no_duplicate_headings": [
+      "content"
+    ],
     "markdown_paths_resolve": [
       "git-hygiene",
       "cross-file"
+    ],
+    "markdown_required_headings": [
+      "content"
     ],
     "max_consecutive_blank_lines": [
       "text-hygiene"
@@ -430,12 +503,29 @@
       "cross-file",
       "security-unicode-sanity"
     ],
+    "pinned_references": [
+      "content",
+      "security-unicode-sanity"
+    ],
+    "properties_path_absent": [
+      "structured-query"
+    ],
+    "properties_path_equals": [
+      "structured-query"
+    ],
+    "properties_path_matches": [
+      "structured-query"
+    ],
     "registry_paths_resolve": [
       "cross-file"
     ],
     "shebang_has_executable": [
       "unix-metadata",
       "content"
+    ],
+    "spdx_identifier_valid": [
+      "content",
+      "security-unicode-sanity"
     ],
     "toml_path_absent": [
       "structured-query"
@@ -481,6 +571,5559 @@
     "min_size": "file_min_size",
     "shebang": "file_shebang"
   },
+  "kind_meta": {
+    "changeset_requires_path": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "add_glob",
+          "type": "diff_glob",
+          "rerootable": false
+        },
+        {
+          "name": "when_changed",
+          "type": "diff_glob",
+          "rerootable": false
+        }
+      ],
+      "since": "required",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "command": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "spawn_user_command"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "env_export"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "delegated"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "command"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "command_idempotent": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "workdir",
+          "type": "literal_path",
+          "rerootable": true
+        },
+        {
+          "name": "files_pattern",
+          "type": "regex",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "spawn_user_command"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "env_export"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        }
+      ],
+      "content": {
+        "kind": "delegated"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "commented_out_code": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "cross_file": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "source.file",
+          "type": "literal_path",
+          "rerootable": false
+        },
+        {
+          "name": "source.files",
+          "type": "glob",
+          "rerootable": false
+        },
+        {
+          "name": "source.extract",
+          "type": "extract",
+          "rerootable": false
+        },
+        {
+          "name": "targets.files",
+          "type": "glob",
+          "rerootable": false
+        },
+        {
+          "name": "targets[].file",
+          "type": "literal_path",
+          "rerootable": false
+        },
+        {
+          "name": "targets[].extract",
+          "type": "extract",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "other_files"
+      },
+      "formats": [
+        "json",
+        "yaml",
+        "toml",
+        "xml",
+        "dotenv",
+        "properties",
+        "ini",
+        "hcl"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "sync_from",
+        "create_and_register"
+      ],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "dir_absent": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "ancestor_only"
+      },
+      "git_tracked_only": "dir_aware",
+      "respect_gitignore": false,
+      "root_only": true,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "tracked_set"
+            ]
+          },
+          "condition": {
+            "kind": "option_set",
+            "option": "git_tracked_only"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "dir_contains": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "select",
+          "type": "glob_list",
+          "rerootable": true
+        },
+        {
+          "name": "require",
+          "type": "basename_glob",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "dir_exists": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "dir_aware",
+      "respect_gitignore": false,
+      "root_only": true,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "tracked_set"
+            ]
+          },
+          "condition": {
+            "kind": "option_set",
+            "option": "git_tracked_only"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "dir_create"
+      ],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "dir_only_contains": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "select",
+          "type": "glob_list",
+          "rerootable": true
+        },
+        {
+          "name": "allow",
+          "type": "basename_glob",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "dotenv_path_absent": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "dotenv"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "remove_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "dotenv_path_equals": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "dotenv"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "set_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "dotenv_path_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "dotenv"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "editorconfig_conforms": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "other_files"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "every_matching_has": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "select",
+          "type": "glob_list",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "delegated"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "nested",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "nested",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": true
+      },
+      "nested_rules": true
+    },
+    "executable_bit": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "unix_only"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "metadata"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "chmod"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "executable_has_shebang": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "unix_only"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "prefix",
+        "max_bytes": 2,
+        "metadata": true
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_absent": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": true
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "file_only",
+      "respect_gitignore": false,
+      "root_only": true,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "tracked_set"
+            ]
+          },
+          "condition": {
+            "kind": "option_set",
+            "option": "git_tracked_only"
+          }
+        },
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "untrack"
+            ]
+          },
+          "condition": {
+            "kind": "fix_op_configured",
+            "op": "git_untrack"
+          }
+        }
+      ],
+      "content": {
+        "kind": "prefix",
+        "max_bytes": null,
+        "metadata": false
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_remove",
+        "git_untrack",
+        "relocate"
+      ],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_content_forbidden": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_content_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_append"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_ends_with": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "suffix",
+        "max_bytes": null,
+        "metadata": false
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_exists": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": true
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "file_only",
+      "respect_gitignore": true,
+      "root_only": true,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "tracked_set"
+            ]
+          },
+          "condition": {
+            "kind": "option_set",
+            "option": "git_tracked_only"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_create"
+      ],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_footer": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_append"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_graph": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "nodes",
+          "type": "glob",
+          "rerootable": false
+        },
+        {
+          "name": "edges.from_content.extract",
+          "type": "extract",
+          "rerootable": false
+        },
+        {
+          "name": "edges.derive_target.from",
+          "type": "regex",
+          "rerootable": false
+        },
+        {
+          "name": "edges.derive_target.to",
+          "type": "path_template",
+          "rerootable": false
+        },
+        {
+          "name": "require.no_orphans.roots",
+          "type": "glob_list",
+          "rerootable": false
+        },
+        {
+          "name": "require.forbidden_edges[].from",
+          "type": "glob",
+          "rerootable": false
+        },
+        {
+          "name": "require.forbidden_edges[].to",
+          "type": "glob",
+          "rerootable": false
+        },
+        {
+          "name": "require.fresh.marker",
+          "type": "regex",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "other_files"
+      },
+      "formats": [
+        "json",
+        "yaml",
+        "toml",
+        "xml",
+        "dotenv",
+        "properties",
+        "ini",
+        "hcl"
+      ],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_hash": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_header": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_prepend",
+        "insert_header"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_is_ascii": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_is_text": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "prefix",
+        "max_bytes": 8192,
+        "metadata": false
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_max_lines": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_max_size": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "metadata"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_min_lines": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_min_size": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "metadata"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_shebang": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "file_starts_with": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "prefix",
+        "max_bytes": null,
+        "metadata": false
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "filename_case": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_rename"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "filename_regex": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "final_newline": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_append_final_newline"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "for_each_dir": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "select",
+          "type": "glob_list",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "delegated"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "nested",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "nested",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": true
+      },
+      "nested_rules": true
+    },
+    "for_each_file": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "select",
+          "type": "glob_list",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "delegated"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "nested",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "nested",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": true
+      },
+      "nested_rules": true
+    },
+    "for_each_match": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "select",
+          "type": "regex",
+          "rerootable": false
+        },
+        {
+          "name": "require.matches",
+          "type": "regex",
+          "rerootable": false
+        },
+        {
+          "name": "require.forbid",
+          "type": "regex",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "generated_file_fresh": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "file",
+          "type": "literal_path",
+          "rerootable": true
+        },
+        {
+          "name": "outputs",
+          "type": "glob_list",
+          "rerootable": true
+        },
+        {
+          "name": "workdir",
+          "type": "literal_path",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "spawn_user_command"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "env_export"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "writes_during_check"
+          },
+          "condition": {
+            "kind": "option_set",
+            "option": "outputs"
+          }
+        }
+      ],
+      "content": {
+        "kind": "delegated"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "git_blame_age": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "tracked_set",
+              "blame"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "analysis_time"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "blame"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "git_commit_author_allowlist": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "optional",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "log"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "assertion"
+        ],
+        "required_stages": [
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "git_commit_gpg_signed": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "optional",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "log",
+              "verify_commit"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "host_keyring"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "assertion"
+        ],
+        "required_stages": [
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "git_commit_message": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "optional",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "log"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "env_read"
+          },
+          "condition": {
+            "kind": "option_matches",
+            "option": "since",
+            "predicate": "contains_legacy_env_reference"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "assertion"
+        ],
+        "required_stages": [
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "git_commit_no_fixup": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "optional",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "log"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "assertion"
+        ],
+        "required_stages": [
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "git_commit_signed_off": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "optional",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "log"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "assertion"
+        ],
+        "required_stages": [
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "git_commit_subject_matches": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "optional",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "log"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "assertion"
+        ],
+        "required_stages": [
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "git_no_denied_paths": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "denied",
+          "type": "diff_glob",
+          "rerootable": false
+        }
+      ],
+      "since": "optional",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "tracked_set"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "option_set",
+            "option": "since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "hcl_path_absent": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "hcl"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "remove_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "hcl_path_equals": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "hcl"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "set_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "hcl_path_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "hcl"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "import_gate": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "allow",
+          "type": "glob_list",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "indent_style": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "indent_style"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "ini_path_absent": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "ini"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "remove_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "ini_path_equals": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "ini"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "set_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "ini_path_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "ini"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "json_path_absent": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "json"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "remove_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "json_path_equals": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "json"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "set_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "json_path_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "json"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "json_schema_passes": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "schema_path",
+          "type": "literal_path",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "out_of_root_read"
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "allow_out_of_root"
+          }
+        },
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "other_files"
+      },
+      "formats": [
+        "json",
+        "yaml",
+        "toml",
+        "xml",
+        "dotenv",
+        "properties",
+        "ini",
+        "hcl"
+      ],
+      "dependencies": [
+        {
+          "field": "schema_path"
+        }
+      ],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "key_parity": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": true
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "reference",
+          "type": "literal_path",
+          "rerootable": false
+        },
+        {
+          "name": "peers",
+          "type": "glob",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "json",
+        "yaml",
+        "toml",
+        "dotenv",
+        "properties",
+        "ini"
+      ],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "line_endings": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_normalize_line_endings"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "line_max_width": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "markdown_fragments_resolve": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "root.dir",
+          "type": "literal_path",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "other_files"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "markdown_images_have_alt": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "markdown_links_resolve": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "root.dir",
+          "type": "literal_path",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "markdown_no_duplicate_headings": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "markdown_paths_resolve": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": true
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "prefixes",
+          "type": "literal_path",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "markdown_required_headings": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "max_consecutive_blank_lines": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_collapse_blank_lines"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "max_directory_depth": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "max_files_per_directory": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": true
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_bidi_controls": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_strip_bidi"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_bom": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "prefix",
+        "max_bytes": 16,
+        "metadata": false
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_strip_bom"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_case_conflicts": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": true
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_empty_files": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "metadata"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_remove"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_illegal_windows_names": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_merge_conflict_markers": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_submodules": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_remove"
+      ],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "assertion"
+        ],
+        "required_stages": [
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_symlinks": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "metadata"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_remove"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_trailing_whitespace": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_trim_trailing_whitespace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "no_zero_width_chars": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "file_strip_zero_width"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "ordered_block": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "select",
+          "type": "regex",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "sort",
+        "insert_line"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "pair": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "primary",
+          "type": "glob",
+          "rerootable": true
+        },
+        {
+          "name": "partner",
+          "type": "path_template",
+          "rerootable": true
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "pair_changed_together": {
+      "dispatch": {
+        "kind": "single_shot"
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "if_changed",
+          "type": "diff_glob",
+          "rerootable": false
+        },
+        {
+          "name": "then_changed",
+          "type": "diff_glob",
+          "rerootable": false
+        }
+      ],
+      "since": "required",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "always"
+          }
+        }
+      ],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "pair_hash": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "source",
+          "type": "glob",
+          "rerootable": false
+        },
+        {
+          "name": "target",
+          "type": "literal_path",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "out_of_root_read"
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "allow_out_of_root"
+          }
+        }
+      ],
+      "content": {
+        "kind": "other_files"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "pinned_references": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "properties_path_absent": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "properties"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "remove_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "properties_path_equals": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "properties"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "set_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "properties_path_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "properties"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "registry_paths_resolve": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "source",
+          "type": "glob",
+          "rerootable": false
+        },
+        {
+          "name": "extract",
+          "type": "extract",
+          "rerootable": false
+        },
+        {
+          "name": "base",
+          "type": "literal_path",
+          "rerootable": false
+        },
+        {
+          "name": "orphans.space",
+          "type": "glob",
+          "rerootable": false
+        },
+        {
+          "name": "exclude_query",
+          "type": "extract",
+          "rerootable": false
+        },
+        {
+          "name": "must_contain",
+          "type": "literal_path",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "out_of_root_read"
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "allow_out_of_root"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "json",
+        "yaml",
+        "toml",
+        "xml",
+        "dotenv",
+        "properties",
+        "ini",
+        "hcl"
+      ],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "shebang_has_executable": {
+      "dispatch": {
+        "kind": "rule_major_scoped"
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "unix_only"
+          },
+          "condition": {
+            "kind": "always"
+          }
+        },
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "prefix",
+        "max_bytes": 2,
+        "metadata": true
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [
+        "chmod"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "spdx_identifier_valid": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "toml_path_absent": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "toml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "remove_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "toml_path_equals": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "toml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "set_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "toml_path_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "toml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "unique_by": {
+      "dispatch": {
+        "kind": "full_index",
+        "path_scope": false
+      },
+      "paths": "forbidden",
+      "scope_filter": {
+        "kind": "rejected",
+        "reason": "scope_filter is not supported by this kind"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [
+        {
+          "name": "select",
+          "type": "glob",
+          "rerootable": true
+        },
+        {
+          "name": "key",
+          "type": "path_template",
+          "rerootable": false
+        }
+      ],
+      "since": "none",
+      "capabilities": [],
+      "content": {
+        "kind": "path_only"
+      },
+      "formats": [],
+      "dependencies": [],
+      "fix_ops": [],
+      "expect_matches": false,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": false,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "xml_path_absent": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "xml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "remove_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "xml_path_equals": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "xml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "set_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "xml_path_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "xml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "yaml_path_absent": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "yaml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "remove_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "yaml_path_equals": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "yaml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "set_value"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    },
+    "yaml_path_matches": {
+      "dispatch": {
+        "kind": "per_file",
+        "full_index": false
+      },
+      "paths": "required",
+      "scope_filter": {
+        "kind": "full"
+      },
+      "git_tracked_only": "none",
+      "respect_gitignore": false,
+      "root_only": false,
+      "selectors": [],
+      "since": "none",
+      "capabilities": [
+        {
+          "capability": {
+            "kind": "git",
+            "operations": [
+              "diff"
+            ]
+          },
+          "condition": {
+            "kind": "common_field_set",
+            "field": "scope_filter.changed_since"
+          }
+        }
+      ],
+      "content": {
+        "kind": "whole_file"
+      },
+      "formats": [
+        "yaml"
+      ],
+      "dependencies": [],
+      "fix_ops": [
+        "replace"
+      ],
+      "expect_matches": true,
+      "trace": {
+        "allowed_stages": [
+          "selection",
+          "extraction",
+          "cardinality",
+          "assertion"
+        ],
+        "required_stages": [
+          "selection",
+          "assertion"
+        ],
+        "emits_preview_rows": true,
+        "nested_evaluation": false
+      },
+      "nested_rules": false
+    }
+  },
+  "compatibility": {
+    "config_versions": [
+      1
+    ],
+    "policy_test_versions": [
+      1
+    ]
+  },
   "rule_source_files": {
     "changeset_requires_path": "changeset_requires_path",
     "command": "command",
@@ -488,12 +6131,16 @@
     "commented_out_code": "commented_out_code",
     "content_forbidden": "file_content_forbidden",
     "content_matches": "file_content_matches",
-    "cross_file": "cross_file",
-    "cross_file_value_equals": "cross_file",
+    "cross_file": "cross_file/mod",
+    "cross_file_value_equals": "cross_file/mod",
     "dir_absent": "dir_absent",
     "dir_contains": "dir_contains",
     "dir_exists": "dir_exists",
     "dir_only_contains": "dir_only_contains",
+    "dotenv_path_absent": "structured_path",
+    "dotenv_path_equals": "structured_path",
+    "dotenv_path_matches": "structured_path",
+    "editorconfig_conforms": "editorconfig_conforms",
     "every_matching_has": "every_matching_has",
     "executable_bit": "executable_bit",
     "executable_has_shebang": "executable_has_shebang",
@@ -530,17 +6177,29 @@
     "git_commit_signed_off": "git_commit_signed_off",
     "git_commit_subject_matches": "git_commit_subject_matches",
     "git_no_denied_paths": "git_no_denied_paths",
+    "hcl_path_absent": "structured_path",
+    "hcl_path_equals": "structured_path",
+    "hcl_path_matches": "structured_path",
     "header": "file_header",
     "import_gate": "import_gate",
     "indent_style": "indent_style",
+    "ini_path_absent": "structured_path",
+    "ini_path_equals": "structured_path",
+    "ini_path_matches": "structured_path",
     "is_text": "file_is_text",
     "json_path_absent": "structured_path",
     "json_path_equals": "structured_path",
     "json_path_matches": "structured_path",
     "json_schema_passes": "json_schema_passes",
+    "key_parity": "key_parity",
     "line_endings": "line_endings",
     "line_max_width": "line_max_width",
+    "markdown_fragments_resolve": "markdown_fragments_resolve",
+    "markdown_images_have_alt": "markdown_images_have_alt",
+    "markdown_links_resolve": "markdown_links_resolve",
+    "markdown_no_duplicate_headings": "markdown_no_duplicate_headings",
     "markdown_paths_resolve": "markdown_paths_resolve",
+    "markdown_required_headings": "markdown_required_headings",
     "max_consecutive_blank_lines": "max_consecutive_blank_lines",
     "max_directory_depth": "max_directory_depth",
     "max_files_per_directory": "max_files_per_directory",
@@ -558,13 +6217,18 @@
     "no_symlinks": "no_symlinks",
     "no_trailing_whitespace": "no_trailing_whitespace",
     "no_zero_width_chars": "no_zero_width_chars",
-    "ordered_block": "ordered_block",
+    "ordered_block": "ordered_block/mod",
     "pair": "pair",
     "pair_changed_together": "pair_changed_together",
     "pair_hash": "pair_hash",
+    "pinned_references": "pinned_references",
+    "properties_path_absent": "structured_path",
+    "properties_path_equals": "structured_path",
+    "properties_path_matches": "structured_path",
     "registry_paths_resolve": "registry_paths_resolve",
     "shebang": "file_shebang",
     "shebang_has_executable": "shebang_has_executable",
+    "spdx_identifier_valid": "spdx_identifier_valid",
     "toml_path_absent": "structured_path",
     "toml_path_equals": "structured_path",
     "toml_path_matches": "structured_path",
@@ -583,46 +6247,36 @@
     "apache-spark": 110,
     "astral-sh-ruff": 80,
     "astral-sh-uv": 89,
-    "bazelbuild-bazel": 86,
+    "bazelbuild-bazel": 85,
     "clap-rs-clap": 76,
     "denoland-deno": 81,
     "dotnet-runtime": 59,
-    "facebook-react": 82,
-    "flutter-flutter": 58,
+    "facebook-react": 80,
+    "flutter-flutter": 57,
     "golang-go": 62,
     "helm-helm": 58,
     "istio-istio": 64,
     "kubernetes-kubernetes": 58,
-    "microsoft-typescript": 71,
+    "microsoft-typescript": 69,
     "microsoft-vscode": 68,
-    "nixos-nixpkgs": 58,
+    "nixos-nixpkgs": 56,
     "nodejs-node": 61,
     "pnpm-pnpm": 92,
     "prettier-prettier": 65,
-    "protocolbuffers-protobuf": 45,
+    "protocolbuffers-protobuf": 44,
     "python-cpython": 78,
-    "pytorch-pytorch": 61,
-    "rust-lang-rust": 68,
-    "tensorflow-tensorflow": 58,
-    "tokio-rs-tokio": 73,
-    "vercel-next.js": 115,
-    "vercel-turbo": 91
+    "pytorch-pytorch": 60,
+    "rust-lang-rust": 58,
+    "tensorflow-tensorflow": 55,
+    "tokio-rs-tokio": 70,
+    "vercel-next.js": 110,
+    "vercel-turbo": 85
   },
   "bench_scenario_rule_counts": {
-    "S1": 8,
-    "S10": 5,
-    "S11": 3,
-    "S12": 4,
-    "S13": 2,
-    "S14": 7,
-    "S2": 8,
-    "S3": 32,
-    "S4": 5,
-    "S5": 4,
-    "S6": 13,
-    "S7": 6,
-    "S8": 34,
-    "S9": 26
+    "S1": 16,
+    "S2": 20,
+    "S3": 16,
+    "S4": 85
   },
   "bundled_rulesets": [
     "agent-context",
@@ -646,7 +6300,9 @@
     "php",
     "python",
     "rust",
-    "tooling/editorconfig"
+    "toolchain-pins",
+    "tooling/editorconfig",
+    "versioning"
   ],
   "bundled_ruleset_sizes": {
     "agent-context": 4,
@@ -670,7 +6326,9 @@
     "php": 6,
     "python": 8,
     "rust": 10,
-    "tooling/editorconfig": 3
+    "toolchain-pins": 24,
+    "tooling/editorconfig": 3,
+    "versioning": 11
   },
   "output_formats": [
     "agent",
@@ -694,6 +6352,7 @@
     "lsp",
     "rules",
     "suggest",
+    "test",
     "validate-config"
   ],
   "fact_predicates": [

@@ -82,7 +82,7 @@ impl Scan {
     /// always pass through.
     pub fn config_already_covers(&self, proposal: &Proposal) -> bool {
         match &proposal.kind {
-            ProposalKind::BundledRuleset { uri } => self.has_extends(uri),
+            ProposalKind::BundledRuleset { uri, .. } => self.has_extends(uri),
             ProposalKind::Rule { .. } => false,
         }
     }
@@ -128,7 +128,16 @@ fn read_existing_extends(root: &Path) -> Vec<String> {
         let Ok(body) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&body) else {
+        // Guard a deep-flow YAML bomb before yaml_serde/libyaml-rs processes it
+        // super-linearly -- the same guard the config loader applies. `suggest`
+        // reads the repo's `.alint.yml` directly, so an untrusted checkout could
+        // otherwise hang it. Degrade gracefully to "no existing extends", as this
+        // function already does for an unparseable config.
+        let yaml_guards = alint_core::yaml_depth::scan_guards(&body);
+        if !yaml_guards.flow_within_limit() || !yaml_guards.expansion_within_limit(&body) {
+            return Vec::new();
+        }
+        let Ok(doc) = yaml_serde::from_str::<yaml_serde::Value>(&body) else {
             return Vec::new();
         };
         return collect_extends(&doc);
@@ -142,11 +151,11 @@ fn read_existing_extends(root: &Path) -> Vec<String> {
 /// silently — the loader will surface its own error if the
 /// user's config is malformed; we just need our best-effort
 /// already-covered set.
-fn collect_extends(doc: &serde_yaml_ng::Value) -> Vec<String> {
+fn collect_extends(doc: &yaml_serde::Value) -> Vec<String> {
     let Some(map) = doc.as_mapping() else {
         return Vec::new();
     };
-    let Some(extends) = map.get(serde_yaml_ng::Value::String("extends".into())) else {
+    let Some(extends) = map.get(yaml_serde::Value::String("extends".into())) else {
         return Vec::new();
     };
     let Some(seq) = extends.as_sequence() else {
@@ -154,9 +163,9 @@ fn collect_extends(doc: &serde_yaml_ng::Value) -> Vec<String> {
     };
     seq.iter()
         .filter_map(|entry| match entry {
-            serde_yaml_ng::Value::String(s) => Some(s.clone()),
-            serde_yaml_ng::Value::Mapping(m) => m
-                .get(serde_yaml_ng::Value::String("url".into()))
+            yaml_serde::Value::String(s) => Some(s.clone()),
+            yaml_serde::Value::Mapping(m) => m
+                .get(yaml_serde::Value::String("url".into()))
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             _ => None,
@@ -233,7 +242,7 @@ mod tests {
         let scan = Scan::collect(tmp.path(), &Progress::null()).unwrap();
         assert_eq!(scan.index.entries.len(), 0);
         assert!(!scan.has_git);
-        assert!(scan.detection.languages.is_empty());
+        assert_eq!(scan.detection.languages, [] as [crate::init::Language; 0]);
     }
 
     #[test]
@@ -248,6 +257,18 @@ mod tests {
         assert!(scan.has_extends("alint://bundled/oss-baseline@v1"));
         assert!(scan.has_extends("alint://bundled/rust@v1"));
         assert!(!scan.has_extends("alint://bundled/node@v1"));
+    }
+
+    #[test]
+    fn extends_reader_degrades_on_a_yaml_flow_bomb() {
+        // `suggest` reads the repo's `.alint.yml` directly, so a deep-flow bomb in
+        // an untrusted checkout must NOT hang it: the flow-depth guard rejects it
+        // and we degrade to "no existing extends" (best-effort), exactly as this
+        // reader already does for an unparseable config.
+        let tmp = td();
+        let bomb = format!("extends: {}1{}", "[".repeat(200_000), "]".repeat(200_000));
+        touch(tmp.path(), ".alint.yml", &bomb);
+        assert_eq!(read_existing_extends(tmp.path()), Vec::<String>::new());
     }
 
     #[test]
@@ -269,7 +290,7 @@ mod tests {
         // Scan must still build — we silently degrade to an
         // empty extends list rather than fail the command.
         let scan = Scan::collect(tmp.path(), &Progress::null()).unwrap();
-        assert!(scan.extends_uris.is_empty());
+        assert_eq!(scan.extends_uris, [] as [String; 0]);
     }
 
     #[test]

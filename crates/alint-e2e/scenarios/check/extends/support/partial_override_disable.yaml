@@ -1,0 +1,6 @@
+version: 1
+rules:
+  - id: no-bak
+    kind: file_absent
+    paths: "**/*.bak"
+    level: error

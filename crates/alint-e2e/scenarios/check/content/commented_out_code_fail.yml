@@ -1,3 +1,4 @@
+test_version: 1
 name: commented_out_code flags blocks of code-shaped commented lines
 tags: [check, commented_out_code]
 
@@ -35,5 +36,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: no-commented-code, level: warning, path: src/api.ts}

@@ -76,6 +76,12 @@ impl PerFileRule for LineEndingsRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
+        // Skip binary content: the `file_normalize_line_endings` fixer refuses
+        // it, so `check` and `fix` must agree on scope (else a binary is flagged
+        // fixable forever but never fixed).
+        if crate::io::looks_binary(bytes) {
+            return Ok(Vec::new());
+        }
         let Some(line_no) = first_mismatched_line(bytes, self.target) else {
             return Ok(Vec::new());
         };
@@ -100,7 +106,7 @@ impl PerFileRule for LineEndingsRule {
 /// Walk the byte stream and return the 1-based line number of
 /// the first line ending that doesn't match `target`. The last
 /// "line" (after the final newline, or the whole file if no
-/// newline at all) is ignored — `final_newline` is that rule.
+/// newline at all) is ignored - `final_newline` is that rule.
 fn first_mismatched_line(bytes: &[u8], target: LineEndingTarget) -> Option<usize> {
     let mut line_no = 1usize;
     let mut i = 0;
@@ -121,6 +127,27 @@ fn first_mismatched_line(bytes: &[u8], target: LineEndingTarget) -> Option<usize
     None
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed(
+        "file_normalize_line_endings",
+    )]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec
         .paths
@@ -132,9 +159,15 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let target: LineEndingTarget = opts.target.into();
     let scope = Scope::from_spec(spec)?;
     let fixer = match &spec.fix {
-        Some(FixSpec::FileNormalizeLineEndings { .. }) => {
-            Some(FileNormalizeLineEndingsFixer::new(target))
-        }
+        Some(FixSpec::FileNormalizeLineEndings {
+            file_normalize_line_endings,
+        }) => Some(
+            FileNormalizeLineEndingsFixer::new(target).with_applicability(
+                file_normalize_line_endings
+                    .applicability
+                    .unwrap_or(alint_core::Applicability::Safe),
+            ),
+        ),
         Some(other) => {
             return Err(Error::rule_config(
                 &spec.id,

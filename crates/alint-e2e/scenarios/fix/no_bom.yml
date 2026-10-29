@@ -1,3 +1,4 @@
+test_version: 1
 name: file_strip_bom removes a leading BOM
 tags: [fix, no_bom, file_strip_bom, encoding]
 
@@ -18,10 +19,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: no-bom, level: warning, path: docs/a.md}
-  - applied: [no-bom]
-  - violations: []
+  - exit: success
+    applied: [no-bom]
+  - exit: success
+    violations: []
 
 expect_tree:
   docs:

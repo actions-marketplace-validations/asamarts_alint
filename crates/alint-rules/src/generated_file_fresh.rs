@@ -35,12 +35,13 @@
 //! ```
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use alint_core::{
-    Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation, WalkOptions, walk,
+    AnalysisFailureKind, Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation,
+    WalkOptions, unreadable_file_violation, walk,
 };
 use serde::Deserialize;
 
@@ -123,7 +124,7 @@ struct Options {
     #[serde(default)]
     normalize: Normalize,
     /// Generator timeout in seconds (default 120). On timeout the child is
-    /// killed and one violation is emitted.
+    /// killed and one non-baselinable `evaluation` analysis failure is emitted.
     #[serde(default)]
     #[schemars(range(min = 1))]
     timeout: Option<u64>,
@@ -182,11 +183,13 @@ impl GeneratedFileFreshRule {
             ("ALINT_RULE_ID", self.id.clone()),
             ("ALINT_LEVEL", self.level.as_str().to_string()),
         ];
-        crate::spawn::run_capturing(
+        crate::spawn::run_in_workdir(
             &self.command,
-            &ctx.root.join(&self.workdir),
+            ctx.root,
+            &self.workdir,
             &env,
             Duration::from_secs(self.timeout),
+            ctx.process_environment,
         )
     }
 
@@ -208,17 +211,15 @@ impl GeneratedFileFreshRule {
                 stderr,
             } => (status, stdout, stderr),
             crate::spawn::SpawnOutcome::SpawnError(e) => {
-                let program = self.command.first().map_or("", String::as_str);
-                return vec![self.violation(
-                    file,
-                    &format!("generator `{program}` could not be spawned: {e}"),
-                )];
+                return vec![
+                    self.generator_failure(Some(file), &format!("could not be spawned: {e}")),
+                ];
             }
             crate::spawn::SpawnOutcome::TimedOut { secs } => {
-                return vec![self.violation(
-                    file,
+                return vec![self.generator_failure(
+                    Some(file),
                     &format!(
-                        "generator did not exit within {secs}s \
+                        "did not exit within {secs}s \
                          (raise `timeout:` on the rule to extend)"
                     ),
                 )];
@@ -226,22 +227,22 @@ impl GeneratedFileFreshRule {
         };
 
         if !status.success() {
-            return vec![self.violation(file, &exit_desc(status, &stderr))];
+            return vec![self.generator_failure(Some(file), &exit_desc(status, &stderr))];
         }
 
         let committed = match crate::io::read_capped(&ctx.root.join(&file_rel)) {
             Ok(b) => b,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
-                return vec![self.violation(
-                    file,
-                    &format!("is too large to diff ({})", crate::io::over_cap(n)),
-                )];
+                return vec![alint_core::too_large_file_violation(&file_rel, n)];
             }
-            Err(crate::io::ReadCapError::Io(_)) => {
+            Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 return vec![self.violation(
                     file,
                     "is not on disk, but the generator produced output for it",
                 )];
+            }
+            Err(crate::io::ReadCapError::Io(e)) => {
+                return vec![unreadable_file_violation(file, &e)];
             }
         };
 
@@ -249,7 +250,7 @@ impl GeneratedFileFreshRule {
             return vec![self.violation(
                 file,
                 &format!(
-                    "is stale — its committed contents differ from `{}` output{}",
+                    "is stale - its committed contents differ from `{}` output{}",
                     self.command.join(" "),
                     first_diff_hint(&stdout, &committed),
                 ),
@@ -260,80 +261,91 @@ impl GeneratedFileFreshRule {
 
     // ─── mutating / in-place mode ────────────────────────────────
 
+    // The restorer must remain live across the complete run/diff/report transaction.
+    #[allow(clippy::too_many_lines)]
     fn eval_mutating(
         &self,
         ctx: &Context<'_>,
         outputs: &Scope,
         globs: &[String],
     ) -> Vec<Violation> {
-        // 1. Snapshot every output file that exists now. The restorer
-        //    holds the originals and writes them back on Drop — so an
-        //    early return, error, or panic still restores the tree.
+        // 1. Snapshot every output file that exists now. The restorer holds
+        // the originals for an explicit, error-reporting restore after the
+        // diff. Its Drop fallback also restores on early return or panic.
         let mut restorer = OutputRestorer::new(ctx.root);
         for entry in ctx.index.files() {
             if outputs.matches(&entry.path, ctx.index) {
                 match crate::io::read_capped(&ctx.root.join(&entry.path)) {
                     Ok(bytes) => restorer.snapshot(entry.path.clone(), bytes),
                     Err(crate::io::ReadCapError::TooLarge(n)) => {
-                        return vec![self.fail(&format!(
-                            "output `{}` is too large to snapshot ({})",
-                            entry.path.display(),
-                            crate::io::over_cap(n)
-                        ))];
+                        return vec![alint_core::too_large_file_violation(&entry.path, n)];
                     }
-                    // In the index but unreadable now — skip it.
-                    Err(crate::io::ReadCapError::Io(_)) => {}
+                    Err(crate::io::ReadCapError::Io(e))
+                        if e.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        return vec![alint_core::missing_file_violation(&entry.path)];
+                    }
+                    Err(crate::io::ReadCapError::Io(e)) => {
+                        return vec![unreadable_file_violation(&entry.path, &e)];
+                    }
                 }
             }
         }
 
-        // 2. Run the in-place generator.
-        match self.run(ctx) {
+        // 2. Run the in-place generator. Even after a process failure, rescan
+        // for newly-created partial outputs so the restorer can remove them.
+        // A failed generator produced no freshness verdict, so policy findings
+        // from its partial output are suppressed.
+        let mut failures = Vec::new();
+        let generator_succeeded = match self.run(ctx) {
             crate::spawn::SpawnOutcome::Exited { status, stderr, .. } if !status.success() => {
-                return vec![self.fail(&exit_desc(status, &stderr))];
+                failures.push(self.generator_failure(None, &exit_desc(status, &stderr)));
+                false
             }
             crate::spawn::SpawnOutcome::SpawnError(e) => {
-                let program = self.command.first().map_or("", String::as_str);
-                return vec![
-                    self.fail(&format!("generator `{program}` could not be spawned: {e}")),
-                ];
+                failures.push(self.generator_failure(None, &format!("could not be spawned: {e}")));
+                false
             }
             crate::spawn::SpawnOutcome::TimedOut { secs } => {
-                return vec![self.fail(&format!(
-                    "generator did not exit within {secs}s (raise `timeout:` to extend)"
-                ))];
+                failures.push(self.generator_failure(
+                    None,
+                    &format!("did not exit within {secs}s (raise `timeout:` to extend)"),
+                ));
+                false
             }
-            crate::spawn::SpawnOutcome::Exited { .. } => {}
-        }
+            crate::spawn::SpawnOutcome::Exited { .. } => true,
+        };
 
         // 3. Diff. Changed / removed are found against the snapshot;
         //    new files need a fresh walk of the scope.
         let cmd = self.command.join(" ");
-        let mut stale: Vec<(Arc<Path>, String)> = Vec::new();
-        for (path, before) in restorer.snapshots() {
-            // Capped read (M3-F7): a pathologically large generated file must
-            // not be read unbounded into memory. Over-cap / unreadable is
-            // reported distinctly from removed so the message stays accurate.
-            match crate::io::read_capped(&ctx.root.join(path)) {
-                Ok(after) if self.normalize.differs(before, &after) => stale.push((
-                    path.clone(),
-                    format!("is out of date — re-run `{cmd}` and commit the result"),
-                )),
-                Ok(_) => {}
-                Err(crate::io::ReadCapError::Io(e))
-                    if e.kind() == std::io::ErrorKind::NotFound =>
-                {
-                    stale.push((
+        let mut stale = Vec::new();
+        if generator_succeeded {
+            for (path, before) in restorer.snapshots() {
+                // Capped read (M3-F7): a pathologically large generated file
+                // must not be read unbounded into memory. Over-cap / unreadable
+                // is reported distinctly from removed.
+                match crate::io::read_capped(&ctx.root.join(path)) {
+                    Ok(after) if self.normalize.differs(before, &after) => stale.push((
                         path.clone(),
-                        format!("was removed by `{cmd}` — re-run it and commit the result"),
-                    ));
+                        format!("is out of date - re-run `{cmd}` and commit the result"),
+                    )),
+                    Ok(_) => {}
+                    Err(crate::io::ReadCapError::Io(e))
+                        if e.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        stale.push((
+                            path.clone(),
+                            format!("was removed by `{cmd}` - re-run it and commit the result"),
+                        ));
+                    }
+                    Err(crate::io::ReadCapError::TooLarge(n)) => {
+                        failures.push(alint_core::too_large_file_violation(path, n));
+                    }
+                    Err(crate::io::ReadCapError::Io(e)) => {
+                        failures.push(unreadable_file_violation(path, &e));
+                    }
                 }
-                Err(_) => stale.push((
-                    path.clone(),
-                    format!(
-                        "could not be read to verify freshness (too large or unreadable) — re-run `{cmd}`"
-                    ),
-                )),
             }
         }
         // New in-scope files the generator created (register them so
@@ -342,41 +354,62 @@ impl GeneratedFileFreshRule {
             respect_gitignore: true,
             extra_ignores: Vec::new(),
         };
-        if let Ok(after_index) = walk(ctx.root, &walk_opts) {
-            for entry in after_index.files() {
-                if outputs.matches(&entry.path, &after_index) && !restorer.has(&entry.path) {
-                    restorer.register_new(entry.path.clone());
-                    stale.push((
-                        entry.path.clone(),
-                        format!("is an uncommitted generated file — `{cmd}` created it; commit it"),
-                    ));
+        match walk(ctx.root, &walk_opts) {
+            Ok(after_index) => {
+                for entry in after_index.files() {
+                    if outputs.matches(&entry.path, &after_index) && !restorer.has(&entry.path) {
+                        restorer.register_new(entry.path.clone());
+                        if generator_succeeded {
+                            stale.push((
+                                entry.path.clone(),
+                                format!(
+                                    "is an uncommitted generated file - `{cmd}` created it; commit it"
+                                ),
+                            ));
+                        }
+                    }
                 }
             }
+            Err(e) => failures.push(
+                Violation::new(format!("could not rescan generated outputs: {e}"))
+                    .as_analysis_failure(AnalysisFailureKind::ResourceRead),
+            ),
         }
 
-        if stale.is_empty() && restorer.is_empty() {
-            // `outputs:` matched nothing and produced nothing — almost
-            // always a glob typo; surface it rather than pass silently.
-            return vec![self.fail(&format!(
-                "`outputs:` glob {globs:?} matched no files and the generator produced none"
-            ))];
-        }
-
-        // 4. Report (the restorer restores on Drop, below).
+        // 4. Report, then explicitly restore so write/remove failures are
+        // visible instead of silently leaving the working tree modified.
+        let no_outputs =
+            generator_succeeded && stale.is_empty() && restorer.is_empty() && failures.is_empty();
         stale.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut out: Vec<Violation> = stale
-            .iter()
-            .take(MAX_STALE_REPORTED)
-            .map(|(path, desc)| self.violation(path, desc))
-            .collect();
+        let mut out = failures;
+        if no_outputs {
+            // `outputs:` matched nothing and produced nothing — almost always
+            // a glob typo; surface it rather than pass silently.
+            out.push(self.fail(&format!(
+                "`outputs:` glob {globs:?} matched no files and the generator produced none"
+            )));
+        }
+        out.extend(
+            stale
+                .iter()
+                .take(MAX_STALE_REPORTED)
+                .map(|(path, desc)| self.violation(path, desc)),
+        );
         if stale.len() > MAX_STALE_REPORTED {
             out.push(self.fail(&format!(
                 "…and {} more stale output(s)",
                 stale.len() - MAX_STALE_REPORTED
             )));
         }
+        out.extend(restorer.restore().into_iter().map(|(path, error)| {
+            Violation::new(format!(
+                "could not restore generated output after freshness check: {error}; \
+                 the working tree may be modified"
+            ))
+            .with_path(path)
+            .as_analysis_failure(AnalysisFailureKind::Evaluation)
+        }));
         out
-        // 5. `restorer` drops here → tree restored byte-for-byte.
     }
 
     /// A path-anchored violation (stdout mode + per-output mutating).
@@ -388,16 +421,25 @@ impl GeneratedFileFreshRule {
         Violation::new(msg).with_path(file.to_path_buf())
     }
 
-    /// A rule-level violation (generator spawn/exit failure, no
-    /// single file to anchor on).
+    /// A rule-level policy violation with no single file to anchor on.
     fn fail(&self, desc: &str) -> Violation {
         let msg = self
             .message
             .clone()
             .unwrap_or_else(|| format!("generated_file_fresh `{}`: {desc}", self.id));
-        // No path to anchor on; key on a stable identity so the fingerprint
-        // doesn't fall through to the volatile message (anti-panic) branch.
         Violation::new(msg).with_baseline_key("generated-file-fresh-generator-failure")
+    }
+
+    /// A process failure means the generator produced no freshness verdict.
+    /// Keep the operational reason independent of the policy `message:` override.
+    fn generator_failure(&self, file: Option<&Path>, desc: &str) -> Violation {
+        let program = self.command.first().map_or("", String::as_str);
+        let message = format!("generator `{program}` in workdir `{}` {desc}", self.workdir);
+        let failure = Violation::new(message).as_analysis_failure(AnalysisFailureKind::Evaluation);
+        match file {
+            Some(path) => failure.with_path(path.to_path_buf()),
+            None => failure,
+        }
     }
 }
 
@@ -411,10 +453,9 @@ fn exit_desc(status: std::process::ExitStatus, stderr: &[u8]) -> String {
     format!("generator exited with {code}: {snippet}")
 }
 
-/// Restores the working tree on Drop: writes every snapshot file back
-/// and deletes every generator-created file. Best-effort (Drop can't
-/// surface errors) and panic-safe — `alint check` must not leave a
-/// mutating generator's output behind.
+/// Restores the working tree explicitly after evaluation, with a Drop fallback
+/// for early returns and panics. The explicit path surfaces restoration errors;
+/// Drop remains best-effort because it cannot report them.
 struct OutputRestorer<'a> {
     root: &'a Path,
     snapshots: HashMap<Arc<Path>, Vec<u8>>,
@@ -449,27 +490,46 @@ impl<'a> OutputRestorer<'a> {
     fn snapshots(&self) -> impl Iterator<Item = (&Arc<Path>, &Vec<u8>)> {
         self.snapshots.iter()
     }
+
+    fn restore(&mut self) -> Vec<(PathBuf, String)> {
+        let mut failures = Vec::new();
+
+        let mut snapshots: Vec<_> = self.snapshots.drain().collect();
+        snapshots.sort_by(|(a, _), (b, _)| a.cmp(b));
+        for (path, bytes) in snapshots {
+            let full = self.root.join(&path);
+            // Avoid mtime churn when an idempotent generator left the file
+            // untouched. Read failures fall through to a restorative write.
+            if matches!(crate::io::read_capped(&full), Ok(current) if current == bytes) {
+                continue;
+            }
+            if let Err(error) = std::fs::write(&full, &bytes) {
+                failures.push((path.to_path_buf(), error.to_string()));
+                self.snapshots.insert(path, bytes);
+            }
+        }
+
+        let mut new_files = std::mem::take(&mut self.new_files);
+        new_files.sort();
+        new_files.dedup();
+        for path in new_files {
+            match std::fs::remove_file(self.root.join(&path)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    failures.push((path.to_path_buf(), error.to_string()));
+                    self.new_files.push(path);
+                }
+            }
+        }
+
+        failures
+    }
 }
 
 impl Drop for OutputRestorer<'_> {
     fn drop(&mut self) {
-        for (path, bytes) in &self.snapshots {
-            let full = self.root.join(path);
-            // Only rewrite when the generator actually changed the
-            // file. An unconditional write bumps the mtime on every
-            // `alint check` — even an idempotent generator that left
-            // the output untouched — which needlessly invalidates
-            // build caches and trips file watchers.
-            // Capped read (M3-F7): over-cap / unreadable falls through to the
-            // rewrite below with the freshly-generated bytes — correct behavior.
-            if matches!(crate::io::read_capped(&full), Ok(current) if current == *bytes) {
-                continue;
-            }
-            let _ = std::fs::write(&full, bytes);
-        }
-        for path in &self.new_files {
-            let _ = std::fs::remove_file(self.root.join(path));
-        }
+        let _ = self.restore();
     }
 }
 
@@ -490,6 +550,58 @@ fn first_diff_hint(produced: &[u8], committed: &[u8]) -> String {
         format!(" (generator produced {np} lines, file has {nc})")
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("file"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: true,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("outputs"),
+            selector_type: alint_core::SelectorType::GlobList,
+            rerootable: true,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("workdir"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: true,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::SpawnUserCommand,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::EnvExport,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::WritesDuringCheck,
+            condition: alint_core::CapabilityCondition::OptionSet {
+                option: std::borrow::Cow::Borrowed("outputs"),
+            },
+        },
+    ]),
+    content: alint_core::ContentAccess::Delegated,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
@@ -527,14 +639,14 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
             return Err(Error::rule_config(
                 &spec.id,
                 "generated_file_fresh: set exactly one of `file` (stdout mode) or `outputs` \
-                 (mutating/in-place mode), not both",
+             (mutating/in-place mode), not both",
             ));
         }
         (None, None) => {
             return Err(Error::rule_config(
                 &spec.id,
                 "generated_file_fresh requires `file` (compare the generator's stdout to one \
-                 committed file) or `outputs` (the in-place generator's regenerated globs)",
+             committed file) or `outputs` (the in-place generator's regenerated globs)",
             ));
         }
     };
@@ -545,7 +657,13 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         message: spec.message.clone(),
         mode,
         command: opts.command,
-        workdir: opts.workdir.unwrap_or_else(|| ".".to_string()),
+        workdir: {
+            let workdir = opts.workdir.unwrap_or_else(|| ".".to_string());
+            // Refuse an escaping `workdir:` up front (defense in depth: these
+            // kinds are spawn-gated, but the child's cwd must stay in the repo).
+            crate::spawn::lexical_workdir(&workdir).map_err(|e| Error::rule_config(&spec.id, e))?;
+            workdir
+        },
         normalize: opts.normalize,
         timeout: opts
             .timeout
@@ -612,6 +730,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         r.evaluate(&ctx).unwrap()
     }
@@ -803,6 +924,27 @@ mod tests {
             std::fs::read_to_string(dir.path().join("gen.txt")).unwrap(),
             "orig\n",
             "a failed generator's partial write is rolled back"
+        );
+    }
+
+    #[test]
+    fn failed_mutating_generator_removes_new_partial_output() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("committed.gen"), "orig\n").unwrap();
+        let r = mutating_rule(
+            &["*.gen"],
+            &["sh", "-c", "printf 'partial\\n' > uncommitted.gen; exit 7"],
+            Normalize::None,
+        );
+        let violations = eval_in(&r, dir.path());
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(
+            violations[0].analysis_failure_kind(),
+            Some(AnalysisFailureKind::Evaluation)
+        );
+        assert!(
+            !dir.path().join("uncommitted.gen").exists(),
+            "a failed generator must not leave a newly created output behind"
         );
     }
 

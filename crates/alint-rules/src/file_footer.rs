@@ -27,7 +27,9 @@ use crate::fixers::FileAppendFixer;
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
-    /// Rust regex. The last `lines` lines of each file must match.
+    /// Rust regex. The last `lines` lines of each file must match. They are
+    /// one string, newlines included, so `^` and `$` anchor to the block's
+    /// start and end unless the pattern turns on `(?m)`.
     pattern: String,
     /// Number of trailing lines to consider.
     #[serde(default = "default_lines")]
@@ -68,18 +70,15 @@ impl Rule for FileFooterRule {
                 continue;
             }
             let full = ctx.root.join(&entry.path);
-            // Cap the read so a multi-GB file matched here can't OOM the run
-            // via the `for_each`-nested path (which bypasses the engine's cap).
-            // Over-cap → skip, matching the engine's per-file batch so the same
-            // rule behaves identically whether top-level or nested (M3-F1).
+            // Cap the read so a multi-GB file matched here cannot OOM the run
+            // through the `for_each`-nested path, which bypasses the engine's
+            // file-major reader. Missing, unreadable, and over-cap files all
+            // become typed `resource_read` analysis failures so `check` and
+            // `fix` agree.
             let bytes = match crate::io::read_capped(&full) {
                 Ok(b) => b,
-                Err(crate::io::ReadCapError::TooLarge(_)) => continue,
-                Err(crate::io::ReadCapError::Io(e)) => {
-                    violations.push(
-                        Violation::new(format!("could not read file: {e}"))
-                            .with_path(entry.path.clone()),
-                    );
+                Err(e) => {
+                    violations.push(crate::io::read_cap_error_violation(&entry.path, &e));
                     continue;
                 }
             };
@@ -90,6 +89,13 @@ impl Rule for FileFooterRule {
 
     fn as_per_file(&self) -> Option<&dyn PerFileRule> {
         Some(self)
+    }
+
+    fn pattern_hints(&self) -> Vec<alint_core::pattern_hints::PatternHint> {
+        alint_core::pattern_hints::pattern_hints(
+            &self.pattern_src,
+            alint_core::pattern_hints::PatternTarget::Lines,
+        )
     }
 }
 
@@ -107,7 +113,11 @@ impl PerFileRule for FileFooterRule {
         let Ok(text) = std::str::from_utf8(bytes) else {
             return Ok(vec![
                 Violation::new("file is not valid UTF-8; cannot match footer")
-                    .with_path(std::sync::Arc::<Path>::from(path)),
+                    .with_path(std::sync::Arc::<Path>::from(path))
+                    // No fix resolves this: the fixer would append bytes, but the
+                    // file would still not be valid UTF-8 (and a UTF-16 / binary
+                    // file is refused outright), so `check` must not promise one.
+                    .with_not_fixable(),
             ]);
         };
         let footer = last_lines(text, self.lines);
@@ -121,7 +131,11 @@ impl PerFileRule for FileFooterRule {
             )
         });
         Ok(vec![
-            Violation::new(msg).with_path(std::sync::Arc::<Path>::from(path)),
+            Violation::new(msg)
+                .with_path(std::sync::Arc::<Path>::from(path))
+                // The append fixer refuses a binary-looking file (e.g. valid
+                // UTF-8 with a NUL), so don't tag it fixable.
+                .with_not_fixable_if(crate::io::looks_binary(bytes)),
         ])
     }
 }
@@ -146,6 +160,25 @@ fn last_lines(text: &str, n: usize) -> String {
     let start = lines.len() - take;
     lines[start..].concat()
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_append")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(_paths) = &spec.paths else {
@@ -173,7 +206,13 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 &file_append.content,
                 &file_append.content_from,
             )?;
-            Some(FileAppendFixer::new(source))
+            Some(
+                FileAppendFixer::new(source).with_applicability(
+                    file_append
+                        .applicability
+                        .unwrap_or(alint_core::Applicability::Safe),
+                ),
+            )
         }
         Some(other) => {
             return Err(Error::rule_config(

@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_gpg_signed fires on an unsigned commit
 tags: [check, git_commit_gpg_signed, git, failing]
 
@@ -9,6 +10,9 @@ docs:
   title: An unsigned HEAD commit
   case: fail
   kind: git_commit_gpg_signed
+
+capabilities:
+  host_keyring: true
 
 given:
   tree:
@@ -28,5 +32,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: signed-commits, level: error}

@@ -16,6 +16,8 @@
 //!   level: warning
 //! ```
 
+use std::path::Path;
+
 use alint_core::when::WhenExpr;
 use alint_core::{
     CompiledNestedSpec, Context, Error, Level, NestedRuleSpec, Result, Rule, RuleSpec, Scope,
@@ -24,28 +26,43 @@ use alint_core::{
 use serde::Deserialize;
 
 use crate::for_each_dir::{
-    IterateMode, SelectSpec, compile_nested_require, evaluate_for_each, parse_when_iter,
-    resolve_select, validate_nested_require,
+    ForEachParent, IterateMode, SelectSpec, compile_nested_require, evaluate_for_each,
+    parse_when_iter, resolve_select, validate_nested_require, visit_sensitive_for_each,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     select: SelectSpec,
-    /// Optional per-iteration filter — typical shapes:
-    /// `iter.basename matches "^[a-z]"` to skip uppercase-named
-    /// files, or `not iter.has_file(...)` (always false for
-    /// file iteration) to no-op the rule.
+    /// Per-iteration `when:` filter - see `for_each_dir.when_iter`.
+    /// `iter.has_file(...)` always evaluates to false on file iteration; useful
+    /// predicates here include `iter.basename`, `iter.ext`, and
+    /// `iter.parent_name`.
     #[serde(default)]
     when_iter: Option<String>,
+    #[schemars(schema_with = "require_schema")]
     require: Vec<NestedRuleSpec>,
 }
+
+/// Preserve the shared recursive nested-rule schema instead of deriving the
+/// flattened `NestedRuleSpec` option map.
+fn require_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "description": "Nested rules evaluated against each matched file.",
+        "type": "array",
+        "minItems": 1,
+        "items": { "$ref": "#/$defs/nested_rule" }
+    })
+}
+
+crate::options_schema_for!(Options);
 
 #[derive(Debug)]
 pub struct ForEachFileRule {
     id: String,
     level: Level,
     policy_url: Option<String>,
+    message: Option<String>,
     select_scope: Scope,
     when_iter: Option<WhenExpr>,
     require: Vec<CompiledNestedSpec>,
@@ -54,14 +71,45 @@ pub struct ForEachFileRule {
 impl Rule for ForEachFileRule {
     alint_core::rule_common_impl!();
 
+    fn requires_full_index(&self) -> bool {
+        // Cross-file: a `for_each_file` over `**/*.c` requiring a
+        // matching `{dir}/{stem}.h` must see every source file, not
+        // just the changed ones, or under `--changed` it would miss
+        // a source whose partner was deleted in an earlier commit.
+        // Mirrors `for_each_dir`; opts out of `--changed` filtering.
+        true
+    }
+
     fn validate_nested(&self, registry: &alint_core::RuleRegistry) -> Result<()> {
         validate_nested_require(&self.id, self.level, &self.require, registry)
     }
 
-    fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        evaluate_for_each(
+    fn nested_rule_specs(&self) -> &[CompiledNestedSpec] {
+        &self.require
+    }
+
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        visit_sensitive_for_each(
             &self.id,
             self.level,
+            explicit,
+            &self.select_scope,
+            self.when_iter.as_ref(),
+            &self.require,
+            ctx,
+            IterateMode::Files,
+            visit,
+        );
+    }
+
+    fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        evaluate_for_each(
+            ForEachParent::new(&self.id, self.level, self.message.as_deref()),
             &self.select_scope,
             self.when_iter.as_ref(),
             &self.require,
@@ -70,6 +118,31 @@ impl Rule for ForEachFileRule {
         )
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("select"),
+        selector_type: alint_core::SelectorType::GlobList,
+        rerootable: true,
+    }]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::Delegated,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::NESTED,
+    nested_rules: true,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "for_each_file")?;
@@ -89,6 +162,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         id: spec.id.clone(),
         level: spec.level,
         policy_url: spec.policy_url.clone(),
+        message: spec.message.clone(),
         select_scope,
         when_iter,
         require,
@@ -120,14 +194,14 @@ mod tests {
 
     #[test]
     fn passes_when_every_file_has_required_sibling() {
-        let require: Vec<NestedRuleSpec> = vec![
-            serde_yaml_ng::from_str("kind: file_exists\npaths: \"{dir}/{stem}.h\"\n").unwrap(),
-        ];
+        let require: Vec<NestedRuleSpec> =
+            vec![yaml_serde::from_str("kind: file_exists\npaths: \"{dir}/{stem}.h\"\n").unwrap()];
         let require = compile_nested_require("t", require).unwrap();
         let r = ForEachFileRule {
             id: "t".into(),
             level: Level::Error,
             policy_url: None,
+            message: None,
             select_scope: Scope::from_patterns(&["**/*.c".to_string()]).unwrap(),
             when_iter: None,
             require,
@@ -147,6 +221,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert!(v.is_empty(), "unexpected: {v:?}");
@@ -154,14 +231,14 @@ mod tests {
 
     #[test]
     fn violates_per_missing_sibling() {
-        let require: Vec<NestedRuleSpec> = vec![
-            serde_yaml_ng::from_str("kind: file_exists\npaths: \"{dir}/{stem}.h\"\n").unwrap(),
-        ];
+        let require: Vec<NestedRuleSpec> =
+            vec![yaml_serde::from_str("kind: file_exists\npaths: \"{dir}/{stem}.h\"\n").unwrap()];
         let require = compile_nested_require("t", require).unwrap();
         let r = ForEachFileRule {
             id: "t".into(),
             level: Level::Error,
             policy_url: None,
+            message: Some("add the matching header".into()),
             select_scope: Scope::from_patterns(&["**/*.c".to_string()]).unwrap(),
             when_iter: None,
             require,
@@ -181,9 +258,13 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         assert_eq!(v.len(), 2);
+        assert!(v.iter().all(|v| v.message == "add the matching header"));
     }
 
     #[test]

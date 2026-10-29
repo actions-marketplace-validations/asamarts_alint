@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_author_allowlist is silent when the author matches the allowlist
 tags: [check, git_commit_author_allowlist, git, passing]
 
@@ -28,4 +29,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,3 +1,4 @@
+test_version: 1
 name: no_symlinks is silent on regular files
 tags: [check, no_symlinks, unix_metadata, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

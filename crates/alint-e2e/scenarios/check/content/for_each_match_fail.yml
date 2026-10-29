@@ -1,3 +1,4 @@
+test_version: 1
 name: for_each_match fires when a changelog entry breaks the per-line grammar
 tags: [check, for_each_match, content]
 
@@ -26,5 +27,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: changelog-entries-well-formed, level: error, path: CHANGELOG.md}

@@ -1,3 +1,4 @@
+test_version: 1
 name: indent_style tabs flags space-indented sources
 tags: [check, indent_style, content]
 
@@ -23,5 +24,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: go-tabs, level: error, path: src/bad.go}

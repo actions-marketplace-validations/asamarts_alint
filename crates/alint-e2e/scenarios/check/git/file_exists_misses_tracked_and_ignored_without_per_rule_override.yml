@@ -1,3 +1,4 @@
+test_version: 1
 name: file_exists misses a tracked-AND-gitignored file when per-rule respect_gitignore is unset
 tags: [check, file_exists, respect_gitignore, git]
 
@@ -39,5 +40,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - rule: bazelversion-required

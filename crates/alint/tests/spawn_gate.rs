@@ -1,13 +1,8 @@
-//! Spawn-gate RCE canary — end-to-end, through the real `alint` binary.
-//!
-//! alint's process-execution trust boundary: a rule kind that shells out
-//! (`command`, `command_idempotent`, `generated_file_fresh` — the
-//! `alint_dsl::SPAWNING_RULE_KINDS` allow-list) may be declared **only** in
-//! the user's own top-level config. Introducing one through any *untrusted*
-//! channel — an `extends:`'d ruleset, a `templates:` block, a `require:`
-//! sub-rule, or a nested `.alint.yml` — must be refused, because anyone who
-//! can land such a config (open a PR, publish a ruleset) would otherwise gain
-//! arbitrary code execution on every `alint check`.
+//! End-to-end canary for every metadata-declared process-spawning rule kind.
+//! Such kinds may be declared only in the user's own top-level config.
+//! Introducing one through any untrusted channel — an `extends:`'d ruleset, a
+//! `templates:` block, a `require:` sub-rule, or a nested `.alint.yml` — must be
+//! refused because anyone who can modify that source could execute code.
 //!
 //! The DSL-level gate logic is unit-tested in `alint-dsl` (it asserts
 //! `load()` returns an `Err`). What those tests can't prove is the property
@@ -111,10 +106,18 @@ fn scaffold() -> (tempfile::TempDir, PathBuf) {
     (dir, sentinel)
 }
 
-/// The spawning kinds, read from the crate under test so this matrix tracks
-/// the allow-list automatically.
-fn spawning_kinds() -> &'static [&'static str] {
-    alint_dsl::SPAWNING_RULE_KINDS
+/// Metadata-derived spawning kinds. The one-release hand-list equality is
+/// audited separately by `coverage_audit_spawn_gate`.
+fn spawning_kinds() -> Vec<String> {
+    alint_rules::builtin_registry()
+        .kind_metadata()
+        .filter(|(_kind, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::SpawnUserCommand))
+        })
+        .map(|(kind, _meta)| kind.to_string())
+        .collect()
 }
 
 // ─── Positive control — the canary mechanism is real ────────────────────
@@ -149,11 +152,11 @@ fn positive_control_trusted_top_level_command_executes() {
 fn spawning_kind_via_extends_rules_is_refused() {
     // Primary vector: a spawning `kind:` sitting directly in an `extends:`'d
     // ruleset's `rules:`. Covered for every allow-listed kind.
-    for &kind in spawning_kinds() {
+    for kind in spawning_kinds() {
         let (dir, sentinel) = scaffold();
         let base = format!(
             "version: 1\nrules:\n  - id: smuggled\n{}\n",
-            indent(&spawn_rule_fields(kind, &sentinel), 4)
+            indent(&spawn_rule_fields(&kind, &sentinel), 4)
         );
         std::fs::write(dir.path().join("base.yml"), base).unwrap();
         std::fs::write(
@@ -161,7 +164,7 @@ fn spawning_kind_via_extends_rules_is_refused() {
             "version: 1\nextends: [./base.yml]\nrules: []\n",
         )
         .unwrap();
-        assert_refused_no_rce("extends-rules", kind, dir.path(), &sentinel);
+        assert_refused_no_rce("extends-rules", &kind, dir.path(), &sentinel);
     }
 }
 
@@ -170,11 +173,11 @@ fn spawning_kind_via_extends_template_is_refused() {
     // C1 bypass: a spawning kind hidden in an inherited `templates:` block,
     // pulled in by a `kind`-less `extends_template:` that expands *after* the
     // top-level `rules[].kind` gate.
-    for &kind in spawning_kinds() {
+    for kind in spawning_kinds() {
         let (dir, sentinel) = scaffold();
         let base = format!(
             "version: 1\ntemplates:\n  - id: t\n{}\nrules:\n  - id: smuggled\n    extends_template: t\n",
-            indent(&spawn_rule_fields(kind, &sentinel), 4)
+            indent(&spawn_rule_fields(&kind, &sentinel), 4)
         );
         std::fs::write(dir.path().join("base.yml"), base).unwrap();
         std::fs::write(
@@ -182,7 +185,7 @@ fn spawning_kind_via_extends_template_is_refused() {
             "version: 1\nextends: [./base.yml]\nrules: []\n",
         )
         .unwrap();
-        assert_refused_no_rce("extends-template", kind, dir.path(), &sentinel);
+        assert_refused_no_rce("extends-template", &kind, dir.path(), &sentinel);
     }
 }
 
@@ -191,12 +194,12 @@ fn spawning_kind_via_extends_require_block_is_refused() {
     // Third vector: buried in a `require:` sub-rule of a `for_each_dir`, whose
     // nested `kind` flattens into the parent's options — the top-level `kind`
     // check would miss it, so the gate must recurse.
-    for &kind in spawning_kinds() {
+    for kind in spawning_kinds() {
         let (dir, sentinel) = scaffold();
         // Fields align at 8 spaces; turn the first (`kind:`) into the `- `
         // list item by swapping its leading indent for `      - ` (same width),
         // leaving the rest at 8 so they stay inside the one require entry.
-        let fields = indent(&spawn_rule_fields(kind, &sentinel), 8);
+        let fields = indent(&spawn_rule_fields(&kind, &sentinel), 8);
         let fields = fields.replacen("        kind:", "      - kind:", 1);
         let base = format!(
             "version: 1\nrules:\n  - id: outer\n    kind: for_each_dir\n    select: \"**/\"\n    require:\n{fields}\n    level: error\n",
@@ -207,7 +210,7 @@ fn spawning_kind_via_extends_require_block_is_refused() {
             "version: 1\nextends: [./base.yml]\nrules: []\n",
         )
         .unwrap();
-        assert_refused_no_rce("extends-require", kind, dir.path(), &sentinel);
+        assert_refused_no_rce("extends-require", &kind, dir.path(), &sentinel);
     }
 }
 
@@ -216,7 +219,7 @@ fn spawning_kind_via_nested_config_is_refused() {
     // C2 bypass: a nested `.alint.yml` is as untrusted as an `extends:`'d
     // ruleset (anyone opening a monorepo PR can add one), so it may not
     // declare a spawning kind either.
-    for &kind in spawning_kinds() {
+    for kind in spawning_kinds() {
         let (dir, sentinel) = scaffold();
         std::fs::write(
             dir.path().join(".alint.yml"),
@@ -227,9 +230,9 @@ fn spawning_kind_via_nested_config_is_refused() {
         std::fs::create_dir_all(&pkg).unwrap();
         let nested = format!(
             "version: 1\nrules:\n  - id: smuggled\n{}\n",
-            indent(&spawn_rule_fields(kind, &sentinel), 4)
+            indent(&spawn_rule_fields(&kind, &sentinel), 4)
         );
         std::fs::write(pkg.join(".alint.yml"), nested).unwrap();
-        assert_refused_no_rce("nested-config", kind, dir.path(), &sentinel);
+        assert_refused_no_rce("nested-config", &kind, dir.path(), &sentinel);
     }
 }

@@ -1,18 +1,13 @@
 # Informational findings — the notes/skip-surfacing channel
 
-Status: **Implemented (2026-05-23).** Notes flow as `is_note`-flagged
-`Violation`s through the existing return channel; `RuleResult::new`
-partitions them into `RuleResult.notes` at assembly time, so pass/fail
-and every unmodified formatter only ever see real violations in
-`violations`. Producers: `registry_paths_resolve` (skipped non-literal
-entries) and `cross_file_value_equals` (dropped non-literal
-source/target values). Surfacing: `alint check` prints a one-line
-stderr count by default and the full list with `--show-notes`; the
-`json` formatter carries a per-result `notes` array (omitted when
-empty; `check-report.json` schema extended). The `read_capped`
-over-cap path stays a violation (not a note). Deferred fast-follow:
-`agent`/`markdown`/`sarif` note rendering (they currently omit notes,
-which is safe). Original draft written 2026-05-21.
+Status: **Superseded (2026-10-16)** by the
+[v0.19 notes-output design](../v0.19/notes-output-completeness.md), which replaces the internal
+`is_note` flag with typed `note_kind` metadata and defines projections for every output format.
+This document records the v0.11 design and its original implementation: notes flowed as
+`is_note`-flagged `Violation`s through the existing return channel, and `RuleResult::new`
+partitioned them into `RuleResult.notes` at assembly time. The current implementation and output
+contract are defined by the superseding design, not by the historical model or deferred work
+below. Original draft written 2026-05-21.
 
 ## Problem
 

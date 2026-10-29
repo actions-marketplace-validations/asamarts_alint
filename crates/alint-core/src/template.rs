@@ -28,37 +28,111 @@ pub struct PathTokens {
     pub parent_name: String,
 }
 
+/// Which path tokens a set of templates refers to. Per-entry callers derive
+/// only these: each token is a fresh allocation, and most templates use one or
+/// two of the six.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenSet(u8);
+
+impl TokenSet {
+    const PATH: u8 = 1;
+    const DIR: u8 = 1 << 1;
+    const BASENAME: u8 = 1 << 2;
+    const STEM: u8 = 1 << 3;
+    const EXT: u8 = 1 << 4;
+    const PARENT_NAME: u8 = 1 << 5;
+
+    /// Every token.
+    pub const ALL: Self = Self(0b11_1111);
+    /// No token.
+    pub const NONE: Self = Self(0);
+
+    /// The tokens `template` contains (by literal `{name}` occurrence, so an
+    /// unknown or escaped token can only over-include, never miss one).
+    #[must_use]
+    pub fn of(template: &str) -> Self {
+        if !template.contains('{') {
+            return Self::NONE;
+        }
+        let mut bits = 0;
+        for (name, bit) in [
+            ("{path}", Self::PATH),
+            ("{dir}", Self::DIR),
+            ("{basename}", Self::BASENAME),
+            ("{stem}", Self::STEM),
+            ("{ext}", Self::EXT),
+            ("{parent_name}", Self::PARENT_NAME),
+        ] {
+            if template.contains(name) {
+                bits |= bit;
+            }
+        }
+        Self(bits)
+    }
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    const fn has(self, bit: u8) -> bool {
+        self.0 & bit != 0
+    }
+}
+
 impl PathTokens {
     /// Derive tokens from a relative path. Missing components (e.g. a path
     /// with no parent, or no extension) resolve to the empty string.
     pub fn from_path(rel: &Path) -> Self {
+        Self::from_path_with(rel, TokenSet::ALL)
+    }
+
+    /// [`Self::from_path`] deriving only the tokens in `needed`; the others are
+    /// empty. Rendering a template whose tokens are all in `needed` gives the
+    /// same result as with every token derived. A path containing a glob
+    /// metacharacter derives every token, so [`unescape_token_values`] (which
+    /// consults all six) also behaves exactly as with [`Self::from_path`].
+    pub fn from_path_with(rel: &Path, needed: TokenSet) -> Self {
+        let needed = if needs_glob_escape(&rel.to_string_lossy()) {
+            TokenSet::ALL
+        } else {
+            needed
+        };
+        let derive = |bit, f: &dyn Fn() -> String| {
+            if needed.has(bit) { f() } else { String::new() }
+        };
         Self {
-            path: rel.display().to_string(),
-            dir: rel
-                .parent()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default(),
-            basename: rel
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            stem: rel
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            ext: rel
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
-            parent_name: rel
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or_default()
-                .to_string(),
+            path: derive(TokenSet::PATH, &|| rel.display().to_string()),
+            dir: derive(TokenSet::DIR, &|| {
+                rel.parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            }),
+            basename: derive(TokenSet::BASENAME, &|| {
+                rel.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            stem: derive(TokenSet::STEM, &|| {
+                rel.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            ext: derive(TokenSet::EXT, &|| {
+                rel.extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
+            parent_name: derive(TokenSet::PARENT_NAME, &|| {
+                rel.parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            }),
         }
     }
 }
@@ -73,7 +147,125 @@ impl PathTokens {
 /// so a repo file literally named `a{ext}.c` (stem `a{ext}`) had its embedded
 /// `{ext}` wrongly expanded by the later `{ext}` pass, yielding a bogus path
 /// for the forbidding rules (L8). Unknown `{tokens}` are preserved verbatim.
+///
+/// An EMPTY token value that sits in its own leading path segment collapses
+/// together with the `/` after it: a root-level file has `{dir}` = `""`, so the
+/// documented `"{dir}/{stem}.h"` renders `"top.h"`, not the absolute-looking
+/// `"/top.h"` (which never matches a repo-relative path).
+///
+/// The output is a LITERAL path: substituted values are not escaped. For a
+/// template that is compiled as a glob, use [`render_path_glob`].
 pub fn render_path(template: &str, t: &PathTokens) -> String {
+    render_path_with(template, t, |v, out| out.push_str(v))
+}
+
+/// [`render_path`] for a template that is compiled as a **glob** (a nested
+/// rule's `paths:`, an `iter.has_file` pattern). Each substituted token value
+/// is glob-escaped (see [`glob_escape`]) so a real path containing glob
+/// metacharacters -- a Next.js `app/[slug]` dir, a literal `pkgs/*`, an
+/// unbalanced `{` -- matches only itself instead of being reinterpreted as a
+/// pattern (a false positive / false negative / invalid-glob error). The
+/// user-written template text around the tokens keeps its glob meaning.
+pub fn render_path_glob(template: &str, t: &PathTokens) -> String {
+    render_path_with(template, t, |v, out| {
+        // A value landing at the very start of the pattern that begins with `!`
+        // would be read as an EXCLUDE by `Scope::from_patterns`; wrap the `!` in
+        // a single-arm alternation so it is a literal.
+        let v = if out.is_empty()
+            && let Some(rest) = v.strip_prefix('!')
+        {
+            out.push_str("{!}");
+            rest
+        } else {
+            v
+        };
+        push_glob_escaped(out, v);
+    })
+}
+
+/// True when `s` has a byte [`glob_escape`] would rewrite.
+fn needs_glob_escape(s: &str) -> bool {
+    s.bytes().any(|b| {
+        matches!(b, b'?' | b'*' | b'[' | b']' | b'{' | b'}') || (b == b'\\' && !cfg!(windows))
+    })
+}
+
+/// Append `v` glob-escaped, without allocating when it has nothing to escape.
+fn push_glob_escaped(out: &mut String, v: &str) {
+    if needs_glob_escape(v) {
+        out.push_str(&glob_escape(v));
+    } else {
+        out.push_str(v);
+    }
+}
+
+/// Escape `s` so it matches only itself when compiled as an alint glob
+/// (`globset`, the dialect `Scope` uses): the metacharacters `* ? [ ] { }` are
+/// wrapped in a one-character class (`[` -> `[[]`), and on non-Windows a `\`
+/// (a legal filename byte there, and globset's escape character) is
+/// backslash-escaped. On Windows `\` is the path separator, never part of a
+/// name, so it is left as-is.
+#[must_use]
+pub fn glob_escape(s: &str) -> String {
+    if !needs_glob_escape(s) {
+        return s.to_owned();
+    }
+    let escaped = globset::escape(s);
+    if cfg!(windows) {
+        escaped
+    } else {
+        escaped.replace('\\', "\\\\")
+    }
+}
+
+/// The single literal path an alint glob `pattern` matches, with its escapes
+/// resolved -- or `None` when it has a real (unescaped) metacharacter (or a
+/// leading `!` exclude), i.e. it may match more than one path.
+///
+/// This is the inverse of [`glob_escape`], and the ONE literal test the
+/// O(1) "is this a literal path?" fast paths must use: a raw scan for
+/// `* ? [ ] { }` misses that on non-Windows `\` is globset's escape character,
+/// so a rendered `app/a\\b/page.tsx` (from a directory literally named `a\b`)
+/// was looked up verbatim -- with the escape still in it -- and never found.
+/// Recognized escapes: `\x` (non-Windows) and a one-character class `[x]`
+/// (what `globset::escape` emits for a metacharacter). Anything else glob-shaped
+/// returns `None`, so the caller falls back to real glob matching.
+#[must_use]
+pub fn literal_glob_path(pattern: &str) -> Option<String> {
+    if pattern.starts_with('!') {
+        return None;
+    }
+    if !pattern
+        .bytes()
+        .any(|b| matches!(b, b'\\' | b'[' | b'*' | b'?' | b']' | b'{' | b'}'))
+    {
+        return Some(pattern.to_owned());
+    }
+    let mut out = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !cfg!(windows) => out.push(chars.next()?),
+            '[' => {
+                // Only a single-char class `[x]` is literal (`[[]`, `[]]`, `[*]`).
+                let x = chars.next()?;
+                if matches!(x, '!' | '^') || chars.next()? != ']' {
+                    return None;
+                }
+                out.push(x);
+            }
+            '*' | '?' | ']' | '{' | '}' => return None,
+            c => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+fn render_path_with(
+    template: &str,
+    t: &PathTokens,
+    mut push: impl FnMut(&str, &mut String),
+) -> String {
     // Longest-first only matters if one token is a prefix of another; none is,
     // but the order is kept stable for clarity / future additions.
     let tokens: [(&str, &str); 6] = [
@@ -90,8 +282,17 @@ pub fn render_path(template: &str, t: &PathTokens) -> String {
         out.push_str(&rest[..open]);
         let at_brace = &rest[open..];
         if let Some((tok, val)) = tokens.iter().find(|(tok, _)| at_brace.starts_with(tok)) {
-            out.push_str(val);
             rest = &at_brace[tok.len()..];
+            // An empty value that forms a whole leading segment (start of the
+            // output or right after a `/`) collapses with its trailing `/`, so
+            // `{dir}/x` for a root-level file is `x`, not `/x`.
+            if val.is_empty() && (out.is_empty() || out.ends_with('/')) {
+                if let Some(after) = rest.strip_prefix('/') {
+                    rest = after;
+                }
+            } else {
+                push(val, &mut out);
+            }
         } else {
             // A `{` that doesn't begin a known token: emit it literally and
             // resume after it (preserves `{unknown}` verbatim).
@@ -133,8 +334,8 @@ pub fn render_path_argv(template: &str, t: &PathTokens) -> String {
 /// through unchanged. Used by nested-rule specs (e.g. `for_each_dir`) so that
 /// the `{dir}` in a nested rule's `paths`, `pattern`, or `partner` field
 /// resolves to the iterated entry's path at rule-build time.
-pub fn render_mapping(m: serde_yaml_ng::Mapping, tokens: &PathTokens) -> serde_yaml_ng::Mapping {
-    let mut out = serde_yaml_ng::Mapping::with_capacity(m.len());
+pub fn render_mapping(m: yaml_serde::Mapping, tokens: &PathTokens) -> yaml_serde::Mapping {
+    let mut out = yaml_serde::Mapping::with_capacity(m.len());
     for (k, v) in m {
         out.insert(k, render_value(v, tokens));
     }
@@ -142,8 +343,8 @@ pub fn render_mapping(m: serde_yaml_ng::Mapping, tokens: &PathTokens) -> serde_y
 }
 
 /// Recursive mate to [`render_mapping`] for arbitrary YAML values.
-pub fn render_value(v: serde_yaml_ng::Value, tokens: &PathTokens) -> serde_yaml_ng::Value {
-    use serde_yaml_ng::Value;
+pub fn render_value(v: yaml_serde::Value, tokens: &PathTokens) -> yaml_serde::Value {
+    use yaml_serde::Value;
     match v {
         Value::String(s) => Value::String(render_path(&s, tokens)),
         Value::Sequence(seq) => {
@@ -155,15 +356,228 @@ pub fn render_value(v: serde_yaml_ng::Value, tokens: &PathTokens) -> serde_yaml_
 }
 
 /// Apply path-template substitution to every pattern in a `PathsSpec`.
+/// `paths:` entries are globs, so token values are glob-escaped
+/// ([`render_path_glob`]). A flat-list `!exclude` entry keeps its leading
+/// `!` (it is template text, not a substituted value): the `!` is peeled off,
+/// the remainder rendered, and the `!` restored.
 pub fn render_paths_spec(spec: &PathsSpec, tokens: &PathTokens) -> PathsSpec {
+    let flat = |s: &String| match s.strip_prefix('!') {
+        Some(rest) => format!("!{}", render_path_glob(rest, tokens)),
+        None => render_path_glob(s, tokens),
+    };
     match spec {
-        PathsSpec::Single(s) => PathsSpec::Single(render_path(s, tokens)),
-        PathsSpec::Many(v) => PathsSpec::Many(v.iter().map(|s| render_path(s, tokens)).collect()),
+        PathsSpec::Single(s) => PathsSpec::Single(flat(s)),
+        PathsSpec::Many(v) => PathsSpec::Many(v.iter().map(flat).collect()),
         PathsSpec::IncludeExclude { include, exclude } => PathsSpec::IncludeExclude {
-            include: include.iter().map(|s| render_path(s, tokens)).collect(),
-            exclude: exclude.iter().map(|s| render_path(s, tokens)).collect(),
+            include: include
+                .iter()
+                .map(|s| render_path_glob(s, tokens))
+                .collect(),
+            exclude: exclude
+                .iter()
+                .map(|s| render_path_glob(s, tokens))
+                .collect(),
         },
     }
+}
+
+/// Undo [`render_path_glob`]'s escaping of `tokens`' values inside a
+/// user-facing `message`: a nested rule reports the glob it was built from
+/// (`expected a file matching app/[[]slug[]]/*.tsx`), and the escape forms are
+/// noise to the reader, who named the directory `app/[slug]`. Only the exact
+/// escaped spellings of this iteration's token values are replaced, so a
+/// user-written pattern is shown as written.
+#[must_use]
+pub fn unescape_token_values(message: &str, tokens: &PathTokens) -> Option<String> {
+    let mut pairs: Vec<(String, &str)> = Vec::new();
+    for v in [
+        &tokens.path,
+        &tokens.dir,
+        &tokens.basename,
+        &tokens.stem,
+        &tokens.parent_name,
+        &tokens.ext,
+    ] {
+        let escaped = glob_escape(v);
+        if escaped != *v {
+            pairs.push((escaped, v));
+        }
+        if let Some(rest) = v.strip_prefix('!') {
+            pairs.push((format!("{{!}}{}", glob_escape(rest)), v));
+        }
+    }
+    if pairs.is_empty() {
+        return None;
+    }
+    // Longest first: `{path}`'s spelling contains `{dir}`'s and `{basename}`'s.
+    pairs.sort_by_key(|(e, _)| std::cmp::Reverse(e.len()));
+    let mut out = message.to_string();
+    for (escaped, raw) in pairs {
+        if out.contains(&escaped) {
+            out = out.replace(&escaped, raw);
+        }
+    }
+    (out != message).then_some(out)
+}
+
+/// Option keys of a nested rule that hold a **list of nested rule specs**
+/// (each rendered recursively with [`render_nested_options`] for its own kind).
+const NESTED_SPEC_LISTS: &[(&[&str], &str)] = &[(
+    &["for_each_dir", "for_each_file", "every_matching_has"],
+    "require",
+)];
+
+/// Option keys (beyond `paths:`, which is rendered by [`render_paths_spec`])
+/// whose values are compiled as **globs**, per rule kind (aliases included).
+/// A dotted key is a path into nested mappings (sequence elements are walked
+/// through), e.g. `targets.files`. Every other string option is rendered
+/// LITERALLY: a regex (`for_each_match.select`, `pattern`), a literal path or
+/// template (`pair.partner`, `pair_hash.target`, `cross_file`'s `file`), a
+/// message. Glob-escaping a regex or a literal path would corrupt it.
+pub const NESTED_GLOB_OPTIONS: &[(&[&str], &[&str])] = &[
+    (&["dir_contains"], &["select", "require"]),
+    (&["dir_only_contains"], &["select", "allow"]),
+    (&["unique_by"], &["select"]),
+    (&["key_parity"], &["peers"]),
+    (
+        &["for_each_dir", "for_each_file", "every_matching_has"],
+        &["select"],
+    ),
+    (&["pair"], &["primary"]),
+    (&["pair_hash"], &["source"]),
+    (&["pair_changed_together"], &["if_changed", "then_changed"]),
+    (&["changeset_requires_path"], &["add_glob", "when_changed"]),
+    (&["generated_file_fresh"], &["outputs"]),
+    (&["git_no_denied_paths"], &["denied"]),
+    (&["import_gate"], &["allow"]),
+    (
+        &["file_graph"],
+        &[
+            "nodes",
+            "require.no_orphans.roots",
+            "require.forbidden_edges.from",
+            "require.forbidden_edges.to",
+        ],
+    ),
+    (
+        &["cross_file", "cross_file_value_equals"],
+        &["source.files", "targets.files"],
+    ),
+    (&["registry_paths_resolve"], &["source", "orphans.space"]),
+];
+
+/// The glob-typed option keys of `kind` (see [`NESTED_GLOB_OPTIONS`]).
+#[must_use]
+pub fn nested_glob_options(kind: &str) -> &'static [&'static str] {
+    NESTED_GLOB_OPTIONS
+        .iter()
+        .find(|(kinds, _)| kinds.contains(&kind))
+        .map_or(&[], |(_, keys)| keys)
+}
+
+/// Render a nested rule's option mapping (`extra`) for one iteration. Like
+/// [`render_mapping`], every string gets the iterated entry's tokens, but a
+/// glob-typed option of `kind` ([`NESTED_GLOB_OPTIONS`]) is rendered with
+/// [`render_path_glob`] (a leading template `!` exclude is kept), and a nested
+/// rule-spec list (`for_each_dir.require`, ...) is rendered per element for
+/// that element's own kind. So a directory named `app/[slug]` reaches a nested
+/// `dir_contains` `select: "{path}"` as the literal `app/[[]slug[]]`, not a
+/// character class that matches `app/s`.
+#[must_use]
+pub fn render_nested_options(
+    kind: &str,
+    m: yaml_serde::Mapping,
+    tokens: &PathTokens,
+) -> yaml_serde::Mapping {
+    render_options(kind, m, tokens, false)
+}
+
+/// [`render_nested_options`]; `with_paths` also renders the mapping's own
+/// `paths:` (a nested spec inside a nested spec list) as globs.
+fn render_options(
+    kind: &str,
+    m: yaml_serde::Mapping,
+    tokens: &PathTokens,
+    with_paths: bool,
+) -> yaml_serde::Mapping {
+    const PATHS: &[&str] = &["paths", "paths.include", "paths.exclude"];
+    let globs = nested_glob_options(kind);
+    let spec_list = NESTED_SPEC_LISTS
+        .iter()
+        .find(|(kinds, _)| kinds.contains(&kind))
+        .map(|(_, key)| *key);
+    let mut out = yaml_serde::Mapping::with_capacity(m.len());
+    for (k, v) in m {
+        let key = k.as_str().unwrap_or_default().to_string();
+        let v = if spec_list == Some(key.as_str()) {
+            render_nested_spec_list(v, tokens)
+        } else if with_paths && key == "paths" {
+            render_keyed(v, &key, PATHS, tokens)
+        } else {
+            render_keyed(v, &key, globs, tokens)
+        };
+        out.insert(k, v);
+    }
+    out
+}
+
+/// Render `v`, found at dotted key path `at`, glob-escaping where `at` is one
+/// of `globs`.
+fn render_keyed(
+    v: yaml_serde::Value,
+    at: &str,
+    globs: &[&str],
+    tokens: &PathTokens,
+) -> yaml_serde::Value {
+    use yaml_serde::Value;
+    match v {
+        Value::String(s) if globs.contains(&at) => Value::String(match s.strip_prefix('!') {
+            Some(rest) => format!("!{}", render_path_glob(rest, tokens)),
+            None => render_path_glob(&s, tokens),
+        }),
+        Value::String(s) => Value::String(render_path(&s, tokens)),
+        Value::Sequence(seq) => Value::Sequence(
+            seq.into_iter()
+                .map(|e| render_keyed(e, at, globs, tokens))
+                .collect(),
+        ),
+        Value::Mapping(m) => Value::Mapping(
+            m.into_iter()
+                .map(|(k, v)| {
+                    let sub = match k.as_str() {
+                        Some(name) => format!("{at}.{name}"),
+                        None => at.to_string(),
+                    };
+                    (k, render_keyed(v, &sub, globs, tokens))
+                })
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+/// Render a list of nested rule specs, each for its own `kind` (its `paths:`
+/// as globs too).
+fn render_nested_spec_list(v: yaml_serde::Value, tokens: &PathTokens) -> yaml_serde::Value {
+    use yaml_serde::Value;
+    let Value::Sequence(seq) = v else {
+        return render_value(v, tokens);
+    };
+    Value::Sequence(
+        seq.into_iter()
+            .map(|item| match item {
+                Value::Mapping(spec) => {
+                    let kind = spec
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    Value::Mapping(render_options(&kind, spec, tokens, true))
+                }
+                other => render_value(other, tokens),
+            })
+            .collect(),
+    )
 }
 
 pub fn render_message<F>(template: &str, resolve: F) -> String
@@ -200,6 +614,174 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pre-fast-path algorithms, kept as the reference the fast paths must
+    /// match exactly.
+    fn glob_escape_reference(s: &str) -> String {
+        let escaped = globset::escape(s);
+        if cfg!(windows) {
+            escaped
+        } else {
+            escaped.replace('\\', "\\\\")
+        }
+    }
+
+    fn literal_glob_path_reference(pattern: &str) -> Option<String> {
+        if pattern.starts_with('!') {
+            return None;
+        }
+        let mut out = String::with_capacity(pattern.len());
+        let mut chars = pattern.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' if !cfg!(windows) => out.push(chars.next()?),
+                '[' => {
+                    let x = chars.next()?;
+                    if matches!(x, '!' | '^') || chars.next()? != ']' {
+                        return None;
+                    }
+                    out.push(x);
+                }
+                '*' | '?' | ']' | '{' | '}' => return None,
+                c => out.push(c),
+            }
+        }
+        Some(out)
+    }
+
+    /// Every string up to length 3 over an alphabet that covers each glob
+    /// metacharacter, the escape character, `!` and a non-ASCII char.
+    fn exhaustive_short_strings() -> Vec<String> {
+        const ALPHABET: [char; 13] = [
+            'a', '/', '.', '*', '?', '[', ']', '{', '}', '\\', '!', '\u{e9}', ' ',
+        ];
+        let mut out = vec![String::new()];
+        for len in 1..=3 {
+            let mut idx = vec![0usize; len];
+            loop {
+                out.push(idx.iter().map(|&i| ALPHABET[i]).collect());
+                let mut pos = 0;
+                loop {
+                    idx[pos] += 1;
+                    if idx[pos] < ALPHABET.len() {
+                        break;
+                    }
+                    idx[pos] = 0;
+                    pos += 1;
+                    if pos == len {
+                        break;
+                    }
+                }
+                if pos == len {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn partial_tokens_render_like_full_tokens() {
+        let templates = [
+            "{dir}/{stem}.h",
+            "{path}/README.md",
+            "{parent_name}-{basename}",
+            "{ext}",
+            "include/{stem}{ext}.bak",
+            "no tokens here",
+            "{unknown}/{stem}",
+            "{dir}",
+        ];
+        for path in [
+            "src/mod/foo.c",
+            "top.c",
+            "a/b",
+            "Makefile",
+            "x/.hidden",
+            "",
+            "app/[slug]",
+        ] {
+            let full = PathTokens::from_path(Path::new(path));
+            for template in templates {
+                let partial = PathTokens::from_path_with(Path::new(path), TokenSet::of(template));
+                assert_eq!(
+                    render_path(template, &partial),
+                    render_path(template, &full)
+                );
+                let message = format!("expected {}", render_path_glob(template, &partial));
+                assert_eq!(
+                    unescape_token_values(&message, &partial),
+                    unescape_token_values(&message, &full),
+                    "{path:?} {template:?}"
+                );
+                assert_eq!(
+                    render_path_glob(template, &partial),
+                    render_path_glob(template, &full)
+                );
+            }
+        }
+        assert_eq!(TokenSet::of("plain"), TokenSet::NONE);
+        assert_eq!(
+            TokenSet::of("{dir}").union(TokenSet::of("{stem}")),
+            TokenSet::of("{dir}/{stem}")
+        );
+    }
+
+    #[test]
+    fn glob_escape_fast_path_matches_the_reference() {
+        for s in exhaustive_short_strings() {
+            assert_eq!(glob_escape(&s), glob_escape_reference(&s), "{s:?}");
+            let mut pushed = String::from("pre/");
+            push_glob_escaped(&mut pushed, &s);
+            assert_eq!(
+                pushed,
+                format!("pre/{}", glob_escape_reference(&s)),
+                "{s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn literal_glob_path_fast_path_matches_the_reference() {
+        for s in exhaustive_short_strings() {
+            assert_eq!(
+                literal_glob_path(&s),
+                literal_glob_path_reference(&s),
+                "{s:?}"
+            );
+            let escaped = glob_escape(&s);
+            assert_eq!(
+                literal_glob_path(&escaped),
+                literal_glob_path_reference(&escaped),
+                "escaped {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn literal_glob_path_resolves_escapes_and_rejects_real_globs() {
+        // The inverse of glob_escape: an escaped metacharacter is literal.
+        for name in ["[slug]", "a*b", "{x}", "q?"] {
+            assert_eq!(
+                literal_glob_path(&format!("app/{}/p.tsx", glob_escape(name))).as_deref(),
+                Some(format!("app/{name}/p.tsx").as_str())
+            );
+        }
+        assert_eq!(literal_glob_path("a/b.txt").as_deref(), Some("a/b.txt"));
+        for glob in ["a/*.rs", "a/[ab].rs", "a/{x,y}", "!a.rs", "a/?", "a]"] {
+            assert_eq!(literal_glob_path(glob), None, "{glob}");
+        }
+        #[cfg(not(windows))]
+        {
+            // `\` escapes on non-Windows: a dir literally named `a\b` renders as
+            // `a\\b`, which must resolve back to `a\b` (a raw scan missed it).
+            assert_eq!(
+                literal_glob_path(&glob_escape("a\\b")).as_deref(),
+                Some("a\\b")
+            );
+            assert_eq!(literal_glob_path("a\\*b").as_deref(), Some("a*b"));
+        }
+    }
     use std::path::Path;
 
     #[test]
@@ -228,6 +810,211 @@ mod tests {
     fn render_path_c_to_h() {
         let t = PathTokens::from_path(Path::new("src/mod/foo.c"));
         assert_eq!(render_path("{dir}/{stem}.h", &t), "src/mod/foo.h");
+    }
+
+    #[test]
+    fn render_path_root_level_dir_collapses_its_separator() {
+        // Audit 2026-10 finding 3: a root-level file has `{dir}` = "", so the
+        // documented `{dir}/{stem}.h` used to render `/top.h` (never a
+        // repo-relative path).
+        let t = PathTokens::from_path(Path::new("top.c"));
+        assert_eq!(render_path("{dir}/{stem}.h", &t), "top.h");
+        assert_eq!(render_path("{dir}/include/{stem}.h", &t), "include/top.h");
+        assert_eq!(render_path_glob("{dir}/*.h", &t), "*.h");
+        // A non-empty dir and a mid-template empty token are unchanged.
+        let nested = PathTokens::from_path(Path::new("src/foo.c"));
+        assert_eq!(render_path("{dir}/{stem}.h", &nested), "src/foo.h");
+        let no_ext = PathTokens::from_path(Path::new("src/Makefile"));
+        assert_eq!(render_path("{dir}/{stem}.{ext}", &no_ext), "src/Makefile.");
+    }
+
+    #[test]
+    fn render_path_glob_escapes_token_values_not_the_template() {
+        // Audit 2026-10 finding 2: substituted values are real path text and must
+        // not be reinterpreted as glob syntax; the user's template keeps its.
+        let t = PathTokens::from_path(Path::new("app/[slug]"));
+        assert_eq!(render_path_glob("{path}/*.tsx", &t), "app/[[]slug[]]/*.tsx");
+        // The literal renderer leaves values untouched.
+        assert_eq!(render_path("{path}/page.tsx", &t), "app/[slug]/page.tsx");
+        let star = PathTokens::from_path(Path::new("pkgs/*"));
+        assert_eq!(render_path_glob("{path}/**", &star), "pkgs/[*]/**");
+        let brace = PathTokens::from_path(Path::new("pkgs/nobrace{"));
+        assert_eq!(render_path_glob("{path}/x", &brace), "pkgs/nobrace[{]/x");
+        // A value beginning with `!` at the start of a pattern stays literal
+        // (a bare leading `!` would turn the pattern into an exclude).
+        let bang = PathTokens::from_path(Path::new("!keep"));
+        assert_eq!(render_path_glob("{path}/x", &bang), "{!}keep/x");
+    }
+
+    #[test]
+    fn render_paths_spec_escaped_patterns_match_only_the_real_path() {
+        use crate::scope::Scope;
+        use crate::walker::FileIndex;
+        let idx = FileIndex::from_entries(Vec::new());
+        let matches = |dir: &str, pat: &str, candidate: &str| {
+            let t = PathTokens::from_path(Path::new(dir));
+            let spec = render_paths_spec(&PathsSpec::Single(pat.to_string()), &t);
+            Scope::from_paths_spec(&spec)
+                .unwrap()
+                .matches(Path::new(candidate), &idx)
+        };
+        assert!(matches(
+            "app/[slug]",
+            "{path}/page.tsx",
+            "app/[slug]/page.tsx"
+        ));
+        assert!(!matches("app/[slug]", "{path}/page.tsx", "app/s/page.tsx"));
+        assert!(matches("pkgs/*", "{path}/*.rs", "pkgs/*/a.rs"));
+        assert!(!matches("pkgs/*", "{path}/*.rs", "pkgs/other/a.rs"));
+        assert!(matches(
+            "pkgs/nobrace{",
+            "{path}/*.rs",
+            "pkgs/nobrace{/b.rs"
+        ));
+        assert!(matches("!keep", "{path}/x", "!keep/x"));
+        // A template-level `!` exclude survives rendering.
+        let t = PathTokens::from_path(Path::new("pkgs/a"));
+        let spec = render_paths_spec(
+            &PathsSpec::Many(vec!["{path}/**".into(), "!{path}/gen/**".into()]),
+            &t,
+        );
+        let scope = Scope::from_paths_spec(&spec).unwrap();
+        assert!(scope.matches(Path::new("pkgs/a/src/x.rs"), &idx));
+        assert!(!scope.matches(Path::new("pkgs/a/gen/x.rs"), &idx));
+        // Backslash is a legal filename byte off Windows; it must stay literal.
+        #[cfg(not(windows))]
+        assert!(matches("pkgs/a\\b", "{path}/x", "pkgs/a\\b/x"));
+    }
+
+    fn yaml(s: &str) -> yaml_serde::Mapping {
+        yaml_serde::from_str(s).unwrap()
+    }
+
+    fn get<'a>(m: &'a yaml_serde::Mapping, path: &[&str]) -> &'a yaml_serde::Value {
+        let mut v = m.get(path[0]).unwrap();
+        for k in &path[1..] {
+            v = match k.parse::<usize>() {
+                Ok(i) => &v.as_sequence().unwrap()[i],
+                Err(_) => v.get(*k).unwrap(),
+            };
+        }
+        v
+    }
+
+    #[test]
+    fn nested_options_escape_globs_per_kind_and_leave_regexes_literal() {
+        let t = PathTokens::from_path(Path::new("app/[slug]"));
+        // Globs: escaped (a template `!` exclude survives).
+        let m = render_nested_options(
+            "dir_contains",
+            yaml("select: \"{path}\"\nrequire: [\"{basename}.tsx\", \"*.ts\"]"),
+            &t,
+        );
+        assert_eq!(get(&m, &["select"]).as_str(), Some("app/[[]slug[]]"));
+        assert_eq!(get(&m, &["require", "0"]).as_str(), Some("[[]slug[]].tsx"));
+        let m = render_nested_options(
+            "for_each_dir",
+            yaml("select: [\"{path}/*\", \"!{path}/gen\"]"),
+            &t,
+        );
+        assert_eq!(
+            get(&m, &["select", "1"]).as_str(),
+            Some("!app/[[]slug[]]/gen")
+        );
+        // Dotted keys reach into nested mappings and lists of mappings.
+        let m = render_nested_options(
+            "file_graph",
+            yaml(
+                "nodes: \"{path}/**\"\nrequire:\n  forbidden_edges:\n    - { from: \"{path}/a\", to: x }",
+            ),
+            &t,
+        );
+        assert_eq!(get(&m, &["nodes"]).as_str(), Some("app/[[]slug[]]/**"));
+        assert_eq!(
+            get(&m, &["require", "forbidden_edges", "0", "from"]).as_str(),
+            Some("app/[[]slug[]]/a")
+        );
+        // A regex (`for_each_match.select`) and a literal path template
+        // (`pair.partner`) are NOT glob-escaped.
+        let m = render_nested_options("for_each_match", yaml("select: \"{path}\""), &t);
+        assert_eq!(get(&m, &["select"]).as_str(), Some("app/[slug]"));
+        let m = render_nested_options(
+            "pair",
+            yaml("primary: \"{path}/*.c\"\npartner: \"{path}/x.h\""),
+            &t,
+        );
+        assert_eq!(get(&m, &["primary"]).as_str(), Some("app/[[]slug[]]/*.c"));
+        assert_eq!(get(&m, &["partner"]).as_str(), Some("app/[slug]/x.h"));
+        // A nested spec list renders each element for its own kind, `paths:`
+        // as globs.
+        let m = render_nested_options(
+            "for_each_dir",
+            yaml(
+                "require:\n  - kind: dir_contains\n    select: \"{path}\"\n  - kind: file_exists\n    paths: \"{path}/x\"\n    message: \"{path}\"",
+            ),
+            &t,
+        );
+        assert_eq!(
+            get(&m, &["require", "0", "select"]).as_str(),
+            Some("app/[[]slug[]]")
+        );
+        assert_eq!(
+            get(&m, &["require", "1", "paths"]).as_str(),
+            Some("app/[[]slug[]]/x")
+        );
+        assert_eq!(
+            get(&m, &["require", "1", "message"]).as_str(),
+            Some("app/[slug]")
+        );
+    }
+
+    #[test]
+    fn literal_glob_path_decodes_only_escapes() {
+        assert_eq!(
+            literal_glob_path("app/[[]slug[]]/page.tsx").as_deref(),
+            Some("app/[slug]/page.tsx")
+        );
+        assert_eq!(literal_glob_path("pkgs/[*]/x").as_deref(), Some("pkgs/*/x"));
+        assert_eq!(
+            literal_glob_path("plain/path").as_deref(),
+            Some("plain/path")
+        );
+        assert_eq!(literal_glob_path("app/*.tsx"), None);
+        assert_eq!(literal_glob_path("app/[ab]"), None);
+        assert_eq!(literal_glob_path("a{b,c}"), None);
+        for raw in ["app/[slug]", "x/{y}", "q?/z*"] {
+            assert_eq!(literal_glob_path(&glob_escape(raw)).as_deref(), Some(raw));
+        }
+    }
+
+    #[test]
+    fn unescape_token_values_restores_the_real_path_in_messages() {
+        let t = PathTokens::from_path(Path::new("app/[slug]"));
+        assert_eq!(
+            unescape_token_values("expected a file matching [app/[[]slug[]]/*.tsx]", &t).as_deref(),
+            Some("expected a file matching [app/[slug]/*.tsx]")
+        );
+        // A user-written class is not a token value: left alone.
+        assert_eq!(unescape_token_values("matching [ab]", &t), None);
+        let plain = PathTokens::from_path(Path::new("src/a"));
+        assert_eq!(unescape_token_values("anything", &plain), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unescape_token_values_restores_a_backslash_in_a_name() {
+        // A directory literally named `a\b` is escaped to `a\\b` in the glob;
+        // the message shows the real name.
+        let t = PathTokens::from_path(Path::new("app/a\\b"));
+        let msg = format!(
+            "expected a file matching [{}]",
+            render_path_glob("{path}/page.tsx", &t)
+        );
+        assert_eq!(msg, "expected a file matching [app/a\\\\b/page.tsx]");
+        assert_eq!(
+            unescape_token_values(&msg, &t).as_deref(),
+            Some("expected a file matching [app/a\\b/page.tsx]")
+        );
     }
 
     #[test]

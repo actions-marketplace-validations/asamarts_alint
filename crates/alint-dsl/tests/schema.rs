@@ -14,7 +14,7 @@ fn compile_schema() -> jsonschema::Validator {
 }
 
 fn yaml_to_json(yaml: &str) -> serde_json::Value {
-    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).expect("yaml should parse");
+    let value: yaml_serde::Value = yaml_serde::from_str(yaml).expect("yaml should parse");
     serde_json::to_value(value).expect("yaml → json should round-trip")
 }
 
@@ -111,11 +111,111 @@ fn accepts_minimal_config() {
 }
 
 #[test]
+fn requirement_schema_matches_the_runtime_literal_grammar() {
+    let validator = compile_schema();
+    for accepted in ["0.0.0", "0.19.0", "18446744073709551615.0.1"] {
+        let yaml = format!("version: 1\nrequires:\n  alint: '{accepted}'\nrules: []\n");
+        let instance = yaml_to_json(&yaml);
+        assert_valid(&validator, &instance, accepted);
+        yaml_serde::from_str::<alint_core::Config>(&yaml).unwrap_or_else(|error| {
+            panic!("runtime rejected schema-valid requirement {accepted:?}: {error}")
+        });
+    }
+
+    for rejected in [
+        "01.2.3",
+        "1.2",
+        "1.2.3.4",
+        ">=1.2.3",
+        "1.2.3-alpha",
+        "1.2.3+build",
+    ] {
+        let yaml = format!("version: 1\nrequires:\n  alint: '{rejected}'\nrules: []\n");
+        let instance = yaml_to_json(&yaml);
+        assert_invalid(&validator, &instance, rejected);
+        assert!(
+            yaml_serde::from_str::<alint_core::Config>(&yaml).is_err(),
+            "runtime accepted schema-invalid requirement {rejected:?}"
+        );
+    }
+
+    for yaml in [
+        "version: 1\nrequires: {}\nrules: []\n",
+        "version: 1\nrequires: { alint: '0.19.0', other: x }\nrules: []\n",
+        "version: 1\nrequires: { alint: [0, 19, 0] }\nrules: []\n",
+    ] {
+        let instance = yaml_to_json(yaml);
+        assert_invalid(&validator, &instance, yaml);
+        assert!(
+            yaml_serde::from_str::<alint_core::Config>(yaml).is_err(),
+            "runtime accepted {yaml:?}"
+        );
+    }
+}
+
+#[test]
 fn accepts_every_rule_kind() {
     let validator = compile_schema();
     let yaml = include_str!("fixtures/all_kinds.yaml");
     let instance = yaml_to_json(yaml);
     assert_valid(&validator, &instance, "all_kinds.yaml fixture");
+}
+
+#[test]
+fn sensitive_boolean_is_accepted_on_every_kind_and_nested_rule() {
+    fn mark_rules(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if object.contains_key("kind") {
+                    object.insert("sensitive".into(), serde_json::Value::Bool(true));
+                }
+                for child in object.values_mut() {
+                    mark_rules(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    mark_rules(item);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut instance = yaml_to_json(include_str!("fixtures/all_kinds.yaml"));
+    mark_rules(&mut instance);
+    assert_valid(
+        &compile_schema(),
+        &instance,
+        "sensitive on every top-level and nested rule",
+    );
+
+    let config: alint_core::Config =
+        serde_json::from_value(instance).expect("runtime model accepts sensitive booleans");
+    let registry = alint_rules::builtin_registry();
+    for spec in &config.rules {
+        registry
+            .build(spec)
+            .unwrap_or_else(|error| panic!("{} rejected sensitive: {error}", spec.kind));
+    }
+}
+
+#[test]
+fn sensitive_rejects_non_boolean_values() {
+    let instance = yaml_to_json(concat!(
+        "version: 1\n",
+        "rules:\n",
+        "  - id: t\n",
+        "    kind: file_exists\n",
+        "    paths: a\n",
+        "    sensitive: definitely\n",
+        "    level: error\n",
+    ));
+    assert_invalid(&compile_schema(), &instance, "sensitive must be a boolean");
+    assert!(
+        serde_json::from_value::<alint_core::Config>(instance).is_err(),
+        "runtime model must reject a non-boolean sensitive value"
+    );
 }
 
 /// Rot-prevention guard. Asserts the `all_kinds.yaml` fixture
@@ -130,16 +230,16 @@ fn accepts_every_rule_kind() {
 #[test]
 fn fixture_covers_every_registered_rule_kind() {
     let yaml = include_str!("fixtures/all_kinds.yaml");
-    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).expect("fixture parses");
+    let parsed: yaml_serde::Value = yaml_serde::from_str(yaml).expect("fixture parses");
     let fixture_kinds: std::collections::HashSet<String> = parsed
         .as_mapping()
-        .and_then(|m| m.get(serde_yaml_ng::Value::String("rules".into())))
+        .and_then(|m| m.get(yaml_serde::Value::String("rules".into())))
         .and_then(|v| v.as_sequence())
         .map(|seq| {
             seq.iter()
                 .filter_map(|rule| {
                     rule.as_mapping()
-                        .and_then(|m| m.get(serde_yaml_ng::Value::String("kind".into())))
+                        .and_then(|m| m.get(yaml_serde::Value::String("kind".into())))
                         .and_then(|v| v.as_str())
                         .map(str::to_string)
                 })
@@ -197,8 +297,12 @@ fn fixture_covers_every_registered_rule_kind() {
 fn every_registered_kind_rejects_an_unknown_option() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/all_kinds.yaml");
-    let config = alint_dsl::load(&path).expect("all_kinds.yaml loads");
     let registry = alint_rules::builtin_registry();
+    let config = alint_dsl::load_with(
+        &path,
+        &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+    )
+    .expect("all_kinds.yaml loads");
 
     let mut swallowers: Vec<String> = Vec::new();
     let mut probed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -210,8 +314,8 @@ fn every_registered_kind_rejects_an_unknown_option() {
         }
         let mut bogus = spec.clone();
         bogus.extra.insert(
-            serde_yaml_ng::Value::String("__alint_unknown_option_probe__".into()),
-            serde_yaml_ng::Value::Bool(true),
+            yaml_serde::Value::String("__alint_unknown_option_probe__".into()),
+            yaml_serde::Value::Bool(true),
         );
         probed.insert(spec.kind.clone());
         if registry.build(&bogus).is_ok() {
@@ -346,4 +450,71 @@ rules:
 ";
     let instance = yaml_to_json(yaml);
     assert_invalid(&validator, &instance, "rule id with uppercase");
+}
+
+/// Every fix op the engine deserializes has a schema branch, and the schema
+/// agrees with serde on the op's `applicability` field and on unknown keys.
+/// The hand-written `$defs/fix` once covered only 15 of the 26 ops and rejected
+/// `applicability` on the hygiene ops, so schema-aware editors flagged configs
+/// `alint validate-config` accepted (audit 2026-10).
+#[test]
+fn fix_schema_matches_every_fix_op() {
+    let schema: serde_json::Value = serde_json::from_str(CONFIG_SCHEMA_V1).expect("valid JSON");
+    let fix_schema = serde_json::json!({
+        "$schema": schema["$schema"].clone(),
+        "$ref": "#/$defs/fix",
+        "$defs": schema["$defs"].clone(),
+    });
+    let validator = jsonschema::validator_for(&fix_schema).expect("fix schema should compile");
+    let branches = schema["$defs"]["fix"]["oneOf"]
+        .as_array()
+        .expect("$defs/fix is a oneOf");
+    let schema_ops: Vec<&str> = branches
+        .iter()
+        .map(|branch| {
+            let branch = branch["$ref"].as_str().map_or(branch, |reference| {
+                schema
+                    .pointer(reference.strip_prefix('#').expect("local schema reference"))
+                    .expect("fix branch reference resolves")
+            });
+            branch["required"][0]
+                .as_str()
+                .expect("fix branch requires its operation")
+        })
+        .collect();
+
+    for op in alint_core::FixSpec::ALL_OP_NAMES {
+        assert!(
+            schema_ops.contains(op),
+            "fix op `{op}` has no `$defs/fix` branch"
+        );
+        // The minimal body serde requires for this op.
+        let base = match *op {
+            "replace" => "replacement: x\n",
+            "command" => "run: [x]\n",
+            "file_create" | "file_prepend" | "file_append" => "content: x\n",
+            _ => "",
+        };
+        for (extra, label) in [
+            ("applicability: suggestion\n", "applicability"),
+            ("bogus: 1\n", "unknown key"),
+        ] {
+            let body = format!("{base}{extra}");
+            let fix_yaml = format!("{op}:\n{}", indent(&body));
+            let serde_ok = yaml_serde::from_str::<alint_core::FixSpec>(&fix_yaml).is_ok();
+            let fix = yaml_to_json(&fix_yaml);
+            assert_eq!(
+                validator.is_valid(&fix),
+                serde_ok,
+                "schema and serde disagree on `{op}` with {label}"
+            );
+        }
+    }
+}
+
+fn indent(s: &str) -> String {
+    s.lines().fold(String::new(), |mut out, l| {
+        let _ = writeln!(out, "  {l}");
+        out
+    })
 }

@@ -1,3 +1,4 @@
+test_version: 1
 name: no_trailing_whitespace flags files with trailing spaces or tabs
 tags: [check, no_trailing_whitespace]
 
@@ -23,6 +24,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-ws, level: error, path: src/bad.rs}
       - {rule: no-ws, level: error, path: src/tabbed.md}

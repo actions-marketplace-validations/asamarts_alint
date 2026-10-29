@@ -1,0 +1,41 @@
+test_version: 1
+name: sync_from declines a non-string canonical source
+
+tags: [fix, cross_file, sync_from, structured, applicability]
+
+# The string-only relation reports the typed source mismatch. The fixer must not
+# coerce the number or write either file; the rule's fix attempt is declined.
+given:
+  tree:
+    source.json: |
+      {"version": 7}
+    target.json: |
+      {"version": "old"}
+  config: |
+    version: 1
+    rules:
+      - id: versions-match
+        kind: cross_file
+        source: { file: source.json, extract: { json: "$.version" } }
+        targets: [{ file: target.json, extract: { json: "$.version" } }]
+        relation: equals
+        level: error
+        fix: { sync_from: {} }
+
+when: [check, fix_unsafe, check]
+
+expect:
+  - exit: policy_failure
+    violations:
+      - {rule: versions-match, level: error, path: source.json}
+  - exit: policy_failure
+    unfixable: [versions-match]
+  - exit: policy_failure
+    violations:
+      - {rule: versions-match, level: error, path: source.json}
+
+expect_tree:
+  source.json: |
+    {"version": 7}
+  target.json: |
+    {"version": "old"}

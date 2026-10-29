@@ -1,3 +1,4 @@
+test_version: 1
 name: scope_filter survives inheritance through extends
 tags: [check, scope_filter, extends, composition]
 
@@ -9,16 +10,7 @@ tags: [check, scope_filter, extends, composition]
 
 given:
   tree:
-    base.yml: |
-      version: 1
-      rules:
-        - id: nws
-          kind: no_trailing_whitespace
-          paths: "**/*.rs"
-          scope_filter:
-            has_ancestor: Cargo.toml
-          level: warning
-
+    # The inherited config is a package asset, separate from the repository.
     crates:
       api:
         Cargo.toml: "[package]\nname = \"api\"\n"
@@ -31,11 +23,12 @@ given:
 
   config: |
     version: 1
-    extends: [./base.yml]
+    extends: [./support/scope_filter_extends_inheritance.yaml]
 
 when: [check]
 
 expect:
   # Inherited filter keeps the out-of-scope file silent.
-  - violations:
+  - exit: success
+    violations:
       - {rule: nws, level: warning, path: crates/api/src/main.rs}

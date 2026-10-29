@@ -1,5 +1,12 @@
+test_version: 1
 name: when_iter scopes for_each_dir to dirs containing a marker file
 tags: [check, for_each_dir, when_iter]
+
+docs:
+  title: Filter Cargo workspace members with `when_iter`
+  case: fail
+  kind: for_each_dir
+  order: 10
 
 # Canonical Cargo-workspace shape: only iterate `crates/*`
 # directories that actually look like a workspace member
@@ -36,5 +43,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: cargo-pkg-needs-readme, level: error, path: "crates/alint-rules"}

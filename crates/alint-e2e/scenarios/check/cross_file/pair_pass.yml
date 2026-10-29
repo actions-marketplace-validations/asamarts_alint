@@ -1,3 +1,4 @@
+test_version: 1
 name: pair is silent when every primary has its partner
 tags: [check, pair, cross_file, passing]
 
@@ -25,4 +26,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

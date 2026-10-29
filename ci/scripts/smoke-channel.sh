@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-# Post-publish install smoke (MP-M5): install alint from ONE distribution channel
-# and assert `alint --version` reports the expected version. Advisory -- run after
-# a release (or on demand) so a broken/stale publish is caught by CI, not a user.
-# Each channel retries to ride out registry / CDN propagation lag.
+# Post-publish install smoke (MP-M5): install alint from ONE distribution channel,
+# assert `alint --version` reports the expected version, and execute a fresh
+# downstream policy-test package through the installed command. Advisory -- run
+# after a release (or on demand) so a broken/stale publish is caught by CI, not a
+# user. Each channel retries to ride out registry / CDN propagation lag.
 #
 # Usage: ci/scripts/smoke-channel.sh <channel> <tag>
-#   channel: install.sh | cargo | cargo-binstall | npm | docker | homebrew
+#   channel: install.sh | cargo | cargo-binstall | npm | docker | homebrew | pypi
 #   tag:     the release tag, e.g. v0.16.0
 #
 # Env overrides: DOCKER (default: docker; set to podman locally),
 #                RETRY_MAX (default 6), RETRY_SLEEP seconds (default 30).
 
-CHANNEL="${1:?channel required (install.sh|cargo|cargo-binstall|npm|docker|homebrew)}"
+CHANNEL="${1:?channel required (install.sh|cargo|cargo-binstall|npm|docker|homebrew|pypi)}"
 TAG="${2:?tag required (e.g. v0.16.0)}"
+# Fail closed: TAG reaches install scripts and registry queries below.
+if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "  [smoke] invalid tag '${TAG}' (expected vX.Y.Z)" >&2
+  exit 2
+fi
 VER="${TAG#v}"                        # 0.16.0
 IMAGE="ghcr.io/asamarts/alint"
 DOCKER="${DOCKER:-docker}"
 RETRY_MAX="${RETRY_MAX:-6}"
 RETRY_SLEEP="${RETRY_SLEEP:-30}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Retry a command until it succeeds, to absorb post-publish propagation lag.
 retry() {
@@ -68,17 +74,78 @@ check_floating() {
   echo "  [smoke] OK: ${CHANNEL} latest pointer -> ${VER}"
 }
 
+# Releases are cosign-signed (SHA256SUMS.cosign.bundle) from v0.15.1 on; older
+# tags (e.g. v0.15.0) predate signing and have no bundle, so install.sh cannot
+# verify them. For every signed release the smoke is STRICT: install.sh runs
+# with ALINT_REQUIRE_VERIFY=1 and must print "Signature OK". For an older tag it
+# still checks the per-file SHA-256 but does not require a signature. Keyed on
+# the version (not a probe for the bundle), so a missing or unreachable bundle
+# on a new release fails the leg instead of silently downgrading it.
+FIRST_SIGNED_RELEASE="0.15.1"
+FIRST_POLICY_TEST_RELEASE="0.20.0"
+# version_ge A B: numeric vX.Y.Z comparison, A >= B.
+version_ge() {
+  local IFS=.
+  # shellcheck disable=SC2206  # deliberate split on the dots
+  local a=($1) b=($2) i
+  for i in 0 1 2; do
+    if (( 10#${a[i]} != 10#${b[i]} )); then
+      (( 10#${a[i]} > 10#${b[i]} ))
+      return
+    fi
+  done
+  return 0
+}
+REQUIRE_VERIFY=0
+if version_ge "$VER" "$FIRST_SIGNED_RELEASE"; then
+  REQUIRE_VERIFY=1
+fi
+
+# `alint test` is part of v0.20+. Keep manual smoke dispatches usable for older
+# release tags while requiring the downstream package smoke for every release
+# that claims this public command.
+smoke_policy_test() {
+  if ! version_ge "$VER" "$FIRST_POLICY_TEST_RELEASE"; then
+    echo "  [smoke] note: ${TAG} predates policy tests (first shipped: v${FIRST_POLICY_TEST_RELEASE})"
+    return 0
+  fi
+  "$SCRIPT_DIR/smoke-policy-test.sh" "$@"
+}
+
+# The documented one-liner, as a function so TAG travels as data (env), never
+# spliced into a `bash -c` source string. For a signed release
+# ALINT_REQUIRE_VERIFY=1 makes install.sh fail closed unless the cosign
+# signature actually verified (the workflow installs cosign v3 for this leg),
+# and the log is kept so the caller can prove the verification ran instead of
+# being silently skipped.
+INSTALL_LOG="$(mktemp)"
+install_via_script() {
+  curl -fsSL https://alint.org/install.sh \
+    | ALINT_VERSION="$TAG" ALINT_REQUIRE_VERIFY="$REQUIRE_VERIFY" bash 2>&1 | tee "$INSTALL_LOG"
+}
+
 echo "==> smoke: channel=${CHANNEL} tag=${TAG} ver=${VER} floating=${SMOKE_FLOATING:-0}"
 case "$CHANNEL" in
   install.sh)
-    retry bash -c "curl -fsSL https://alint.org/install.sh | ALINT_VERSION='${TAG}' bash"
+    retry install_via_script
+    if [[ "$REQUIRE_VERIFY" == "1" ]]; then
+      if ! grep -q '^==> Signature OK' "$INSTALL_LOG"; then
+        echo "  [smoke] FAIL: install.sh did not report a verified cosign signature" >&2
+        exit 1
+      fi
+      echo "  [smoke] OK: install.sh verified the release signature"
+    else
+      echo "  [smoke] note: ${TAG} predates release signing (first signed: v${FIRST_SIGNED_RELEASE}); SHA-256 checked, signature not required"
+    fi
     export PATH="${HOME}/.local/bin:${PATH}"       # install.sh's default INSTALL_DIR
     assert_version alint --version
+    smoke_policy_test alint
     ;;
   cargo)
     # Mirror the documented `cargo install alint`; --force makes a retry idempotent.
     retry cargo install alint --version "${VER}" --force
     assert_version alint --version
+    smoke_policy_test alint
     ;;
   cargo-binstall)
     # --disable-strategies compile: never silently fall back to a SOURCE build, so
@@ -86,15 +153,18 @@ case "$CHANNEL" in
     # MP-M5; binstall otherwise compiles from crates.io and exits 0, hiding it).
     retry cargo binstall --no-confirm --disable-strategies compile "alint@${VER}"
     assert_version alint --version
+    smoke_policy_test alint
     ;;
   npm)
     retry npm install -g "@asamarts/alint@${VER}"
     assert_version alint --version
+    smoke_policy_test alint
     check_floating "$(npm view "@asamarts/alint" version 2>/dev/null)"
     ;;
   docker)
     retry "$DOCKER" pull "${IMAGE}:${VER}"
     assert_version "$DOCKER" run --rm "${IMAGE}:${VER}" --version
+    smoke_policy_test --docker "$DOCKER" "${IMAGE}:${VER}"
     check_floating "$("$DOCKER" run --rm "${IMAGE}:latest" --version 2>&1 | awk '/^alint [0-9]/ { print $2; exit }')"
     ;;
   homebrew)
@@ -139,6 +209,26 @@ case "$CHANNEL" in
       hb_n=$((hb_n + 1))
     done
     assert_version alint --version
+    smoke_policy_test alint
+    ;;
+  pypi)
+    # The Python-ecosystem entry points, exercised against the pinned version.
+    # uvx is the headline path (the real user flow: install uv, then run the
+    # wheel); a pip-install into a throwaway venv is the lowest common
+    # denominator. Both pull the prebuilt py3-none wheel from PyPI with no
+    # toolchain. See docs/design/distribution-pypi.md.
+    export PATH="${HOME}/.local/bin:${PATH}"
+    if ! command -v uvx >/dev/null 2>&1; then
+      retry bash -c 'curl -fsSL https://astral.sh/uv/install.sh | sh'
+    fi
+    retry uvx "alint@${VER}" --version
+    assert_version uvx "alint@${VER}" --version
+    python3 -m venv /tmp/alint-pypi-smoke
+    retry /tmp/alint-pypi-smoke/bin/pip install --quiet "alint==${VER}"
+    assert_version /tmp/alint-pypi-smoke/bin/alint --version
+    smoke_policy_test /tmp/alint-pypi-smoke/bin/alint
+    # Unversioned resolve must serve VER when smoking the latest (no-op otherwise).
+    check_floating "$(uvx alint --version 2>&1 | awk '/^alint [0-9]/ { print $2; exit }')"
     ;;
   *)
     echo "  [smoke] unknown channel: ${CHANNEL}" >&2

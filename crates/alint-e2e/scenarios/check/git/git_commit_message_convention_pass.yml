@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_message is silent when HEAD follows the convention
 tags: [check, git_commit_message, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

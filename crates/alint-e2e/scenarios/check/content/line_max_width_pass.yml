@@ -1,3 +1,4 @@
+test_version: 1
 name: line_max_width is silent when every line fits
 tags: [check, line_max_width, passing]
 
@@ -23,4 +24,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

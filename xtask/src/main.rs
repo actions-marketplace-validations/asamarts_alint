@@ -21,8 +21,8 @@
 //!   docs) and the site repo (presentation).
 //! - `gen-public-roadmap` — render the public roadmap from the canonical
 //!   `docs/design/ROADMAP.md` (also invoked internally by `docs-export`).
-//! - `gen-schema`         — regenerate `schemas/v1/config.json` from the rule
-//!   `Options` structs (schemars); `--check` gates drift.
+//! - `gen-schema`         — regenerate config and policy-test schemas from
+//!   canonical Rust models; `--check` gates drift.
 //! - `gen-facts`          — regenerate `facts.json` (the surface-area contract)
 //!   from canonical sources; `--check` gates drift.
 //! - `gen-roadmap`        — regenerate `roadmap.json` (the public-roadmap
@@ -32,6 +32,8 @@
 //! - `gen-model`          — regenerate the code-derived `LikeC4` model fragments
 //!   (the rule-kind taxonomy, ...) for the architecture diagrams; `--check`
 //!   gates drift.
+//! - `corpus-replay`      — run `alint check` over the 110-repository v0.12
+//!   corpus at its pinned commits, optionally diffing two binaries' reports.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +46,7 @@ mod bench;
 mod bench_release;
 mod categories;
 mod categories_line;
+mod corpus_replay;
 mod docs_checks;
 mod docs_export;
 mod facts;
@@ -91,14 +94,16 @@ enum Commands {
         /// Include the 1M-file size (multi-GB working set, slow).
         #[arg(long)]
         include_1m: bool,
-        /// Comma-separated scenarios. Default `S1,S2,S3` is the
-        /// publication trio (filename / existence+content /
-        /// workspace bundle). `S4` (agent-era hygiene) and `S5`
-        /// (fix-pass) are opt-in for characterization runs.
-        #[arg(long, default_value = "S1,S2,S3", value_delimiter = ',')]
+        /// Comma-separated scenarios. Default `S1,S2,S3,S4,SFIX` is the
+        /// full consolidated set: the four check scenarios (S1 layout /
+        /// S2 content / S3 relational / S4 workspace) plus the dedicated
+        /// auto-fix scenario (SFIX). SFIX only produces rows under `fix`
+        /// mode (see `Tool::supports`), so keep `fix` in `--modes` for it.
+        #[arg(long, default_value = "S1,S2,S3,S4,SFIX", value_delimiter = ',')]
         scenarios: Vec<String>,
-        /// Comma-separated modes (full,changed).
-        #[arg(long, default_value = "full,changed", value_delimiter = ',')]
+        /// Comma-separated modes (full, changed, fix). `fix` pairs only
+        /// with the SFIX scenario; the check scenarios take full/changed.
+        #[arg(long, default_value = "full,changed,fix", value_delimiter = ',')]
         modes: Vec<String>,
         /// Comma-separated tools (alint, ls-lint, or `all`).
         /// Default `alint` (preserves v0.5.6's alint-only
@@ -136,6 +141,12 @@ enum Commands {
         /// Override the image with `ALINT_BENCH_IMAGE=...`.
         #[arg(long)]
         docker: bool,
+        /// Benchmark a PRE-BUILT alint binary at this path instead of building
+        /// from the current checkout. For past-version backfill: build an old
+        /// tag's alint separately, then point this at it so the CURRENT
+        /// harness measures that OLD binary. Incompatible with `--docker`.
+        #[arg(long)]
+        alint_binary: Option<PathBuf>,
     },
     /// Materialize a synthetic tree (persistent) for manual experimentation.
     GenFixture {
@@ -191,11 +202,17 @@ enum Commands {
     /// Gate a macro `results.json` for publish. Quality: per-cell
     /// within-run CV ≤ 10 % on 100k/1m only (1k/10k advisory).
     /// Regression (with `--baseline`): `min_ms` delta vs the prior
-    /// release ≤ +15 % on ≥10k cells. Exits non-zero on a gating
-    /// failure. Replaces the unenforced human CV eyeball in
+    /// release ≤ +15 % on full/fix cells at 10k or larger and every
+    /// 100k/1m cell; changed-mode 1k/10k cells are advisory. Exits
+    /// non-zero on a gating failure. Replaces the unenforced human CV eyeball in
     /// `RELEASING.md`; thresholds validated against the full
     /// corpus — see
     /// `docs/benchmarks/investigations/2026-05-bench-runner-instability/`.
+    /// Deterministic instruction counts for the criterion micro suite, head
+    /// vs base (and the long-horizon anchor): each ref's benches compiled
+    /// against a counting criterion stand-in and run under Callgrind. Needs
+    /// valgrind. See `docs/benchmarks/METHODOLOGY.md`.
+    MicroDet(bench::micro_det::Args),
     BenchGate {
         /// The run to gate (a `bench-scale` `results.json`).
         #[arg(long)]
@@ -204,6 +221,11 @@ enum Commands {
         /// regression check. Omit to run quality-only.
         #[arg(long)]
         baseline: Option<PathBuf>,
+        /// Long-horizon anchor: a `results.json`, or `auto` for the release
+        /// named in `docs/benchmarks/ANCHOR` (resolved beside `--results`).
+        /// Gating cells may not exceed it by more than 10% cumulative.
+        #[arg(long)]
+        anchor: Option<String>,
     },
     /// Snapshot `target/criterion/` into the per-version
     /// committable location under
@@ -272,11 +294,11 @@ enum Commands {
         #[arg(long, default_value = "Roadmap")]
         title: String,
     },
-    /// Generate `schemas/v1/config.json` from Rust types (schemars) for the
-    /// migrated rule kinds, passing hand-written branches through for the rest.
-    /// See ADR-0001 and docs/design/spec-driven-development.md.
+    /// Generate public config and policy-test JSON Schemas from their canonical
+    /// Rust models, with config common fields derived from `KindMeta`.
+    /// See ADR-0001, the accepted v0.19 W1 design, and ADR-0022.
     GenSchema {
-        /// Verify the committed schema is up to date instead of rewriting it.
+        /// Verify the committed schemas are up to date instead of rewriting them.
         #[arg(long)]
         check: bool,
     },
@@ -316,6 +338,11 @@ enum Commands {
         #[arg(long)]
         check: bool,
     },
+    /// Run `alint check` over the v0.12 case-study corpus (110 repositories at
+    /// the commits in `docs/design/v0.12/corpus/pins.tsv`), with spawning rules
+    /// removed. `--compare` diffs a second binary's reports and fails on any
+    /// difference. Fetches into `--cache` on first use (network).
+    CorpusReplay(corpus_replay::Args),
 }
 
 fn main() -> Result<()> {
@@ -338,9 +365,22 @@ fn main() -> Result<()> {
             quick,
             json_only,
             docker,
+            alint_binary,
         } => dispatch_bench_scale(
-            &sizes, include_1m, &scenarios, &modes, &tools, warmup, runs, seed, diff_pct, out,
-            quick, json_only, docker,
+            &sizes,
+            include_1m,
+            &scenarios,
+            &modes,
+            &tools,
+            warmup,
+            runs,
+            seed,
+            diff_pct,
+            out,
+            quick,
+            json_only,
+            docker,
+            alint_binary,
         ),
         Commands::GenFixture {
             files,
@@ -355,9 +395,13 @@ fn main() -> Result<()> {
             after,
             threshold,
         } => bench::compare::run(&before, &after, threshold),
-        Commands::BenchGate { results, baseline } => {
-            bench::gate::run(&results, baseline.as_deref())
-        }
+        Commands::MicroDet(args) => bench::micro_det::run(&args),
+        Commands::CorpusReplay(args) => corpus_replay::run(&args),
+        Commands::BenchGate {
+            results,
+            baseline,
+            anchor,
+        } => bench::gate::run(&results, baseline.as_deref(), anchor.as_deref()),
         Commands::DocsExport {
             out,
             check,
@@ -407,7 +451,15 @@ fn dispatch_bench_scale(
     quick: bool,
     json_only: bool,
     docker: bool,
+    alint_binary: Option<PathBuf>,
 ) -> Result<()> {
+    if docker && alint_binary.is_some() {
+        bail!(
+            "--alint-binary is incompatible with --docker: the docker image builds \
+             alint from the mounted (current) source, so it cannot benchmark a \
+             pre-built binary. Run --alint-binary directly on the host."
+        );
+    }
     if docker {
         // The `--docker` path forwards args verbatim into the
         // image's entrypoint. Skip host-side parse so the
@@ -477,6 +529,7 @@ fn dispatch_bench_scale(
         out,
         quick,
         json_only,
+        alint_binary,
     })
 }
 
@@ -588,14 +641,13 @@ pub(crate) fn workspace_version_from_manifest(workspace: &Path) -> Result<String
         .context("read workspace Cargo.toml")?;
     for line in manifest.lines() {
         let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("version") {
-            if let Some(eq) = rest.find('=')
-                && let Some(start) = rest[eq..].find('"')
-                && let Some(end) = rest[eq + start + 1..].find('"')
-            {
-                let value = &rest[eq + start + 1..eq + start + 1 + end];
-                return Ok(value.to_string());
-            }
+        if let Some(rest) = trimmed.strip_prefix("version")
+            && let Some(eq) = rest.find('=')
+            && let Some(start) = rest[eq..].find('"')
+            && let Some(end) = rest[eq + start + 1..].find('"')
+        {
+            let value = &rest[eq + start + 1..eq + start + 1 + end];
+            return Ok(value.to_string());
         }
     }
     bail!(

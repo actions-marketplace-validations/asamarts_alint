@@ -1,0 +1,37 @@
+test_version: 1
+name: markdown_fragments_resolve accepts generated target anchors
+
+tags: [check, markdown_fragments_resolve, cross_file, passing]
+
+docs:
+  title: Encoded fragments and duplicate-anchor suffixes resolve
+  case: pass
+  kind: markdown_fragments_resolve
+
+given:
+  tree:
+    README.md: |
+      # Project
+
+      Read [Café](docs/guide.md#caf%C3%A9) and [the second API](docs/guide.md#api-1).
+    docs/guide.md: |
+      # Guide
+
+      ## Café
+
+      ## API
+
+      ## API
+  config: |
+    version: 1
+    rules:
+      - id: heading-links
+        kind: markdown_fragments_resolve
+        paths: "**/*.md"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

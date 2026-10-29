@@ -3,8 +3,9 @@
 //! result aggregation) from walk costs.
 
 use std::path::Path;
+use std::sync::Arc;
 
-use alint_core::{Engine, FileEntry, FileIndex, Rule};
+use alint_core::{Engine, FileEntry, FileIndex, RuleEntry};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 const CONFIG_YAML: &str = r#"
@@ -45,14 +46,20 @@ rules:
     level: warning
 "#;
 
-fn build_rules() -> Vec<Box<dyn Rule>> {
+/// Keep source specs attached: W3 capability routing is metadata-driven, so
+/// `Engine::new` would benchmark only its compatibility fallback.
+fn build_engine() -> Engine {
     let config = alint_dsl::parse(CONFIG_YAML).expect("bench config parses");
     let registry = alint_rules::builtin_registry();
-    config
+    let entries = config
         .rules
         .iter()
-        .map(|spec| registry.build(spec).expect("bench rule builds"))
-        .collect()
+        .map(|spec| {
+            let rule = registry.build(spec).expect("bench rule builds");
+            RuleEntry::new(rule).with_spec(Arc::new(spec.clone()))
+        })
+        .collect();
+    Engine::from_entries(entries, registry)
 }
 
 fn build_index(n: usize) -> FileIndex {
@@ -90,9 +97,7 @@ fn bench_rule_engine(c: &mut Criterion) {
 
     for &n in &[1_000usize, 10_000, 100_000] {
         let index = build_index(n);
-        let rules = build_rules();
-        let engine = Engine::new(rules, alint_rules::builtin_registry());
-
+        let engine = build_engine();
         group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::from_parameter(n), &index, |b, idx| {
             b.iter(|| engine.run(fake_root, idx).unwrap());

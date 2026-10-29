@@ -1,3 +1,4 @@
+test_version: 1
 name: file_starts_with flags files missing the required prefix
 tags: [check, file_starts_with, content]
 
@@ -24,6 +25,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: spdx-header, level: error, path: src/no_header.rs}
       - {rule: spdx-header, level: error, path: src/wrong_spdx.rs}

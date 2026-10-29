@@ -1,0 +1,30 @@
+test_version: 1
+name: file_graph reports non-string edge extractions
+
+tags: [check, file_graph, cross_file, structured, failing]
+
+# Edge queries are string-only path relations. Typed values are reported by
+# type and count instead of being silently dropped or coerced.
+given:
+  tree:
+    graph.json: |
+      {"dependencies": [42, true]}
+  config: |
+    version: 1
+    rules:
+      - id: graph-resolves
+        kind: file_graph
+        nodes: "*.json"
+        edges:
+          from_content:
+            extract: { json: "$.dependencies[*]" }
+            resolve: relative_to_repo_root
+        require: no_dangling
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations:
+      - {rule: graph-resolves, level: error, path: graph.json}

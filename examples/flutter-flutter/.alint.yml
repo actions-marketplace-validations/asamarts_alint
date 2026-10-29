@@ -116,7 +116,7 @@ rules:
          "**/*.ttf","**/*.swp","**/third_party/**","**/*.enc"]
     # The check is a NEGATIVE: no line may end in space/tab. file_content_matches
     # asserts presence, so use `forbid` semantics via the absence form.
-    pattern: '[ \t]+$'
+    pattern: '(?m)[ \t]+$'
     level: warning
     message: >-
       Replaces verifyNoTrailingSpaces: no line may end in U+0020 space or
@@ -134,7 +134,7 @@ rules:
       include: ["**/*.java","**/*.js","**/*.kt","**/*.c","**/*.cc","**/*.cpp",
                 "**/*.h","**/*.m","**/*.swift"]
       exclude: ["**/third_party/**","engine/src/flutter/third_party/**"]
-    pattern: '(^|[ \t])(if|switch|for|do|while|catch)\('
+    pattern: '(?m)(^|[ \t])(if|switch|for|do|while|catch)\('
     level: warning
     message: >-
       Replaces verifySpacesAfterFlowControlStatements: native-language files
@@ -171,29 +171,6 @@ rules:
       Replaces verifyNoTestImports: production library code must never import a
       *_test.dart file.
 
-
-  # ════════════════════════════════════════════════════════════════════
-  # ENGINE.VERSION PIN COHERENCE — NEW (v0.10 cross_file_value_equals).
-  # bin/internal/engine.version pins the in-tree engine commit. The
-  # content-aware-hash workflow + update_engine_version.sh derive from it.
-  # cross_file_value_equals locks the pin against any duplicate that drifts.
-  # (engine.version was empty at clone time in monorepo mode — rule no-ops
-  #  cleanly when absent.)
-  # ════════════════════════════════════════════════════════════════════
-  - id: flutter-engine-version-coherent
-    kind: cross_file_value_equals
-    source:
-      file: bin/internal/engine.version
-      extract: { lines: {} }
-    targets:
-      - file: bin/cache/engine.stamp
-        extract: { lines: {} }
-    allow_missing_target: true
-    level: error
-    message: >-
-      engine.version pin coherence (NEW): the engine commit in
-      bin/internal/engine.version must match any cached engine stamp. Mirrors
-      what update_engine_version.sh / content_aware_hash.sh assert at bootstrap.
 
   # ════════════════════════════════════════════════════════════════════
   # .ci.yaml SHARD REGISTRY RESOLUTION + ORDERING — v0.10 kinds.
@@ -316,7 +293,6 @@ rules:
   # dart format --set-exit-if-changed prints each unformatted path; parse them.
   - id: flutter-dart-format-check
     kind: command_idempotent
-    paths: analysis_options.yaml
     command: ["dart","format","--output=none","--set-exit-if-changed","."]
     files_from: stdout
     files_pattern: 'Changed (.+)'

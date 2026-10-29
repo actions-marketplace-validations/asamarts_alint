@@ -1,0 +1,31 @@
+test_version: 1
+name: markdown_images_have_alt accepts rendered descriptions
+
+tags: [check, markdown_images_have_alt, content, passing]
+
+docs:
+  title: Formatted image alt text is recognized by the CommonMark parser
+  case: pass
+  kind: markdown_images_have_alt
+
+given:
+  tree:
+    README.md: |
+      # Project
+
+      ![Component **architecture**](architecture.svg)
+      `![](example-only.svg)`
+    architecture.svg: "<svg/>\n"
+  config: |
+    version: 1
+    rules:
+      - id: image-alt
+        kind: markdown_images_have_alt
+        paths: "**/*.md"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

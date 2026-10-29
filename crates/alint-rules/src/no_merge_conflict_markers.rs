@@ -48,10 +48,17 @@ impl PerFileRule for NoMergeConflictMarkersRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        let Ok(text) = std::str::from_utf8(bytes) else {
+        // A binary-looking file that is not valid UTF-8 (image, archive) is
+        // skipped, as before the lossy decode: random bytes can spell a marker
+        // line. Valid-UTF-8 text with a NUL is still scanned.
+        if crate::io::char_scan_mode(bytes) == crate::io::CharScan::Skip {
             return Ok(Vec::new());
-        };
-        let Some((line_no, marker)) = first_marker(text) else {
+        }
+        // Decode lossily: one stray non-UTF-8 byte must not hide the markers
+        // (they are ASCII, so an invalid byte -> U+FFFD never creates or masks
+        // one, and line numbers are unchanged).
+        let text = String::from_utf8_lossy(bytes);
+        let Some((line_no, marker)) = first_marker(&text) else {
             return Ok(Vec::new());
         };
         let msg = self.message.clone().unwrap_or_else(|| {
@@ -65,7 +72,7 @@ impl PerFileRule for NoMergeConflictMarkersRule {
     }
 }
 
-/// True when the file carries an unambiguous conflict *anchor* — a
+/// True when the file carries an unambiguous conflict *anchor* - a
 /// line starting with `<<<<<<< `, `>>>>>>> `, or `||||||| ` (each
 /// followed by a ref, so it never collides with prose). A bare
 /// `=======` is only treated as a separator when such an anchor is
@@ -121,6 +128,25 @@ fn classify_marker(line: &str, separator_armed: bool) -> Option<&'static str> {
     None
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec.paths.as_ref().ok_or_else(|| {
         Error::rule_config(
@@ -131,7 +157,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "no_merge_conflict_markers has no fix op — conflict resolution requires human judgment",
+            "no_merge_conflict_markers has no fix op - conflict resolution requires human judgment",
         ));
     }
     Ok(Box::new(NoMergeConflictMarkersRule {
@@ -227,5 +253,37 @@ mod tests {
             first_marker("=======\ntheirs\n>>>>>>> branch\n"),
             Some((1, "======="))
         );
+    }
+}
+
+#[cfg(test)]
+mod non_utf8_tests {
+    use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
+
+    #[test]
+    fn non_utf8_text_is_still_scanned_for_markers() {
+        // Fail-closed regression: one Latin-1 byte used to skip the whole file.
+        let rule = super::build(&spec_yaml(
+            "id: t\nkind: no_merge_conflict_markers\npaths: \"**/*\"\nlevel: error\n",
+        ))
+        .unwrap();
+        let body: &[u8] = b"caf\xe9\n<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> b\n";
+        let (tmp, idx) = tempdir_with_files(&[("a.txt", body)]);
+        let vs = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(vs.len(), 1);
+        assert_eq!(vs[0].line, Some(2));
+    }
+
+    #[test]
+    fn invalid_utf8_binaries_are_skipped() {
+        // Regression: the lossy decode scanned binaries, so marker-shaped bytes
+        // in an archive were reported.
+        let rule = super::build(&spec_yaml(
+            "id: t\nkind: no_merge_conflict_markers\npaths: \"**/*\"\nlevel: error\n",
+        ))
+        .unwrap();
+        let blob: &[u8] = b"\x00\xff\xfe\n<<<<<<< HEAD\nx\n>>>>>>> b\n\xc3";
+        let (tmp, idx) = tempdir_with_files(&[("a.bin", blob)]);
+        assert!(rule.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty());
     }
 }

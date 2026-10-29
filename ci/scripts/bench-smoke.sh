@@ -7,6 +7,10 @@ cd "$REPO_ROOT"
 echo "==> Compiling criterion bench targets (no run)"
 cargo bench -p alint-bench --no-run --locked
 
+echo "==> Exercising pinned-reference parser scaling cells"
+cargo bench -p alint-bench --bench single_file_rules --features fs-benches --locked -- \
+  --test pinned_references
+
 echo "==> Running xtask bench-release --quick"
 # Smoke only — we do not gate on numbers on a self-hosted runner. Real
 # headline numbers come from bench-release.yml on pinned platforms.

@@ -8,11 +8,12 @@ branding:
 inputs:
   version:
     description: |
-      alint version to install: a release tag like `v0.1.0`, or
-      `latest`. Leave unset to install the release matching the tag
-      the action itself is pinned to — e.g. `uses: asamarts/alint@v0.12.0`
-      installs v0.12.0, so pinning the action pins the binary. Falls
-      back to `latest` when the action is pinned to a branch or SHA.
+      alint version to install: `latest`, or a release tag like `v0.20.1`
+      with optional pre-release/build suffixes. An explicit value overrides
+      the action ref. When unset,
+      an exact release tag installs that tag, a commit SHA installs the
+      release baked into that action commit, and a branch follows the
+      latest release.
     required: false
     default: ""
   path:
@@ -60,9 +61,18 @@ runs:
       shell: bash
       env:
         ALINT_VERSION: ${{ inputs.version }}
+        # Keep this separate from the public input default. GitHub resolves an
+        # omitted input to its default before a composite step runs, so a
+        # non-empty public default is indistinguishable from an explicit
+        # `with: version:` value. A separate baked value lets the resolver
+        # preserve all three contracts: explicit input wins, an exact tag wins
+        # when the input is omitted, and only a full commit SHA selects the
+        # release baked into that commit. bump-version.sh updates this before
+        # the release commit is tagged; the release preflight verifies it.
+        ALINT_BAKED_VERSION: v0.20.1
         INSTALL_DIR: ${{ runner.temp }}/alint-bin
         # Pin install.sh to whichever ref the consumer pinned the
-        # action to (e.g. `asamarts/alint@v0.12.0`). Without this,
+        # action to (e.g. `asamarts/alint@v0.20.1`). Without this,
         # `main`'s install.sh would be fetched on every run — a
         # change to that script affects every action consumer
         # regardless of the version they pinned.
@@ -70,62 +80,69 @@ runs:
         # `github.action_ref` is populated for ANY remote `uses:`
         # reference. It is only empty for `uses: ./` (a local
         # checkout-based action), which is what `action-selftest.yml`
-        # does inside this repo. For that path, `main` is the
-        # intended fallback because we're testing the bundled
-        # install.sh at HEAD; for every external consumer the
-        # fallback is unreachable.
+        # does inside this repo. For that path we run the install.sh
+        # bundled beside this action.yml (`github.action_path`), i.e.
+        # the copy at the commit under test, so a PR's install.sh
+        # change is exercised pre-merge instead of `main`'s copy.
+        # For every external consumer this branch is unreachable.
         #
         # `GITHUB_REPOSITORY` lets us defensively assert this: if
         # someone outside the asamarts/alint repo somehow hits an
-        # empty action_ref, we fail loudly rather than silently
-        # fetch `main` from the canonical repo.
+        # empty action_ref, we fail loudly rather than run an
+        # unexpected installer.
         ACTION_REF: ${{ github.action_ref }}
+        ACTION_PATH: ${{ github.action_path }}
         SOURCE_REPO: ${{ github.repository }}
       run: |
         set -euo pipefail
         if [[ -z "${ACTION_REF:-}" ]]; then
           if [[ "${SOURCE_REPO}" != "asamarts/alint" ]]; then
-            echo "::error::action_ref is empty but the action is running outside asamarts/alint (${SOURCE_REPO}). Pin the action to a tag, e.g. uses: asamarts/alint@v0.12.0" >&2
+            echo "::error::action_ref is empty but the action is running outside asamarts/alint (${SOURCE_REPO}). Pin the action to a tag, e.g. uses: asamarts/alint@v0.20.1" >&2
             exit 1
           fi
-          ref="main"
+          ref=""
         else
           ref="$ACTION_REF"
         fi
-        # Binary version: an explicit `version:` input always wins.
-        # With none, default to the release tag the action itself is
-        # pinned to (ACTION_REF like vX.Y.Z) so pinning the action
-        # pins the binary, with zero release-time maintenance. Fall
-        # back to `latest` only when the action is pinned to a non-
-        # release ref (branch / SHA / the in-repo `uses: ./`
-        # selftest), where a floating binary is the right match.
-        ver="${ALINT_VERSION:-}"
-        if [[ -z "$ver" ]]; then
-          if [[ "${ACTION_REF:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            ver="$ACTION_REF"
-          else
-            ver="latest"
-          fi
-        fi
+        # The resolver lives beside action.yml so its precedence contract is
+        # unit-tested rather than duplicated as untestable inline shell. GitHub
+        # documents github.action_path specifically for files bundled with a
+        # composite action.
+        # ACTION_PATH is GitHub's action directory.
+        # shellcheck disable=SC1090
+        source "$ACTION_PATH/action/resolve-version.sh"
+        ver="$(resolve_alint_action_version \
+          "${ALINT_VERSION:-}" \
+          "${ACTION_REF:-}" \
+          "$ALINT_BAKED_VERSION")"
         export ALINT_VERSION="$ver"
-        echo "alint action: installing '${ver}' (action_ref='${ACTION_REF:-<local>}', install.sh ref='${ref}')"
-        # Fetch install.sh with retries: raw.githubusercontent.com can return a
-        # transient 403 (rate-limit / CDN edge) that previously failed the action
-        # outright. Portable retry loop (no curl --retry-all-errors version
-        # dependency), up to 3 attempts before giving up.
-        install_url="https://raw.githubusercontent.com/asamarts/alint/${ref}/install.sh"
-        install_sh="${RUNNER_TEMP:-/tmp}/alint-install.sh"
-        for attempt in 1 2 3; do
-          if curl -fsSL "$install_url" -o "$install_sh"; then
-            break
-          fi
-          if [[ "$attempt" -eq 3 ]]; then
-            echo "::error::failed to fetch install.sh from ${install_url} after 3 attempts (transient raw.githubusercontent error, e.g. rate-limit or CDN)" >&2
+        if [[ -z "$ref" ]]; then
+          install_sh="$ACTION_PATH/install.sh"
+          echo "alint action: installing '${ver}' (action_ref='<local>', install.sh=bundled ${install_sh})"
+          if [[ ! -f "$install_sh" ]]; then
+            echo "::error::local action checkout has no install.sh at ${install_sh}" >&2
             exit 1
           fi
-          echo "alint action: install.sh fetch failed (attempt ${attempt}/3), retrying in 2s..." >&2
-          sleep 2
-        done
+        else
+          echo "alint action: installing '${ver}' (action_ref='${ACTION_REF}', install.sh ref='${ref}')"
+          # Fetch install.sh with retries: raw.githubusercontent.com can return a
+          # transient 403 (rate-limit / CDN edge) that previously failed the action
+          # outright. Portable retry loop (no curl --retry-all-errors version
+          # dependency), up to 3 attempts before giving up.
+          install_url="https://raw.githubusercontent.com/asamarts/alint/${ref}/install.sh"
+          install_sh="${RUNNER_TEMP:-/tmp}/alint-install.sh"
+          for attempt in 1 2 3; do
+            if curl -fsSL "$install_url" -o "$install_sh"; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "::error::failed to fetch install.sh from ${install_url} after 3 attempts (transient raw.githubusercontent error, e.g. rate-limit or CDN)" >&2
+              exit 1
+            fi
+            echo "alint action: install.sh fetch failed (attempt ${attempt}/3), retrying in 2s..." >&2
+            sleep 2
+          done
+        fi
         bash "$install_sh"
         echo "$INSTALL_DIR" >> "$GITHUB_PATH"
 

@@ -1,5 +1,6 @@
+test_version: 1
 name: cross_file resolves fires when a declared path does not exist on disk
-tags: [check, cross_file, cross_file]
+tags: [check, cross_file]
 
 given:
   tree:
@@ -25,5 +26,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: members-exist, level: error, path: Cargo.toml}

@@ -1,3 +1,4 @@
+test_version: 1
 name: filename_case flags stems that don't match the convention
 tags: [check, filename_case]
 
@@ -24,6 +25,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: rust-snake, level: error, path: src/BadModule.rs}
       - {rule: rust-snake, level: error, path: src/OtherName.rs}

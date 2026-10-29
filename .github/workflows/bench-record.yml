@@ -1,17 +1,18 @@
 name: bench-record
 
 # Tag-triggered "publish-grade" bench run for the canonical baseline
-# machine: self-hosted `kbench` (Intel i7-6700HQ laptop, 16 GB), which
+# machine: the self-hosted bench host (Intel i7-6700HQ laptop, 16 GB), which
 # replaced the 3900X dev box as the bench host on 2026-07-15 (quiet +
 # dedicated + fixed fingerprint). Its 16 GB RAM needs the drop_caches
 # fix (ALINT_BENCH_DROP_CACHES, set below); the trees live on /bench
-# (ext4 NVMe) because kbench's /tmp is a 7.8 GB tmpfs that overflows at
-# 1M. See project docs: the kbench canonical-host note + the
+# (ext4 NVMe) because the bench host's /tmp is a 7.8 GB tmpfs that overflows at
+# 1M. See project docs: the canonical bench-host note + the
 # 2026-07-1m-writeback-contention investigation.
 #
 # Two layers per run:
 # - macro: `xtask bench-scale --include-1m --warmup 3 --runs 10` over
-#   the full S1-S14 × {1k,10k,100k,1m} × {full,changed} matrix.
+#   the consolidated S1-S4 × {1k,10k,100k,1m} × {full,changed} matrix,
+#   plus the SFIX fix-mode scenario.
 # - micro: `cargo bench -p alint-bench --features fs-benches` over the
 #   12 criterion benches EXPLICITLY (not a bare `-p alint-bench`, which
 #   would also fire the gungraun det_engine/det_check benches), then
@@ -20,9 +21,9 @@ name: bench-record
 #
 # Output: a PR adding both directories plus a HISTORY.md update for
 # every (scenario, mode, size) cell measured. The PR sits in review
-# until a maintainer eyeballs the CV (anything > 10 % gets a re-run
-# on a quieter system) and merges. No auto-merge — bench numbers
-# enter the published corpus only after human review.
+# until a maintainer runs the programmatic quality/regression gate
+# and checks the history output. No auto-merge — bench numbers enter
+# the published corpus only after human review.
 #
 # Triggers:
 # - tag push (v*): the canonical case. Bench runs on the released
@@ -52,9 +53,7 @@ on:
         required: false
         default: ""
 
-permissions:
-  contents: write       # commit the bench dirs + HISTORY.md update
-  pull-requests: write  # open the review PR
+permissions: {}
 
 # Hard serialisation: only one bench run at a time per ref. A second
 # tag push while a bench is in flight queues rather than racing for
@@ -76,8 +75,15 @@ jobs:
   guard:
     name: engine-change guard
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       should_bench: ${{ steps.decide.outputs.should_bench }}
+      # The commit benched and the release it is compared against (empty when
+      # there is none): the macro gate report, the same-session micro A/B and
+      # the micro-det job all use the same pair.
+      head_sha: ${{ steps.decide.outputs.head_sha }}
+      prev: ${{ steps.decide.outputs.prev }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -87,18 +93,30 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           TAG: ${{ github.ref_name }}
+          INPUT_REF: ${{ github.event.inputs.ref }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ "$EVENT" = "push" ]; then
+            head_sha="$(git rev-parse "${TAG}^{commit}")"
+            # The release immediately preceding this tag in version order (NOT
+            # merely the highest other tag, so a re-pushed / non-latest tag still
+            # compares against its true predecessor).
+            prev="$(git tag --list 'v*.*.*' --sort=-v:refname | awk -v t="$TAG" '$0==t{f=1;next} f{print;exit}')"
+          else
+            ref="${INPUT_REF:-main}"
+            head_sha="$(git rev-parse --verify --quiet "origin/${ref}^{commit}" \
+              || git rev-parse --verify "${ref}^{commit}")"
+            # The nearest release below the benched commit.
+            prev="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "${head_sha}^" 2>/dev/null || true)"
+          fi
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          echo "prev=${prev}" >> "$GITHUB_OUTPUT"
           if [ "$EVENT" != "push" ]; then
             echo "should_bench=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::workflow_dispatch -- benching unconditionally."
+            echo "::notice::workflow_dispatch -- benching unconditionally (vs ${prev:-no prior release})."
             exit 0
           fi
-          # The release immediately preceding this tag in version order (NOT merely
-          # the highest other tag, so a re-pushed / non-latest tag still compares
-          # against its true predecessor).
-          prev="$(git tag --list 'v*.*.*' --sort=-v:refname | awk -v t="$TAG" '$0==t{f=1;next} f{print;exit}')"
           if [ -z "$prev" ]; then
             echo "should_bench=true" >> "$GITHUB_OUTPUT"
             echo "::notice::no prior release tag -- benching."
@@ -119,26 +137,37 @@ jobs:
     needs: guard
     if: needs.guard.outputs.should_bench == 'true'
     name: bench (linux-x86_64)
-    # The canonical baseline runner is kbench (label `bench`), NOT the
+    # The canonical baseline runner is the bench host (label `bench`), NOT the
     # `alint` CI runner (the 3900X dev box) — bench moved to a dedicated,
     # quiet, fixed-fingerprint host. ubuntu-latest on github-hosted would
     # run a different CPU, kernel, and FS, voiding cross-version
     # comparability.
     runs-on: [self-hosted, linux, bench]
+    permissions:
+      contents: write       # commit the bench dirs + HISTORY.md update
+      pull-requests: write  # open the review PR
     timeout-minutes: 360   # 6h cap; ~3.5h expected at publish-grade flags
+    env:
+      BENCH_RUST: "1.97.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
           fetch-depth: 0
       # PINNED, unlike CI's @stable: rustc is part of the bench fingerprint, so
-      # the whole kbench corpus series must stay on one toolchain or numbers stop
+      # the whole bench-host corpus series must stay on one toolchain or numbers stop
       # being cross-version comparable. 1.97.0 matches the v0.10-v0.13 backfill
-      # that re-based the series onto kbench. Bump deliberately (and re-baseline)
+      # that re-based the series onto the bench host. Bump deliberately (and re-baseline)
       # when the fleet moves, never implicitly via `stable` drift.
       - uses: dtolnay/rust-toolchain@35a842e360814583e976785eeda0bd0655cb8e83 # 1.97.0
-        with:
-          toolchain: 1.97.0
+      # dtolnay/rust-toolchain only sets the rustup default, and rust-toolchain.toml
+      # (`stable`) wins over that inside the checkout. Export RUSTUP_TOOLCHAIN and fail
+      # unless rustc really is BENCH_RUST; otherwise the bench silently builds with
+      # whatever `stable` the runner user has installed.
+      - name: pin the bench toolchain
+        env:
+          RELEASE_RUST: ${{ env.BENCH_RUST }}
+        run: ci/scripts/pin-release-toolchain.sh
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           key: bench-record
@@ -159,10 +188,10 @@ jobs:
           # a silent pin miss fails the run loudly.
           hf_ver="1.20.0"
           mkdir -p "$HOME/.local/bin"
-          curl -fsSL -o /tmp/hf.tar.gz \
+          curl -fsSL -o "$RUNNER_TEMP/hf.tar.gz" \
             "https://github.com/sharkdp/hyperfine/releases/download/v${hf_ver}/hyperfine-v${hf_ver}-x86_64-unknown-linux-gnu.tar.gz"
-          tar -xzf /tmp/hf.tar.gz -C /tmp
-          cp "/tmp/hyperfine-v${hf_ver}-x86_64-unknown-linux-gnu/hyperfine" \
+          tar -xzf "$RUNNER_TEMP/hf.tar.gz" -C "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/hyperfine-v${hf_ver}-x86_64-unknown-linux-gnu/hyperfine" \
             "$HOME/.local/bin/hyperfine"
           chmod +x "$HOME/.local/bin/hyperfine"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -187,10 +216,10 @@ jobs:
             # tarball.
             gh_ver="2.62.0"
             mkdir -p "$HOME/.local/bin"
-            curl -fsSL -o /tmp/gh.tar.gz \
+            curl -fsSL -o "$RUNNER_TEMP/gh.tar.gz" \
               "https://github.com/cli/cli/releases/download/v${gh_ver}/gh_${gh_ver}_linux_amd64.tar.gz"
-            tar -xzf /tmp/gh.tar.gz -C /tmp
-            cp "/tmp/gh_${gh_ver}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+            tar -xzf "$RUNNER_TEMP/gh.tar.gz" -C "$RUNNER_TEMP"
+            cp "$RUNNER_TEMP/gh_${gh_ver}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
             chmod +x "$HOME/.local/bin/gh"
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
             export PATH="$HOME/.local/bin:$PATH"
@@ -213,9 +242,9 @@ jobs:
             python_ver="3.12.7"
             release_tag="20241016"
             mkdir -p "$HOME/.local"
-            curl -fsSL -o /tmp/python.tar.gz \
+            curl -fsSL -o "$RUNNER_TEMP/python.tar.gz" \
               "https://github.com/indygreg/python-build-standalone/releases/download/${release_tag}/cpython-${python_ver}+${release_tag}-x86_64-unknown-linux-gnu-install_only.tar.gz"
-            tar -xzf /tmp/python.tar.gz -C "$HOME/.local/"
+            tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$HOME/.local/"
             echo "$HOME/.local/python/bin" >> "$GITHUB_PATH"
             export PATH="$HOME/.local/python/bin:$PATH"
           fi
@@ -223,10 +252,20 @@ jobs:
 
       - name: derive output label
         id: label
+        env:
+          # Via env, never `${{ }}` inside the script: a dispatch input expanded
+          # into shell source is a script-injection vector.
+          INPUT_LABEL: ${{ github.event.inputs.label }}
         run: |
           set -euo pipefail
-          input_label='${{ github.event.inputs.label }}'
+          input_label="${INPUT_LABEL:-}"
           if [[ -n "$input_label" ]]; then
+            # The label becomes a docs/benchmarks/ directory name and a branch
+            # name; allow only a conservative path-segment alphabet.
+            if [[ ! "$input_label" =~ ^[A-Za-z0-9._-]+$ || "$input_label" == .* ]]; then
+              echo "::error::invalid label '${input_label}' (allowed: [A-Za-z0-9._-]+, no leading dot)" >&2
+              exit 1
+            fi
             echo "label=$input_label" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
             # Tag push: docs/benchmarks/.../v0.9.7/ shape.
@@ -241,7 +280,7 @@ jobs:
       - name: graft drop-caches harness onto pre-fix refs
         run: |
           set -euo pipefail
-          # The ALINT_BENCH_DROP_CACHES quiescing (mandatory on kbench's 16 GB, or
+          # The ALINT_BENCH_DROP_CACHES quiescing (mandatory on the bench host's 16 GB, or
           # S2/1m/full blows the CV gate — see
           # docs/benchmarks/investigations/2026-07-1m-writeback-contention/) was
           # added to the bench driver AFTER v0.13. Re-benching a pre-fix ref
@@ -265,17 +304,17 @@ jobs:
         run: cargo build --release -p alint -p xtask
 
       # ── Macro: full publish-grade matrix ─────────────────────────
-      # 14 scenarios × 4 sizes × 2 modes = 112 cells. The 1M cells
-      # dominate — ~10 min each, so ~3h for the 28 1M cells alone.
-      # S10 added in v0.9.9 (scope_filter outside per-file dispatch);
-      # S11–S13 added in v0.10 (v0.10 cross-file / per-file /
-      # single-shot dispatch classes — release-gating per audit D5);
-      # S14 added in v0.12 (the comprehensive v0.12 net-new featureset:
-      # file_graph / for_each_match / glob-union / markerless / gff-mutating).
+      # The consolidated set (5 scenarios): 4 check scenarios (S1 layout /
+      # S2 content / S3 relational / S4 workspace) × 4 sizes × 2 modes
+      # (full, changed) = 32 cells, plus the dedicated fix scenario (SFIX)
+      # × 4 sizes × 1 mode (fix) = 4 cells → 36 cells total. The 1M cells
+      # dominate — ~10 min each, so ~3h for the 1M row alone.
+      # Old tags re-baselined via workflow_dispatch keep their own
+      # scenario/mode set (see the file-guarded append below).
       - name: macro bench-scale
         env:
           OUT_LABEL: ${{ steps.label.outputs.label }}
-          # kbench (16 GB) needs the page-cache-reclaim fix or S2/1m/full
+          # the bench host (16 GB) needs the page-cache-reclaim fix or S2/1m/full
           # spikes to 40-50% CV and fails bench-gate; and its trees must
           # live on the /bench ext4 NVMe, not the 7.8 GB /tmp tmpfs which
           # overflows at 1M. Both are no-ops/harmless on any large-RAM host.
@@ -297,29 +336,137 @@ jobs:
           sync   # flush the release build's dirty pages before measuring
           out_dir="docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}"
           mkdir -p "$out_dir"
-          # Scenarios present in THIS ref, not a hardcoded list: S10 landed in
-          # v0.9.9, S11-S13 in v0.10, S14 in v0.12, so re-benching an old tag (when
-          # re-baselining v0.10-v0.13 onto the runner) must request only the
-          # scenarios its own xtask knows, or bench-scale errors on an unknown
-          # scenario — the same per-tag adaptation the manual backfill made. Derived
-          # from the scenario definition files; a current release still yields the
-          # full S1..S14.
-          scenarios=$(ls xtask/src/bench/scenarios/s*.yml 2>/dev/null \
+          # Scenarios present in THIS ref, not a hardcoded list: the set has
+          # changed shape across releases (S10 in v0.9.9, S11-S13 in v0.10, S14 in
+          # v0.12, then the v0.17 consolidation to S1-S4 + the fix-only SFIX), so
+          # re-benching an old tag (re-baselining onto the runner) must request only
+          # the scenarios + modes its own xtask knows, or bench-scale errors on an
+          # unknown scenario/mode — the same per-tag adaptation the manual backfill
+          # made. The numbered check scenarios are derived from the definition
+          # files; the fix-only sfix_all.yml is excluded by the s[0-9]*_ glob
+          # (supports() runs it under fix mode only, not the full/changed the check
+          # scenarios take) and appended explicitly as SFIX.
+          scenarios=$(find xtask/src/bench/scenarios -maxdepth 1 -type f \
+            -name 's[0-9]*_*.yml' -print \
             | sed -E 's#.*/s([0-9]+)_.*#\1#' | sort -n | sed 's/^/S/' | paste -sd,)
-          echo "scenarios for this ref ($(git rev-parse --short HEAD)): $scenarios"
+          if [ -z "$scenarios" ]; then
+            echo "::error::no numbered benchmark scenarios found" >&2
+            exit 1
+          fi
+          modes="full,changed"
+          # Append the fix scenario + enable fix mode ONLY when this ref ships
+          # sfix_all.yml, so an old-tag re-baseline whose xtask predates SFIX /
+          # Mode::Fix still requests only what its own binary understands.
+          if [ -f xtask/src/bench/scenarios/sfix_all.yml ]; then
+            scenarios="${scenarios:+$scenarios,}SFIX"
+            modes="full,changed,fix"
+          fi
+          echo "scenarios for this ref ($(git rev-parse --short HEAD)): $scenarios (modes: $modes)"
           ./target/release/xtask bench-scale \
             --include-1m \
             --sizes 1k,10k,100k,1m \
             --scenarios "$scenarios" \
-            --modes full,changed \
+            --modes "$modes" \
             --tools alint \
             --warmup 3 --runs 10 \
             --json-only \
             --out "$out_dir"
           ls -la "$out_dir"
 
+      # The release gate, run here so its verdict is in the review PR: bench-gate
+      # against the previous release's committed results and the long-horizon
+      # anchor (docs/benchmarks/ANCHOR). A failure is reported (step summary,
+      # an error annotation and the PR body), not raised, so the results are
+      # still published for review.
+      - name: bench-gate report
+        env:
+          OUT_LABEL: ${{ steps.label.outputs.label }}
+          PREV_TAG: ${{ needs.guard.outputs.prev }}
+        run: |
+          set -uo pipefail
+          arch_dir="docs/benchmarks/macro/results/linux-x86_64"
+          args=(--results "${arch_dir}/${OUT_LABEL}/results.json")
+          if [ -n "$PREV_TAG" ] && [ -f "${arch_dir}/${PREV_TAG}/results.json" ]; then
+            args+=(--baseline "${arch_dir}/${PREV_TAG}/results.json")
+          else
+            echo "::warning title=bench-gate::no committed results for the previous release '${PREV_TAG}'; regression check skipped"
+          fi
+          anchor="$(sed -n 's/^version = "\(.*\)"$/\1/p' docs/benchmarks/ANCHOR 2>/dev/null || true)"
+          if [ -n "$anchor" ] && [ -f "${arch_dir}/${anchor}/results.json" ]; then
+            args+=(--anchor auto)
+          elif [ -n "$anchor" ]; then
+            echo "::warning title=bench-gate::no committed results for the anchor '${anchor}'; anchor check skipped"
+          fi
+          ./target/release/xtask bench-gate "${args[@]}" > "$RUNNER_TEMP/bench-gate.txt" 2>&1
+          rc=$?
+          echo "$rc" > "$RUNNER_TEMP/bench-gate.rc"
+          cat "$RUNNER_TEMP/bench-gate.txt"
+          {
+            echo "### bench-gate (exit ${rc})"
+            echo '```'
+            cat "$RUNNER_TEMP/bench-gate.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=bench-gate::the release gate failed (exit ${rc}); see the review PR"
+          fi
+
       # ── Micro: criterion ─────────────────────────────────────────
+      # Same-session A/B (report-only): the previous release's criterion suite
+      # runs first into the shared criterion dir as baseline `prev`, so the new
+      # ref's run reports each benchmark's change measured minutes apart on this
+      # host, not against a snapshot months old. Best-effort: if the previous
+      # tag's benches do not build or run, the comparison is skipped.
+      # The previous tag builds in its own target dir. Between releases both
+      # refs carry the same package versions, and cargo names a workspace
+      # package's artifacts by name, version and workspace-relative path, so in
+      # a shared target dir the new ref's build finds the previous tag's
+      # artifacts, judges them fresh against its own older sources and
+      # benchmarks the previous tag a second time.
+      - name: micro baseline (previous release)
+        id: micro_prev
+        env:
+          PREV_TAG: ${{ needs.guard.outputs.prev }}
+        run: |
+          set -uo pipefail
+          if [ -z "$PREV_TAG" ]; then
+            echo "no previous release; no same-session comparison"
+            exit 0
+          fi
+          sudo -n renice -n -10 -p $$ >/dev/null 2>&1 || true
+          sudo -n ionice -c2 -n0 -p $$ >/dev/null 2>&1 || true
+          prev_src="$RUNNER_TEMP/prev-src"
+          prev_target="$RUNNER_TEMP/prev-target"
+          if ! git worktree add --detach "$prev_src" "$PREV_TAG"; then
+            echo "::warning title=micro A/B::could not check out ${PREV_TAG}; no same-session comparison"
+            exit 0
+          fi
+          mapfile -t pbenches < <(find "$prev_src/crates/alint-bench/benches" -maxdepth 1 -type f \
+            -name '*.rs' -exec basename {} .rs \; | grep -vE '^det_' | sort)
+          args=()
+          for bench in "${pbenches[@]}"; do
+            args+=(--bench "$bench")
+          done
+          if grep -q '^fs-benches' "$prev_src/crates/alint-bench/Cargo.toml"; then
+            args+=(--features fs-benches)
+          fi
+          sync
+          if (cd "$prev_src" && CARGO_TARGET_DIR="$prev_target" \
+                CRITERION_HOME="$GITHUB_WORKSPACE/target/criterion" \
+                cargo bench -p alint-bench "${args[@]}" -- --save-baseline prev); then
+            # Keep only `prev/`: a benchmark the new ref dropped must not be
+            # published with the previous release's numbers as `new/`.
+            find "$GITHUB_WORKSPACE/target/criterion" -type d -name new -prune -exec rm -rf {} +
+            echo "compare=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=micro A/B::the ${PREV_TAG} criterion suite did not run; no same-session comparison"
+          fi
+          git worktree remove --force "$prev_src" || true
+          rm -rf "$prev_target"
+
       - name: micro cargo bench
+        env:
+          PREV_COMPARE: ${{ steps.micro_prev.outputs.compare }}
         run: |
           set -euo pipefail
           # Same footprint reduction as the macro step (criterion measures ns/op,
@@ -339,10 +486,26 @@ jobs:
           # criterion micro corpus). Derived rather than hardcoded so re-benching an
           # old tag (blame_cache / structured_query / etc. were added over time)
           # doesn't fail on a --bench its alint-bench crate doesn't define.
-          mbenches=$(ls crates/alint-bench/benches/*.rs 2>/dev/null | xargs -n1 basename \
-            | sed 's/\.rs$//' | grep -vE '^det_' | sed 's/^/--bench /' | paste -sd' ')
-          echo "micro benches for this ref: $mbenches"
-          cargo bench -p alint-bench --features fs-benches $mbenches
+          mapfile -t mbenches < <(find crates/alint-bench/benches -maxdepth 1 -type f \
+            -name '*.rs' -exec basename {} .rs \; | grep -vE '^det_' | sort)
+          if [ "${#mbenches[@]}" -eq 0 ]; then
+            echo "::error::no Criterion benchmark targets found" >&2
+            exit 1
+          fi
+          bench_args=()
+          for bench in "${mbenches[@]}"; do
+            bench_args+=(--bench "$bench")
+          done
+          echo "micro benches for this ref: ${mbenches[*]}"
+          compare=()
+          if [ "${PREV_COMPARE:-}" = "1" ]; then
+            compare=(-- --baseline-lenient prev)
+          fi
+          cargo bench -p alint-bench --features fs-benches "${bench_args[@]}" "${compare[@]}"
+          if [ "${PREV_COMPARE:-}" = "1" ] && [ -f ci/scripts/criterion-change-summary.py ]; then
+            python3 ci/scripts/criterion-change-summary.py target/criterion > "$RUNNER_TEMP/micro-ab.md" || true
+            { echo "### Same-session micro A/B (report-only)"; cat "$RUNNER_TEMP/micro-ab.md"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: publish micro snapshot
         env:
@@ -351,28 +514,28 @@ jobs:
           set -euo pipefail
           out_dir="docs/benchmarks/micro/results/linux-x86_64/${OUT_LABEL}/criterion"
           ./target/release/xtask publish-benches --to "$out_dir" --trim
-          ls -la "$out_dir" | head -20
+          # This is a human-readable diagnostic listing, not filename parsing.
+          # shellcheck disable=SC2012
+          ls -la "$out_dir" | sed -n '1,20p'
 
-      # ── HISTORY.md update is intentionally manual ────────────────
-      # Auto-rewriting markdown tables is fragile (positional cells,
-      # version ordering, scenario sections). The PR body links to
-      # the new results.json so the maintainer pastes the new row
-      # into HISTORY.md as part of the merge. The new row fields
-      # come from the per-cell JSON via:
-      #
-      #   jq -r '.rows[] | "\(.scenario) \(.size_label) \(.mode): mean=\(.mean_ms)ms ± \(.stddev_ms)"' \
-      #     docs/benchmarks/macro/results/linux-x86_64/<tag>/results.json
-      #
-      # … which the PR body shells out for and inlines verbatim, so
-      # the maintainer copy-pastes pre-formatted values.
+      # HISTORY.md is rendered after the result branch is rebased onto current
+      # main in the PR-creation step below. Keeping that render there avoids
+      # tracked changes before the branch switch and makes the PR self-contained.
 
       - name: open PR with bench results
         env:
           GH_TOKEN: ${{ github.token }}
           OUT_LABEL: ${{ steps.label.outputs.label }}
           SOURCE_SHA: ${{ github.sha }}
+          PREV_TAG: ${{ needs.guard.outputs.prev }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # Gate results from earlier steps (outside the checkout, so they survive
+          # the reset + rebase below).
+          gate_rc="$(cat "$RUNNER_TEMP/bench-gate.rc" 2>/dev/null || echo 'not run')"
+          gate_txt="$(cat "$RUNNER_TEMP/bench-gate.txt" 2>/dev/null || echo 'bench-gate did not run')"
+          ab_md="$(cat "$RUNNER_TEMP/micro-ab.md" 2>/dev/null || echo '_No same-session comparison in this run._')"
           branch="bench-record/${OUT_LABEL}"
 
           git config user.name  "alint bench bot"
@@ -429,7 +592,11 @@ jobs:
           # bench data we just restored). Sanity check: emit a
           # warning if the new version's row doesn't appear in
           # the output (CHANGELOG.md missing the entry).
-          python3 xtask/scripts/render-history.py > docs/benchmarks/HISTORY.md
+          # Write to a temp then mv, so a render-history failure (e.g. the
+          # recurrence guard tripping on a new scenario id) never truncates
+          # the committed HISTORY.md via the `>` redirect under set -e.
+          python3 xtask/scripts/render-history.py > docs/benchmarks/HISTORY.md.tmp
+          mv docs/benchmarks/HISTORY.md.tmp docs/benchmarks/HISTORY.md
           if ! grep -q "^| \*\*${OUT_LABEL}\*\*" docs/benchmarks/HISTORY.md; then
             echo "::warning ::render-history.py did not produce a row for ${OUT_LABEL}; CHANGELOG.md may be missing the entry. HISTORY.md updated anyway."
           fi
@@ -440,10 +607,10 @@ jobs:
           # step; include it in the same commit so the PR is
           # one-merge-completes-everything.
           git add docs/benchmarks/HISTORY.md
-          git commit -m "docs(bench): publish ${OUT_LABEL} matrix (S1-S14 at 1k/10k/100k/1m × full/changed) + HISTORY.md refresh"
+          git commit -m "docs(bench): publish ${OUT_LABEL} matrix (S1-S4 × {full,changed} + SFIX × fix, 1k/10k/100k/1m) + HISTORY.md refresh"
           git push origin "$branch" --force
 
-          # Render a per-cell summary the maintainer pastes into HISTORY.md.
+          # Render a per-cell summary for reviewer cross-checking.
           json=docs/benchmarks/macro/results/linux-x86_64/"${OUT_LABEL}"/results.json
           summary=$(jq -r '.rows[] | "- \(.scenario) \(.size_label) \(.mode): \(.mean_ms | tostring | .[0:6]) ms ± \(.stddev_ms | tostring | .[0:5])"' "$json")
 
@@ -454,9 +621,10 @@ jobs:
 
           ## What landed
 
-          - \`docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}/\` — full
-            publish-grade hyperfine matrix (S1-S14 × {1k, 10k, 100k, 1m} × {full,
-            changed}) at \`--warmup 3 --runs 10\`.
+          - \`docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}/\` — the
+            consolidated publish-grade hyperfine matrix (S1-S4 × {1k, 10k, 100k,
+            1m} × {full, changed}, plus SFIX × fix) requested at \`--warmup 3
+            --runs 10\` (the 1m tier is capped at 1 warmup + 3 measured runs).
           - \`docs/benchmarks/micro/results/linux-x86_64/${OUT_LABEL}/criterion/\`
             — trimmed criterion snapshot from \`cargo bench -p alint-bench\`.
           - \`docs/benchmarks/HISTORY.md\` — auto-refreshed via
@@ -466,10 +634,32 @@ jobs:
             \`## [X.Y.Z] — YYYY-MM-DD\` header + first sentence
             beneath it.
 
+          ## Release gates (automated)
+
+          - \`bench-gate\` exit **${gate_rc}**, against the previous release
+            \`${PREV_TAG:-none}\` and the long-horizon anchor in
+            \`docs/benchmarks/ANCHOR\`. Non-zero blocks the merge.
+
+          \`\`\`
+          ${gate_txt}
+          \`\`\`
+
+          - Deterministic micro gate: the \`micro-det (deterministic)\` job of
+            [this run](${RUN_URL}) must be green. It compares instruction counts
+            for the full criterion suite against \`${PREV_TAG:-the previous release}\`
+            (+3% per gated bench) and the anchor (+10%).
+
+          <details><summary>Same-session micro A/B vs ${PREV_TAG:-the previous release} (wall-clock, report-only)</summary>
+
+          ${ab_md}
+
+          </details>
+
           ## Maintainer review checklist
 
-          - [ ] Run \`xtask bench-gate\` against the previous release's
-            \`results.json\` — non-zero exit blocks the merge. Replaces
+          - [ ] Confirm both automated gates above passed. To reproduce
+            \`bench-gate\` locally against the previous release's
+            \`results.json\` (non-zero exit blocks the merge). Replaces
             the v0.9.22-and-earlier "CV > 10 % eyeball" (which was
             never met by any shipped release and never enforced in
             code); see [\`RELEASING.md\`](../RELEASING.md) §"Bench-record review"
@@ -479,12 +669,16 @@ jobs:
             git show origin/${branch}:docs/benchmarks/macro/results/linux-x86_64/${OUT_LABEL}/results.json > /tmp/new.json
             cargo run -q -p xtask -- bench-gate \\
               --results /tmp/new.json \\
-              --baseline docs/benchmarks/macro/results/linux-x86_64/v<prev>/results.json
+              --baseline docs/benchmarks/macro/results/linux-x86_64/v<prev>/results.json \\
+              --anchor docs/benchmarks/macro/results/linux-x86_64/<anchor>/results.json
             \`\`\`
             Gating: per-cell within-run CV ≤ 10 % on 100k/1m cells
-            (1k/10k advisory); \`min_ms\` regression ≤ +15 % vs the
-            prior release on ≥10k cells. New cells with no baseline
-            mate are skipped from the regression check.
+            (1k/10k advisory); \`min_ms\` regression ≤ +15 % on
+            full/fix cells at ≥10k and every 100k/1m cell. Small
+            changed cells are advisory per METHODOLOGY.md. New cells
+            with no baseline mate are skipped. A scenario whose semantic
+            workload revision changed is quality-gated but not compared
+            against the unlike prior workload; review every \`RESET\` line.
           - [ ] Eyeball the HISTORY.md headline row for
             \`${OUT_LABEL}\` — if the auto-extracted first sentence
             from CHANGELOG.md isn't a good one-row blurb, edit
@@ -512,3 +706,61 @@ jobs:
             --head "$branch" \
             --base main \
             --label bench-record
+
+  # Deterministic micro gate for the release: `xtask micro-det` counts the
+  # instructions of every criterion micro benchmark under Callgrind, the benched
+  # commit vs the previous release and vs the long-horizon anchor. The counts do
+  # not depend on the host, so this runs on GitHub-hosted capacity alongside the
+  # wall-clock bench. A gated regression (+3% vs the previous release, +10% vs
+  # the anchor) fails this job; the bench job still opens the results PR, whose
+  # checklist requires this job to be green.
+  micro-det:
+    needs: guard
+    if: needs.guard.outputs.should_bench == 'true' && needs.guard.outputs.prev != ''
+    name: micro-det (deterministic)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Up to three bench builds (head, previous release, anchor) plus the full
+    # suite under Valgrind.
+    timeout-minutes: 330
+    env:
+      BENCH_RUST: "1.97.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: dtolnay/rust-toolchain@35a842e360814583e976785eeda0bd0655cb8e83 # 1.97.0
+      - name: pin the bench toolchain
+        env:
+          RELEASE_RUST: ${{ env.BENCH_RUST }}
+        run: ci/scripts/pin-release-toolchain.sh
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: bench-record-micro-det
+      - name: install valgrind
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq valgrind
+      - name: micro-det (full suite)
+        env:
+          HEAD_SHA: ${{ needs.guard.outputs.head_sha }}
+          PREV_TAG: ${{ needs.guard.outputs.prev }}
+        run: |
+          set -euo pipefail
+          # Reuse the cached target dir for dependencies.
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+          anchor=()
+          if [ -f docs/benchmarks/ANCHOR ]; then
+            anchor=(--anchor auto)
+          fi
+          cargo run -q -p xtask -- micro-det \
+            --base "$PREV_TAG" --head "$HEAD_SHA" --suite full "${anchor[@]}" \
+            --workdir "$RUNNER_TEMP/micro-det" \
+            --out-json "$RUNNER_TEMP/micro-det.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: ${{ !cancelled() }}
+        with:
+          name: micro-det
+          path: ${{ runner.temp }}/micro-det.json
+          if-no-files-found: ignore

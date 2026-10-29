@@ -64,6 +64,13 @@ impl PerFileRule for FinalNewlineRule {
         if bytes.last().copied() == Some(b'\n') {
             return Ok(Vec::new());
         }
+        // Skip binary content: the `file_append_final_newline` fixer refuses it,
+        // so `check` and `fix` must agree on scope (else a binary is flagged
+        // fixable forever but never fixed). Consulted only when a newline is
+        // actually missing, so the common (clean) case pays nothing.
+        if crate::io::looks_binary(bytes) {
+            return Ok(Vec::new());
+        }
         let msg = self
             .message
             .clone()
@@ -72,13 +79,27 @@ impl PerFileRule for FinalNewlineRule {
             Violation::new(msg).with_path(std::sync::Arc::<Path>::from(path)),
         ])
     }
-
-    fn max_bytes_needed(&self) -> Option<usize> {
-        // Only the last byte matters; engine reads whole file
-        // today but a future bounded-read pass could honour this.
-        Some(1)
-    }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    // Binary detection scans the full file when the final byte is not `\n`.
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_append_final_newline")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec
@@ -87,7 +108,15 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .ok_or_else(|| Error::rule_config(&spec.id, "final_newline requires a `paths` field"))?;
     let scope = Scope::from_spec(spec)?;
     let fixer = match &spec.fix {
-        Some(FixSpec::FileAppendFinalNewline { .. }) => Some(FileAppendFinalNewlineFixer),
+        Some(FixSpec::FileAppendFinalNewline {
+            file_append_final_newline,
+        }) => Some(
+            FileAppendFinalNewlineFixer::new().with_applicability(
+                file_append_final_newline
+                    .applicability
+                    .unwrap_or(alint_core::Applicability::Safe),
+            ),
+        ),
         Some(other) => {
             return Err(Error::rule_config(
                 &spec.id,

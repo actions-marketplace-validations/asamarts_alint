@@ -33,14 +33,15 @@ syscall instruction counts drift with glibc/kernel versions.
 So we split:
 
 - **criterion micro-benches** isolate the pure-CPU kernels
-  where instruction-ish patterns are stable. 12 criterion bench
+  where instruction-ish patterns are stable. 13 criterion bench
   files under `crates/alint-bench/benches/` (the two `det_*`
   gungraun benches there back the deterministic gate below, not
   this layer); the catalogue with per-bench rationale lives in
   [`micro/README.md`](micro/README.md).
 - **hyperfine macro-benches** measure the actual CLI as
   users will invoke it, across controlled synthetic trees,
-  and publish per-platform numbers. 14 scenarios (S1-S14)
+  and publish per-platform numbers. Five scenarios (S1-S4
+  plus SFIX)
   under `xtask/src/bench/scenarios/`; catalogue in
   [`macro/README.md`](macro/README.md).
 
@@ -52,25 +53,41 @@ the published `results.json`. The harness:
 
 1. **Builds** `alint` in release mode via `cargo build
    --release -p alint`.
-2. **Generates** a deterministic synthetic monorepo via
+2. **Captures** a hardware fingerprint (OS, arch, rustc
+   version, CPU model, RAM size, filesystem type, hyperfine
+   version, and tool versions); the report separately records
+   the seed and warmup/run counts.
+3. **Generates** a deterministic synthetic monorepo via
    `alint_bench::tree::generate_monorepo(packages,
    files_per_package, seed)`. The seed is fixed (`0xA11E47`
    by default) so every machine materialises a byte-identical
-   tree. S8 uses `generate_git_monorepo`, which additionally
-   runs `git init && git add -A && git commit` so the
-   engine's git-aware paths actually fire.
-3. **Stages** the scenario's config YAML at the tree root.
-4. **Captures** a hardware fingerprint (OS, arch, rustc
-   version, CPU model, RAM size, filesystem type, hyperfine
-   version, tool versions, seed, warmup/runs counts) and
-   writes it to the `index.md` header.
-5. **Shells out** to hyperfine with `--warmup 3 --runs 10`
+   tree. S4 uses the nested polyglot generator with committed
+   version/toolchain policy anchors and a real Git repository so its
+   workspace, versioning, toolchain, and git-aware paths fire.
+4. **Stages** the scenario overlay and the current tool's configuration at the
+   tree root, removing that tool-specific config before the next competitor so
+   shared trees do not accumulate extra benchmark inputs.
+5. **Validates** every row before timing it. Competitive S1/S2
+   full-mode rows receive a temporary, scenario-specific violation;
+   the command must return the exact expected status and report the
+   planted filename or rule ID. This distinguishes a real finding
+   from a startup/configuration failure, including Repolinter's
+   ambiguous exit code 1.
+6. **Shells out** to hyperfine with `--warmup 3 --runs 10`
    by default — `3` warmup runs to fill the page cache and
    amortise JIT/CPU-frequency-scaling settling, `10`
    measured runs for a stddev that's small enough to detect
-   10% deltas with high confidence.
-6. **Writes** per-size `results.md` plus an aggregated
-   `index.md` and the machine-readable `results.json`.
+   10% deltas with high confidence. The 1m tier caps this at
+   1 warmup and 3 measured runs so the full matrix remains tractable;
+   each result row records its actual sample count. The harness ignores
+   only the exit codes explicitly associated with findings for that tool;
+   setup and internal failures remain fatal.
+7. **Checks scaling** when a run contains both 1k and 100k
+   full-tree rows. A 100k/1k mean below 2× produces a warning,
+   since that shape usually means the tool never walked the tree.
+8. **Writes** per-size `results.md` plus an aggregated
+   `index.md` and the machine-readable `results.json`, including every
+   measured sample in milliseconds as well as the aggregate statistics.
 
 Macro-specific design choices worth flagging:
 
@@ -92,8 +109,18 @@ Cross-version reproducibility tells the real story:
 So `xtask bench-gate` (the publish criterion; `RELEASING.md`
 step 1) gates within-run CV only on 100k/1m (1k/10k are advisory
 measurement-floor noise) and gates cross-version regression on
-`min_ms` for `>= 10k` at a **+15 % ceiling vs the prior release**
-(`1k` is unreliable at every statistic).
+`min_ms` at a **+15 % ceiling vs the prior release** for `full`/`fix`
+cells at `>= 10k` and every 100k/1m cell. `changed`/1k and
+`changed`/10k are the documented exception below; `1k` is otherwise
+unreliable at every statistic. Each result also records a semantic
+workload revision per scenario. When both reports declare different
+revisions, the gate still applies the new run's within-run quality check
+but skips that scenario's cross-version regression comparison: different
+resolved rules or fixture semantics are different work, not evidence of
+an engine regression. Scenario contracts anchor the revision's resolved
+rule count and, for fact-gated workloads, the fact truth and active-rule
+profiles.
+
 The published `HISTORY.md` tables and the alint.org trajectory
 deliberately stay `mean +/- stddev`: every historical row and the
 hardcoded v0.5.6 baseline are mean-based, and restating the
@@ -101,7 +128,41 @@ public corpus on `min_ms` is a separable, externally-visible
 change held out of scope. Standard split: gate on the robust
 statistic, publish the full distribution. Cross-machine and
 cross-hyperfine-version comparisons still require a like-for-like
-fingerprint.
+fingerprint, and cross-version comparisons require the same scenario
+workload revision.
+
+**Caveat on the small `changed`-mode cells (added 2026-09).** The `changed`/1k and
+`changed`/10k cells are unreliable for the `min_ms` REGRESSION gate too, not just for
+CV. `changed` mode spawns `git` single-threaded to find the changed subset, then
+dispatches the rule `par_iter` over a *tiny* subset, so these cells are dominated by
+the cost of waking the other cores for that brief parallel burst - which is highly
+sensitive to the host's C-state / frequency behavior and drifts across baseline
+captures independent of any code change. v0.16.0's bench-record flagged them +40-92%,
+yet the same v0.15.0 binary re-measured on the same host moved 43 -> 117 ms on
+`changed`/10k (with `full` flat, and `RAYON_NUM_THREADS=1` pinned at the old 43 ms for
+both versions), so it was a version-independent environment artifact
+([`investigations/2026-09-v0.16-changed-mode-bench-artifact/`](investigations/2026-09-v0.16-changed-mode-bench-artifact/)).
+`xtask bench-gate` now treats small `changed` cells (1k/10k) as regression-advisory as
+well as CV-advisory (`gate.rs` `CHANGED_REGRESSION_ADVISORY_SIZES`): they report their
+`min_ms` delta as `ADV` but do not fail the gate, while `full`/10k and all 100k/1m cells
+still gate. The deterministic gate stays the authoritative regression signal.
+
+**The 1k `changed` cells had a second, harness-made cause (found 2026-10).** Git, built
+without `USE_NSEC` (its default), treats a tracked file whose mtime falls in the same
+wall-clock second as `.git/index` as *racily clean* and re-hashes its content on every
+`git ls-files --modified`, the command `--changed` runs; `ls-files` never rewrites the
+index, so the cost repeats on every timed run. The harness generates and commits a 1k
+tree within one second, so anywhere from none to all of it was racy depending on where
+the second boundary fell: published 1k `changed` cells flipped between about 11 and
+about 20 ms from release to release with unchanged code (up to 43M extra instructions
+in git per run). `init_git_for_changed_mode` now waits out the second and lets `git
+status` rewrite the index (`settle_racy_index`); 10k and larger trees take more than a
+second to commit and were never affected
+([`investigations/2026-10-v0.20-bench-increases/`](investigations/2026-10-v0.20-bench-increases/)).
+On the bench host, five fresh-tree 1k runs per harness took S1 `changed` from 11.1-19.8 ms
+(79% spread) to 10.6-12.0 ms, and S2 from 65% to 12%. The cells still vary about ±6-9%
+around their median, the same floor as the 1k `full` cells (which never gated), so 1k
+`changed` stays regression-advisory.
 
 ### Why hyperfine and not a custom Rust harness
 
@@ -140,9 +201,9 @@ patterns). The synthetic tree:
 
 ### Why Docker for `--tools all` runs
 
-Comparing alint vs ls-lint vs grep vs Repolinter on a
+Comparing alint vs ls-lint vs shell pipelines vs Repolinter on a
 developer's laptop is dishonest: each laptop has a
-different `ls-lint` version, a different `grep` flavour, a
+different `ls-lint` version, different `find`, grep, and ripgrep versions, a
 different Node runtime under Repolinter. Numbers from such
 a run aren't comparable to any other machine's run.
 
@@ -156,6 +217,11 @@ re-publishing the image and re-running the competitive
 numbers. The full rationale + tool-version pin list lives
 in [`macro/README.md`](macro/README.md)'s "Reproducible
 competitive runs" section.
+
+The image also pins its benchmark-only Rust compiler independently of
+alint's user-facing MSRV. The mounted checkout's moving `stable` override
+cannot silently change that compiler, and the exact rustc remains in every
+result fingerprint.
 
 ## Reproducibility caveats (be honest)
 
@@ -185,10 +251,10 @@ competitive runs" section.
   and `MemAvailable` that spikes one cell's CV to 40-50 %. The flag drops
   the page cache once per size phase after tree-gen; warmup re-reads the
   tree so measured runs stay warm. A large-RAM host (e.g. the now-retired
-  62 GB 3900X reference desktop, whose series lives at
-  [`/benchmarks-1/`](https://alint.org/benchmarks-1/)) never reclaims and
-  must leave the flag OFF — it needs passwordless sudo for `drop_caches`
-  and would only add overhead.
+  62 GB 3900X reference desktop, whose retained series lives under
+  [`macro/results/linux-x86_64-ryzen-3900x/`](macro/results/linux-x86_64-ryzen-3900x/))
+  never reclaims and must leave the flag OFF — it needs passwordless sudo
+  for `drop_caches` and would only add overhead.
   Investigation: [`investigations/2026-07-1m-writeback-contention/`](investigations/2026-07-1m-writeback-contention/).
 
 ## Why not CodSpeed / iai-callgrind / Bencher
@@ -224,21 +290,108 @@ The CI bench jobs (per PR, `ci.yml`) are **not** the wall-clock
    not a correctness gate).
 2. **`perf-gate`** — the deterministic gungraun gate
    (`ci/scripts/det-perf-gate.sh`): instruction-count `Ir` (+2%) and
-   `EstimatedCycles` (+5%) vs the PR's merge-base, load-immune so it
-   runs on the self-hosted runner regardless of co-tenants. **Advisory
-   today** (`DET_PERF_ADVISORY=1` — it annotates, doesn't fail); see
+   `EstimatedCycles` (+5%) vs the base, load-immune so it runs on any
+   runner (GitHub-hosted for PRs today) and posts its per-bench table to
+   the job summary. It runs on pull requests (base = the PR's base) and
+   on pushes to `main` (base = the tip before the push), because most
+   engine changes land as direct pushes. **Advisory today**
+   (`DET_PERF_ADVISORY=1` — a regression annotates, doesn't fail; a
+   gate that couldn't run fails the job as a tooling failure); see
    [`../design/deterministic-perf-gating.md`](../design/deterministic-perf-gating.md).
+   `det_engine` runs with one rayon worker and collects that worker's
+   jobs: until 2026-10 it counted only the benchmark thread, about 0.06%
+   of the engine's work. The gate now fails as a tooling failure if
+   `engine_run n10k` counts fewer than 10M instructions.
+3. **Micro subset** (same job, `ci/scripts/micro-det-gate.sh`): the curated
+   low-noise criterion micro benchmarks counted by `xtask micro-det`
+   (below), head vs the same base. Advisory: a bench growing more than +3%
+   in instructions annotates the run.
+
+At release, `bench-record.yml` runs three more checks on the tagged commit:
+
+- **`bench-gate`, automated.** After the macro matrix it runs against the
+  previous release's committed `results.json` and the long-horizon anchor,
+  and records the verdict in the job summary and the results PR (it does
+  not abort the job, so the results are still published for review).
+- **`micro-det` job** (GitHub-hosted, in parallel): the full criterion suite
+  in instructions, vs the previous release (+3% per gated bench) and the
+  anchor (+10%). A regression fails the job; the results PR's checklist
+  requires it to be green.
+- **Same-session micro A/B** (report-only): the previous release's criterion
+  suite runs first on the bench host as baseline `prev`, then the new
+  ref's with `--baseline-lenient prev`, so the PR shows each benchmark's
+  wall-clock change measured minutes apart. This covers the I/O-heavy
+  benches (walker, file content rules, blame cache) whose cost instruction
+  counts cannot see.
+
+### Deterministic micro counts (`xtask micro-det`)
+
+Wall-clock micro results from one release to the next cannot tell a 10%
+step from run-to-run noise: v0.20.0's published `every_matching_has/1000`
+rose 14% with identical instructions and simulated cycles. `xtask
+micro-det` makes the micro suite deterministic:
+
+1. Each ref is checked out in a worktree and its own, unmodified criterion
+   benches are built against a counting stand-in for `criterion`
+   (`xtask/src/bench/micro_det_criterion_shim.rs`, patched over the crates.io
+   crate with `--config patch.crates-io.criterion.path=…`).
+2. Each benchmark runs under Callgrind at 1 and K iterations
+   (`RAYON_NUM_THREADS=1`), collecting only inside the stand-in's
+   per-iteration `__inv_measure` frame and the rayon jobs it dispatches.
+   `(Ir(K) - Ir(1)) / (K - 1)` is the exact steady-state instruction count
+   of one iteration on every thread, with setup and first-call warm-up
+   excluded.
+3. Head is compared with base (and the anchor). The gate covers every
+   benchmark whose count is stable: in calibration (two full runs of v0.19.0
+   and v0.20.0) 56+ benchmarks moved under 1% between identical runs. Two
+   kinds are reported only (`REPORT_ONLY` in `xtask/src/bench/micro_det.rs`):
+   the wall-clock-bound walker, blame-cache and dry-run fix benches, and the
+   benches that read real files (single-file content rules, most structured
+   queries), whose count moved 1-18% because glibc's allocator takes
+   history-dependent paths there. The same-session wall-clock A/B covers
+   those. The per-PR subset is a cheap gated selection covering each
+   regression-prone area.
+
+```sh
+cargo run -q -p xtask -- micro-det --base v0.20.0 --head HEAD            # curated subset
+cargo run -q -p xtask -- micro-det --base v0.20.0 --suite full --anchor auto
+```
+
+It needs `valgrind` and takes a few minutes for the subset. Instruction
+counts depend on the compiler, so both refs are always built in the same
+run with the same toolchain; never compare counts across runs.
+
+### Long-horizon anchor
+
+Every gate above compares a release with its predecessor, so creep can pass
+every step: config loading grew +41%, +16% and +13% over three releases. The
+anchor file [`ANCHOR`](ANCHOR) names a reference release. `bench-gate --anchor
+auto` (macro gating cells, `min_ms`) and `micro-det --anchor auto`
+(instructions) fail when a release exceeds it by more than 10% cumulative.
+Accepting a deliberate cost means bumping the anchor in a reviewed commit, with
+the reason in the file, so creep becomes a recorded decision.
+
+The relation layer has its own, stricter reference: v0.18.2 at +3% on the
+deterministic S1-S3 cells, run on relation-layer pull requests and every Rust push to
+main (ADR-0023, ADR-0024). It
+is described, with its recorded measurement, in
+[`REFERENCE-v0.18.2.md`](REFERENCE-v0.18.2.md). The separate relation scenario
+(`relation_coalescing.yml`: `key_parity` plus a per-file rule over the same files) runs in
+`det_check`'s `relation_grp`, outside the absolute S1-S3 filter, and its first measurement is
+recorded there as the basis for later budgets.
 
 `xtask bench-compare` (micro vs the v0.7.0 floor) is a **local** helper,
 not wired into any workflow. Wall-clock regression is gated
 **per-release** (manual, before tag) by `xtask bench-gate`
 (cross-version `min_ms`; the publish criterion in `RELEASING.md`),
 trustworthy only on a verified-quiet box — `bench-record.yml`'s
-`xtask bench-scale` matrix (S1-S14 × {1k,10k,100k,1m} × {full,changed})
-is otherwise characterization. A gate failure — or any > 20 % drift even
-when the gate passes — gets an investigation under
-[`investigations/`](investigations/) (v0.14.0's S2 read regression failed
-the gate at +15 % and got one, below).
+`xtask bench-scale` matrix (S1-S4 full/changed plus SFIX fix, each at
+1k/10k/100k/1m) is otherwise characterization. A gate failure — or any
+> 20 % drift in a non-advisory cell even when the gate passes — gets an
+investigation under [`investigations/`](investigations/) (v0.14.0's S2
+read regression failed the gate at +15 % and got one, below). Small
+`changed` cells follow the standing artifact investigation above unless
+a gated 100k/1m cell corroborates the drift.
 
 **The deterministic `perf-gate` is load-immune but I/O-blind — this is the concrete
 case for keeping BOTH layers.** It counts *guest instructions*, so a regression that

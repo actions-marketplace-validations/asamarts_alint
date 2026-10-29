@@ -21,7 +21,10 @@
 
 use std::path::Path;
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
+    unreadable_file_violation,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256, Sha512};
 
@@ -97,7 +100,7 @@ pub struct PairHashRule {
     target: String,
     algorithm: Algorithm,
     format: Format,
-    /// Permit reading a `target:` that escapes the repo root — set
+    /// Permit reading a `target:` that escapes the repo root - set
     /// post-build from the top-level `allow_out_of_root:` policy.
     allow_out_of_root: bool,
 }
@@ -148,25 +151,28 @@ impl Rule for PairHashRule {
         let b_bytes = match crate::io::read_capped(&ctx.root.join(&target_rel)) {
             Ok(b) => b,
             Err(crate::io::ReadCapError::TooLarge(n)) => {
-                violations.push(
-                    Violation::new(format!(
-                        "pair_hash target {:?} is too large to analyze ({})",
-                        self.target,
-                        crate::io::over_cap(n)
-                    ))
-                    .with_path(std::sync::Arc::<Path>::from(target_path)),
-                );
+                violations.push(alint_core::too_large_file_violation(target_path, n));
                 return Ok(violations);
             }
-            Err(crate::io::ReadCapError::Io(_)) => {
+            Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 let msg = self.message.clone().unwrap_or_else(|| {
-                    format!(
-                        "pair_hash target {:?} does not exist or is unreadable",
-                        self.target
-                    )
+                    format!("pair_hash target {:?} does not exist", self.target)
                 });
-                violations
-                    .push(Violation::new(msg).with_path(std::sync::Arc::<Path>::from(target_path)));
+                let finding = Violation::new(msg)
+                    .with_path(std::sync::Arc::<Path>::from(target_path))
+                    .with_related_locations(
+                        ctx.index
+                            .files()
+                            .filter(|entry| self.source_scope.matches(&entry.path, ctx.index))
+                            .map(|entry| {
+                                RelatedLocation::new(entry.path.as_ref(), "digest source")
+                            }),
+                    );
+                violations.push(finding);
+                return Ok(violations);
+            }
+            Err(crate::io::ReadCapError::Io(e)) => {
+                violations.push(unreadable_file_violation(target_path, &e));
                 return Ok(violations);
             }
         };
@@ -180,23 +186,22 @@ impl Rule for PairHashRule {
             let a_bytes = match crate::io::read_capped(&ctx.root.join(&entry.path)) {
                 Ok(b) => b,
                 Err(crate::io::ReadCapError::TooLarge(n)) => {
-                    violations.push(
-                        Violation::new(format!(
-                            "{} is too large to hash ({})",
-                            entry.path.display(),
-                            crate::io::over_cap(n)
-                        ))
-                        .with_path(entry.path.clone()),
-                    );
+                    violations.push(alint_core::too_large_file_violation(&entry.path, n));
                     continue;
                 }
-                // permission / race — silent skip, like content rules
-                Err(crate::io::ReadCapError::Io(_)) => continue,
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    violations.push(crate::io::io_error_violation(&entry.path, &e));
+                    continue;
+                }
             };
             let digest = self.algorithm.hex(&a_bytes);
             if let Some(desc) = self.check(&entry.path, &digest, &b_text, &b_lower) {
                 let msg = self.message.clone().unwrap_or(desc);
-                violations.push(Violation::new(msg).with_path(entry.path.clone()));
+                violations.push(
+                    Violation::new(msg)
+                        .with_path(entry.path.clone())
+                        .with_related_location(RelatedLocation::new(&target_rel, "digest target")),
+                );
             }
         }
         Ok(violations)
@@ -294,6 +299,43 @@ fn is_hex_digest(tok: &str, expected_len: usize) -> bool {
     tok.len() == expected_len && tok.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("source"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("target"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::OutOfRootRead,
+        condition: alint_core::CapabilityCondition::CommonFieldSet {
+            field: std::borrow::Cow::Borrowed("allow_out_of_root"),
+        },
+    }]),
+    content: alint_core::ContentAccess::OtherFiles,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "pair_hash")?;
     let opts: Options = spec
@@ -314,8 +356,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "pair_hash has no fix op — regenerating a checksum manifest is the \
-             manifest generator's job, not alint's",
+            "pair_hash has no fix op - regenerating a checksum manifest is the \
+         manifest generator's job, not alint's",
         ));
     }
     let source_scope = Scope::from_patterns(std::slice::from_ref(&opts.source))?;
@@ -377,6 +419,9 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].path.as_deref(), Some(Path::new("a.txt")));
         assert!(v[0].message.contains("not found in"));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("pin.txt"));
+        assert_eq!(v[0].related_locations[0].label, "digest target");
     }
 
     #[test]
@@ -417,7 +462,7 @@ mod tests {
         r.set_allow_out_of_root(true);
         let v = r.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert!(
-            v.iter().all(|x| x.is_note),
+            v.iter().all(|x| x.note_kind().is_some()),
             "only an out-of-root note: {v:?}"
         );
         assert!(
@@ -537,6 +582,9 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].path.as_deref(), Some(Path::new("nope.sum")));
         assert!(v[0].message.contains("does not exist"));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("a.txt"));
+        assert_eq!(v[0].related_locations[0].label, "digest source");
     }
 
     #[test]
@@ -570,7 +618,7 @@ mod tests {
     /// `pair_hash` (and the other v0.10 cross-file / structured
     /// rules) consume. We can't materialise a >256 MiB fixture
     /// at test time, so we go in via `read_capped_with` directly
-    /// — proves the cap helper preserves the file's real size
+    /// to prove the cap helper preserves the file's real size
     /// (so the rule's `{n} bytes` interpolation reports honestly)
     /// and that the canonical "too large to analyze" wording
     /// constructed from that `n` matches what the rule's evaluate

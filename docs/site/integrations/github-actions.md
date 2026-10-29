@@ -7,14 +7,14 @@ sidebar:
 
 The official Action wraps the `install.sh` flow plus alint invocation into one step.
 
-**Runs on Linux and macOS runners only.** The Action wraps `install.sh` (shell-based), so on `windows-latest` it fails with `unsupported platform`. For Windows CI, install alint in a prior `run:` step (`npm install -g @asamarts/alint` or `cargo install alint`) and invoke `alint` directly.
+**Runs on Linux and macOS runners only.** The Action wraps `install.sh` (shell-based), so on `windows-latest` it fails with `unsupported platform`. For Windows CI, install alint in a prior `run:` step (`pip install alint`, `npm install -g @asamarts/alint`, or `cargo install alint`) and invoke `alint` directly.
 
 <likec4-view view-id="ciActionFlow"></likec4-view>
 
 ## Inline PR annotations (default)
 
 ```yaml
-- uses: asamarts/alint@v0.15.2
+- uses: asamarts/alint@265d9fdc720bb8f59d00b87e33e4149869f77327 # v0.20.1
 ```
 
 This runs `alint check --format github` against `.` and emits findings as `::error::` / `::warning::` workflow commands, which GitHub renders inline on the PR.
@@ -22,14 +22,13 @@ This runs `alint check --format github` against `.` and emits findings as `::err
 ## Inputs (all optional)
 
 ```yaml
-- uses: asamarts/alint@v0.15.2
+- uses: asamarts/alint@265d9fdc720bb8f59d00b87e33e4149869f77327 # v0.20.1
   with:
-    version: v0.15.2        # release tag; omit to follow the pinned action ref
+    version: ""            # binary release to install (default: the one this Action release carries)
     path: .                # directory to lint (default: .)
     working-directory: .   # dir the action runs in (default: the runner workspace)
-    format: github         # human | json | sarif | github (default)
-    config: |              # extra config path(s), one per line
-      .alint.yml
+    format: github         # human | json | sarif | github | markdown | junit | gitlab | agent
+    config: .alint.yml     # one extra config; compose more with extends:
     fail-on-warning: false
     args: ""               # extra CLI args appended verbatim
 ```
@@ -39,12 +38,12 @@ This runs `alint check --format github` against `.` and emits findings as `::err
 Use `format: sarif` and pipe to the standard upload action:
 
 ```yaml
-- uses: asamarts/alint@v0.15.2
+- uses: asamarts/alint@265d9fdc720bb8f59d00b87e33e4149869f77327 # v0.20.1
   id: alint
   with:
     format: sarif
   continue-on-error: true
-- uses: github/codeql-action/upload-sarif@v3
+- uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
   if: always()
   with:
     sarif_file: ${{ steps.alint.outputs.sarif-file }}
@@ -59,10 +58,14 @@ alint's SARIF carries a stable [`partialFingerprints`](/docs/reference/output-fo
 For supply-chain hygiene (and to satisfy alint's own [`ci/github-actions@v1`](/docs/bundled-rulesets/) bundled ruleset), pin the action to a commit SHA:
 
 ```yaml
-- uses: asamarts/alint@<40-char-sha>  # v0.15.2
+- uses: asamarts/alint@265d9fdc720bb8f59d00b87e33e4149869f77327 # v0.20.1
 ```
 
-Look up the SHA on the [tag page](https://github.com/asamarts/alint/tags).
+Look up the SHA on the [tag page](https://github.com/asamarts/alint/tags). From
+v0.18.0 the Action carries its matching binary version in `action.yml`, so the
+SHA alone pins both the Action code and the alint binary it installs. Set
+`version:` only to choose a different binary release intentionally. (A v0.17.0
+or older SHA predates this and needs an explicit `version:` to pin the binary.)
 
 ## Validate PR commits with `git_commit_message`
 
@@ -78,7 +81,7 @@ jobs:
   alint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # `since:` walks <base>..HEAD. fetch-depth: 0 makes the
           # base ref reachable; the default depth of 1 leaves it
@@ -88,7 +91,7 @@ jobs:
       - name: alint check
         env:
           ALINT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        uses: asamarts/alint@v0.15.2
+        uses: asamarts/alint@265d9fdc720bb8f59d00b87e33e4149869f77327 # v0.20.1
 ```
 
 The rule in `.alint.yml`:
@@ -102,4 +105,4 @@ The rule in `.alint.yml`:
   level: error
 ```
 
-The `{{env.ALINT_BASE_SHA | default('origin/main')}}` default makes the same config work locally too: when you run `alint check` on your feature branch without setting the env var, the rule falls back to `origin/main` and validates everything since you branched. See the [`git_commit_message` reference](/docs/rules/git-hygiene/git_commit_message/) and [variable interpolation](/docs/concepts/variable-interpolation/) for the full surface. (The older POSIX `since: ${ALINT_BASE_SHA:-origin/main}` form still works but is deprecated — alint prints a one-line migration hint at load.)
+The `{{env.ALINT_BASE_SHA | default('origin/main')}}` default makes the same config work locally too: when you run `alint check` on your feature branch without setting the env var, the rule falls back to `origin/main` and validates everything since you branched. See the [`git_commit_message` reference](/docs/rules/git-hygiene/git_commit_message/) and [variable interpolation](/docs/configuration/variable-interpolation/) for the full surface. (The older POSIX `since: ${ALINT_BASE_SHA:-origin/main}` form still works but is deprecated — alint prints a one-line migration hint at load.)

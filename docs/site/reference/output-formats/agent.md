@@ -1,6 +1,6 @@
 ---
 title: The agent output format
-description: "The alint check --format agent report: a flat violations array, a templated agent_instruction per finding, lowercase severities, stable behind schema_version 1."
+description: "Use the agent report's flat violation list, per-finding instructions, lowercase severities, and versioned schema."
 sidebar:
   label: agent
   order: 2
@@ -19,15 +19,17 @@ alint check --format agent
 - **Flat list of violations.** `json` groups violations under each rule result; `agent` flattens them into a single `violations` array, so an agent loops once.
 - **A templated `agent_instruction` per violation.** A ready-to-act sentence composed from the severity, message, location, fix availability, and policy URL. `json` leaves that synthesis to the consumer.
 - **`severity` is a lowercase string** (`"error"` / `"warning"` / `"info"`), not the SARIF level mapping, so it drops straight into a prompt.
+- **A separate `analysis_failures` list.** Incomplete analysis is error-bearing but not a policy
+  violation, so these records have no remediation instruction, fix command, or proposed edit.
 - **Check-side only.** There is no agent-format fix report. An agent confirming a fix landed re-runs `alint check --format agent` against the modified tree.
 
 ## The self-correction loop
 
-The format exists to make an agent's lint loop deterministic: the agent makes a change, runs `alint check --format agent` (locally or in CI), reads its own violations, acts on each `agent_instruction`, and re-runs until the report is empty.
+The format exists to make an agent's lint loop deterministic: the agent makes a change, runs `alint check --format agent` (locally or in CI), reads its violations and analysis failures, acts on each `agent_instruction`, restores any input alint could not analyze, and re-runs until both arrays are empty.
 
 ## Report shape
 
-A report is a single JSON object. This example has three violations: one path-bound and fixable, one path-bound and not, and one tree-wide.
+A report is a single JSON object. This example has three violations, one analysis failure, and two non-violation notes.
 
 ```json
 {
@@ -38,7 +40,8 @@ A report is a single JSON object. This example has three violations: one path-bo
     "by_severity": { "error": 1, "warning": 2, "info": 0 },
     "fixable_violations": 1,
     "passing_rules": 18,
-    "failing_rules": 3
+    "failing_rules": 4,
+    "total_analysis_failures": 1
   },
   "violations": [
     {
@@ -67,7 +70,20 @@ A report is a single JSON object. This example has three violations: one path-bo
       "agent_instruction": "error: Multiple lockfiles found. To resolve: this is a repository-level rule with no specific file location; resolve the underlying invariant the rule enforces.",
       "fix_available": false
     }
-  ]
+  ],
+  "analysis_failures": [
+    {
+      "rule_id": "dependency-schema",
+      "kind": "resource_parse",
+      "file": "config/dependencies.json",
+      "line": 1,
+      "human_message": "config/dependencies.json is not valid JSON"
+    }
+  ],
+  "notes": {
+    "count": 2,
+    "details_format": "json"
+  }
 }
 ```
 
@@ -79,6 +95,33 @@ A report is a single JSON object. This example has three violations: one path-bo
 | `format` | string | Always `"agent"`. Lets a multi-format consumer route on one field. |
 | `summary` | object | Aggregate counts (below). |
 | `violations` | array | One entry per violation, flattened across all rules. |
+| `analysis_failures` | array | Incomplete-analysis records flattened across all rules. |
+| `notes` | object | Optional non-violation note count and full-detail format. Absent when the count is zero. |
+
+### `notes`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `count` | integer | Total notes in the report; always at least `1` when `notes` is present. |
+| `details_format` | string | Always `"json"`. Rerun the same check with `--format json` for the full per-rule note list. |
+
+Notes are informational, never enter `violations`, never receive an `agent_instruction`, and do not
+change summary counts or the exit code.
+
+### `analysis_failures[]`
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `rule_id` | string | yes | Owning configured rule id. |
+| `kind` | string | yes | `evaluation`, `condition`, `resource_read`, `resource_parse`, or `nested_rule_build`. |
+| `human_message` | string | yes | Stable failure reason. |
+| `file` | string | no | Repo-relative resource path, when known. |
+| `line` | integer | no | 1-based line, when known. |
+| `column` | integer | no | 1-based column, when known. |
+
+Analysis failures always force a failing run, regardless of the owning rule's configured severity.
+They never enter `violations`, never receive an `agent_instruction`, and cannot be baselined or
+fixed automatically.
 
 ### `summary`
 
@@ -87,8 +130,9 @@ A report is a single JSON object. This example has three violations: one path-bo
 | `total_violations` | integer | Length of `violations`. |
 | `by_severity` | object | `error`, `warning`, `info`, each an integer count. |
 | `fixable_violations` | integer | How many violations come from a rule that declares an autofix. Use it to decide whether to suggest `alint fix`. |
-| `passing_rules` | integer | Rules that produced no violation. |
-| `failing_rules` | integer | Rules that produced at least one violation. |
+| `passing_rules` | integer | Rules that produced neither a violation nor an analysis failure. |
+| `failing_rules` | integer | Rules that produced at least one violation or analysis failure. |
+| `total_analysis_failures` | integer | Length of `analysis_failures`; counted separately from policy violations and severities. |
 
 ### `violations[]`
 
@@ -100,6 +144,7 @@ A report is a single JSON object. This example has three violations: one path-bo
 | `agent_instruction` | string | yes | Templated remediation phrasing (see below). |
 | `fix_available` | boolean | yes | `true` when the source rule declares an autofix. |
 | `fix_command` | array of strings | no | Present iff `fix_available`. Exact argv (after `alint`) to auto-fix this one violation — e.g. `["fix", "--only", "final-newline"]`. Run it programmatically instead of parsing the command out of `agent_instruction`. |
+| `proposed_edit` | array | no | Exact Safe edit payload (`path`, `region`, `inserted`). Omitted when no concrete edit exists or any target path cannot be represented as an exact JSON string; use `fix_command` in that case. |
 | `file` | string | no | Repo-relative path. Absent for tree-wide (cross-file) violations. |
 | `line` | integer | no | 1-based line, when the rule reports one. |
 | `column` | integer | no | 1-based column, when the rule reports one. |
@@ -149,4 +194,4 @@ https://raw.githubusercontent.com/asamarts/alint/main/schemas/v1/agent-report.js
 
 - [Output formats overview](/docs/reference/output-formats/) — every format `alint check` can emit.
 - [Guard an agent-heavy repo](/docs/cookbook/) — wiring the loop end to end with the `agent-hygiene` and `agent-context` rulesets.
-- [`alint check`](/docs/cli/check/) — the command and all its flags.
+- [`alint check`](/docs/cli/check/) — the command and its flags.

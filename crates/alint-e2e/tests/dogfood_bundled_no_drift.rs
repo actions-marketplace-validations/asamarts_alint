@@ -7,14 +7,15 @@
 //! differ. When they drift, external users who `extends:` the bundled ruleset get
 //! behavior the maintainers never see on their own dogfooded repo.
 //!
-//! This is the gate issue #208 lacked: the bundled `gha-pin-actions-to-sha` regex
-//! had drifted from the already-fixed dogfood copy, shipping a false positive on
-//! local `./` action references. This test fails on exactly that kind of drift.
+//! This is the gate issue #208 lacked: the bundled `gha-pin-actions-to-sha`
+//! implementation had drifted from the already-fixed dogfood copy, shipping a
+//! false positive on local `./` action references. This test catches that class
+//! of semantic drift regardless of the backing rule kind.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde_yaml_ng::Value;
+use yaml_serde::Value;
 
 /// Fields that may legitimately differ between a dogfood copy and its bundled
 /// twin: they change how a violation is *presented* or *fixed*, not *whether* it
@@ -65,7 +66,7 @@ fn without_presentation(rule: &Value) -> Value {
     let Some(m) = rule.as_mapping() else {
         return rule.clone();
     };
-    let mut out = serde_yaml_ng::Mapping::new();
+    let mut out = yaml_serde::Mapping::new();
     for (k, v) in m {
         if k.as_str().is_some_and(|key| PRESENTATION.contains(&key)) {
             continue;
@@ -83,7 +84,7 @@ fn canon(v: &Value) -> Value {
             let mut entries: Vec<(Value, Value)> =
                 m.iter().map(|(k, val)| (k.clone(), canon(val))).collect();
             entries.sort_by_key(|(k, _)| k.as_str().unwrap_or_default().to_string());
-            let mut out = serde_yaml_ng::Mapping::new();
+            let mut out = yaml_serde::Mapping::new();
             for (k, val) in entries {
                 out.insert(k, val);
             }
@@ -101,7 +102,7 @@ fn rules_by_id(path: &Path) -> BTreeMap<String, Value> {
     let Ok(text) = std::fs::read_to_string(path) else {
         return out;
     };
-    let Ok(doc) = serde_yaml_ng::from_str::<Value>(&text) else {
+    let Ok(doc) = yaml_serde::from_str::<Value>(&text) else {
         return out;
     };
     let Some(rules) = doc.get("rules").and_then(Value::as_sequence) else {
@@ -152,8 +153,8 @@ fn dogfood_rules_match_their_bundled_twins() {
             continue;
         };
         if drule != brule {
-            let d = serde_yaml_ng::to_string(drule).unwrap_or_default();
-            let b = serde_yaml_ng::to_string(brule).unwrap_or_default();
+            let d = yaml_serde::to_string(drule).unwrap_or_default();
+            let b = yaml_serde::to_string(brule).unwrap_or_default();
             drifts.push(format!(
                 "  rule `{id}`:\n    .alint.yml (dogfood) matching fields:\n{}\n    bundled ruleset matching fields:\n{}",
                 indent(&d),

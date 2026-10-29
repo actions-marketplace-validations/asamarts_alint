@@ -11,7 +11,8 @@ struct Options {
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to directories that contain at least one git-tracked
-    /// file. No effect outside a git repo. Default `false`.
+    /// file. Repository unavailability is an analysis failure when enabled.
+    /// Default `false`.
     #[serde(default)]
     git_tracked_only: bool,
 }
@@ -29,7 +30,7 @@ pub struct DirAbsentRule {
     root_only: bool,
     /// When `true`, only fire on directories that contain at
     /// least one git-tracked file. The canonical use case is
-    /// "don't let `target/` be committed" — with this flag set,
+    /// "don't let `target/` be committed" - with this flag set,
     /// a developer's locally-built `target/` (gitignored, no
     /// tracked content) doesn't trigger; a `target/` whose
     /// contents made it into git's index does.
@@ -94,6 +95,32 @@ impl Rule for DirAbsentRule {
         Ok(violations)
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::AncestorOnly,
+    git_tracked_only: alint_core::GitTrackedSupport::DirAware,
+    respect_gitignore: false,
+    root_only: true,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::Git {
+            operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::TrackedSet]),
+        },
+        condition: alint_core::CapabilityCondition::OptionSet {
+            option: std::borrow::Cow::Borrowed("git_tracked_only"),
+        },
+    }]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(paths) = &spec.paths else {
@@ -191,17 +218,12 @@ mod tests {
 
     #[test]
     fn git_tracked_only_advertises_dir_aware_mode() {
-        // v0.9.11: the silent-no-op-outside-git-repo guarantee
-        // moved from a per-rule runtime check to an engine-side
-        // pre-filtered FileIndex. Calling `evaluate` directly
-        // bypasses the engine's filtering, so this unit test
-        // can no longer assert the no-op behaviour at the rule
-        // level — instead it asserts the rule advertises the
-        // correct `GitTrackedMode`, which is what tells the
-        // engine to substitute an empty index when the
-        // tracked-set is `None`. The end-to-end no-op behaviour
-        // is asserted by
-        // `crates/alint-e2e/scenarios/check/git/git_tracked_only_outside_git_silently_passes_absent.yml`.
+        // The rule advertises `DirAware` so the engine can build the
+        // tracked-directory index once. Repository unavailability is gated from
+        // capability metadata before this rule dispatches; direct evaluation
+        // tests only assert the runtime index mode here. End-to-end routing is
+        // covered by
+        // `git_tracked_only_outside_git_fails_closed.yml`.
         let spec = spec_yaml(
             "id: t\n\
              kind: dir_absent\n\

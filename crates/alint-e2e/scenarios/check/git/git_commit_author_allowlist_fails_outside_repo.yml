@@ -1,0 +1,24 @@
+test_version: 1
+name: git_commit_author_allowlist fails closed outside a Git repository
+tags: [check, git_commit_author_allowlist, git]
+
+# The unconditional commit-history capability must be available before dispatch.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: org-authors
+        kind: git_commit_author_allowlist
+        email_pattern: '^.+@example\.com$'
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: org-authors, kind: resource_read}

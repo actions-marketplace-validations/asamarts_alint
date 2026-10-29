@@ -1,3 +1,4 @@
+test_version: 1
 name: file_prepend injects a license header
 tags: [fix, file_header, file_prepend]
 
@@ -22,10 +23,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: header-required, level: error, path: src/a.rs}
-  - applied: [header-required]
-  - violations: []
+  - exit: success
+    applied: [header-required]
+  - exit: success
+    violations: []
 
 expect_tree:
   src:

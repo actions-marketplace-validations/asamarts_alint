@@ -14,17 +14,18 @@
 //! ancestor-walk semantics.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
 
 /// Build a single-rule engine from a YAML spec snippet. The spec
-/// is parsed via `serde_yaml_ng` exactly as the loader would.
+/// is parsed via `yaml_serde` exactly as the loader would.
 fn engine_from_yaml(yaml: &str) -> Engine {
-    let spec: alint_core::RuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
+    let spec: Arc<alint_core::RuleSpec> = Arc::new(yaml_serde::from_str(yaml).unwrap());
     let registry = builtin_registry();
     let rule = registry.build(&spec).unwrap();
-    Engine::from_entries(vec![RuleEntry::new(rule)], registry)
+    Engine::from_entries(vec![RuleEntry::new(rule).with_spec(spec)], registry)
 }
 
 /// Run the engine over `root` and return the set of relative
@@ -106,12 +107,9 @@ fn baseline_without_scope_filter_fires_on_every_match() {
 /// actual Rust package. `services/web/scripts/migrate.rs` has
 /// no `Cargo.toml` ancestor and must be silently skipped.
 ///
-/// Today (v0.9.6) this fails — per-file rule builders parse
-/// `spec.scope_filter` into the spec but never thread it into
-/// the built rule, so `Rule::scope_filter()` returns the trait
-/// default `None` and the engine's gate is a no-op. The fix is
-/// to have each per-file rule build/store/expose the filter so
-/// `engine.rs:417` actually filters dispatch.
+/// This regression gate proves per-file rule builders thread
+/// `spec.scope_filter` into the built rule, so `Rule::scope_filter()` exposes
+/// it and `engine/gates.rs` filters dispatch.
 #[test]
 fn scope_filter_skips_files_without_ancestor_manifest() {
     let tmp = polyglot_tree();

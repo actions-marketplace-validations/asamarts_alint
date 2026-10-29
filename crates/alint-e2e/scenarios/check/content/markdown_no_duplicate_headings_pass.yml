@@ -1,0 +1,31 @@
+test_version: 1
+name: markdown_no_duplicate_headings honors explicit ids
+
+tags: [check, markdown_no_duplicate_headings, content, passing]
+
+docs:
+  title: Repeated labels with distinct explicit anchors remain valid
+  case: pass
+  kind: markdown_no_duplicate_headings
+
+given:
+  tree:
+    README.md: |
+      # Project
+
+      ## Examples {#basic-examples}
+
+      ## Examples {#advanced-examples}
+  config: |
+    version: 1
+    rules:
+      - id: unique-headings
+        kind: markdown_no_duplicate_headings
+        paths: "**/*.md"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

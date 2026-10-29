@@ -20,10 +20,8 @@
 //! require commits that fix issues to include a body linking the
 //! issue.
 //!
-//! Outside a git repo, with no commits yet, or when `git` isn't on
-//! PATH, the rule silently no-ops. Same advisory posture as
-//! `git_tracked_only` and `git_no_denied_paths`: a rule about git
-//! only fires when there's git to inspect.
+//! Git or repository unavailability is an analysis failure. An initialized
+//! repository with no commits has no policy input and passes.
 //!
 //! Bad `since:` refs (typo, or a shallow-clone gotcha that left
 //! the ref out of local objects) hard-fail with a hint to widen
@@ -59,12 +57,11 @@ struct Options {
     /// Git ref to use as the base of the commit range. When set, validates
     /// every commit in `<since>..HEAD` instead of just HEAD. Accepts anything
     /// `git rev-parse` does: SHA (full or abbreviated), branch (`origin/main`),
-    /// tag (`v1.2.3`), or relative ref (`HEAD~5`). Supports POSIX `${VAR}` and
-    /// `${VAR:-default}` env-var interpolation so CI can pass a SHA via an env
-    /// var (e.g. `since: ${ALINT_BASE_SHA:-origin/main}` with `ALINT_BASE_SHA`
-    /// exported in a workflow step from `github.event.pull_request.base.sha`).
-    /// The GitHub Actions double-brace template syntax `${{ ... }}` is NOT
-    /// interpolated by alint.
+    /// tag (`v1.2.3`), or relative ref (`HEAD~5`). Supports alint's template
+    /// syntax, so CI can pass a SHA through an environment variable (for
+    /// example, `since: "{{env.ALINT_BASE_SHA | default('origin/main')}}"`).
+    /// The older POSIX `${VAR}` / `${VAR:-default}` form is deprecated and will
+    /// be removed in v1.0.
     #[serde(default)]
     since: Option<String>,
     /// When validating a range (`since:` set), include merge commits. Defaults
@@ -132,11 +129,15 @@ impl Rule for GitCommitMessageRule {
                     author_name: String::new(),
                     author_email: String::new(),
                 }],
-                None => return Ok(violations), // silent no-op
+                // Unborn HEAD is a valid empty policy input. Repository
+                // unavailability is gated by Engine before dispatch.
+                None => return Ok(violations),
             },
             Some(since) => {
                 match commit_messages_in_range(ctx.root, since, self.include_merges) {
-                    Ok(None) => return Ok(violations), // not a git repo: silent
+                    // Defensive direct-evaluation fallback; Engine capability
+                    // routing reports repository unavailability before dispatch.
+                    Ok(None) => return Ok(violations),
                     Ok(Some(records)) => records,
                     Err(CommitRangeError::BadRange { stderr }) => {
                         return Err(Error::rule_config(
@@ -237,7 +238,7 @@ fn format_msg(commit: &CommitRecord, subject: &str, what: &str) -> String {
 /// first line; the body is everything after the first blank line
 /// that follows it. Messages with no blank-line separator have an
 /// empty body. Trailing whitespace on the subject is preserved
-/// as-is — the length check counts it.
+/// as-is - the length check counts it.
 fn split_subject_body(message: &str) -> (&str, &str) {
     let (subject, rest) = message.split_once('\n').unwrap_or((message, ""));
     // Skip exactly one trailing blank-line separator if present
@@ -251,13 +252,13 @@ fn split_subject_body(message: &str) -> (&str, &str) {
 /// Expand POSIX-style env-var references in a `since:` value. The
 /// syntax is intentionally narrow:
 ///
-/// - `${VAR}` — substitute the value of `VAR`. If unset, returns
+/// - `${VAR}` - substitute the value of `VAR`. If unset, returns
 ///   `Err(missing-var-name)` so the rule can hard-fail with a
 ///   CI-friendly hint.
-/// - `${VAR:-default}` — substitute `VAR`, or `default` when
+/// - `${VAR:-default}` - substitute `VAR`, or `default` when
 ///   `VAR` is unset or empty. `default` may not itself contain
-///   `${`, `}` or `:-` — keep the surface small.
-/// - Bare text — left as-is. So `since: origin/main` works
+///   `${`, `}` or `:-` - keep the surface small.
+/// - Bare text - left as-is. So `since: origin/main` works
 ///   unchanged.
 ///
 /// Multiple `${...}` references in one value are supported. The
@@ -342,6 +343,41 @@ fn posix_to_env_template(input: &str) -> String {
     out
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::SingleShot,
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::Optional,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::Log]),
+            },
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::EnvRead,
+            condition: alint_core::CapabilityCondition::OptionMatches {
+                option: std::borrow::Cow::Borrowed("since"),
+                predicate: alint_core::OptionPredicate::ContainsLegacyEnvReference,
+            },
+        },
+    ]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::ASSERTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -351,7 +387,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "git_commit_message needs at least one of `pattern:`, `subject_max_length:`, \
-             or `requires_body: true`",
+         or `requires_body: true`",
         ));
     }
     // `subject_max_length: 0` would fail every commit (a 0-char subject is
@@ -372,7 +408,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "`include_merges: true` has no effect without `since:`. Either remove it \
-             or set `since:` to enable range mode.",
+         or set `since:` to enable range mode.",
         ));
     }
 
@@ -384,17 +420,17 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     // at evaluate time by `expand_env`) but warns; v1.0 removes it.
     // Scoped to `since:` because `${VAR}` was never interpolated in
     // any other field — a literal `${` elsewhere is just a literal.
-    if let Some(raw) = &opts.since {
-        if raw.contains("${") {
-            eprintln!(
-                "alint: warning: rule {:?}: `since: {raw}` uses the deprecated v0.9.21 \
-                 `${{VAR}}` interpolation syntax. The canonical v0.11+ form is `{}`; \
-                 the `${{VAR}}` form will be removed in v1.0. \
-                 See https://alint.org/docs/configuration/#variable-interpolation.",
-                spec.id,
-                posix_to_env_template(raw),
-            );
-        }
+    if let Some(raw) = &opts.since
+        && raw.contains("${")
+    {
+        eprintln!(
+            "alint: warning: rule {:?}: `since: {raw}` uses the deprecated v0.9.21 \
+             `${{VAR}}` interpolation syntax. The canonical v0.11+ form is `{}`; \
+             the `${{VAR}}` form will be removed in v1.0. \
+             See https://alint.org/docs/configuration/variable-interpolation/.",
+            spec.id,
+            posix_to_env_template(raw),
+        );
     }
 
     let pattern = opts
@@ -469,13 +505,13 @@ mod tests {
     #[test]
     fn requires_body_detects_subject_only() {
         let (_, body) = split_subject_body("just a subject");
-        assert!(body.trim().is_empty());
+        assert_eq!(body.trim(), "");
     }
 
     #[test]
     fn requires_body_accepts_canonical_form() {
         let (_, body) = split_subject_body("subject\n\nbody content");
-        assert!(!body.trim().is_empty());
+        assert_ne!(body.trim(), "");
     }
 
     // ----- format_msg formatting --------------------------------

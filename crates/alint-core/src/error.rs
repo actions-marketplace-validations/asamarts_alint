@@ -4,6 +4,18 @@ use thiserror::Error;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+impl From<ignore::Error> for Error {
+    fn from(e: ignore::Error) -> Self {
+        Self::Walk(e)
+    }
+}
+
+impl From<yaml_serde::Error> for Error {
+    fn from(e: yaml_serde::Error) -> Self {
+        Self::Yaml(e)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("I/O error at {path}: {source}")]
@@ -13,8 +25,12 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    // `Walk` and `Yaml` render their inner error in their own message, so it is
+    // deliberately NOT also exposed as `source()` (no `#[from]`): an
+    // `anyhow` `{:#}` chain would otherwise print it twice. The `From` impls
+    // below keep `?` working.
     #[error("walk error: {0}")]
-    Walk(#[from] ignore::Error),
+    Walk(ignore::Error),
 
     #[error("invalid glob {pattern:?}: {source}")]
     Glob {
@@ -24,7 +40,7 @@ pub enum Error {
     },
 
     #[error("YAML parse error: {0}")]
-    Yaml(#[from] serde_yaml_ng::Error),
+    Yaml(yaml_serde::Error),
 
     #[error("unknown rule kind {0:?}")]
     UnknownRuleKind(String),
@@ -133,10 +149,10 @@ mod tests {
 
     #[test]
     fn yaml_error_propagates_via_from_impl() {
-        // The `#[from] serde_yaml_ng::Error` derive lets `?` lift
+        // The `#[from] yaml_serde::Error` derive lets `?` lift
         // a YAML parse failure into our Error type without
         // boilerplate. Sanity-check the impl is wired.
-        let parse: std::result::Result<i32, _> = serde_yaml_ng::from_str("not: yaml: [");
+        let parse: std::result::Result<i32, _> = yaml_serde::from_str("not: yaml: [");
         let yaml_err = parse.unwrap_err();
         let our_err: Error = yaml_err.into();
         assert!(matches!(our_err, Error::Yaml(_)));

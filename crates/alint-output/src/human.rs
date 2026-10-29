@@ -16,11 +16,10 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
 
-use alint_core::{FixReport, FixStatus, Level, Report, RuleResult, Violation};
+use alint_core::{AnalysisFailure, FixReport, FixStatus, Level, Report, RuleResult, Violation};
 
-use crate::sanitize::sanitize_terminal;
+use crate::sanitize::{sanitize_terminal, sanitize_terminal_multiline};
 use crate::style::{self, GlyphSet, HumanOptions, write_hyperlink};
 
 // ---------------------------------------------------------------
@@ -48,21 +47,22 @@ pub fn write_human(report: &Report, w: &mut dyn Write, opts: HumanOptions) -> st
         return Ok(());
     }
 
-    // Bucket violations by path. `Option<Arc<Path>>` sorts `None`
-    // before `Some`, which we want — repository-level gaps lead.
-    // Cloning the Arc is an atomic refcount bump, not a path-byte
-    // copy.
-    let mut by_bucket: BTreeMap<Option<Arc<Path>>, Vec<(&RuleResult, &Violation)>> =
-        BTreeMap::new();
+    // Bucket violations by public path. `Option<&Path>` sorts `None` before
+    // `Some`, which we want — repository-level gaps lead. Borrowing avoids a
+    // path copy or refcount operation.
+    let mut by_bucket: BTreeMap<Option<&Path>, Vec<HumanFinding<'_>>> = BTreeMap::new();
     for result in &report.results {
-        if result.passed() {
-            continue;
-        }
         for violation in &result.violations {
             by_bucket
-                .entry(violation.path.clone())
+                .entry(violation.report_path())
                 .or_default()
-                .push((result, violation));
+                .push(HumanFinding::Violation(result, violation));
+        }
+        for failure in &result.analysis_failures {
+            by_bucket
+                .entry(failure.report_path())
+                .or_default()
+                .push(HumanFinding::AnalysisFailure(result, failure));
         }
     }
 
@@ -89,8 +89,15 @@ pub fn write_human(report: &Report, w: &mut dyn Write, opts: HumanOptions) -> st
         );
         write_section_header(w, &label, width, &opts.glyphs)?;
 
-        for (result, violation) in items {
-            write_violation(w, result, violation, &opts)?;
+        for item in items {
+            match item {
+                HumanFinding::Violation(result, violation) => {
+                    write_violation(w, result, violation, &opts)?;
+                }
+                HumanFinding::AnalysisFailure(result, failure) => {
+                    write_analysis_failure(w, result, failure, &opts)?;
+                }
+            }
         }
     }
 
@@ -102,6 +109,11 @@ pub fn write_human(report: &Report, w: &mut dyn Write, opts: HumanOptions) -> st
 /// Emit a `─── <label> ─────…` section header stretched to
 /// `width` columns. Falls back gracefully when the label alone
 /// exceeds the width (just emits `─── label`, no trailing fill).
+enum HumanFinding<'a> {
+    Violation(&'a RuleResult, &'a Violation),
+    AnalysisFailure(&'a RuleResult, &'a AnalysisFailure),
+}
+
 fn write_section_header(
     w: &mut dyn Write,
     label: &str,
@@ -143,7 +155,10 @@ fn write_violation(
     // byte past the parser's raw-control-char check) — sanitize it like the
     // message + path (M8).
     let safe_rule_id = sanitize_terminal(&result.rule_id);
-    if result.is_fixable {
+    // Per-VIOLATION fixability (not `result.is_fixable`, which is per-rule): a
+    // rule may fix one violation but honestly skip another (an unconvertible
+    // `café.rs` stem under `snake`), so tag only the violations `fix` will act on.
+    if violation.is_fixable {
         let fix = style::FIXABLE;
         writeln!(
             w,
@@ -168,7 +183,7 @@ fn write_violation(
     // The message can embed a matched value or a `kind: command` rule's
     // subprocess output — neutralize terminal escapes before wrapping, while
     // preserving the intentional `\n` paragraph breaks wrap_message honors (M8).
-    let safe_message = sanitize_terminal(&violation.message);
+    let safe_message = sanitize_terminal_multiline(&violation.message);
     let lines = wrap_message(&safe_message, MSG_INDENT.len(), total_width);
     let (first_line, rest) = lines
         .split_first()
@@ -186,6 +201,31 @@ fn write_violation(
     }
     for line in rest {
         writeln!(w, "{MSG_INDENT}{line}")?;
+    }
+
+    for related in &violation.related_locations {
+        let label = sanitize_terminal(&related.label);
+        let lossy_path = related.path.to_string_lossy();
+        let path = sanitize_terminal(&lossy_path);
+        if let Some(range) = &related.range {
+            writeln!(
+                w,
+                "{MSG_INDENT}{dim}related:{dim:#} {label}: {path}:{}:{}-{}:{}",
+                range.start_line(),
+                range.start_column(),
+                range.end_line(),
+                range.end_column(),
+            )?;
+        } else {
+            writeln!(w, "{MSG_INDENT}{dim}related:{dim:#} {label}: {path}")?;
+        }
+    }
+    if violation.related_locations_omitted > 0 {
+        writeln!(
+            w,
+            "{MSG_INDENT}{dim}and {} more related locations{dim:#}",
+            violation.related_locations_omitted,
+        )?;
     }
 
     // Policy URL, if present. Printed once per violation to stay
@@ -223,6 +263,34 @@ fn write_violation(
     Ok(())
 }
 
+fn write_analysis_failure(
+    w: &mut dyn Write,
+    result: &RuleResult,
+    failure: &AnalysisFailure,
+    opts: &HumanOptions,
+) -> std::io::Result<()> {
+    let s = style::ERROR;
+    let rule_style = style::RULE_ID;
+    let safe_rule_id = sanitize_terminal(&result.rule_id);
+    writeln!(
+        w,
+        "  {s}{}  analysis failure{s:#}  {rule_style}{safe_rule_id}{rule_style:#}",
+        opts.glyphs.error,
+    )?;
+
+    let safe_message = sanitize_terminal_multiline(&failure.message);
+    let kind = failure.kind.as_str();
+    let message = match (failure.line, failure.column) {
+        (Some(line), Some(column)) => format!("{kind}, {line}:{column}: {safe_message}"),
+        (Some(line), None) => format!("{kind}, line {line}: {safe_message}"),
+        _ => format!("{kind}: {safe_message}"),
+    };
+    for line in wrap_message(&message, MSG_INDENT.len(), opts.effective_width()) {
+        writeln!(w, "{MSG_INDENT}{line}")?;
+    }
+    Ok(())
+}
+
 /// Summary block: per-level counts, overall passing/failing/fixable
 /// totals, and a `alint fix` call-to-action when anything's auto-fixable.
 fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::io::Result<()> {
@@ -236,9 +304,10 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
             continue;
         }
         let count = r.violations.len();
-        if r.is_fixable {
-            fixable_violations += count;
-        }
+        // Count fixable violations per-violation, not per-rule: a rule with a
+        // fixer can still have violations `fix` honestly skips (an unconvertible
+        // stem), so the "N auto-fixable" total must match what `fix` will apply.
+        fixable_violations += r.violations.iter().filter(|v| v.is_fixable).count();
         match r.level {
             Level::Error => errors += count,
             Level::Warning => warnings += count,
@@ -248,12 +317,22 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
     }
 
     let total = errors + warnings + infos;
+    let failure_count = report.total_analysis_failures();
     let failing = report.failing_rules();
     let passing = report.passing_rules();
     let dim = style::DIM;
 
-    let plural = if total == 1 { "" } else { "s" };
-    writeln!(w, "{dim}Summary ({total} violation{plural}):{dim:#}")?;
+    let violation_plural = if total == 1 { "" } else { "s" };
+    let failure_part = if failure_count > 0 {
+        let plural = if failure_count == 1 { "" } else { "s" };
+        format!(", {failure_count} analysis failure{plural}")
+    } else {
+        String::new()
+    };
+    writeln!(
+        w,
+        "{dim}Summary ({total} violation{violation_plural}{failure_part}):{dim:#}"
+    )?;
 
     // First line: per-level breakdown. Skip levels with zero count
     // to keep the line short on typical runs.
@@ -277,6 +356,14 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
     if infos > 0 {
         let s = style::INFO;
         parts.push(format!("{s}{} {infos} info{s:#}", glyphs.info));
+    }
+    if failure_count > 0 {
+        let s = style::ERROR;
+        parts.push(format!(
+            "{s}{} {failure_count} analysis failure{p}{s:#}",
+            glyphs.error,
+            p = if failure_count == 1 { "" } else { "s" }
+        ));
     }
     writeln!(w, "  {}", parts.join("   "))?;
 
@@ -331,6 +418,8 @@ fn write_summary(w: &mut dyn Write, report: &Report, glyphs: &GlyphSet) -> std::
 /// obvious even without the grouped format's per-file separators; levels are
 /// color-tagged too. The `AutoStream` strips SGR escapes when the sink
 /// isn't a TTY, so pipe-safe `path:line:col` output is automatic.
+// The compact grammar and its counters are one linear write transaction.
+#[allow(clippy::too_many_lines)]
 fn write_human_compact(
     report: &Report,
     w: &mut dyn Write,
@@ -339,6 +428,7 @@ fn write_human_compact(
     let mut errors = 0usize;
     let mut warnings = 0usize;
     let mut infos = 0usize;
+    let mut analysis_failures = 0usize;
     let mut fixable = 0usize;
 
     for result in &report.results {
@@ -348,7 +438,7 @@ fn write_human_compact(
         for v in &result.violations {
             // Path + message are attacker-controlled; neutralize terminal
             // escapes for this single-line format (M8).
-            let path = v.path.as_ref().map_or_else(
+            let path = v.report_path().map_or_else(
                 || "<repo>".to_string(),
                 |p| sanitize_terminal(&p.display().to_string()).into_owned(),
             );
@@ -376,12 +466,15 @@ fn write_human_compact(
                 }
                 Level::Off => (style::DIM, "off"), // filtered earlier; defensive
             };
-            if result.is_fixable {
+            // Per-violation fixability (see the block formatter): a rule with a
+            // fixer may still skip a specific violation, so tag and count only the
+            // ones `fix` will act on.
+            if v.is_fixable {
                 fixable += 1;
             }
 
             let rule_style = style::RULE_ID;
-            let fix_tag = if result.is_fixable {
+            let fix_tag = if v.is_fixable {
                 let fix = style::FIXABLE;
                 format!("  {fix}[fixable]{fix:#}")
             } else {
@@ -394,12 +487,34 @@ fn write_human_compact(
                 "{loc_style}{loc}{loc_style:#}: {level_style}{level_name}{level_style:#}: {rule_style}{safe_rule_id}{rule_style:#}: {message}{fix_tag}",
             )?;
         }
+        for failure in &result.analysis_failures {
+            analysis_failures += 1;
+            let path = failure.report_path().map_or_else(
+                || "<repo>".to_string(),
+                |p| sanitize_terminal(&p.display().to_string()).into_owned(),
+            );
+            let loc = match (failure.line, failure.column) {
+                (Some(line), Some(column)) => format!("{path}:{line}:{column}"),
+                (Some(line), None) => format!("{path}:{line}"),
+                _ => path,
+            };
+            let kind = failure.kind.as_str();
+            let message = sanitize_terminal(&failure.message);
+            let safe_rule_id = sanitize_terminal(&result.rule_id);
+            let loc_style = style::LOCATION;
+            let level_style = style::ERROR;
+            let rule_style = style::RULE_ID;
+            writeln!(
+                w,
+                "{loc_style}{loc}{loc_style:#}: {level_style}analysis failure{level_style:#}: {rule_style}{safe_rule_id}{rule_style:#}: {kind}: {message}",
+            )?;
+        }
     }
 
     // Trailing summary: one line, sentence-cased, no box. Stays
     // at stderr-style density so `alint check --compact | wc -l`
     // still counts only violations + summary (+1).
-    if errors == 0 && warnings == 0 && infos == 0 {
+    if errors == 0 && warnings == 0 && infos == 0 && analysis_failures == 0 {
         let s = style::SUCCESS;
         writeln!(w, "{s}{} all rules passed.{s:#}", opts.glyphs.success)?;
         return Ok(());
@@ -424,6 +539,13 @@ fn write_human_compact(
         let s = style::INFO;
         parts.push(format!("{s}{infos} info{s:#}"));
     }
+    if analysis_failures > 0 {
+        let s = style::ERROR;
+        parts.push(format!(
+            "{s}{analysis_failures} analysis failure{p}{s:#}",
+            p = if analysis_failures == 1 { "" } else { "s" }
+        ));
+    }
     let mut line = parts.join(", ");
     if fixable > 0 {
         use std::fmt::Write as _;
@@ -442,6 +564,8 @@ fn write_human_compact(
 /// 4 cols sits under the `· `/`✓ ` glyph so wrapped lines align.
 const FIX_INDENT: &str = "    ";
 
+// Keep status selection, wrapping, and output order in one linear renderer.
+#[allow(clippy::too_many_lines)]
 pub fn write_fix_human(
     report: &FixReport,
     w: &mut dyn Write,
@@ -470,11 +594,13 @@ pub fn write_fix_human(
             "{level_style}{level_name}{level_style:#} {rule_style}[{safe_rule_id}]{rule_style:#}:",
         )?;
         for item in &rule.items {
+            // The applied summary already names the file it touched, so the
+            // path prefix is added only to the message-based skipped / no-fixer
+            // lines below, where the file would otherwise go unnamed.
             let path_prefix = item
                 .violation
-                .path
-                .as_ref()
-                .map(|p| format!("{} — ", p.display()))
+                .report_path()
+                .map(|p| format!("{} - ", p.display()))
                 .unwrap_or_default();
             let (glyph, line_style_open, line_style_close, content) = match &item.status {
                 FixStatus::Applied(summary) => {
@@ -483,15 +609,28 @@ pub fn write_fix_human(
                         opts.glyphs.success,
                         format!("{s}"),
                         format!("{s:#}"),
-                        format!("{path_prefix}{summary}"),
+                        summary.clone(),
                     )
                 }
-                FixStatus::Skipped(reason) => (
+                FixStatus::Skipped { reason, .. } => (
                     opts.glyphs.bullet,
                     format!("{dim}"),
                     format!("{dim:#}"),
                     format!(
                         "{path_prefix}{} (skipped: {reason})",
+                        item.violation.message
+                    ),
+                ),
+                // Available but not applied (below the tier threshold, a
+                // suggestion, or verification-demoted). Emitted by the Unsafe ops
+                // under a bare `alint fix` -- `file_remove`, `git_untrack`, an
+                // unpromoted `command` fix, and any user-demoted fixer.
+                FixStatus::Suggested { summary, .. } => (
+                    opts.glyphs.bullet,
+                    format!("{dim}"),
+                    format!("{dim:#}"),
+                    format!(
+                        "{path_prefix}{} (suggested: {summary})",
                         item.violation.message
                     ),
                 ),
@@ -505,7 +644,7 @@ pub fn write_fix_human(
             // `content` embeds the attacker-controlled path + message (alint's
             // own status prose is clean ASCII); styling is applied separately
             // below, so sanitizing the whole string is safe (M8).
-            let content = sanitize_terminal(&content);
+            let content = sanitize_terminal_multiline(&content);
             let lines = wrap_message(&content, FIX_INDENT.len(), total_width);
             let (first_line, rest) = lines
                 .split_first()
@@ -518,15 +657,51 @@ pub fn write_fix_human(
                 writeln!(w, "{FIX_INDENT}{line_style_open}{line}{line_style_close}")?;
             }
         }
+        for failure in &rule.analysis_failures {
+            let path_prefix = failure
+                .report_path()
+                .map(|p| format!("{} - ", p.display()))
+                .unwrap_or_default();
+            let content = format!(
+                "{path_prefix}{}: {}",
+                failure.kind.as_str(),
+                failure.message
+            );
+            let content = sanitize_terminal_multiline(&content);
+            let lines = wrap_message(&content, FIX_INDENT.len(), total_width);
+            let (first_line, rest) = lines
+                .split_first()
+                .map_or(("", &[][..]), |(f, r)| (f.as_str(), r));
+            let s = style::ERROR;
+            writeln!(w, "  {s}{} {first_line}{s:#}", opts.glyphs.error)?;
+            for line in rest {
+                writeln!(w, "{FIX_INDENT}{s}{line}{s:#}")?;
+            }
+        }
     }
 
     let applied = report.applied();
     let skipped = report.skipped();
     let unfixable = report.unfixable();
+    let suggested = report.suggested();
+    let analysis_failures = report.total_analysis_failures();
     let ok = style::SUCCESS;
+    // Append `suggested` only when non-zero, so a run without suggestions is
+    // byte-identical to pre-tier output (the fix-*.stdout snapshots).
+    let suggested_part = if suggested > 0 {
+        format!(", {suggested} suggested")
+    } else {
+        String::new()
+    };
+    let failure_part = if analysis_failures > 0 {
+        let plural = if analysis_failures == 1 { "" } else { "s" };
+        format!(", {analysis_failures} analysis failure{plural}")
+    } else {
+        String::new()
+    };
     writeln!(
         w,
-        "\n{ok}{applied} applied{ok:#}, {skipped} skipped, {unfixable} unfixable."
+        "\n{ok}{applied} applied{ok:#}, {skipped} skipped, {unfixable} unfixable{suggested_part}{failure_part}."
     )?;
     Ok(())
 }
@@ -723,6 +898,39 @@ mod tests {
     }
 
     #[test]
+    fn human_format_renders_sanitized_related_locations_and_truncation() {
+        let mut violation = Violation::new("relationship failed")
+            .with_path(std::path::Path::new("primary.txt"))
+            .with_related_location(
+                alint_core::RelatedLocation::new(
+                    format!("other-{RAW_CLEAR}.txt"),
+                    format!("source {RAW_CLEAR}"),
+                )
+                .with_range(alint_core::SourceRange::new(2, 3, 4, 5).unwrap()),
+            );
+        violation.related_locations_omitted = 2;
+        let report = Report {
+            results: vec![RuleResult::new(
+                "relation".into(),
+                Level::Error,
+                None,
+                vec![violation],
+                false,
+            )],
+        };
+        let mut buf = Vec::new();
+        write_human(&report, &mut buf, HumanOptions::default()).unwrap();
+        let rendered = String::from_utf8(buf).unwrap();
+
+        assert_neutralized(&rendered);
+        let plain = strip_sgr(&rendered);
+        assert!(
+            plain.contains("related: source \\x1b[2J\\x1b[H: other-\\x1b[2J\\x1b[H.txt:2:3-4:5")
+        );
+        assert!(plain.contains("and 2 more related locations"));
+    }
+
+    #[test]
     fn compact_format_neutralizes_terminal_escapes() {
         let mut buf = Vec::new();
         let opts = HumanOptions {
@@ -731,6 +939,30 @@ mod tests {
         };
         write_human(&evil_report(), &mut buf, opts).unwrap();
         assert_neutralized(&String::from_utf8(buf).unwrap());
+    }
+
+    #[test]
+    fn compact_format_keeps_each_finding_on_one_physical_line() {
+        let violation = Violation::new("first\nforged:0:0: error: fake")
+            .with_path(std::path::PathBuf::from("bad\npath"));
+        let report = Report {
+            results: vec![RuleResult::new(
+                "rule\ninjection".into(),
+                Level::Error,
+                None,
+                vec![violation],
+                false,
+            )],
+        };
+        let mut buf = Vec::new();
+        let opts = HumanOptions {
+            compact: true,
+            ..HumanOptions::default()
+        };
+        write_human(&report, &mut buf, opts).unwrap();
+        let rendered = strip_sgr(&String::from_utf8(buf).unwrap());
+        assert_eq!(rendered.lines().count(), 2, "{rendered:?}");
+        assert_eq!(rendered.matches("\\x0a").count(), 3, "{rendered:?}");
     }
 
     #[test]
@@ -783,12 +1015,106 @@ mod tests {
         );
     }
 
+    /// Per-violation fixability: one rule, two violations, only one fixable
+    /// (mirrors `filename_case` under `snake` flagging both `café.rs`, which
+    /// `fix` skips, and `myFile.rs`, which it renames). The `fixable` tag and the
+    /// "auto-fixable" total must reflect the per-violation truth, not the
+    /// per-rule `is_fixable` -- otherwise `check` promises a fix `fix` won't make.
+    fn mixed_fixability_report() -> Report {
+        use std::path::PathBuf;
+        let mut fixable = Violation::new("stem \"myFile\" is not snake_case")
+            .with_path(PathBuf::from("myFile.rs"));
+        fixable.is_fixable = true;
+        let unfixable =
+            Violation::new("stem \"café\" is not snake_case").with_path(PathBuf::from("café.rs")); // is_fixable stays false
+        Report {
+            // The rule DOES declare a fixer (`is_fixable: true`), so this proves
+            // the renderer reads the per-violation flag, not the per-rule one.
+            results: vec![RuleResult::new(
+                "snake-names".into(),
+                Level::Warning,
+                None,
+                vec![unfixable, fixable],
+                true,
+            )],
+        }
+    }
+
+    /// The text of one file's block: from its `─── <path> ───` header to the
+    /// blank line that ends the block. Lets a test check the `fixable` tag on
+    /// the right violation without matching the summary's "auto-fixable".
+    fn block_for<'a>(out: &'a str, path: &str) -> &'a str {
+        let after = &out[out.find(path).expect("path header present")..];
+        after.split("\n\n").next().unwrap_or(after)
+    }
+
+    #[test]
+    fn block_tags_only_the_fixable_violation() {
+        let mut buf = Vec::new();
+        write_human(
+            &mixed_fixability_report(),
+            &mut buf,
+            HumanOptions::default(),
+        )
+        .unwrap();
+        let out = strip_sgr(&String::from_utf8(buf).unwrap());
+        assert!(
+            block_for(&out, "myFile.rs").contains("fixable"),
+            "convertible violation's block is tagged fixable:\n{out}"
+        );
+        assert!(
+            !block_for(&out, "café.rs").contains("fixable"),
+            "unconvertible violation's block is NOT tagged fixable:\n{out}"
+        );
+        assert!(
+            out.contains("1 auto-fixable"),
+            "summary must count 1 auto-fixable, not 2:\n{out}"
+        );
+        assert!(
+            out.contains("resolve 1 fixable violation."),
+            "call-to-action must say 1 (singular), not 2:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_tags_only_the_fixable_violation() {
+        let mut buf = Vec::new();
+        let opts = HumanOptions {
+            compact: true,
+            ..HumanOptions::default()
+        };
+        write_human(&mixed_fixability_report(), &mut buf, opts).unwrap();
+        let out = strip_sgr(&String::from_utf8(buf).unwrap());
+        // The myFile line carries `[fixable]`; the café line does not.
+        let myfile_line = out
+            .lines()
+            .find(|l| l.contains("myFile.rs"))
+            .expect("myFile line present");
+        let cafe_line = out
+            .lines()
+            .find(|l| l.contains("café.rs"))
+            .expect("café line present");
+        assert!(
+            myfile_line.contains("[fixable]"),
+            "convertible violation is tagged: {myfile_line}"
+        );
+        assert!(
+            !cafe_line.contains("[fixable]"),
+            "unconvertible violation is NOT tagged: {cafe_line}"
+        );
+        assert!(
+            out.contains("1 auto-fixable"),
+            "compact summary counts 1, not 2:\n{out}"
+        );
+    }
+
     #[test]
     fn fix_format_neutralizes_terminal_escapes() {
         use std::path::PathBuf;
         let v = Violation::new(format!("{RAW_CLEAR}forged"))
             .with_path(PathBuf::from(format!("src/{RAW_CLEAR}evil.rs")));
         let report = FixReport {
+            non_convergent: false,
             results: vec![alint_core::FixRuleResult {
                 rule_id: "demo".into(),
                 level: Level::Warning,
@@ -796,10 +1122,39 @@ mod tests {
                     violation: v,
                     status: FixStatus::Unfixable,
                 }],
+                analysis_failures: Vec::new(),
             }],
         };
         let mut buf = Vec::new();
         write_fix_human(&report, &mut buf, HumanOptions::default()).unwrap();
         assert_neutralized(&String::from_utf8(buf).unwrap());
+    }
+
+    #[test]
+    fn fix_human_renders_suggested_item() {
+        use std::path::PathBuf;
+        let report = FixReport {
+            non_convergent: false,
+            results: vec![alint_core::FixRuleResult {
+                rule_id: "cfg".into(),
+                level: Level::Error,
+                items: vec![alint_core::FixItem {
+                    violation: Violation::new("value mismatch")
+                        .with_path(PathBuf::from("app.json")),
+                    status: FixStatus::Suggested {
+                        summary: "would set $.debug to false".into(),
+                        edit: Some(alint_core::FixEdit::SetContent {
+                            path: PathBuf::from("app.json"),
+                            content: Vec::new(),
+                        }),
+                    },
+                }],
+                analysis_failures: Vec::new(),
+            }],
+        };
+        let mut buf = Vec::new();
+        write_fix_human(&report, &mut buf, HumanOptions::default()).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("suggested"), "suggested should render: {out}");
     }
 }

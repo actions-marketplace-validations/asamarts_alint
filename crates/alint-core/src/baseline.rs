@@ -11,8 +11,9 @@
 //! identity isn't `(rule_id, path)`; the boundary is enforced by the
 //! `coverage_audit_baseline_safety` collision-invariant in `alint-e2e`.
 //! `check --baseline` wires this in between `Engine::run` and the
-//! formatters (see `crates/alint/src/main.rs`).
+//! formatters (see `crates/alint/src/check.rs`).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -60,7 +61,7 @@ pub fn violation_fingerprint(
     message: &str,
     file_bytes: Option<&[u8]>,
 ) -> String {
-    let path_norm = path.map(normalize_path).unwrap_or_default();
+    let path_norm: Cow<'_, [u8]> = path.map_or(Cow::Borrowed(&[]), normalize_path);
 
     let discriminator: &[u8] = if let Some(key) = baseline_key {
         key.as_bytes()
@@ -77,7 +78,7 @@ pub fn violation_fingerprint(
     };
 
     let mut hasher = Sha256::new();
-    for component in [rule_id.as_bytes(), path_norm.as_bytes(), discriminator] {
+    for component in [rule_id.as_bytes(), path_norm.as_ref(), discriminator] {
         let len = u32::try_from(component.len()).unwrap_or(u32::MAX);
         hasher.update(len.to_le_bytes());
         hasher.update(component);
@@ -90,22 +91,59 @@ pub fn violation_fingerprint(
 /// is passed separately because it lives on the owning `RuleResult`, not
 /// the violation. `file_bytes` is the violation's file content, consulted
 /// only for the line-content discriminator.
+///
+/// Sensitive findings always use a constant discriminator and never consult
+/// their producer key, message, or offending-line bytes. The path and rule id
+/// remain structural identity, while duplicate findings collapse through the
+/// baseline count.
 #[must_use]
 pub fn fingerprint(rule_id: &str, v: &Violation, file_bytes: Option<&[u8]>) -> String {
+    if v.is_sensitive() {
+        return violation_fingerprint(
+            rule_id,
+            v.path.as_deref(),
+            None,
+            Some("sensitive"),
+            "",
+            None,
+        );
+    }
+    let identity_line = v
+        .range
+        .as_ref()
+        .map_or(v.line, crate::SourceRange::baseline_identity_line);
     violation_fingerprint(
         rule_id,
         v.path.as_deref(),
-        v.line,
+        identity_line,
         v.baseline_key.as_deref(),
         &v.message,
         file_bytes,
     )
 }
 
-/// Normalise a path to a stable, forward-slashed string so a fingerprint
-/// is identical across operating systems.
-fn normalize_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+/// Normalise a path to stable bytes. Windows separators are rewritten to `/`;
+/// Unix paths retain their exact bytes so lossy UTF-8 replacement cannot merge
+/// distinct filenames. Portable UTF-8 paths fingerprint exactly as before and
+/// remain identical across operating systems.
+#[cfg(unix)]
+fn normalize_path(path: &Path) -> Cow<'_, [u8]> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    Cow::Borrowed(path.as_os_str().as_bytes())
+}
+
+#[cfg(windows)]
+fn normalize_path(path: &Path) -> Cow<'_, [u8]> {
+    Cow::Owned(path.to_string_lossy().replace('\\', "/").into_bytes())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn normalize_path(path: &Path) -> Cow<'_, [u8]> {
+    match path.to_string_lossy() {
+        Cow::Borrowed(path) => Cow::Borrowed(path.as_bytes()),
+        Cow::Owned(path) => Cow::Owned(path.into_bytes()),
+    }
 }
 
 /// The bytes of 1-based line `n` in `bytes`, with a trailing `\r`
@@ -463,6 +501,62 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_of_an_ordinary_path_is_pinned() {
+        // Compatibility pin: existing `.alint-baseline` files hold these exact
+        // digests, so a change to path normalization must not move them (audit
+        // 2026-10 finding 10 changed only the backslash case below).
+        assert_eq!(
+            fp("r", Some("src/a.rs"), None, None, "m", None),
+            "e442d61e4daffddbab1d9ef55e55aef8974c9cf2983570b0cbbf6e8b869c1817"
+        );
+        assert_eq!(
+            fp(
+                "r",
+                Some("src/a.rs"),
+                Some(2),
+                None,
+                "m",
+                Some(b"x\nbad\ny")
+            ),
+            "232ea2d0041a143141b5bf4abadf6334080156e142cca88872c37497635b3dd4"
+        );
+    }
+
+    #[test]
+    fn backslash_is_a_separator_only_on_windows() {
+        // Audit 2026-10 finding 10: `\` was rewritten to `/` on every OS, so on
+        // unix (where `\` is a legal filename byte) `a\b.txt` and the different
+        // file `a/b.txt` shared one fingerprint -- a baseline entry for one
+        // grandfathered the other, and the fix merge conflated them.
+        let slash = fp("r", Some("a/b.txt"), None, None, "m", None);
+        let back = fp("r", Some("a\\b.txt"), None, None, "m", None);
+        if cfg!(windows) {
+            assert_eq!(slash, back, "on Windows `\\` IS the separator");
+        } else {
+            assert_ne!(slash, back, "on unix `a\\b.txt` is a different file");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn distinct_non_utf8_paths_have_distinct_fingerprints() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let first = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![
+            b'a', b'/', 0x80, b'.', b'r', b's',
+        ]));
+        let second = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![
+            b'a', b'/', 0x81, b'.', b'r', b's',
+        ]));
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(
+            violation_fingerprint("r", Some(&first), None, None, "m", None),
+            violation_fingerprint("r", Some(&second), None, None, "m", None),
+            "lossy path rendering must not merge distinct Unix filenames"
+        );
+    }
+
+    #[test]
     fn fingerprint_is_stable_and_64_hex() {
         let a = fp("r", Some("a.rs"), Some(2), None, "m", Some(b"x\nbad\ny"));
         let b = fp("r", Some("a.rs"), Some(2), None, "m", Some(b"x\nbad\ny"));
@@ -592,9 +686,11 @@ mod tests {
     #[test]
     fn paths_normalize_to_forward_slashes() {
         let unix = violation_fingerprint("r", Some(Path::new("a/b.rs")), None, None, "m", None);
-        // A backslash path hashes the same as its forward-slash form.
+        // On Windows a backslash path hashes the same as its forward-slash form
+        // (so a baseline is portable across OSes); on unix `\` is a filename
+        // byte, so it must NOT fold (see `backslash_is_a_separator_only_on_windows`).
         let win = violation_fingerprint("r", Some(Path::new("a\\b.rs")), None, None, "m", None);
-        assert_eq!(unix, win);
+        assert_eq!(unix == win, cfg!(windows));
     }
 
     #[test]
@@ -620,6 +716,53 @@ mod tests {
             Some(b"only\none\n"),
         );
         assert_eq!(a, c);
+    }
+
+    #[test]
+    fn ranges_related_locations_and_fix_keys_do_not_change_existing_fingerprints() {
+        let original = Violation::new("bad")
+            .with_path(Path::new("a.rs"))
+            .with_location(2, 1);
+        let enriched = original
+            .clone()
+            .with_range(crate::SourceRange::new(3, 1, 3, 2).unwrap())
+            .with_related_location(crate::RelatedLocation::new("b.rs", "secondary"))
+            .with_fix_key("occurrence\0one");
+
+        assert_eq!(
+            fingerprint("rule", &original, Some(b"ok\nbad\nmore\n")),
+            fingerprint("rule", &enriched, Some(b"ok\nbad\nmore\n"))
+        );
+    }
+
+    #[test]
+    fn adding_a_range_to_path_only_finding_preserves_path_identity() {
+        let original = Violation::new("bad").with_path(Path::new("a.rs"));
+        let enriched = original
+            .clone()
+            .with_range(crate::SourceRange::new(2, 1, 2, 2).unwrap());
+        assert_eq!(
+            fingerprint("rule", &original, Some(b"ok\nbad\n")),
+            fingerprint("rule", &enriched, Some(b"ok\nbad\n"))
+        );
+    }
+
+    #[test]
+    fn sensitive_fingerprint_ignores_message_key_and_file_bytes() {
+        let make = |message: &str, key: &str, line: usize| {
+            let mut violation = Violation::new(message.to_string())
+                .with_path(std::path::PathBuf::from("secrets.env"))
+                .with_location(line, 1)
+                .with_baseline_key(key.to_string());
+            violation.redact_message("rule");
+            violation
+        };
+        let first = make("TOKEN_VALUE_DO_NOT_REPORT", "raw-key-one", 1);
+        let second = make("different secret", "raw-key-two", 2);
+        assert_eq!(
+            fingerprint("rule", &first, Some(b"TOKEN_VALUE_DO_NOT_REPORT\nother\n")),
+            fingerprint("rule", &second, Some(b"other\ndifferent secret\n")),
+        );
     }
 
     fn item(rule: &str, path: Option<&str>, fp: &str) -> FingerprintedViolation {
@@ -736,7 +879,7 @@ mod tests {
     fn empty_baseline_is_valid_and_suppresses_nothing() {
         let text = format!("{{\"schema_version\":{SCHEMA_VERSION}}}\n");
         let b = Baseline::load(&text).unwrap();
-        assert!(b.entries.is_empty());
+        assert_eq!(b.entries, Vec::new());
         assert_eq!(b.total(), 0);
     }
 
@@ -838,7 +981,7 @@ mod tests {
         let out = apply(&rep, &base, by_message);
         assert_eq!(out.suppressed_total, 2);
         assert_eq!(out.live.total_violations(), 1, "the 3rd X is new");
-        assert!(out.stale.is_empty());
+        assert_eq!(out.stale, Vec::new());
     }
 
     #[test]
@@ -901,7 +1044,40 @@ mod tests {
         let out = apply(&rep, &Baseline::default(), by_message);
         assert_eq!(out.suppressed_total, 0);
         assert_eq!(out.live.total_violations(), 2);
-        assert!(out.stale.is_empty());
+        assert_eq!(out.stale, Vec::new());
+    }
+
+    #[test]
+    fn apply_preserves_notes_without_fingerprinting_or_suppressing_them() {
+        let rep = Report {
+            results: vec![RuleResult::new(
+                "r".into(),
+                Level::Error,
+                None,
+                vec![
+                    Violation::new("X"),
+                    Violation::new("bounded detail").as_analysis_truncated_note(),
+                ],
+                false,
+            )],
+        };
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("X", 1)],
+        };
+        let mut fingerprint_calls = 0;
+        let out = apply(&rep, &base, |rule, violation| {
+            fingerprint_calls += 1;
+            by_message(rule, violation)
+        });
+
+        assert_eq!(fingerprint_calls, 1, "notes are not baseline candidates");
+        assert!(out.live.results[0].violations.is_empty());
+        assert_eq!(out.live.total_notes(), 1);
+        assert_eq!(
+            out.live.results[0].notes[0].note_kind(),
+            Some(crate::NoteKind::AnalysisTruncated)
+        );
     }
 
     #[test]
@@ -943,7 +1119,7 @@ mod tests {
         let out = apply(&rep, &base, by_message);
         assert_eq!(out.suppressed_total, 5, "summed budget suppresses all five");
         assert_eq!(out.live.total_violations(), 0);
-        assert!(out.stale.is_empty());
+        assert_eq!(out.stale, Vec::new());
     }
 
     #[test]
@@ -991,5 +1167,43 @@ mod tests {
         }
         assert_eq!(out.live.results[0].violations[0].message.as_ref(), "B");
         assert_eq!(out.live.results[1].violations[0].message.as_ref(), "D");
+    }
+
+    #[test]
+    fn apply_never_fingerprints_or_suppresses_analysis_failures() {
+        use crate::AnalysisFailureKind;
+
+        let rep = Report {
+            results: vec![RuleResult::new(
+                std::sync::Arc::from("r"),
+                Level::Warning,
+                None,
+                vec![
+                    Violation::new("same").with_path(Path::new("f.rs")),
+                    Violation::new("same")
+                        .with_path(Path::new("f.rs"))
+                        .as_analysis_failure(AnalysisFailureKind::ResourceRead),
+                ],
+                false,
+            )],
+        };
+        let base = Baseline {
+            alint_version: None,
+            entries: vec![entry("same", 2)],
+        };
+        let mut fingerprint_calls = 0;
+        let out = apply(&rep, &base, |rule, violation| {
+            fingerprint_calls += 1;
+            by_message(rule, violation)
+        });
+
+        assert_eq!(
+            fingerprint_calls, 1,
+            "only policy violations are fingerprinted"
+        );
+        assert_eq!(out.suppressed_total, 1);
+        assert!(out.live.results[0].violations.is_empty());
+        assert_eq!(out.live.results[0].analysis_failures.len(), 1);
+        assert!(out.live.has_errors(), "baseline cannot downgrade a failure");
     }
 }

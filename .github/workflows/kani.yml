@@ -1,7 +1,8 @@
 # Kani bounded-proof job (Phase 5 / WS4, docs/design/formal-methods.md).
 #
-# Runs the `#[kani::proof]` harnesses (today: the path-confinement policy
-# proof in alint-rules). Kept OFF the PR path and on a weekly schedule +
+# Runs every `#[kani::proof]` harness in alint-core: the path-confinement
+# policy proof (pathsafe.rs) and the located-edit overlap-skip disjointness
+# proof (located_fix.rs). Kept OFF the PR path and on a weekly schedule +
 # manual dispatch, because model-checking time should never block a merge
 # — the proptest properties on the PR path are the always-on behaviour
 # spec; this is the deeper, slower guarantee.
@@ -26,6 +27,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Run Kani proofs
-        uses: model-checking/kani-github-action@2534b7aeb3c6b4b0a5ecc3981bb3e63d47b5b126 # v1
-        with:
-          args: "-p alint-rules"
+        # The official v1 wrapper parses the second word of `kani --version`.
+        # Kani 0.68 prints `Kani Rust Verifier <version>`, so the wrapper rejects
+        # the version it just installed. Keep the same official crates.io setup
+        # path, but run it directly until the wrapper accepts current output.
+        run: |
+          cargo +stable install --locked --version 0.68.0 kani-verifier
+          cargo-kani setup
+          # Target alint-core, where every #[kani::proof] lives (alint-rules has
+          # none, so the original "-p alint-rules" verified zero harnesses and
+          # passed vacuously). No --harness filter: new proofs run automatically.
+          cargo-kani -p alint-core

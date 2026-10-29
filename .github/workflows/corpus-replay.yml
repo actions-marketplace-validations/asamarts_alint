@@ -1,0 +1,93 @@
+# Corpus replay: `alint check` over the 110-repository v0.12 case-study corpus
+# at its pinned commits (docs/design/v0.12/corpus/pins.tsv). Nothing from a
+# corpus repository runs: spawning and keyring rules, spawning fix operations,
+# and configs with custom facts are removed or refused first. See
+# `cargo run -p xtask -- corpus-replay --help`.
+#
+# Every run fails on a crash, and on any skipped or unavailable repository not
+# listed in docs/design/v0.12/corpus/replay-expectations.tsv (or a listed one
+# that replays again). `compare_ref` builds a second binary from that ref and
+# fails on any report, proposed edit, or baseline fingerprint that differs:
+# RELEASING.md dispatches it with the previous release before a release that
+# changes the relation layer, and each difference must be explained there.
+# v0.21's shadow comparison (ADR-0023, V21-7) runs inside the replay binary,
+# built with alint-rules/shadow-ir: any shadow difference aborts that repository.
+#
+# It runs on the canonical bench host's runner, which executes one job at a
+# time, so a replay never overlaps a benchmark. The repository cache lives on
+# that host and is reused by every run.
+name: Corpus Replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      compare_ref:
+        description: "Optional git ref: build its release binary and fail on any report that differs from this ref's"
+        required: false
+        default: ""
+  schedule:
+    - cron: "37 3 * * 2"  # weekly, Tuesday 03:37 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: corpus-replay
+  cancel-in-progress: false
+
+jobs:
+  replay:
+    name: Corpus replay
+    runs-on: [self-hosted, linux, bench]
+    # First run fetches 110 repositories at depth 1 and builds two release
+    # binaries; later runs reuse the cache.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: corpus-replay
+      - name: build alint (shadow-ir) and xtask
+        run: |
+          # The replay binary carries the test-only shadow. xtask itself must
+          # stay feature-free (its bench-record build shares the feature graph).
+          cargo build --release --locked -p alint --features alint-rules/shadow-ir
+          cargo build --release --locked -p xtask
+      - name: build the comparison binary
+        if: ${{ inputs.compare_ref != '' }}
+        env:
+          COMPARE_REF: ${{ inputs.compare_ref }}
+        run: |
+          # A worktree registration left by a crashed run would block the add.
+          git worktree prune
+          git rev-parse --verify --end-of-options "${COMPARE_REF}^{commit}" >/dev/null
+          git worktree add --detach "$RUNNER_TEMP/compare" "${COMPARE_REF}^{commit}"
+          (cd "$RUNNER_TEMP/compare" && cargo build --release --locked -p alint)
+          echo "COMPARE_BIN=$RUNNER_TEMP/compare/target/release/alint" >> "$GITHUB_ENV"
+      - name: replay
+        run: |
+          args=(--alint target/release/alint
+                --cache "$HOME/.cache/alint-corpus-replay"
+                --jobs 4
+                --expect docs/design/v0.12/corpus/replay-expectations.tsv
+                --out-json "$RUNNER_TEMP/corpus-replay.json"
+                --summary "$GITHUB_STEP_SUMMARY")
+          if [[ -n "${COMPARE_BIN:-}" ]]; then
+            args+=(--compare "$COMPARE_BIN")
+          fi
+          target/release/xtask corpus-replay "${args[@]}"
+      - name: upload the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: corpus-replay
+          path: ${{ runner.temp }}/corpus-replay.json
+          if-no-files-found: ignore
+      - name: remove the comparison worktree
+        if: ${{ always() && inputs.compare_ref != '' }}
+        run: git worktree remove --force "$RUNNER_TEMP/compare" || true

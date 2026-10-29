@@ -1,3 +1,4 @@
+test_version: 1
 name: file_content_matches fact suppresses a gated rule when the pattern is absent
 tags: [check, facts, file_content_matches]
 
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,3 +1,4 @@
+test_version: 1
 name: no_empty_files + file_remove deletes zero-byte files
 tags: [fix, no_empty_files, file_remove, structure]
 
@@ -13,15 +14,18 @@ given:
         paths: "**"
         level: warning
         fix:
-          file_remove: {}
+          file_remove: { applicability: safe }
 
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: no-empty, level: warning, path: drop.log}
-  - applied: [no-empty]
-  - violations: []
+  - exit: success
+    applied: [no-empty]
+  - exit: success
+    violations: []
 
 expect_tree:
   keep.md: "# stays"

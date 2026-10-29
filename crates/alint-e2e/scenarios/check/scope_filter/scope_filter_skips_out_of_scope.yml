@@ -1,3 +1,4 @@
+test_version: 1
 name: scope_filter has_ancestor (Cargo.toml) skips files outside any Rust subtree
 tags: [check, scope_filter, no_trailing_whitespace]
 
@@ -37,5 +38,6 @@ expect:
   # Only the in-scope file fires. If the gate is a no-op
   # (the bug under test), `services/web/scripts/migrate.rs`
   # also fires and this assertion fails.
-  - violations:
+  - exit: success
+    violations:
       - {rule: nws, level: warning, path: crates/api/src/main.rs}

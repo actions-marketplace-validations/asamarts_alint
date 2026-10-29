@@ -807,7 +807,7 @@ identical semantic value).
 ### 21. `yaml_path_*` rules error on multi-document YAML files
 
 `yaml_path_equals` and the `yaml_path_*` family parse the YAML body
-through `serde_yaml_ng::from_str::<serde_yaml::Value>()`, which rejects
+through `yaml_serde::from_str::<serde_json::Value>()`, which rejects
 streams containing more than one `---`-separated document. Files that
 contain multi-doc streams (k8s manifests bundled together, release-notes
 stitched into one file, helm-chart-rendered output) trip a runtime

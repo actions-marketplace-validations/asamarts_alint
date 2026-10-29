@@ -1,3 +1,4 @@
+test_version: 1
 name: shebang_has_executable is silent on scripts with no shebang
 tags: [check, shebang_has_executable, unix_metadata, passing]
 
@@ -17,4 +18,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,12 +1,14 @@
 //! Structured-query rule family:
-//! `{json,yaml,toml,xml}_path_{equals,matches,absent}`.
+//! `{json,yaml,toml,xml,dotenv,properties,ini,hcl}_path_{equals,matches,absent}`.
 //!
-//! The eight value-checking kinds (`equals` / `matches`) share a
+//! The sixteen value-checking kinds (`equals` / `matches`) share a
 //! single implementation that varies along two axes:
 //!
-//! - **Format** — `Json`, `Yaml`, `Toml`, or `Xml`. The file is
+//! - **Format** — `Json`, `Yaml`, `Toml`, `Xml`, `Dotenv`, `Properties`, `Ini`, or `Hcl`. The file is
 //!   parsed into a `serde_json::Value` tree regardless (YAML and
-//!   TOML coerce through serde; XML maps via the xmltodict-style
+//!   TOML coerce through serde -- YAML with its `<<` merge keys
+//!   applied and custom tags such as `!Ref` dropped in favour of the
+//!   tagged value; XML maps via the xmltodict-style
 //!   convention in `xml_to_value` — `@attr` / `#text` /
 //!   repeated-element→array, leaf elements collapse to their
 //!   text string, namespaces flatten to local names, every leaf
@@ -40,17 +42,17 @@
 //! pinned to a commit SHA" (a workflow with only `run:` steps
 //! has no `uses:` at all and shouldn't be flagged).
 //!
-//! ## `{json,yaml,toml,xml}_path_absent`
+//! ## `{json,yaml,toml,xml,dotenv,properties,ini,hcl}_path_absent`
 //!
 //! A third op — **existence** — mirrors `file_absent` for a path:
 //! the query must select *nothing*, and any match produces exactly
 //! one file-level violation (never per-match, so a `$[?…]` filter
 //! that fans out over every root key still yields one violation).
 //! `equals` / `matches` / `if_present` don't apply. Shipped for all
-//! four formats, kept symmetric with `equals`/`matches` by the
+//! eight formats, kept symmetric with `equals`/`matches` by the
 //! `structured_family_is_symmetric` test.
 //!
-//! Unparseable files (bad JSON / YAML / TOML, not-well-formed
+//! Unparseable files (bad JSON / YAML / TOML / dotenv / properties / INI / HCL, not-well-formed
 //! XML) produce one violation per file. An unparseable file is a
 //! documentation problem, not the structured rule's concern —
 //! but better to surface it than silently skip.
@@ -58,27 +60,20 @@
 use std::path::{Path, PathBuf};
 
 use alint_core::{
-    Context, Error, Format, Level, PathsSpec, PerFileRule, Result, Rule, RuleSpec, Scope, Violation,
+    AnalysisFailureKind, Applicability, Context, Error, FixSpec, Fixer, Format, Level, PathsSpec,
+    PerFileRule, Result, Rule, RuleSpec, Scope, Violation,
 };
+
+use crate::fixers::StructuredFixer;
+use crate::io::looks_binary;
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json_path::JsonPath;
 
-/// True when `pattern` is a plain relative-path literal — no
-/// glob metacharacters, no `!` exclude prefix. Mirrors
-/// `file_exists::is_literal_path`; kept local to dodge a
-/// crate-wide pub-helper module just for two rules.
-fn is_literal_path(pattern: &str) -> bool {
-    !pattern.starts_with('!')
-        && !pattern
-            .chars()
-            .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'))
-}
-
 /// Collect every literal pattern from `spec` IFF every entry is
 /// a literal AND the spec carries no excludes. Returns `None`
-/// when any pattern is a glob or there are excludes — the slow
+/// when any pattern is a glob or there are excludes - the slow
 /// path is still correct in those cases.
 fn extract_literal_paths(spec: &PathsSpec) -> Option<Vec<PathBuf>> {
     let patterns: Vec<&str> = match spec {
@@ -89,14 +84,16 @@ fn extract_literal_paths(spec: &PathsSpec) -> Option<Vec<PathBuf>> {
         }
         PathsSpec::IncludeExclude { .. } => return None,
     };
-    if patterns.iter().all(|p| is_literal_path(p)) {
-        Some(patterns.iter().map(PathBuf::from).collect())
-    } else {
-        None
-    }
+    // `literal_glob_path` resolves escapes (a rendered `a\\b` names the
+    // directory `a\b`); a raw metacharacter scan looked such a path up verbatim
+    // and silently found nothing.
+    patterns
+        .iter()
+        .map(|p| alint_core::template::literal_glob_path(p).map(PathBuf::from))
+        .collect()
 }
 
-/// Comparison op — keeps the rule builders thin.
+/// Comparison op - keeps the rule builders thin.
 #[derive(Debug)]
 pub enum Op {
     /// Value at `path` must serialize-compare equal to this
@@ -149,16 +146,16 @@ struct MatchesOptions {
     if_present: bool,
 }
 
-/// schemars-derived options schema for the four `*_path_equals` kinds; composed
+/// schemars-derived options schema for the eight `*_path_equals` kinds; composed
 /// into their `$defs` branches by `xtask gen-schema`. See
-/// [`crate::migrated_option_schemas`].
+/// [`crate::rule_option_schemas`].
 #[must_use]
 pub fn equals_options_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(EqualsOptions))
         .expect("EqualsOptions JSON schema serializes")
 }
 
-/// schemars-derived options schema for the four `*_path_matches` kinds.
+/// schemars-derived options schema for the eight `*_path_matches` kinds.
 #[must_use]
 pub fn matches_options_schema() -> serde_json::Value {
     serde_json::to_value(schemars::schema_for!(MatchesOptions))
@@ -197,7 +194,7 @@ pub struct StructuredPathRule {
     /// literal (no glob metacharacters, no `!` excludes). The
     /// fast path uses these to short-circuit through the
     /// index's hash-set and skip the O(N) `scope.matches`
-    /// scan — same shape as `file_exists`'s fast path. Driven
+    /// scan - same shape as `file_exists`'s fast path. Driven
     /// by the bundled `monorepo/cargo-workspace@v1`'s
     /// `cargo-workspace-member-declares-name` rule, which
     /// `for_each_dir` instantiates with `paths:
@@ -211,12 +208,16 @@ pub struct StructuredPathRule {
     op: Op,
     /// When `true`, a `JSONPath` query that produces zero matches
     /// is silently OK. When `false` (default), a zero-match query
-    /// is reported as a single violation — the "value being
+    /// is reported as a single violation - the "value being
     /// enforced doesn't exist" case. Use `true` for predicates
     /// that are conditional on the field being present (e.g.
-    /// "every `uses:` in a workflow must be SHA-pinned" — a
+    /// "every `uses:` in a workflow must be SHA-pinned" - a
     /// workflow with no `uses:` at all shouldn't be flagged).
     if_present: bool,
+    /// The located structured fixer, when the rule declares a compatible
+    /// `fix:` (`set_value` on `*_path_equals`, `remove_value` on
+    /// `*_path_absent`). `None` for `*_path_matches` and unfixed rules.
+    fixer: Option<StructuredFixer>,
 }
 
 impl Rule for StructuredPathRule {
@@ -228,6 +229,42 @@ impl Rule for StructuredPathRule {
     }
     fn policy_url(&self) -> Option<&str> {
         self.policy_url.as_deref()
+    }
+
+    fn fixer(&self) -> Option<&dyn Fixer> {
+        self.fixer.as_ref().map(|f| f as &dyn Fixer)
+    }
+
+    fn path_contents_sensitive_by_default(&self) -> bool {
+        self.format.redacts_by_default()
+    }
+
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        let manifest_sensitive = self.scope.sensitive_manifest_sources().next().is_some();
+        for path in self.scope.sensitive_manifest_sources() {
+            visit(path);
+        }
+        if !explicit && !manifest_sensitive && !self.format.redacts_by_default() {
+            return;
+        }
+        if let Some(literals) = &self.literal_paths {
+            for path in literals {
+                if ctx.index.contains_file(path) && self.scope.matches(path, ctx.index) {
+                    visit(path);
+                }
+            }
+            return;
+        }
+        for entry in ctx.index.files() {
+            if self.scope.matches(&entry.path, ctx.index) {
+                visit(&entry.path);
+            }
+        }
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -244,14 +281,23 @@ impl Rule for StructuredPathRule {
             // re-introduce the O(N) work this fast path
             // exists to avoid.)
             for literal in literals {
-                if !ctx.index.contains_file(literal) {
+                // The scope still applies: a literal `paths:` entry satisfies the
+                // include globs trivially, but `scope_filter` can exclude it. Skipping
+                // this check let `alint fix` (which evaluates rule-by-rule) edit a file
+                // that `check`'s file-major dispatch had excluded.
+                if !ctx.index.contains_file(literal) || !self.scope.matches(literal, ctx.index) {
                     continue;
                 }
                 let full = ctx.root.join(literal);
-                // Cap the read so a multi-GB file matched here can't OOM the
-                // run; over-cap or unreadable → skip (M3).
-                let Ok(bytes) = crate::io::read_capped(&full) else {
-                    continue;
+                // Cap the read so a multi-GB file matched here cannot OOM the
+                // run. Every failure class becomes a typed `resource_read`
+                // analysis failure, matching `check`'s file-major dispatch.
+                let bytes = match crate::io::read_capped(&full) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        violations.push(crate::io::read_cap_error_violation(literal, &e));
+                        continue;
+                    }
                 };
                 violations.extend(self.evaluate_file(ctx, literal, &bytes)?);
             }
@@ -261,10 +307,15 @@ impl Rule for StructuredPathRule {
                     continue;
                 }
                 let full = ctx.root.join(&entry.path);
-                // Cap the read (multi-GB OOM guard, M3); permission / race /
-                // over-cap → silent skip, like other content rules.
-                let Ok(bytes) = crate::io::read_capped(&full) else {
-                    continue;
+                // Cap the read so a multi-GB file matched here cannot OOM the
+                // run. Every failure class becomes a typed `resource_read`
+                // analysis failure, matching `check`'s file-major dispatch.
+                let bytes = match crate::io::read_capped(&full) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        violations.push(crate::io::read_cap_error_violation(&entry.path, &e));
+                        continue;
+                    }
                 };
                 violations.extend(self.evaluate_file(ctx, &entry.path, &bytes)?);
             }
@@ -284,32 +335,107 @@ impl PerFileRule for StructuredPathRule {
 
     fn evaluate_file(
         &self,
-        _ctx: &Context<'_>,
+        ctx: &Context<'_>,
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return Ok(Vec::new());
+        Ok(self.evaluate_file_inner::<false>(ctx, path, bytes))
+    }
+
+    fn evaluate_file_traced(
+        &self,
+        ctx: &Context<'_>,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<Vec<Violation>> {
+        Ok(self.evaluate_file_inner::<true>(ctx, path, bytes))
+    }
+}
+
+impl StructuredPathRule {
+    fn evaluate_file_inner<const TRACE: bool>(
+        &self,
+        ctx: &Context<'_>,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Vec<Violation> {
+        // A NUL-bearing / genuinely-binary file caught by a broad glob is skipped
+        // (no violation), matching the hygiene fixers' invariant and keeping `check`
+        // and `fix` in agreement -- otherwise a PERMISSIVE-format rule (`.properties`
+        // / YAML) flags a fixable "value mismatch" on binary junk that `set_value`
+        // then cannot resolve, so the fix loops to a false exit-2 (audit M2).
+        // `looks_binary` triggers on NUL bytes, NOT high bytes, so a legitimate
+        // Latin-1 `.properties` (below) is unaffected.
+        if looks_binary(bytes) {
+            return Vec::new();
+        }
+        let sensitive = self.format.redacts_by_default();
+        let redact = |finding: &mut Violation, category: &str, evidence: &[String]| {
+            if sensitive {
+                let locator = format!(
+                    "{}\0{}\0{}\0{category}",
+                    self.format.label(),
+                    path.display(),
+                    self.path_src
+                );
+                finding.redact_evidence(&self.id, &locator, evidence.iter().map(String::as_str));
+            }
         };
-        let root_value = match self.format.parse(text) {
+        // Lossy-decode (like `json_schema_passes` / `cross_file`) rather than a
+        // strict `from_utf8` + silent skip: a non-UTF-8 file -- e.g. a Latin-1
+        // `.properties`, the format's historical default -- must be ANALYZED, not
+        // silently ignored. Invalid bytes become U+FFFD. For the STRICT formats
+        // (JSON / TOML / XML / HCL / INI / dotenv) a truncated-but-textual file
+        // caught by a broad glob then surfaces one parse analysis failure rather
+        // than hiding. The two PERMISSIVE formats do NOT: `.properties` maps almost any
+        // bytes to valueless keys and YAML reads bare bytes as a scalar string, so a
+        // mis-globbed textual file there yields a junk tree (the query just finds no
+        // match), not a parse error -- keep the glob narrow for those formats.
+        let text = String::from_utf8_lossy(bytes);
+        let root_value = match self.format.parse(&text) {
             Ok(v) => v,
             Err(err) => {
-                return Ok(vec![
-                    Violation::new(format!(
-                        "not a valid {} document: {err}",
-                        self.format.label()
-                    ))
-                    .with_path(std::sync::Arc::<Path>::from(path)),
-                ]);
+                if TRACE {
+                    ctx.record_trace_extraction(alint_core::TraceExtractionObservation {
+                        inputs: 1,
+                        parse_failures: 1,
+                        ..alint_core::TraceExtractionObservation::default()
+                    });
+                }
+                let mut finding = Violation::new(format!(
+                    "not a valid {} document: {err}",
+                    self.format.label()
+                ))
+                .with_path(std::sync::Arc::<Path>::from(path))
+                .as_analysis_failure(AnalysisFailureKind::ResourceParse);
+                if sensitive {
+                    finding.redact_message(&self.id);
+                }
+                return vec![finding];
             }
         };
         let matches = self.path_expr.query(&root_value);
+        if TRACE {
+            let cardinality_mismatch = if matches!(self.op, Op::Absent) {
+                !matches.is_empty()
+            } else {
+                matches.is_empty() && !self.if_present
+            };
+            ctx.record_trace_extraction(alint_core::TraceExtractionObservation {
+                inputs: 1,
+                values: u64::try_from(matches.len()).expect("query result length fits u64"),
+                cardinality_checks: 1,
+                cardinality_mismatches: u64::from(cardinality_mismatch),
+                ..alint_core::TraceExtractionObservation::default()
+            });
+            record_structured_trace_preview(ctx, path, &matches, sensitive);
+        }
         // Existence assertion: the query must select nothing. Any match is
         // exactly one file-level violation -- never per-match, so a `$[?...]`
         // filter that fans out over every root key still yields one violation.
         if matches!(self.op, Op::Absent) {
             if matches.is_empty() {
-                return Ok(Vec::new());
+                return Vec::new();
             }
             let msg = self.message.clone().unwrap_or_else(|| {
                 format!(
@@ -317,23 +443,25 @@ impl PerFileRule for StructuredPathRule {
                     self.path_src
                 )
             });
-            return Ok(vec![
-                Violation::new(msg)
-                    .with_path(std::sync::Arc::<Path>::from(path))
-                    .with_baseline_key(format!("{}\u{0}absent", self.path_src)),
-            ]);
+            let mut finding = Violation::new(msg)
+                .with_path(std::sync::Arc::<Path>::from(path))
+                .with_baseline_key(format!("{}\u{0}absent", self.path_src));
+            // The matched value drives this finding even though the default
+            // message is value-free; mark secret-bearing formats so baseline
+            // identity and remediation output stay protected.
+            redact(&mut finding, "absent", &[]);
+            return vec![finding];
         }
         if matches.is_empty() {
             if self.if_present {
-                return Ok(Vec::new());
+                return Vec::new();
             }
             let msg = self
                 .message
                 .clone()
                 .unwrap_or_else(|| format!("JSONPath `{}` produced no match", self.path_src));
-            return Ok(vec![
-                Violation::new(msg).with_path(std::sync::Arc::<Path>::from(path)),
-            ]);
+            let finding = Violation::new(msg).with_path(std::sync::Arc::<Path>::from(path));
+            return vec![finding];
         }
         let mut violations = Vec::new();
         for m in matches.iter() {
@@ -345,14 +473,51 @@ impl PerFileRule for StructuredPathRule {
                 // violations would collapse to one fingerprint and mask a
                 // genuinely new failing node; and a reworded `message:`
                 // must not churn the baseline. (v3 audit, §2.4.)
-                violations.push(
-                    Violation::new(base)
-                        .with_path(std::sync::Arc::<Path>::from(path))
-                        .with_baseline_key(match_baseline_key(&self.path_src, &self.op, m)),
-                );
+                let mut finding = Violation::new(base)
+                    .with_path(std::sync::Arc::<Path>::from(path))
+                    .with_baseline_key(match_baseline_key(&self.path_src, &self.op, m));
+                let evidence = sensitive.then(|| vec![m.to_string(), short_render(m)]);
+                redact(&mut finding, "mismatch", evidence.as_deref().unwrap_or(&[]));
+                violations.push(finding);
             }
         }
-        Ok(violations)
+        violations
+    }
+}
+fn record_structured_trace_preview(
+    ctx: &Context<'_>,
+    path: &Path,
+    matches: &serde_json_path::NodeList<'_>,
+    sensitive: bool,
+) {
+    if !ctx.trace_preview_enabled() {
+        return;
+    }
+    let sensitivity = ctx.trace_evidence_sensitivity(sensitive);
+    for (occurrence, value) in matches.iter().enumerate() {
+        let occurrence = u64::try_from(occurrence).expect("query result index fits u64");
+        ctx.record_trace_preview(alint_core::TracePreviewRow::new(
+            path,
+            alint_core::TracePathOrigin::RepositorySource,
+            None,
+            Some(format!("row:{occurrence}")),
+            occurrence,
+            alint_core::TraceProvenance::Structured,
+            sensitivity,
+            trace_value_type(value),
+            &value.to_string(),
+        ));
+    }
+}
+
+fn trace_value_type(value: &Value) -> alint_core::TraceValueType {
+    match value {
+        Value::String(_) => alint_core::TraceValueType::String,
+        Value::Number(_) => alint_core::TraceValueType::Number,
+        Value::Bool(_) => alint_core::TraceValueType::Boolean,
+        Value::Null => alint_core::TraceValueType::Null,
+        Value::Array(_) => alint_core::TraceValueType::Array,
+        Value::Object(_) => alint_core::TraceValueType::Object,
     }
 }
 
@@ -364,17 +529,103 @@ impl PerFileRule for StructuredPathRule {
 ///
 /// The value is rendered in **full** (not `short_render`, which truncates at
 /// 80 chars for human messages): a truncated value would collapse two distinct
-/// long values sharing an 80-char prefix into one fingerprint — a masking bug.
+/// long values sharing an 80-char prefix into one fingerprint - a masking bug.
 /// `Value`'s `Display` is compact JSON with control characters escaped, so a
 /// value can never contain a literal `\0` and forge the NUL separators.
 fn match_baseline_key(path_src: &str, op: &Op, m: &Value) -> String {
     let op_descr = match op {
         Op::Equals(expected) => format!("== {expected}"),
-        Op::Matches(re) => format!("=~ {}", re.as_str()),
+        // The `matches:` key is shared with the located `replace` fixer -- route
+        // it through the single source so the two can never drift.
+        Op::Matches(re) => return matches_baseline_key(path_src, re.as_str(), m),
         // Unreached: `Absent` violations are file-level (built in `evaluate_file`).
         Op::Absent => "absent".to_string(),
     };
     format!("{path_src}\u{0}{op_descr}\u{0}got {m}")
+}
+
+/// The baseline identity of one failing `matches:` node -- the SINGLE definition
+/// of that key, shared with the located `replace` fixer
+/// ([`crate::fixers::StructuredFixer::collect_edits`]). `fix --baseline` drops
+/// the grandfathered violations upstream and hands the fixer only the LIVE set;
+/// the fixer re-derives every node from the file, so it must correlate each
+/// candidate back to a live violation by this exact key. If the check side and
+/// the fixer ever computed it differently, a grandfathered node would be
+/// silently re-fixed (an under-suppression trust bug) -- routing both callers
+/// through this fn makes that drift impossible. Output is byte-identical to the
+/// former inline `=~ {re}` branch, so recorded baselines stay valid.
+pub(crate) fn matches_baseline_key(path_src: &str, matches_regex_src: &str, m: &Value) -> String {
+    format!("{path_src}\u{0}=~ {matches_regex_src}\u{0}got {m}")
+}
+
+/// Deep equality for `equals:` with numbers compared BY VALUE: `1` equals `1.0`
+/// (and `1e2` equals `100`), recursively through arrays and objects. Plain
+/// `serde_json::Value` equality distinguishes an integer from a float, so
+/// `equals: 1` failed against a document's `1.0` -- and which one a document
+/// yields is a parser detail (TOML / YAML keep `1.0` a float, `hcl-rs`
+/// normalizes it to `1`). Value equality is the same in every format. Two
+/// integers compare exactly (no float rounding of large `i64` / `u64`), and so
+/// does an integer against a float: equal only when the float is finite,
+/// integral and in the integer's range, and then exactly (`9007199254740993`
+/// does NOT equal `9007199254740992.0`, though both round to the same `f64`).
+/// Two floats compare as `f64`. No other coercion: `"1"` never equals `1`.
+fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => numbers_equal(x, y),
+        (Value::Array(xs), Value::Array(ys)) => {
+            xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| values_equal(x, y))
+        }
+        (Value::Object(xs), Value::Object(ys)) => {
+            xs.len() == ys.len()
+                && xs
+                    .iter()
+                    .all(|(k, x)| ys.get(k).is_some_and(|y| values_equal(x, y)))
+        }
+        _ => a == b,
+    }
+}
+
+/// Exact numeric equality (see [`values_equal`]).
+fn numbers_equal(x: &serde_json::Number, y: &serde_json::Number) -> bool {
+    match (
+        x.as_f64().filter(|_| x.is_f64()),
+        y.as_f64().filter(|_| y.is_f64()),
+    ) {
+        #[allow(clippy::float_cmp)] // exact value equality is the point
+        (Some(f), Some(g)) => f == g,
+        (Some(f), None) => int_equals_float(y, f),
+        (None, Some(g)) => int_equals_float(x, g),
+        (None, None) => {
+            if let (Some(i), Some(j)) = (x.as_i64(), y.as_i64()) {
+                i == j
+            } else if let (Some(i), Some(j)) = (x.as_u64(), y.as_u64()) {
+                i == j
+            } else {
+                // One negative i64 and one u64 beyond i64::MAX: never equal.
+                false
+            }
+        }
+    }
+}
+
+/// Whether integer `n` equals float `f` EXACTLY: `f` must be finite, integral
+/// and within the integer type's range; only then is the cast to it lossless.
+fn int_equals_float(n: &serde_json::Number, f: f64) -> bool {
+    // 2^63 and 2^64 are exactly representable as f64.
+    const TWO_63: f64 = 9_223_372_036_854_775_808.0;
+    const TWO_64: f64 = 18_446_744_073_709_551_616.0;
+    if !f.is_finite() || f.fract() != 0.0 {
+        return false;
+    }
+    if let Some(i) = n.as_i64() {
+        #[allow(clippy::cast_possible_truncation)] // range-checked: exact
+        return (-TWO_63..TWO_63).contains(&f) && f as i64 == i;
+    }
+    if let Some(u) = n.as_u64() {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // range-checked
+        return (0.0..TWO_64).contains(&f) && f as u64 == u;
+    }
+    false
 }
 
 /// Return `Some(message)` if the match fails the op; `None` if it passes.
@@ -384,7 +635,7 @@ fn check_match(m: &Value, op: &Op) -> Option<String> {
         // the per-match loop; a stray call is a pass.
         Op::Absent => None,
         Op::Equals(expected) => {
-            if m == expected {
+            if values_equal(m, expected) {
                 None
             } else {
                 Some(format!(
@@ -451,6 +702,462 @@ fn kind_name(v: &Value) -> &'static str {
 // constructs the shared `StructuredPathRule`.
 // ---------------------------------------------------------------
 
+pub static JSON_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Json]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static JSON_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Json]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static YAML_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Yaml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static YAML_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Yaml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static TOML_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Toml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static TOML_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Toml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static XML_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Xml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static XML_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Xml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static DOTENV_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Dotenv]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static DOTENV_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Dotenv]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static PROPERTIES_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Properties]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static PROPERTIES_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Properties]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static INI_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Ini]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static INI_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Ini]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static HCL_PATH_EQUALS_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Hcl]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("set_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static HCL_PATH_MATCHES_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Hcl]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("replace")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static JSON_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Json]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static YAML_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Yaml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static TOML_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Toml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static XML_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Xml]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static DOTENV_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Dotenv]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static PROPERTIES_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Properties]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static INI_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Ini]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
+pub static HCL_PATH_ABSENT_META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[alint_core::Format::Hcl]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("remove_value")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::EXTRACTION,
+    nested_rules: false,
+};
+
 pub fn json_path_equals_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     build_equals(spec, Format::Json, "json_path_equals")
 }
@@ -499,6 +1206,54 @@ pub fn xml_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     build_absent(spec, Format::Xml, "xml_path_absent")
 }
 
+pub fn dotenv_path_equals_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_equals(spec, Format::Dotenv, "dotenv_path_equals")
+}
+
+pub fn dotenv_path_matches_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_matches(spec, Format::Dotenv, "dotenv_path_matches")
+}
+
+pub fn dotenv_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_absent(spec, Format::Dotenv, "dotenv_path_absent")
+}
+
+pub fn properties_path_equals_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_equals(spec, Format::Properties, "properties_path_equals")
+}
+
+pub fn properties_path_matches_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_matches(spec, Format::Properties, "properties_path_matches")
+}
+
+pub fn properties_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_absent(spec, Format::Properties, "properties_path_absent")
+}
+
+pub fn ini_path_equals_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_equals(spec, Format::Ini, "ini_path_equals")
+}
+
+pub fn ini_path_matches_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_matches(spec, Format::Ini, "ini_path_matches")
+}
+
+pub fn ini_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_absent(spec, Format::Ini, "ini_path_absent")
+}
+
+pub fn hcl_path_equals_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_equals(spec, Format::Hcl, "hcl_path_equals")
+}
+
+pub fn hcl_path_matches_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_matches(spec, Format::Hcl, "hcl_path_matches")
+}
+
+pub fn hcl_path_absent_build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
+    build_absent(spec, Format::Hcl, "hcl_path_absent")
+}
+
 fn build_absent(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Box<dyn Rule>> {
     let paths = spec.paths.as_ref().ok_or_else(|| {
         Error::rule_config(&spec.id, format!("{kind_label} requires a `paths` field"))
@@ -512,6 +1267,27 @@ fn build_absent(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Box
             alint_core::jsonpath_diagnostics::format_parse_error(&opts.path, e),
         )
     })?;
+    // Only `remove_value` is compatible with a `*_path_absent` kind (it deletes
+    // the matched node the rule requires to be absent). Any other op is a config
+    // error rather than a silently-ignored `fix:`. Unsafe by default.
+    let fixer = match &spec.fix {
+        Some(FixSpec::RemoveValue { remove_value }) => Some(StructuredFixer::remove(
+            format,
+            path_expr.clone(),
+            opts.path.clone(),
+            remove_value.applicability.unwrap_or(Applicability::Unsafe),
+        )),
+        Some(other) => {
+            return Err(Error::rule_config(
+                &spec.id,
+                format!(
+                    "fix.{} is not compatible with {kind_label} (only `remove_value` is)",
+                    other.op_name()
+                ),
+            ));
+        }
+        None => None,
+    };
     Ok(Box::new(StructuredPathRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -524,6 +1300,7 @@ fn build_absent(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Box
         path_src: opts.path,
         op: Op::Absent,
         if_present: false,
+        fixer,
     }))
 }
 
@@ -540,6 +1317,29 @@ fn build_equals(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Box
             alint_core::jsonpath_diagnostics::format_parse_error(&opts.path, e),
         )
     })?;
+    // Only `set_value` is compatible with a `*_path_equals` kind (it overwrites
+    // the matched node with the rule's `equals` value). Safe by default, but the
+    // fixer only emits at tier for a scalar replacing an existing scalar
+    // (`StructuredFixer::collect_edits`); anything else declines.
+    let fixer = match &spec.fix {
+        Some(FixSpec::SetValue { set_value }) => Some(StructuredFixer::set(
+            format,
+            path_expr.clone(),
+            opts.path.clone(),
+            opts.equals.clone(),
+            set_value.applicability.unwrap_or(Applicability::Safe),
+        )),
+        Some(other) => {
+            return Err(Error::rule_config(
+                &spec.id,
+                format!(
+                    "fix.{} is not compatible with {kind_label} (only `set_value` is)",
+                    other.op_name()
+                ),
+            ));
+        }
+        None => None,
+    };
     Ok(Box::new(StructuredPathRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -552,6 +1352,7 @@ fn build_equals(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Box
         path_src: opts.path,
         op: Op::Equals(opts.equals),
         if_present: opts.if_present,
+        fixer,
     }))
 }
 
@@ -571,6 +1372,49 @@ fn build_matches(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Bo
     let re = Regex::new(&opts.matches).map_err(|e| {
         Error::rule_config(&spec.id, format!("invalid regex {:?}: {e}", opts.matches))
     })?;
+    // `*_path_matches` accepts ONLY the `replace` op: the value at `path` is
+    // rewritten (by the fix's OWN `pattern:` -> `replacement:`) so it satisfies the
+    // rule's `matches:` -- which stays the check + re-verify target. Any other op is
+    // a config error. Unsafe by default (a regex rewrite is not behavior-preserving).
+    let fixer = match &spec.fix {
+        Some(FixSpec::Replace { replace }) => {
+            let Some(pattern) = &replace.pattern else {
+                return Err(Error::rule_config(
+                    &spec.id,
+                    format!(
+                        "fix.replace on {kind_label} requires a `pattern:` (the search \
+                         regex applied to the value at `path`); the rule's `matches:` is \
+                         the check target, not the search"
+                    ),
+                ));
+            };
+            let search = Regex::new(pattern).map_err(|e| {
+                Error::rule_config(
+                    &spec.id,
+                    format!("invalid fix.replace.pattern {pattern:?}: {e}"),
+                )
+            })?;
+            Some(StructuredFixer::replace(
+                format,
+                path_expr.clone(),
+                opts.path.clone(),
+                search,
+                replace.replacement.clone(),
+                opts.matches.clone(),
+                replace.applicability.unwrap_or(Applicability::Unsafe),
+            ))
+        }
+        Some(other) => {
+            return Err(Error::rule_config(
+                &spec.id,
+                format!(
+                    "fix.{} is not compatible with {kind_label} (only `replace` is)",
+                    other.op_name()
+                ),
+            ));
+        }
+        None => None,
+    };
     Ok(Box::new(StructuredPathRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -583,649 +1427,10 @@ fn build_matches(spec: &RuleSpec, format: Format, kind_label: &str) -> Result<Bo
         path_src: opts.path,
         op: Op::Matches(re),
         if_present: opts.if_present,
+        fixer,
     }))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
-
-    #[test]
-    fn short_render_truncates_on_a_char_boundary_without_panicking() {
-        // Regression: `short_render` byte-sliced `&raw[..80]`, which panics
-        // when an untrusted matched value puts a multibyte codepoint across
-        // byte 80 — crashing the whole parallel run (and the LSP). 78 ASCII
-        // + `é`s: serde_json quotes the string, so the byte-80 boundary
-        // lands mid-`é`. Must truncate (with the ellipsis), not abort.
-        let value = Value::String(format!("{}{}", "a".repeat(78), "é".repeat(8)));
-        let rendered = short_render(&value);
-        assert!(rendered.ends_with('…'), "expected truncation: {rendered}");
-        // A short non-ASCII value is returned whole (quoted JSON rendering).
-        assert_eq!(short_render(&Value::String("café".to_string())), "\"café\"");
-    }
-
-    // ─── build-path errors ────────────────────────────────────
-
-    #[test]
-    fn build_rejects_missing_paths() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_equals\n\
-             path: \"$.name\"\n\
-             equals: \"x\"\n\
-             level: error\n",
-        );
-        assert!(json_path_equals_build(&spec).is_err());
-    }
-
-    #[test]
-    fn build_rejects_invalid_jsonpath() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_equals\n\
-             paths: \"package.json\"\n\
-             path: \"$..[invalid\"\n\
-             equals: \"x\"\n\
-             level: error\n",
-        );
-        assert!(json_path_equals_build(&spec).is_err());
-    }
-
-    #[test]
-    fn build_rejects_invalid_regex_in_matches() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_matches\n\
-             paths: \"package.json\"\n\
-             path: \"$.version\"\n\
-             matches: \"[unterminated\"\n\
-             level: error\n",
-        );
-        // Must fail in the regex-compile path (not via
-        // deny_unknown_fields on a typo'd `pattern:` key — the
-        // latent bug this previously had).
-        let e = json_path_matches_build(&spec).unwrap_err().to_string();
-        assert!(e.contains("regex"), "expected a regex error, got: {e}");
-    }
-
-    // ─── json_path_equals ─────────────────────────────────────
-
-    #[test]
-    fn json_path_equals_passes_when_value_matches() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_equals\n\
-             paths: \"package.json\"\n\
-             path: \"$.name\"\n\
-             equals: \"demo\"\n\
-             level: error\n",
-        );
-        let rule = json_path_equals_build(&spec).unwrap();
-        let (tmp, idx) =
-            tempdir_with_files(&[("package.json", br#"{"name":"demo","version":"1.0.0"}"#)]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "matching value should pass: {v:?}");
-    }
-
-    #[test]
-    fn json_path_equals_fires_on_mismatch() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_equals\n\
-             paths: \"package.json\"\n\
-             path: \"$.name\"\n\
-             equals: \"demo\"\n\
-             level: error\n",
-        );
-        let rule = json_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("package.json", br#"{"name":"other"}"#)]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1);
-    }
-
-    #[test]
-    fn json_path_equals_fires_on_missing_path() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_equals\n\
-             paths: \"package.json\"\n\
-             path: \"$.name\"\n\
-             equals: \"demo\"\n\
-             level: error\n",
-        );
-        let rule = json_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("package.json", br#"{"version":"1.0"}"#)]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1, "missing path should fire");
-    }
-
-    #[test]
-    fn json_path_if_present_silent_on_missing() {
-        // `if_present: true` → missing path is silent.
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_equals\n\
-             paths: \"package.json\"\n\
-             path: \"$.name\"\n\
-             equals: \"demo\"\n\
-             if_present: true\n\
-             level: error\n",
-        );
-        let rule = json_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("package.json", br#"{"version":"1.0"}"#)]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "if_present should silence: {v:?}");
-    }
-
-    // ─── json_path_matches ────────────────────────────────────
-
-    #[test]
-    fn json_path_matches_passes_on_pattern_hit() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_matches\n\
-             paths: \"package.json\"\n\
-             path: \"$.version\"\n\
-             matches: \"^\\\\d+\\\\.\\\\d+\\\\.\\\\d+$\"\n\
-             level: error\n",
-        );
-        let rule = json_path_matches_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("package.json", br#"{"version":"1.2.3"}"#)]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "matching version should pass: {v:?}");
-    }
-
-    #[test]
-    fn json_path_matches_fires_on_pattern_miss() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_matches\n\
-             paths: \"package.json\"\n\
-             path: \"$.version\"\n\
-             matches: \"^\\\\d+\\\\.\\\\d+\\\\.\\\\d+$\"\n\
-             level: error\n",
-        );
-        let rule = json_path_matches_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("package.json", br#"{"version":"v1.x"}"#)]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1);
-    }
-
-    // ─── yaml_path_* ─────────────────────────────────────────
-
-    #[test]
-    fn yaml_path_equals_passes_when_value_matches() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: yaml_path_equals\n\
-             paths: \".github/workflows/*.yml\"\n\
-             path: \"$.name\"\n\
-             equals: \"CI\"\n\
-             level: error\n",
-        );
-        let rule = yaml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            ".github/workflows/ci.yml",
-            b"name: CI\non: push\njobs: {}\n",
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "matching name should pass: {v:?}");
-    }
-
-    #[test]
-    fn yaml_path_matches_uses_bracket_notation_for_dashed_keys() {
-        // Per the memory note: dashed YAML keys need bracket
-        // notation (`$.foo['dashed-key']`) because the JSONPath
-        // dot-form can't parse them.
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: yaml_path_matches\n\
-             paths: \"action.yml\"\n\
-             path: \"$.runs['using']\"\n\
-             matches: \"^node\\\\d+$\"\n\
-             level: error\n",
-        );
-        let rule = yaml_path_matches_build(&spec).unwrap();
-        let (tmp, idx) =
-            tempdir_with_files(&[("action.yml", b"runs:\n  using: node20\n  main: index.js\n")]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "bracket notation should match: {v:?}");
-    }
-
-    // ─── yaml_path_absent ────────────────────────────────────
-
-    #[test]
-    fn yaml_path_absent_passes_when_query_matches_nothing() {
-        // The path the rule forbids isn't there -> pass.
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: yaml_path_absent\n\
-             paths: \".github/workflows/*.yml\"\n\
-             path: \"$.permissions\"\n\
-             level: error\n",
-        );
-        let rule = yaml_path_absent_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            ".github/workflows/ci.yml",
-            b"name: CI\non: push\njobs: {}\n",
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "absent path should pass: {v:?}");
-    }
-
-    #[test]
-    fn yaml_path_absent_fires_once_when_query_matches() {
-        // The forbidden path exists -> exactly one file-level violation.
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: yaml_path_absent\n\
-             paths: \".github/workflows/*.yml\"\n\
-             path: \"$.permissions\"\n\
-             level: error\n",
-        );
-        let rule = yaml_path_absent_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            ".github/workflows/ci.yml",
-            b"name: CI\npermissions: write-all\non: push\njobs: {}\n",
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1, "present path should fire once: {v:?}");
-    }
-
-    #[test]
-    fn yaml_path_absent_filter_fanout_collapses_to_one_violation() {
-        // A root-level filter `$[?…]` selects *every* top-level key when the
-        // predicate holds (N nodes). Absent-mode must still yield exactly ONE
-        // file-level violation -- this is the whole point of the kind (vs. a
-        // `yaml_path_equals` + sentinel filter, which fans out to N warnings).
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: yaml_path_absent\n\
-             paths: \"w.yml\"\n\
-             path: \"$[?($.permissions == 'write-all')]\"\n\
-             level: error\n",
-        );
-        let rule = yaml_path_absent_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            "w.yml",
-            b"name: CI\npermissions: write-all\non: push\njobs: {}\n",
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(
-            v.len(),
-            1,
-            "filter fan-out must collapse to one file-level violation: {v:?}"
-        );
-    }
-
-    #[test]
-    fn yaml_path_absent_rejects_value_and_if_present_options() {
-        // `if_present` / `equals` / `matches` are not valid on an absent rule
-        // (deny_unknown_fields).
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: yaml_path_absent\n\
-             paths: \"w.yml\"\n\
-             path: \"$.x\"\n\
-             if_present: true\n\
-             level: error\n",
-        );
-        assert!(
-            yaml_path_absent_build(&spec).is_err(),
-            "if_present must be rejected on yaml_path_absent"
-        );
-    }
-
-    // ─── toml_path_* ─────────────────────────────────────────
-
-    #[test]
-    fn toml_path_equals_passes_when_value_matches() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: toml_path_equals\n\
-             paths: \"Cargo.toml\"\n\
-             path: \"$.package.edition\"\n\
-             equals: \"2024\"\n\
-             level: error\n",
-        );
-        let rule = toml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            "Cargo.toml",
-            b"[package]\nname = \"x\"\nedition = \"2024\"\n",
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "matching edition should pass: {v:?}");
-    }
-
-    #[test]
-    fn toml_path_matches_fires_on_floating_version() {
-        // Common policy: deps must be tilde-pinned, not bare.
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: toml_path_matches\n\
-             paths: \"Cargo.toml\"\n\
-             path: \"$.dependencies.serde\"\n\
-             matches: \"^[~=]\"\n\
-             level: error\n",
-        );
-        let rule = toml_path_matches_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            "Cargo.toml",
-            b"[package]\nname = \"x\"\n[dependencies]\nserde = \"1\"\n",
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1, "floating `serde = \"1\"` should fire");
-    }
-
-    // ─── xml_path_* ──────────────────────────────────────────
-
-    #[test]
-    fn xml_path_equals_passes_on_csproj_leaf() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: xml_path_equals\n\
-             paths: \"App.csproj\"\n\
-             path: \"$.Project.PropertyGroup.TargetFramework\"\n\
-             equals: \"net8.0\"\n\
-             level: error\n",
-        );
-        let rule = xml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            "App.csproj",
-            br#"<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>"#,
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "leaf element should match: {v:?}");
-    }
-
-    #[test]
-    fn xml_path_equals_fires_on_csproj_mismatch() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: xml_path_equals\n\
-             paths: \"App.csproj\"\n\
-             path: \"$.Project.PropertyGroup.TargetFramework\"\n\
-             equals: \"net8.0\"\n\
-             level: error\n",
-        );
-        let rule = xml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            "App.csproj",
-            br"<Project><PropertyGroup><TargetFramework>net6.0</TargetFramework></PropertyGroup></Project>",
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1);
-    }
-
-    #[test]
-    fn xml_path_matches_on_packageref_attribute_array() {
-        // Repeated <PackageReference> → array; `@Version`
-        // attribute reached via bracket notation; every match
-        // must be a non-empty version-ish string.
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: xml_path_matches\n\
-             paths: \"App.csproj\"\n\
-             path: \"$.Project.ItemGroup.PackageReference[*]['@Version']\"\n\
-             matches: \"^\\\\d\"\n\
-             level: error\n",
-        );
-        let rule = xml_path_matches_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            "App.csproj",
-            br#"<Project><ItemGroup><PackageReference Include="A" Version="1.2.3"/><PackageReference Include="B" Version="4.0.0"/></ItemGroup></Project>"#,
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "both @Version attrs should match: {v:?}");
-    }
-
-    #[test]
-    fn xml_pom_namespace_flattened_and_repeated_dependency_array() {
-        // Maven default namespace must not leak into the query;
-        // repeated <dependency> must be an array.
-        let pom = br#"<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion><dependencies><dependency><artifactId>guava</artifactId></dependency><dependency><artifactId>junit</artifactId></dependency></dependencies></project>"#;
-        let eq = spec_yaml(
-            "id: t\n\
-             kind: xml_path_equals\n\
-             paths: \"pom.xml\"\n\
-             path: \"$.project.modelVersion\"\n\
-             equals: \"4.0.0\"\n\
-             level: error\n",
-        );
-        let (tmp, idx) = tempdir_with_files(&[("pom.xml", pom)]);
-        assert!(
-            xml_path_equals_build(&eq)
-                .unwrap()
-                .evaluate(&ctx(tmp.path(), &idx))
-                .unwrap()
-                .is_empty(),
-            "namespace-flattened modelVersion should match"
-        );
-        let m = spec_yaml(
-            "id: t\n\
-             kind: xml_path_matches\n\
-             paths: \"pom.xml\"\n\
-             path: \"$.project.dependencies.dependency[*].artifactId\"\n\
-             matches: \"^[a-z]+$\"\n\
-             level: error\n",
-        );
-        let v = xml_path_matches_build(&m)
-            .unwrap()
-            .evaluate(&ctx(tmp.path(), &idx))
-            .unwrap();
-        assert!(v.is_empty(), "both deps' artifactId should match: {v:?}");
-    }
-
-    #[test]
-    fn xml_path_if_present_silences_missing() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: xml_path_equals\n\
-             paths: \"App.csproj\"\n\
-             path: \"$.Project.PropertyGroup.Nullable\"\n\
-             equals: \"enable\"\n\
-             if_present: true\n\
-             level: error\n",
-        );
-        let rule = xml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[(
-            "App.csproj",
-            br"<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>",
-        )]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert!(v.is_empty(), "if_present should silence missing: {v:?}");
-    }
-
-    #[test]
-    fn xml_malformed_fires_one_violation() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: xml_path_equals\n\
-             paths: \"App.csproj\"\n\
-             path: \"$.Project\"\n\
-             equals: \"x\"\n\
-             level: error\n",
-        );
-        let rule = xml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("App.csproj", b"<Project><Unclosed></Project>")]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1, "not-well-formed XML should fire once");
-        assert!(v[0].message.contains("XML"), "{:?}", v[0].message);
-    }
-
-    #[test]
-    fn xml_deeply_nested_is_a_parse_error_not_an_abort() {
-        // P1 regression: unbounded recursion would `abort()` the
-        // whole process. The `MAX_XML_DEPTH` guard must instead
-        // yield exactly one ordinary parse-error violation for
-        // the file (no panic, no abort, per-file contained).
-        let depth = alint_core::MAX_XML_DEPTH + 50;
-        let xml = format!("{}deep{}", "<a>".repeat(depth), "</a>".repeat(depth));
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: xml_path_equals\n\
-             paths: \"deep.xml\"\n\
-             path: \"$.a\"\n\
-             equals: \"x\"\n\
-             level: error\n",
-        );
-        let rule = xml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("deep.xml", xml.as_bytes())]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(
-            v.len(),
-            1,
-            "deeply-nested XML must yield exactly one parse-error violation: {v:?}"
-        );
-        assert!(
-            v[0].message.contains("not a valid XML") && v[0].message.contains("depth"),
-            "expected a depth parse-error message, got: {}",
-            v[0].message
-        );
-    }
-
-    #[test]
-    fn xml_depth_beyond_parse_recursion_limit_is_rejected_pre_parse_not_aborted() {
-        // The MAX_XML_DEPTH guard above is POST-parse; a document deep enough to
-        // overflow `roxmltree::Document::parse` itself (tens of thousands of
-        // levels) aborts the whole process before that guard runs. The pre-parse
-        // `xml_depth_within_limit` scan must reject it as an ordinary parse error.
-        // (Without the pre-scan this test would SIGABRT the whole test binary.)
-        let depth = 100_000;
-        let xml = format!("{}deep{}", "<a>".repeat(depth), "</a>".repeat(depth));
-        let spec = spec_yaml(
-            "id: t\nkind: xml_path_equals\npaths: \"deep.xml\"\n\
-             path: \"$.a\"\nequals: \"x\"\nlevel: error\n",
-        );
-        let rule = xml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("deep.xml", xml.as_bytes())]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(
-            v.len(),
-            1,
-            "must be one contained parse-error, no abort: {v:?}"
-        );
-        assert!(v[0].message.contains("depth"), "{}", v[0].message);
-    }
-
-    #[test]
-    fn yaml_flow_depth_bomb_is_rejected_pre_parse_not_hung() {
-        // W2 wiring regression: a `yaml_path_*` rule over a deeply-nested FLOW
-        // document (`[[[…`) must be rejected as a contained parse-error, not fed
-        // to libyaml (which is super-linear on flow nesting and would hang the
-        // run). This exercises the `flow_depth_within_limit` guard *at its
-        // structured-query call site* — the yaml_depth unit tests only cover the
-        // scanner in isolation, so without this a deleted guard here would pass
-        // CI while reopening the DoS.
-        let depth = 5000;
-        let yaml = format!("x: {}1{}", "[".repeat(depth), "]".repeat(depth));
-        let spec = spec_yaml(
-            "id: t\nkind: yaml_path_equals\npaths: \"bomb.yml\"\n\
-             path: \"$.x\"\nequals: \"1\"\nlevel: error\n",
-        );
-        let rule = yaml_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("bomb.yml", yaml.as_bytes())]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(
-            v.len(),
-            1,
-            "must be one contained parse-error, no hang: {v:?}"
-        );
-        assert!(
-            v[0].message.contains("depth"),
-            "the flow-depth guard message should mention depth: {}",
-            v[0].message
-        );
-    }
-
-    #[test]
-    fn xml_leaf_values_are_string_typed() {
-        // Documented gotcha: every XML leaf is a string. A
-        // quoted `equals: "8"` matches; a bare `equals: 8`
-        // (a YAML integer) does not.
-        let xml: &[u8] = b"<Config><n>8</n></Config>";
-        let as_str = spec_yaml(
-            "id: t\n\
-             kind: xml_path_equals\n\
-             paths: \"c.xml\"\n\
-             path: \"$.Config.n\"\n\
-             equals: \"8\"\n\
-             level: error\n",
-        );
-        let (tmp, idx) = tempdir_with_files(&[("c.xml", xml)]);
-        assert!(
-            xml_path_equals_build(&as_str)
-                .unwrap()
-                .evaluate(&ctx(tmp.path(), &idx))
-                .unwrap()
-                .is_empty(),
-            "string 8 should match the string-typed leaf"
-        );
-        let as_int = spec_yaml(
-            "id: t\n\
-             kind: xml_path_equals\n\
-             paths: \"c.xml\"\n\
-             path: \"$.Config.n\"\n\
-             equals: 8\n\
-             level: error\n",
-        );
-        let v = xml_path_equals_build(&as_int)
-            .unwrap()
-            .evaluate(&ctx(tmp.path(), &idx))
-            .unwrap();
-        assert_eq!(v.len(), 1, "integer 8 must NOT equal string \"8\"");
-    }
-
-    #[test]
-    fn xml_empty_element_is_null() {
-        // Design-doc promise (was untested): an empty element
-        // maps to JSON null — `equals: null` matches; `equals:
-        // ""` does not (it is null, not an empty string).
-        let xml: &[u8] = b"<Config><empty/></Config>";
-        let (tmp, idx) = tempdir_with_files(&[("c.xml", xml)]);
-        let as_null = spec_yaml(
-            "id: t\nkind: xml_path_equals\npaths: \"c.xml\"\n\
-             path: \"$.Config.empty\"\nequals: null\nlevel: error\n",
-        );
-        assert!(
-            xml_path_equals_build(&as_null)
-                .unwrap()
-                .evaluate(&ctx(tmp.path(), &idx))
-                .unwrap()
-                .is_empty(),
-            "an empty element must equal null"
-        );
-        let as_empty_str = spec_yaml(
-            "id: t\nkind: xml_path_equals\npaths: \"c.xml\"\n\
-             path: \"$.Config.empty\"\nequals: \"\"\nlevel: error\n",
-        );
-        assert_eq!(
-            xml_path_equals_build(&as_empty_str)
-                .unwrap()
-                .evaluate(&ctx(tmp.path(), &idx))
-                .unwrap()
-                .len(),
-            1,
-            "null must NOT equal the empty string"
-        );
-    }
-
-    // ─── parse error path ─────────────────────────────────────
-
-    #[test]
-    fn evaluate_fires_on_malformed_input() {
-        let spec = spec_yaml(
-            "id: t\n\
-             kind: json_path_equals\n\
-             paths: \"package.json\"\n\
-             path: \"$.name\"\n\
-             equals: \"x\"\n\
-             level: error\n",
-        );
-        let rule = json_path_equals_build(&spec).unwrap();
-        let (tmp, idx) = tempdir_with_files(&[("package.json", b"{not valid json")]);
-        let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
-        assert_eq!(v.len(), 1, "malformed JSON should fire one violation");
-    }
-}
+#[path = "structured_path_tests.rs"]
+mod tests;

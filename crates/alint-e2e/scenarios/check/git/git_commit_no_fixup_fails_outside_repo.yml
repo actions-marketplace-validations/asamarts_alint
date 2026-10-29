@@ -1,0 +1,23 @@
+test_version: 1
+name: git_commit_no_fixup fails closed outside a Git repository
+tags: [check, git_commit_no_fixup, git]
+
+# The unconditional commit-history capability must be available before dispatch.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: no-fixup
+        kind: git_commit_no_fixup
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: no-fixup, kind: resource_read}

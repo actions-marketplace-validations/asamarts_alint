@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_signed_off is silent when HEAD carries the DCO trailer
 tags: [check, git_commit_signed_off, git, passing]
 
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

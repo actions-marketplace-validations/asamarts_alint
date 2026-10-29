@@ -38,13 +38,12 @@ impl Rule for FileIsTextRule {
             // the whole file from the engine and inspects only
             // the prefix.
             let full = ctx.root.join(&entry.path);
+            // Every read error, including a mid-walk removal, fails closed to
+            // match `check`'s file-major dispatch.
             let bytes = match read_prefix(&full) {
                 Ok(b) => b,
                 Err(e) => {
-                    violations.push(
-                        Violation::new(format!("could not read file: {e}"))
-                            .with_path(entry.path.clone()),
-                    );
+                    violations.push(crate::io::io_error_violation(&entry.path, &e));
                     continue;
                 }
             };
@@ -92,6 +91,28 @@ impl PerFileRule for FileIsTextRule {
         Some(TEXT_INSPECT_LEN)
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::Prefix {
+        max_bytes: Some(8192),
+        metadata: false,
+    },
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(_paths) = &spec.paths else {

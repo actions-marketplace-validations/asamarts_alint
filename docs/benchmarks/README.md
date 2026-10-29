@@ -4,24 +4,24 @@ How fast is alint, how do we measure it, and where do the numbers live.
 
 ## TL;DR — current published numbers
 
-`linux-x86_64` (Intel Core i7-6700HQ 4-core / 15 GB / ext4 / rustc 1.97.0, host
-`kbench`). Canonical since 2026-07-15; the retired 3900X dev-box series is
+`linux-x86_64` (Intel Core i7-6700HQ 4-core / 15 GB / ext4 / rustc 1.97.0, the
+bench host). Canonical since 2026-07-15; the retired 3900X dev-box series is
 retained at [`macro/results/linux-x86_64-ryzen-3900x/`](macro/results/linux-x86_64-ryzen-3900x/)
-(published at alint.org/benchmarks-1). Latest published release: **v0.13.0**
-(2026-06-17). Headline full-run wall-times at 1M files (sourced from
+and summarized in [`legacy/HISTORY.md`](legacy/HISTORY.md). Latest published release: **v0.18.4**
+(2026-10-15). Headline full-run wall-times at 1M files (sourced from
 [`HISTORY.md`](HISTORY.md)):
 
-| Workload (1M, full) | v0.13.0 |
+| Workload (1M, full) | v0.18.4 |
 |---|---:|
-| S3 workspace bundle | 17.46 s ± 0.16 |
-| S6 per-file content fan-out | 16.65 s ± 0.03 |
-| S7 cross-file relational | 16.09 s ± 0.10 |
-| S9 nested polyglot | 11.39 s ± 0.05 |
+| S1 layout and path | 4.01 s ± 0.07 |
+| S2 per-file content | 18.38 s ± 0.04 |
+| S3 cross-file relational | 475.2 s ± 2.0 |
+| S4 workspace bundle | 16.17 s ± 0.03 |
 
 The full per-scenario, per-size trajectory (every release × 1k/10k/100k/1M ×
 full/changed) lives in [`HISTORY.md`](HISTORY.md); per-version raw snapshots
-under [`macro/results/linux-x86_64/v0.13.0/`](macro/results/linux-x86_64/v0.13.0/)
-and [`micro/results/linux-x86_64/v0.13.0/`](micro/results/linux-x86_64/v0.13.0/).
+under [`macro/results/linux-x86_64/v0.18.4/`](macro/results/linux-x86_64/v0.18.4/)
+and [`micro/results/linux-x86_64/v0.18.4/`](micro/results/linux-x86_64/v0.18.4/).
 
 ## Layout
 
@@ -36,7 +36,7 @@ docs/benchmarks/
 │   ├── README.md        — what each of the 12 micro-benches measures
 │   └── results/<arch>/<version>/criterion/   — published snapshots
 │
-├── macro/               — hyperfine bench-scale (S1-S14, full e2e wall-time)
+├── macro/               — hyperfine bench-scale (S1-S4 + SFIX, full e2e wall-time)
 │   ├── README.md        — what each scenario tests + tool matrix
 │   └── results/<arch>/<version>/             — published snapshots
 │

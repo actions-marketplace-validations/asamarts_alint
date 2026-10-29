@@ -1,0 +1,38 @@
+test_version: 1
+name: markdown_required_headings accepts wildcard content
+
+tags: [check, markdown_required_headings, content, passing]
+
+docs:
+  title: Required headings remain ordered around arbitrary intermediate sections
+  case: pass
+  kind: markdown_required_headings
+
+given:
+  tree:
+    docs/adr/0001-choice.md: |
+      # Choice
+
+      ## Status
+
+      ## Consequences
+
+      ### Positive
+
+      ## Context
+
+      ## Decision
+  config: |
+    version: 1
+    rules:
+      - id: adr-shape
+        kind: markdown_required_headings
+        paths: "docs/adr/*.md"
+        headings: ["# Choice", "## Status", "*", "## Context", "## Decision"]
+        level: error
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

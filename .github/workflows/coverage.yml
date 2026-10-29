@@ -7,6 +7,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: coverage-${{ github.ref }}
   cancel-in-progress: true
@@ -23,20 +26,30 @@ env:
 jobs:
   coverage:
     name: cargo-llvm-cov
-    # SECURITY (audit H6): never run on the self-hosted box for a fork PR.
-    # Coverage needs the box's pids-limit / CARGO_BUILD_JOBS tuning (a hosted
-    # instrumented build OOMs/hangs) and its Codecov secret is withheld from
-    # forks anyway. The ALINT_COVERAGE_FLOOR gate still runs on push-to-main
-    # and on every same-repo (collaborator) PR. See
-    # docs/design/v0.14/ci-fork-pr-isolation.md.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, alint]
-    # Self-fail fast if the runner ever hangs again, instead of sitting at the
-    # 360-min GitHub default and holding the single self-hosted runner. 90 min
-    # comfortably covers a cold-cache, parallelism-capped instrumented build
-    # (typical warm runs finish in minutes); well under bench's 360 / mutants'
-    # 240. The pids-limit + CARGO_BUILD_JOBS fixes should keep hangs from
-    # recurring — this is the belt-and-suspenders net.
+    # SECURITY (audit H6): all PR coverage is held while the fixed-label
+    # listener is offline. Keep the full exact-ID predicate beside the explicit
+    # false capacity switch so its future disposable route cannot silently
+    # broaden admission. This is defence in depth, not scheduling authority.
+    # See docs/design/v0.14/ci-fork-pr-isolation.md.
+    # The persistent `alint` listener is intentionally offline pending the
+    # disposable-runner cutover. Main/manual coverage remains useful and safe
+    # on ephemeral hosted capacity; PR coverage stays skipped by this guard.
+    if: >-
+      ${{
+        github.event_name != 'pull_request' ||
+        (false &&
+          format('{0}', github.event.repository.id) == '1214597864' &&
+          format('{0}', github.event.pull_request.base.repo.id) == '1214597864' &&
+          format('{0}', github.event.pull_request.head.repo.id) == '1214597864' &&
+          contains(fromJSON('["11239806"]'), format('{0}', github.event.pull_request.user.id)) &&
+          contains(fromJSON('["11239806"]'), format('{0}', github.event.sender.id)) &&
+          contains(fromJSON('["11239806"]'), format('{0}', github.actor_id))
+        )
+      }}
+    runs-on: ubuntu-latest
+    # Self-fail fast if an instrumented build hangs. 90 minutes comfortably
+    # covers a cold-cache, parallelism-capped run and is well under GitHub's
+    # default job timeout.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -54,14 +67,14 @@ jobs:
       - run: ci/scripts/coverage.sh
 
       - name: Upload LCOV artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-lcov
           path: target/coverage/coverage.lcov
           retention-days: 30
 
       - name: Upload HTML artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: coverage-html
           path: target/coverage/html/
@@ -83,7 +96,7 @@ jobs:
           fi
       - name: Upload to Codecov
         if: steps.codecov_token.outputs.present == 'true'
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: target/coverage/coverage.lcov

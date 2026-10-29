@@ -28,12 +28,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Violation};
+use alint_core::{AnalysisFailureKind, Context, Error, Level, Result, Rule, RuleSpec, Violation};
 use regex::Regex;
 use serde::Deserialize;
 
 /// Cap on the tool output captured into a fallback violation
-/// message — a noisy formatter can emit a lot; keep reports
+/// message - a noisy formatter can emit a lot; keep reports
 /// legible (mirrors the `command` rule's output cap intent).
 const OUTPUT_SNIPPET_CAP: usize = 400;
 
@@ -69,7 +69,7 @@ struct Options {
     #[serde(default)]
     files_pattern: Option<String>,
     /// Checker timeout in seconds (default 120). On timeout the child is killed
-    /// and one violation is emitted.
+    /// and one non-baselinable `evaluation` analysis failure is emitted.
     #[serde(default)]
     #[schemars(range(min = 1))]
     timeout: Option<u64>,
@@ -108,11 +108,13 @@ impl Rule for CommandIdempotentRule {
             ("ALINT_RULE_ID", self.id.clone()),
             ("ALINT_LEVEL", self.level.as_str().to_string()),
         ];
-        let (status, stdout_b, stderr_b) = match crate::spawn::run_capturing(
+        let (status, stdout_b, stderr_b) = match crate::spawn::run_in_workdir(
             &self.command,
-            &ctx.root.join(&self.workdir),
+            ctx.root,
+            &self.workdir,
             &env,
             Duration::from_secs(self.timeout),
+            ctx.process_environment,
         ) {
             crate::spawn::SpawnOutcome::Exited {
                 status,
@@ -121,22 +123,35 @@ impl Rule for CommandIdempotentRule {
             } => (status, stdout, stderr),
             crate::spawn::SpawnOutcome::SpawnError(e) => {
                 let program = self.command.first().map_or("", String::as_str);
-                return Ok(vec![self.violation(
-                    &self.workdir,
-                    &format!("checker `{program}` could not be spawned: {e}"),
-                )]);
+                return Ok(vec![
+                    Violation::new(format!("checker `{program}` could not be spawned: {e}"))
+                        .with_path(PathBuf::from(&self.workdir))
+                        .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                ]);
             }
             crate::spawn::SpawnOutcome::TimedOut { secs } => {
-                return Ok(vec![self.violation(
-                    &self.workdir,
-                    &format!(
+                return Ok(vec![
+                    Violation::new(format!(
                         "`{}` did not exit within {secs}s \
                          (raise `timeout:` on the rule to extend)",
                         self.command.join(" ")
-                    ),
-                )]);
+                    ))
+                    .with_path(PathBuf::from(&self.workdir))
+                    .as_analysis_failure(AnalysisFailureKind::Evaluation),
+                ]);
             }
         };
+
+        if status.code().is_none() {
+            return Ok(vec![
+                Violation::new(format!(
+                    "`{}` terminated without an exit status before producing a policy verdict",
+                    self.command.join(" ")
+                ))
+                .with_path(PathBuf::from(&self.workdir))
+                .as_analysis_failure(AnalysisFailureKind::Evaluation),
+            ]);
+        }
 
         if status.success() {
             // The tree is idempotent / formatter-clean.
@@ -157,7 +172,7 @@ impl Rule for CommandIdempotentRule {
                 return Ok(vec![self.violation(
                     &self.workdir,
                     &format!(
-                        "`{}` exited with {code} — the tree is not formatter-clean{}",
+                        "`{}` exited with {code} - the tree is not formatter-clean{}",
                         self.command.join(" "),
                         snippet(&stdout, &stderr),
                     ),
@@ -230,6 +245,47 @@ fn snippet(stdout: &str, stderr: &str) -> String {
     format!(": {snip}")
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("workdir"),
+            selector_type: alint_core::SelectorType::LiteralPath,
+            rerootable: true,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("files_pattern"),
+            selector_type: alint_core::SelectorType::Regex,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::SpawnUserCommand,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::EnvExport,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+    ]),
+    content: alint_core::ContentAccess::Delegated,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -238,7 +294,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "command_idempotent requires a non-empty `command` argv \
-             (the checker to run in its --check / idempotence mode)",
+         (the checker to run in its --check / idempotence mode)",
         ));
     }
     if opts.files_pattern.is_some() && opts.files_from == FilesFrom::None {
@@ -259,7 +315,13 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         policy_url: spec.policy_url.clone(),
         message: spec.message.clone(),
         command: opts.command,
-        workdir: opts.workdir.unwrap_or_else(|| ".".to_string()),
+        workdir: {
+            let workdir = opts.workdir.unwrap_or_else(|| ".".to_string());
+            // Refuse an escaping `workdir:` up front (defense in depth: these
+            // kinds are spawn-gated, but the child's cwd must stay in the repo).
+            crate::spawn::lexical_workdir(&workdir).map_err(|e| Error::rule_config(&spec.id, e))?;
+            workdir
+        },
         files_from: opts.files_from,
         files_pattern,
         timeout: opts
@@ -305,6 +367,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         r.evaluate(&ctx).unwrap()
     }
@@ -380,12 +445,50 @@ mod tests {
     }
 
     #[test]
-    fn spawn_failure_is_a_violation() {
+    fn spawn_failure_is_an_analysis_failure() {
         let dir = tempfile::tempdir().unwrap();
         let r = rule(&["alint-no-such-checker-xyz"], FilesFrom::None, None);
-        let v = eval(&r, dir.path());
-        assert_eq!(v.len(), 1);
-        assert!(v[0].message.contains("could not be spawned"));
+        let raw = eval(&r, dir.path());
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert_eq!(
+            result.analysis_failures[0].kind,
+            AnalysisFailureKind::Evaluation,
+        );
+        assert!(
+            result.analysis_failures[0]
+                .message
+                .contains("could not be spawned")
+        );
+    }
+
+    #[test]
+    fn signal_termination_is_an_analysis_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = rule(&["/bin/sh", "-c", "kill -TERM $$"], FilesFrom::None, None);
+        let raw = eval(&r, dir.path());
+        let result = alint_core::RuleResult::new("t".into(), Level::Warning, None, raw, false);
+        assert!(result.violations.is_empty());
+        assert_eq!(result.analysis_failures.len(), 1);
+        assert_eq!(
+            result.analysis_failures[0].kind,
+            AnalysisFailureKind::Evaluation,
+        );
+    }
+
+    #[test]
+    fn build_rejects_an_escaping_workdir() {
+        let spec = crate::test_support::spec_yaml(
+            "id: t\nkind: command_idempotent\ncommand: [\"true\"]\n\
+             workdir: \"../elsewhere\"\nlevel: error\n",
+        );
+        assert!(
+            build(&spec)
+                .unwrap_err()
+                .to_string()
+                .contains("escapes the repository root")
+        );
     }
 
     #[test]

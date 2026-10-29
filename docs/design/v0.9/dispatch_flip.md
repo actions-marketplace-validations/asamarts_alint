@@ -291,7 +291,7 @@ Three engine-level mechanics change:
 
 - `crates/alint-core/src/rule.rs` — new `PerFileRule` trait;
   `Rule::as_per_file()` default method.
-- `crates/alint-core/src/engine.rs` — partition logic; new
+- `crates/alint-core/src/engine/run.rs` — partition logic; new
   file-major loop; aggregation into per-rule `RuleResult`s.
 - `crates/alint-rules/src/` — per-rule migration. Each per-
   file rule grows a `PerFileRule` impl alongside its existing

@@ -1,3 +1,4 @@
+test_version: 1
 name: nested .alint.yml auto-scopes rules to its subtree
 tags: [check, nested, composition]
 
@@ -43,6 +44,7 @@ expect:
   # hit index.ts (it's .ts, not .rs). Strict path filtering
   # rules those out, but the scope-prefix is the load-bearing
   # piece this scenario proves.
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: frontend-ts-final-newline, level: warning, path: packages/frontend/src/index.ts}
       - {rule: backend-rs-snake-case, level: error, path: packages/backend/src/BadName.rs}

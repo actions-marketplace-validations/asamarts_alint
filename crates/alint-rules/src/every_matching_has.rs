@@ -14,6 +14,8 @@
 //!   level: error
 //! ```
 
+use std::path::Path;
+
 use alint_core::when::WhenExpr;
 use alint_core::{
     CompiledNestedSpec, Context, Error, Level, NestedRuleSpec, Result, Rule, RuleSpec, Scope,
@@ -22,8 +24,8 @@ use alint_core::{
 use serde::Deserialize;
 
 use crate::for_each_dir::{
-    IterateMode, SelectSpec, compile_nested_require, evaluate_for_each, parse_when_iter,
-    resolve_select, validate_nested_require,
+    ForEachParent, IterateMode, SelectSpec, compile_nested_require, evaluate_for_each,
+    parse_when_iter, resolve_select, validate_nested_require, visit_sensitive_for_each,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -45,7 +47,7 @@ struct Options {
     require: Vec<NestedRuleSpec>,
 }
 
-/// Schema for `require:` — a non-empty array of the shared `nested_rule` def
+/// Schema for `require:` - a non-empty array of the shared `nested_rule` def
 /// (kept hand-written; see the field comment). Reproduces the previous
 /// hand-written branch exactly.
 fn require_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
@@ -64,6 +66,7 @@ pub struct EveryMatchingHasRule {
     id: String,
     level: Level,
     policy_url: Option<String>,
+    message: Option<String>,
     select_scope: Scope,
     when_iter: Option<WhenExpr>,
     require: Vec<CompiledNestedSpec>,
@@ -76,6 +79,10 @@ impl Rule for EveryMatchingHasRule {
         validate_nested_require(&self.id, self.level, &self.require, registry)
     }
 
+    fn nested_rule_specs(&self) -> &[CompiledNestedSpec] {
+        &self.require
+    }
+
     fn requires_full_index(&self) -> bool {
         // Cross-file: every entry matching `select` must satisfy
         // `require`, regardless of whether it (or its required
@@ -84,10 +91,28 @@ impl Rule for EveryMatchingHasRule {
         true
     }
 
-    fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        evaluate_for_each(
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        visit_sensitive_for_each(
             &self.id,
             self.level,
+            explicit,
+            &self.select_scope,
+            self.when_iter.as_ref(),
+            &self.require,
+            ctx,
+            IterateMode::Both,
+            visit,
+        );
+    }
+
+    fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
+        evaluate_for_each(
+            ForEachParent::new(&self.id, self.level, self.message.as_deref()),
             &self.select_scope,
             self.when_iter.as_ref(),
             &self.require,
@@ -96,6 +121,31 @@ impl Rule for EveryMatchingHasRule {
         )
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[alint_core::SelectorMeta {
+        name: std::borrow::Cow::Borrowed("select"),
+        selector_type: alint_core::SelectorType::GlobList,
+        rerootable: true,
+    }]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::Delegated,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::NESTED,
+    nested_rules: true,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "every_matching_has")?;
@@ -115,6 +165,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         id: spec.id.clone(),
         level: spec.level,
         policy_url: spec.policy_url.clone(),
+        message: spec.message.clone(),
         select_scope,
         when_iter,
         require,
@@ -150,12 +201,13 @@ mod tests {
         // (rare but possible). The rule should evaluate require against
         // both.
         let require: Vec<NestedRuleSpec> =
-            vec![serde_yaml_ng::from_str("kind: file_exists\npaths: \"{path}\"\n").unwrap()];
+            vec![yaml_serde::from_str("kind: file_exists\npaths: \"{path}\"\n").unwrap()];
         let require = compile_nested_require("t", require).unwrap();
         let r = EveryMatchingHasRule {
             id: "t".into(),
             level: Level::Error,
             policy_url: None,
+            message: None,
             select_scope: Scope::from_patterns(&["packages/*".to_string()]).unwrap(),
             when_iter: None,
             require,
@@ -174,6 +226,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         let v = r.evaluate(&ctx).unwrap();
         // `{path}` resolves to "packages/a" (dir) and "packages/x.md" (file).
@@ -236,6 +291,9 @@ scope_filter:
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         let v = rule.evaluate(&ctx).unwrap();
         // packages/a is iterated (a dir, not a file → file_exists

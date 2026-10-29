@@ -1,3 +1,4 @@
+test_version: 1
 name: all_files_exist fact is false when any listed file is missing
 tags: [check, facts, all_files_exist]
 
@@ -21,4 +22,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

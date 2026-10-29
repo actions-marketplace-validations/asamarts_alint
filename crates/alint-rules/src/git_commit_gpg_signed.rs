@@ -13,8 +13,9 @@
 //!
 //! Shares the commit-validation family shape (the `commit_range`
 //! module): `since:` unset checks HEAD only; `since:` set checks
-//! `<since>..HEAD`. Silent outside a git repo; a bad `since:` ref
-//! hard-fails with a shallow-clone hint.
+//! `<since>..HEAD`. An unavailable Git executable or repository is
+//! an analysis failure; a bad `since:` ref hard-fails with a
+//! shallow-clone hint.
 //!
 //! Check-only — alint can't sign the user's commits.
 
@@ -83,6 +84,41 @@ impl Rule for GitCommitGpgSignedRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::SingleShot,
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::Optional,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[
+                    alint_core::GitOperation::Log,
+                    alint_core::GitOperation::VerifyCommit,
+                ]),
+            },
+            condition: alint_core::CapabilityCondition::Always,
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::HostKeyring,
+            condition: alint_core::CapabilityCondition::Always,
+        },
+    ]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::ASSERTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -97,7 +133,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "`include_merges: true` has no effect without `since:`. Either remove it \
-             or set `since:` to enable range mode.",
+         or set `since:` to enable range mode.",
         ));
     }
 

@@ -1,0 +1,914 @@
+{
+  "$defs": {
+    "TraceAnalysisFailure": {
+      "additionalProperties": false,
+      "description": "Complete public projection of one typed analysis failure.",
+      "properties": {
+        "column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "message",
+        "sensitive"
+      ],
+      "type": "object"
+    },
+    "TraceCounts": {
+      "additionalProperties": false,
+      "description": "Checked aggregate counters carried by a stage.",
+      "properties": {
+        "analysis_failures": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "children": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "considered": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "failed_children": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inputs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "matched": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "notes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "satisfied_children": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "skipped_children": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "values": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "violated_children": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "violations": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "considered",
+        "matched",
+        "inputs",
+        "values",
+        "violations",
+        "notes",
+        "analysis_failures",
+        "children",
+        "satisfied_children",
+        "violated_children",
+        "failed_children",
+        "skipped_children"
+      ],
+      "type": "object"
+    },
+    "TraceExecution": {
+      "additionalProperties": false,
+      "description": "Execution controls recorded in the experimental trace envelope.",
+      "properties": {
+        "base": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changed": {
+          "type": "boolean"
+        },
+        "preview": {
+          "type": "boolean"
+        },
+        "preview_limit": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "changed",
+        "preview",
+        "preview_limit"
+      ],
+      "type": "object"
+    },
+    "TraceNote": {
+      "additionalProperties": false,
+      "description": "Complete public projection of one non-violation note.",
+      "properties": {
+        "column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fixable": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceResultRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "related_locations": {
+          "items": {
+            "$ref": "#/$defs/TraceRelatedLocation"
+          },
+          "type": "array"
+        },
+        "related_locations_omitted": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "related_locations",
+        "related_locations_omitted",
+        "sensitive",
+        "fixable",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "TracePreview": {
+      "additionalProperties": false,
+      "description": "Exact trace-evidence accounting plus the lexicographically first retained rows.",
+      "properties": {
+        "omitted": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "redacted": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/TracePreviewRow"
+          },
+          "type": "array"
+        },
+        "shown": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "value_truncated": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "shown",
+        "omitted",
+        "redacted",
+        "value_truncated",
+        "rows"
+      ],
+      "type": "object"
+    },
+    "TracePreviewRow": {
+      "additionalProperties": false,
+      "description": "One bounded trace-evidence row.",
+      "properties": {
+        "display_value": {
+          "type": "string"
+        },
+        "occurrence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "pointer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/TraceProvenance"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceSourceRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "redacted": {
+          "type": "boolean"
+        },
+        "value_truncated": {
+          "type": "boolean"
+        },
+        "value_type": {
+          "$ref": "#/$defs/TraceValueType"
+        }
+      },
+      "required": [
+        "path",
+        "occurrence",
+        "provenance",
+        "value_type",
+        "display_value",
+        "redacted",
+        "value_truncated"
+      ],
+      "type": "object"
+    },
+    "TraceProvenance": {
+      "description": "Provenance of one retained trace-evidence value.",
+      "enum": [
+        "literal",
+        "structured",
+        "capture",
+        "derived",
+        "command",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "TraceReason": {
+      "description": "Stable machine-readable reason for a trace stage.",
+      "enum": [
+        "level_enabled",
+        "level_off",
+        "when_true",
+        "when_false",
+        "when_evaluation_failed",
+        "changed_scope_matched",
+        "changed_scope_empty",
+        "git_available",
+        "git_unavailable",
+        "analysis_time_available",
+        "analysis_time_unavailable",
+        "manifest_available",
+        "manifest_unavailable",
+        "expect_matches_satisfied",
+        "expect_matches_violated",
+        "expect_matches_failed",
+        "selector_matched",
+        "selector_no_match",
+        "parse_failed",
+        "extraction_succeeded",
+        "cardinality_satisfied",
+        "cardinality_mismatch",
+        "assertion_satisfied",
+        "assertion_violated",
+        "assertion_failed",
+        "nested_satisfied",
+        "nested_violated",
+        "nested_failed",
+        "outcome_satisfied",
+        "outcome_violated",
+        "outcome_skipped",
+        "outcome_analysis_failure"
+      ],
+      "type": "string"
+    },
+    "TraceRelatedLocation": {
+      "additionalProperties": false,
+      "description": "One secondary location in a trace finding.",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceResultRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "label"
+      ],
+      "type": "object"
+    },
+    "TraceResult": {
+      "additionalProperties": false,
+      "description": "Selected rule's complete public result in the trace envelope.",
+      "properties": {
+        "analysis_failures": {
+          "items": {
+            "$ref": "#/$defs/TraceAnalysisFailure"
+          },
+          "type": "array"
+        },
+        "notes": {
+          "items": {
+            "$ref": "#/$defs/TraceNote"
+          },
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/TraceStatus"
+        },
+        "violations": {
+          "items": {
+            "$ref": "#/$defs/TraceViolation"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "status",
+        "violations",
+        "analysis_failures",
+        "notes"
+      ],
+      "type": "object"
+    },
+    "TraceResultRange": {
+      "additionalProperties": false,
+      "description": "Half-open source coordinates in a trace result.",
+      "properties": {
+        "byte_end": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "byte_start": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "end_column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end_line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_line",
+        "start_column",
+        "end_line",
+        "end_column"
+      ],
+      "type": "object"
+    },
+    "TraceSourceRange": {
+      "additionalProperties": false,
+      "description": "Half-open, one-based source coordinates retained by a preview row.",
+      "properties": {
+        "end_column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end_line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_line",
+        "start_column",
+        "end_line",
+        "end_column"
+      ],
+      "type": "object"
+    },
+    "TraceStage": {
+      "additionalProperties": false,
+      "description": "One typed trace stage.",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/TraceStageClass"
+        },
+        "counts": {
+          "$ref": "#/$defs/TraceCounts"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ordinal": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TracePreview"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "$ref": "#/$defs/TraceReason"
+        },
+        "status": {
+          "$ref": "#/$defs/TraceStatus"
+        }
+      },
+      "required": [
+        "ordinal",
+        "class",
+        "name",
+        "status",
+        "reason",
+        "counts"
+      ],
+      "type": "object"
+    },
+    "TraceStageClass": {
+      "description": "A trace stage class. Common gates and the terminal outcome are engine-owned.",
+      "enum": [
+        "gate",
+        "selection",
+        "extraction",
+        "cardinality",
+        "assertion",
+        "nested",
+        "outcome"
+      ],
+      "type": "string"
+    },
+    "TraceStatus": {
+      "description": "The status of one trace stage.",
+      "enum": [
+        "satisfied",
+        "violated",
+        "skipped",
+        "analysis_failure",
+        "not_evaluated"
+      ],
+      "type": "string"
+    },
+    "TraceValueType": {
+      "description": "Stable type classification for a preview value.",
+      "enum": [
+        "string",
+        "number",
+        "boolean",
+        "null",
+        "array",
+        "object",
+        "bytes",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "TraceViolation": {
+      "additionalProperties": false,
+      "description": "Complete public projection of one violation.",
+      "properties": {
+        "column": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fixable": {
+          "type": "boolean"
+        },
+        "line": {
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceResultRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "related_locations": {
+          "items": {
+            "$ref": "#/$defs/TraceRelatedLocation"
+          },
+          "type": "array"
+        },
+        "related_locations_omitted": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sensitive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message",
+        "related_locations",
+        "related_locations_omitted",
+        "sensitive",
+        "fixable"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://raw.githubusercontent.com/asamarts/alint/main/schemas/experimental/rule-trace.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Versioned, explicitly experimental JSON document for `explain --trace`.",
+  "properties": {
+    "execution": {
+      "$ref": "#/$defs/TraceExecution"
+    },
+    "kind": {
+      "const": "rule-trace",
+      "type": "string"
+    },
+    "result": {
+      "$ref": "#/$defs/TraceResult"
+    },
+    "rule": {
+      "additionalProperties": false,
+      "properties": {
+        "analysis_time": {
+          "additionalProperties": false,
+          "properties": {
+            "date": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "error": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "date",
+            "source"
+          ],
+          "type": "object"
+        },
+        "capabilities": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "capability": {
+                "type": "object"
+              },
+              "condition": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "capability",
+              "condition"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "conditional": {
+          "type": "boolean"
+        },
+        "docs": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expect_matches": {
+          "type": "boolean"
+        },
+        "fix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fix_ops": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fixable": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "level": {
+          "enum": [
+            "off",
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "options": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "paths": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "exclude": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "include": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "include",
+                "exclude"
+              ],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule_kind": {
+          "type": "string"
+        },
+        "scope_filter": {
+          "type": [
+            "object",
+            "string",
+            "null"
+          ]
+        },
+        "selectors": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "rerootable": {
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "rerootable"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "when": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "rule_kind",
+        "categories",
+        "summary",
+        "capabilities",
+        "selectors",
+        "fix_ops",
+        "docs",
+        "level",
+        "paths",
+        "scope_filter",
+        "options",
+        "message",
+        "policy_url",
+        "when",
+        "expect_matches",
+        "conditional",
+        "fixable",
+        "fix"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 1,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "stability": {
+      "const": "experimental",
+      "type": "string"
+    },
+    "stages": {
+      "items": {
+        "$ref": "#/$defs/TraceStage"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "kind",
+    "stability",
+    "rule",
+    "execution",
+    "stages",
+    "result"
+  ],
+  "title": "alint experimental rule trace",
+  "type": "object"
+}

@@ -18,10 +18,12 @@
 //! every colliding file. For groups of N, that is one violation (not N),
 //! because the collision is a single fact.
 
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
-use alint_core::template::{PathTokens, render_message, render_path};
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::template::{PathTokens, TokenSet, render_message, render_path};
+use alint_core::{
+    Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -33,7 +35,7 @@ struct Options {
     #[serde(default = "default_key")]
     key: String,
     /// Fold the key to lowercase before grouping, so keys that
-    /// collide only under case-folding count as duplicates — the
+    /// collide only under case-folding count as duplicates - the
     /// case-insensitive-filesystem hazard (Windows / macOS).
     #[serde(default)]
     case_insensitive: bool,
@@ -69,16 +71,18 @@ impl Rule for UniqueByRule {
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
-        // BTreeMap gives a stable (sorted) iteration order →
-        // deterministic output. Storing `Arc<Path>` re-uses the
-        // walker's per-file allocation rather than copying bytes
-        // through a `PathBuf`.
-        let mut groups: BTreeMap<String, Vec<std::sync::Arc<std::path::Path>>> = BTreeMap::new();
+        // Group in a hash map (one hash per file instead of ~log2(n) string
+        // comparisons in an ordered map), then sort only the colliding groups
+        // by key, so the output order is the same sorted-key order as before.
+        // Storing `Arc<Path>` re-uses the walker's per-file allocation rather
+        // than copying bytes through a `PathBuf`.
+        let mut groups: HashMap<String, Vec<std::sync::Arc<std::path::Path>>> = HashMap::new();
+        let needed = TokenSet::of(&self.key_template);
         for entry in ctx.index.files() {
             if !self.select_scope.matches(&entry.path, ctx.index) {
                 continue;
             }
-            let tokens = PathTokens::from_path(&entry.path);
+            let tokens = PathTokens::from_path_with(&entry.path, needed);
             let mut key = render_path(&self.key_template, &tokens);
             if self.case_insensitive {
                 key = key.to_lowercase();
@@ -90,11 +94,13 @@ impl Rule for UniqueByRule {
             }
             groups.entry(key).or_default().push(entry.path.clone());
         }
+        let mut duplicates: Vec<_> = groups
+            .into_iter()
+            .filter(|(_, paths)| paths.len() > 1)
+            .collect();
+        duplicates.sort_unstable_by(|a, b| a.0.cmp(&b.0));
         let mut violations = Vec::new();
-        for (key, mut paths) in groups {
-            if paths.len() <= 1 {
-                continue;
-            }
+        for (key, mut paths) in duplicates {
             paths.sort();
             let anchor = paths[0].clone();
             let msg = self.format_message(&key, &paths);
@@ -102,11 +108,16 @@ impl Rule for UniqueByRule {
             // key + the sorted path SET so a new colliding file is detected
             // (anchoring on one path alone would mask a new group member).
             let group: Vec<String> = paths.iter().map(crate::slash).collect();
-            violations.push(
-                Violation::new(msg)
-                    .with_path(anchor)
-                    .with_baseline_key(format!("{key}\u{0}{}", group.join("\u{0}"))),
-            );
+            let finding = Violation::new(msg)
+                .with_path(anchor)
+                .with_baseline_key(format!("{key}\u{0}{}", group.join("\u{0}")))
+                .with_related_locations(
+                    paths
+                        .iter()
+                        .skip(1)
+                        .map(|path| RelatedLocation::new(path.as_ref(), "shares this key")),
+                );
+            violations.push(finding);
         }
         Ok(violations)
     }
@@ -138,6 +149,38 @@ impl UniqueByRule {
         )
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("select"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: true,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("key"),
+            selector_type: alint_core::SelectorType::PathTemplate,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "unique_by")?;
@@ -207,6 +250,9 @@ mod tests {
             vars: None,
             git_tracked: None,
             git_blame: None,
+            analysis_time: None,
+            process_environment: None,
+            trace: None,
         };
         rule.evaluate(&ctx).unwrap()
     }
@@ -227,6 +273,9 @@ mod tests {
         assert_eq!(v[0].path.as_deref(), Some(Path::new("src/mod1/foo.rs")));
         assert!(v[0].message.contains("src/mod1/foo.rs"));
         assert!(v[0].message.contains("src/mod2/foo.rs"));
+        assert_eq!(v[0].related_locations.len(), 1);
+        assert_eq!(v[0].related_locations[0].path, Path::new("src/mod2/foo.rs"));
+        assert_eq!(v[0].related_locations[0].label, "shares this key");
     }
 
     #[test]
@@ -272,6 +321,24 @@ mod tests {
             ],
         );
         assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn groups_report_in_sorted_key_order() {
+        let r = rule("**/*.rs", "{stem}");
+        let mut files = Vec::new();
+        for key in (0..40).rev() {
+            files.push(format!("a/k{key:02}.rs"));
+            files.push(format!("b/k{key:02}.rs"));
+        }
+        let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+        let v = eval(&r, &refs);
+        let anchors: Vec<String> = v
+            .iter()
+            .map(|v| v.path.as_ref().unwrap().display().to_string())
+            .collect();
+        let expected: Vec<String> = (0..40).map(|key| format!("a/k{key:02}.rs")).collect();
+        assert_eq!(anchors, expected);
     }
 
     #[test]

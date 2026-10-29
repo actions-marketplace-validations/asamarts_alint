@@ -1,5 +1,6 @@
+test_version: 1
 name: cross_file normalize semver-minor reconciles version formats
-tags: [check, cross_file, cross_file, passing]
+tags: [check, cross_file, passing]
 
 # protobuf shape: version.json carries `4.36-dev`, the .bzl carries
 # `4.36.0` — the same release in two formats. `normalize:
@@ -31,4 +32,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

@@ -1,0 +1,33 @@
+test_version: 1
+name: inactive manifest scope needs no resource
+
+tags: [check, scope_filter, when, passing]
+
+# A false top-level gate removes the rule before dependency preparation. The
+# absent manifest is neither read nor diagnosed.
+
+given:
+  tree:
+    src:
+      lib.rs: "pub fn demo() {} \n"
+  config: |
+    version: 1
+    vars:
+      enforce_scope: false
+    rules:
+      - id: scoped-lines
+        kind: no_trailing_whitespace
+        paths: "src/**/*.rs"
+        when: vars.enforce_scope == "true"
+        level: warning
+        scope_filter:
+          include_manifest_paths:
+            source: package.json
+            extract: { json: "$.files[*]" }
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []
+    analysis_failures: []

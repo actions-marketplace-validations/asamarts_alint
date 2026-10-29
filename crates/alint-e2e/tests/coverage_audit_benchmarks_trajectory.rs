@@ -14,14 +14,16 @@
 //!
 //! This test runs `render-history.py --json-out <tmp>` and asserts:
 //! - The renderer exits cleanly.
-//! - Output is valid JSON with `schema_version: 1`.
+//! - Output is valid JSON with `schema_version: 2` (the consolidated
+//!   5-scenario series; v1 was the frozen 14-scenario series).
 //! - The top row's version matches the highest semver-sorted dir
 //!   under `docs/benchmarks/macro/results/linux-x86_64/`. If a new
 //!   release dir lands but doesn't surface as the top row, the
 //!   alint.org page would silently stay on the older version.
-//! - The top row has a non-null `s3_1m_full` cell — that's the
-//!   anchor scenario every release captures, so a missing value
-//!   means bench-record.yml ran but didn't publish full data.
+//! - The top row has a non-null `s4_1m_full` cell — S4 (workspace
+//!   bundle) is the anchor scenario every release captures, so a
+//!   missing value means bench-record.yml ran but didn't publish
+//!   full data.
 //!
 //! Skipped (not failed) if `python3` isn't on PATH, since the
 //! renderer is Python and not every contributor's local env has it.
@@ -88,8 +90,8 @@ fn benchmarks_trajectory_renders_with_latest_version_on_top() {
     let parsed: serde_json::Value = serde_json::from_str(&body).expect("parse trajectory JSON");
 
     assert_eq!(
-        parsed["schema_version"], 1,
-        "schema_version drift; consumers pin to v1",
+        parsed["schema_version"], 2,
+        "schema_version drift; consumers pin to v2 (consolidated 5-scenario series)",
     );
 
     let rows = parsed["rows"].as_array().expect("rows is an array");
@@ -127,13 +129,22 @@ fn benchmarks_trajectory_renders_with_latest_version_on_top() {
         on_disk[0],
     );
 
-    // The S3 anchor scenario is captured by every release.
-    // Missing data on the top row means bench-record.yml ran but
-    // didn't publish full results — a partial publish that we want
+    // The S4 (workspace bundle) anchor scenario is captured by every
+    // release. Missing data on the top row means bench-record.yml ran
+    // but didn't publish full results — a partial publish that we want
     // to catch at CI time.
     assert!(
-        !rows[0]["cells"]["s3_1m_full"].is_null(),
-        "top row ({top_version}) has no s3_1m_full cell — partial bench publish?",
+        !rows[0]["cells"]["s4_1m_full"].is_null(),
+        "top row ({top_version}) has no s4_1m_full cell — partial bench publish?",
+    );
+    let latest_report: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(results_dir.join(&top_version).join("results.json"))
+            .expect("read latest benchmark report"),
+    )
+    .expect("parse latest benchmark report");
+    assert_eq!(
+        rows[0]["workload_revisions"]["S4"], latest_report["args"]["scenario_revisions"]["S4"],
+        "trajectory S4 revision must match the latest published report",
     );
 }
 
@@ -186,5 +197,45 @@ fn every_published_version_appears_in_trajectory() {
     assert!(
         missing.is_empty(),
         "trajectory.json is missing rows for these published versions: {missing:?}",
+    );
+}
+
+#[test]
+fn committed_history_matches_renderer() {
+    if Command::new("python3").arg("--version").output().is_err() {
+        eprintln!("skipping: python3 not on PATH");
+        return;
+    }
+
+    let workspace = workspace_root();
+    let script = workspace.join("xtask/scripts/render-history.py");
+    let out = Command::new("python3")
+        .arg(&script)
+        .current_dir(&workspace)
+        .output()
+        .expect("run render-history.py");
+    assert!(
+        out.status.success(),
+        "render-history.py exited {:?}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    // Git may check Markdown out as CRLF on Windows while Python's captured
+    // stdout uses LF (or vice versa). Newline encoding is not renderer drift;
+    // normalize it while retaining the terminal newline in the comparison.
+    let rendered = String::from_utf8(out.stdout)
+        .expect("render-history.py stdout is UTF-8")
+        .replace("\r\n", "\n");
+    assert!(
+        rendered.contains("**r2 ← reset from r1**"),
+        "S4's v0.19.0 workload reset must be visible beside its timing rows",
+    );
+    let committed = std::fs::read_to_string(workspace.join("docs/benchmarks/HISTORY.md"))
+        .expect("read committed benchmark history")
+        .replace("\r\n", "\n");
+    assert_eq!(
+        rendered, committed,
+        "docs/benchmarks/HISTORY.md drifted from render-history.py; regenerate it before committing"
     );
 }

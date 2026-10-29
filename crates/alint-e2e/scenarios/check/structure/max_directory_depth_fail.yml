@@ -1,3 +1,4 @@
+test_version: 1
 name: max_directory_depth flags paths nested too deeply
 tags: [check, max_directory_depth, structure]
 
@@ -30,5 +31,6 @@ expect:
   # top.txt (depth 1) — ok.
   # src/lib.rs (depth 2) — ok.
   # src/deep/nested/way_down/lost.rs (depth 5) — too deep.
-  - violations:
+  - exit: success
+    violations:
       - {rule: shallow, level: warning, path: src/deep/nested/way_down/lost.rs}

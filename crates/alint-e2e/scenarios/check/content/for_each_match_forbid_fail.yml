@@ -1,3 +1,4 @@
+test_version: 1
 name: for_each_match forbid fires when a selected line matches a banned pattern
 tags: [check, for_each_match, content]
 
@@ -20,5 +21,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: changelog-no-fix-directive, level: error, path: CHANGELOG.md}

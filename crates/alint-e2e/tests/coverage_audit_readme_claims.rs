@@ -1,9 +1,9 @@
 //! Coverage audit: README.md marketing claims match their workspace
 //! source of truth.
 //!
-//! README.md makes six numeric claims about alint's surface area
-//! ("70 rule kinds across 13 families", "19 bundled ecosystem
-//! rulesets", "12 auto-fix ops", "8 output formats", "9 subcommands").
+//! README.md makes seven numeric claims about alint's surface area
+//! ("102 rule kinds across 13 families, plus 11 aliases", "24 bundled ecosystem
+//! rulesets", "26 auto-fix ops", "8 output formats", "12 subcommands").
 //! These claims drift trivially: a new rule kind ships, a new fixer
 //! lands, a new formatter lights up, but the README copy stays at
 //! the old number. The v0.9.22 audit caught a multi-month "60 rule
@@ -14,10 +14,11 @@
 //!
 //! | Claim                  | Source of truth                                            |
 //! |------------------------|------------------------------------------------------------|
-//! | rule kinds             | distinct `kind:` values in `crates/alint-dsl/tests/fixtures/all_kinds.yaml` |
+//! | rule kinds             | accepted fixture kinds minus generated aliases             |
+//! | rule aliases           | `alint_rules::categories::ALIAS_TO_CANONICAL`               |
 //! | families               | non-meta `## ` headings in `docs/rules.md`                 |
 //! | bundled rulesets       | `.yml` files under `crates/alint-dsl/rulesets/v1/`          |
-//! | auto-fix ops           | `pub struct *Fixer` declarations under `crates/alint-rules/src/fixers/` |
+//! | auto-fix ops           | `FixSpec::ALL_OP_NAMES` (the canonical fix-op list; one fixer may back several ops) |
 //! | output formats         | variants of `Format` enum in `crates/alint-output/src/lib.rs` |
 //! | subcommands            | variants of `Command` enum in `crates/alint/src/cli.rs`     |
 //!
@@ -139,29 +140,6 @@ fn count_yml_files_recursive(dir: &Path) -> usize {
     total
 }
 
-/// Count `pub struct ...Fixer` lines across every `.rs` under `dir`.
-fn count_fixer_structs(dir: &Path) -> usize {
-    let mut total = 0;
-    for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display())) {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-            continue;
-        }
-        let src = fs::read_to_string(&path).unwrap();
-        for line in src.lines() {
-            let t = line.trim_start();
-            if t.starts_with("pub struct ") && t.contains("Fixer") {
-                // Match either `pub struct FooFixer;` (unit struct)
-                // or `pub struct FooFixer {` / `pub struct FooFixer(...);`
-                // — both indicate one distinct fixer type.
-                total += 1;
-            }
-        }
-    }
-    total
-}
-
 /// Find `enum <name> {` in `source` and count comma-terminated or
 /// brace-terminated variant identifiers in its body. Tolerates
 /// docstrings, attributes, and variants with struct/tuple fields.
@@ -247,15 +225,29 @@ fn readme_rule_kinds_count_matches_fixture() {
     let fixture_path = workspace_root().join("crates/alint-dsl/tests/fixtures/all_kinds.yaml");
     let fixture = fs::read_to_string(&fixture_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", fixture_path.display()));
-    let actual = count_distinct_kinds(&fixture);
+    let accepted = count_distinct_kinds(&fixture);
+    let aliases = alint_rules::categories::ALIAS_TO_CANONICAL.len();
+    let actual = accepted - aliases;
 
     assert_eq!(
         claimed,
         actual,
-        "README claims {claimed} rule kinds; all_kinds.yaml has {actual} distinct kinds.\n\
-         Either bump the README claim or update the fixture.\n\
+        "README claims {claimed} rule kinds; all_kinds.yaml has {accepted} accepted names, \
+         including {aliases} aliases, leaving {actual} canonical kinds.\n\
+         Either bump the README claim or update the fixture/alias bridge.\n\
          (Source: README.md '...N rule kinds across...', fixture: {})",
         fixture_path.display()
+    );
+}
+
+#[test]
+fn readme_rule_alias_count_matches_generated_alias_map() {
+    let readme = read_readme();
+    let claimed = num_before(&readme, "aliases").expect("README must contain 'N aliases'");
+    let actual = alint_rules::categories::ALIAS_TO_CANONICAL.len();
+    assert_eq!(
+        claimed, actual,
+        "README claims {claimed} aliases; the generated registry bridge has {actual}"
     );
 }
 
@@ -312,15 +304,46 @@ fn readme_auto_fix_ops_count_matches_fixers() {
     let claimed =
         num_before(&readme, "auto-fix ops").expect("README must contain 'N auto-fix ops'");
 
-    let dir = workspace_root().join("crates/alint-rules/src/fixers");
-    let actual = count_fixer_structs(&dir);
+    // The canonical op list, not the `*Fixer` struct count: one fixer can serve
+    // several ops (`StructuredFixer` backs both `set_value` and `remove_value`),
+    // so the op SSOT is what the "auto-fix ops" claim must track -- consistent
+    // with the sibling gates counting the `Format` / `Command` enum SSOTs.
+    let actual = alint_core::FixSpec::ALL_OP_NAMES.len();
 
     assert_eq!(
-        claimed,
-        actual,
-        "README claims {claimed} auto-fix ops; {actual} `pub struct *Fixer` declarations in {}.\n\
-         Update README.md or check whether a new fixer was added without bumping the count.",
-        dir.display()
+        claimed, actual,
+        "README claims {claimed} auto-fix ops; FixSpec::ALL_OP_NAMES lists {actual}.\n\
+         Update README.md or check whether a new fix op was added without bumping the count.",
+    );
+
+    // The headline (line ~26, `N auto-fix ops`) and the feature-list prose (line
+    // ~60, `N ops covering ...`) are hand-edited separately, so a new op can bump
+    // one and not the other (audit F2). Pin the prose count too; `num_before`
+    // returns the FIRST match, so this distinct marker targets the line-60 phrase.
+    let prose = num_before(&readme, "ops covering")
+        .expect("README must contain the 'N ops covering ...' auto-fix prose");
+    assert_eq!(
+        prose, actual,
+        "README's 'N ops covering' auto-fix prose claims {prose}; \
+         FixSpec::ALL_OP_NAMES lists {actual}. Bump both the headline and the prose.",
+    );
+}
+
+#[test]
+fn fixing_md_op_count_matches_fixers() {
+    // AUDIT R2 (coverage gap): the README count is gated above, but the synced
+    // concepts page `docs/site/concepts/adoption/fixing.md` carries its OWN "N fix
+    // ops" claim (frontmatter description) on the docs-bundle path to alint.org and
+    // drifts independently -- a 27th op would silently desync it. Pin it too.
+    let path = workspace_root().join("docs/site/concepts/adoption/fixing.md");
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let claimed = num_before(&text, "fix ops")
+        .expect("fixing.md must state 'N fix ops' (the frontmatter description)");
+    let actual = alint_core::FixSpec::ALL_OP_NAMES.len();
+    assert_eq!(
+        claimed, actual,
+        "fixing.md claims {claimed} fix ops; FixSpec::ALL_OP_NAMES lists {actual}. \
+         Update docs/site/concepts/adoption/fixing.md.",
     );
 }
 
@@ -401,6 +424,11 @@ fn about_page_surface_claims_match_readme() {
         about_families, readme_families,
         "docs/site/about/index.md claims {about_families} families; README.md claims \
          {readme_families}. They must agree (README is pinned to docs/rules.md)."
+    );
+    assert_eq!(
+        num_before(&about, "aliases"),
+        num_before(&readme, "aliases"),
+        "docs/site/about/index.md and README.md must claim the same alias count"
     );
 
     let readme_rulesets = num_before(&readme, "bundled ecosystem rulesets")

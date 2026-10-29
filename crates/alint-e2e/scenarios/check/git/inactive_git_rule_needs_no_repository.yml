@@ -1,0 +1,24 @@
+test_version: 1
+name: inactive Git rule needs no repository
+tags: [check, git_commit_message, when, git]
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    vars:
+      enforce_history: false
+    rules:
+      - id: conventional-commit
+        kind: git_commit_message
+        pattern: '^(feat|fix): '
+        when: vars.enforce_history == "true"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []
+    analysis_failures: []

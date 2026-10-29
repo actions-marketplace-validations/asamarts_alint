@@ -1,3 +1,4 @@
+test_version: 1
 name: for_each_dir evaluates nested rules in every selected directory
 tags: [check, for_each_dir, cross_file]
 
@@ -29,5 +30,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: every-module-has-mod, level: error, path: src/beta}

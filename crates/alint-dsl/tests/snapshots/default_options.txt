@@ -25,6 +25,7 @@ CommandRule {
         "shellcheck",
     ],
     timeout: 30s,
+    fixer: None,
 }
 
 === kind: command_idempotent | id: fmt-is-idempotent ===
@@ -70,6 +71,7 @@ FileContentForbiddenRule {
     pattern: Regex(
         "unimplemented!",
     ),
+    fixer: None,
 }
 
 === kind: content_matches | id: content-matches-alias ===
@@ -95,7 +97,8 @@ CrossFileRule {
     source_file: "pnpm-workspace.yaml",
     source_glob: None,
     source_extract: Some(
-        Yaml(
+        Structured(
+            Yaml,
             "$.catalog.*",
         ),
     ),
@@ -103,16 +106,20 @@ CrossFileRule {
         Glob {
             scope: Scope { ... },
             extract: Some(
-                Json(
+                Structured(
+                    Json,
                     "$.dependencies.*",
                 ),
             ),
+            matches: None,
         },
     ),
     relation: Subset,
     normalize: [],
     allow_missing: false,
     skip_header_lines: 0,
+    register_as: None,
+    fixer: None,
 }
 
 === kind: cross_file | id: hl-groups-doc-matches-code ===
@@ -133,14 +140,15 @@ CrossFileRule {
     targets: Some(
         List(
             [
-                (
-                    "src/highlight.c",
-                    Some(
+                Target {
+                    file: "src/highlight.c",
+                    extract: Some(
                         Regex(
                             "default link (\\w+)",
                         ),
                     ),
-                ),
+                    matches: None,
+                },
             ],
         ),
     ),
@@ -148,6 +156,8 @@ CrossFileRule {
     normalize: [],
     allow_missing: false,
     skip_header_lines: 0,
+    register_as: None,
+    fixer: None,
 }
 
 === kind: cross_file | id: license-copies-have-identical-content ===
@@ -167,12 +177,15 @@ CrossFileRule {
             extract: Some(
                 WholeFile,
             ),
+            matches: None,
         },
     ),
     relation: Equals,
     normalize: [],
     allow_missing: false,
     skip_header_lines: 0,
+    register_as: None,
+    fixer: None,
 }
 
 === kind: cross_file_value_equals | id: workspace-versions-coherent ===
@@ -184,7 +197,8 @@ CrossFileRule {
     source_file: "Cargo.toml",
     source_glob: None,
     source_extract: Some(
-        Toml(
+        Structured(
+            Toml,
             "$.workspace.package.version",
         ),
     ),
@@ -192,10 +206,12 @@ CrossFileRule {
         Glob {
             scope: Scope { ... },
             extract: Some(
-                Toml(
+                Structured(
+                    Toml,
                     "$.package.version",
                 ),
             ),
+            matches: None,
         },
     ),
     relation: Equals,
@@ -205,6 +221,8 @@ CrossFileRule {
     ],
     allow_missing: false,
     skip_header_lines: 0,
+    register_as: None,
+    fixer: None,
 }
 
 === kind: dir_absent | id: no-target ===
@@ -250,6 +268,7 @@ DirExistsRule {
     ],
     root_only: false,
     git_tracked_only: false,
+    fixer: None,
 }
 
 === kind: dir_only_contains | id: src-only-rs ===
@@ -268,11 +287,123 @@ DirOnlyContainsRule {
     allow_matcher: GlobSet { ... },
 }
 
+=== kind: dotenv_path_absent | id: dotenv-no-debug-flag ===
+StructuredPathRule {
+    id: "dotenv-no-debug-flag",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            ".env",
+        ],
+    ),
+    format: Dotenv,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "DEBUG",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.DEBUG",
+    op: Absent,
+    if_present: false,
+    fixer: None,
+}
+
+=== kind: dotenv_path_equals | id: dotenv-node-env-production ===
+StructuredPathRule {
+    id: "dotenv-node-env-production",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            ".env.production",
+        ],
+    ),
+    format: Dotenv,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "NODE_ENV",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.NODE_ENV",
+    op: Equals(
+        String("production"),
+    ),
+    if_present: true,
+    fixer: None,
+}
+
+=== kind: dotenv_path_matches | id: dotenv-database-url-postgres ===
+StructuredPathRule {
+    id: "dotenv-database-url-postgres",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            ".env",
+        ],
+    ),
+    format: Dotenv,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "DATABASE_URL",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.DATABASE_URL",
+    op: Matches(
+        Regex(
+            "^postgres://",
+        ),
+    ),
+    if_present: true,
+    fixer: None,
+}
+
+=== kind: editorconfig_conforms | id: repository-editorconfig-policy ===
+EditorconfigConformsRule {
+    id: "repository-editorconfig-policy",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+}
+
 === kind: every_matching_has | id: every-pkg-has-src ===
 EveryMatchingHasRule {
     id: "every-pkg-has-src",
     level: Error,
     policy_url: None,
+    message: None,
     select_scope: Scope { ... },
     when_iter: None,
     require: [
@@ -287,6 +418,8 @@ EveryMatchingHasRule {
                 message: None,
                 policy_url: None,
                 when: None,
+                expect_matches: false,
+                sensitive: false,
                 scope_filter: None,
                 extra: Mapping {},
             },
@@ -303,6 +436,7 @@ ExecutableBitRule {
     message: None,
     scope: Scope { ... },
     require_exec: true,
+    fixer: None,
 }
 
 === kind: executable_has_shebang | id: exec-needs-shebang ===
@@ -329,7 +463,9 @@ FileAbsentRule {
     git_tracked_only: false,
     content_prefixes: [],
     fixer: Some(
-        FileRemoveFixer,
+        FileRemoveFixer {
+            applicability: Unsafe,
+        },
     ),
 }
 
@@ -344,6 +480,7 @@ FileContentForbiddenRule {
     pattern: Regex(
         "\\bTODO\\b",
     ),
+    fixer: None,
 }
 
 === kind: file_content_forbidden | id: no-todos ===
@@ -357,6 +494,7 @@ FileContentForbiddenRule {
     pattern: Regex(
         "\\b(TODO|FIXME|XXX)\\b",
     ),
+    fixer: None,
 }
 
 === kind: file_content_matches | id: content-matches-spdx ===
@@ -389,6 +527,7 @@ FileContentMatchesRule {
             source: Inline(
                 "\n// Copyright (c) 2026\n",
             ),
+            applicability: Safe,
         },
     ),
 }
@@ -430,6 +569,7 @@ FileExistsRule {
                 "root = true\n[*]\nend_of_line = lf\nindent_style = space\nindent_size = 2\n",
             ),
             create_parents: true,
+            applicability: Safe,
         },
     ),
 }
@@ -575,6 +715,7 @@ FileHeaderRule {
             source: Inline(
                 "// Copyright (c) 2026 Acme Corp\n// SPDX-License-Identifier: Apache-2.0\n",
             ),
+            applicability: Safe,
         },
     ),
 }
@@ -738,6 +879,7 @@ FilenameCaseRule {
     fixer: Some(
         FileRenameFixer {
             case: Pascal,
+            applicability: Safe,
         },
     ),
 }
@@ -786,6 +928,7 @@ ForEachDirRule {
     id: "every-module-has-mod",
     level: Error,
     policy_url: None,
+    message: None,
     select_scope: Scope { ... },
     when_iter: None,
     require: [
@@ -800,6 +943,8 @@ ForEachDirRule {
                 message: None,
                 policy_url: None,
                 when: None,
+                expect_matches: false,
+                sensitive: false,
                 scope_filter: None,
                 extra: Mapping {},
             },
@@ -813,6 +958,7 @@ ForEachFileRule {
     id: "unit-has-snapshot",
     level: Warning,
     policy_url: None,
+    message: None,
     select_scope: Scope { ... },
     when_iter: None,
     require: [
@@ -827,6 +973,8 @@ ForEachFileRule {
                 message: None,
                 policy_url: None,
                 when: None,
+                expect_matches: false,
+                sensitive: false,
                 scope_filter: None,
                 extra: Mapping {},
             },
@@ -1013,6 +1161,144 @@ GitNoDeniedPathsRule {
     since_raw: None,
 }
 
+=== kind: hcl_path_absent | id: hcl-no-hardcoded-key ===
+StructuredPathRule {
+    id: "hcl-no-hardcoded-key",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "main.tf",
+        ],
+    ),
+    format: Hcl,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "provider",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "aws",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "access_key",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.provider.aws.access_key",
+    op: Absent,
+    if_present: false,
+    fixer: None,
+}
+
+=== kind: hcl_path_equals | id: hcl-instance-count ===
+StructuredPathRule {
+    id: "hcl-instance-count",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "main.tf",
+        ],
+    ),
+    format: Hcl,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "resource",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "aws_instance",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "web",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "count",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.resource.aws_instance.web.count",
+    op: Equals(
+        Number(1),
+    ),
+    if_present: true,
+    fixer: None,
+}
+
+=== kind: hcl_path_matches | id: hcl-required-version ===
+StructuredPathRule {
+    id: "hcl-required-version",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "main.tf",
+        ],
+    ),
+    format: Hcl,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "terraform",
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: DotName(
+                        "required_version",
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$.terraform.required_version",
+    op: Matches(
+        Regex(
+            "^~>",
+        ),
+    ),
+    if_present: true,
+    fixer: None,
+}
+
 === kind: header | id: header-alias ===
 FileHeaderRule {
     id: "header-alias",
@@ -1046,6 +1332,9 @@ ImportGateRule {
         Scope { ... },
     ),
     strip_comments: false,
+    prefilter: Some(
+        "use",
+    ),
 }
 
 === kind: indent_style | id: indent-style ===
@@ -1059,6 +1348,163 @@ IndentStyleRule {
     width: Some(
         4,
     ),
+    fixer: None,
+}
+
+=== kind: ini_path_absent | id: ini-no-debug ===
+StructuredPathRule {
+    id: "ini-no-debug",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "config.ini",
+        ],
+    ),
+    format: Ini,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "server",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "debug",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$['server']['debug']",
+    op: Absent,
+    if_present: false,
+    fixer: None,
+}
+
+=== kind: ini_path_equals | id: ini-server-port ===
+StructuredPathRule {
+    id: "ini-server-port",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "config.ini",
+        ],
+    ),
+    format: Ini,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "server",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "port",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$['server']['port']",
+    op: Equals(
+        String("8080"),
+    ),
+    if_present: true,
+    fixer: None,
+}
+
+=== kind: ini_path_matches | id: ini-database-url ===
+StructuredPathRule {
+    id: "ini-database-url",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "config.ini",
+        ],
+    ),
+    format: Ini,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "database",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "url",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$['database']['url']",
+    op: Matches(
+        Regex(
+            "^jdbc:postgresql:",
+        ),
+    ),
+    if_present: true,
+    fixer: None,
 }
 
 === kind: is_text | id: is-text-alias ===
@@ -1105,6 +1551,7 @@ StructuredPathRule {
     path_src: "$.scripts.postinstall",
     op: Absent,
     if_present: false,
+    fixer: None,
 }
 
 === kind: json_path_equals | id: package-name-matches ===
@@ -1138,6 +1585,7 @@ StructuredPathRule {
         String("demo"),
     ),
     if_present: false,
+    fixer: None,
 }
 
 === kind: json_path_matches | id: package-version-matches ===
@@ -1173,6 +1621,7 @@ StructuredPathRule {
         ),
     ),
     if_present: false,
+    fixer: None,
 }
 
 === kind: json_schema_passes | id: package-conforms-to-schema ===
@@ -1188,6 +1637,24 @@ JsonSchemaPassesRule {
     compiled: OnceLock(
         <uninit>,
     ),
+}
+
+=== kind: key_parity | id: locale-key-parity ===
+KeyParityRule {
+    id: "locale-key-parity",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    reference: "locales/en.json",
+    reference_format: Json,
+    format_override: None,
+    peers: "locales/*.json",
+    peers_scope: Scope { ... },
+    scope: Scope { ... },
+    direction: Both,
+    plurals: Exact,
+    strip_root: false,
+    ignore: [],
 }
 
 === kind: line_endings | id: line-endings-lf ===
@@ -1211,6 +1678,51 @@ LineMaxWidthRule {
     max_width: 100,
 }
 
+=== kind: markdown_fragments_resolve | id: markdown-fragments-resolve ===
+MarkdownFragmentsResolveRule {
+    id: "markdown-fragments-resolve",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    relative: Resolve,
+    root_map: None,
+}
+
+=== kind: markdown_images_have_alt | id: markdown-image-alt ===
+MarkdownImagesHaveAltRule {
+    id: "markdown-image-alt",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+}
+
+=== kind: markdown_links_resolve | id: docs-links-resolve ===
+MarkdownLinksResolveRule {
+    id: "docs-links-resolve",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    relative: Resolve,
+    root_map: Some(
+        RootMap {
+            url_prefix: "/docs/",
+            dir: "docs/site",
+        },
+    ),
+}
+
+=== kind: markdown_no_duplicate_headings | id: markdown-unique-headings ===
+MarkdownNoDuplicateHeadingsRule {
+    id: "markdown-unique-headings",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+}
+
 === kind: markdown_paths_resolve | id: agents-md-paths-resolve ===
 MarkdownPathsResolveRule {
     id: "agents-md-paths-resolve",
@@ -1224,6 +1736,26 @@ MarkdownPathsResolveRule {
         "docs/",
     ],
     ignore_template_vars: true,
+}
+
+=== kind: markdown_required_headings | id: markdown-required-sections ===
+MarkdownRequiredHeadingsRule {
+    id: "markdown-required-sections",
+    level: Error,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    headings: [
+        Exact {
+            level: 1,
+            text: "Project",
+        },
+        Any,
+        Exact {
+            level: 2,
+            text: "Decision",
+        },
+    ],
 }
 
 === kind: max_consecutive_blank_lines | id: max-blank-lines ===
@@ -1414,6 +1946,8 @@ OrderedBlockRule {
             "^\\s*[A-Za-z]",
         ),
     ),
+    require: [],
+    fixer: None,
 }
 
 === kind: pair | id: c-requires-h ===
@@ -1454,6 +1988,136 @@ PairHashRule {
     allow_out_of_root: false,
 }
 
+=== kind: pinned_references | id: immutable-build-inputs ===
+PinnedReferencesRule {
+    id: "immutable-build-inputs",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    format: GithubActions,
+}
+
+=== kind: properties_path_absent | id: properties-no-debug ===
+StructuredPathRule {
+    id: "properties-no-debug",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "application.properties",
+        ],
+    ),
+    format: Properties,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "debug.enabled",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$['debug.enabled']",
+    op: Absent,
+    if_present: false,
+    fixer: None,
+}
+
+=== kind: properties_path_equals | id: properties-server-port ===
+StructuredPathRule {
+    id: "properties-server-port",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "application.properties",
+        ],
+    ),
+    format: Properties,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "server.port",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$['server.port']",
+    op: Equals(
+        String("8080"),
+    ),
+    if_present: true,
+    fixer: None,
+}
+
+=== kind: properties_path_matches | id: properties-datasource-postgres ===
+StructuredPathRule {
+    id: "properties-datasource-postgres",
+    level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    literal_paths: Some(
+        [
+            "application.properties",
+        ],
+    ),
+    format: Properties,
+    path_expr: JsonPath(
+        Query {
+            kind: Root,
+            segments: [
+                QuerySegment {
+                    kind: Child,
+                    segment: LongHand(
+                        [
+                            Name(
+                                Name(
+                                    "spring.datasource.url",
+                                ),
+                            ),
+                        ],
+                    ),
+                },
+            ],
+        },
+    ),
+    path_src: "$['spring.datasource.url']",
+    op: Matches(
+        Regex(
+            "^jdbc:postgresql:",
+        ),
+    ),
+    if_present: true,
+    fixer: None,
+}
+
 === kind: registry_paths_resolve | id: workspace-members-resolve ===
 RegistryPathsResolveRule {
     id: "workspace-members-resolve",
@@ -1462,7 +2126,8 @@ RegistryPathsResolveRule {
     message: None,
     source: "Cargo.toml",
     registry_scope: None,
-    extract: Toml(
+    extract: Structured(
+        Toml,
         "$.workspace.members[*]",
     ),
     base: RegistryDir,
@@ -1471,13 +2136,15 @@ RegistryPathsResolveRule {
     must_contain: Some(
         "Cargo.toml",
     ),
-    exclude_query: Some(
-        "$.workspace.exclude[*]",
+    exclude_extract: Some(
+        Structured(
+            Toml,
+            "$.workspace.exclude[*]",
+        ),
     ),
     orphans: Some(
         OrphansSpec {
-            space: "crates/*/Cargo.toml",
-            unreferenced: Warn,
+            space: "crates/*",
         },
     ),
     allow_out_of_root: false,
@@ -1500,6 +2167,16 @@ FileShebangRule {
 ShebangHasExecutableRule {
     id: "shebang-needs-exec",
     level: Warning,
+    policy_url: None,
+    message: None,
+    scope: Scope { ... },
+    fixer: None,
+}
+
+=== kind: spdx_identifier_valid | id: valid-spdx-expressions ===
+SpdxIdentifierValidRule {
+    id: "valid-spdx-expressions",
+    level: Error,
     policy_url: None,
     message: None,
     scope: Scope { ... },
@@ -1534,6 +2211,7 @@ StructuredPathRule {
     path_src: "$.patch",
     op: Absent,
     if_present: false,
+    fixer: None,
 }
 
 === kind: toml_path_equals | id: cargo-edition-2024 ===
@@ -1573,6 +2251,7 @@ StructuredPathRule {
         String("2024"),
     ),
     if_present: false,
+    fixer: None,
 }
 
 === kind: toml_path_matches | id: rust-version-floor ===
@@ -1620,6 +2299,7 @@ StructuredPathRule {
         ),
     ),
     if_present: true,
+    fixer: None,
 }
 
 === kind: unique_by | id: unique-rs-stems ===
@@ -1672,6 +2352,7 @@ StructuredPathRule {
     path_src: "$.Project.PropertyGroup.AllowUnsafeBlocks",
     op: Absent,
     if_present: false,
+    fixer: None,
 }
 
 === kind: xml_path_equals | id: csproj-targets-net8 ===
@@ -1713,6 +2394,7 @@ StructuredPathRule {
         String("net8.0"),
     ),
     if_present: true,
+    fixer: None,
 }
 
 === kind: xml_path_matches | id: packageref-has-version ===
@@ -1776,6 +2458,7 @@ StructuredPathRule {
         ),
     ),
     if_present: true,
+    fixer: None,
 }
 
 === kind: yaml_path_absent | id: no-workflow-write-all ===
@@ -1848,6 +2531,7 @@ StructuredPathRule {
     path_src: "$[?($.permissions == 'write-all')]",
     op: Absent,
     if_present: false,
+    fixer: None,
 }
 
 === kind: yaml_path_equals | id: workflow-uses-checkout ===
@@ -1909,6 +2593,7 @@ StructuredPathRule {
         String("actions/checkout@v4"),
     ),
     if_present: true,
+    fixer: None,
 }
 
 === kind: yaml_path_matches | id: workflow-permissions-shape ===
@@ -1952,5 +2637,6 @@ StructuredPathRule {
         ),
     ),
     if_present: true,
+    fixer: None,
 }
 

@@ -1,3 +1,4 @@
+test_version: 1
 name: --changed keeps dir_absent (a directory rule) evaluating on the full tree
 tags: [check, check_changed, changed, dir_absent]
 
@@ -33,7 +34,9 @@ given:
 when: [check, check_changed]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-build, level: error, path: "build"}
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: no-build, level: error, path: "build"}

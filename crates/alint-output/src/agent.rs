@@ -27,7 +27,7 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::path::Path;
 
-use alint_core::{Level, Report, RuleResult, Violation};
+use alint_core::{Level, ProposedEdit, Report, RuleResult, Violation};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -35,7 +35,10 @@ struct AgentReport<'a> {
     schema_version: u32,
     format: &'static str,
     summary: AgentSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<AgentNotes>,
     violations: Vec<AgentViolation<'a>>,
+    analysis_failures: Vec<AgentAnalysisFailure<'a>>,
 }
 
 #[derive(Serialize)]
@@ -45,6 +48,13 @@ struct AgentSummary {
     fixable_violations: usize,
     passing_rules: usize,
     failing_rules: usize,
+    total_analysis_failures: usize,
+}
+
+#[derive(Serialize)]
+struct AgentNotes {
+    count: usize,
+    details_format: &'static str,
 }
 
 #[derive(Serialize)]
@@ -89,8 +99,27 @@ struct AgentViolation<'a> {
     /// set should add `--changed` (and `--base <ref>`) itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     fix_command: Option<Vec<&'a str>>,
+    /// The concrete Safe fix edit(s) alint would apply for this violation
+    /// (source region + replacement text) -- distinct from `fix_command` (the
+    /// argv to run). Lets an agent apply the fix directly. Present for a
+    /// Safe-fixable finding only when every target path has an exact JSON string
+    /// representation; `fix_command` remains available otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proposed_edit: Option<&'a [ProposedEdit]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     policy_url: Option<&'a str>,
+}
+#[derive(Serialize)]
+struct AgentAnalysisFailure<'a> {
+    rule_id: &'a str,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<Cow<'a, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    human_message: &'a str,
 }
 
 pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
@@ -101,6 +130,7 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
         info: 0,
     };
     let mut fixable_violations = 0;
+    let mut analysis_failures = Vec::new();
 
     for r in &report.results {
         for v in &r.violations {
@@ -110,27 +140,47 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
                 Level::Info => by_sev.info += 1,
                 Level::Off => {} // off rules don't produce violations, but be explicit
             }
-            if r.is_fixable {
+            // Per-VIOLATION fixability, not per-rule `r.is_fixable`: an agent
+            // acts on a single violation, and `fix_command` is documented as the
+            // argv to fix THIS violation. A rule with a fixer that skips this
+            // violation (an unconvertible stem) -- or an Unsafe-tier fixer a bare
+            // `alint fix` only suggests -- must not advertise a fix here, or an
+            // agent runs the command, the violation persists, and it loops.
+            if v.is_fixable {
                 fixable_violations += 1;
             }
             violations.push(AgentViolation {
                 rule_id: r.rule_id.as_ref(),
                 severity: severity_str(r.level),
-                file: v.path.as_deref().map(Path::to_string_lossy),
+                file: v.report_path().map(Path::to_string_lossy),
                 line: v.line,
                 column: v.column,
                 human_message: v.message.as_ref(),
                 agent_instruction: build_agent_instruction(r, v),
-                fix_available: r.is_fixable,
-                fix_command: r
+                fix_available: v.is_fixable,
+                fix_command: v
                     .is_fixable
                     .then(|| vec!["fix", "--only", r.rule_id.as_ref()]),
+                proposed_edit: crate::utf8_proposed_edits(v),
                 policy_url: r.policy_url.as_deref(),
             });
         }
+        analysis_failures.extend(
+            r.analysis_failures
+                .iter()
+                .map(|failure| AgentAnalysisFailure {
+                    rule_id: r.rule_id.as_ref(),
+                    kind: failure.kind.as_str(),
+                    file: failure.report_path().map(Path::to_string_lossy),
+                    line: failure.line,
+                    column: failure.column,
+                    human_message: failure.message.as_ref(),
+                }),
+        );
     }
 
     let total = violations.len();
+    let note_count = report.total_notes();
     let out = AgentReport {
         schema_version: 1,
         format: "agent",
@@ -140,8 +190,14 @@ pub fn write_agent(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
             fixable_violations,
             passing_rules: report.passing_rules(),
             failing_rules: report.failing_rules(),
+            total_analysis_failures: analysis_failures.len(),
         },
+        notes: (note_count > 0).then_some(AgentNotes {
+            count: note_count,
+            details_format: "json",
+        }),
         violations,
+        analysis_failures,
     };
     serde_json::to_writer_pretty(&mut *w, &out)?;
     writeln!(w)?;
@@ -167,8 +223,8 @@ fn severity_str(level: Level) -> &'static str {
 /// Concrete shapes:
 ///
 /// - Path-bound, fixable: `"warning: README is missing. To
-///   resolve: edit README — or run `alint fix --only
-///   readme-exists` to apply the auto-fix."`
+///   resolve: edit README (or run `alint fix --only
+///   readme-exists` to apply the auto-fix)."`
 /// - Path-bound, non-fixable: `"warning: console.log left in
 ///   non-test source. To resolve: edit src/api.ts:2:1."`
 /// - Cross-file (no path): `"error: Multiple lockfiles present.
@@ -185,7 +241,7 @@ fn build_agent_instruction(rule: &RuleResult, violation: &Violation) -> String {
     }
 
     out.push_str(" To resolve: ");
-    match &violation.path {
+    match violation.report_path() {
         Some(path) => {
             out.push_str("edit ");
             out.push_str(&path.display().to_string());
@@ -207,10 +263,10 @@ fn build_agent_instruction(rule: &RuleResult, violation: &Violation) -> String {
         }
     }
 
-    if rule.is_fixable {
-        out.push_str(" — or run `alint fix --only ");
+    if violation.is_fixable {
+        out.push_str(" (or run `alint fix --only ");
         out.push_str(&rule.rule_id);
-        out.push_str("` to apply the auto-fix");
+        out.push_str("` to apply the auto-fix)");
     }
 
     if let Some(url) = rule.policy_url.as_deref() {
@@ -247,7 +303,10 @@ mod tests {
         assert_eq!(v["summary"]["total_violations"], 0);
         assert_eq!(v["summary"]["passing_rules"], 0);
         assert_eq!(v["summary"]["failing_rules"], 0);
-        assert!(v["violations"].as_array().unwrap().is_empty());
+        assert_eq!(
+            v["violations"].as_array().unwrap(),
+            &Vec::<serde_json::Value>::new()
+        );
     }
 
     #[test]
@@ -263,6 +322,7 @@ mod tests {
             ],
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         };
         let out = run(vec![result]);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -284,13 +344,16 @@ mod tests {
 
     #[test]
     fn fixable_violation_suggests_alint_fix_in_instruction() {
+        let mut v = Violation::new("A README is required at the root.");
+        v.is_fixable = true; // a bare `alint fix` would create it (Safe tier)
         let result = RuleResult {
             rule_id: "readme-exists".into(),
             level: Level::Error,
             policy_url: Some("https://example.com/policy".into()),
-            violations: vec![Violation::new("A README is required at the root.")],
+            violations: vec![v],
             notes: Vec::new(),
             is_fixable: true,
+            analysis_failures: Vec::new(),
         };
         let out = run(vec![result]);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -303,11 +366,86 @@ mod tests {
             "got: {inst}"
         );
         assert!(
+            inst.contains("(or run `alint fix --only readme-exists` to apply the auto-fix)"),
+            "fixable instruction should carry the parenthetical fix hint: {inst}"
+        );
+        assert!(
+            !inst.contains('\u{2014}'),
+            "agent_instruction must not contain an em-dash: {inst}"
+        );
+        assert!(
             inst.contains("https://example.com/policy"),
             "policy URL should be cited: {inst}"
         );
         assert_eq!(v["violations"][0]["fix_available"], true);
         assert_eq!(v["summary"]["fixable_violations"], 1);
+    }
+
+    #[test]
+    fn fix_affordance_is_per_violation_not_per_rule() {
+        // Round-7 (A3-F1): the agent format must derive fix_available / fix_command
+        // / the instruction hint / the fixable_violations count from the
+        // PER-VIOLATION flag, not the per-rule one. A rule that declares a fixer
+        // (is_fixable: true) but has a violation a bare fix won't resolve (an
+        // unconvertible stem, or an Unsafe file_remove) must NOT advertise a fix
+        // for that violation -- else an agent runs the command, the violation
+        // persists, and it loops.
+        let mut ok =
+            Violation::new("stem myFile is not snake_case").with_path(PathBuf::from("myFile.rs"));
+        ok.is_fixable = true;
+        let stuck =
+            Violation::new("stem café is not snake_case").with_path(PathBuf::from("café.rs"));
+        // stuck.is_fixable stays false
+        let result = RuleResult {
+            rule_id: "snake-names".into(),
+            level: Level::Warning,
+            policy_url: None,
+            violations: vec![stuck, ok],
+            notes: Vec::new(),
+            is_fixable: true, // the RULE has a fixer
+            analysis_failures: Vec::new(),
+        };
+        let out = run(vec![result]);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(
+            v["summary"]["fixable_violations"], 1,
+            "count is per-violation"
+        );
+        let by_file = |needle: &str| -> serde_json::Value {
+            v["violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|viol| viol["file"].as_str().is_some_and(|f| f.contains(needle)))
+                .unwrap()
+                .clone()
+        };
+        let myfile = by_file("myFile");
+        let cafe = by_file("café");
+        assert_eq!(myfile["fix_available"], true);
+        assert!(
+            !myfile["fix_command"].is_null(),
+            "convertible has a fix_command"
+        );
+        assert!(
+            myfile["agent_instruction"]
+                .as_str()
+                .unwrap()
+                .contains("alint fix"),
+            "convertible instruction offers the fix"
+        );
+        assert_eq!(cafe["fix_available"], false, "unconvertible has no fix");
+        assert!(
+            cafe["fix_command"].is_null(),
+            "unconvertible has no fix_command"
+        );
+        assert!(
+            !cafe["agent_instruction"]
+                .as_str()
+                .unwrap()
+                .contains("alint fix"),
+            "unconvertible instruction must not offer a fix that won't apply"
+        );
     }
 
     #[test]
@@ -319,6 +457,7 @@ mod tests {
             violations: vec![Violation::new("Multiple lockfiles found.")],
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         };
         let out = run(vec![result]);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -343,6 +482,7 @@ mod tests {
                 violations: vec![Violation::new("a")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             },
             RuleResult {
                 rule_id: "rule-b".into(),
@@ -351,6 +491,7 @@ mod tests {
                 violations: vec![Violation::new("b1"), Violation::new("b2")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             },
             RuleResult {
                 rule_id: "rule-c".into(),
@@ -359,6 +500,7 @@ mod tests {
                 violations: vec![Violation::new("c")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             },
             RuleResult {
                 rule_id: "rule-d".into(),
@@ -367,6 +509,7 @@ mod tests {
                 violations: vec![],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             },
         ];
         let out = run(results);

@@ -18,17 +18,17 @@
 //! but not arbitrary filesystem state outside the repo root.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use std::io::Read as _;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use regex::Regex;
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
+use crate::extract::{Extract, ExtractSpec, extract_values};
 use crate::scope::Scope;
-use crate::walker::FileIndex;
+use crate::walker::{FileEntry, FileIndex};
 
 /// A value a fact evaluates to. Keeps the surface small for v0.2; richer
 /// types (list, map) arrive with the `when` expression language.
@@ -67,14 +67,66 @@ impl OneOrMany {
             Self::Many(v) => v.clone(),
         }
     }
+
+    fn as_slice(&self) -> &[String] {
+        match self {
+            Self::One(value) => std::slice::from_ref(value),
+            Self::Many(values) => values,
+        }
+    }
 }
 
 /// YAML-level declaration of a single fact.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FactSpec {
     pub id: String,
-    #[serde(flatten)]
     pub kind: FactKind,
+}
+
+impl<'de> Deserialize<'de> for FactSpec {
+    /// `id` plus exactly one fact-kind key. A derived `#[serde(flatten)]` over
+    /// the untagged [`FactKind`] silently kept the first matching kind and
+    /// dropped any other key (a second kind, or a typo), so both are refused
+    /// here by name before the kind body is deserialized.
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let mut map = yaml_serde::Mapping::deserialize(deserializer)?;
+        let id = match map.remove("id") {
+            Some(yaml_serde::Value::String(id)) => id,
+            Some(_) => return Err(D::Error::custom("fact `id` must be a string")),
+            None => return Err(D::Error::missing_field("id")),
+        };
+        let keys: Vec<String> = map
+            .keys()
+            .map(|k| k.as_str().map_or_else(|| format!("{k:?}"), str::to_owned))
+            .collect();
+        if let Some(unknown) = keys
+            .iter()
+            .find(|k| !FactKind::ALL_NAMES.contains(&k.as_str()))
+        {
+            return Err(D::Error::custom(format!(
+                "fact {id:?}: unknown field `{unknown}`; expected `id` and one of {}",
+                FactKind::ALL_NAMES.join(", ")
+            )));
+        }
+        if keys.len() != 1 {
+            return Err(D::Error::custom(format!(
+                "fact {id:?}: a fact declares exactly one kind key, found {}{}",
+                keys.len(),
+                if keys.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", keys.join(", "))
+                }
+            )));
+        }
+        let kind = yaml_serde::from_value(yaml_serde::Value::Mapping(map))
+            .map_err(|e| D::Error::custom(format!("fact {id:?}: {e}")))?;
+        Ok(Self { id, kind })
+    }
 }
 
 /// The closed set of built-in fact kinds. Serde dispatches via `untagged`
@@ -157,13 +209,17 @@ pub struct CustomFact {
     pub argv: Vec<String>,
 }
 
-/// Fact-kind body for `file_content_matches`. Fact evaluates
-/// truthy when at least one file in `paths` contains a regex
-/// match for `pattern`. Files that aren't valid UTF-8 are skipped.
+/// Fact-kind body for `file_content_matches`. Without `extract`, the fact is
+/// truthy when at least one file in `paths` contains a regex match for
+/// `pattern`. With a structured `extract`, the file is parsed and the fact is
+/// truthy when at least one extracted string matches. Parse failures,
+/// non-string query results, and non-UTF-8 files make that file a non-match.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileContentMatchesFact {
     pub paths: OneOrMany,
+    #[serde(default)]
+    pub extract: Option<Box<ExtractSpec>>,
     pub pattern: String,
 }
 
@@ -212,69 +268,158 @@ impl FactValues {
 }
 
 /// Evaluate a whole fact list against a prebuilt `FileIndex`. Invoked by
-/// `Engine::run` before any rule evaluates.
+/// `Engine::run` before any rule evaluates, inheriting the host process
+/// environment for backward-compatible production behavior.
 pub fn evaluate_facts(facts: &[FactSpec], root: &Path, index: &FileIndex) -> Result<FactValues> {
+    evaluate_facts_with_environment(facts, root, index, None)
+}
+
+/// Evaluate facts with an optional complete child-process environment.
+///
+/// `Some` clears inherited variables before a `custom` fact is spawned.
+pub fn evaluate_facts_with_environment(
+    facts: &[FactSpec],
+    root: &Path,
+    index: &FileIndex,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
+) -> Result<FactValues> {
     let mut out = FactValues::new();
     for spec in facts {
-        let value = evaluate_one(spec, root, index)?;
+        let value = evaluate_one(spec, root, index, process_environment)?;
         out.insert(spec.id.clone(), value);
     }
     Ok(out)
 }
 
-fn evaluate_one(spec: &FactSpec, root: &Path, index: &FileIndex) -> Result<FactValue> {
+/// Decode a pattern list only when every member names one exact indexed path.
+///
+/// A leading exclusion or any real glob returns `None`, preserving the full
+/// `Scope` path for ordered include/exclude semantics. Escaped metacharacters
+/// are decoded by the same helper used by rule-level literal fast paths.
+fn literal_paths(patterns: &[String]) -> Option<Vec<PathBuf>> {
+    let mut paths: Vec<PathBuf> = patterns
+        .iter()
+        .map(|pattern| crate::template::literal_glob_path(pattern).map(PathBuf::from))
+        .collect::<Option<_>>()?;
+    paths.sort_unstable();
+    paths.dedup();
+    Some(paths)
+}
+
+fn file_content_matches_entry(
+    entry: &FileEntry,
+    root: &Path,
+    regex: &Regex,
+    extract: Option<&Extract>,
+) -> bool {
+    // Cap the read (M3): a fact content-predicate must not read a multi-GB
+    // in-scope file unbounded. Gates on the walk-time size and bounds the actual
+    // read (TOCTOU-safe via read_capped_or_skip).
+    let Some(bytes) = crate::walker::read_capped_or_skip(&root.join(&entry.path), entry.size)
+    else {
+        return false;
+    };
+    let Ok(text) = std::str::from_utf8(&bytes) else {
+        return false;
+    };
+    let Some(extract) = extract else {
+        return regex.is_match(text);
+    };
+    extract_values(extract, text)
+        .is_ok_and(|values| values.strings.iter().any(|value| regex.is_match(value)))
+}
+
+fn evaluate_one(
+    spec: &FactSpec,
+    root: &Path,
+    index: &FileIndex,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
+) -> Result<FactValue> {
     match &spec.kind {
         FactKind::AnyFileExists { any_file_exists } => {
-            let globs = any_file_exists.to_vec();
-            let scope = Scope::from_patterns(&globs)?;
-            let found = index.files().any(|e| scope.matches(&e.path, index));
+            let patterns = any_file_exists.as_slice();
+            let found = if let Some(paths) = literal_paths(patterns) {
+                paths.iter().any(|path| index.contains_file(path))
+            } else {
+                let scope = Scope::from_patterns(patterns)?;
+                index.files().any(|entry| scope.matches(&entry.path, index))
+            };
             Ok(FactValue::Bool(found))
         }
         FactKind::AllFilesExist { all_files_exist } => {
-            let globs = all_files_exist.to_vec();
-            for glob in &globs {
-                let scope = Scope::from_patterns(std::slice::from_ref(glob))?;
-                if !index.files().any(|e| scope.matches(&e.path, index)) {
+            for pattern in all_files_exist.as_slice() {
+                let found = if let Some(path) = crate::template::literal_glob_path(pattern) {
+                    index.contains_file(Path::new(&path))
+                } else {
+                    let scope = Scope::from_patterns(std::slice::from_ref(pattern))?;
+                    index.files().any(|entry| scope.matches(&entry.path, index))
+                };
+                if !found {
                     return Ok(FactValue::Bool(false));
                 }
             }
             Ok(FactValue::Bool(true))
         }
         FactKind::CountFiles { count_files } => {
-            let scope = Scope::from_patterns(std::slice::from_ref(count_files))?;
-            let count = index
-                .files()
-                .filter(|e| scope.matches(&e.path, index))
-                .count();
+            let count = if let Some(path) = crate::template::literal_glob_path(count_files) {
+                usize::from(index.contains_file(Path::new(&path)))
+            } else {
+                let scope = Scope::from_patterns(std::slice::from_ref(count_files))?;
+                index
+                    .files()
+                    .filter(|entry| scope.matches(&entry.path, index))
+                    .count()
+            };
             Ok(FactValue::Int(i64::try_from(count).unwrap_or(i64::MAX)))
         }
         FactKind::FileContentMatches {
             file_content_matches: spec,
         } => {
-            let scope = Scope::from_patterns(&spec.paths.to_vec())?;
+            let patterns = spec.paths.as_slice();
+            let literal_paths = literal_paths(patterns);
+            // Preserve validation precedence: a malformed glob is reported
+            // before a malformed content regex, as it was on the scan path.
+            let scope = literal_paths
+                .is_none()
+                .then(|| Scope::from_patterns(patterns))
+                .transpose()?;
             let regex = Regex::new(&spec.pattern)
                 .map_err(|e| Error::Other(format!("fact pattern /{}/: {e}", spec.pattern)))?;
-            let any = index.files().any(|entry| {
-                if !scope.matches(&entry.path, index) {
-                    return false;
-                }
-                // Cap the read (M3): a fact content-predicate must not read a
-                // multi-GB in-scope file unbounded. Gates on the walk-time size
-                // and bounds the actual read (TOCTOU-safe via read_capped_or_skip).
-                let Some(bytes) =
-                    crate::walker::read_capped_or_skip(&root.join(&entry.path), entry.size)
-                else {
-                    return false;
-                };
-                let Ok(text) = std::str::from_utf8(&bytes) else {
-                    return false;
-                };
-                regex.is_match(text)
-            });
+            let extract = spec
+                .extract
+                .as_deref()
+                .cloned()
+                .map(ExtractSpec::resolve)
+                .transpose()
+                .map_err(|e| Error::Other(format!("fact extract: {e}")))?
+                .map(|extract| match extract {
+                    Extract::Structured(_) => Ok(extract),
+                    _ => Err(Error::Other(
+                        "fact extract must use one of json/yaml/toml/xml/dotenv/properties/ini/hcl"
+                            .to_string(),
+                    )),
+                })
+                .transpose()?;
+            let any = if let Some(paths) = literal_paths {
+                paths
+                    .iter()
+                    .filter_map(|path| index.find_file(path))
+                    .any(|entry| file_content_matches_entry(entry, root, &regex, extract.as_ref()))
+            } else {
+                let scope = scope.expect("non-literal patterns compile a scope");
+                index
+                    .files()
+                    .filter(|entry| scope.matches(&entry.path, index))
+                    .any(|entry| file_content_matches_entry(entry, root, &regex, extract.as_ref()))
+            };
             Ok(FactValue::Bool(any))
         }
         FactKind::GitBranch { git_branch: _ } => Ok(FactValue::String(read_git_branch(root))),
-        FactKind::Custom { custom } => Ok(FactValue::String(run_custom(custom, root))),
+        FactKind::Custom { custom } => Ok(FactValue::String(run_custom(
+            custom,
+            root,
+            process_environment,
+        ))),
     }
 }
 
@@ -287,65 +432,43 @@ const CUSTOM_FACT_TIMEOUT: Duration = Duration::from_secs(30);
 /// failures / a run past [`CUSTOM_FACT_TIMEOUT`] / unusable output → empty
 /// string. stdout is drained on a thread so a chatty child can't deadlock on a
 /// full pipe while we wait on the deadline.
-fn run_custom(spec: &CustomFact, root: &Path) -> String {
-    run_custom_with_timeout(spec, root, CUSTOM_FACT_TIMEOUT)
+fn run_custom(
+    spec: &CustomFact,
+    root: &Path,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
+) -> String {
+    run_custom_with_timeout(spec, root, CUSTOM_FACT_TIMEOUT, process_environment)
 }
 
 /// [`run_custom`] with an injectable timeout so tests can exercise the
 /// deadline path without sleeping the full 30s.
-fn run_custom_with_timeout(spec: &CustomFact, root: &Path, timeout: Duration) -> String {
+fn run_custom_with_timeout(
+    spec: &CustomFact,
+    root: &Path,
+    timeout: Duration,
+    process_environment: Option<&std::collections::BTreeMap<String, String>>,
+) -> String {
     let Some((program, args)) = spec.argv.split_first() else {
         return String::new();
     };
-    let Ok(mut child) = std::process::Command::new(program)
-        .args(args)
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args)
         .current_dir(root)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-    else {
-        return String::new();
-    };
-
-    let mut out_pipe = child.stdout.take();
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(p) = out_pipe.as_mut() {
-            // Custom facts are tiny by nature (a branch, a count); cap defensively.
-            let _ = p.take(1024 * 1024).read_to_end(&mut buf);
+        .stdin(std::process::Stdio::null());
+    if let Some(environment) = process_environment {
+        cmd.env_clear().envs(environment);
+    }
+    // Shared bounded runner: concurrent drain, a bounded timeout (the whole
+    // process group in a non-interactive run; see `crate::process`), and a
+    // backgrounded descendant can't stall the run after the child exits.
+    // Custom facts are tiny by nature (a branch, a count); cap defensively.
+    match crate::process::run_bounded(cmd, timeout, 1024 * 1024, false) {
+        crate::process::RunOutcome::Exited { status, stdout, .. } if status.success() => {
+            std::str::from_utf8(&stdout)
+                .map(|t| t.trim_end().to_string())
+                .unwrap_or_default()
         }
-        buf
-    });
-
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let buf = reader.join().unwrap_or_default();
-                if !status.success() {
-                    return String::new();
-                }
-                return std::str::from_utf8(&buf)
-                    .map(|t| t.trim_end().to_string())
-                    .unwrap_or_default();
-            }
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = reader.join();
-                    return String::new();
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return String::new();
-            }
-        }
+        _ => String::new(),
     }
 }
 
@@ -395,6 +518,8 @@ fn read_git_branch(root: &Path) -> String {
 mod tests {
     use super::*;
     use crate::walker::FileEntry;
+    #[cfg(unix)]
+    use std::time::Instant;
 
     fn idx(paths: &[&str]) -> FileIndex {
         FileIndex::from_entries(
@@ -410,7 +535,7 @@ mod tests {
     }
 
     fn parse(yaml: &str) -> Vec<FactSpec> {
-        serde_yaml_ng::from_str(yaml).unwrap()
+        yaml_serde::from_str(yaml).unwrap()
     }
 
     /// `FactKind::ALL_NAMES` is the source of truth for the `facts.json`
@@ -482,6 +607,22 @@ mod tests {
     }
 
     #[test]
+    fn any_file_exists_preserves_escaped_literals_and_mixed_excludes() {
+        let escaped = parse("- id: route\n  any_file_exists: \"app/[[]slug[]]/config.toml\"\n");
+        let values =
+            evaluate_facts(&escaped, Path::new("/"), &idx(&["app/[slug]/config.toml"])).unwrap();
+        assert_eq!(values.get("route"), Some(&FactValue::Bool(true)));
+
+        let mixed = parse(
+            "- id: source\n  any_file_exists: [Cargo.toml, \"src/*.rs\", \"!src/generated.rs\"]\n",
+        );
+        let excluded = evaluate_facts(&mixed, Path::new("/"), &idx(&["src/generated.rs"])).unwrap();
+        assert_eq!(excluded.get("source"), Some(&FactValue::Bool(false)));
+        let included = evaluate_facts(&mixed, Path::new("/"), &idx(&["src/lib.rs"])).unwrap();
+        assert_eq!(included.get("source"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
     fn all_files_exist_true_when_all_match() {
         let facts = parse("- id: is_monorepo\n  all_files_exist: [Cargo.toml, README.md]\n");
         let v = evaluate_facts(
@@ -501,6 +642,17 @@ mod tests {
     }
 
     #[test]
+    fn all_files_exist_combines_literal_and_glob_members() {
+        let facts = parse("- id: complete\n  all_files_exist: [Cargo.toml, \"src/*.rs\"]\n");
+        let complete =
+            evaluate_facts(&facts, Path::new("/"), &idx(&["Cargo.toml", "src/lib.rs"])).unwrap();
+        assert_eq!(complete.get("complete"), Some(&FactValue::Bool(true)));
+
+        let incomplete = evaluate_facts(&facts, Path::new("/"), &idx(&["Cargo.toml"])).unwrap();
+        assert_eq!(incomplete.get("complete"), Some(&FactValue::Bool(false)));
+    }
+
+    #[test]
     fn count_files_returns_integer() {
         let facts = parse("- id: n_rs\n  count_files: \"**/*.rs\"\n");
         let v = evaluate_facts(
@@ -510,6 +662,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(v.get("n_rs"), Some(&FactValue::Int(3)));
+    }
+
+    #[test]
+    fn count_files_preserves_exact_and_escaped_literal_semantics() {
+        let facts = parse(
+            "- id: manifest\n  count_files: Cargo.toml\n\
+             - id: route\n  count_files: \"app/[[]slug[]]/config.toml\"\n",
+        );
+        let values = evaluate_facts(
+            &facts,
+            Path::new("/"),
+            &idx(&["Cargo.toml", "app/[slug]/config.toml", "src/lib.rs"]),
+        )
+        .unwrap();
+        assert_eq!(values.get("manifest"), Some(&FactValue::Int(1)));
+        assert_eq!(values.get("route"), Some(&FactValue::Int(1)));
+
+        let missing = evaluate_facts(&facts, Path::new("/"), &idx(&["src/lib.rs"])).unwrap();
+        assert_eq!(missing.get("manifest"), Some(&FactValue::Int(0)));
+        assert_eq!(missing.get("route"), Some(&FactValue::Int(0)));
     }
 
     #[test]
@@ -569,6 +741,126 @@ mod tests {
         assert_eq!(v.get("uses_tokio"), Some(&FactValue::Bool(false)));
     }
 
+    #[test]
+    fn file_content_literal_lookup_obeys_the_walked_index() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("ignored.txt"), "needle\n").unwrap();
+        std::fs::write(tmp.path().join("kept.txt"), "plain\n").unwrap();
+        let facts = parse(
+            "- id: found\n  file_content_matches:\n    paths: [missing.txt, ignored.txt]\n    pattern: needle\n",
+        );
+
+        let omitted = evaluate_facts(&facts, tmp.path(), &idx(&["kept.txt"])).unwrap();
+        assert_eq!(omitted.get("found"), Some(&FactValue::Bool(false)));
+
+        let indexed =
+            evaluate_facts(&facts, tmp.path(), &idx(&["kept.txt", "ignored.txt"])).unwrap();
+        assert_eq!(indexed.get("found"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
+    fn file_content_glob_lookup_preserves_exclusions() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/generated.txt"), "needle\n").unwrap();
+        std::fs::write(tmp.path().join("src/kept.txt"), "plain\n").unwrap();
+        let facts = parse(
+            "- id: found\n  file_content_matches:\n    paths: [\"src/*.txt\", \"!src/generated.txt\"]\n    pattern: needle\n",
+        );
+        let index = idx(&["src/generated.txt", "src/kept.txt"]);
+
+        let excluded = evaluate_facts(&facts, tmp.path(), &index).unwrap();
+        assert_eq!(excluded.get("found"), Some(&FactValue::Bool(false)));
+
+        std::fs::write(tmp.path().join("src/kept.txt"), "needle\n").unwrap();
+        let included = evaluate_facts(&facts, tmp.path(), &index).unwrap();
+        assert_eq!(included.get("found"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
+    fn file_content_reports_invalid_glob_before_invalid_regex() {
+        let facts =
+            parse("- id: invalid\n  file_content_matches:\n    paths: '['\n    pattern: '['\n");
+        let error = evaluate_facts(&facts, Path::new("."), &idx(&[])).unwrap_err();
+        let Error::Glob { pattern, .. } = error else {
+            panic!("expected glob validation to run first, got {error}");
+        };
+        assert_eq!(pattern, "[");
+    }
+
+    #[test]
+    fn file_content_matches_can_match_a_structured_root_value() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("global.json");
+        let facts = parse(
+            "- id: exact_sdk\n  file_content_matches:\n    paths: global.json\n    extract: { json: \"$.sdk.version\" }\n    pattern: '^9[.]0[.]306$'\n",
+        );
+        let index = idx(&["global.json"]);
+
+        std::fs::write(
+            &path,
+            r#"{"metadata":{"sdk":{"version":"9.0.306"}},"sdk":{"version":"latest"}}"#,
+        )
+        .unwrap();
+        let values = evaluate_facts(&facts, tmp.path(), &index).unwrap();
+        assert_eq!(values.get("exact_sdk"), Some(&FactValue::Bool(false)));
+
+        std::fs::write(
+            &path,
+            r#"{"metadata":{"sdk":{"version":"latest"}},"sdk":{"version":"9.0.306"}}"#,
+        )
+        .unwrap();
+        let values = evaluate_facts(&facts, tmp.path(), &index).unwrap();
+        assert_eq!(values.get("exact_sdk"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
+    fn file_content_matches_structured_parse_failure_is_false() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.90.0\"\nnot toml\n",
+        )
+        .unwrap();
+        let facts = parse(
+            "- id: exact_rust\n  file_content_matches:\n    paths: rust-toolchain.toml\n    extract: { toml: \"$.toolchain.channel\" }\n    pattern: '^1[.]90[.]0$'\n",
+        );
+        let values = evaluate_facts(&facts, tmp.path(), &idx(&["rust-toolchain.toml"])).unwrap();
+        assert_eq!(values.get("exact_rust"), Some(&FactValue::Bool(false)));
+    }
+
+    #[test]
+    fn file_content_matches_supports_xml_structured_extract() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("value.xml"), "<root><v>1</v></root>").unwrap();
+        let facts = parse(
+            "- id: exact\n  file_content_matches:\n    paths: value.xml\n    extract: { xml: \"$.root.v\" }\n    pattern: '^1$'\n",
+        );
+
+        let values = evaluate_facts(&facts, tmp.path(), &idx(&["value.xml"])).unwrap();
+        assert_eq!(values.get("exact"), Some(&FactValue::Bool(true)));
+    }
+
+    #[test]
+    fn file_content_matches_rejects_non_structured_extracts() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("value.txt"), "v=1\n").unwrap();
+        let facts = parse(
+            "- id: exact\n  file_content_matches:\n    paths: value.txt\n    extract: { regex: 'v=(.*)' }\n    pattern: '^1$'\n",
+        );
+
+        let error = evaluate_facts(&facts, tmp.path(), &idx(&["value.txt"])).unwrap_err();
+        assert!(
+            error.to_string().contains("extract must use one of"),
+            "{error}"
+        );
+    }
     #[test]
     fn file_content_matches_skips_non_utf8_files() {
         use tempfile::tempdir;
@@ -675,11 +967,47 @@ mod tests {
             argv: vec!["sleep".to_string(), "30".to_string()],
         };
         let start = Instant::now();
-        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_millis(150));
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_millis(150), None);
         assert_eq!(got, "", "timed-out fact is empty");
         assert!(
             start.elapsed() < Duration::from_secs(5),
             "must return promptly at the deadline, not run the full sleep"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_fact_timeout_is_enforced_against_a_grandchild_holding_stdout() {
+        // Audit 2026-10 finding 5: killing only `sh` left `sleep` holding the
+        // pipe, so the reader join ran the full 15s past a 300ms deadline.
+        let spec = CustomFact {
+            argv: vec!["sh".into(), "-c".into(), "sleep 15; echo x".into()],
+        };
+        let start = Instant::now();
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_millis(300), None);
+        assert_eq!(got, "");
+        assert!(
+            start.elapsed() < Duration::from_secs(6),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_fact_does_not_wait_for_a_backgrounded_descendant() {
+        // `sleep 9 &` inherits stdout; the fact must resolve once `sh` exits
+        // (plus the bounded reader grace), not when the sleep ends.
+        let spec = CustomFact {
+            argv: vec!["sh".into(), "-c".into(), "sleep 9 & echo hi".into()],
+        };
+        let start = Instant::now();
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_secs(30), None);
+        assert_eq!(got, "hi");
+        assert!(
+            start.elapsed() < Duration::from_secs(6),
+            "{:?}",
+            start.elapsed()
         );
     }
 
@@ -690,7 +1018,7 @@ mod tests {
         let spec = CustomFact {
             argv: vec!["echo".to_string(), "hi".to_string()],
         };
-        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_secs(5));
+        let got = run_custom_with_timeout(&spec, Path::new("."), Duration::from_secs(5), None);
         assert_eq!(got, "hi");
     }
 
@@ -701,6 +1029,7 @@ mod tests {
         );
         let config = crate::config::Config {
             version: 1,
+            requires: None,
             extends: Vec::new(),
             ignore: Vec::new(),
             respect_gitignore: true,
@@ -711,6 +1040,7 @@ mod tests {
             nested_configs: false,
             allow_out_of_root: crate::AllowOutOfRoot::default(),
             baseline: None,
+            compatibility: Vec::new(),
         };
         let err = reject_custom_facts(&config, "./base.yml").unwrap_err();
         assert!(err.to_string().contains("custom"), "{err}");
@@ -722,6 +1052,7 @@ mod tests {
         let facts = parse("- id: plain\n  any_file_exists: x\n");
         let config = crate::config::Config {
             version: 1,
+            requires: None,
             extends: Vec::new(),
             ignore: Vec::new(),
             respect_gitignore: true,
@@ -732,6 +1063,7 @@ mod tests {
             nested_configs: false,
             allow_out_of_root: crate::AllowOutOfRoot::default(),
             baseline: None,
+            compatibility: Vec::new(),
         };
         assert!(reject_custom_facts(&config, "./base.yml").is_ok());
     }

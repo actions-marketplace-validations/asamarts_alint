@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::path::Path;
 
-use alint_core::{FixReport, FixStatus, Level, Report};
+use alint_core::{AnalysisFailure, FixReport, FixStatus, Level, ProposedEdit, Report};
 use serde::Serialize;
 
 use crate::BaselineMarks;
@@ -33,6 +33,7 @@ struct Summary {
     failing_rules: usize,
     passing_rules: usize,
     total_violations: usize,
+    total_analysis_failures: usize,
     has_errors: bool,
     has_warnings: bool,
     /// Occurrences suppressed by the baseline this run, when one is in effect.
@@ -71,11 +72,48 @@ struct JsonResult<'a> {
     /// when empty, so results without notes are byte-identical to
     /// pre-v0.11 output.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    notes: Vec<JsonViolation<'a>>,
+    notes: Vec<JsonNote<'a>>,
+    analysis_failures: Vec<JsonAnalysisFailure<'a>>,
 }
 
 #[derive(Serialize)]
 struct JsonViolation<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<Cow<'a, str>>,
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    /// Whether a bare `alint fix` resolves THIS specific violation (a Safe,
+    /// applicable fix). PER-VIOLATION, unlike the rule-level `fixable` (which only
+    /// means the rule declares a fixer): an Unsafe fix, or one whose `can_fix`
+    /// declines this finding, is `false` here but may leave the rule `fixable`.
+    /// Matches the `agent` format's `fix_available` and the human `[fixable]` tag.
+    fixable: bool,
+    /// The concrete Safe fix(es) alint would apply to resolve this violation
+    /// (source region + replacement text). Present only under `--include-fixes`,
+    /// only for a fixable finding, and only when every target path has an exact
+    /// JSON string representation; a note never carries one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    proposed_edit: Option<&'a [ProposedEdit]>,
+}
+
+#[derive(Serialize)]
+struct JsonNote<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<Cow<'a, str>>,
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<usize>,
+    kind: &'static str,
+    fixable: bool,
+}
+#[derive(Serialize)]
+struct JsonAnalysisFailure<'a> {
+    kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<Cow<'a, str>>,
     message: &'a str,
@@ -102,6 +140,7 @@ pub fn write_json_with_baseline(
         failing_rules: report.failing_rules(),
         passing_rules: report.passing_rules(),
         total_violations: report.total_violations(),
+        total_analysis_failures: report.total_analysis_failures(),
         has_errors: report.has_errors(),
         has_warnings: report.has_warnings(),
         baselined_suppressed: baseline.map(|b| b.suppressed_total),
@@ -119,21 +158,33 @@ pub fn write_json_with_baseline(
                 .violations
                 .iter()
                 .map(|v| JsonViolation {
-                    path: lossy_path(v.path.as_deref()),
+                    path: lossy_path(v.report_path()),
                     message: v.message.as_ref(),
                     line: v.line,
                     column: v.column,
+                    fixable: v.is_fixable,
+                    proposed_edit: crate::utf8_proposed_edits(v),
                 })
                 .collect(),
             notes: r
                 .notes
                 .iter()
-                .map(|v| JsonViolation {
-                    path: lossy_path(v.path.as_deref()),
+                .map(|v| JsonNote {
+                    path: lossy_path(v.report_path()),
                     message: v.message.as_ref(),
                     line: v.line,
                     column: v.column,
+                    kind: v
+                        .note_kind()
+                        .unwrap_or(alint_core::NoteKind::Informational)
+                        .as_str(),
+                    fixable: false,
                 })
+                .collect(),
+            analysis_failures: r
+                .analysis_failures
+                .iter()
+                .map(json_analysis_failure)
                 .collect(),
         })
         .collect();
@@ -146,7 +197,7 @@ pub fn write_json_with_baseline(
                 .flat_map(|(rr, m)| {
                     m.suppressed.iter().map(move |sf| JsonBaselined {
                         id: rr.rule_id.as_ref(),
-                        path: lossy_path(sf.violation.path.as_deref()),
+                        path: lossy_path(sf.violation.report_path()),
                         message: sf.violation.message.as_ref(),
                         line: sf.violation.line,
                         column: sf.violation.column,
@@ -172,6 +223,10 @@ pub fn write_json_with_baseline(
 #[derive(Serialize)]
 struct JsonFixReport<'a> {
     schema_version: u32,
+    /// `true` for `alint fix --dry-run`: nothing was written, and every
+    /// `applied` item is what WOULD be applied. Distinguishes a preview from
+    /// a real run without parsing the human-oriented `detail` text.
+    dry_run: bool,
     summary: FixSummary,
     results: Vec<JsonFixRuleResult<'a>>,
 }
@@ -181,6 +236,18 @@ struct FixSummary {
     applied: usize,
     skipped: usize,
     unfixable: usize,
+    /// Fixes available but not applied (below the tier threshold, a
+    /// suggestion, or verification-demoted). Always present (a machine
+    /// format keeps a stable envelope); `0` when none.
+    suggested: usize,
+    total_analysis_failures: usize,
+    /// `true` when the fix loop hit its pass cap without settling (a
+    /// non-convergent config). This is the ONLY structured signal of the
+    /// distinct exit 2 ("fix could not complete"): without it a capped run --
+    /// whose items are mostly `applied` because the fixes kept re-firing --
+    /// is indistinguishable in this envelope from a clean run. Always present;
+    /// `false` for a converged run. See docs/design/v0.17/fixpoint.md.
+    non_convergent: bool,
 }
 
 #[derive(Serialize)]
@@ -188,6 +255,7 @@ struct JsonFixRuleResult<'a> {
     id: &'a str,
     level: Level,
     items: Vec<JsonFixItem<'a>>,
+    analysis_failures: Vec<JsonAnalysisFailure<'a>>,
 }
 
 #[derive(Serialize)]
@@ -202,9 +270,26 @@ struct JsonFixItem<'a> {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<&'a str>,
+    /// For a `skipped` item, WHY it was not fixed: `declined` (the fixer
+    /// declined), `errored` (an I/O error), `baselined` (grandfathered by
+    /// `fix --baseline`), or `unresolved` (the fix ran, or would run, but the
+    /// rule still reports the violation). Absent for other statuses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skip_kind: Option<&'static str>,
 }
 
 pub fn write_fix_json(report: &FixReport, w: &mut dyn Write) -> std::io::Result<()> {
+    write_fix_json_with_mode(report, false, w)
+}
+
+/// [`write_fix_json`] for a run that may be a dry run: `dry_run` is emitted
+/// as the top-level `dry_run` field (statuses stay `applied` etc. for
+/// compatibility; `dry_run: true` says none of them were written).
+pub fn write_fix_json_with_mode(
+    report: &FixReport,
+    dry_run: bool,
+    w: &mut dyn Write,
+) -> std::io::Result<()> {
     let results: Vec<JsonFixRuleResult<'_>> = report
         .results
         .iter()
@@ -215,35 +300,60 @@ pub fn write_fix_json(report: &FixReport, w: &mut dyn Write) -> std::io::Result<
                 .items
                 .iter()
                 .map(|it| {
-                    let (status, detail) = match &it.status {
-                        FixStatus::Applied(s) => ("applied", Some(s.as_str())),
-                        FixStatus::Skipped(s) => ("skipped", Some(s.as_str())),
-                        FixStatus::Unfixable => ("unfixable", None),
+                    let (status, detail, skip_kind) = match &it.status {
+                        FixStatus::Applied(s) => ("applied", Some(s.as_str()), None),
+                        FixStatus::Skipped { reason: s, kind } => {
+                            ("skipped", Some(s.as_str()), Some(kind.as_str()))
+                        }
+                        FixStatus::Suggested { summary, .. } => {
+                            ("suggested", Some(summary.as_str()), None)
+                        }
+                        FixStatus::Unfixable => ("unfixable", None, None),
                     };
                     JsonFixItem {
-                        path: lossy_path(it.violation.path.as_deref()),
+                        path: lossy_path(it.violation.report_path()),
                         message: it.violation.message.as_ref(),
                         line: it.violation.line,
                         column: it.violation.column,
                         status,
                         detail,
+                        skip_kind,
                     }
                 })
+                .collect(),
+            analysis_failures: r
+                .analysis_failures
+                .iter()
+                .map(json_analysis_failure)
                 .collect(),
         })
         .collect();
     let out = JsonFixReport {
         schema_version: 1,
+        dry_run,
         summary: FixSummary {
             applied: report.applied(),
             skipped: report.skipped(),
             unfixable: report.unfixable(),
+            suggested: report.suggested(),
+            total_analysis_failures: report.total_analysis_failures(),
+            non_convergent: report.non_convergent,
         },
         results,
     };
     serde_json::to_writer_pretty(&mut *w, &out)?;
     writeln!(w)?;
     Ok(())
+}
+
+fn json_analysis_failure(failure: &AnalysisFailure) -> JsonAnalysisFailure<'_> {
+    JsonAnalysisFailure {
+        kind: failure.kind.as_str(),
+        path: lossy_path(failure.report_path()),
+        message: failure.message.as_ref(),
+        line: failure.line,
+        column: failure.column,
+    }
 }
 
 #[cfg(test)]
@@ -290,6 +400,38 @@ mod tests {
         assert!(
             !out.contains("\"notes\""),
             "empty notes must be omitted: {out}"
+        );
+    }
+
+    #[test]
+    fn fix_json_renders_suggested_status_and_detail() {
+        use alint_core::{FixEdit, FixItem, FixReport, FixRuleResult};
+        use std::path::PathBuf;
+        let report = FixReport {
+            non_convergent: false,
+            results: vec![FixRuleResult {
+                rule_id: "demo".into(),
+                level: Level::Error,
+                items: vec![FixItem {
+                    violation: Violation::new("v").with_path(PathBuf::from("a.txt")),
+                    status: FixStatus::Suggested {
+                        summary: "would set $.x to 1".into(),
+                        edit: Some(FixEdit::SetContent {
+                            path: PathBuf::from("a.txt"),
+                            content: Vec::new(),
+                        }),
+                    },
+                }],
+                analysis_failures: Vec::new(),
+            }],
+        };
+        let mut buf = Vec::new();
+        write_fix_json(&report, &mut buf).unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("\"suggested\""), "status should render: {s}");
+        assert!(
+            s.contains("would set $.x to 1"),
+            "detail should render: {s}"
         );
     }
 

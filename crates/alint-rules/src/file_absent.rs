@@ -5,7 +5,7 @@ use alint_core::{
 };
 use serde::Deserialize;
 
-use crate::fixers::FileRemoveFixer;
+use crate::fixers::{FileRemoveFixer, GitUntrackFixer, RelocateFixer};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -15,8 +15,8 @@ struct Options {
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to files tracked in git's index: entries present in the
-    /// walked tree but not in `git ls-files` are skipped. No effect outside a
-    /// git repo. Default `false`.
+    /// walked tree but not in `git ls-files` are skipped. Repository
+    /// unavailability is an analysis failure when enabled. Default `false`.
     #[serde(default)]
     git_tracked_only: bool,
     /// When non-empty, a file matching `paths` is reported only if its raw
@@ -44,17 +44,18 @@ pub struct FileAbsentRule {
     patterns: Vec<String>,
     root_only: bool,
     /// When `true`, only fire on entries that are also tracked
-    /// in git's index. Outside a git repo or with no rules
-    /// opting in, the tracked-set is `None` and every entry
-    /// reads as "untracked," so the rule becomes a no-op —
-    /// which is the right default for "don't let X be
-    /// committed" semantics.
+    /// in Git's index. The engine derives this dependency from
+    /// kind metadata and gates repository unavailability before
+    /// dispatch.
     git_tracked_only: bool,
     /// Parsed `content_prefix_hex` signatures. Empty ⇒ pure name-based
     /// matching (the historical behaviour); non-empty ⇒ a name match is only
     /// reported when the file's leading bytes equal one of these prefixes.
     content_prefixes: Vec<Vec<u8>>,
-    fixer: Option<FileRemoveFixer>,
+    /// The configured fix: `file_remove` (delete from disk) or `git_untrack`
+    /// (remove from git's index, keep on disk) — boxed since `file_absent` hosts
+    /// two distinct fixer types.
+    fixer: Option<Box<dyn Fixer>>,
 }
 
 impl Rule for FileAbsentRule {
@@ -78,6 +79,10 @@ impl Rule for FileAbsentRule {
 
     fn path_scope(&self) -> Option<&Scope> {
         Some(&self.scope)
+    }
+
+    fn supports_expect_matches(&self) -> bool {
+        false
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -123,7 +128,7 @@ impl Rule for FileAbsentRule {
     }
 
     fn fixer(&self) -> Option<&dyn Fixer> {
-        self.fixer.as_ref().map(|f| f as &dyn Fixer)
+        self.fixer.as_deref()
     }
 }
 
@@ -150,6 +155,51 @@ impl FileAbsentRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: true },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::FileOnly,
+    respect_gitignore: false,
+    root_only: true,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::TrackedSet]),
+            },
+            condition: alint_core::CapabilityCondition::OptionSet {
+                option: std::borrow::Cow::Borrowed("git_tracked_only"),
+            },
+        },
+        alint_core::CapabilityMeta {
+            capability: alint_core::Capability::Git {
+                operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::Untrack]),
+            },
+            condition: alint_core::CapabilityCondition::FixOpConfigured {
+                op: std::borrow::Cow::Borrowed("git_untrack"),
+            },
+        },
+    ]),
+    content: alint_core::ContentAccess::Prefix {
+        max_bytes: None,
+        metadata: false,
+    },
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[
+        std::borrow::Cow::Borrowed("file_remove"),
+        std::borrow::Cow::Borrowed("git_untrack"),
+        std::borrow::Cow::Borrowed("relocate"),
+    ]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "file_absent")?;
     let Some(paths) = &spec.paths else {
@@ -165,8 +215,27 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         .map(|hex| parse_content_prefix(hex))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|msg| Error::rule_config(&spec.id, msg))?;
-    let fixer = match &spec.fix {
-        Some(FixSpec::FileRemove { .. }) => Some(FileRemoveFixer),
+    // `file_absent` hosts two fixes: `file_remove` (delete from disk) and
+    // `git_untrack` (remove from git's index, keep on disk) -- both `Unsafe` by
+    // default (each irreversibly restructures state on a bare `alint fix`). The
+    // `git_untrack` op is *spawning*, so the DSL's `reject_spawning_fix_ops_in`
+    // refuses it from any non-top-level source before this builder ever runs.
+    let fixer: Option<Box<dyn Fixer>> = match &spec.fix {
+        Some(FixSpec::FileRemove { file_remove }) => Some(Box::new(FileRemoveFixer::new(
+            file_remove
+                .applicability
+                .unwrap_or(alint_core::Applicability::Unsafe),
+        ))),
+        Some(FixSpec::GitUntrack { git_untrack }) => Some(Box::new(GitUntrackFixer::new(
+            git_untrack
+                .applicability
+                .unwrap_or(alint_core::Applicability::Unsafe),
+        ))),
+        Some(FixSpec::Relocate { relocate }) => Some(Box::new(RelocateFixer::new(
+            relocate
+                .applicability
+                .unwrap_or(alint_core::Applicability::Unsafe),
+        ))),
         Some(other) => {
             return Err(Error::rule_config(
                 &spec.id,
@@ -205,7 +274,7 @@ fn parse_content_prefix(hex: &str) -> std::result::Result<Vec<u8>, String> {
     if hex.is_empty() {
         return Err("content_prefix_hex entries must not be empty".to_string());
     }
-    if !hex.is_ascii() || hex.len() % 2 != 0 {
+    if !hex.is_ascii() || !hex.len().is_multiple_of(2) {
         return Err(format!(
             "content_prefix_hex entries must be even-length ASCII hex, got {hex:?}"
         ));
@@ -269,6 +338,41 @@ mod tests {
     }
 
     #[test]
+    fn build_accepts_git_untrack_fix() {
+        // The sibling fix on file_absent: untrack from git rather than delete.
+        // The canonical shape pairs it with `git_tracked_only: true` so it
+        // converges (the file leaves the tracked set).
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: file_absent\n\
+             paths: \"build/**\"\n\
+             git_tracked_only: true\n\
+             level: error\n\
+             fix:\n  \
+               git_untrack: {}\n",
+        );
+        let rule = build(&spec).expect("valid git_untrack fix");
+        assert!(rule.fixer().is_some(), "git_untrack fixer should attach");
+    }
+
+    #[test]
+    fn build_accepts_relocate_fix() {
+        // The Phase-3 fix on file_absent: move a nested file to the repo root
+        // rather than delete or untrack it. The canonical shape pairs it with a
+        // SUBDIRECTORY-anchored pattern so the relocated root file converges.
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: file_absent\n\
+             paths: \"**/*/Cargo.lock\"\n\
+             level: error\n\
+             fix:\n  \
+               relocate: {}\n",
+        );
+        let rule = build(&spec).expect("valid relocate fix");
+        assert!(rule.fixer().is_some(), "relocate fixer should attach");
+    }
+
+    #[test]
     fn evaluate_passes_when_no_match_present() {
         let spec = spec_yaml(
             "id: t\n\
@@ -298,17 +402,10 @@ mod tests {
 
     #[test]
     fn git_tracked_only_advertises_file_only_mode() {
-        // v0.9.11: the silent-no-op-outside-git-repo guarantee
-        // moved from a per-rule runtime check to an engine-side
-        // pre-filtered FileIndex. Calling `evaluate` directly
-        // bypasses the engine's filtering, so this unit test
-        // can no longer assert the no-op behaviour at the rule
-        // level — instead it asserts the rule advertises the
-        // correct `GitTrackedMode`, which is what tells the
-        // engine to substitute an empty index when the
-        // tracked-set is `None`. The end-to-end no-op behaviour
-        // is asserted by the e2e scenarios under
-        // `crates/alint-e2e/scenarios/check/git/`.
+        // Direct evaluation bypasses the engine's tracked-index construction
+        // and repository-availability gate, so this test asserts only the
+        // advertised `GitTrackedMode`. End-to-end routing is covered by the
+        // scenarios under `crates/alint-e2e/scenarios/check/git/`.
         let spec = spec_yaml(
             "id: t\n\
              kind: file_absent\n\
@@ -327,7 +424,7 @@ mod tests {
     /// ADR-0008: `respect_gitignore` is honoured ONLY by `file_exists` (pitfall
     /// #18), so it lives solely in `file_exists`'s `Options`. A sibling
     /// existence kind like `file_absent` must reject it at load rather than
-    /// accept-and-ignore — the subtle case where a user assumes every existence
+    /// accept-and-ignore - the subtle case where a user assumes every existence
     /// kind shares the option.
     #[test]
     fn build_rejects_respect_gitignore_sibling_existence_kind() {

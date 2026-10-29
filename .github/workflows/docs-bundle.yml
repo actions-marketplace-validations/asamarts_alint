@@ -36,12 +36,12 @@ permissions:
   contents: write   # required to push to the docs-bundle branch
 
 concurrency:
-  # Coalesce rapid main-branch pushes — only one bundle build at
-  # a time per ref, and a newer push cancels an older still-
-  # running one. The tag-push trigger uses a separate group so a
-  # release-time bundle build can't get cancelled by an immediate
-  # follow-up main push (or vice versa).
-  group: docs-bundle-${{ github.ref }}
+  # Every trigger publishes the same docs-bundle branch. Serialize them in one
+  # group and cancel a stale run when a newer event arrives; per-ref groups let
+  # an older main/tag/manual run finish last and overwrite a newer bundle.
+  # A main run that supersedes a release run still queries releases/latest, so
+  # it builds from the same newly published release.
+  group: docs-bundle-publish
   cancel-in-progress: true
 
 jobs:
@@ -81,7 +81,7 @@ jobs:
         with:
           key: docs-bundle
 
-      - name: Overlay main-tracked docs (reference + design)
+      - name: Overlay main-tracked release-safe docs
         run: |
           set -euo pipefail
           # docs-export (next step) builds from the release TAG checked out
@@ -89,14 +89,18 @@ jobs:
           # already-released behaviour (e.g. the output formats). Overlaying it
           # from main lets reference-doc additions and fixes ship without
           # waiting for the next release. Keep reference pages to released
-          # behaviour so this can't surface anything unreleased. A few concept /
-          # getting-started pages (concepts/index, concepts/content-from,
-          # getting-started/installation) are overlaid too, so presentation-only
-          # fixes -- e.g. dropping a low-value <likec4-view> -- reach the site
-          # without a release; like reference docs they are release-gated below
-          # and must stay within released behaviour (no count/version drift).
-          # All other docs/site prose stays pinned to the tag, so count- or
-          # version-sensitive pages can't drift ahead of the release.
+          # behaviour so this can't surface anything unreleased. The whole
+          # docs/site/concepts/ tree is overlaid from main (the Phase 6 redesign
+          # restructured concepts into grouped subdirs and renamed/folded the old
+          # flat pages), so the concepts ship without a release; getting-started/
+          # installation is overlaid for the same presentation-fix reason. The
+          # GitHub Actions guide is also main-tracked because its immutable
+          # release-commit pin can only be written after the tag exists. Like
+          # reference docs these are release-gated below (strip-since). The one
+          # count-bearing concepts page is also rendered from the release tag's
+          # facts.json, because main's rule counts can legitimately move ahead
+          # between releases. All other docs/site prose stays pinned to the tag;
+          # new behavior in an overlaid page must use the since markers below.
           #
           # docs/design/ARCHITECTURE.md and ROADMAP.md are overlaid too: they
           # are living design documents for contributors (the
@@ -120,14 +124,35 @@ jobs:
           # they stay overlaid for released-doc fixes.
           git fetch --quiet origin main
           git checkout origin/main -- docs/site/reference docs/design/ARCHITECTURE.md docs/design/ROADMAP.md roadmap.json \
-            docs/site/about/architecture-diagrams.md docs/site/concepts/how-it-works.md \
-            docs/site/concepts/index.md docs/site/concepts/content-from.md docs/site/getting-started/installation.md
-          echo "Overlaid reference + design docs from origin/main ($(git rev-parse --short origin/main))."
+            docs/site/about/architecture-diagrams.md docs/site/getting-started/installation.md \
+            docs/site/integrations/github-actions.md
+          # Concepts: overlay the whole tree from main. `git checkout` adds and
+          # overwrites but never DELETES, so remove the tag's obsolete flat
+          # concept pages first (Phase 6 renamed/folded/relocated all of them);
+          # otherwise stale pages would survive from the tag and shadow the
+          # redirects. Delete first so main's subdir layout REPLACES the tag's.
+          rm -rf docs/site/concepts
+          git checkout origin/main -- docs/site/concepts
+          # Phase 6 relocated three pages OUT of concepts/: templates.md and
+          # variable-interpolation.md to configuration/, and suggest.md to
+          # cookbook/. The redesign (and a rule page) link to their new homes, so
+          # overlay those from main too -- otherwise they exist only at the tag's
+          # old concepts/ paths and the new links 404. Drift-safe: same released
+          # prose, just moved.
+          git checkout origin/main -- docs/site/configuration/templates.md \
+            docs/site/configuration/variable-interpolation.md docs/site/cookbook/suggest.md
+          # The content rules' pages (rule-page bridge, from main) link to the
+          # "Regex patterns and anchors" page added after v0.20.0 (#343). Its
+          # anchor semantics describe released behavior; the load-time warnings
+          # section is a since-block, stripped below until it ships.
+          git checkout origin/main -- docs/site/configuration/patterns.md
+          echo "Overlaid reference + Action guide + design + full concepts/ + relocated pages from origin/main ($(git rev-parse --short origin/main))."
 
       - name: Release-gate the overlaid docs (strip unreleased since-blocks)
-        # The overlay above brings main's reference + design prose into the
-        # tag-built tree, and that prose may carry `<!-- alint:since=X -->` blocks
-        # staged for a FUTURE release (e.g. a v0.14 baseline note). The release
+        # The overlay above brings main's reference, Action-guide, and design
+        # prose into the tag-built tree, and that prose may carry
+        # `<!-- alint:since=X -->` blocks staged for a FUTURE release (e.g. a
+        # v0.14 baseline note). The release
         # TAG's docs-export (next step) predates the P-REF stripper, so it cannot
         # gate them — without this step an unreleased block reaches the bundle
         # AND the live site, and a link inside it to a not-yet-shipped page (a
@@ -147,26 +172,64 @@ jobs:
           # bridge below runs MAIN's xtask from a worktree. origin/main was already
           # fetched by the overlay step; fetch again so this step is self-contained.
           git fetch --quiet origin main
-          git checkout origin/main -- ci/scripts/strip-since.mjs
+          git checkout origin/main -- ci/scripts/strip-since.mjs ci/scripts/pin-docs-counts.py
           node ci/scripts/strip-since.mjs --released-version "${BUNDLE_SOURCE#v}" \
             docs/site/reference \
             docs/site/about/architecture-diagrams.md \
-            docs/site/concepts/how-it-works.md \
-            docs/site/concepts/index.md \
-            docs/site/concepts/content-from.md \
+            docs/site/concepts \
+            docs/site/configuration/templates.md \
+            docs/site/configuration/variable-interpolation.md \
+            docs/site/configuration/patterns.md \
+            docs/site/cookbook/suggest.md \
             docs/site/getting-started/installation.md \
+            docs/site/integrations/github-actions.md \
             docs/design/ARCHITECTURE.md \
             docs/design/ROADMAP.md
+          # This page states concrete catalogue counts in prose and an SVG.
+          # Unlike since-blocks, a number cannot be conditionally decremented.
+          # Render every count from the release tag's facts.json so a new kind
+          # on main cannot make the published release look larger than it is.
+          python3 ci/scripts/pin-docs-counts.py facts.json \
+            docs/site/concepts/start-here/kinds-families-categories.md
 
       - name: Generate docs-bundle/
         # This runs the RELEASE TAG's docs-export, so it must NOT pass a flag the
-        # tag's xtask lacks — the main-overlaid reference/design docs were already
-        # release-gated by the standalone stripper step above (the tag's
-        # copy_site_tree has no stripper of its own). The rule-page bridge below
-        # gates separately, because it runs MAIN's docs-export from a worktree
-        # where `--released-version` exists.
+        # tag's xtask lacks — the main-overlaid reference, Action-guide, and
+        # design docs were already release-gated by the standalone stripper
+        # step above (the tag's copy_site_tree has no stripper of its own). The
+        # rule-page bridge below gates separately, because it runs MAIN's xtask
+        # from a worktree where `--released-version` exists.
         run: cargo run -q -p xtask -- docs-export
         # Output lives at target/docs-bundle/.
+
+      - name: Verify published Action documentation pin
+        run: |
+          set -euo pipefail
+          # The release commit cannot name its own SHA. The post-release main
+          # commit records it in action-doc-pin.env and updates the overlaid
+          # guide above; assert the generated bundle carries that exact pin so a
+          # successful docs build cannot leave the live copy-paste snippet one
+          # release behind.
+          pin_file="$(mktemp)"
+          trap 'rm -f "$pin_file"' EXIT
+          git show origin/main:ci/action-doc-pin.env > "$pin_file"
+          # shellcheck disable=SC1090
+          source "$pin_file"
+          doc=target/docs-bundle/integrations/github-actions.md
+          expected="asamarts/alint@${ACTION_DOC_SHA} # v${ACTION_DOC_VERSION}"
+          uses_count="$(grep -cE 'uses:[[:space:]]*asamarts/alint@' "$doc" || true)"
+          if [[ "$uses_count" -eq 0 ]]; then
+            echo "::error file=$doc::No alint Action examples found in the generated guide."
+            exit 1
+          fi
+          mismatched="$(grep -nE 'uses:[[:space:]]*asamarts/alint@' "$doc" |
+            grep -vF "$expected" || true)"
+          if [[ -n "$mismatched" ]]; then
+            echo "::error file=$doc::Generated Action examples do not match $expected"
+            printf '%s\n' "$mismatched"
+            exit 1
+          fi
+          echo "Published Action guide has $uses_count example(s) pinned to $expected."
 
       - name: Ensure roadmap.json is in the bundle (main-tracked)
         run: |
@@ -189,17 +252,21 @@ jobs:
           # dropped <likec4-view> on a generated concept page — can't reach the site
           # by overlaying a single file the way ARCHITECTURE.md does above; the
           # pages have to be re-rendered. Regenerate them from a clean origin/main
-          # worktree and REFRESH the bundle's existing pages only (the --rules-only
-          # export emits both rules/ and the generated concepts/).
+          # worktree and REFRESH the bundle's existing leaf rule and concept pages
+          # only (the --rules-only export emits rules/ and generated concepts/).
           #
-          # Refresh-existing is the safety property that keeps this from
+          # Refresh-existing is one safety property that keeps this from
           # surfacing anything unreleased: a rule kind added on main since the
           # release has no page in the tag-built bundle, so its freshly
           # generated page is never copied in. Only pages the released tool
           # already documents get their prose/examples refreshed from main —
           # the same "track main, stay within released behaviour" contract the
-          # docs/site/reference + ARCHITECTURE.md overlays use. Idempotent once
-          # these docs-export changes ship in a release tag.
+          # docs/site/reference + ARCHITECTURE.md overlays use. Generated rule
+          # index pages are deliberately NOT refreshed: a main index can link a
+          # new kind whose leaf page refresh-existing correctly withheld. The
+          # release-generated indexes already describe exactly the released
+          # page set. Idempotent once these docs-export changes ship in a release
+          # tag.
           git fetch --quiet origin main
           main_tree="$(mktemp -d)"
           git worktree add --quiet --detach "$main_tree" origin/main
@@ -229,6 +296,11 @@ jobs:
           ( cd "$main_tree" && cargo run -q -p xtask -- docs-export --rules-only --released-version "${BUNDLE_SOURCE#v}" --out "$main_tree/_bundle" )
           refreshed=0
           while IFS= read -r page; do
+            case "$page" in
+              target/docs-bundle/rules/index.md|target/docs-bundle/rules/*/index.md)
+                continue
+                ;;
+            esac
             src="${main_tree}/_bundle/${page#target/docs-bundle/}"
             if [[ -f "$src" ]]; then
               cp "$src" "$page"
@@ -237,7 +309,12 @@ jobs:
           done < <(find target/docs-bundle/rules target/docs-bundle/concepts -type f -name '*.md' 2>/dev/null)
           echo "Refreshed ${refreshed} rule + concept reference page(s) from origin/main ($(git rev-parse --short origin/main))."
 
-      - name: Refresh cross-version trajectory from main's bench results
+          # Fail before publishing if a generated rule index ever points at a
+          # page the release bundle does not contain. This is intentionally
+          # checked after the bridge, at the exact tree that will be pushed.
+          python3 "$main_tree/ci/scripts/check-docs-bundle-rule-links.py" target/docs-bundle
+
+      - name: Refresh cross-version trajectory + bench rule-counts from main
         run: |
           set -euo pipefail
           # The bundle's docs are built from the release TAG (above), but the
@@ -249,11 +326,11 @@ jobs:
           #
           # `git checkout <ref> -- <dir>` ADDS and OVERWRITES but never DELETES,
           # so a results dir that main MOVED still survives from the tag's tree
-          # and gets rendered as part of the canonical series. The 2026-07 kbench
+          # and gets rendered as part of the canonical series. The 2026-07 bench host
           # re-baseline relocated the pre-v0.10 3900X results to
           # `linux-x86_64-ryzen-3900x/`; without dropping the tag's copy first,
           # those 20 stale dirs stayed at `linux-x86_64/` and spliced a foreign
-          # host into the trajectory (kbench v0.10+ rows sitting on top of 3900X
+          # host into the trajectory (bench-host v0.10+ rows sitting on top of 3900X
           # v0.5.7-v0.9.23 rows, under one fingerprint). Delete first so main's
           # layout REPLACES the tag's rather than merging with it. Safe here: the
           # bundle payload is already assembled under target/docs-bundle/, and
@@ -263,7 +340,15 @@ jobs:
           git checkout origin/main -- docs/benchmarks xtask/scripts/render-history.py
           python3 xtask/scripts/render-history.py \
             --json-out "$(pwd)/target/docs-bundle/benchmarks-trajectory.json"
-          echo "Trajectory refreshed from origin/main ($(git rev-parse --short origin/main))."
+          # The /benchmarks/ page's per-scenario rule counts read facts.json's
+          # `bench_scenario_rule_counts`. Those track the consolidated 5-scenario
+          # set (S1-S4), which lands on main with the consolidation and is ABSENT
+          # from the release tag's facts.json (the bundle otherwise keeps the tag's
+          # facts.json for version-count consistency). Surgically overlay JUST that
+          # field from main so the page's counts match the new scenarios; every
+          # other facts.json field stays at the release tag.
+          python3 -c "import json,subprocess; b=json.load(open('target/docs-bundle/facts.json')); m=json.loads(subprocess.check_output(['git','show','origin/main:facts.json'])); b['bench_scenario_rule_counts']=m['bench_scenario_rule_counts']; json.dump(b,open('target/docs-bundle/facts.json','w'),indent=2,ensure_ascii=False); open('target/docs-bundle/facts.json','a').write('\n')"
+          echo "Trajectory + bench rule-counts refreshed from origin/main ($(git rev-parse --short origin/main))."
 
       - name: Push to docs-bundle branch
         env:
@@ -305,7 +390,11 @@ jobs:
             echo "No bundle changes; skipping push."
             exit 0
           }
-          git push origin docs-bundle --force
+          # The clone makes this commit a child of the observed remote head, so
+          # a normal push is sufficient. If another publisher somehow wins the
+          # race after the clone, reject this stale writer instead of letting a
+          # force-push overwrite the newer bundle.
+          git push origin docs-bundle
 
       - name: Trigger alint.org rebuild
         # Cloudflare Pages exposes a deploy-hook URL per project

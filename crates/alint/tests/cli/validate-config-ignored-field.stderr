@@ -1,0 +1,1 @@
+alint: rule "format-once": `paths` is not supported by `command_idempotent` and would be ignored; remove the field

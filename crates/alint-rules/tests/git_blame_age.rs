@@ -9,6 +9,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 
 use alint_core::{Engine, Level, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
@@ -59,10 +60,10 @@ fn build_engine(pattern: &str, max_age_days: u64) -> Engine {
          max_age_days: {max_age_days}\n\
          level: warning\n",
     );
-    let spec: alint_core::RuleSpec = serde_yaml_ng::from_str(&yaml).unwrap();
+    let spec: Arc<alint_core::RuleSpec> = Arc::new(yaml_serde::from_str(&yaml).unwrap());
     let registry = builtin_registry();
     let rule = registry.build(&spec).unwrap();
-    Engine::from_entries(vec![RuleEntry::new(rule)], registry)
+    Engine::from_entries(vec![RuleEntry::new(rule).with_spec(spec)], registry)
 }
 
 #[test]
@@ -87,18 +88,12 @@ fn fires_on_old_line_silent_on_recent_line() {
         "@1500000000 +0000", // 2017-07-14
     );
 
-    // Second commit: yesterday. New TODO that's well within
-    // the threshold and must NOT fire.
+    // Second commit has a fixed reference date. The engine's default
+    // analysis time is this HEAD committer timestamp.
     let mut bytes = std::fs::read(root.join("a.rs")).unwrap();
     bytes.extend_from_slice(b"// TODO recent marker\n");
     std::fs::write(root.join("a.rs"), bytes).unwrap();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let yesterday = now - 86_400;
-    let yesterday_arg = format!("@{yesterday} +0000");
-    commit_with_date(root, "a.rs", "fresh", &yesterday_arg);
+    commit_with_date(root, "a.rs", "fresh", "2026-10-16T12:00:00Z");
 
     let engine = build_engine(r"\bTODO\b", 180);
     let walk_opts = WalkOptions {
@@ -125,6 +120,56 @@ fn fires_on_old_line_silent_on_recent_line() {
         "message should reference the matched marker: {}",
         v.message
     );
+    assert!(
+        v.message.ends_with("(as of 2026-10-16)"),
+        "finding should expose the deterministic reference date: {}",
+        v.message
+    );
+}
+
+#[test]
+fn strict_boundary_young_future_and_uncommitted_lines_do_not_fire() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+
+    std::fs::write(root.join("a.rs"), "// TODO boundary\n").unwrap();
+    commit_with_date(root, "a.rs", "boundary", "2026-10-06T00:00:00Z");
+    std::fs::write(root.join("a.rs"), "// TODO boundary\n// TODO old\n").unwrap();
+    commit_with_date(root, "a.rs", "old", "2026-10-05T23:59:59Z");
+    std::fs::write(
+        root.join("a.rs"),
+        "// TODO boundary\n// TODO old\n// TODO future\n",
+    )
+    .unwrap();
+    commit_with_date(root, "a.rs", "future", "2026-10-17T00:00:00Z");
+    std::fs::write(
+        root.join("a.rs"),
+        "// TODO boundary\n// TODO old\n// TODO future\n// TODO uncommitted\n",
+    )
+    .unwrap();
+
+    let engine = build_engine(r"\bTODO\b", 10).with_analysis_time("2026-10-16".parse().unwrap());
+    let index = walk(
+        root,
+        &WalkOptions {
+            respect_gitignore: true,
+            extra_ignores: Vec::new(),
+        },
+    )
+    .unwrap();
+    let report = engine.run(root, &index).unwrap();
+    let violations: Vec<_> = report
+        .results
+        .iter()
+        .flat_map(|result| &result.violations)
+        .collect();
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0].line, Some(2));
+    assert!(violations[0].message.ends_with("(as of 2026-10-16)"));
 }
 
 #[test]
@@ -155,10 +200,11 @@ max_age_days: 180
 level: warning
 message: \"`{{ctx.match}}` marker is ancient — resolve or remove\"
 ";
-    let spec: alint_core::RuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
+    let spec: alint_core::RuleSpec = yaml_serde::from_str(yaml).unwrap();
     let registry = builtin_registry();
     let rule = registry.build(&spec).unwrap();
-    let engine = Engine::from_entries(vec![RuleEntry::new(rule)], registry);
+    let engine = Engine::from_entries(vec![RuleEntry::new(rule)], registry)
+        .with_analysis_time("2026-10-16".parse().unwrap());
 
     let walk_opts = WalkOptions {
         respect_gitignore: true,
@@ -183,10 +229,63 @@ message: \"`{{ctx.match}}` marker is ancient — resolve or remove\"
         combined.contains("`TODO`"),
         "TODO capture should render: {combined}"
     );
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.ends_with("(as of 2026-10-16)")),
+        "custom messages must retain the reference date: {messages:?}"
+    );
 }
 
 #[test]
-fn silent_outside_git() {
+fn nested_parent_message_preserves_analysis_date() {
+    if Command::new("git").arg("--version").output().is_err() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git_init(root);
+    std::fs::create_dir_all(root.join("pkg/src")).unwrap();
+    std::fs::write(root.join("pkg/src/a.rs"), "// TODO old marker\n").unwrap();
+    commit_with_date(root, "pkg/src/a.rs", "ancient", "2000-01-01T00:00:00Z");
+
+    let spec: alint_core::RuleSpec = yaml_serde::from_str(
+        "id: per-package\n\
+         kind: for_each_dir\n\
+         select: pkg\n\
+         message: review package debt\n\
+         level: warning\n\
+         require:\n\
+         \x20 - kind: git_blame_age\n\
+         \x20   paths: '{path}/**/*.rs'\n\
+         \x20   pattern: '\\bTODO\\b'\n\
+         \x20   max_age_days: 30\n",
+    )
+    .unwrap();
+    let registry = builtin_registry();
+    let rule = registry.build(&spec).unwrap();
+    let engine = Engine::from_entries(vec![RuleEntry::new(rule)], registry)
+        .with_analysis_time("2026-10-16".parse().unwrap());
+    let index = walk(
+        root,
+        &WalkOptions {
+            respect_gitignore: true,
+            extra_ignores: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let report = engine.run(root, &index).unwrap();
+    let violations = &report.results[0].violations;
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(
+        violations[0].message,
+        "review package debt (as of 2026-10-16)"
+    );
+}
+
+#[test]
+fn reports_resource_read_failure_outside_git() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     // No git_init — bare tempdir.
@@ -200,10 +299,15 @@ fn silent_outside_git() {
     let index = walk(root, &walk_opts).unwrap();
     let report = engine.run(root, &index).unwrap();
 
-    assert!(
-        report.results.iter().all(|r| r.violations.is_empty()),
-        "rule should silently no-op outside a git repo; got: {:?}",
-        report.results
+    assert_eq!(report.results.len(), 1);
+    let result = &report.results[0];
+    assert!(result.violations.is_empty());
+    assert_eq!(result.analysis_failures.len(), 1);
+    let failure = &result.analysis_failures[0];
+    assert_eq!(failure.kind.as_str(), "resource_read");
+    assert_eq!(
+        failure.message,
+        "Git is unavailable or the lint root is not a usable Git repository"
     );
 }
 
@@ -230,10 +334,11 @@ pattern: 'TODO'
 max_age_days: 180
 level: error
 ";
-    let spec: alint_core::RuleSpec = serde_yaml_ng::from_str(yaml).unwrap();
+    let spec: alint_core::RuleSpec = yaml_serde::from_str(yaml).unwrap();
     let registry = builtin_registry();
     let rule = registry.build(&spec).unwrap();
-    let engine = Engine::from_entries(vec![RuleEntry::new(rule)], registry);
+    let engine = Engine::from_entries(vec![RuleEntry::new(rule)], registry)
+        .with_analysis_time("2026-10-16".parse().unwrap());
 
     let walk_opts = WalkOptions {
         respect_gitignore: true,

@@ -1,3 +1,4 @@
+test_version: 1
 name: cross_file superset fires when a target value is missing from the source set
 
 docs:
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: used-are-allowed, level: error, path: used.json}

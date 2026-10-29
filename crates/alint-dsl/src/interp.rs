@@ -19,7 +19,7 @@
 //!
 //! See `docs/design/v0.11/variable_interpolation.md`.
 
-use serde_yaml_ng::Value;
+use yaml_serde::Value;
 
 /// Rule-entry keys whose values are never interpolated. Rule identity,
 /// type, and severity must be stable across environments — env-driven
@@ -189,6 +189,22 @@ where
     })
 }
 
+/// Whether interpolating `input` would read the environment: true when it
+/// holds at least one `{{env.X}}` span (with or without a `| default(...)`
+/// filter, and with any spacing the real resolver accepts). Runs the real
+/// span resolver with a probe lookup, so it agrees with
+/// [`interpolate_scalar`] on every boundary; a span that does not parse is
+/// left to the real interpolation pass to report.
+pub(crate) fn reads_env(input: &str) -> bool {
+    let read = std::cell::Cell::new(false);
+    let probe = |_: &str| {
+        read.set(true);
+        Some("x".to_owned())
+    };
+    let _ = interpolate_scalar(input, &probe);
+    read.get()
+}
+
 enum SpanResult {
     /// An `env.X` span resolved to a value.
     Resolved(String),
@@ -298,7 +314,15 @@ fn strip_quotes(s: &str) -> Option<&str> {
 /// deserialization surfaces a clear type error. This matches the design
 /// doc's accepted trade-off.
 fn retype_scalar(text: String) -> Value {
-    match serde_yaml_ng::from_str::<Value>(&text) {
+    // A bare number / bool literal is short; anything long is a string regardless.
+    // Skip the YAML re-parse for a long value so a huge INTERPOLATED value (e.g. an
+    // attacker-controlled `{{env.X}}` holding a `[[[…` flow bomb, substituted AFTER
+    // the config's own flow-depth guard already ran) can't be handed to libyaml to
+    // chew on super-linearly.
+    if text.len() > 1024 {
+        return Value::String(text);
+    }
+    match yaml_serde::from_str::<Value>(&text) {
         Ok(v @ (Value::Number(_) | Value::Bool(_))) => v,
         _ => Value::String(text),
     }
@@ -357,6 +381,21 @@ mod tests {
     fn simple_env_substitution() {
         let env = fake_env(&[("ALINT_BASE_SHA", "deadbeef")]);
         assert_eq!(interp("{{env.ALINT_BASE_SHA}}", &env).unwrap(), "deadbeef");
+    }
+
+    #[test]
+    fn retype_scalar_skips_long_values_without_reparse() {
+        // A short bare number / bool re-types; a long value stays a String WITHOUT a
+        // super-linear YAML re-parse -- so a `[[[…` flow bomb substituted from an
+        // attacker-controlled `{{env.X}}` (after the config's own flow guard) can
+        // never reach libyaml here.
+        assert!(matches!(retype_scalar("72".to_string()), Value::Number(_)));
+        assert!(matches!(
+            retype_scalar("true".to_string()),
+            Value::Bool(true)
+        ));
+        let bomb = "[".repeat(200_000);
+        assert!(matches!(retype_scalar(bomb), Value::String(_)));
     }
 
     #[test]
@@ -529,7 +568,7 @@ mod tests {
     #[test]
     fn walker_skips_id_kind_level_inside_rule_scope() {
         let env = fake_env(&[("X", "SUBBED")]);
-        let mut v: Value = serde_yaml_ng::from_str(
+        let mut v: Value = yaml_serde::from_str(
             "rules:\n  - id: \"{{env.X}}\"\n    kind: \"{{env.X}}\"\n    \
              level: \"{{env.X}}\"\n    paths: \"{{env.X}}\"",
         )
@@ -552,7 +591,7 @@ mod tests {
         // interpolate. Regression guard for the previously-global skip.
         let env = fake_env(&[("X", "prod")]);
         let mut v: Value =
-            serde_yaml_ng::from_str("vars:\n  level: \"{{env.X}}\"\n  id: \"{{env.X}}\"").unwrap();
+            yaml_serde::from_str("vars:\n  level: \"{{env.X}}\"\n  id: \"{{env.X}}\"").unwrap();
         interpolate_value(&mut v, &env).unwrap();
         let vars = v.as_mapping().unwrap()["vars"].as_mapping().unwrap();
         assert_eq!(vars["level"].as_str().unwrap(), "prod");
@@ -565,7 +604,7 @@ mod tests {
         // YAML list or mapping must stay a string, never silently
         // become a Sequence/Mapping in a string-typed field.
         let env = fake_env(&[("L", "[a, b]"), ("M", "{k: v}")]);
-        let mut v: Value = serde_yaml_ng::from_str("a: \"{{env.L}}\"\nb: \"{{env.M}}\"").unwrap();
+        let mut v: Value = yaml_serde::from_str("a: \"{{env.L}}\"\nb: \"{{env.M}}\"").unwrap();
         interpolate_value(&mut v, &env).unwrap();
         let map = v.as_mapping().unwrap();
         assert_eq!(map["a"].as_str().unwrap(), "[a, b]");
@@ -582,7 +621,7 @@ mod tests {
     fn walker_retypes_resolved_integer_field() {
         let env = fake_env(&[]);
         let mut v: Value =
-            serde_yaml_ng::from_str("subject_max_length: \"{{env.MAX | default('72')}}\"").unwrap();
+            yaml_serde::from_str("subject_max_length: \"{{env.MAX | default('72')}}\"").unwrap();
         interpolate_value(&mut v, &env).unwrap();
         let n = v.as_mapping().unwrap()["subject_max_length"]
             .as_u64()
@@ -593,7 +632,7 @@ mod tests {
     #[test]
     fn walker_retypes_resolved_bool_field() {
         let env = fake_env(&[("FLAG", "true")]);
-        let mut v: Value = serde_yaml_ng::from_str("if_present: \"{{env.FLAG}}\"").unwrap();
+        let mut v: Value = yaml_serde::from_str("if_present: \"{{env.FLAG}}\"").unwrap();
         interpolate_value(&mut v, &env).unwrap();
         assert_eq!(v.as_mapping().unwrap()["if_present"].as_bool(), Some(true));
     }
@@ -601,7 +640,7 @@ mod tests {
     #[test]
     fn walker_keeps_string_when_value_stays_templated() {
         let env = fake_env(&[]);
-        let mut v: Value = serde_yaml_ng::from_str("message: \"{{vars.x}}\"").unwrap();
+        let mut v: Value = yaml_serde::from_str("message: \"{{vars.x}}\"").unwrap();
         interpolate_value(&mut v, &env).unwrap();
         // Deferred vars span stays a string for the later pass.
         assert_eq!(
@@ -614,12 +653,25 @@ mod tests {
     fn walker_recurses_into_sequences() {
         let env = fake_env(&[("DIR", "pkgs")]);
         let mut v: Value =
-            serde_yaml_ng::from_str("paths:\n  - \"{{env.DIR}}/a\"\n  - \"{{env.DIR}}/b\"")
-                .unwrap();
+            yaml_serde::from_str("paths:\n  - \"{{env.DIR}}/a\"\n  - \"{{env.DIR}}/b\"").unwrap();
         interpolate_value(&mut v, &env).unwrap();
         let seq = v.as_mapping().unwrap()["paths"].as_sequence().unwrap();
         assert_eq!(seq[0].as_str().unwrap(), "pkgs/a");
         assert_eq!(seq[1].as_str().unwrap(), "pkgs/b");
+    }
+
+    #[test]
+    fn reads_env_matches_the_resolver() {
+        assert!(reads_env("{{env.NPM_TOKEN}}"));
+        assert!(reads_env("{{ env.NPM_TOKEN }}"));
+        assert!(reads_env("{{  env . NPM_TOKEN | default('x') }}"));
+        assert!(reads_env("prefix-{{env.A}}-suffix"));
+        assert!(reads_env("{{vars.a}}{{env.B}}"));
+        assert!(!reads_env("{{vars.token}}"));
+        assert!(!reads_env("{{ctx.path}}"));
+        assert!(!reads_env("{{end}}"));
+        assert!(!reads_env("plain"));
+        assert!(!reads_env("{{env.UNCLOSED"));
     }
 
     #[test]

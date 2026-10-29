@@ -1,3 +1,4 @@
+test_version: 1
 name: every_matching_has evaluates nested rules against every selected entry
 tags: [check, every_matching_has, cross_file]
 
@@ -29,5 +30,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: every-pkg-has-package-json, level: error, path: packages/beta}

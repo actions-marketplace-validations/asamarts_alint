@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_signed_off fires when HEAD has no DCO trailer
 tags: [check, git_commit_signed_off, git, failing]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: dco, level: error}

@@ -1,3 +1,4 @@
+test_version: 1
 name: pair_hash fires when a source is not listed in the checksum manifest
 tags: [check, pair_hash, cross_file]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: sums-pins-sources, level: error, path: hello.txt}

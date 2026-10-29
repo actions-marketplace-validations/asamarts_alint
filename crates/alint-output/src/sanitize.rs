@@ -17,30 +17,59 @@
 
 use std::borrow::Cow;
 
-/// A control char alint emits on purpose and must preserve: the newline that
-/// [`crate::wrap_message`] treats as a paragraph break in a wrapped message.
-const fn is_intentional(c: char) -> bool {
-    c == '\n'
+use alint_core::invisible::is_deceptive_on_display;
+
+fn is_unsafe(c: char, preserve_newlines: bool) -> bool {
+    (c.is_control() && !(preserve_newlines && c == '\n')) || is_deceptive_on_display(c)
 }
 
-/// Render untrusted `s` safe to write to a terminal: every control character
-/// (C0, `DEL`, C1) except the intentional newline is replaced with a visible,
-/// inert `\xNN` escape — so an embedded `ESC` becomes the four literal
-/// characters `\x1b`, carrying no control byte for the terminal to act on.
+/// Render untrusted `s` safe on one terminal line. Every control character
+/// (C0, `DEL`, and C1) becomes a visible, inert `\xNN` escape, so an embedded
+/// `ESC` cannot execute and an embedded newline cannot inject another record.
+/// Characters that reorder or hide displayed text become a visible
+/// `\u{XXXX}` escape: everything `no_bidi_controls` and `no_zero_width_chars`
+/// flag (one shared definition, [`alint_core::invisible`]) plus other
+/// display-invisible characters such as the tag characters and U+2028/U+2029.
 ///
-/// Returns the input borrowed unchanged when there is nothing to strip (the
-/// overwhelming common case), so clean output pays no allocation.
-pub(crate) fn sanitize_terminal(s: &str) -> Cow<'_, str> {
-    if !s.chars().any(|c| c.is_control() && !is_intentional(c)) {
+/// Returns the input borrowed unchanged when no escaping is needed.
+#[must_use]
+pub fn sanitize_terminal(s: &str) -> Cow<'_, str> {
+    sanitize_terminal_impl(s, false)
+}
+
+/// Terminal sanitizer for block renderers that deliberately re-indent
+/// newline-separated message paragraphs before writing them. Callers MUST
+/// place each preserved newline at a trusted indentation boundary.
+#[must_use]
+pub fn sanitize_terminal_multiline(s: &str) -> Cow<'_, str> {
+    sanitize_terminal_impl(s, true)
+}
+
+fn sanitize_terminal_impl(s: &str, preserve_newlines: bool) -> Cow<'_, str> {
+    // Printable ASCII needs no escaping: every character the slow path escapes
+    // is a C0/DEL/C1 control or non-ASCII. Nearly every path, message and rule
+    // id takes this byte scan instead of a per-character classification.
+    if s.bytes()
+        .all(|b| (0x20..0x7f).contains(&b) || (preserve_newlines && b == b'\n'))
+    {
+        return Cow::Borrowed(s);
+    }
+    sanitize_slow(s, preserve_newlines)
+}
+
+fn sanitize_slow(s: &str, preserve_newlines: bool) -> Cow<'_, str> {
+    if !s.chars().any(|c| is_unsafe(c, preserve_newlines)) {
         return Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len() + 8);
     for c in s.chars() {
-        if c.is_control() && !is_intentional(c) {
-            use std::fmt::Write as _;
+        use std::fmt::Write as _;
+        if c.is_control() && !(preserve_newlines && c == '\n') {
             // Control chars are Unicode category Cc: U+0000–U+001F and
             // U+007F–U+009F, all ≤ 0x9f, so a 2-digit hex escape suffices.
             let _ = write!(out, "\\x{:02x}", c as u32);
+        } else if is_deceptive_on_display(c) {
+            let _ = write!(out, "\\u{{{:04x}}}", c as u32);
         } else {
             out.push(c);
         }
@@ -51,6 +80,42 @@ pub(crate) fn sanitize_terminal(s: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ascii_fast_path_agrees_with_the_full_scan() {
+        let mut inputs: Vec<String> = (0u8..0x80).map(|b| char::from(b).to_string()).collect();
+        for a in 0u8..0x80 {
+            for b in [b'a', b'\n', b'\t', 0x1b, 0x7f] {
+                inputs.push(format!("{}{}x", char::from(a), char::from(b)));
+            }
+        }
+        inputs.extend(
+            [
+                "src/main.rs: tidy up",
+                "caf\u{e9}",
+                "a\u{202e}b",
+                "\u{200b}",
+                "\u{feff}x",
+                "x\u{85}y",
+                "\u{2028}",
+            ]
+            .map(String::from),
+        );
+        for s in &inputs {
+            for preserve in [false, true] {
+                assert_eq!(
+                    sanitize_terminal_impl(s, preserve),
+                    sanitize_slow(s, preserve),
+                    "{s:?} preserve_newlines={preserve}"
+                );
+                assert_eq!(
+                    matches!(sanitize_terminal_impl(s, preserve), Cow::Borrowed(_)),
+                    matches!(sanitize_slow(s, preserve), Cow::Borrowed(_)),
+                    "{s:?}: borrowed iff nothing to escape"
+                );
+            }
+        }
+    }
 
     #[test]
     fn clean_text_is_borrowed_unchanged() {
@@ -77,16 +142,84 @@ mod tests {
     }
 
     #[test]
-    fn newline_is_preserved_as_paragraph_break() {
+    fn multiline_messages_preserve_paragraph_breaks() {
         // `command` rule messages embed subprocess output with `\n`
-        // separators that wrap_message renders as paragraph breaks.
-        let out = sanitize_terminal("failed (1):\nline one\nline two");
-        assert_eq!(out, "failed (1):\nline one\nline two");
+        // separators that wrap_message renders as re-indented paragraphs.
+        let input = "failed (1):\nline one\nline two";
+        assert_eq!(sanitize_terminal_multiline(input), input);
     }
 
     #[test]
-    fn tab_is_neutralized_but_newline_kept() {
+    fn single_line_output_escapes_newlines_and_tabs() {
         let out = sanitize_terminal("a\tb\nc");
-        assert_eq!(out, "a\\x09b\nc");
+        assert_eq!(out, "a\\x09b\\x0ac");
+    }
+
+    #[test]
+    fn bidi_and_zero_width_are_made_visible() {
+        // Trojan-Source style reordering + hidden zero-width content.
+        let out = sanitize_terminal("ok\u{202E}gnp.exe\u{2066}x\u{200B}y\u{FEFF}\u{061C}");
+        for c in ['\u{202E}', '\u{2066}', '\u{200B}', '\u{FEFF}', '\u{061C}'] {
+            assert!(!out.contains(c), "{c:?} survived: {out:?}");
+        }
+        assert_eq!(
+            out,
+            "ok\\u{202e}gnp.exe\\u{2066}x\\u{200b}y\\u{feff}\\u{061c}"
+        );
+        // Ordinary non-ASCII text is untouched.
+        assert!(matches!(
+            sanitize_terminal("caf\u{e9} \u{1F600}"),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn everything_the_rules_flag_is_escaped() {
+        // U+180E is flagged by `no_zero_width_chars` and was printed raw while
+        // the sanitizer kept its own list; now both read one definition.
+        for c in (0..=0x0010_FFFF).filter_map(char::from_u32) {
+            if alint_core::invisible::is_bidi_control(c)
+                || alint_core::invisible::is_flagged_zero_width(c, false)
+            {
+                let s = c.to_string();
+                assert!(
+                    !sanitize_terminal(&s).contains(c),
+                    "{:04X} printed raw",
+                    c as u32
+                );
+            }
+        }
+        assert_eq!(sanitize_terminal("a\u{180E}b"), "a\\u{180e}b");
+    }
+
+    #[test]
+    fn hidden_tag_characters_and_line_separators_are_made_visible() {
+        // "ASCII smuggling": tag characters spell hidden text a terminal won't
+        // show. U+2028 can render as a line break and forge an extra line.
+        let hidden: String = "ignore"
+            .chars()
+            .map(|c| char::from_u32(0xE0000 + c as u32).unwrap())
+            .collect();
+        let input = format!("ok{hidden}\u{2028}\u{00AD}x");
+        let out = sanitize_terminal(&input);
+        assert!(
+            !out.chars()
+                .any(|c| ('\u{E0000}'..='\u{E007F}').contains(&c)),
+            "{out:?}"
+        );
+        assert!(out.starts_with("ok\\u{e0069}\\u{e0067}"), "{out:?}");
+        assert!(out.ends_with("\\u{2028}\\u{00ad}x"), "{out:?}");
+    }
+
+    #[test]
+    fn rtl_text_and_emoji_pass_through() {
+        for s in [
+            "\u{5e9}\u{5dc}\u{5d5}\u{5dd}",
+            "\u{645}\u{631}\u{62d}\u{628}\u{627}",
+            "\u{2764}\u{FE0F}",
+            "\u{1F468}",
+        ] {
+            assert!(matches!(sanitize_terminal(s), Cow::Borrowed(_)), "{s:?}");
+        }
     }
 }

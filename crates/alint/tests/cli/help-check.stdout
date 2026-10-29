@@ -13,12 +13,15 @@ Options:
           Path to a config file
 
       --changed
-          Restrict the check to files in the working-tree diff. Without `--base`, uses `git ls-files
-          --modified --others --exclude-standard` (right shape for pre-commit). With `--base`, uses
-          `git diff --name-only <base>...HEAD` (right shape for PR checks). Cross-file rules
-          (`pair`, `for_each_dir`, `every_matching_has`, `unique_by`, `dir_contains`,
-          `dir_only_contains`) and existence rules (`file_exists` et al.) still consult the full
-          tree by definition
+          Restrict the check to paths changed in Git. Without `--base`, includes staged, unstaged,
+          and untracked paths (the right shape for pre-commit). With `--base`, uses `git diff
+          --name-only <base>...HEAD` (right shape for PR checks). Cross-file rules (`pair`,
+          `for_each_dir`, `every_matching_has`, `unique_by`, `dir_contains`, `dir_only_contains`)
+          and existence rules (`file_exists` et al.) still consult the full tree by definition
+
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
 
       --base <REF>
           Base ref for `--changed` (uses three-dot `<base>...HEAD`, i.e. merge-base diff). Implies
@@ -38,7 +41,7 @@ Options:
       --show-notes
           List informational notes in full on stderr.
           
-          Notes are non-violation findings — e.g. entries a rule skipped rather than failed on. By
+          Notes are non-violation findings - e.g. entries a rule skipped rather than failed on. By
           default only a one-line count is shown.
 
       --color <WHEN>
@@ -75,11 +78,21 @@ Options:
           Useful for narrow terminals, screen recordings, and CI logs where long URLs disrupt visual
           alignment. URLs remain in JSON / SARIF / GitHub / markdown output regardless.
 
+      --include-fixes
+          Include the concrete proposed fix edit(s) in `json` output.
+          
+          Adds a `proposed_edit` array (source region + replacement text) to each fixable finding in
+          `--format json`, so a tool can preview/apply the fix without running `alint fix`. Only
+          Safe (auto-applyable) fixes are included -- Unsafe fixes stay suggestions on alint's own
+          `fix`. The `agent` format always carries this; SARIF carries it as `result.fixes[]`. No
+          effect on other formats. Computing the edit re-reads the fixable files during `check`, so
+          it is opt-in here.
+
       --progress <WHEN>
           When to render progress on stderr for slow operations.
           
           Currently just `alint suggest`. `auto` (the default) renders when stderr is a TTY;
-          `always` forces; `never` silences. Progress always lives on stderr — `--format` JSON
+          `always` forces; `never` silences. Progress always lives on stderr - `--format` JSON
           output on stdout stays byte-clean.
           
           [default: auto]
@@ -119,7 +132,7 @@ Options:
           matches no loaded rule is an error, so typos fail loudly rather than silently linting
           nothing. Applies to `check` and `fix` (the `agent` format emits `fix --only <rule-id>`);
           rejected on any other subcommand. Global, so the bare `alint --only <id>` lints the
-          current directory like `alint check --only <id>` — to lint a different path, use the
+          current directory like `alint check --only <id>` - to lint a different path, use the
           explicit form `alint check --only <id> <path>`.
 
   -h, --help

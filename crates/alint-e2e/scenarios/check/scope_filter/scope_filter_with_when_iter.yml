@@ -1,3 +1,4 @@
+test_version: 1
 name: scope_filter and tree-level when must both accept for the rule to fire
 tags: [check, scope_filter, when, facts]
 
@@ -43,5 +44,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: nws, level: warning, path: crates/api/src/main.rs}

@@ -1,0 +1,42 @@
+---
+title: 'alint lsp'
+description: 'alint lsp runs the alint language server over stdio, so VS Code, Zed, Neovim and other LSP clients show alint findings as you open, edit and save files.'
+---
+
+You don't run `alint lsp` yourself: your editor starts it and talks to it over
+the Language Server Protocol on stdio. Point your editor's LSP client at the
+command `alint lsp`, and findings from the workspace's `.alint.yml` appear as
+diagnostics as you open, edit and save files.
+
+Each open file is linted by the nearest `.alint.yml` above it, across every
+workspace folder. When a config between that one and the workspace folder's
+own config sets `nested_configs: true`, the outermost such config governs the
+file instead (its rules plus the nested config's), matching `alint check` run
+from the workspace root. Pass `--show-notes` (for example through your editor's
+`alint.args` setting) to list informational notes on the server's stderr
+after each check instead of a one-line count. Following the LSP
+specification, the server exits with code 0 after a `shutdown` request and
+`exit` notification, and with code 1 when `exit` arrives without `shutdown`.
+
+## Finding locations
+
+When a rule supplies an exact primary range, the diagnostic highlights that range instead of only
+its starting point. Relationship findings can also point to labeled secondary files or ranges.
+alint publishes those as `Diagnostic.relatedInformation` only when the editor advertises
+`publishDiagnostics.relatedInformation`; clients without that capability receive the same primary
+diagnostic without the optional relationships. Positions are converted from alint's Unicode-scalar
+coordinates to LSP UTF-16 coordinates against open buffers or the current on-disk file.
+
+## Reference date for time-dependent rules
+
+Start the server as `alint lsp --as-of YYYY-MM-DD` to pin one strict UTC date
+for the session. The flag overrides the editor process's `ALINT_AS_OF`;
+without either, each workspace config uses its repository HEAD commit's
+committer timestamp, resolved once for that session. An explicit date removes
+that HEAD-time lookup, but `git_blame_age` still requires a usable Git
+repository for tracked-file and blame data; when unavailable, the LSP reports
+an Error-severity analysis-failure diagnostic.
+
+## See also
+
+- [Editors](/docs/integrations/editors/): setup for VS Code, Zed, Neovim and others

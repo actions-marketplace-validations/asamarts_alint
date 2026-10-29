@@ -275,6 +275,25 @@ impl PerFileRule for CommentedOutCodeRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(_paths) = &spec.paths else {
         return Err(Error::rule_config(
@@ -338,38 +357,38 @@ fn find_comment_blocks(text: &str, lang: Language) -> Vec<CommentBlock> {
         let trimmed = line.trim_start();
 
         // Block-comment open (`/* … */`) — consume until close.
-        if let Some((open, close)) = block_delim {
-            if trimmed.starts_with(open) {
-                let is_doc = doc_block_delim.is_some_and(|(d_open, _)| trimmed.starts_with(d_open));
-                let start_line = i + 1;
-                let mut block_lines = Vec::new();
-                let mut block_content = String::new();
-                let mut closed = false;
-                let mut j = i;
-                while j < lines.len() {
-                    let l = lines[j];
-                    block_lines.push(l.to_string());
-                    let stripped = strip_block_comment_markers(l, open, close);
-                    block_content.push_str(&stripped);
-                    block_content.push('\n');
-                    if l.contains(close) && (j > i || trimmed.matches(close).count() > 0) {
-                        closed = true;
-                        j += 1;
-                        break;
-                    }
+        if let Some((open, close)) = block_delim
+            && trimmed.starts_with(open)
+        {
+            let is_doc = doc_block_delim.is_some_and(|(d_open, _)| trimmed.starts_with(d_open));
+            let start_line = i + 1;
+            let mut block_lines = Vec::new();
+            let mut block_content = String::new();
+            let mut closed = false;
+            let mut j = i;
+            while j < lines.len() {
+                let l = lines[j];
+                block_lines.push(l.to_string());
+                let stripped = strip_block_comment_markers(l, open, close);
+                block_content.push_str(&stripped);
+                block_content.push('\n');
+                if l.contains(close) && (j > i || trimmed.matches(close).count() > 0) {
+                    closed = true;
                     j += 1;
+                    break;
                 }
-                if closed {
-                    blocks.push(CommentBlock {
-                        start_line,
-                        lines: block_lines,
-                        content: block_content,
-                        is_doc_comment: is_doc,
-                    });
-                }
-                i = j;
-                continue;
+                j += 1;
             }
+            if closed {
+                blocks.push(CommentBlock {
+                    start_line,
+                    lines: block_lines,
+                    content: block_content,
+                    is_doc_comment: is_doc,
+                });
+            }
+            i = j;
+            continue;
         }
 
         // Line-comment run (consecutive `//` / `#` lines).
@@ -442,7 +461,7 @@ fn strip_block_comment_markers(line: &str, open: &str, close: &str) -> String {
 /// Characters strongly biased toward code over English prose.
 /// Brackets and assignment / comparison operators show up
 /// constantly in code and almost never in normal writing.
-/// Backticks and quotes are NOT included — backticks delimit
+/// Backticks and quotes are NOT included - backticks delimit
 /// code references in rustdoc / `TSDoc` prose
 /// (`` `foo` matches `bar` ``), double quotes appear in normal
 /// English. Either would inflate the score on legitimate prose
@@ -459,7 +478,7 @@ const STRONG_CODE_CHARS: &[char] = &[
 const SATURATION_POINT: f64 = 0.20;
 
 /// Punctuation-density score in [0.0, 1.0]. See module-level
-/// rustdoc for the design rationale — the short version is
+/// rustdoc for the design rationale - the short version is
 /// "count brackets / semicolons / assignment operators, ignore
 /// identifier tokens (prose has identifier-shaped words too)."
 ///
@@ -485,7 +504,7 @@ fn score_density(content: &str) -> f64 {
 
 /// Strip runs of 5+ identical characters. Used to defang
 /// ASCII-art separators / banners (`==========`, `----`,
-/// `####`) before density scoring — those are layout, not
+/// `####`) before density scoring - those are layout, not
 /// code structure, and inflate the strong-char count.
 fn drop_long_runs(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

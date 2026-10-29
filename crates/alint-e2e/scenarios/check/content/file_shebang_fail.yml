@@ -1,3 +1,4 @@
+test_version: 1
 name: file_shebang flags scripts without the required shebang
 tags: [check, file_shebang, content]
 
@@ -24,6 +25,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: scripts-use-env-bash, level: error, path: scripts/hardcoded.sh}
       - {rule: scripts-use-env-bash, level: error, path: scripts/missing.sh}

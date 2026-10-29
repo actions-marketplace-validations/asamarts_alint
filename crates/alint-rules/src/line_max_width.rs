@@ -59,13 +59,17 @@ impl PerFileRule for LineMaxWidthRule {
         path: &Path,
         bytes: &[u8],
     ) -> Result<Vec<Violation>> {
-        // `chars().count()` requires a UTF-8-validated `&str` —
-        // line widths count Unicode scalars, not bytes. Non-UTF-8
-        // files silently skip, matching the rule-major path.
-        let Ok(text) = std::str::from_utf8(bytes) else {
+        // Skip binary content (like max_consecutive_blank_lines): an image or
+        // archive has no meaningful "lines", and measuring one lossily flagged
+        // every binary in scope.
+        if crate::io::looks_binary(bytes) {
             return Ok(Vec::new());
-        };
-        let Some((line_no, width)) = first_overlong_line(text, self.max_width) else {
+        }
+        // Line widths count Unicode scalars, not bytes. Decode lossily so a
+        // non-UTF-8 file is still measured rather than silently skipped: each
+        // invalid byte decodes to one U+FFFD and so counts as one column.
+        let text = String::from_utf8_lossy(bytes);
+        let Some((line_no, width)) = first_overlong_line(&text, self.max_width) else {
             return Ok(Vec::new());
         };
         let msg = self.message.clone().unwrap_or_else(|| {
@@ -88,7 +92,7 @@ impl PerFileRule for LineMaxWidthRule {
 }
 
 fn first_overlong_line(text: &str, max_width: usize) -> Option<(usize, usize)> {
-    for (idx, line) in text.split('\n').enumerate() {
+    for (idx, line) in crate::io::without_leading_bom(text).split('\n').enumerate() {
         let trimmed = line.strip_suffix('\r').unwrap_or(line);
         let width = trimmed.chars().count();
         if width > max_width {
@@ -97,6 +101,25 @@ fn first_overlong_line(text: &str, max_width: usize) -> Option<(usize, usize)> {
     }
     None
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec
@@ -115,7 +138,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "line_max_width has no fix op — truncation is unsafe",
+            "line_max_width has no fix op - truncation is unsafe",
         ));
     }
     Ok(Box::new(LineMaxWidthRule {
@@ -161,5 +184,52 @@ mod tests {
         assert_eq!(first_overlong_line("☃☃☃\n", 3), None);
         // Under max_width: 2 it's flagged.
         assert_eq!(first_overlong_line("☃☃☃\n", 2), Some((1, 3)));
+    }
+}
+
+#[cfg(test)]
+mod non_utf8_tests {
+    use crate::test_support::{ctx, spec_yaml, tempdir_with_files};
+
+    #[test]
+    fn non_utf8_text_is_still_measured() {
+        // Fail-closed regression: one Latin-1 byte used to skip the whole file.
+        // An invalid byte counts as one column (it decodes to one U+FFFD).
+        let rule = super::build(&spec_yaml(
+            "id: t\nkind: line_max_width\npaths: \"**/*\"\nmax_width: 10\nlevel: error\n",
+        ))
+        .unwrap();
+        let body: &[u8] = b"caf\xe9\n0123456789abc\n";
+        let (tmp, idx) = tempdir_with_files(&[("a.txt", body)]);
+        let vs = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        assert_eq!(vs.len(), 1);
+        assert_eq!(vs[0].line, Some(2));
+        let ok: &[u8] = b"0123456789\xe9\n";
+        let (tmp, idx) = tempdir_with_files(&[("b.txt", ok)]);
+        assert_eq!(rule.evaluate(&ctx(tmp.path(), &idx)).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn binary_files_are_skipped() {
+        // Regression: the lossy decode measured binaries too, so every image /
+        // archive in scope was flagged as one overlong "line".
+        let rule = super::build(&spec_yaml(
+            "id: t\nkind: line_max_width\npaths: \"**/*\"\nmax_width: 10\nlevel: error\n",
+        ))
+        .unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
+        png.extend(std::iter::repeat_n(0xA5u8, 200));
+        let (tmp, idx) = tempdir_with_files(&[("img.png", png.as_slice())]);
+        assert!(rule.evaluate(&ctx(tmp.path(), &idx)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_leading_bom_does_not_count_toward_width() {
+        // An editor shows this first line as exactly 10 columns.
+        assert_eq!(super::first_overlong_line("\u{FEFF}0123456789\n", 10), None);
+        assert_eq!(
+            super::first_overlong_line("\u{FEFF}0123456789X\n", 10),
+            Some((1, 11))
+        );
     }
 }

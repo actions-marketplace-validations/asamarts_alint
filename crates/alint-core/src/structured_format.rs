@@ -1,30 +1,140 @@
 //! Structured-document parsing shared by the structured-query rule
-//! family (`{json,yaml,toml,xml}_path_*`) and core-side predicates
+//! family (`{json,yaml,toml,xml,dotenv,properties,ini,hcl}_path_*`) and core-side predicates
 //! that need to read a config / manifest into a `serde_json::Value`
 //! tree.
 //!
-//! [`Format`] parses JSON / YAML / TOML / XML into one uniform
-//! `serde_json::Value` shape (YAML and TOML coerce through serde; XML
-//! maps via the xmltodict-style convention in `xml_to_value` — `@attr`
-//! / `#text` / repeated-element→array, leaf elements collapse to their
-//! text string, namespaces flatten to local names, every leaf is a
-//! string), so a single `JSONPath` engine only ever has to reason
-//! about one tree shape. XML design + open-question resolutions:
-//! `docs/design/v0.10/xml_path.md`.
+//! [`Format`] parses JSON / YAML / TOML / XML / dotenv / properties / INI / HCL
+//! into one uniform `serde_json::Value` shape (YAML and TOML coerce through
+//! serde; XML maps via the xmltodict-style convention in `xml_to_value` —
+//! `@attr` / `#text` / repeated-element→array, leaf elements collapse to their
+//! text string, and namespaces flatten to local names; dotenv is a flat map
+//! whose assigned values are literal strings and whose bare declarations are
+//! `null`; Java `.properties` is a flat literal-string map; INI is a 2-level
+//! `{ section: { key: value } }` map of the same, with pre-section keys hoisted
+//! to the top level; HCL maps via `hcl-rs`, JSON-native — blocks nest by type +
+//! labels, values keep their type, and an unevaluated expression is an opaque
+//! string), so a single `JSONPath`
+//! engine only ever has to reason about one tree shape. XML design +
+//! open-question resolutions: `docs/design/v0.10/xml_path.md`.
 
+use serde::Serialize;
 use serde_json::Value;
 
-/// Which YAML-flavoured parser to use on the target file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+mod xml_scan;
+mod yaml_value;
+
+#[cfg(test)]
+use xml_scan::MAX_XML_ATTRS_PER_ELEMENT;
+pub use xml_scan::MAX_XML_DEPTH;
+use xml_scan::xml_within_parse_limits;
+
+/// Maximum INPUT size any structured format will parse into a value tree. The read
+/// cap [`crate::walker::MAX_ANALYZE_BYTES`] (256 MiB) bounds bytes, but a parsed tree
+/// costs far more RSS: measured up to ~30x the input for attribute-heavy XML
+/// (roxmltree builds its own arena alongside the `serde_json::Value` tree), ~6-10x
+/// for JSON. Lossless dotenv keeps tighter byte and physical-line budgets because
+/// retained items and decoded escape maps amplify input. A
+/// near-read-cap structured file would peak at multiple GB --
+/// and the per-file rule dispatch is parallel, so several parse at once. Capping the
+/// structured-parse INPUT at 32 MiB bounds a single file's tree to ~1 GB worst case
+/// (XML), far above any real config / manifest (they are KB-MB; even a large
+/// `OpenAPI` spec or SBOM is well under 32 MiB) yet 8x tighter than the read cap. An
+/// oversize structured file is one per-file parse-error violation. HCL keeps its own
+/// tighter `MAX_HCL_BYTES` (64 KiB), and dotenv has a 4 MiB cap plus a physical-line
+/// budget; this is the ceiling for the rest. (Aggregate
+/// concurrent parse memory -- this cap times the `par_iter` fan-out -- is a separate,
+/// coarser bound tracked in `docs/design/format-coverage.md`.)
+pub const MAX_STRUCTURED_BYTES: usize = 32 * 1024 * 1024;
+
+/// The structured-parse cap must stay meaningfully below the read cap, or it does
+/// nothing (a file that passes the read cap would also pass this and still balloon).
+const _: () = assert!((MAX_STRUCTURED_BYTES as u64) < crate::walker::MAX_ANALYZE_BYTES / 2);
+
+/// Which config format the target file is parsed as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Format {
     Json,
     Yaml,
     Toml,
     Xml,
+    Dotenv,
+    Properties,
+    Ini,
+    Hcl,
 }
 
 impl Format {
+    /// The canonical inventory of config formats and the single source of truth
+    /// for the config-format axis. Format-specific surfaces (`extract`, the
+    /// structured-query kinds, `json_schema_passes`, the `did_you_mean` hints)
+    /// should cover every variant; a per-surface parity test asserts that as each
+    /// surface is leveled (today `extract_spec_covers_every_format`; the rest land
+    /// with the format-coverage rollout). `format_all_is_complete` guards this
+    /// list itself. See `docs/design/format-coverage.md`.
+    pub const ALL: &'static [Format] = &[
+        Format::Json,
+        Format::Yaml,
+        Format::Toml,
+        Format::Xml,
+        Format::Dotenv,
+        Format::Properties,
+        Format::Ini,
+        Format::Hcl,
+    ];
+
+    /// Whether values read from this format are secret-bearing by default.
+    /// Every extraction and structured-query surface delegates to this single
+    /// classification so a future format change cannot redact on one path and
+    /// leak on another.
+    #[must_use]
+    pub fn redacts_by_default(self) -> bool {
+        matches!(self, Self::Dotenv | Self::Properties)
+    }
+
     pub fn parse(self, text: &str) -> std::result::Result<Value, String> {
+        let raw_text = text;
+        // Strip any leading UTF-8 BOM(s) uniformly. Some libraries (serde_json,
+        // hcl-rs) reject a `\u{feff}` prefix as a syntax error, so a BOM-prefixed
+        // `package.json` / `config.hcl` (common from Windows editors) would
+        // false-fire the structured rules; the dotenv/ini/properties parsers
+        // already skip it. `trim_start_matches` (not `strip_prefix`) so
+        // consecutive leading BOMs are all removed. Flagging a BOM is the `no_bom`
+        // rule's job.
+        let text = text.trim_start_matches('\u{feff}');
+        // Bound the parsed-tree memory FIRST: a structured tree costs up to ~30x the
+        // input in RSS (XML), so a large file balloons to multiple GB. Reject before
+        // building it -- and before the whitespace-emptiness scan below, so an oversize
+        // all-whitespace file is a fast size rejection rather than an O(n) trim.
+        // (HCL's own 64 KiB cap in `hcl_to_value` fires first for HCL.)
+        if text.len() > MAX_STRUCTURED_BYTES {
+            return Err(format!(
+                "input exceeds the maximum supported size for a structured document ({MAX_STRUCTURED_BYTES} bytes)"
+            ));
+        }
+        // An empty file (nothing but BOMs and whitespace) is "no config", not a
+        // broken document: return an empty OBJECT (an empty document) so
+        // `*_path_absent` is satisfied, `if_present` stays silent, AND
+        // `json_schema_passes` validates it as `{}` -- which satisfies
+        // `{"type":"object"}`, since an empty config file IS a valid empty table.
+        // (Returning `Value::Null` here made `json_schema_passes` false-fire "null
+        // is not of type object" on an empty `.toml`/`.ini`/`.env`/`.properties`/
+        // `.hcl`, while a comment-only file of the same format parsed to `{}` and
+        // passed -- two "no config" files disagreeing.) Otherwise the JSON / XML
+        // libraries reject empty input as a syntax error -- a false positive for the
+        // absent family. The emptiness test also strips a stray BOM interleaved with
+        // whitespace (e.g. `\u{feff} \u{feff}`), which `trim_start_matches` alone
+        // leaves and which YAML/properties/INI would otherwise mis-read as a
+        // one-character scalar. Flagging an empty file is the `no_empty_files` rule's
+        // job. (TOML / dotenv / INI / properties already parse empty to `{}`; YAML's
+        // native empty is `null`, but one uniform empty document is less surprising
+        // than per-format null-vs-object.)
+        if text
+            .trim_matches(|c: char| c == '\u{feff}' || c.is_whitespace())
+            .is_empty()
+        {
+            return Ok(Value::Object(serde_json::Map::new()));
+        }
         match self {
             // Try strict JSON first (the common, fast path — plain
             // JSON is byte-for-byte unchanged). Only on failure retry
@@ -39,18 +149,32 @@ impl Format {
             Self::Yaml => {
                 // Bound flow-nesting before libyaml parses it super-linearly (a
                 // crafted `[[[…` file otherwise hangs the run) — the YAML analogue
-                // of the `xml_depth_within_limit` guard below. JSON (serde_json,
+                // of the `xml_within_parse_limits` guard below. JSON (serde_json,
                 // 128-deep) and TOML (toml, 80-deep) carry their own limits.
-                if !crate::yaml_depth::flow_depth_within_limit(text) {
+                let yaml_guards = crate::yaml_depth::scan_guards(text);
+                if !yaml_guards.flow_within_limit() {
                     return Err(format!(
                         "YAML flow nesting exceeds the maximum supported depth ({})",
                         crate::yaml_depth::MAX_YAML_FLOW_DEPTH
                     ));
                 }
-                serde_yaml_ng::from_str(text).map_err(|e| e.to_string())
+                // Bound ALIAS expansion: yaml_serde's own limits miss a single
+                // anchor referenced many times (`*a` x N -> N x anchor-size nodes),
+                // which balloons a small file into millions of nodes. Cheap
+                // discard-only pre-count; alias-free text short-circuits for free.
+                if !yaml_guards.expansion_within_limit(text) {
+                    return Err(
+                        "YAML alias expansion exceeds the maximum supported size".to_string()
+                    );
+                }
+                yaml_value::yaml_to_value(text)
             }
             Self::Toml => toml::from_str(text).map_err(|e| e.to_string()),
             Self::Xml => xml_to_value(text),
+            Self::Dotenv => crate::dotenv::parse(raw_text),
+            Self::Properties => properties_to_value(text),
+            Self::Ini => crate::ini::parse(text),
+            Self::Hcl => hcl_to_value(text),
         }
     }
 
@@ -60,6 +184,10 @@ impl Format {
             Self::Yaml => "YAML",
             Self::Toml => "TOML",
             Self::Xml => "XML",
+            Self::Dotenv => "dotenv",
+            Self::Properties => "properties",
+            Self::Ini => "INI",
+            Self::Hcl => "HCL",
         }
     }
 
@@ -68,15 +196,49 @@ impl Format {
     /// (require an explicit `format:` override, default to JSON,
     /// emit a per-file violation, etc).
     pub fn detect_from_path(path: &std::path::Path) -> Option<Self> {
-        match path.extension()?.to_str()? {
-            "json" => Some(Self::Json),
-            "yaml" | "yml" => Some(Self::Yaml),
-            "toml" => Some(Self::Toml),
-            "xml" | "csproj" | "props" | "targets" | "vbproj" | "fsproj" | "nuspec" => {
-                Some(Self::Xml)
+        // Extension detection first, case-INSENSITIVELY: `.JSON` / `.CSPROJ` /
+        // `.XML` (common on Windows and case-insensitive filesystems, or from Java
+        // tooling) are valid and must not yield a false "could not detect format".
+        // A KNOWN format extension also wins over the `.env` family below, so a
+        // `.env.json` / `.env.yaml` is parsed by its real format, not shadowed as
+        // dotenv.
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            match ext.to_ascii_lowercase().as_str() {
+                "json" => return Some(Self::Json),
+                "yaml" | "yml" => return Some(Self::Yaml),
+                "toml" => return Some(Self::Toml),
+                "properties" => return Some(Self::Properties),
+                "ini" | "cfg" => return Some(Self::Ini),
+                "hcl" | "tf" | "tfvars" | "nomad" => return Some(Self::Hcl),
+                "xml" | "csproj" | "props" | "targets" | "vbproj" | "fsproj" | "nuspec" => {
+                    return Some(Self::Xml);
+                }
+                _ => {}
             }
-            _ => None,
         }
+        // Well-known config files identified by NAME, not extension: extension-less
+        // (`.editorconfig`, `Pipfile`) or a `.config` that is specifically .NET XML
+        // (a bare `.config` extension is not universally XML, so match exact names).
+        // Only UNAMBIGUOUS names are mapped -- `.eslintrc`/`.prettierrc` are skipped
+        // because they may be JSON OR YAML, so they still need an explicit `format:`.
+        // dotenv is likewise filename-based: a bare `.env` has no extension, and
+        // `.env.local` / `.env.production` carry the environment where an extension
+        // would be. The `.env` family matches by name but only for a suffix that
+        // ISN'T a known format extension (handled above), so `.env.json` is JSON.
+        // All case-folded (`.ENV`, `WEB.CONFIG`, ...).
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            let lname = name.to_ascii_lowercase();
+            match lname.as_str() {
+                ".editorconfig" => return Some(Self::Ini),
+                "pipfile" => return Some(Self::Toml),
+                "web.config" | "app.config" => return Some(Self::Xml),
+                _ => {}
+            }
+            if lname == ".env" || lname.starts_with(".env.") {
+                return Some(Self::Dotenv);
+            }
+        }
+        None
     }
 }
 
@@ -181,92 +343,29 @@ fn strip_jsonc(src: &str) -> String {
 // `docs/design/v0.10/xml_path.md`.
 // ---------------------------------------------------------------
 
-/// Maximum XML element-nesting depth `xml_to_value` will
-/// descend. Real config/manifest XML (`.csproj`, `pom.xml`, …)
-/// is a handful of levels deep; 256 is far beyond any real
-/// manifest yet far below the recursion depth that would
-/// overflow the stack. A document nested deeper is rejected as a
-/// parse error (one per-file violation via the existing
-/// parse-error path) rather than recursed into — a crafted or
-/// accidental deeply-nested file must never abort the run. The
-/// other formats' parsers carry their own internal recursion
-/// limits; this is the XML arm's equivalent.
-pub const MAX_XML_DEPTH: usize = 256;
-
-/// Conservatively bound the raw XML's element-nesting depth BEFORE
-/// `roxmltree::Document::parse` sees it. `Document::parse` descends recursively
-/// per element and overflows the stack — **aborting the whole process** — on
-/// deeply-nested input (tens of thousands of levels); the `element_to_value`
-/// [`MAX_XML_DEPTH`] guard is post-parse, so it only catches depths the parser
-/// already survived. A cheap linear pre-scan rejects an over-deep document here
-/// (as one ordinary per-file parse-error violation) so a crafted or accidental
-/// `<a><a>…` file can never abort the run. Comment / CDATA / PI / declaration
-/// regions are skipped so their contents don't count toward depth.
-fn xml_depth_within_limit(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let mut pos = 0usize;
-    let mut depth = 0usize;
-    while pos < bytes.len() {
-        if bytes[pos] != b'<' {
-            pos += 1;
-            continue;
-        }
-        let rest = &text[pos..];
-        if rest.starts_with("</") {
-            depth = depth.saturating_sub(1);
-            pos += 2;
-        } else if rest.starts_with("<!--") {
-            pos += rest.find("-->").map_or(rest.len(), |p| p + 3);
-        } else if rest.starts_with("<![CDATA[") {
-            pos += rest.find("]]>").map_or(rest.len(), |p| p + 3);
-        } else if rest.starts_with("<!") || rest.starts_with("<?") {
-            // DOCTYPE / PI / other declaration: skip to its terminating `>`.
-            pos += rest.find('>').map_or(rest.len(), |p| p + 1);
-        } else {
-            // `<tag …>` or `<tag/>`: find the closing `>` respecting quoted
-            // attribute values (a `>` inside `"…"`/`'…'` isn't the tag end).
-            let tag = rest.as_bytes();
-            let mut end = 1usize;
-            let mut quote: Option<u8> = None;
-            while end < tag.len() {
-                let ch = tag[end];
-                if let Some(q) = quote {
-                    if ch == q {
-                        quote = None;
-                    }
-                } else if ch == b'"' || ch == b'\'' {
-                    quote = Some(ch);
-                } else if ch == b'>' {
-                    break;
-                }
-                end += 1;
-            }
-            // Self-closing `<tag/>` opens and closes, so it adds no depth.
-            let self_closing = end >= 2 && tag[end - 1] == b'/';
-            if !self_closing {
-                depth += 1;
-                if depth > MAX_XML_DEPTH {
-                    return false;
-                }
-            }
-            pos += end + 1;
-        }
-    }
-    true
-}
-
 /// Parse XML into the same `serde_json::Value` tree the rest of
 /// the family queries. The document maps to
 /// `{ <root-element-name>: <root value> }` so the root element is
 /// the first `JSONPath` segment (`$.Project…`, `$.project…`).
 fn xml_to_value(text: &str) -> std::result::Result<Value, String> {
-    // Reject over-deep XML before `Document::parse` can overflow the stack.
-    if !xml_depth_within_limit(text) {
-        return Err(format!(
-            "XML nesting exceeds the maximum supported depth ({MAX_XML_DEPTH})"
-        ));
-    }
-    let doc = roxmltree::Document::parse(text).map_err(|e| e.to_string())?;
+    // Reject over-deep, over-wide or namespace-heavy XML before `Document::parse`
+    // can overflow the stack (depth) or hang in O(n^2) attribute validation
+    // (width) or namespace resolution.
+    xml_within_parse_limits(text)?;
+    let doc = roxmltree::Document::parse(text).map_err(|e| {
+        let msg = e.to_string();
+        // roxmltree runs with DTD processing disabled (a billion-laughs / XXE
+        // safety limit). Make the wholesale rejection actionable instead of the
+        // terse upstream "XML with DTD detected".
+        if msg.contains("DTD") {
+            format!(
+                "{msg}: alint parses XML with DTDs disabled for safety, so \
+                 DTD-bearing files (Checkstyle, Spring, Ant, log4j) cannot be linted"
+            )
+        } else {
+            msg
+        }
+    })?;
     let root = doc.root_element();
     let mut obj = serde_json::Map::new();
     obj.insert(
@@ -333,9 +432,417 @@ fn element_to_value(node: roxmltree::Node, depth: usize) -> std::result::Result<
     Ok(Value::Object(obj))
 }
 
+/// Java `.properties` -> a flat `{ key: "value" }` object of literal strings
+/// (via `java-properties`, decoded as UTF-8; it handles `=`/`:`/space separators,
+/// `#`/`!` comments, backslash line-continuations, and `\uXXXX` escapes). Dotted
+/// keys (`a.b.c`) stay ONE opaque key, faithful to Java -- query with `$['a.b.c']`.
+/// Values are literal: `${...}` placeholders are resolved by the application,
+/// not the file, so they are kept verbatim. Duplicate keys: last wins. Two
+/// upstream quirks vs Java's `Properties`: a `\uXXXX` surrogate PAIR (an emoji,
+/// say) is rejected as a parse error, and a trailing backslash at EOF drops that
+/// line.
+fn properties_to_value(text: &str) -> std::result::Result<Value, String> {
+    // Decode as UTF-8: alint holds the file as UTF-8 (the caller lossy-decodes its
+    // bytes), but `java_properties::read` defaults to WINDOWS_1252, which would
+    // mojibake any non-ASCII value (`café` -> `cafÃ©`). A leading BOM is stripped
+    // so it cannot land on the first key.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut map = serde_json::Map::new();
+    java_properties::PropertiesIter::new_with_encoding(text.as_bytes(), encoding_rs::UTF_8)
+        .read_into(|k, v| {
+            map.insert(k, Value::String(v));
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(Value::Object(map))
+}
+
+/// Maximum HCL structural (`{` / `[`) nesting depth `hcl_to_value` will parse.
+/// `hcl-rs` is a recursive-descent parser with very large per-level stack frames
+/// (tens of KB for a block / object / tuple), so deeply-nested structure OVERFLOWS
+/// THE STACK and ABORTS THE PROCESS (SIGABRT) -- the same hazard as
+/// [`MAX_XML_DEPTH`], but far shallower per level (the default 1-2 MB thread stack
+/// overflows below ~30 levels). 256 is far beyond any real HCL yet well below the
+/// parse-thread ceiling. A deeper document is one per-file parse-error violation.
+pub const MAX_HCL_DEPTH: usize = 256;
+
+/// Maximum HCL input size `hcl_to_value` will parse. The [`MAX_HCL_DEPTH`] guard
+/// bounds `{` / `[` / `(` and unary nesting, but `hcl-rs` ALSO recurses on
+/// EXPRESSION-OPERATOR nesting that carries no such delimiter -- long binary /
+/// ternary chains (`1 + 1 + …`, `a == a == …`, `1 ? … : …`), including inside
+/// `${…}` string / heredoc interpolation. A lexical scan cannot cleanly bound
+/// those (operators interleave with operands and span lines), and they too
+/// overflow the stack (SIGABRT). The DENSEST such chain is ~2 bytes per recursion
+/// level (`+1`), so the byte cap bounds them: on the 512 MB parse thread an
+/// operator chain overflows around ~75 000 levels (~150 KB), so 64 KiB admits at
+/// most ~32 000 levels -- a >2x stack margin that tolerates per-level frame drift
+/// across `hcl-rs` versions. Real HCL is far smaller (Terraform best practice
+/// splits into modules); an oversize file is one per-file parse-error violation.
+/// MUST be kept below (parse-thread `stack_size` / operator frame / 2 bytes).
+pub const MAX_HCL_BYTES: usize = 64 * 1024;
+
+/// The analytically-derived ceiling for [`MAX_HCL_BYTES`], enforced at compile
+/// time below. The 512 MB parse thread overflows a densest (~2 bytes/level)
+/// operator chain around ~75 000 levels (~150 KiB); half of that (a >=2x stack
+/// margin) is the largest cap that stays safe against per-level frame drift.
+/// Widening `MAX_HCL_BYTES` past this re-opens the operator-chain stack-overflow
+/// `DoS` that the 256 KiB cap let through (PR #223) -- and the bomb regression test
+/// only fails by CRASHING, which is fragile, so pin the bound statically too.
+// Rust 1.88's dead-code analysis does not count this use from an unnamed const;
+// keep the MSRV build warning-free without widening the internal API.
+#[allow(dead_code)]
+const SAFE_MAX_HCL_BYTES: usize = 75 * 1024;
+const _: () = assert!(
+    MAX_HCL_BYTES <= SAFE_MAX_HCL_BYTES,
+    "MAX_HCL_BYTES exceeds its analytically-safe ceiling -- a crafted operator \
+     chain could again overflow the HCL parse thread (SIGABRT). See PR #223."
+);
+
+/// Conservatively bound the HCL constructs `hcl-rs` recurses on, BEFORE
+/// `hcl::from_str` overflows the stack. Every one of these aborts the process on
+/// deep input, and none is caught by a naive `{`/`[` scan:
+/// - `{` / `[` / `(` nesting -- blocks, objects, tuples, index, **and
+///   parentheses / function-call args** (parens have a big frame: ~5 K levels
+///   abort).
+/// - A run of prefix unary `-` / `!` (`----1`, `!!!!true`, and the SPACED /
+///   multi-line `- - - 1` -- `hcl-rs` recurses on those too) -- no delimiter to
+///   count; whitespace does not break the run.
+///
+/// These are counted only in EXPRESSION context. Inside a string literal, a
+/// heredoc, or a comment the bytes are CONTENT (a `-----` banner / separator is not
+/// a unary chain, a `((((` in a `description` is not a paren group), so those spans
+/// are SKIPPED -- counting them false-rejected legit `.tf` files with a misleading
+/// "nesting depth" error. The one exception is a `${…}` / `%{…}` template
+/// interpolation, which carries a real (parsed, recursing) sub-expression and IS
+/// counted ([`count_interp`]); skipping THAT was a stack-abort bypass. Binary /
+/// ternary chains (`1 + 1 + …`) cost >= 2 bytes per level, so [`MAX_HCL_BYTES`]
+/// bounds them instead. Returns false for an over-deep document.
+fn hcl_depth_within_limit(text: &str) -> bool {
+    let b = text.as_bytes();
+    let n = b.len();
+    let mut i = 0usize;
+    let mut depth = 0usize;
+    let mut unary_run = 0usize;
+    while i < n {
+        match b[i] {
+            // Comments: `#` / `//` to end of line, `/* … */` block. Content, skipped.
+            b'#' => {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+                unary_run = 0;
+            }
+            // Double-quoted string: skip content, count `${…}` / `%{…}` interpolations.
+            b'"' => {
+                unary_run = 0;
+                i += 1;
+                while i < n && b[i] != b'"' {
+                    match b[i] {
+                        b'\\' => i += 2,
+                        b'$' | b'%' => match b.get(i + 1) {
+                            Some(&b'{') => {
+                                if !count_interp(b, &mut i, n, &mut depth, &mut unary_run) {
+                                    return false;
+                                }
+                            }
+                            Some(&next) if next == b[i] => i += 2, // literal $${ / %%{
+                            _ => i += 1,
+                        },
+                        _ => i += 1,
+                    }
+                }
+                i += 1;
+            }
+            // Heredoc: `<<TAG` / `<<-TAG` … TAG. Body is content (interps counted).
+            b'<' if b.get(i + 1) == Some(&b'<') => {
+                unary_run = 0;
+                if !skip_heredoc(b, &mut i, n, &mut depth, &mut unary_run) {
+                    return false;
+                }
+            }
+            b'{' | b'[' | b'(' => {
+                depth += 1;
+                if depth > MAX_HCL_DEPTH {
+                    return false;
+                }
+                unary_run = 0;
+                i += 1;
+            }
+            b'}' | b']' | b')' => {
+                depth = depth.saturating_sub(1);
+                unary_run = 0;
+                i += 1;
+            }
+            b'-' | b'!' => {
+                unary_run += 1;
+                if unary_run > MAX_HCL_DEPTH {
+                    return false;
+                }
+                i += 1;
+            }
+            b' ' | b'\t' | b'\r' | b'\n' => i += 1,
+            _ => {
+                unary_run = 0;
+                i += 1;
+            }
+        }
+    }
+    true
+}
+
+/// Count structure / unary inside one `${…}` / `%{…}` template interpolation, whose
+/// opener `b[*i..]` is `${` or `%{`. Advances `*i` past the matching `}`. The
+/// interpolation carries a real recursing sub-expression, so its `{`/`[`/`(` and
+/// unary runs count toward the depth guard exactly as top-level ones do; a nested
+/// string inside it has its own content skipped but its own deeper `${…}` counted
+/// (via recursion). Comments inside the expression (`#` / `//` line, `/* … */` block,
+/// all honored by `hcl-rs` here) are skipped as content, so a `}` in a comment does
+/// not close the interpolation early and hide a bomb after it. Self-bounded: every
+/// `{`/`${` increments `depth`, so recursion and the loop both stop at
+/// `MAX_HCL_DEPTH` -- this scanner cannot itself overflow.
+fn count_interp(
+    b: &[u8],
+    i: &mut usize,
+    n: usize,
+    depth: &mut usize,
+    unary_run: &mut usize,
+) -> bool {
+    *i += 2; // past `${` / `%{`
+    *depth += 1;
+    if *depth > MAX_HCL_DEPTH {
+        return false;
+    }
+    *unary_run = 0;
+    let mut brace = 1usize; // matches the interpolation's own `{`
+    while *i < n && brace > 0 {
+        match b[*i] {
+            b'{' => {
+                brace += 1;
+                *depth += 1;
+                if *depth > MAX_HCL_DEPTH {
+                    return false;
+                }
+                *unary_run = 0;
+                *i += 1;
+            }
+            b'}' => {
+                brace -= 1;
+                *depth = depth.saturating_sub(1);
+                *unary_run = 0;
+                *i += 1;
+            }
+            b'[' | b'(' => {
+                *depth += 1;
+                if *depth > MAX_HCL_DEPTH {
+                    return false;
+                }
+                *unary_run = 0;
+                *i += 1;
+            }
+            b']' | b')' => {
+                *depth = depth.saturating_sub(1);
+                *unary_run = 0;
+                *i += 1;
+            }
+            // Comments inside the interpolation's expression (hcl-rs honors `#` / `//`
+            // line comments and `/* … */` blocks here). Their bytes are CONTENT: a `}`
+            // in a comment must NOT close the interpolation, else a bomb after the
+            // comment would go uncounted (`${1 # }` ... deep-bomb `}`).
+            b'#' => {
+                while *i < n && b[*i] != b'\n' {
+                    *i += 1;
+                }
+            }
+            b'/' if b.get(*i + 1) == Some(&b'/') => {
+                while *i < n && b[*i] != b'\n' {
+                    *i += 1;
+                }
+            }
+            b'/' if b.get(*i + 1) == Some(&b'*') => {
+                *i += 2;
+                while *i + 1 < n && !(b[*i] == b'*' && b[*i + 1] == b'/') {
+                    *i += 1;
+                }
+                *i += 2;
+                *unary_run = 0;
+            }
+            b'-' | b'!' => {
+                *unary_run += 1;
+                if *unary_run > MAX_HCL_DEPTH {
+                    return false;
+                }
+                *i += 1;
+            }
+            // A nested string inside the interpolation: skip its content (so a
+            // `}` in the string doesn't close the interpolation early), but count
+            // any deeper `${…}` it carries.
+            b'"' => {
+                *unary_run = 0;
+                *i += 1;
+                while *i < n && b[*i] != b'"' {
+                    match b[*i] {
+                        b'\\' => *i += 2,
+                        b'$' | b'%' => match b.get(*i + 1) {
+                            Some(&b'{') => {
+                                if !count_interp(b, i, n, depth, unary_run) {
+                                    return false;
+                                }
+                            }
+                            Some(&next) if next == b[*i] => *i += 2,
+                            _ => *i += 1,
+                        },
+                        _ => *i += 1,
+                    }
+                }
+                *i += 1;
+            }
+            b' ' | b'\t' | b'\r' | b'\n' => *i += 1,
+            _ => {
+                *unary_run = 0;
+                *i += 1;
+            }
+        }
+    }
+    true
+}
+
+/// Skip an HCL heredoc (`b[*i..]` is `<<`), advancing `*i` past its terminator line.
+/// The body is literal CONTENT (dashes there are not a unary chain), so it is
+/// skipped -- except `${…}` / `%{…}` interpolations in it, which are counted.
+fn skip_heredoc(
+    b: &[u8],
+    i: &mut usize,
+    n: usize,
+    depth: &mut usize,
+    unary_run: &mut usize,
+) -> bool {
+    *i += 2; // past `<<`
+    // Consume an optional `-` (`<<-TAG`); it affects body-indent stripping in HCL,
+    // not terminator recognition (hcl-rs accepts an indented terminator either way).
+    if b.get(*i) == Some(&b'-') {
+        *i += 1;
+    }
+    let tag_start = *i;
+    while *i < n && (b[*i].is_ascii_alphanumeric() || b[*i] == b'_') {
+        *i += 1;
+    }
+    let tag = &b[tag_start..*i];
+    if tag.is_empty() {
+        return true; // `<<` not opening a heredoc; let hcl-rs surface the error
+    }
+    while *i < n && b[*i] != b'\n' {
+        *i += 1; // skip the rest of the opening line
+    }
+    while *i < n {
+        *i += 1; // past the `\n`, to the start of the next line
+        let line_start = *i;
+        let mut ws = line_start;
+        while ws < n && (b[ws] == b' ' || b[ws] == b'\t') {
+            ws += 1;
+        }
+        // A terminator is the tag as a WHOLE TOKEN with any leading whitespace: the
+        // byte after the tag must not be a tag-continuation char (`[A-Za-z0-9_]`). That
+        // matches hcl-rs, which ends a heredoc on the tag followed by trailing
+        // whitespace, a trailing `#` / `//` comment, a newline, or EOF -- and also on
+        // an INDENTED terminator, for both `<<` and `<<-`. Matching that leniency is a
+        // SAFETY requirement: a terminator we fail to recognize (a trailing-space `TAG `,
+        // a `TAG # c`, or an indented `  TAG`) would leave us skipping the real
+        // expression AFTER it as "body", hiding a nesting bomb from the depth count.
+        // Whatever follows the tag (whitespace / comment / newline) is then scanned by
+        // the caller's main loop as ordinary expression-context bytes; a longer token
+        // (`TAGx`, `TAG_`) is a different tag, not the terminator (and `TAG foo` is an
+        // hcl-rs parse error either way, so ending the heredoc there stays safe).
+        if b[ws..].starts_with(tag) {
+            let after = ws + tag.len();
+            if after >= n || !(b[after].is_ascii_alphanumeric() || b[after] == b'_') {
+                *i = after;
+                return true;
+            }
+        }
+        // Body line: skip content, count interpolations.
+        let mut j = line_start;
+        while j < n && b[j] != b'\n' {
+            match b[j] {
+                b'$' | b'%' => match b.get(j + 1) {
+                    Some(&b'{') => {
+                        if !count_interp(b, &mut j, n, depth, unary_run) {
+                            return false;
+                        }
+                    }
+                    Some(&next) if next == b[j] => j += 2,
+                    _ => j += 1,
+                },
+                _ => j += 1,
+            }
+        }
+        *i = j;
+    }
+    true
+}
+
+/// Parse HCL (Terraform / Nomad / Packer) into the same `serde_json::Value` tree
+/// the family queries. `hcl::Value` is JSON-native, so `hcl::from_str` maps
+/// directly: a block is nested by its type then labels (`resource "t" "n" {…}` ->
+/// `$.resource.t.n`), values keep their HCL type (a number stays a number, unlike
+/// assigned dotenv/INI values), and an unevaluated expression (`var.x`, `${…}`,
+/// a function call) arrives as an opaque string. A block type appearing
+/// once is an object but REPEATED is an array (the XML cardinality footgun);
+/// duplicate attributes and malformed input are parse errors.
+///
+/// Three layers keep `hcl-rs`'s unbounded recursion from ABORTING the process on a
+/// crafted file: the [`MAX_HCL_BYTES`] size cap (bounds delimiter-less expression
+/// nesting), the [`hcl_depth_within_limit`] `{` / `[` depth guard (bounds
+/// big-frame structural nesting), and parsing on a large explicit-stack thread so
+/// a file at those limits still has headroom on every platform (the 1 MB Windows /
+/// ~2 MB rayon-worker default would crash on a tens-deep file). The returned
+/// `Value` is safe to drop on the caller's ordinary stack: expressions flatten to
+/// strings and structural nesting is bounded by the depth guard.
+fn hcl_to_value(text: &str) -> std::result::Result<Value, String> {
+    if text.len() > MAX_HCL_BYTES {
+        return Err(format!(
+            "HCL input exceeds the maximum supported size ({MAX_HCL_BYTES} bytes)"
+        ));
+    }
+    if !hcl_depth_within_limit(text) {
+        return Err(format!(
+            "HCL nesting exceeds the maximum supported depth ({MAX_HCL_DEPTH})"
+        ));
+    }
+    std::thread::scope(|scope| {
+        match std::thread::Builder::new()
+            .stack_size(512 * 1024 * 1024)
+            .spawn_scoped(scope, || {
+                hcl::from_str::<Value>(text).map_err(|e| e.to_string())
+            }) {
+            Ok(handle) => handle
+                .join()
+                .unwrap_or_else(|_| Err("HCL parser panicked".to_string())),
+            // A linter must never abort the run -- not on untrusted input, and not
+            // on resource pressure. If the OS refuses the large-stack parse thread
+            // (an `RLIMIT_AS` / `RLIMIT_NPROC` / `vm.max_map_count` ceiling, common
+            // in hardened CI / containers, against which the 512 MB reservation
+            // counts), surface it as one ordinary per-file parse-error violation
+            // rather than `.expect`-panicking with the "alint crashed" banner.
+            Err(e) => Err(format!("could not allocate HCL parse thread: {e}")),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     // ─── JSONC tolerance ──────────────────────────────────────
 
@@ -367,18 +874,968 @@ mod tests {
     }
 
     #[test]
-    fn xml_depth_scan_does_not_count_comments_cdata_or_self_closing() {
-        // The pre-scan must not over-count: comment/CDATA contents and
-        // self-closing tags don't add nesting, so valid shallow docs pass.
-        assert!(xml_depth_within_limit(
-            "<r><!-- <a><a><a> --><c/><![CDATA[ <b><b> ]]><d attr=\"x>y\"/></r>"
+    fn xml_scan_bounds_attribute_width_to_prevent_quadratic_parse() {
+        // roxmltree 0.20 validates per-element attribute uniqueness in O(n^2), so
+        // one element with tens of thousands of attributes is a wall-clock DoS the
+        // depth guard can't see. The pre-scan must reject an over-wide element as
+        // an ordinary parse error -- NOT hand it to roxmltree to grind on.
+        use std::fmt::Write as _;
+        let mut wide = String::from("<r");
+        for i in 0..(MAX_XML_ATTRS_PER_ELEMENT + 10) {
+            write!(wide, " a{i}=\"v\"").unwrap();
+        }
+        wide.push_str("/>");
+        let err = xml_within_parse_limits(&wide).unwrap_err();
+        assert!(
+            err.contains("attributes"),
+            "over-wide element rejected with an attribute message: {err}"
+        );
+        // And the full parse surfaces it as one parse-error (no hang), not a panic.
+        assert!(Format::Xml.parse(&wide).is_err());
+        // A normal, even generously-attributed, element is unaffected.
+        let mut ok = String::from("<Reference");
+        for i in 0..64 {
+            write!(ok, " p{i}=\"v\"").unwrap();
+        }
+        ok.push_str("/>");
+        assert!(xml_within_parse_limits(&ok).is_ok());
+        // `=` inside a quoted value is NOT an attribute and must not be counted:
+        // a single attribute whose value is packed with `=` stays one attribute.
+        let equals_in_value = format!("<r a=\"{}\"/>", "=".repeat(5000));
+        assert!(xml_within_parse_limits(&equals_in_value).is_ok());
+        // Exact boundary: `MAX_XML_ATTRS_PER_ELEMENT` is accepted, one more is not.
+        let at_cap: String = format!(
+            "<r{}/>",
+            (0..MAX_XML_ATTRS_PER_ELEMENT).fold(String::new(), |mut s, i| {
+                write!(s, " a{i}=\"v\"").unwrap();
+                s
+            })
+        );
+        assert!(
+            xml_within_parse_limits(&at_cap).is_ok(),
+            "exactly the cap is accepted"
+        );
+        let over_cap = at_cap.replace("/>", " extra=\"v\"/>");
+        assert!(
+            xml_within_parse_limits(&over_cap).is_err(),
+            "one over the cap is rejected"
+        );
+    }
+
+    #[test]
+    fn xml_dtd_is_rejected_with_an_actionable_message() {
+        // roxmltree runs with DTD processing disabled (billion-laughs / XXE
+        // safety); the wholesale rejection must say WHY, not just the terse
+        // upstream "XML with DTD detected".
+        let err = Format::Xml
+            .parse("<!DOCTYPE note SYSTEM \"note.dtd\"><note/>")
+            .unwrap_err();
+        assert!(err.contains("DTD"), "names the cause: {err}");
+        assert!(
+            err.contains("disabled for safety"),
+            "explains the limit: {err}"
+        );
+    }
+
+    #[test]
+    fn xml_to_value_maps_attributes_text_arrays_and_empty() {
+        // Pins the xmltodict-style contract (module docs): the root element wraps
+        // the tree, attributes are `@name`, a leaf collapses to its text, repeated
+        // siblings become an array, loose text alongside attributes/children is
+        // `#text`, and an empty element is null. A silent drift here changes what
+        // EVERY XML-consuming surface sees (extract, json_schema_passes, xml_path_*).
+        let xml = r#"
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net8.0</TargetFramework>
+              </PropertyGroup>
+              <ItemGroup>
+                <Ref Include="a" />
+                <Ref Include="b" />
+              </ItemGroup>
+              <Empty/>
+              <Mixed Attr="x">hello</Mixed>
+            </Project>
+        "#;
+        let v = Format::Xml.parse(xml).expect("parse xml");
+        // Root element wraps the tree; attributes become `@name` keys.
+        assert_eq!(v["Project"]["@Sdk"], json!("Microsoft.NET.Sdk"));
+        // A leaf element collapses to its text string.
+        assert_eq!(
+            v["Project"]["PropertyGroup"]["TargetFramework"],
+            json!("net8.0")
+        );
+        // Repeated siblings become a document-order array of objects.
+        assert_eq!(
+            v["Project"]["ItemGroup"]["Ref"],
+            json!([{"@Include": "a"}, {"@Include": "b"}])
+        );
+        // An empty element is null (NOT an empty object/string).
+        assert_eq!(v["Project"]["Empty"], Value::Null);
+        // Text alongside an attribute is `#text` -- the element is an object, not
+        // the bare string "hello" (the `Condition=`-attribute reshaping footgun).
+        assert_eq!(
+            v["Project"]["Mixed"],
+            json!({"@Attr": "x", "#text": "hello"})
+        );
+    }
+
+    #[test]
+    fn dotenv_files_detect_by_filename() {
+        use std::path::Path;
+        // dotenv detection is filename-based (a bare `.env` has no extension), the
+        // one piece of new control flow in the dotenv work. Positive cases:
+        for p in [".env", ".env.local", ".env.production", ".env.example"] {
+            assert_eq!(
+                Format::detect_from_path(Path::new(p)),
+                Some(Format::Dotenv),
+                "{p} should detect as dotenv"
+            );
+        }
+        // Near-misses must NOT match (the `.env.` boundary matters: a regression to
+        // `contains(\".env\")` would wrongly claim `.environment` / `foo.env`).
+        for p in [".environment", "env.local", "foo.env", "envrc", ".envision"] {
+            assert_ne!(
+                Format::detect_from_path(Path::new(p)),
+                Some(Format::Dotenv),
+                "{p} must NOT detect as dotenv"
+            );
+        }
+        // A KNOWN format extension after `.env.` wins over the dotenv family: a
+        // `.env.json` is JSON-format env config, NOT a flat dotenv map (parsing it
+        // with the dotenv parser would silently produce a wrong tree).
+        for (p, want) in [
+            (".env.json", Format::Json),
+            (".env.yaml", Format::Yaml),
+            (".env.toml", Format::Toml),
+        ] {
+            assert_eq!(
+                Format::detect_from_path(Path::new(p)),
+                Some(want),
+                "{p} should detect by its real extension, not be shadowed as dotenv"
+            );
+        }
+    }
+
+    #[test]
+    fn format_detection_is_case_insensitive() {
+        use std::path::Path;
+        // An uppercase extension (Windows / case-insensitive FS / Java tooling) is
+        // valid and must detect, not yield a false "could not detect format".
+        for (p, want) in [
+            ("Config.JSON", Format::Json),
+            ("data.YAML", Format::Yaml),
+            ("app.YML", Format::Yaml),
+            ("Cargo.TOML", Format::Toml),
+            ("App.CSPROJ", Format::Xml),
+            ("build.XML", Format::Xml),
+            ("main.TF", Format::Hcl),
+            ("settings.INI", Format::Ini),
+            ("db.PROPERTIES", Format::Properties),
+        ] {
+            assert_eq!(
+                Format::detect_from_path(Path::new(p)),
+                Some(want),
+                "{p} should detect case-insensitively"
+            );
+        }
+        // The `.env` family is case-folded too.
+        assert_eq!(
+            Format::detect_from_path(Path::new(".ENV")),
+            Some(Format::Dotenv),
+            ".ENV should detect as dotenv"
+        );
+    }
+
+    #[test]
+    fn well_known_config_files_detect_by_name() {
+        use std::path::Path;
+        // Extension-less / name-identified config files auto-detect by filename.
+        for (p, want) in [
+            (".editorconfig", Format::Ini),
+            ("Pipfile", Format::Toml),
+            ("web.config", Format::Xml),
+            ("app.config", Format::Xml),
+            ("WEB.CONFIG", Format::Xml), // case-folded
+        ] {
+            assert_eq!(
+                Format::detect_from_path(Path::new(p)),
+                Some(want),
+                "{p} should detect by name"
+            );
+        }
+        // `Pipfile.lock` is JSON, NOT TOML -- the exact-name match must not catch it
+        // (and we don't auto-detect it, so it stays None rather than mis-detecting).
+        assert_eq!(Format::detect_from_path(Path::new("Pipfile.lock")), None);
+        // Ambiguous dotfiles (JSON or YAML) are deliberately NOT auto-detected.
+        assert_eq!(Format::detect_from_path(Path::new(".eslintrc")), None);
+        assert_eq!(Format::detect_from_path(Path::new(".prettierrc")), None);
+    }
+
+    #[test]
+    fn properties_is_a_flat_literal_map() {
+        // `.properties` -> a flat object of literal strings: all three Java
+        // separators (`=` / `:` / space), dotted keys stay ONE key, and `${...}`
+        // placeholders are kept verbatim (resolved by the app, not the file).
+        let text = "# comment\n\
+                    db.host = localhost\n\
+                    db.port : 5432\n\
+                    app.name value with spaces\n\
+                    url=${NOT_EXPANDED}/x\n";
+        let v = Format::Properties.parse(text).expect("parse properties");
+        assert_eq!(
+            v["db.host"],
+            json!("localhost"),
+            "`=` separator, dotted key flat"
+        );
+        assert_eq!(v["db.port"], json!("5432"), "`:` separator");
+        assert_eq!(v["app.name"], json!("value with spaces"), "space separator");
+        assert_eq!(
+            v["url"],
+            json!("${NOT_EXPANDED}/x"),
+            "placeholders are literal"
+        );
+    }
+
+    #[test]
+    fn properties_non_ascii_is_utf8_not_latin1_with_bom() {
+        // Encoding regression guard: UTF-8 values must round-trip, not mojibake
+        // through Windows-1252 (`café` -> `cafÃ©`), and a leading BOM is stripped.
+        let v = Format::Properties
+            .parse("\u{feff}name=café\ngreeting=\u{65e5}\u{672c}\u{8a9e}\n")
+            .expect("parse utf-8 properties");
+        assert_eq!(
+            v["name"],
+            json!("café"),
+            "UTF-8 value + BOM stripped from key"
+        );
+        assert_eq!(v["greeting"], json!("日本語"), "CJK round-trips");
+    }
+
+    #[test]
+    fn properties_escapes_continuations_dups_and_comments() {
+        let v = Format::Properties
+            .parse(
+                "# comment\n\
+                 ! also a comment\n\
+                 unicode=caf\\u00e9\n\
+                 cont=line1\\\n  line2\n\
+                 dup=first\n\
+                 dup=second\n",
+            )
+            .expect("parse");
+        assert_eq!(v["unicode"], json!("café"), "\\uXXXX escape decoded");
+        assert_eq!(v["cont"], json!("line1line2"), "line-continuation joins");
+        assert_eq!(v["dup"], json!("second"), "duplicate keys: last wins");
+        let obj = v.as_object().unwrap();
+        assert!(!obj.contains_key("# comment"), "`#` comment excluded");
+        assert!(
+            !obj.contains_key("! also a comment"),
+            "`!` comment excluded"
+        );
+        assert_eq!(obj.len(), 3, "only unicode / cont / dup");
+    }
+
+    #[test]
+    fn properties_malformed_unicode_escape_is_an_error() {
+        // The parse-error path: java-properties rejects a bad `\u` escape.
+        assert!(Format::Properties.parse("k=\\uZZZZ\n").is_err());
+    }
+
+    #[test]
+    fn properties_and_props_extensions_are_distinct() {
+        use std::path::Path;
+        // `.properties` (Java config) detects as Properties; `.props` (an MSBuild
+        // XML file) detects as XML -- distinct extensions kept separate by the
+        // match arms, so neither is misparsed as the other.
+        assert_eq!(
+            Format::detect_from_path(Path::new("application.properties")),
+            Some(Format::Properties)
+        );
+        assert_eq!(
+            Format::detect_from_path(Path::new("Directory.Build.props")),
+            Some(Format::Xml)
+        );
+    }
+
+    #[test]
+    fn ini_dispatches_to_a_two_level_section_map() {
+        // The `Format::Ini` arm reaches the hand-rolled parser: pre-section keys
+        // hoist to the top level, a `[section]` is a nested object, and both
+        // `=`/`:` separate. Full parser coverage lives in `crate::ini`.
+        let v = Format::Ini
+            .parse("root = true\n[server]\nhost = localhost\nport : 8080\n")
+            .expect("parse ini");
+        assert_eq!(v["root"], json!("true"), "global key hoisted to top level");
+        assert_eq!(v["server"]["host"], json!("localhost"));
+        assert_eq!(v["server"]["port"], json!("8080"), "`:` separator");
+    }
+
+    #[test]
+    fn ini_and_cfg_extensions_detect_as_ini() {
+        use std::path::Path;
+        for p in ["tox.ini", "pytest.ini", "setup.cfg", "app.cfg"] {
+            assert_eq!(
+                Format::detect_from_path(Path::new(p)),
+                Some(Format::Ini),
+                "{p} should detect as INI"
+            );
+        }
+    }
+
+    #[test]
+    fn hcl_dispatches_to_a_json_native_value() {
+        // hcl-rs maps HCL directly: a block nests by type + labels, values keep their
+        // HCL type (a number stays a number, unlike assigned dotenv/INI values), and
+        // an unevaluated expression is an opaque string.
+        let v = Format::Hcl
+            .parse(
+                "region = \"us-east-1\"\n\
+                 resource \"aws_instance\" \"web\" {\n  ami = \"ami-1\"\n  count = 2\n}\n\
+                 locals {\n  name = var.env\n}\n",
+            )
+            .expect("parse hcl");
+        assert_eq!(v["region"], json!("us-east-1"));
+        assert_eq!(
+            v["resource"]["aws_instance"]["web"]["ami"],
+            json!("ami-1"),
+            "block nests by type -> label1 -> label2"
+        );
+        assert_eq!(
+            v["resource"]["aws_instance"]["web"]["count"],
+            json!(2),
+            "a number stays a JSON number"
+        );
+        assert_eq!(
+            v["locals"]["name"],
+            json!("${var.env}"),
+            "an unevaluated expression is an opaque string"
+        );
+    }
+
+    #[test]
+    fn hcl_repeated_block_is_an_array_single_is_an_object() {
+        // The cardinality footgun (same as XML repeated elements): a block type
+        // appearing once is an object, repeated is a document-order array.
+        assert_eq!(
+            Format::Hcl.parse("s {\n  a = 1\n}\n").expect("one")["s"],
+            json!({"a": 1})
+        );
+        assert_eq!(
+            Format::Hcl
+                .parse("s {\n  a = 1\n}\ns {\n  a = 2\n}\n")
+                .expect("many")["s"],
+            json!([{"a": 1}, {"a": 2}])
+        );
+    }
+
+    #[test]
+    fn hcl_extensions_detect_as_hcl() {
+        use std::path::Path;
+        for p in ["main.tf", "variables.tfvars", "config.hcl", "job.nomad"] {
+            assert_eq!(
+                Format::detect_from_path(Path::new(p)),
+                Some(Format::Hcl),
+                "{p} should detect as HCL"
+            );
+        }
+    }
+
+    #[test]
+    fn hcl_comment_inside_interpolation_does_not_hide_a_bomb() {
+        // hcl-rs honors `#` / `//` / `/* */` comments inside a `${…}` interpolation, so
+        // a `}` that sits inside such a comment does NOT close the interpolation. The
+        // depth scanner (`count_interp`) must treat those comment bytes as content too:
+        // otherwise it closes the interpolation at the comment's `}` and never counts a
+        // deep bomb after it, which then reaches hcl-rs and stack-aborts. Heredocs let
+        // an interpolation span lines, so the comment + bomb is reachable.
+        let paren = format!(
+            "{}1{}",
+            "(".repeat(MAX_HCL_DEPTH + 50),
+            ")".repeat(MAX_HCL_DEPTH + 50)
+        );
+        for lead in ["#", "//", "/*"] {
+            let close = if lead == "/*" { "*/" } else { "" };
+            let bomb = format!("x = <<EOT\n${{1 {lead} }} {close}\n+ {paren} }}\nEOT\n");
+            assert!(
+                Format::Hcl.parse(&bomb).is_err(),
+                "a bomb after a `{lead}` comment inside an interpolation must be rejected"
+            );
+        }
+        // Legit comments inside an interpolation still parse (no false reject).
+        for src in [
+            "x = <<EOT\n${1 # c\n+ 1}\nEOT\n",
+            "x = <<EOT\n${1 // c\n+ 1}\nEOT\n",
+            "x = <<EOT\n${1 /* c */ + 1}\nEOT\n",
+        ] {
+            assert!(
+                Format::Hcl.parse(src).is_ok(),
+                "a legit comment inside an interpolation must still parse: {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hcl_heredoc_terminator_leniency_matches_hcl_rs() {
+        // hcl-rs terminates a heredoc on the tag with leading AND/OR trailing
+        // whitespace, for both `<<` and `<<-`. The depth guard MUST recognize the same
+        // terminators: a terminator it fails to see (a trailing-space `EOT ` or an
+        // indented `  EOT`) leaves it skipping the real expression AFTER the terminator
+        // as "heredoc body", so a deep bomb there is never counted and slips past the
+        // guard into an `hcl-rs` stack-abort. (Regression: the guard previously required
+        // a column-0 tag followed immediately by a newline.)
+        let deep = format!(
+            "{}1{}",
+            "[".repeat(MAX_HCL_DEPTH + 50),
+            "]".repeat(MAX_HCL_DEPTH + 50)
+        );
+        // hcl-rs also ends a heredoc on the tag + a trailing `#` / `//` comment, and on
+        // an indented terminator; the guard must recognize every one of those.
+        for term in [
+            "EOT",
+            "EOT ",
+            "EOT\t",
+            "EOT   ",
+            "  EOT",
+            "  EOT  ",
+            "EOT # c",
+            "EOT#c",
+            "EOT//c",
+            "  EOT\t// c",
+        ] {
+            let bomb = format!("x = <<EOT\nbody\n{term}\nz = {deep}\n");
+            // `Format::Hcl.parse` runs the guard first, so an unrecognized terminator
+            // would let the bomb reach the parse thread; the guard must reject it here.
+            assert!(
+                Format::Hcl.parse(&bomb).is_err(),
+                "a bomb after heredoc terminator {term:?} must be rejected, not skipped"
+            );
+        }
+        // A legit heredoc whose terminator carries leading / trailing whitespace or a
+        // trailing comment still parses (no false reject): exactly what hcl-rs accepts.
+        for term in [
+            "EOT",
+            "EOT ",
+            "  EOT",
+            "  EOT  ",
+            "EOT # done",
+            "EOT // done",
+        ] {
+            let ok = format!("x = <<-EOT\n  hello\n{term}\ny = 1\n");
+            assert!(
+                Format::Hcl.parse(&ok).is_ok(),
+                "a legit heredoc with terminator {term:?} must still parse"
+            );
+        }
+    }
+
+    #[test]
+    fn hcl_over_deep_nesting_is_rejected_not_a_stack_abort() {
+        // hcl-rs overflows the stack (process ABORT) on deep input; the guard must
+        // reject an over-limit file as an error, while a realistically-deep one still
+        // parses (on the large-stack thread). If this ever aborts instead of failing,
+        // the guard or the parse-thread stack regressed.
+        let over = format!(
+            "{}x=1\n{}",
+            "a {\n".repeat(MAX_HCL_DEPTH + 5),
+            "}\n".repeat(MAX_HCL_DEPTH + 5)
+        );
+        assert!(
+            Format::Hcl.parse(&over).is_err(),
+            "an over-deep HCL file must be a parse error, not a crash"
+        );
+        let ok = format!("{}x=1\n{}", "a {\n".repeat(40), "}\n".repeat(40));
+        assert!(Format::Hcl.parse(&ok).is_ok(), "a 40-deep file parses");
+    }
+
+    #[test]
+    fn hcl_depth_guard_counts_expressions_not_string_content() {
+        let over = MAX_HCL_DEPTH + 1;
+        // EXPRESSION-position structure / unary IS counted (real recursion in hcl-rs):
+        assert!(!hcl_depth_within_limit(&"(".repeat(over)), "parens count");
+        assert!(
+            !hcl_depth_within_limit(&"-".repeat(over)),
+            "a contiguous `-` run is bounded"
+        );
+        assert!(
+            !hcl_depth_within_limit(&format!("x = {}1\n", "- ".repeat(over))),
+            "a SPACED unary chain (hcl-rs recurses on it too) is bounded"
+        );
+        assert!(
+            !hcl_depth_within_limit(&format!("x = {}true\n", "!".repeat(over))),
+            "a `!` run is bounded"
+        );
+        // Plain string / heredoc / comment CONTENT is NOT counted -- a `-----` banner
+        // or a `((((` separator is literal text, not a nesting chain. These
+        // false-rejected legit `.tf` (with a misleading "nesting depth" error) before
+        // the fix; they must now PASS.
+        assert!(
+            hcl_depth_within_limit(&format!("banner = \"{}\"\n", "-".repeat(over))),
+            "dashes in a double-quoted string are content"
+        );
+        assert!(
+            hcl_depth_within_limit(&format!("x = \"{}\"\n", "[".repeat(over))),
+            "delimiters in a string are content"
+        );
+        assert!(
+            hcl_depth_within_limit(&format!(
+                "d = <<EOT\n{}\nEOT\n",
+                vec!["-".repeat(40); over / 20 + 2].join("\n")
+            )),
+            "multi-line dashes in a heredoc are content"
+        );
+        assert!(
+            hcl_depth_within_limit(&format!("# {}\n", "-".repeat(over))),
+            "dashes in a comment are content"
+        );
+        // A `${...}` / `%{...}` interpolation carries a real sub-expression, so its
+        // structure / unary IS counted (skipping it was a stack-abort bypass):
+        assert!(
+            !hcl_depth_within_limit(&format!("x = \"${{{}1}}\"\n", "-".repeat(over))),
+            "unary inside an interpolation counts"
+        );
+        assert!(
+            !hcl_depth_within_limit(&format!(
+                "x = \"${{{}1{}}}\"\n",
+                "(".repeat(over),
+                ")".repeat(over)
+            )),
+            "parens inside an interpolation count"
+        );
+        assert!(
+            !hcl_depth_within_limit(&format!("d = <<EOT\n${{{}1}}\nEOT\n", "-".repeat(over))),
+            "unary inside a heredoc interpolation counts"
+        );
+        // An escaped `$${` is a LITERAL `${`, not an interpolation -> not counted.
+        assert!(
+            hcl_depth_within_limit(&format!("x = \"$${{{}1}}\"\n", "-".repeat(over))),
+            "an escaped literal interpolation is not counted"
+        );
+        // A realistically shallow file passes (balanced parens, a unary `-`, a
+        // normal heredoc with a small JSON body, an interpolation).
+        assert!(hcl_depth_within_limit(
+            "x = max(1, -2)\ny = \"${var.z}\"\npolicy = <<EOT\n{ \"a\": [1, 2] }\nEOT\n"
         ));
-        // A genuinely deep run is rejected.
-        let deep = format!("{}{}", "<a>".repeat(300), "</a>".repeat(300));
-        assert!(!xml_depth_within_limit(&deep));
-        // Real manifest depth is fine.
-        assert!(xml_depth_within_limit(
-            "<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>"
-        ));
+    }
+
+    #[test]
+    fn hcl_expression_bombs_are_rejected_not_a_stack_abort() {
+        // THE safety regression. Every construct hcl-rs recurses on -- deep parens /
+        // function calls / unary chains / interpolation-embedded nesting (caught by
+        // the depth guard), and oversize operator chains (caught by the size cap) --
+        // must yield an `Err`, NEVER a SIGABRT that takes down the whole run. Each
+        // input below aborts an unguarded hcl-rs; if this test ABORTS instead of
+        // failing, the guard / size cap / parse-thread stack regressed.
+        let d = 60_000; // past every measured crash threshold
+        let bombs = [
+            // Delimiter / unary nesting -- caught by the depth guard (small inputs).
+            format!("x = {}1{}", "(".repeat(d), ")".repeat(d)), // parens
+            format!("x = {}1{}", "f(".repeat(d), ")".repeat(d)), // function calls
+            format!("x = {}1", "-".repeat(d)),                  // unary minus
+            format!("x = {}true", "!".repeat(d)),               // unary not
+            format!("x = \"${{{}1{}}}\"", "(".repeat(d), ")".repeat(d)), // interp parens
+            format!("x = \"${{{}1{}}}\"", "[".repeat(d), "]".repeat(d)), // interp tuple
+            format!("x = <<EOT\n${{{}1{}}}\nEOT\n", "[".repeat(d), "]".repeat(d)), // heredoc interp
+            // Delimiter-less OPERATOR chains -- these carry no `{`/`[`/`(` and no
+            // unary run, so ONLY the byte cap stops them. Each is in the ~150 KB+
+            // overflow band that a naive cap (256 KB) let crash (audit finding);
+            // 64 KB rejects them. Regression guards against re-widening the cap.
+            format!("x = 1{}", "+1".repeat(80_000)), // binary chain (~160 KB)
+            format!("x = {}1", "1?1:".repeat(65_000)), // ternary chain
+            format!("x = \"${{1{}}}\"", "+1".repeat(131_000)), // binary inside interpolation
+            format!("x = <<EOT\n${{1{}}}\nEOT\n", "+1".repeat(131_000)), // binary inside heredoc interp
+        ];
+        for b in &bombs {
+            assert!(
+                Format::Hcl.parse(b).is_err(),
+                "an expression bomb must be a parse error, not a crash"
+            );
+        }
+        // A bounded operator chain UNDER the cap still parses (no over-reject of a
+        // normal file), at a depth well inside the parse-thread stack ceiling.
+        assert!(
+            Format::Hcl
+                .parse(&format!("x = 1{}", "+1".repeat(10_000)))
+                .is_ok(),
+            "a bounded binary chain parses"
+        );
+    }
+
+    #[test]
+    fn hcl_at_cap_operator_chain_parses_on_the_stack_thread() {
+        // CAP-RELATIVE companion to the bomb battery: a densest (~2 B/level)
+        // operator chain sized right up to `MAX_HCL_BYTES` is NOT size-rejected, so
+        // it reaches the parser and MUST parse without overflowing the 512 MB parse
+        // thread. This ties the margin to the CONSTANT itself: if `MAX_HCL_BYTES`
+        // is ever widened past the empirical overflow point, this builds a crashing
+        // chain and ABORTS the test binary loudly -- catching an unsafe re-widening
+        // even if the compile-time `SAFE_MAX_HCL_BYTES` ceiling were miscalibrated
+        // by hcl-rs frame-size drift. (The fixed-size bombs above all sit ABOVE the
+        // cap, so they can't catch a re-widening on their own -- the audit gap.)
+        let n = (MAX_HCL_BYTES - "x = 1".len()) / 2; // "+1" is 2 bytes per level
+        let at_cap = format!("x = 1{}", "+1".repeat(n));
+        assert!(
+            at_cap.len() <= MAX_HCL_BYTES,
+            "the chain must be within the cap so it reaches the parser"
+        );
+        assert!(
+            Format::Hcl.parse(&at_cap).is_ok(),
+            "a cap-sized operator chain must parse, not overflow the stack"
+        );
+    }
+
+    #[test]
+    fn xml_at_max_depth_parses_on_a_worker_sized_stack() {
+        // The depth REJECTION path is tested elsewhere; this gates the other half
+        // -- that a document AT `MAX_XML_DEPTH` actually PARSES without overflowing
+        // on the stack alint really parses XML on (a ~2 MiB rayon worker), not just
+        // on the test harness's larger stack. roxmltree recurses ~1 frame/element.
+        // NOTE this proves at-limit safety for the CURRENT value; it does NOT by
+        // itself catch a re-widening: a 2 MiB debug stack survives to ~350 deep, so
+        // a regression to e.g. 256 would still PASS here. The compile-time
+        // `SAFE_MAX_XML_DEPTH = 160` assert is what blocks such a raise (`256 > 160`
+        // = build error); this runtime test is the empirical at-limit backstop that
+        // the ceiling isn't fantasy.
+        let deep = format!(
+            "{}x{}",
+            "<a>".repeat(MAX_XML_DEPTH),
+            "</a>".repeat(MAX_XML_DEPTH)
+        );
+        let ok = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || Format::Xml.parse(&deep).is_ok())
+            .expect("spawn worker-sized thread")
+            .join()
+            .expect("the parse thread must return, not abort the process");
+        assert!(
+            ok,
+            "an at-limit XML document must parse on a 2 MiB worker stack"
+        );
+    }
+
+    #[test]
+    fn dotenv_budget_counts_original_bom_bytes() {
+        let cap = crate::dotenv::MAX_DOTENV_BYTES;
+        for prelude in ["", "\u{feff}", "\u{feff}\u{feff}"] {
+            let size = cap - prelude.len() - 2;
+            let mut source = format!("{prelude}A={}", "x".repeat(size - 1));
+            assert_eq!(
+                Format::Dotenv.parse(&source).unwrap()["A"]
+                    .as_str()
+                    .unwrap()
+                    .len(),
+                size - 1
+            );
+            source.push('x');
+            assert_eq!(
+                Format::Dotenv.parse(&source).unwrap()["A"]
+                    .as_str()
+                    .unwrap()
+                    .len(),
+                size
+            );
+            source.push('x');
+            assert!(Format::Dotenv.parse(&source).is_err());
+        }
+    }
+
+    #[test]
+    fn dotenv_no_config_fastpath_remains_independent_of_lossless_budgets() {
+        let source = format!(
+            "\u{feff}{}",
+            " \r\n".repeat(crate::dotenv::MAX_DOTENV_BYTES / 3)
+        );
+        assert!(source.len() > crate::dotenv::MAX_DOTENV_BYTES);
+        assert_eq!(
+            Format::Dotenv.parse(&source).unwrap(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn every_format_tolerates_bom_and_empty_input() {
+        // GATE for the uniform BOM-strip + empty->{} handling at the top of
+        // `Format::parse`. A BOM-prefixed file must parse IDENTICALLY to its
+        // un-BOM'd form (JSON / HCL previously rejected a BOM as a syntax error),
+        // and an empty / whitespace-only file must parse to an empty OBJECT for
+        // EVERY format -- so `*_path_absent` is satisfied and `json_schema_passes`
+        // validates it as `{}` (which passes `{"type":"object"}`), NOT the
+        // false-firing `null` the first cut returned. Iterates `Format::ALL`, so a
+        // newly-added format cannot silently skip this contract.
+        let empty_doc = Value::Object(serde_json::Map::new());
+        for &f in Format::ALL {
+            assert_eq!(
+                f.parse(""),
+                Ok(empty_doc.clone()),
+                "{} empty input must be an empty object",
+                f.label()
+            );
+            assert_eq!(
+                f.parse("   \n\t  "),
+                Ok(empty_doc.clone()),
+                "{} whitespace-only input must be an empty object",
+                f.label()
+            );
+            // A BOM interleaved with whitespace (a stray BOM that `trim_start_matches`
+            // alone leaves behind) on otherwise-empty input must ALSO be an empty
+            // object, not a one-char scalar (which YAML/properties/INI would produce).
+            assert_eq!(
+                f.parse("\u{feff} \u{feff}\t"),
+                Ok(empty_doc.clone()),
+                "{} BOM-and-whitespace-only input must be an empty object",
+                f.label()
+            );
+        }
+        // A minimal valid document per format; a single OR double BOM prefix must
+        // not change the parse. The sample table MUST cover every `Format::ALL`
+        // variant (asserted), so a new format forces a BOM sample here too.
+        let samples: &[(Format, &str)] = &[
+            (Format::Json, "{\"k\":\"v\"}"),
+            (Format::Yaml, "k: v"),
+            (Format::Toml, "k = \"v\""),
+            (Format::Xml, "<r><k>v</k></r>"),
+            (Format::Dotenv, "k=v"),
+            (Format::Properties, "k=v"),
+            (Format::Ini, "[s]\nk=v"),
+            (Format::Hcl, "k = \"v\""),
+        ];
+        let covered: std::collections::BTreeSet<&str> =
+            samples.iter().map(|(f, _)| f.label()).collect();
+        let all: std::collections::BTreeSet<&str> = Format::ALL.iter().map(|f| f.label()).collect();
+        assert_eq!(
+            covered, all,
+            "the BOM sample table must cover every Format::ALL variant"
+        );
+        for &(f, doc) in samples {
+            let plain = f.parse(doc);
+            assert!(plain.is_ok(), "{} sample must parse: {plain:?}", f.label());
+            assert_eq!(
+                f.parse(&format!("\u{feff}{doc}")),
+                plain,
+                "{} single-BOM must parse identically",
+                f.label()
+            );
+            assert_eq!(
+                f.parse(&format!("\u{feff}\u{feff}{doc}")),
+                plain,
+                "{} double-BOM must parse identically (no residual mis-parse)",
+                f.label()
+            );
+        }
+    }
+
+    #[test]
+    fn hcl_malformed_and_duplicate_attr_are_parse_errors() {
+        assert!(
+            Format::Hcl.parse("resource \"x\" {\n  a =\n").is_err(),
+            "an incomplete block is a parse error"
+        );
+        assert!(
+            Format::Hcl.parse("a = 1\na = 2\n").is_err(),
+            "HCL rejects a duplicate attribute"
+        );
+    }
+
+    #[test]
+    fn duplicate_keys_diverge_by_format_as_documented() {
+        // GATE for the "Duplicate keys differ" caveat in docs/rules.md: a key
+        // repeated within one scope resolves three incompatible ways, and a rule
+        // author needs to know which. Pinning it here keeps the doc honest and
+        // catches a parser swap that changes the behavior (e.g. a serde_yaml that
+        // starts rejecting dup keys would move YAML from keep-last to reject).
+        //
+        // Keep-LAST (earlier value invisible):
+        assert_eq!(
+            Format::Json.parse("{\"a\":1,\"a\":2}").unwrap()["a"],
+            serde_json::json!(2),
+            "JSON keeps the last duplicate key"
+        );
+        assert_eq!(
+            Format::Yaml.parse("a: 1\na: 2\n").unwrap()["a"],
+            serde_json::json!(2),
+            "YAML (yaml_serde) keeps the last duplicate key"
+        );
+        assert_eq!(
+            Format::Dotenv.parse("a=1\na=2\n").unwrap()["a"],
+            serde_json::json!("2"),
+            "dotenv keeps the last duplicate key"
+        );
+        assert_eq!(
+            Format::Properties.parse("a=1\na=2\n").unwrap()["a"],
+            serde_json::json!("2"),
+            "properties keeps the last duplicate key"
+        );
+        // REJECT (parse error):
+        assert!(
+            Format::Toml.parse("a = 1\na = 2\n").is_err(),
+            "TOML rejects a duplicate key"
+        );
+        assert!(
+            Format::Hcl.parse("a = 1\na = 2\n").is_err(),
+            "HCL rejects a duplicate attribute"
+        );
+        // Document-order ARRAY (both values queryable):
+        assert_eq!(
+            Format::Xml.parse("<r><a>1</a><a>2</a></r>").unwrap()["r"]["a"],
+            serde_json::json!(["1", "2"]),
+            "XML collects repeated elements into a document-order array"
+        );
+        assert_eq!(
+            Format::Ini.parse("[s]\na=1\na=2\n").unwrap()["s"]["a"],
+            serde_json::json!(["1", "2"]),
+            "INI collects a repeated key into a document-order array"
+        );
+    }
+
+    #[test]
+    fn value_mapping_caveats_are_accurate() {
+        // GATE for the "Value-mapping caveats" block in docs/rules.md. That block
+        // has drifted from the real parser twice (a linter that documents a footgun
+        // must document the RIGHT footgun), so pin every claim here: a doc/parser
+        // mismatch now fails CI. (Duplicate-key divergence has its own test above.)
+        use serde_json::json;
+
+        // Assigned leaves in stringly-typed formats store even a numeric literal
+        // as a STRING -- the root cause of numeric/boolean filter comparators
+        // no-oping on XML/dotenv/properties/INI. A typed format keeps the number.
+        assert_eq!(
+            Format::Dotenv.parse("PORT=8080").unwrap()["PORT"],
+            json!("8080")
+        );
+        assert_eq!(
+            Format::Json.parse("{\"PORT\":8080}").unwrap()["PORT"],
+            json!(8080)
+        );
+
+        // inf/nan: TOML (`inf`/`nan`) and YAML (`.inf`/`.nan`) -> null; HCL -> opaque
+        // expression string (NOT an error); JSON has no such literal. NB YAML's bare
+        // `nan` (no dot) is a plain string -- only the dotted form is a float.
+        assert_eq!(Format::Toml.parse("a = inf").unwrap()["a"], json!(null));
+        assert_eq!(Format::Toml.parse("a = nan").unwrap()["a"], json!(null));
+        assert_eq!(Format::Yaml.parse("a: .inf").unwrap()["a"], json!(null));
+        assert_eq!(Format::Yaml.parse("a: .nan").unwrap()["a"], json!(null));
+        assert_eq!(Format::Yaml.parse("a: nan").unwrap()["a"], json!("nan"));
+        assert_eq!(Format::Hcl.parse("a = inf").unwrap()["a"], json!("${inf}"));
+        assert_eq!(Format::Hcl.parse("a = nan").unwrap()["a"], json!("${nan}"));
+
+        // Empty assigned value: null in XML/YAML, "" in
+        // json/toml/dotenv/ini/properties. A dotenv bare declaration is distinct
+        // from an empty assignment and maps to null.
+        assert_eq!(
+            Format::Xml.parse("<r><a/></r>").unwrap()["r"]["a"],
+            json!(null)
+        );
+        assert_eq!(Format::Yaml.parse("a:").unwrap()["a"], json!(null));
+        assert_eq!(Format::Json.parse("{\"a\":\"\"}").unwrap()["a"], json!(""));
+        assert_eq!(Format::Toml.parse("a = \"\"").unwrap()["a"], json!(""));
+        assert_eq!(Format::Dotenv.parse("a=").unwrap()["a"], json!(""));
+        assert_eq!(Format::Dotenv.parse("a\n").unwrap()["a"], json!(null));
+        assert_eq!(Format::Ini.parse("[s]\nk=").unwrap()["s"]["k"], json!(""));
+        assert_eq!(Format::Properties.parse("k=").unwrap()["k"], json!(""));
+
+        // A TOML date/time is a magic-key OBJECT, not a string; YAML's is a string.
+        assert_eq!(
+            Format::Toml.parse("a = 1979-05-27").unwrap()["a"],
+            json!({ "$__toml_private_datetime": "1979-05-27" })
+        );
+        assert_eq!(
+            Format::Yaml.parse("a: 2002-12-14").unwrap()["a"],
+            json!("2002-12-14")
+        );
+
+        // Based / underscored numbers: TOML parses hex/octal/binary + underscores;
+        // YAML parses the base prefixes but keeps an underscored decimal as a string;
+        // HCL REJECTS non-decimal literals; the stringly formats keep them as strings.
+        assert_eq!(Format::Toml.parse("a = 0x1F").unwrap()["a"], json!(31));
+        assert_eq!(Format::Toml.parse("a = 0o17").unwrap()["a"], json!(15));
+        assert_eq!(Format::Toml.parse("a = 0b101").unwrap()["a"], json!(5));
+        assert_eq!(Format::Toml.parse("a = 1_000").unwrap()["a"], json!(1000));
+        assert_eq!(Format::Yaml.parse("a: 0x1F").unwrap()["a"], json!(31));
+        assert_eq!(Format::Yaml.parse("a: 0o17").unwrap()["a"], json!(15));
+        assert_eq!(Format::Yaml.parse("a: 0b101").unwrap()["a"], json!(5));
+        assert_eq!(Format::Yaml.parse("a: 1_000").unwrap()["a"], json!("1_000"));
+        assert!(Format::Hcl.parse("a = 0x1F").is_err());
+        assert!(Format::Hcl.parse("a = 1_000").is_err());
+        assert_eq!(
+            Format::Ini.parse("[s]\nport=8080").unwrap()["s"]["port"],
+            json!("8080")
+        );
+        assert_eq!(
+            Format::Xml.parse("<r><n>42</n></r>").unwrap()["r"]["n"],
+            json!("42")
+        );
+
+        // Big integer beyond i64: lossy float in JSON, parse error in YAML/TOML/HCL.
+        assert!(Format::Json.parse("{\"a\":100000000000000000000}").unwrap()["a"].is_f64());
+        assert!(Format::Yaml.parse("a: 100000000000000000000").is_err());
+        assert!(Format::Toml.parse("a = 100000000000000000000").is_err());
+        assert!(Format::Hcl.parse("a = 100000000000000000000").is_err());
+    }
+
+    #[test]
+    fn oversize_structured_input_is_rejected_before_building_a_tree() {
+        // A structured tree costs up to ~30x the input (XML), so an input over
+        // MAX_STRUCTURED_BYTES is rejected at the size check (no tree, no balloon). The
+        // rejection is on `.len()` alone, so no parse runs for the oversize input.
+        // Iterate `Format::ALL` so the invariant is asserted for EVERY format (a
+        // per-arm refactor that skipped the check for one would be caught here); the
+        // "maximum supported size" substring matches both the structured cap message
+        // and HCL's own tighter cap message.
+        let over = "x".repeat(MAX_STRUCTURED_BYTES + 1);
+        for &f in Format::ALL {
+            let err = f.parse(&over).unwrap_err();
+            assert!(
+                err.contains("maximum supported size"),
+                "{} oversize input rejected: {err}",
+                f.label()
+            );
+        }
+    }
+
+    #[test]
+    fn format_all_is_complete() {
+        // Every parity gate iterates `Format::ALL`, so a variant missing from ALL
+        // silently bypasses them. The real guard here is the exhaustive `match`
+        // below: a NEW `Format` variant is a COMPILE error until a reviewer adds an
+        // arm, so no variant reaches the codebase without a human editing this
+        // test with `Format::ALL` in view; the asserts then require ALL and
+        // `variants` to list the same set. Fully deriving ALL from the enum would
+        // need a proc-macro (`strum`), which this crate deliberately avoids -- so
+        // the compile error, not the assert, is what stops a half-wired variant.
+        let variants = [
+            Format::Json,
+            Format::Yaml,
+            Format::Toml,
+            Format::Xml,
+            Format::Dotenv,
+            Format::Properties,
+            Format::Ini,
+            Format::Hcl,
+        ];
+        for f in variants {
+            // Distinct arms (clippy-clean) keep the match exhaustive, so a new
+            // Format variant is a compile error here until it is added.
+            let _label = match f {
+                Format::Json => "json",
+                Format::Yaml => "yaml",
+                Format::Toml => "toml",
+                Format::Xml => "xml",
+                Format::Dotenv => "dotenv",
+                Format::Properties => "properties",
+                Format::Ini => "ini",
+                Format::Hcl => "hcl",
+            };
+        }
+        assert_eq!(
+            Format::ALL.len(),
+            variants.len(),
+            "Format::ALL is out of sync with the Format variants; update both"
+        );
+        for f in variants {
+            assert!(
+                Format::ALL.contains(&f),
+                "Format::{f:?} is missing from Format::ALL"
+            );
+        }
     }
 }

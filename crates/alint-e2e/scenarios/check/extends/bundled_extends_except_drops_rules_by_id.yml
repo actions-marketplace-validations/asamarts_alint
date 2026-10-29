@@ -1,3 +1,4 @@
+test_version: 1
 name: extends entry with `except:` drops listed rules from a bundled ruleset
 tags: [check, extends, bundled, only_except]
 
@@ -24,7 +25,8 @@ expect:
   # oss-code-of-conduct-exists was dropped, so it doesn't appear
   # in any violation. The remaining existence advisories still
   # fire.
-  - violations:
+  - exit: success
+    violations:
       - {rule: oss-readme-exists}
       - {rule: oss-license-exists}
       - {rule: oss-security-policy-exists}

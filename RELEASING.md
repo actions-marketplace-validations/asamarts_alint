@@ -12,19 +12,31 @@ points are explicit.
    bash ci/scripts/bump-version.sh <new-version>   # e.g. 0.9.21
    ```
 
-   The script edits `Cargo.toml [workspace.package].version` + every
-   user-facing install snippet (README, SECURITY, docs/site/**) +
-   inserts a CHANGELOG stub + refreshes `Cargo.lock` via
+   The script edits `Cargo.toml [workspace.package].version`, the private
+   `ALINT_BAKED_VERSION` in `action.yml`, every workspace-version-coupled
+   install snippet (README, SECURITY, and the installation, Docker, and
+   pre-commit guides), the npm and Zed manifests, and the npm README. It also
+   inserts a CHANGELOG stub, refreshes `Cargo.lock` via
    `cargo metadata --offline` (so the workspace internal-crate
-   version entries in the lockfile track the bump).
+   version entries in the lockfile track the bump), and regenerates the
+   version-bearing `facts.json` discovery contract.
 
-   Deliberately **not** touched:
+   The baked Action value is deliberately separate from the public `version`
+   input's empty default. This lets an explicit `with: version:` override every
+   ref, preserves exact-tag and moving-branch behavior, and makes a full commit
+   SHA select the release carried by that commit. The release preflight runs
+   `ci/scripts/check-release-version.sh` and blocks publishing unless the tag,
+   workspace version, and baked Action version all agree.
+
    - `Cargo.toml [workspace.dependencies].alint-* version`,
-     the intra-workspace API-compat floor. Bump by hand only when an
-     inter-crate API actually breaks. Preflight asserts each floor
-     is `<= workspace.package.version` via
-     `ci/scripts/check-workspace-dep-floors.sh`; an over-pinned floor
-     would publish-fail, so the check catches it before push.
+     the intra-workspace API-compat floor, on a patch release or a post-1.0
+     same-major release. The script advances every floor automatically when
+     Cargo's caret compatibility line changes (every pre-1.0 minor and every
+     major); otherwise bump a floor by hand only when an inter-crate API break
+     requires it. Preflight asserts each floor is
+     `<= workspace.package.version` via
+     `ci/scripts/check-workspace-dep-floors.sh`; an over-pinned floor would
+     publish-fail, so the check catches it before push.
 
    `npm/package.json` version was previously left lagging
    (rewritten by `release.yml` at publish time). As of v0.9.22 the
@@ -51,23 +63,52 @@ points are explicit.
    `release.yml` `preflight` job runs the same gates remotely; this
    is the pre-push sanity gate.
 
-   Two recurrence guards bundled into `test` / `dep-floors`:
+   Recurrence guards bundled into `test` / `dep-floors` (plus the MSRV leg):
    - README-count claims (rule kinds, families, bundled rulesets,
      fix ops, output formats, subcommands) are asserted against
      the workspace truth by
      `crates/alint-e2e/tests/coverage_audit_readme_claims.rs`.
    - `[workspace.dependencies]` API-compat floors are asserted
      `<= workspace.package.version` by
-     `ci/scripts/check-workspace-dep-floors.sh`.
+     `ci/scripts/check-workspace-dep-floors.sh` (also run by ci.yml's
+     `MSRV` job and the `release.yml` preflight).
+   - The workspace compiles on the exact MSRV
+     (`[workspace.package].rust-version`) via `ci/scripts/msrv.sh`, run
+     by ci.yml's `MSRV` job and the `release.yml` preflight (so no crate
+     publishes advertising an MSRV it was not built on). Not part of
+     `preflight.sh`; run it locally when touching dependencies.
+   - GitHub Action resolution is asserted for explicit inputs, exact tags,
+     branches, local actions, and commit SHAs by
+     `ci/scripts/test-action-version.sh`; release tag/workspace/baked-version
+     agreement is covered by `ci/scripts/test-release-version.sh`.
 
    The pre-push git hook at `ci/githooks/pre-push` runs the same
    script automatically once opted in via
    `git config core.hooksPath ci/githooks`.
 
+   **Corpus replay (releases with relation-layer changes).** Before the bump
+   commit of a release that changes the relation layer (v0.21 onward), run the
+   `Corpus Replay` workflow on main's tip (the bump changes only versions) with
+   the previous release as the comparison:
+
+   ```sh
+   gh workflow run corpus-replay.yml --ref main -f compare_ref=v<previous>
+   ```
+
+   It replays the 110-repository case-study corpus with both binaries on the
+   canonical bench host and lists every repository whose findings changed.
+   Each difference must be explained by a CHANGELOG entry, and a crash
+   blocks the release. The replay binary is built with
+   `alint-rules/shadow-ir`, so it also runs R4's shadow implementation; any
+   shadow difference blocks the release.
+
 4. **Commit and tag.**
 
    ```sh
-   git add Cargo.toml Cargo.lock npm/package.json CHANGELOG.md
+   git add Cargo.toml Cargo.lock facts.json action.yml README.md SECURITY.md CHANGELOG.md \
+     npm/package.json npm/README.md editors/zed/Cargo.toml \
+     editors/zed/extension.toml docs/site/getting-started/installation.md \
+     docs/site/integrations/docker.md docs/site/integrations/pre-commit.md
    git commit -m "chore(release): bump workspace to <x.y.z>"
    git tag v<x.y.z>
    git push origin main
@@ -123,10 +164,28 @@ checklist so the release-gated pieces land and nothing drifts:
    cookbook, getting-started) are safe to pre-write; the output-formats note is
    under the main-overlaid `docs/site/reference/**`, so wrap any unreleased part
    in `<!-- alint:since=X -->`.
-4. **Reconcile the trackers.** Bump `alint.org`'s pins (four install sites plus
+4. **Refresh the published Action pin after the release exists.** A release
+   commit cannot contain its own SHA, so this is deliberately a follow-up
+   commit on `main`: update `ci/action-doc-pin.env` and every
+   `asamarts/alint@<sha> # vX.Y.Z` example to the new tag's commit. From v0.18.0
+   onward the tagged `action.yml` contains its baked binary version, so set
+   `ACTION_DOC_REQUIRES_EXPLICIT_VERSION=false` and remove the now-redundant
+   `with: version:` line from each example. Verify both the user-facing copies
+   and the tag relationship with:
+
+   ```sh
+   bash ci/scripts/check-version-pins.sh --verify-action-tag
+   ```
+
+   The docs-bundle workflow overlays the GitHub Actions guide from `main` and
+   rejects generated output that does not match this metadata, so pushing the
+   follow-up also refreshes alint.org's published snippets without waiting for
+   another release.
+
+5. **Reconcile the trackers.** Bump `alint.org`'s pins (four install sites plus
    prose claims), and reconcile `alint.org` `marketing/STATE.md` to the new
    version and counts so it never drifts weeks behind again (P5.2).
-5. **Confirm the gates are green.** `gen-schema` / `gen-facts` / `docs-export`
+6. **Confirm the gates are green.** `gen-schema` / `gen-facts` / `docs-export`
    `--check` and the `docs/adr@v1` dogfood here; the `check-counts.mjs` count
    gate and `check-version-pins.sh` pin gate on the alint.org side.
 
@@ -134,12 +193,12 @@ checklist so the release-gated pieces land and nothing drifts:
 
 | Workflow | Triggered by | What it does | Time |
 |---|---|---|---|
-| `ci.yml` | tag + main pushes | fmt + clippy + test + doc + dogfood, plus audit, deny, build, bench-smoke, examples, shell-tests, editors, and the advisory perf-gate. Self-hosted Linux. | ~5 min |
+| `ci.yml` | tag + main pushes | fmt + clippy + test + doc + dogfood, plus audit + deny (both blocking on RustSec vulnerabilities), build, bench-smoke, examples, shell-tests, editors, and the advisory perf-gate. Self-hosted Linux. | ~5 min |
 | `release.yml` | tag push only | preflight gate → supply-chain (SBOM + license bundle) → cross-platform build matrix → GitHub Release (cosign-signed `SHA256SUMS` + build-provenance + SBOM attestations) → ghcr.io Docker (attested + cosign-signed by digest) → npm → Homebrew tap → crates.io → VS Code Marketplace + Open VSX → JetBrains Marketplace. | ~15-25 min |
 | `docs-bundle.yml` | tag + main pushes | `xtask docs-export` → push refreshed bundle to `docs-bundle` branch → Cloudflare deploy hook → alint.org rebuilds. The sibling `check-pins.yml` workflow in the alint.org repo (PR + push + daily cron) asserts alint.org's three install-pin sites reference the latest tag from this release; fires automatically. | ~3-5 min |
 | `bench-docker.yml` | tag pushes | Build + push `ghcr.io/asamarts/alint-bench:<tag>` (the reproducible competitive-bench environment). | ~5 min |
-| **`bench-record.yml`** | tag push only | **Self-hosted full publish-grade `xtask bench-scale` matrix (S1-S14 × {1k, 10k, 100k, 1m} × {full, changed}) at `--warmup 3 --runs 10`. Opens a PR adding the new per-version macro/results dir + criterion micro snapshot.** | **~3.5 hr** |
-| `post-publish-smoke.yml` | dispatched by `release.yml` after the CLI channels publish (+ weekly cron) | Install alint from each CLI channel (install.sh, cargo, cargo-binstall, npm, docker, homebrew) and assert `alint --version` matches the tag. Advisory (`MP-M5`): a red run flags a broken/stale publish, blocks nothing. | ~5-10 min |
+| **`bench-record.yml`** | tag push only | **Self-hosted full publish-grade `xtask bench-scale` matrix (S1-S4 check × {1k, 10k, 100k, 1m} × {full, changed} + the SFIX auto-fix scenario × {fix}) at `--warmup 3 --runs 10`. Opens a PR adding the new per-version macro/results dir + criterion micro snapshot.** | **~3.5 hr** |
+| `post-publish-smoke.yml` | dispatched by `release.yml` after the CLI channels publish (+ weekly cron) | Install alint from each CLI channel (install.sh, cargo, cargo-binstall, npm, Docker, Homebrew, PyPI), assert `alint --version` matches the tag, and execute a fresh downstream policy-test package through every installed command. Advisory (`MP-M5`): a red run flags a broken, stale, or behaviorally incomplete publish; it blocks nothing. | ~5-10 min |
 
 Signing and attestation (the `release`/`docker` cosign + `attest-build-provenance`
 / `attest-sbom` steps) are **keyless** via Sigstore + GitHub OIDC: they add
@@ -151,17 +210,30 @@ can expire mid-release. Consumer-side verification commands live in
 
 ## Adding a new published crate
 
-When a new workspace crate joins the crates.io publish list
-(`ci/scripts/publish-crates.sh` `CRATES=()`), **register its crates.io
-Trusted Publisher before the release that first publishes it via OIDC**:
-crate → Settings → Trusted Publishing → repo `asamarts/alint`, workflow
-`release.yml`, no environment. The OIDC token is scoped per crate, so a
-crate without a publisher entry fails that release's `publish to
-crates.io` job with `403 ... access token is not valid for crate
-<name>`, *after* the earlier crates have already published (crates.io
-is permanent; see Yanking). The publish script is idempotent, so the
-recovery is: add the publisher, then `gh run rerun <id> --failed`
-(never re-tag). `alint-lsp` hit this on v0.11.1.
+crates.io Trusted Publishing cannot create a crate. When a new workspace crate
+joins `ci/scripts/publish-crates.sh`'s `CRATES=()` list, its first tagged release
+therefore requires this one-time bootstrap:
+
+1. Let the release workflow publish the established crates and fail at the new
+   crate with `403 Forbidden: Trusted Publishing tokens do not support creating
+   new crates`.
+2. From the exact clean tagged commit, run
+   `cargo +<RELEASE_RUST> publish -p <crate> --locked` using a maintainer's
+   scoped crates.io token.
+3. Add the crate's Trusted Publisher in crates.io: crate → Settings → Trusted
+   Publishing → repo `asamarts/alint`, workflow `release.yml`, no environment.
+   Do this in the same release, before step 4. Nothing fails if it is skipped
+   until the next release tries to publish the crate through OIDC.
+4. Run `gh run rerun <id> --failed`. Never re-tag. The publish script skips
+   versions already visible on crates.io and resumes in dependency order.
+
+The manual first publish is an unavoidable partial release, so do it immediately
+after the expected failure and never from an uncommitted or post-tag tree. Every
+later release is tokenless through OIDC. `alint-testkit` was bootstrapped in
+v0.20.0 without step 3, so v0.20.1's `publish to crates.io` job failed with
+`403 Forbidden` on that crate until its Trusted Publisher was added and the job
+rerun. Before tagging the release after a bootstrap, open the new crate's
+Trusted Publishing settings on crates.io and confirm the entry exists.
 
 ## npm Trusted Publishing
 
@@ -194,14 +266,29 @@ never re-tag** (crates.io / npm / ghcr are permanent, and a new tag would collid
   (fail-closed, not a partial release). Fix the generator and
   `gh run rerun <id> --failed`; ci.yml runs the same script pre-merge (the
   `supply-chain` job), so a release-time failure should be rare.
-- **A signing / attestation failure** (`MP-H1`). The `release` job's cosign + attest
-  steps run *before* `create GitHub Release` and depend on public-good Sigstore
-  (Fulcio + Rekor) plus the GitHub attestations API. A transient Sigstore outage, or
-  a cosign / attest-action error, fails the release job before the Release exists,
-  while `docker` and `publish-crates` (both `needs: build`) may already have
-  published to ghcr / crates.io. Re-run the release job: the cosign + attest steps are
-  idempotent and precede Release creation, so a clean re-run re-signs and then creates
-  the Release. Never re-tag.
+- **A signing / attestation failure** (`MP-H1`). The `release` job's steps run in
+  this order: aggregate `SHA256SUMS`, cosign keyless sign of `SHA256SUMS`, create
+  the GitHub Release, then the two attestations (build provenance + SBOM), then the
+  docs-bundle dispatch and the major-tag move. Only the cosign signature precedes
+  Release creation: it depends on public-good Sigstore (Fulcio + Rekor), so a
+  transient Sigstore outage or a cosign error fails the job before the Release
+  exists, while `docker` and `publish-crates` (both `needs: build`) may already have
+  published to ghcr / crates.io. The attestations run *after* the Release and are
+  best-effort (`continue-on-error`): a failure there only raises a `::warning::`
+  and never blocks the Release or the downstream publishers. In every case, re-run
+  with `gh run rerun <id> --failed`. Never re-tag.
+- **A failure after the Release exists.** The `release` job is idempotent: if a
+  later step failed (for example the major-tag move), the re-run finds the
+  existing Release and re-uploads the same asset set with
+  `gh release upload --clobber` (then asserts the published asset set matches)
+  instead of dying on `gh release create`, so the `needs: release` publishers
+  (npm, PyPI, Homebrew, VS Code, JetBrains) still run. If the surviving Release
+  is a **draft** (made by hand, or left by an interrupted attempt), the step
+  publishes it (`gh release edit --draft=false`) once the asset set is verified;
+  a draft would otherwise stay invisible to `install.sh`, `releases/latest` and
+  the npm postinstall download. The docs-bundle dispatch is
+  non-fatal: if it fails the job emits a `::warning::` and you run
+  `gh workflow run docs-bundle.yml --ref main` by hand.
 - **Expiring credentials** (`MP-M2`). Three channels carry secrets that can expire: VS
   Code + Open VSX (`VSCE_PAT` / `OVSX_PAT`), JetBrains (the marketplace token + signing
   cert/key), and the Homebrew tap SSH deploy key. On a 401/403 from any, rotate the
@@ -209,11 +296,103 @@ never re-tag** (crates.io / npm / ghcr are permanent, and a new tag would collid
   [`release-credentials.md`](docs/development/release-credentials.md)), then
   `gh run rerun <id> --failed`. (npm no longer carries a PAT: it publishes tokenlessly
   via OIDC Trusted Publishing, see [npm Trusted Publishing](#npm-trusted-publishing).)
+- **A RustSec advisory blocking the preflight.** `deny.sh` and `audit.sh` fail on
+  any vulnerability advisory (unmaintained / unsound / yanked only warn), so a
+  CVE published between merge and tag stops the release before anything
+  publishes (every publisher `needs:` the preflight). Prefer upgrading the
+  dependency; only if the advisory provably does not affect alint, waive it in
+  `deny.toml` `[advisories].ignore` as `{ id = "RUSTSEC-YYYY-NNNN", reason = "..." }`
+  (the one list both gates honour). Land the fix on `main`. Because nothing has
+  published, this is the one case where the tag may be moved: delete it
+  (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`) and tag the fixed
+  commit; if anything did publish, cut the next patch instead.
 - **A build-matrix flake blocking crates.io** (`MP-M1`). `publish-crates` deliberately
   `needs: build` (a cross-platform compile gate before the irreversible publish), so a
   flaky windows or aarch64 leg can block it. Re-run once the leg heals with
   `gh run rerun <id> --failed`; the publish script is idempotent, so already-published
   crates are skipped.
+- **A crates.io CDN outage mid-publish.** `cargo publish` verifies each crate by
+  downloading its freshly published dependencies from `static.crates.io`; a CDN outage
+  (HTTP 500, `Connection timeout to backend`, HTTP/2 stream resets) fails
+  `publish-crates` after some crates are already up (v0.18.3: four of six). Confirm
+  which versions exist (`https://crates.io/api/v1/crates/<name>`), wait until a
+  download URL returns 200 again, then `gh run rerun <id> --failed`; the published
+  crates are skipped.
+- **A post-publish smoke failure right after the release.** The smoke workflow is
+  dispatched as soon as the publishers finish, and a registry can lag: v0.18.3's first
+  run failed cargo / cargo-binstall / npm because the last crates were still
+  publishing, and v0.18.4's failed PyPI because the simple index did not yet list the
+  version although its files were uploaded. Check the registry directly (for PyPI,
+  `https://pypi.org/pypi/alint/json`), then re-run the failed smoke jobs; they are
+  read-only.
+
+## Release toolchain
+
+Releases build, test and publish with ONE pinned Rust toolchain, the exact
+`RELEASE_RUST` in `.github/workflows/release.yml`'s workflow-level `env:`. Dev
+and `ci.yml` keep `rust-toolchain.toml`'s floating `stable`, so CI keeps
+tracking new stables while a release stays reproducible. Every Rust-building
+release job installs `${{ env.RELEASE_RUST }}` and then runs
+`ci/scripts/pin-release-toolchain.sh`, which exports `RUSTUP_TOOLCHAIN` (that,
+unlike the `rustup default` the install action sets, beats
+`rust-toolchain.toml`) and fails the job unless `rustc --version` is the pin;
+`release-binary.sh` logs the `rustc --version` each tarball was built with. The
+MSRV leg is unaffected: `msrv.sh` builds with `cargo +<msrv>`, which beats
+`RUSTUP_TOOLCHAIN`. `ci/scripts/test-release-toolchain-pin.sh` fails on a
+floating `stable`, a different version, or a job that skips the pin step.
+
+Bump procedure (do it in its own PR, not in the release-cut PR):
+
+1. Pick the newest stable that is at least about two weeks old (check
+   <https://static.rust-lang.org/dist/channel-rust-stable.toml> and the Rust
+   blog), taking its latest patch (`1.98.1`, not `1.98.0`).
+2. Edit `RELEASE_RUST` in `release.yml` (the only place it is set).
+3. Prove the tree is clean on it locally:
+   `RUSTUP_TOOLCHAIN=<ver> ci/scripts/fmt.sh && RUSTUP_TOOLCHAIN=<ver> ci/scripts/clippy.sh && RUSTUP_TOOLCHAIN=<ver> ci/scripts/test.sh && RUSTUP_TOOLCHAIN=<ver> ci/scripts/docs.sh`
+   (a new stable's clippy lints are the usual surprise), then
+   `ci/scripts/test-release-toolchain-pin.sh` (with the toolchain installed it
+   also proves the override against `rust-toolchain.toml`).
+4. A toolchain bump changes the shipped binaries, so it needs a normal release
+   to take effect; `bench-record.yml` pins its own toolchain separately.
+
+## Backport releases and re-running an old tag
+
+`release.yml` publishes two kinds of things. **Immutable** publishes (crates.io,
+PyPI, the npm version itself, the GitHub Release and its assets, Docker
+`:vX.Y.Z` / `:X.Y.Z`) are always safe to (re-)run for any tag. **Floating
+pointers** are not: the major tag (`v0`), the GitHub "Latest" release (which
+`install.sh` and the Action resolve by default), Docker `:latest` and `:X.Y`, the
+Homebrew formula (the tap serves one version) and npm's `latest` dist-tag.
+
+Every step that moves a floating pointer is gated by
+`ci/scripts/release-pointer-guard.sh`, which compares the tag against every
+published `vX.Y.Z` tag (pre-releases and the `v0` pointer are ignored; a
+pre-release tag never moves anything):
+
+| Pointer | Moves only when the tag is ... |
+|---|---|
+| `v0` major tag, GitHub "Latest", Docker `:latest`, Homebrew formula, npm `latest` | the highest release overall (equal counts, so re-running the newest release is fine) |
+| Docker `:X.Y` | the highest release in its `X.Y` line |
+
+Otherwise the step logs a `::notice::` and leaves the pointer where it is (npm
+publishes the backport under a `release-X.Y` dist-tag instead of `latest`).
+`ci/scripts/test-release-pointer-guard.sh` pins the comparison and that each of
+those steps honours it.
+
+So, to ship a **backport** (say `v0.16.2` after `v0.17.0`): branch from the
+`v0.16.x` tag, cherry-pick the fix, bump with `ci/scripts/bump-version.sh`, and
+push the `v0.16.2` tag as usual. Every channel publishes `0.16.2`; `v0`,
+"Latest", `:latest`, Homebrew and npm `latest` stay on `v0.17.0`, and `:0.16`
+moves to `0.16.2`. Users on the newest line are unaffected; a `0.16` user pins
+`0.16.2` explicitly (`ALINT_VERSION=v0.16.2`, `@asamarts/alint@0.16.2`,
+`ghcr.io/asamarts/alint:0.16`).
+
+**Re-running an old tag's job** (`gh run rerun <id> --failed` on, say, the
+`v0.16.1` run after `v0.17.0` shipped) is likewise safe: the immutable publishes
+are idempotent (see above) and the floating pointers are skipped, so nothing
+moves backwards. To deliberately move a pointer to an older release (for
+example, after yanking the newest one), do it by hand, not by re-running a
+release job.
 
 ## Editor extensions / IDE plugins
 
@@ -230,8 +409,12 @@ paths:
 These stamp the version from the tag (`v0.x.y` → `0.x.y`), so the
 committed `package.json` / `pluginVersion` can lag. A token 401 mid-run
 is recoverable the same way as npm: rotate + `gh run rerun <id>
---failed`, no new tag (the `.vsix` / plugin `.zip` are idempotent per
-version).
+--failed`, no new tag. Every publisher is re-run safe: `vsce` / `ovsx`
+publish with `--skip-duplicate`, the JetBrains job skips a version the
+Marketplace plugin feed already lists, npm skips a version `npm view`
+already serves, PyPI uses `skip-existing`, `publish-crates.sh` skips
+crates already on crates.io, and the Homebrew job no-ops on an unchanged
+formula (pinned by `ci/scripts/test-release-idempotency.sh`).
 
 **JetBrains Marketplace internal-API rejections** are a *separate* class
 of mid-release failure: the Marketplace's validator rejects references
@@ -258,6 +441,10 @@ retained here as the setup record):**
 
 1. Create the **VS Code Marketplace publisher** `asamarts` (Azure
    DevOps) and an **Open VSX** namespace; generate `VSCE_PAT` / `OVSX_PAT`.
+   The Open VSX namespace `asamarts` is verified (ownership claim
+   EclipseFdn/open-vsx.org#10714, approved 2026-05-29), so the extension
+   shows as published by a verified owner. A new namespace starts
+   unverified; claim it the same way.
 2. Create the **JetBrains Marketplace vendor**; generate the marketplace
    token + a plugin signing certificate/key.
 3. Add all of the above as repo **Actions secrets**.
@@ -281,7 +468,8 @@ Helix / Eclipse are docs-only (config snippets): nothing to publish.
 ## Bench-record review (the human gate)
 
 > **Regression detection is the deterministic `perf-gate` CI job**
-> (`ci/scripts/det-perf-gate.sh`, per-PR; design:
+> (`ci/scripts/det-perf-gate.sh` plus the micro subset in
+> `ci/scripts/micro-det-gate.sh`, on every PR and every push to `main`; design:
 > [`docs/design/deterministic-perf-gating.md`](docs/design/deterministic-perf-gating.md)).
 > It compares Valgrind instruction/cache/branch counts PR-vs-merge-base and is
 > **load-immune**, so it catches regressions deterministically where wall-clock
@@ -308,14 +496,31 @@ Helix / Eclipse are docs-only (config snippets): nothing to publish.
 > only the wall-clock bench caught it
 > ([`docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/`](docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/)).
 > So a wall-clock regression the deterministic gate does not confirm is *not*
-> automatically contamination. If the flagged cells are content-read-heavy (S2 / S6 /
-> S12) and the diff touched the read / open / spawn path, disambiguate with a syscall
+> automatically contamination. If the flagged cells are content-read-heavy (S2 /
+> S3) and the diff touched the read / open / spawn path, disambiguate with a syscall
 > count or a same-box quiescent A/B, not the deterministic gate alone.
 
 `bench-record.yml` opens a PR titled `docs(bench): <tag> bench-scale results`
-when its run completes. Review checklist:
+when its run completes. Its body starts with the automated release gates:
 
-1. **Run the wall-clock gate (characterization; quiescence-sensitive).**
+- `bench-gate` against the previous release and the long-horizon anchor
+  (`docs/benchmarks/ANCHOR`), run by the bench job after the macro matrix.
+- The `micro-det (deterministic)` job of the same run: the full criterion
+  suite in Valgrind instruction counts, vs the previous release (+3% per
+  gated bench) and the anchor (+10%). It runs on GitHub-hosted capacity in
+  parallel with the bench host and fails on a gated regression.
+- A same-session criterion A/B (report-only): the previous release's micro
+  suite measured minutes before the new one on the bench host, with each
+  benchmark's change and confidence interval.
+
+Review checklist:
+
+1. **Check the automated gates.** Both must pass: the `bench-gate` block in
+   the PR body shows exit 0, and the run's `micro-det (deterministic)` job is
+   green. A gate that fails because of a deliberate cost (a new feature, a
+   security check) is accepted by bumping `docs/benchmarks/ANCHOR` in a
+   reviewed commit whose `reason` says why, never by ignoring the gate. The
+   macro gate below is characterization and quiescence-sensitive.
    `xtask bench-gate` records absolute throughput. It supersedes the old "skim
    the PR body for any cell with `stddev_ms / mean_ms > 0.10`" eyeball: that flat
    per-cell CV rule was never met by any shipped release (chronic
@@ -329,7 +534,10 @@ when its run completes. Review checklist:
    git show "origin/bench-record/$tag:docs/benchmarks/macro/results/linux-x86_64/$tag/results.json" > /tmp/new.json
    cargo run -q -p xtask -- bench-gate \
      --results /tmp/new.json \
-     --baseline "docs/benchmarks/macro/results/linux-x86_64/$prev/results.json"
+     --baseline "docs/benchmarks/macro/results/linux-x86_64/$prev/results.json" \
+     --anchor "docs/benchmarks/macro/results/linux-x86_64/$(sed -n 's/^version = "\(.*\)"$/\1/p' docs/benchmarks/ANCHOR)/results.json"
+   # The micro gate, reproducible on any machine with valgrind:
+   cargo run -q -p xtask -- micro-det --base "$prev" --head "$tag" --suite full --anchor auto
    ```
 
    - **Quality**: per-cell within-run CV `<= 10%`, applied only
@@ -339,10 +547,23 @@ when its run completes. Review checklist:
      re-run via `workflow_dispatch` (`-f ref=v<x.y.z> -f
      label=v<x.y.z>`) on an idle runner.
    - **Regression**: `min_ms` delta vs the previous release's
-     `results.json` `<= +15%` on cells of size `>= 10k` (`min_ms`
-     is the reproducible cross-version statistic; `1k` excluded).
-     A failure here is a real perf regression: open an
-     investigation (step 4) before merging.
+     `results.json` `<= +15%` on `full`/`fix` cells of size `>= 10k`
+     and every 100k/1m cell. `changed`/1k and `changed`/10k are
+     regression-advisory because their brief parallel burst is dominated
+     by host C-state/frequency behavior (see `docs/benchmarks/METHODOLOGY.md`).
+     A gating failure is a real perf regression: open an investigation
+     (step 4) before merging.
+   - **Anchor**: the same gating cells may not exceed the anchor release's
+     `min_ms` by more than 10% cumulative, so creep that passes every
+     adjacent comparison still fails.
+
+   Every new report carries `args.scenario_revisions`. If both reports
+   declare different revisions for a scenario, `bench-gate` prints a
+   `RESET` line and skips only that scenario's cross-version regression
+   comparison while retaining its within-run quality gate. Confirm that
+   the revision bump corresponds to an intentional resolved-rule or
+   fixture-semantics change. Scenario contracts pin the expected rule
+   count and, for fact-gated workloads, fact truth and active-rule profiles.
 
    Non-zero exit means do not merge. Advisory lines never block.
    The published `HISTORY.md` table still shows `mean +/- stddev`
@@ -351,28 +572,33 @@ when its run completes. Review checklist:
 
 2. **Fingerprint check.** Open `results.json` and verify
    `fingerprint.alint_version` matches the tag, `fingerprint.cpu_model`
-   matches the canonical baseline (Intel Core i7-6700HQ, host `kbench`;
+   matches the canonical baseline (Intel Core i7-6700HQ bench host;
    the retired 3900X series is at `results/linux-x86_64-ryzen-3900x/`), and
    `fingerprint.os` is `linux`. A bench run on the wrong machine voids
    cross-version comparability.
 
-3. **HISTORY.md update.** The PR body includes a `Per-cell numbers`
-   block formatted as `- SX <size> <mode>: <mean> ms ± <stddev>`.
-   Paste the relevant cells into `docs/benchmarks/HISTORY.md`:
-   - The cross-version trajectory table at the top: a new headline row
-     for the released version (S3 columns).
-   - Each per-scenario section's `full` and `changed` table: new row at
-     the top for the released version.
-   The bench-record PR currently does NOT auto-edit HISTORY.md
-   (positional markdown table edits are too fragile to autocomment-into);
-   the maintainer is the canonical paste channel.
+   Verify `args.scenario_revisions` is present. A `RESET` is valid only
+   when the scenario workload intentionally changed and `HISTORY.md`
+   displays the old/new revisions and reset boundary.
 
-4. **Investigation hand-off.** If a cell drifts > 20 % vs the previous
-   release (and the CV is below 10 % so it's a real signal), open
+3. **HISTORY.md review.** The workflow rebases the result branch onto current
+   `main`, runs `xtask/scripts/render-history.py`, and includes the refreshed
+   `docs/benchmarks/HISTORY.md` in the PR. Verify:
+   - The cross-version trajectory table has a new headline row for the
+     released version.
+   - Each per-scenario `full`/`changed` table, plus the SFIX `fix` table, has
+     the released version at the top.
+   - The date and headline sentence extracted from `CHANGELOG.md` are suitable.
+     If the sentence needs work, edit the changelog and re-render the history.
+
+4. **Investigation hand-off.** If a non-advisory cell drifts > 20 % vs the
+   previous release (and the CV is below 10 % so it is a real signal), open
    `docs/benchmarks/investigations/<YYYY-MM-topic>/README.md` capturing
    the diagnostic data (traces, flamegraphs, bisect notes) before
    merging the bench-record PR. The HISTORY.md entry then links to the
-   investigation.
+   investigation. Small `changed` cells remain covered by the standing
+   investigation linked from `METHODOLOGY.md` unless a gated 100k/1m cell
+   corroborates their drift.
 
 5. **Merge.** Once the above are done, merge the PR. The bench numbers
    enter the published corpus.

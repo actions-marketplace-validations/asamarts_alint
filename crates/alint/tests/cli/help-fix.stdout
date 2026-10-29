@@ -15,28 +15,47 @@ Options:
       --dry-run
           Print what would be done without writing anything
 
+      --as-of <YYYY-MM-DD>
+          Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides `ALINT_AS_OF`;
+          without either, time-dependent rules use the current HEAD commit time
+
       --changed
           Restrict the fix pass to files in the working-tree diff (see `alint check --changed`).
           Cross-file + existence rules still see the full tree
+
+      --base <REF>
+          Base ref for `--changed`. Implies `--changed`
 
   -f, --format <FORMAT>
           Output format
           
           [default: human]
 
-      --base <REF>
-          Base ref for `--changed`. Implies `--changed`
-
       --no-gitignore
           Disable .gitignore handling (overrides config)
+
+      --unsafe-fixes
+          Also apply Unsafe-tier fixes, not just Safe ones. Unsafe fixes may be destructive or
+          change behavior, so they are opt-in: without this flag they are surfaced as suggestions
+          instead of applied. `file_remove` (the fix for `file_absent` / `no_empty_files` /
+          `no_submodules` / `no_symlinks`) is Unsafe, so this flag is what applies it
 
       --fail-on-warning
           Treat warnings as errors for exit-code purposes
 
+      --fix-only
+          Report only the fixes that were applied: suppress the residual (skipped / unfixable)
+          findings and exit 0 unless a fix errored. For "apply what you can and move on" workflows
+
+      --diff
+          Show a unified diff of the fixes that would be applied, writing nothing. Reflects the
+          composed result at the chosen tier; the exit code matches a real `fix`. Output is a
+          unified diff regardless of `--format`
+
       --show-notes
           List informational notes in full on stderr.
           
-          Notes are non-violation findings — e.g. entries a rule skipped rather than failed on. By
+          Notes are non-violation findings - e.g. entries a rule skipped rather than failed on. By
           default only a one-line count is shown.
 
       --color <WHEN>
@@ -73,11 +92,21 @@ Options:
           Useful for narrow terminals, screen recordings, and CI logs where long URLs disrupt visual
           alignment. URLs remain in JSON / SARIF / GitHub / markdown output regardless.
 
+      --include-fixes
+          Include the concrete proposed fix edit(s) in `json` output.
+          
+          Adds a `proposed_edit` array (source region + replacement text) to each fixable finding in
+          `--format json`, so a tool can preview/apply the fix without running `alint fix`. Only
+          Safe (auto-applyable) fixes are included -- Unsafe fixes stay suggestions on alint's own
+          `fix`. The `agent` format always carries this; SARIF carries it as `result.fixes[]`. No
+          effect on other formats. Computing the edit re-reads the fixable files during `check`, so
+          it is opt-in here.
+
       --progress <WHEN>
           When to render progress on stderr for slow operations.
           
           Currently just `alint suggest`. `auto` (the default) renders when stderr is a TTY;
-          `always` forces; `never` silences. Progress always lives on stderr — `--format` JSON
+          `always` forces; `never` silences. Progress always lives on stderr - `--format` JSON
           output on stdout stays byte-clean.
           
           [default: auto]
@@ -117,7 +146,7 @@ Options:
           matches no loaded rule is an error, so typos fail loudly rather than silently linting
           nothing. Applies to `check` and `fix` (the `agent` format emits `fix --only <rule-id>`);
           rejected on any other subcommand. Global, so the bare `alint --only <id>` lints the
-          current directory like `alint check --only <id>` — to lint a different path, use the
+          current directory like `alint check --only <id>` - to lint a different path, use the
           explicit form `alint check --only <id> <path>`.
 
   -h, --help

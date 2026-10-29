@@ -21,47 +21,83 @@ use alint_core::{Level, Report};
 pub fn write_github(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
     for rr in &report.results {
         let keyword = match rr.level {
-            Level::Error => "error",
-            Level::Warning => "warning",
-            Level::Info => "notice",
-            Level::Off => continue,
+            Level::Error => Some("error"),
+            Level::Warning => Some("warning"),
+            Level::Info => Some("notice"),
+            Level::Off => None,
         };
-        for v in &rr.violations {
-            let mut props: Vec<String> = vec![format!("title={}", escape_prop(&rr.rule_id))];
-            if let Some(path) = &v.path {
-                props.push(format!("file={}", escape_prop(&path.display().to_string())));
+        if let Some(keyword) = keyword {
+            for v in &rr.violations {
+                let mut props: Vec<String> = vec![format!("title={}", escape_prop(&rr.rule_id))];
+                if let Some(path) = v.report_path() {
+                    props.push(format!("file={}", escape_prop(&crate::slash_path(path))));
+                }
+                if let Some(line) = v.line {
+                    props.push(format!("line={line}"));
+                }
+                if let Some(col) = v.column {
+                    props.push(format!("col={col}"));
+                }
+                let body = escape_body(&v.message);
+                writeln!(w, "::{keyword} {}::{body}", props.join(","))?;
             }
-            if let Some(line) = v.line {
+        }
+        for failure in &rr.analysis_failures {
+            let mut props = vec![format!(
+                "title={}",
+                escape_prop(&format!("{} analysis failure", rr.rule_id))
+            )];
+            if let Some(path) = failure.report_path() {
+                props.push(format!("file={}", escape_prop(&crate::slash_path(path))));
+            }
+            if let Some(line) = failure.line {
                 props.push(format!("line={line}"));
             }
-            if let Some(col) = v.column {
+            if let Some(col) = failure.column {
                 props.push(format!("col={col}"));
             }
-            let body = escape_body(&v.message);
-            writeln!(w, "::{keyword} {}::{body}", props.join(","))?;
+            let body = escape_body(&format!("{}: {}", failure.kind.as_str(), failure.message));
+            writeln!(w, "::error {}::{body}", props.join(","))?;
         }
+    }
+    let note_count = report.total_notes();
+    if note_count > 0 {
+        writeln!(
+            w,
+            "::notice title=alint notes::{}",
+            escape_body(&crate::note_summary(note_count))
+        )?;
     }
     Ok(())
 }
 
 fn escape_prop(s: &str) -> String {
-    s.replace('%', "%25")
+    // GitHub's `%`/`\r`/`\n`/`:`/`,` escaping FIRST, then neutralize any remaining
+    // terminal control bytes (ESC/BEL/...) from an attacker-named path or message so
+    // they can't fire when a developer previews `--format github` in a terminal
+    // (audit R2 MED-1). `\r`/`\n` are already `%`-escaped above, so `sanitize_terminal`
+    // only touches the other control bytes.
+    let escaped = s
+        .replace('%', "%25")
         .replace('\r', "%0D")
         .replace('\n', "%0A")
         .replace(':', "%3A")
-        .replace(',', "%2C")
+        .replace(',', "%2C");
+    crate::sanitize::sanitize_terminal(&escaped).into_owned()
 }
 
 fn escape_body(s: &str) -> String {
-    s.replace('%', "%25")
+    let escaped = s
+        .replace('%', "%25")
         .replace('\r', "%0D")
-        .replace('\n', "%0A")
+        .replace('\n', "%0A");
+    crate::sanitize::sanitize_terminal(&escaped).into_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{Report, RuleResult, Violation};
+    use alint_core::{FindingDisposition, Report, RuleResult, Violation};
     use std::path::Path;
 
     fn render(report: &Report) -> String {
@@ -81,6 +117,7 @@ mod tests {
                     violations: vec![Violation::new("boom")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-warn".into(),
@@ -89,6 +126,7 @@ mod tests {
                     violations: vec![Violation::new("careful")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-info".into(),
@@ -97,6 +135,7 @@ mod tests {
                     violations: vec![Violation::new("fyi")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };
@@ -116,6 +155,7 @@ mod tests {
                 violations: vec![Violation::new("should not appear")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         assert_eq!(render(&report), "");
@@ -133,11 +173,21 @@ mod tests {
                     message: "bad".into(),
                     line: Some(12),
                     column: Some(4),
-                    is_note: false,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    fix_key: None,
+                    sensitive: false,
+                    is_fixable: false,
+                    not_fixable: false,
+                    proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -157,6 +207,7 @@ mod tests {
                 violations: vec![Violation::new("m")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -173,6 +224,7 @@ mod tests {
                 violations: vec![Violation::new("a: b\nc")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);

@@ -13,7 +13,7 @@
 //! Unix-only for the same `file://` reason as the shared harness.
 #![cfg(unix)]
 
-mod lsp_common;
+use crate::lsp_common;
 
 use serde_json::json;
 
@@ -86,8 +86,7 @@ fn lsp_diagnostic_shape_pins_code_and_severity() {
         );
     }
 
-    server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
-    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
+    server.shutdown();
 }
 
 /// (2) Root resolution via `workspace_folders` (no `rootUri`). The
@@ -127,8 +126,7 @@ fn lsp_workspace_folders_root_resolves_config() {
         "workspaceFolders root should discover .alint.yml and fire, got none"
     );
 
-    server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
-    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
+    server.shutdown();
 }
 
 /// (3) Apply-fix correctness: take the quick-fix `WorkspaceEdit`'s own
@@ -221,8 +219,7 @@ fn lsp_apply_fix_resolves_violation() {
         "applying the fix's own newText should clear the violation, got {after:?}"
     );
 
-    server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
-    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
+    server.shutdown();
 }
 
 /// (4) Root discovery from a subfolder: a client that opens a *subdir*
@@ -266,8 +263,7 @@ fn lsp_discovers_config_in_ancestor_when_rooted_at_subdir() {
         "rooting at a subdir should still discover the ancestor .alint.yml and fire, got none"
     );
 
-    server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
-    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
+    server.shutdown();
 }
 
 /// (5) `didChangeWatchedFiles` reloads the config: a diagnostic present
@@ -324,6 +320,5 @@ fn lsp_reloads_config_on_did_change_watched_files() {
         "config reload should clear a.txt's diagnostics (rule rescoped away), got {after:?}"
     );
 
-    server.send(&json!({ "jsonrpc": "2.0", "id": 9, "method": "shutdown", "params": null }));
-    server.send(&json!({ "jsonrpc": "2.0", "method": "exit", "params": null }));
+    server.shutdown();
 }

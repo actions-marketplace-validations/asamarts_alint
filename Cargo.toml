@@ -16,29 +16,33 @@ members = [
 default-members = ["crates/alint"]
 
 [workspace.package]
-version = "0.15.2"
+version = "0.20.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/asamarts/alint"
 authors = ["alint contributors"]
 
 [workspace.dependencies]
-alint-core = { path = "crates/alint-core", version = "0.15.0" }
-alint-dsl = { path = "crates/alint-dsl", version = "0.15.0" }
-alint-rules = { path = "crates/alint-rules", version = "0.15.0" }
-alint-output = { path = "crates/alint-output", version = "0.15.0" }
-alint-lsp = { path = "crates/alint-lsp", version = "0.15.0" }
-alint-bench = { path = "crates/alint-bench", version = "0.15.0" }
-alint-testkit = { path = "crates/alint-testkit", version = "0.15.0" }
+alint-core = { path = "crates/alint-core", version = "0.20.0" }
+alint-dsl = { path = "crates/alint-dsl", version = "0.20.0" }
+alint-rules = { path = "crates/alint-rules", version = "0.20.0" }
+alint-output = { path = "crates/alint-output", version = "0.20.0" }
+alint-lsp = { path = "crates/alint-lsp", version = "0.20.0" }
+alint-bench = { path = "crates/alint-bench", version = "0.20.0" }
+alint-testkit = { path = "crates/alint-testkit", version = "0.20.0" }
 
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml_ng = "0.10"
+yaml_serde = "0.10.7"
 globset = "0.4"
 ignore = "0.4"
 regex = "1"
+# Pattern parsing for the load-time anchor hints on content patterns
+# (alint-core `pattern_hints`). Already in the tree via `regex`, so this
+# promotes an existing transitive crate to a direct dep, adding none.
+regex-syntax = "0.8"
 rayon = "1"
 parking_lot = "0.12"
 clap = { version = "4", features = ["derive", "cargo", "env", "wrap_help"] }
@@ -46,8 +50,17 @@ miette = { version = "7", features = ["fancy"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 content_inspector = "0.2"
+# CommonMark parser for `markdown_links_resolve`. Disable the CLI/HTML default
+# features: the rule only needs the event stream, source spans, and reference
+# definition table.
+pulldown-cmark = { version = "0.13.5", default-features = false }
+# Unicode category filtering for GitHub-compatible Markdown heading slugs.
+unicode-general-category = "1.1"
+# Offline SPDX License List identifiers and strict expression parser for
+# `spdx_identifier_valid`; no optional detection/regex features and no network.
+spdx = { version = "0.13.6", default-features = false }
 anyhow = "1"
-jsonschema = { version = "0.50", default-features = false }
+jsonschema = { version = "0.58", default-features = false }
 schemars = "1"
 criterion = "0.8"
 rand = "0.10"
@@ -67,7 +80,47 @@ indicatif = "0.18"
 portable-pty = "0.9"
 serde_json_path = "0.7"
 toml = "1.1"
+# Round-trip TOML CST for the Phase-2 structured `set_value`/`remove_value`
+# fixers (alint-core `structured_fix`). Same license as `toml` (MIT OR
+# Apache-2.0) and already in the tree -- the `toml` crate is built on it -- so
+# this promotes an existing transitive crate to a direct dep, adding none.
+toml_edit = "0.25"
+# SIMD byte search for the per-file content scanners (the lead-byte prefilter in
+# `no_zero_width_chars` / `no_bidi_controls`, line splitting in
+# `max_consecutive_blank_lines`). Already in the tree via `regex`, so this
+# promotes an existing transitive crate to a direct dep, adding none.
+memchr = "2"
+# Lossless literal `.env` parsing, diagnostics, spans, and native verified edits
+# for `Format::Dotenv` (alint-core `dotenv`, `structured_fix`). Extracted from
+# alint into asamarts/adotenv; no runtime dependencies of its own.
+adotenv = "0.10.4"
+# Span-capable JSONC AST for the Phase-2 structured `set_value`/`remove_value`
+# fixers (alint-core `structured_fix`): `parse_to_ast` yields node byte ranges, so
+# JSON edits are span-splices (disjoint, one-pass) and JSONC comments / trailing
+# commas survive. The check side parses JSON via serde_json (+ `strip_jsonc`); this
+# is the fix side's spanned view.
+jsonc-parser = { version = "0.34.0", features = ["cst"] }
+# Span-capable YAML AST for the Phase-2 structured `set_value` fixer (alint-core
+# `structured_fix::yaml_`): `saphyr::MarkedYaml` is a spanned node tree, so a YAML
+# scalar edit is a span-splice (like JSON). The check side parses YAML via
+# `yaml_serde`/libyaml-rs, which exposes no spans, so this is the fix side's
+# spanned view. MIT OR Apache-2.0 (same as the workspace). PINNED because the
+# pre-1.0 `Marker.index` remains a CHAR offset (despite byte-oriented rustdoc);
+# `yaml_` converts it to bytes and the multibyte resolver test guards that contract.
+# `default-features = false` drops `encoding` (`load_from_read` only; we load `&str`).
+saphyr = { version = "=0.2.2", default-features = false }
+# Duplicate-aware YAML entry extraction needs the parser event stream before
+# `saphyr::MarkedYaml` rejects duplicate mapping keys. Keep this exact version
+# aligned with `saphyr`: mismatched pre-1.0 releases otherwise compile two parser
+# versions into the binary and make direct-event behavior differ from the loader.
+saphyr-parser = { version = "=0.2.2", default-features = false }
 roxmltree = "0.20"
+# NOTE: pinned; see structured_fix::json_ for the AST-range API used.
+java-properties = "2"
+encoding_rs = "0.8"
+hcl = { package = "hcl-rs", version = "0.18" }
+# Line-level unified diffs for `alint fix --diff`.
+similar = "3"
 
 # LSP server, slated for v0.11. Crate-choice rationale (`tower-lsp`
 # over `lsp-server`) is in `docs/design/v0.11/lsp_server.md`.
@@ -81,6 +134,9 @@ roxmltree = "0.20"
 # the design docs were relocated to `docs/design/v0.11/` (the
 # move itself shipped in v0.9.22).
 tower-lsp = "0.20"
+# The `Service` trait, to wrap the tower-lsp service so `exit` stops the
+# server promptly (already in the tree via tower-lsp).
+tower-service = "0.3"
 # Async runtime for the LSP server (tower-lsp is async). Only
 # `crates/alint-lsp` pulls it in; the CLI enters the runtime via the
 # `lsp` subcommand.

@@ -1,6 +1,6 @@
 # Many-to-many rule categories
 
-Status: proposed (2026-07-07). CLI decision recorded in ADR-0009; this doc is the
+Status: shipped in v0.14.0 (proposed 2026-07-07). CLI decision recorded in ADR-0009 (accepted); this doc is the
 full feature design. Authoring/gating pattern follows `spec-driven-development.md`;
 the contract shape follows `facts-json.md`.
 
@@ -25,7 +25,7 @@ fact.
 
 - `xtask/src/facts.rs` `families()` = the non-meta `## ` headings; the `families`
   list and count in `facts.json` come from there.
-- `xtask/src/docs_export.rs` slices `rules.md` H2 -> H3 into
+- `xtask/src/docs_export/rule_pages.rs` slices `rules.md` H2 -> H3 into
   `rules/<family>/<kind>.md` pages plus a per-family index, and returns a singular
   `kind -> family-slug` map.
 - `xtask/src/gen_model.rs` walks the same H2 -> H3 to build `rule-families.gen.c4`.
@@ -106,9 +106,9 @@ consumer: its `rule-families.gen.c4` taxonomy stays primary-only (see gen-model 
 
 ### The `Category` vocabulary (alint-core)
 
-The 13 current families become enum variants. Title and slug match what the engine's
-`slugify()` (`xtask/src/docs_export.rs`) already generates for family directory names,
-and hence the site URLs, so nothing changes:
+The 13 current families become enum variants. Title and slug match what the exporter's
+`slugify()` (`xtask/src/docs_export/rule_pages.rs`) already generates for family directory
+names, and hence the site URLs, so nothing changes:
 
 | Variant | title() | slug() |
 |---|---|---|
@@ -231,8 +231,8 @@ The `categories` list makes the contract self-contained: it carries each categor
 slug, title, and display order, so a standalone consumer can map a `rule_categories`
 slug back to its title and order without re-slugifying, and it is the source the site's
 `FAMILY_ORDER` (order plus labels) is validated against. The legacy `families` titles
-list stays for back-compat; `counts.families` stays 13 and `counts.rule_kinds` is
-unchanged (see Counting semantics).
+list stays for back-compat; `counts.families` stays 13, while canonical kinds and
+aliases have separate counts (see Counting semantics).
 
 ### Rule-page frontmatter and cross-listing
 
@@ -277,15 +277,14 @@ alias is present to harvest.
 
 ## Counting semantics
 
-Many-to-many changes only per-category membership, not the headline counts. One
-pre-existing subtlety must be surfaced so the catalog is not mistaken for a drift:
+Many-to-many changes only per-category membership, not the underlying rule surface.
+A later count-contract correction makes the pre-existing alias distinction explicit:
 
-- `counts.rule_kinds` = 89, unchanged. That figure counts distinct `kind:` spellings in
-  `all_kinds.yaml`, which INCLUDE the 11 alias spellings, so the canonical kinds number
-  about 78.
-- The catalog (`alint rules list` and the family Overview pages) lists the ~78 CANONICAL
+- `counts.rule_kinds` = 95 canonical kinds; `counts.rule_aliases` = 11. The
+  `rule_kinds` list retains all 106 accepted spellings for backward compatibility.
+- The catalog (`alint rules list` and the family Overview pages) lists the 95 CANONICAL
   kinds, each annotating its aliases, so its row count is intentionally lower than the
-  89 headline. The gap is exactly the 11 aliases, not missing rules.
+  accepted-name list. The gap is exactly the 11 aliases, not missing rules.
 - `counts.families` = number of categories = 13, unchanged.
 - The sum of per-category kind counts now exceeds the canonical count (that is the
   point) and is not a headline number.
@@ -355,8 +354,8 @@ Site:
 Following the project's one-commit-per-phase convention with a forward pointer.
 
 - **Phase 0.** This design doc, ADR-0009, and the curated assignment table
-  (`docs/design/rule-categories-assignments.md`): 78 canonical kinds, 32 multi-category,
-  46 single, with the editorial calls settled.
+  (`docs/design/rule-categories-assignments.md`): 95 canonical kinds, 33 multi-category,
+  62 single, with the editorial calls settled.
 - **Phase 1.** `Category` enum (with the order-parity gate); add the shared rules.md
   parse helper and adopt it in the generators; add single-membership `**Categories:**`
   lines (each kind's current family only); `gen-categories` plus the in-crate bridge;

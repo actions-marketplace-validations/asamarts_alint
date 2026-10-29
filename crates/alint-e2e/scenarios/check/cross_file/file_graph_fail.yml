@@ -1,3 +1,4 @@
+test_version: 1
 name: file_graph fires on a forbidden domain->infra dependency edge
 tags: [check, file_graph, cross_file]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: domain-not-depend-on-infra, level: error, path: src/domain/order.ts}

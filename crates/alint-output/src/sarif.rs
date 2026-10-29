@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
-use alint_core::{Level, Report, Violation};
+use alint_core::{Level, NoteKind, Report, Violation};
 use serde::Serialize;
 
 use crate::{BaselineMarks, ResultMarks};
@@ -19,6 +19,12 @@ use crate::{BaselineMarks, ResultMarks};
 /// `partialFingerprints` key carrying alint's baseline fingerprint, so GitHub
 /// Code Scanning's alert correlation aligns with the baseline.
 const FINGERPRINT_KEY: &str = "alint/v1";
+
+/// The artifact a path-less finding (a missing file, a tree-level rule) is
+/// anchored on when the caller doesn't supply the config's own path. GitHub
+/// Code Scanning drops a result that has no location at all, so every result
+/// carries one -- the config that declared the rule, matching the LSP.
+pub const DEFAULT_CONFIG_URI: &str = ".alint.yml";
 
 pub fn write_sarif(report: &Report, w: &mut dyn Write) -> std::io::Result<()> {
     write_sarif_with_baseline(report, None, w)
@@ -36,7 +42,7 @@ pub fn write_sarif_with_baseline(
     baseline: Option<&BaselineMarks>,
     w: &mut dyn Write,
 ) -> std::io::Result<()> {
-    emit_sarif(&build_sarif(report, baseline, None), w)
+    emit_sarif(&build_sarif(report, baseline, None, DEFAULT_CONFIG_URI), w)
 }
 
 /// SARIF with pre-computed canonical fingerprints but no baseline in effect.
@@ -54,7 +60,31 @@ pub fn write_sarif_with_fingerprints(
     fingerprints: Option<&[Vec<String>]>,
     w: &mut dyn Write,
 ) -> std::io::Result<()> {
-    emit_sarif(&build_sarif(report, None, fingerprints), w)
+    emit_sarif(
+        &build_sarif(report, None, fingerprints, DEFAULT_CONFIG_URI),
+        w,
+    )
+}
+
+/// The full-control SARIF writer the CLI uses: optional baseline marks (as
+/// [`write_sarif_with_baseline`]), optional no-baseline fingerprints (as
+/// [`write_sarif_with_fingerprints`]; ignored when `baseline` is set), and
+/// `config_path` -- the repo-relative path of the config file, on which
+/// path-less findings are anchored (see [`DEFAULT_CONFIG_URI`]).
+pub fn write_sarif_for_config(
+    report: &Report,
+    baseline: Option<&BaselineMarks>,
+    fingerprints: Option<&[Vec<String>]>,
+    config_path: &std::path::Path,
+    w: &mut dyn Write,
+) -> std::io::Result<()> {
+    let config_uri = path_to_uri(config_path);
+    let fingerprints = if baseline.is_some() {
+        None
+    } else {
+        fingerprints
+    };
+    emit_sarif(&build_sarif(report, baseline, fingerprints, &config_uri), w)
 }
 
 /// Serialize a built [`Sarif`] as pretty JSON with a trailing newline.
@@ -64,13 +94,18 @@ fn emit_sarif(sarif: &Sarif, w: &mut dyn Write) -> std::io::Result<()> {
     Ok(())
 }
 
+// One pass keeps rule registration, result ordering, and fingerprint indexes aligned.
+#[allow(clippy::too_many_lines)]
 fn build_sarif(
     report: &Report,
     baseline: Option<&BaselineMarks>,
     fingerprints: Option<&[Vec<String>]>,
+    config_uri: &str,
 ) -> Sarif {
     let mut rules = Vec::with_capacity(report.results.len());
     let mut results = Vec::new();
+    let mut notifications = Vec::new();
+    let mut execution_successful = true;
 
     for (idx, rr) in report.results.iter().enumerate() {
         rules.push(SarifRule {
@@ -85,7 +120,7 @@ fn build_sarif(
 
         // Live (new) findings — drive the exit code; tagged `new` under a baseline.
         for (vi, v) in rr.violations.iter().enumerate() {
-            let mut res = base_result(rr.rule_id.as_ref(), rr.level, v);
+            let mut res = base_result(rr.rule_id.as_ref(), rr.level, v, config_uri);
             // `partialFingerprints` carries the canonical `violation_fingerprint`
             // so GitHub Code Scanning correlates alerts across runs. The value is
             // the baseline marks' fingerprint when a baseline is in effect, else
@@ -107,11 +142,55 @@ fn build_sarif(
             results.push(res);
         }
 
+        for note in &rr.notes {
+            match note.note_kind().unwrap_or(NoteKind::Informational) {
+                NoteKind::Informational => {
+                    let mut result = base_result(rr.rule_id.as_ref(), rr.level, note, config_uri);
+                    result.level = "note";
+                    result.fixes.clear();
+                    results.push(result);
+                }
+                NoteKind::AnalysisTruncated => {
+                    notifications.push(SarifNotification {
+                        level: "note",
+                        message: SarifText {
+                            text: note.message.to_string(),
+                        },
+                        locations: finding_locations(note, config_uri),
+                    });
+                }
+            }
+        }
+        for failure in &rr.analysis_failures {
+            execution_successful = false;
+            results.push(SarifResult {
+                rule_id: rr.rule_id.to_string(),
+                level: "error",
+                kind: Some("fail"),
+                message: SarifText {
+                    text: format!(
+                        "analysis failure ({}): {}",
+                        failure.kind.as_str(),
+                        failure.message
+                    ),
+                },
+                locations: analysis_failure_locations(failure, config_uri),
+                related_locations: Vec::new(),
+                suppressions: Vec::new(),
+                baseline_state: None,
+                partial_fingerprints: None,
+                fixes: Vec::new(),
+                properties: Some(SarifResultProperties {
+                    analysis_failure: failure.kind.as_str(),
+                }),
+            });
+        }
+
         // Baselined findings — marked, not removed, so Code Scanning dismisses
         // (rather than closes-then-reopens) the alert.
         if let Some(m) = marks {
             for sf in &m.suppressed {
-                let mut res = base_result(rr.rule_id.as_ref(), rr.level, &sf.violation);
+                let mut res = base_result(rr.rule_id.as_ref(), rr.level, &sf.violation, config_uri);
                 res.suppressions = vec![SarifSuppression { kind: "external" }];
                 res.baseline_state = Some("unchanged");
                 res.partial_fingerprints = Some(fingerprint_map(&sf.fingerprint));
@@ -132,6 +211,15 @@ fn build_sarif(
                     rules,
                 },
             },
+            // alint's columns (and fix regions) count Unicode scalar values,
+            // not UTF-16 code units (the SARIF default when absent).
+            column_kind: "unicodeCodePoints",
+            invocations: (!execution_successful || !notifications.is_empty()).then(|| {
+                vec![SarifInvocation {
+                    execution_successful,
+                    tool_execution_notifications: notifications,
+                }]
+            }),
             results,
         }],
     }
@@ -151,78 +239,271 @@ fn level_to_sarif(l: Level) -> &'static str {
 /// Scanning's repo-file mapping) and percent-encoding of every byte that
 /// isn't URI-path-safe (space, `#`, `%`, controls, non-ASCII), so a path
 /// like `src/a b#c.rs` neither mis-parses nor fails a format-asserting
-/// SARIF validator.
+/// SARIF validator. `:` is encoded too: in a relative reference a colon in
+/// the first segment (`a:b.txt`) would otherwise parse as a URI scheme.
+/// A backslash is a separator only on Windows; on Unix it is a filename byte
+/// and must encode as `%5C` rather than aliasing a distinct slash path.
+#[cfg(unix)]
+fn path_to_uri(path: &std::path::Path) -> String {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let bytes = path.as_os_str().as_bytes();
+    let mut out = String::with_capacity(bytes.len());
+    for &byte in bytes {
+        if is_uri_path_byte(byte) {
+            out.push(char::from(byte));
+        } else {
+            push_percent_encoded_byte(&mut out, byte);
+        }
+    }
+    out
+}
+
+#[cfg(not(unix))]
 fn path_to_uri(path: &std::path::Path) -> String {
     let s = path.to_string_lossy();
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
-        match ch {
-            '\\' | '/' => out.push('/'),
-            'A'..='Z'
-            | 'a'..='z'
-            | '0'..='9'
-            | '-'
-            | '.'
-            | '_'
-            | '~'
-            | '!'
-            | '$'
-            | '&'
-            | '\''
-            | '('
-            | ')'
-            | '*'
-            | '+'
-            | ','
-            | ';'
-            | '='
-            | ':'
-            | '@' => out.push(ch),
-            other => {
-                use std::fmt::Write as _;
-                let mut buf = [0u8; 4];
-                for b in other.encode_utf8(&mut buf).bytes() {
-                    let _ = write!(out, "%{b:02X}");
-                }
+        if ch == '\\' && std::path::MAIN_SEPARATOR == '\\' {
+            out.push('/');
+        } else if ch.is_ascii() && is_uri_path_byte(ch as u8) {
+            out.push(ch);
+        } else {
+            let mut buf = [0u8; 4];
+            for byte in ch.encode_utf8(&mut buf).bytes() {
+                push_percent_encoded_byte(&mut out, byte);
             }
         }
     }
     out
 }
 
+#[cfg(unix)]
+fn path_has_lossless_uri(_path: &std::path::Path) -> bool {
+    true
+}
+
+#[cfg(not(unix))]
+fn path_has_lossless_uri(path: &std::path::Path) -> bool {
+    path.to_str().is_some()
+}
+
+fn is_uri_path_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'/'
+            | b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'.'
+            | b'_'
+            | b'~'
+            | b'!'
+            | b'$'
+            | b'&'
+            | b'\''
+            | b'('
+            | b')'
+            | b'*'
+            | b'+'
+            | b','
+            | b';'
+            | b'='
+            | b'@'
+    )
+}
+
+fn push_percent_encoded_byte(out: &mut String, byte: u8) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    out.push('%');
+    out.push(char::from(HEX[usize::from(byte >> 4)]));
+    out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+}
+
 /// A SARIF result with the shared fields filled in (no baseline annotations).
-fn base_result(rule_id: &str, level: Level, v: &Violation) -> SarifResult {
-    let region = if v.line.is_some() || v.column.is_some() {
-        Some(SarifRegion {
-            start_line: v.line,
-            start_column: v.column,
-        })
-    } else {
-        None
-    };
-    let locations = if let Some(path) = &v.path {
-        vec![SarifLocation {
-            physical_location: SarifPhysicalLocation {
-                artifact_location: SarifArtifactLocation {
-                    uri: path_to_uri(path),
-                },
-                region,
-            },
-        }]
-    } else {
-        Vec::new()
-    };
+fn base_result(rule_id: &str, level: Level, v: &Violation, config_uri: &str) -> SarifResult {
     SarifResult {
         rule_id: rule_id.to_string(),
         level: level_to_sarif(level),
+        kind: None,
         message: SarifText {
             text: v.message.to_string(),
         },
-        locations,
+        locations: finding_locations(v, config_uri),
+        related_locations: finding_related_locations(v, config_uri),
         suppressions: Vec::new(),
         baseline_state: None,
         partial_fingerprints: None,
+        fixes: build_fixes(rule_id, v),
+        properties: None,
     }
+}
+
+fn finding_locations(v: &Violation, config_uri: &str) -> Vec<SarifLocation> {
+    let region = (!v.path_is_sensitive())
+        .then(|| {
+            v.range.as_ref().map(source_range_to_sarif).or_else(|| {
+                (v.line.is_some() || v.column.is_some()).then_some(SarifRegion {
+                    start_line: v.line,
+                    start_column: v.column,
+                    end_line: None,
+                    end_column: None,
+                })
+            })
+        })
+        .flatten();
+    let (uri, region) = if let Some(path) = v.report_path() {
+        (path_to_uri(path), region)
+    } else {
+        // GitHub Code Scanning drops a location-less result/notification.
+        (
+            config_uri.to_string(),
+            region.or_else(|| {
+                Some(SarifRegion {
+                    start_line: Some(v.line.unwrap_or(1)),
+                    start_column: v.column,
+                    end_line: None,
+                    end_column: None,
+                })
+            }),
+        )
+    };
+    vec![SarifLocation {
+        physical_location: SarifPhysicalLocation {
+            artifact_location: SarifArtifactLocation { uri },
+            region,
+        },
+    }]
+}
+
+fn finding_related_locations(v: &Violation, config_uri: &str) -> Vec<SarifRelatedLocation> {
+    if v.path_is_sensitive() {
+        return Vec::new();
+    }
+    let mut locations = Vec::with_capacity(
+        v.related_locations.len() + usize::from(v.related_locations_omitted > 0),
+    );
+    locations.extend(
+        v.related_locations
+            .iter()
+            .map(|related| SarifRelatedLocation {
+                physical_location: SarifPhysicalLocation {
+                    artifact_location: SarifArtifactLocation {
+                        uri: path_to_uri(&related.path),
+                    },
+                    region: related.range.as_ref().map(source_range_to_sarif),
+                },
+                message: SarifText {
+                    text: related.label.clone(),
+                },
+            }),
+    );
+    if v.related_locations_omitted > 0 {
+        locations.push(SarifRelatedLocation {
+            physical_location: SarifPhysicalLocation {
+                artifact_location: SarifArtifactLocation {
+                    uri: config_uri.to_string(),
+                },
+                region: None,
+            },
+            message: SarifText {
+                text: format!("and {} more related locations", v.related_locations_omitted),
+            },
+        });
+    }
+    locations
+}
+
+fn source_range_to_sarif(range: &alint_core::SourceRange) -> SarifRegion {
+    SarifRegion {
+        start_line: Some(range.start_line()),
+        start_column: Some(range.start_column()),
+        end_line: Some(range.end_line()),
+        end_column: Some(range.end_column()),
+    }
+}
+fn analysis_failure_locations(
+    failure: &alint_core::AnalysisFailure,
+    config_uri: &str,
+) -> Vec<SarifLocation> {
+    let path = failure.report_path();
+    let pathless = path.is_none();
+    let uri = path.map_or_else(|| config_uri.to_string(), path_to_uri);
+    let region = (!failure.path_is_sensitive())
+        .then(|| {
+            (pathless || failure.line.is_some() || failure.column.is_some()).then_some(
+                SarifRegion {
+                    start_line: failure
+                        .line
+                        .or((pathless || failure.column.is_some()).then_some(1)),
+                    start_column: failure.column,
+                    end_line: None,
+                    end_column: None,
+                },
+            )
+        })
+        .flatten();
+    vec![SarifLocation {
+        physical_location: SarifPhysicalLocation {
+            artifact_location: SarifArtifactLocation { uri },
+            region,
+        },
+    }]
+}
+
+/// Build the SARIF `result.fixes` for a violation from its check-computed
+/// [`proposed_edits`](alint_core::Violation). Empty (the common case, and every
+/// non-fixable finding) yields no `fixes` key.
+///
+/// All of a violation's proposed edits target its own artifact, so they group
+/// as one fix, one `artifactChange` per path, and one `replacement` per edit.
+/// Every edit carries a concrete 1-based line/column `deletedRegion` (an
+/// insertion is an empty region at its point). An empty replacement string is a
+/// pure deletion (no `insertedContent`).
+fn build_fixes(rule_id: &str, v: &Violation) -> Vec<SarifFix> {
+    if v.proposed_edits.is_empty()
+        || v.proposed_edits
+            .iter()
+            .any(|edit| !path_has_lossless_uri(&edit.path))
+    {
+        // A missing fix is safer than a URI that can alias another file. Unix
+        // paths are encoded from raw bytes; other hosts require exact Unicode.
+        return Vec::new();
+    }
+    let mut by_path: BTreeMap<String, Vec<SarifReplacement>> = BTreeMap::new();
+    for pe in &v.proposed_edits {
+        let r = &pe.region;
+        let deleted_region = SarifRegion {
+            start_line: Some(r.start_line),
+            start_column: Some(r.start_column),
+            end_line: Some(r.end_line),
+            end_column: Some(r.end_column),
+        };
+        let inserted_content = (!pe.inserted.is_empty()).then(|| SarifText {
+            text: pe.inserted.clone(),
+        });
+        by_path
+            .entry(path_to_uri(&pe.path))
+            .or_default()
+            .push(SarifReplacement {
+                deleted_region,
+                inserted_content,
+            });
+    }
+    let artifact_changes = by_path
+        .into_iter()
+        .map(|(uri, replacements)| SarifArtifactChange {
+            artifact_location: SarifArtifactLocation { uri },
+            replacements,
+        })
+        .collect();
+    vec![SarifFix {
+        description: SarifText {
+            text: format!("alint: fix `{rule_id}`"),
+        },
+        artifact_changes,
+    }]
 }
 
 fn fingerprint_map(fp: &str) -> BTreeMap<&'static str, String> {
@@ -244,7 +525,26 @@ struct Sarif {
 #[derive(Serialize)]
 struct SarifRun {
     tool: SarifTool,
+    #[serde(rename = "columnKind")]
+    column_kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invocations: Option<Vec<SarifInvocation>>,
     results: Vec<SarifResult>,
+}
+
+#[derive(Serialize)]
+struct SarifInvocation {
+    #[serde(rename = "executionSuccessful")]
+    execution_successful: bool,
+    #[serde(rename = "toolExecutionNotifications")]
+    tool_execution_notifications: Vec<SarifNotification>,
+}
+
+#[derive(Serialize)]
+struct SarifNotification {
+    level: &'static str,
+    message: SarifText,
+    locations: Vec<SarifLocation>,
 }
 
 #[derive(Serialize)]
@@ -280,8 +580,12 @@ struct SarifResult {
     #[serde(rename = "ruleId")]
     rule_id: String,
     level: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    kind: Option<&'static str>,
     message: SarifText,
     locations: Vec<SarifLocation>,
+    #[serde(rename = "relatedLocations", skip_serializing_if = "Vec::is_empty")]
+    related_locations: Vec<SarifRelatedLocation>,
     /// `[{ "kind": "external" }]` for a baselined finding; empty otherwise.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     suppressions: Vec<SarifSuppression>,
@@ -295,6 +599,45 @@ struct SarifResult {
         skip_serializing_if = "Option::is_none"
     )]
     partial_fingerprints: Option<BTreeMap<&'static str, String>>,
+    /// Concrete fixes alint would apply for this finding (rendered from the
+    /// violation's proposed edits). Empty (the common case) omits the key.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    fixes: Vec<SarifFix>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<SarifResultProperties>,
+}
+
+#[derive(Serialize)]
+struct SarifResultProperties {
+    #[serde(rename = "analysisFailure")]
+    analysis_failure: &'static str,
+}
+
+/// A SARIF `fix` — a described set of artifact changes a consumer can apply.
+#[derive(Serialize)]
+struct SarifFix {
+    description: SarifText,
+    #[serde(rename = "artifactChanges")]
+    artifact_changes: Vec<SarifArtifactChange>,
+}
+
+/// A SARIF `artifactChange` — the replacements to make in one artifact.
+#[derive(Serialize)]
+struct SarifArtifactChange {
+    #[serde(rename = "artifactLocation")]
+    artifact_location: SarifArtifactLocation,
+    replacements: Vec<SarifReplacement>,
+}
+
+/// A SARIF `replacement` — delete `deletedRegion`, insert `insertedContent`.
+/// A region-less `deletedRegion` (all fields absent) replaces the whole
+/// artifact; an absent `insertedContent` is a pure deletion.
+#[derive(Serialize)]
+struct SarifReplacement {
+    #[serde(rename = "deletedRegion")]
+    deleted_region: SarifRegion,
+    #[serde(rename = "insertedContent", skip_serializing_if = "Option::is_none")]
+    inserted_content: Option<SarifText>,
 }
 
 /// A SARIF `suppression` — alint emits `kind: "external"` for findings
@@ -308,6 +651,13 @@ struct SarifSuppression {
 struct SarifLocation {
     #[serde(rename = "physicalLocation")]
     physical_location: SarifPhysicalLocation,
+}
+
+#[derive(Serialize)]
+struct SarifRelatedLocation {
+    #[serde(rename = "physicalLocation")]
+    physical_location: SarifPhysicalLocation,
+    message: SarifText,
 }
 
 #[derive(Serialize)]
@@ -329,29 +679,202 @@ struct SarifRegion {
     start_line: Option<usize>,
     #[serde(rename = "startColumn", skip_serializing_if = "Option::is_none")]
     start_column: Option<usize>,
+    #[serde(rename = "endLine", skip_serializing_if = "Option::is_none")]
+    end_line: Option<usize>,
+    #[serde(rename = "endColumn", skip_serializing_if = "Option::is_none")]
+    end_column: Option<usize>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{Report, RuleResult, Violation};
+    use alint_core::{
+        EditRegion, FindingDisposition, ProposedEdit, RelatedLocation, Report, RuleResult,
+        SourceRange, Violation,
+    };
     use serde_json::Value;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn path_to_uri_slashes_and_percent_encodes() {
         // Plain ASCII paths are unchanged (keeps existing snapshots stable).
         assert_eq!(path_to_uri(Path::new("src/lib.rs")), "src/lib.rs");
-        // Windows-style separators become `/` (GitHub Code Scanning mapping).
-        assert_eq!(path_to_uri(Path::new("src\\a\\b.rs")), "src/a/b.rs");
+        // Only the host platform's separator becomes `/`; a Unix filename byte
+        // must remain distinct from a path boundary.
+        let expected_backslash = if cfg!(windows) {
+            "src/a/b.rs"
+        } else {
+            "src%5Ca%5Cb.rs"
+        };
+        assert_eq!(path_to_uri(Path::new("src\\a\\b.rs")), expected_backslash);
         // Space / `#` / `%` are percent-encoded per RFC 3986 uri-reference.
         assert_eq!(path_to_uri(Path::new("a b#c%d.rs")), "a%20b%23c%25d.rs");
+        // A `:` would make `a:b.txt` parse as scheme `a` -- encode it.
+        assert_eq!(path_to_uri(Path::new("a:b.txt")), "a%3Ab.txt");
+        assert_eq!(path_to_uri(Path::new("dir/x:y")), "dir/x%3Ay");
     }
 
     fn render(report: &Report) -> Value {
         let mut buf = Vec::new();
         write_sarif(report, &mut buf).unwrap();
         serde_json::from_slice(&buf).unwrap()
+    }
+
+    #[test]
+    fn a_fixable_finding_renders_result_fixes_with_a_line_column_region() {
+        let mut v = Violation::new("bad value").with_path(Path::new("app.json"));
+        v.is_fixable = true;
+        v.proposed_edits = vec![ProposedEdit {
+            path: PathBuf::from("app.json"),
+            region: EditRegion {
+                start_line: 4,
+                start_column: 12,
+                end_line: 4,
+                end_column: 17,
+            },
+            inserted: "\"v2.0\"".to_string(),
+        }];
+        let report = Report {
+            results: vec![RuleResult {
+                rule_id: "v-pins".into(),
+                level: Level::Error,
+                policy_url: None,
+                violations: vec![v],
+                notes: Vec::new(),
+                is_fixable: true,
+                analysis_failures: Vec::new(),
+            }],
+        };
+        let out = render(&report);
+        let fix = &out["runs"][0]["results"][0]["fixes"][0];
+        assert_eq!(fix["description"]["text"], "alint: fix `v-pins`");
+        let change = &fix["artifactChanges"][0];
+        assert_eq!(change["artifactLocation"]["uri"], "app.json");
+        let repl = &change["replacements"][0];
+        assert_eq!(repl["deletedRegion"]["startLine"], 4);
+        assert_eq!(repl["deletedRegion"]["startColumn"], 12);
+        assert_eq!(repl["deletedRegion"]["endLine"], 4);
+        assert_eq!(repl["deletedRegion"]["endColumn"], 17);
+        assert_eq!(repl["insertedContent"]["text"], "\"v2.0\"");
+    }
+
+    #[test]
+    fn a_finding_without_proposed_edits_omits_the_fixes_key() {
+        // The common case (and every non-fixable finding): no `fixes` key at all,
+        // so existing consumers and snapshots are unchanged.
+        let report = Report {
+            results: vec![RuleResult {
+                rule_id: "has-readme".into(),
+                level: Level::Error,
+                policy_url: None,
+                violations: vec![Violation::new("missing")],
+                notes: Vec::new(),
+                is_fixable: false,
+                analysis_failures: Vec::new(),
+            }],
+        };
+        let out = render(&report);
+        assert!(out["runs"][0]["results"][0]["fixes"].is_null());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fixes_keep_literal_backslash_and_slash_paths_distinct() {
+        let region = EditRegion {
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 1,
+        };
+        let mut violation = Violation::new("two files");
+        violation.proposed_edits = vec![
+            ProposedEdit {
+                path: PathBuf::from(r"src\policy.yml"),
+                region: region.clone(),
+                inserted: "a".to_string(),
+            },
+            ProposedEdit {
+                path: PathBuf::from("src/policy.yml"),
+                region,
+                inserted: "b".to_string(),
+            },
+        ];
+
+        let fixes = build_fixes("r", &violation);
+        let changes = &fixes[0].artifact_changes;
+        assert_eq!(changes.len(), 2);
+        let uris: Vec<_> = changes
+            .iter()
+            .map(|change| change.artifact_location.uri.as_str())
+            .collect();
+        assert_eq!(uris, vec!["src%5Cpolicy.yml", "src/policy.yml"]);
+    }
+    #[test]
+    #[cfg(unix)]
+    fn fixes_keep_distinct_non_utf8_paths_distinct() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        let region = EditRegion {
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 1,
+        };
+        let mut violation = Violation::new("two files");
+        violation.proposed_edits = [0xff, 0xfe]
+            .into_iter()
+            .map(|byte| ProposedEdit {
+                path: PathBuf::from(std::ffi::OsString::from_vec(vec![
+                    b'b', b'a', b'd', byte, b'.', b't', b'x', b't',
+                ])),
+                region: region.clone(),
+                inserted: "x".to_string(),
+            })
+            .collect();
+
+        let fixes = build_fixes("r", &violation);
+        let uris: Vec<_> = fixes[0]
+            .artifact_changes
+            .iter()
+            .map(|change| change.artifact_location.uri.as_str())
+            .collect();
+        assert_eq!(uris, vec!["bad%FE.txt", "bad%FF.txt"]);
+    }
+
+    #[test]
+    fn a_pure_deletion_emits_a_region_without_inserted_content() {
+        // An empty replacement string is a deletion: a valid `deletedRegion`
+        // (always present, SARIF-required) and NO `insertedContent`.
+        let mut v = Violation::new("remove").with_path(Path::new("x.txt"));
+        v.is_fixable = true;
+        v.proposed_edits = vec![ProposedEdit {
+            path: PathBuf::from("x.txt"),
+            region: EditRegion {
+                start_line: 1,
+                start_column: 2,
+                end_line: 1,
+                end_column: 5,
+            },
+            inserted: String::new(),
+        }];
+        let report = Report {
+            results: vec![RuleResult {
+                rule_id: "r".into(),
+                level: Level::Warning,
+                policy_url: None,
+                violations: vec![v],
+                notes: Vec::new(),
+                is_fixable: true,
+                analysis_failures: Vec::new(),
+            }],
+        };
+        let out = render(&report);
+        let repl =
+            &out["runs"][0]["results"][0]["fixes"][0]["artifactChanges"][0]["replacements"][0];
+        assert_eq!(repl["deletedRegion"]["startLine"], 1);
+        assert_eq!(repl["deletedRegion"]["startColumn"], 2);
+        assert_eq!(repl["deletedRegion"]["endColumn"], 5);
+        assert!(repl["insertedContent"].is_null()); // pure deletion
     }
 
     #[test]
@@ -383,6 +906,7 @@ mod tests {
                     violations: vec![Violation::new("va1"), Violation::new("va2")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-b".into(),
@@ -391,6 +915,7 @@ mod tests {
                     violations: vec![Violation::new("vb")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };
@@ -423,6 +948,7 @@ mod tests {
                     violations: vec![Violation::new("x")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "info".into(),
@@ -431,6 +957,7 @@ mod tests {
                     violations: vec![Violation::new("y")],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };
@@ -452,11 +979,21 @@ mod tests {
                     message: "m".into(),
                     line: Some(7),
                     column: Some(3),
-                    is_note: false,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    fix_key: None,
+                    sensitive: false,
+                    is_fixable: false,
+                    not_fixable: false,
+                    proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let v = render(&report);
@@ -467,7 +1004,51 @@ mod tests {
     }
 
     #[test]
-    fn violations_without_path_emit_empty_locations() {
+    fn ranges_related_locations_and_truncation_are_projected() {
+        let mut violation = Violation::new("m")
+            .with_path(Path::new("src/lib.rs"))
+            .with_range(SourceRange::new(2, 3, 4, 5).unwrap())
+            .with_related_location(
+                RelatedLocation::new("src/other.rs", "canonical source")
+                    .with_range(SourceRange::new(7, 8, 9, 10).unwrap()),
+            );
+        violation.related_locations_omitted = 2;
+        let report = Report {
+            results: vec![RuleResult {
+                rule_id: "r".into(),
+                level: Level::Error,
+                policy_url: None,
+                violations: vec![violation],
+                notes: Vec::new(),
+                is_fixable: false,
+                analysis_failures: Vec::new(),
+            }],
+        };
+
+        let rendered = render(&report);
+        let result = &rendered["runs"][0]["results"][0];
+        let primary = &result["locations"][0]["physicalLocation"]["region"];
+        assert_eq!(primary["startLine"], 2);
+        assert_eq!(primary["startColumn"], 3);
+        assert_eq!(primary["endLine"], 4);
+        assert_eq!(primary["endColumn"], 5);
+        let related = result["relatedLocations"].as_array().unwrap();
+        assert_eq!(related.len(), 2);
+        assert_eq!(
+            related[0]["physicalLocation"]["artifactLocation"]["uri"],
+            "src/other.rs"
+        );
+        assert_eq!(related[0]["physicalLocation"]["region"]["startLine"], 7);
+        assert_eq!(related[0]["physicalLocation"]["region"]["endColumn"], 10);
+        assert_eq!(related[0]["message"]["text"], "canonical source");
+        assert_eq!(
+            related[1]["message"]["text"],
+            "and 2 more related locations"
+        );
+    }
+
+    #[test]
+    fn violations_without_path_anchor_on_the_config_file() {
         let report = Report {
             results: vec![RuleResult {
                 rule_id: "r".into(),
@@ -476,11 +1057,88 @@ mod tests {
                 violations: vec![Violation::new("no-path")],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let v = render(&report);
         let locs = v["runs"][0]["results"][0]["locations"].as_array().unwrap();
-        assert!(locs.is_empty());
+        // GitHub Code Scanning drops a result without a location, so a
+        // path-less finding is anchored on the config file.
+        assert_eq!(locs.len(), 1, "{locs:?}");
+        let loc = &locs[0]["physicalLocation"];
+        assert_eq!(loc["artifactLocation"]["uri"], DEFAULT_CONFIG_URI);
+        assert_eq!(loc["region"]["startLine"], 1);
+
+        // The CLI passes the real config path.
+        let mut buf = Vec::new();
+        write_sarif_for_config(
+            &report,
+            None,
+            None,
+            Path::new("cfg/alint config.yml"),
+            &mut buf,
+        )
+        .unwrap();
+        let v: Value = serde_json::from_slice(&buf).unwrap();
+        assert_eq!(
+            v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "cfg/alint%20config.yml"
+        );
+    }
+
+    #[test]
+    fn run_declares_unicode_code_point_columns() {
+        let v = render(&Report { results: vec![] });
+        assert_eq!(v["runs"][0]["columnKind"], "unicodeCodePoints");
+    }
+
+    /// Structural SARIF 2.1.0 checks every emitted document must pass (the
+    /// official schema is too large to vendor): required properties, a
+    /// non-empty `locations` per result with a relative `uri` that has no
+    /// scheme, 1-based positive line/column numbers, and a valid
+    /// `columnKind`.
+    #[test]
+    fn every_result_is_structurally_valid_sarif() {
+        let report = Report {
+            results: vec![RuleResult {
+                rule_id: "r".into(),
+                level: Level::Warning,
+                policy_url: Some("https://example.com/p".into()),
+                violations: vec![
+                    Violation::new("no-path"),
+                    Violation::new("colon")
+                        .with_path(PathBuf::from("a:b.txt"))
+                        .with_location(2, 4),
+                ],
+                notes: Vec::new(),
+                is_fixable: false,
+                analysis_failures: Vec::new(),
+            }],
+        };
+        let v = render(&report);
+        assert_eq!(v["version"], "2.1.0");
+        let run = &v["runs"][0];
+        assert_eq!(run["tool"]["driver"]["name"], "alint");
+        assert!(
+            ["utf16CodeUnits", "unicodeCodePoints"].contains(&run["columnKind"].as_str().unwrap())
+        );
+        for res in run["results"].as_array().unwrap() {
+            assert!(res["message"]["text"].is_string());
+            assert!(res["ruleId"].is_string());
+            let locs = res["locations"].as_array().unwrap();
+            assert!(!locs.is_empty(), "every result has a location: {res}");
+            for loc in locs {
+                let pl = &loc["physicalLocation"];
+                let uri = pl["artifactLocation"]["uri"].as_str().unwrap();
+                let first = uri.split('/').next().unwrap();
+                assert!(!first.contains(':'), "no scheme-like first segment: {uri}");
+                for key in ["startLine", "startColumn", "endLine", "endColumn"] {
+                    if let Some(n) = pl["region"].get(key) {
+                        assert!(n.as_u64().unwrap() >= 1, "{key} is 1-based: {pl}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -494,6 +1152,7 @@ mod tests {
                 violations: vec![Violation::new("new TODO").with_path(Path::new("b.txt"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let marks = BaselineMarks {
@@ -541,6 +1200,7 @@ mod tests {
                 violations: vec![Violation::new("v").with_path(Path::new("f"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let v = render(&report); // write_sarif — no baseline
@@ -566,6 +1226,7 @@ mod tests {
                     violations: vec![Violation::new("a1").with_path(Path::new("a.txt"))],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-b".into(),
@@ -574,6 +1235,7 @@ mod tests {
                     violations: vec![Violation::new("b1").with_path(Path::new("b.txt"))],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-c".into(),
@@ -588,6 +1250,7 @@ mod tests {
                     ],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };
@@ -632,6 +1295,7 @@ mod tests {
                     violations: vec![Violation::new("a1").with_path(Path::new("a.txt"))],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
                 RuleResult {
                     rule_id: "rule-b".into(),
@@ -640,6 +1304,7 @@ mod tests {
                     violations: vec![Violation::new("b1").with_path(Path::new("b.txt"))],
                     notes: Vec::new(),
                     is_fixable: false,
+                    analysis_failures: Vec::new(),
                 },
             ],
         };

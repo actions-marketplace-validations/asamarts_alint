@@ -2,11 +2,13 @@
 # Run with UPDATE_SNAPSHOTS=1 to refresh after intentional flag changes.
 
 === <top-level> ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
+  --include-fixes
   --no-docs
   --no-gitignore
   --only <RULE_ID>
@@ -22,6 +24,7 @@
   -q, --quiet
 
 === check ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --base <REF>
   --baseline <FILE>
@@ -29,6 +32,7 @@
   --color <WHEN>
   --compact
   --fail-on-warning
+  --include-fixes
   --no-docs
   --no-gitignore
   --only <RULE_ID>
@@ -43,12 +47,14 @@
   -q, --quiet
 
 === list ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --category <CATEGORY>
   --color <WHEN>
   --compact
   --fail-on-warning
+  --include-fixes
   --no-docs
   --no-gitignore
   --only <RULE_ID>
@@ -63,18 +69,25 @@
   -q, --quiet
 
 === explain ===
+  --as-of <YYYY-MM-DD>
   --ascii
+  --base <REF>
   --baseline <FILE>
+  --changed
   --color <WHEN>
   --compact
   --fail-on-warning
+  --include-fixes
   --no-docs
   --no-gitignore
   --only <RULE_ID>
+  --preview
+  --preview-limit <N>
   --progress <WHEN>
   --show-baselined
   --show-notes
   --strict-baseline
+  --trace
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -82,14 +95,18 @@
   -q, --quiet
 
 === fix ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --base <REF>
   --baseline <FILE>
   --changed
   --color <WHEN>
   --compact
+  --diff
   --dry-run
   --fail-on-warning
+  --fix-only
+  --include-fixes
   --no-docs
   --no-gitignore
   --only <RULE_ID>
@@ -97,6 +114,7 @@
   --show-baselined
   --show-notes
   --strict-baseline
+  --unsafe-fixes
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>
@@ -104,11 +122,13 @@
   -q, --quiet
 
 === facts ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
+  --include-fixes
   --no-docs
   --no-gitignore
   --only <RULE_ID>
@@ -123,11 +143,13 @@
   -q, --quiet
 
 === init ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
+  --include-fixes
   --monorepo
   --no-docs
   --no-gitignore
@@ -143,6 +165,7 @@
   -q, --quiet
 
 === suggest ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
@@ -151,6 +174,7 @@
   --explain
   --fail-on-warning
   --include-bundled
+  --include-fixes
   --no-docs
   --no-gitignore
   --only <RULE_ID>
@@ -165,11 +189,13 @@
   -q, --quiet
 
 === export-agents-md ===
+  --as-of <YYYY-MM-DD>
   --ascii
   --baseline <FILE>
   --color <WHEN>
   --compact
   --fail-on-warning
+  --include-fixes
   --include-info
   --inline
   --no-docs
@@ -181,6 +207,32 @@
   --show-baselined
   --show-notes
   --strict-baseline
+  --width <COLS>
+  -c, --config <CONFIG>
+  -f, --format <FORMAT>
+  -h, --help
+  -q, --quiet
+
+=== test ===
+  --allow-host-keyring
+  --allow-spawn
+  --as-of <YYYY-MM-DD>
+  --ascii
+  --baseline <FILE>
+  --color <WHEN>
+  --compact
+  --fail-on-warning
+  --filter <TEXT>
+  --include-fixes
+  --no-docs
+  --no-gitignore
+  --only <RULE_ID>
+  --progress <WHEN>
+  --show-baselined
+  --show-notes
+  --strict-baseline
+  --tag <TAG>
+  --update-snapshots
   --width <COLS>
   -c, --config <CONFIG>
   -f, --format <FORMAT>

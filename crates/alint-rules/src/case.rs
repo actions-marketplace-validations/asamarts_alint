@@ -61,7 +61,7 @@ impl CaseConvention {
 
     /// Convert `input` to this convention. Used by `file_rename` to
     /// derive a filename's corrected form. `Lower`/`Upper` case-fold with
-    /// Unicode `to_lowercase`/`to_uppercase` — NOT ASCII-only — so the fixer
+    /// Unicode `to_lowercase`/`to_uppercase` - NOT ASCII-only - so the fixer
     /// matches the Unicode-aware `is_lowercase`/`is_uppercase` check and can
     /// actually converge on a non-ASCII name like `RÉSUMÉ.md` (an ASCII-only
     /// flip left `É` and re-fired every run). The other conventions tokenize on
@@ -97,7 +97,7 @@ impl CaseConvention {
 
 /// Split a case-mixed string into word tokens. Separators (`_`, `-`,
 /// space, `.`) split; case transitions split (`fooBar` → `foo`,`Bar`;
-/// `XMLParser` → `XML`,`Parser`). Tokens retain their original casing —
+/// `XMLParser` → `XML`,`Parser`). Tokens retain their original casing -
 /// conversion functions lowercase/titlecase as needed.
 fn tokenize(s: &str) -> Vec<String> {
     let chars: Vec<char> = s.chars().collect();
@@ -189,11 +189,18 @@ impl<'de> Deserialize<'de> for CaseConvention {
 }
 
 fn is_lowercase(s: &str) -> bool {
-    s.chars().all(|c| !c.is_alphabetic() || c.is_lowercase())
+    // "no UPPERCASE letters" -- not "every letter is affirmatively lowercase".
+    // A caseless-script char (CJK, kana, Hebrew, Arabic, Thai, ...) has no case,
+    // so a filename made of them contains no uppercase and IS lowercase-clean.
+    // The old `c.is_lowercase()` was FALSE for such letters, so a CJK name could
+    // never satisfy `lower` and `fix` left it un-renameable forever (a
+    // check/convert asymmetry: `to_lowercase` is a no-op on it, so it never
+    // converged). Testing `!is_uppercase()` matches the rule's documented intent.
+    s.chars().all(|c| !c.is_uppercase())
 }
 
 fn is_uppercase(s: &str) -> bool {
-    s.chars().all(|c| !c.is_alphabetic() || c.is_uppercase())
+    s.chars().all(|c| !c.is_lowercase())
 }
 
 fn is_flat(s: &str) -> bool {
@@ -346,7 +353,7 @@ mod tests {
             let out = conv.convert(input);
             assert!(
                 conv.check(&out),
-                "{conv:?}.convert({input:?}) = {out:?} does not satisfy check() — non-convergent"
+                "{conv:?}.convert({input:?}) = {out:?} does not satisfy check() - non-convergent"
             );
             // And idempotent: a second pass changes nothing.
             assert_eq!(conv.convert(&out), out, "second convert must be a no-op");
@@ -354,8 +361,54 @@ mod tests {
     }
 
     #[test]
+    fn lower_and_upper_accept_caseless_scripts() {
+        // Round-6 audit (Finding 4): `lower`/`upper` mean "no uppercase / no
+        // lowercase letters". A caseless-script char (CJK, kana, Hebrew, Arabic,
+        // Thai) has NO case, so a name made of them contains no uppercase and IS
+        // lowercase-clean -- it must satisfy BOTH `lower` and `upper`. The old
+        // `c.is_lowercase()` predicate wrongly rejected caseless letters, leaving
+        // such a filename flagged-but-un-renameable forever (convert is a no-op).
+        // Caseless scripts + digit/separator-only names have NO cased letters, so
+        // they satisfy BOTH lower and upper.
+        for s in [
+            "中文",
+            "こんにちは",
+            "עברית",
+            "مرحبا",
+            "ไทย",
+            "123",
+            "1_2-3",
+        ] {
+            assert!(
+                CaseConvention::Lower.check(s),
+                "{s:?} should be lower-clean"
+            );
+            assert!(
+                CaseConvention::Upper.check(s),
+                "{s:?} should be upper-clean"
+            );
+        }
+        // A cased name passes only its own convention.
+        assert!(CaseConvention::Lower.check("lower123"));
+        assert!(
+            !CaseConvention::Upper.check("lower123"),
+            "a lowercase letter fails upper"
+        );
+        assert!(CaseConvention::Upper.check("UPPER123"));
+        assert!(
+            !CaseConvention::Lower.check("UPPER123"),
+            "an uppercase letter fails lower"
+        );
+        // A caseless char mixed with an uppercase letter still fails lower.
+        assert!(
+            !CaseConvention::Lower.check("中A文"),
+            "embedded uppercase fails lower"
+        );
+    }
+
+    #[test]
     fn alias_deserialization() {
-        use serde_yaml_ng::from_str;
+        use yaml_serde::from_str;
         let cases = &[
             ("PascalCase", CaseConvention::Pascal),
             ("pascal", CaseConvention::Pascal),

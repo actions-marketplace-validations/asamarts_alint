@@ -1,3 +1,4 @@
+test_version: 1
 name: if_present=true silences zero-match queries (conditional predicate)
 tags: [check, yaml_path_matches, structured, if_present]
 
@@ -44,5 +45,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: pin-actions-if-present, level: warning, path: .github/workflows/unpinned.yml}

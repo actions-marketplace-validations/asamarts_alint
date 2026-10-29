@@ -1,3 +1,4 @@
+test_version: 1
 name: when clause suppresses a rule when its fact evaluates false
 tags: [check, when, facts]
 
@@ -21,4 +22,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

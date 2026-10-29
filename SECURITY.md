@@ -54,6 +54,11 @@ cosign verify ghcr.io/asamarts/alint:<version> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
+**PyPI wheels** carry PEP 740 attestations, generated at publish time via the same
+keyless Sigstore / GitHub OIDC identity. Each wheel's provenance is shown on its file
+page at pypi.org/project/alint, and because the wheel repackages the exact attested
+release binary, the build provenance above covers its payload too.
+
 Provenance and signatures are attached to every release from the version that
 introduced them onward; a release that predates it has none to verify.
 
@@ -116,7 +121,7 @@ Out of scope (report directly to upstream):
 Published advisories live at
 https://github.com/asamarts/alint/security/advisories.
 
-No advisories published as of the v0.15.2 release.
+No advisories published as of the v0.20.1 release.
 
 ## Threat model
 

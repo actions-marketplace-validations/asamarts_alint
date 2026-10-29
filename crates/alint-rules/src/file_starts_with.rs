@@ -54,8 +54,14 @@ impl Rule for FileStartsWithRule {
             // path (`evaluate_file`) gets the full slice from
             // the engine and bounds-checks via `starts_with`.
             let full = ctx.root.join(&entry.path);
-            let Ok(bytes) = read_prefix_n(&full, self.prefix.len()) else {
-                continue;
+            // Every read error, including a mid-walk removal, fails closed to
+            // match `check`'s file-major dispatch.
+            let bytes = match read_prefix_n(&full, self.prefix.len()) {
+                Ok(b) => b,
+                Err(e) => {
+                    violations.push(crate::io::io_error_violation(&entry.path, &e));
+                    continue;
+                }
             };
             violations.extend(self.evaluate_file(ctx, &entry.path, &bytes)?);
         }
@@ -97,6 +103,28 @@ impl PerFileRule for FileStartsWithRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::Prefix {
+        max_bytes: None,
+        metadata: false,
+    },
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec
         .paths
@@ -112,16 +140,16 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "file_starts_with.prefix must not be empty.\n  \
-             hint: for non-emptiness checks, use `file_min_lines: 1` or \
-             `file_min_size: <bytes>` instead. file_starts_with is for \
-             literal-prefix assertions like `prefix: \"#!/bin/bash\\n\"`.",
+         hint: for non-emptiness checks, use `file_min_lines: 1` or \
+         `file_min_size: <bytes>` instead. file_starts_with is for \
+         literal-prefix assertions like `prefix: \"#!/bin/bash\\n\"`.",
         ));
     }
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "file_starts_with has no fix op — pair with an explicit `file_prepend` rule if you \
-             want auto-prepend (avoids silently duplicating near-matching prefixes).",
+            "file_starts_with has no fix op - pair with an explicit `file_prepend` rule if you \
+         want auto-prepend (avoids silently duplicating near-matching prefixes).",
         ));
     }
     Ok(Box::new(FileStartsWithRule {
@@ -206,5 +234,22 @@ mod tests {
         let (tmp, idx) = tempdir_with_files(&[("script.sh", b"echo hi\n")]);
         let v = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
         assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn binary_files_are_checked_byte_for_byte() {
+        // Deliberate (docs/rules.md): unlike the text rules these do not skip
+        // binary-looking files, so a file signature can be asserted on images.
+        let rule = build(&spec_yaml(
+            "id: t\nkind: file_starts_with\npaths: \"**/*\"\nprefix: \"GIF89a\"\nlevel: error\n",
+        ))
+        .unwrap();
+        let (tmp, idx) = tempdir_with_files(&[
+            ("ok.gif", b"GIF89a\x01\0\x01\0\x80\0\0"),
+            ("bad.bin", b"\0\0binary"),
+        ]);
+        let vs = rule.evaluate(&ctx(tmp.path(), &idx)).unwrap();
+        let flagged: Vec<_> = vs.iter().filter_map(|v| v.path.as_deref()).collect();
+        assert_eq!(flagged, [std::path::Path::new("bad.bin")], "{vs:?}");
     }
 }

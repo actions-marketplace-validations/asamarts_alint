@@ -48,6 +48,7 @@ fn build_report(n_violations: usize) -> Report {
             violations,
             notes: Vec::new(),
             is_fixable: i % 2 == 0,
+            analysis_failures: Vec::new(),
         });
     }
     Report { results }

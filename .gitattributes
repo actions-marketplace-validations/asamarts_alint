@@ -7,6 +7,7 @@
 
 # Snapshot files are byte-stable across platforms by design.
 crates/alint-dsl/tests/snapshots/*.txt text eol=lf
+crates/alint/tests/snapshots/*.txt text eol=lf
 
 # YAML test fixtures (testkit + e2e scenarios) feed YAML parsers
 # that mostly tolerate CRLF, but stay safe and explicit.
@@ -19,11 +20,15 @@ crates/alint/tests/cli/*.stderr text eol=lf
 crates/alint/tests/cli/*.in text eol=lf
 crates/alint/tests/cli/*.toml text eol=lf
 
-# Generated config schema: `gen-schema --check` (and its xtask test) read these
+# Generated schemas: `gen-schema --check` (and its xtask test) read these
 # back and byte-compare against a `\n`-only rendered string, so a CRLF checkout
 # on Windows would spuriously report the schema as stale.
 schemas/v1/config.json text eol=lf
+schemas/v1/policy-test.json text eol=lf
 crates/alint-dsl/schemas/v1/config.json text eol=lf
+schemas/v1/policy-test-report.json text eol=lf
+schemas/experimental/rule-trace.json text eol=lf
+crates/alint/schemas/experimental/rule-trace.json text eol=lf
 
 # Generated contracts + crate dependency graph: `gen-facts --check`,
 # `gen-roadmap --check`, and `gen-arch --check` (and their xtask tests)

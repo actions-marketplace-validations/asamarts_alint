@@ -163,11 +163,52 @@ fn strip_frontmatter(text: &str) -> String {
 /// likec4 1.58 emits the Mermaid v11.3 node-metadata syntax
 /// (`ID@{ shape: rectangle, label: "X" }`). GitHub and other renderers lag the
 /// latest Mermaid, so rewrite each node to the classic `ID["X"]` rectangle,
-/// which renders on Mermaid 8.x+. Every emitted node is a rectangle; any other
-/// shape (none today) would be left in the newer syntax.
+/// which renders on Mermaid 8.x+. `LikeC4` also wraps long quoted labels across
+/// physical lines; join those wraps so generated Markdown has valid labels and
+/// no trailing whitespace. Statement newlines outside quotes remain unchanged.
 fn classic_mermaid(body: &str) -> String {
-    body.replace("@{ shape: rectangle, label: ", "[")
+    collapse_quoted_line_breaks(body)
+        .replace("@{ shape: rectangle, label: ", "[")
         .replace("\" }", "\"]")
+}
+
+fn collapse_quoted_line_breaks(body: &str) -> String {
+    let mut output = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+    let mut quoted = false;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if quoted && matches!(ch, '\r' | '\n') {
+            if ch == '\r' && chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            while output.ends_with([' ', '\t']) {
+                output.pop();
+            }
+            while chars.peek().is_some_and(|ch| matches!(ch, ' ' | '\t')) {
+                chars.next();
+            }
+            if !output.ends_with(' ') {
+                output.push(' ');
+            }
+            escaped = false;
+            continue;
+        }
+
+        output.push(ch);
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                quoted = false;
+            }
+        } else if ch == '"' {
+            quoted = true;
+        }
+    }
+    output
 }
 
 fn render_doc(sections: &[(String, String)]) -> String {
@@ -233,6 +274,29 @@ mod tests {
         assert_eq!(
             classic_mermaid(v11),
             "graph LR\n  Dev[\"Developer\"]\n  Eng[\"CI / build\"]"
+        );
+    }
+
+    #[test]
+    fn classic_mermaid_joins_wrapped_quoted_labels_without_trailing_space() {
+        let wrapped = concat!(
+            "graph LR\n",
+            "  Core -. \"`dispatch the command rule per matched \n",
+            "file`\" .-> Rules\n",
+            "  Core --> Rules\n",
+        );
+        let rendered = classic_mermaid(wrapped);
+        assert_eq!(
+            rendered,
+            concat!(
+                "graph LR\n",
+                "  Core -. \"`dispatch the command rule per matched file`\" .-> Rules\n",
+                "  Core --> Rules\n",
+            )
+        );
+        assert!(
+            rendered.lines().all(|line| !line.ends_with([' ', '\t'])),
+            "{rendered:?}"
         );
     }
 

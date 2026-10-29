@@ -10,13 +10,12 @@ verified Kani confinement proof). The only remainder is WS5 — alint.org render
 *from* the shipped `facts.json` — which lives in the private site repo. Per-phase
 "Progress" notes are inline below; ADR home is docs/adr/.
 
-Phase 1 scope note: the option-bearing rule kinds with flat option structs derive
-their `schemas/v1/config.json` branch from their Rust types (schemars); the deeply
-nested kinds (cross_file, file_graph, registry_paths_resolve, for_each_*,
-dir_contains/dir_only_contains, every_matching_has, generated_file_fresh,
-import_gate, the structured-query family) stay hand-written passthrough by design,
-plus two whose option type can't be faithfully derived (filename_case's custom
-case-alias deserializer, json_schema_passes's runtime-validated format string).
+Phase 1 was completed for every canonical rule kind by v0.19 W1 (2026-10-16).
+`xtask gen-schema` derives each kind's option surface from its Rust option model,
+uses an exact shared schema for optionless kinds, and derives common-field
+restrictions from `KindMeta`; registry/schema and metadata/schema parity are
+generation gates. The committed schema remains the descriptive base for prose,
+discriminators, shared DSL structures, and explicit branch-level constraints.
 Scope: cross-cutting (engine, DSL, schema, docs, CI, alint.org)
 Related: [ARCHITECTURE.md](./ARCHITECTURE.md), [ROADMAP.md](./ROADMAP.md), [deterministic-perf-gating.md](./deterministic-perf-gating.md)
 
@@ -486,15 +485,18 @@ rendered tables remain to add.*
 WS1e `facts.json`; WS5 site renders from it with a content test and version-pin parity.
 Closes the highest-remaining-risk external drift.
 
-*Progress (2026-06-11): WS1e shipped. A committed, gated `facts.json` (`xtask gen-facts`
-[`--check`], mirroring `gen-schema`) carries the version, the six headline counts -
-including the `families` count the build-time `manifest.json` omitted - and catalogue lists
-(rule kinds, families, bundled rulesets, output formats, subcommands, fact predicates).
-Every field derives from the same canonical source `coverage_audit_readme_claims` pins the
-README to; a test binds `facts.json`'s counts to the README's claimed numbers. Shipped into
-the docs bundle next to `manifest.json` for alint.org to consume. The live `manifest.json`
-shape is deliberately untouched. Spec: `docs/design/facts-json.md`. WS5 (site renders from
-`facts.json` + cross-repo content/version-pin test) remains, in the private alint.org repo.*
+*Progress (2026-06-11; extended 2026-10-16): WS1e shipped. A committed, gated
+`facts.json` (`xtask gen-facts` [`--check`], mirroring `gen-schema`) carries the
+version, seven headline counts, catalogue lists (rule kinds, families, bundled
+rulesets, output formats, subcommands, fact predicates), and, since format v4,
+the canonical per-kind `KindMeta` capability inventory. Every field derives
+from the same canonical sources used by the engine and
+`coverage_audit_readme_claims`; tests bind its sets and counts to those sources.
+It ships in the docs bundle next to `manifest.json` for alint.org to consume.
+The original rollout left `manifest.json` untouched; its later versioned
+extensions follow a consumer-first compatibility rollout. Spec:
+`docs/design/facts-json.md`. WS5 subsequently shipped in alint.org: the site
+renders from `facts.json` and cross-checks it against the manifest.*
 
 **Phase 4 - Architecture as code.**
 WS3: `cargo-depgraph` / `cargo-modules` extracted graphs + acyclic gate; the Structurizr

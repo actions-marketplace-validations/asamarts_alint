@@ -49,13 +49,13 @@
 //!   require: acyclic
 //! ```
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::slice;
 
 use alint_core::{
-    Context, Error, Extract, ExtractSpec, Level, Result, Rule, RuleSpec, Scope, Violation,
-    extract_values, is_non_literal,
+    AnalysisFailureKind, Context, Error, Extract, ExtractSpec, Level, RelatedLocation, Result,
+    Rule, RuleSpec, Scope, Violation, extract_values, is_non_literal, unreadable_file_violation,
 };
 use regex::Regex;
 use serde::Deserialize;
@@ -63,8 +63,9 @@ use serde::Deserialize;
 use crate::pair_hash::Algorithm;
 
 /// How a content-extracted reference string is turned into a path.
-#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "FileGraphResolve")]
 enum Resolve {
     /// Join the reference onto the referencing file's directory.
     /// Only explicitly-relative refs (leading `.`) are resolved;
@@ -76,41 +77,61 @@ enum Resolve {
     RelativeToRepoRoot,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphFromContentSpec")]
 struct FromContentSpec {
     extract: ExtractSpec,
     #[serde(default)]
     resolve: Resolve,
 }
 
-/// The `edges:` block — exactly one extractor (validated in
+/// The `edges:` block - exactly one extractor (validated in
 /// `build`): `from_content` (the reference-graph modes) or
 /// `derive_target` (a name template → `fresh` codegen-freshness or
 /// `no_dangling` derived-sibling existence).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphEdgesSpec")]
+#[schemars(extend(
+    "oneOf" = [
+        {"required": ["from_content"]},
+        {"required": ["derive_target"]}
+    ]
+))]
 struct EdgesSpec {
     #[serde(default)]
+    #[schemars(schema_with = "from_content_schema")]
     from_content: Option<FromContentSpec>,
     #[serde(default)]
+    #[schemars(schema_with = "derive_target_schema")]
     derive_target: Option<DeriveTargetSpec>,
 }
 
 /// Name-template edges: derive the generated target's path from the
-/// source node's path — `from` is a regex matched against the node
+/// source node's path - `from` is a regex matched against the node
 /// path, `to` is a replacement template using its captures (e.g.
 /// `from: '(.*)\.proto'`, `to: '$1.pb.go'`; a constant `to` maps
 /// many sources to one target). The `fresh` mode's edge.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphDeriveTargetSpec")]
 struct DeriveTargetSpec {
     from: String,
     to: String,
 }
 
-#[derive(Debug, Deserialize)]
+fn from_content_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<FromContentSpec>()
+}
+
+fn derive_target_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<DeriveTargetSpec>()
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphForbiddenEdgeSpec")]
 struct ForbiddenEdgeSpec {
     from: String,
     to: String,
@@ -120,25 +141,27 @@ struct ForbiddenEdgeSpec {
 /// (`{ forbidden_edges: [...] }`). A scalar and a map are
 /// structurally distinct, so an untagged enum decodes them
 /// unambiguously (the proven `cross_file_value_equals` `targets:`
-/// pattern — not the externally-tagged-enum-from-map trap
+/// pattern - not the externally-tagged-enum-from-map trap
 /// `crate::extract` documents).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(
     untagged,
     expecting = "a mode name (`acyclic`, `no_dangling`, or `no_orphans`), or a map of require options"
 )]
+#[schemars(rename = "FileGraphRequireSpec")]
 enum RequireSpec {
     Named(NamedRequire),
     Map(RequireMap),
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[schemars(rename = "FileGraphNamedRequire")]
 enum NamedRequire {
     Acyclic,
     /// Every path-shaped reference must resolve to a path on disk.
     NoDangling,
-    /// No node is unreferenced (bare form — no entry-point roots).
+    /// No node is unreferenced (bare form - no entry-point roots).
     NoOrphans,
 }
 
@@ -148,22 +171,50 @@ enum NamedRequire {
 /// (`acyclic`, `no_dangling`, `no_orphans` with no roots) live in
 /// `NamedRequire`; the configured modes live here, and future ones
 /// (`fresh: { … }`) join as additional `Option` fields.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphRequireMap")]
+#[schemars(extend(
+    "oneOf" = [
+        {"required": ["forbidden_edges"]},
+        {"required": ["no_orphans"]},
+        {"required": ["fresh"]}
+    ]
+))]
 struct RequireMap {
     #[serde(default)]
+    #[schemars(schema_with = "forbidden_edges_schema")]
     forbidden_edges: Option<Vec<ForbiddenEdgeSpec>>,
     #[serde(default)]
+    #[schemars(schema_with = "no_orphans_schema")]
     no_orphans: Option<NoOrphansSpec>,
     #[serde(default)]
+    #[schemars(schema_with = "fresh_schema")]
     fresh: Option<FreshSpec>,
+}
+
+fn forbidden_edges_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "properties": {
+                "from": { "type": "string" },
+                "to": { "type": "string" }
+            },
+            "required": ["from", "to"]
+        }
+    })
 }
 
 /// Options for the `no_orphans` map form: `roots` lists globs whose
 /// nodes are allowed to be unreferenced (graph entry points). Bare
 /// `require: no_orphans` (no roots) is the `NamedRequire` form.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphNoOrphansSpec")]
 struct NoOrphansSpec {
     #[serde(default)]
     roots: Vec<String>,
@@ -172,22 +223,34 @@ struct NoOrphansSpec {
 /// Options for the `fresh` map form: the `derive_target` output must
 /// embed the source's current `hash` digest, captured by `marker`
 /// (a regex whose group 1 is the hex digest). Content-hash, never
-/// mtime — portable on a fresh clone.
-#[derive(Debug, Deserialize)]
+/// mtime - portable on a fresh clone.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(rename = "FileGraphFreshSpec")]
 struct FreshSpec {
     #[serde(default)]
+    #[schemars(extend("default" = "sha256"))]
     hash: Algorithm,
     marker: String,
 }
 
-#[derive(Debug, Deserialize)]
+fn no_orphans_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<NoOrphansSpec>()
+}
+
+fn fresh_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<FreshSpec>()
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Options {
     nodes: String,
     edges: EdgesSpec,
     require: RequireSpec,
 }
+
+crate::options_schema_for!(Options);
 
 /// A resolved forbidden-edge prohibition: an edge whose source
 /// matches `from` and whose (resolved) target matches `to` is a
@@ -219,7 +282,7 @@ enum Require {
     },
 }
 
-/// How edges are formed — paired with `require` in `build`:
+/// How edges are formed - paired with `require` in `build`:
 /// `FromContent` ⇒ the reference-graph modes; `DeriveTarget` ⇒
 /// `fresh`.
 #[derive(Debug)]
@@ -248,6 +311,38 @@ impl Rule for FileGraphRule {
         // so the rule must see the full index, never a
         // `--changed`-scoped subset.
         true
+    }
+
+    fn visit_sensitive_paths(
+        &self,
+        explicit: bool,
+        ctx: &Context<'_>,
+        visit: &mut dyn FnMut(&Path),
+    ) {
+        let manifest_sensitive = self.nodes.sensitive_manifest_sources().next().is_some();
+        for path in self.nodes.sensitive_manifest_sources() {
+            visit(path);
+        }
+        let implicit = matches!(
+            &self.edges,
+            EdgeSource::FromContent { extract, .. } if extract.redacts_by_default()
+        );
+        if !explicit && !implicit && !manifest_sensitive {
+            return;
+        }
+        for entry in ctx.index.files() {
+            if !self.nodes.matches(&entry.path, ctx.index) {
+                continue;
+            }
+            visit(&entry.path);
+            if explicit
+                && let EdgeSource::DeriveTarget { from, to } = &self.edges
+                && let Some(target) =
+                    alint_core::derive_target(from, to, &entry.path.to_string_lossy())
+            {
+                visit(&target);
+            }
+        }
     }
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -329,8 +424,8 @@ impl FileGraphRule {
             }
         }
 
-        for cycle in collect_cycles(&adj, nodes.len()) {
-            out.push(self.cycle_violation(nodes, &cycle));
+        for comp in cyclic_components(&adj, nodes.len()) {
+            out.push(self.cycle_violation(nodes, &comp));
         }
         out
     }
@@ -338,7 +433,7 @@ impl FileGraphRule {
     /// One violation per path-shaped edge whose resolved target
     /// exists nowhere in the index (as a file or a directory).
     /// References that aren't path-shaped (bare module names, URLs)
-    /// are dropped, not flagged — `no_dangling` is a
+    /// are dropped, not flagged - `no_dangling` is a
     /// reference-integrity check, not a module resolver.
     fn check_no_dangling(&self, ctx: &Context<'_>, nodes: &[PathBuf]) -> Vec<Violation> {
         let mut out = Vec::new();
@@ -391,7 +486,7 @@ impl FileGraphRule {
 
     /// Resolve a node to its outgoing edge targets. For `from_content`
     /// edges this reads the node and resolves every content reference
-    /// to a path (unreadable / unparseable nodes push a violation and
+    /// to a path (unreadable / unparseable nodes push an analysis failure and
     /// yield no edges; references that don't resolve to a path are
     /// dropped). For `derive_target` edges it derives the single target
     /// from the node *path* (no file read): the node through the
@@ -431,34 +526,59 @@ impl FileGraphRule {
         let text = match crate::io::read_capped(&abs) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
             Err(crate::io::ReadCapError::TooLarge(n)) => {
-                out.push(Self::node_violation(
-                    node,
-                    &format!("is too large to analyze ({})", crate::io::over_cap(n)),
-                ));
+                out.push(alint_core::too_large_file_violation(node, n));
+                return Vec::new();
+            }
+            Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                out.push(alint_core::missing_file_violation(node));
                 return Vec::new();
             }
             Err(crate::io::ReadCapError::Io(e)) => {
-                out.push(Self::node_violation(
-                    node,
-                    &format!("could not be read: {e}"),
-                ));
+                out.push(unreadable_file_violation(node, &e));
                 return Vec::new();
             }
         };
         let refs = match extract_values(extract, &text) {
             Ok(v) => v,
             Err(e) => {
-                out.push(Self::node_violation(
-                    node,
-                    &format!("edge extraction failed: {e}"),
-                ));
+                let mut finding = Violation::new(format!("edge extraction failed: {e}"))
+                    .with_path(node.to_path_buf())
+                    .as_analysis_failure(AnalysisFailureKind::ResourceParse);
+                if extract.redacts_by_default() {
+                    finding.redact_message(&self.id);
+                }
+                out.push(finding);
                 return Vec::new();
             }
         };
-        refs.iter()
+        if let Some(mut violation) =
+            crate::non_string_extract_violation(node, "edge extract", &refs.non_strings)
+        {
+            self.redact_edge_finding(&mut violation, node, "non_string", std::iter::empty());
+            out.push(violation);
+        }
+        refs.strings
+            .iter()
             .filter(|r| !is_non_literal(r))
             .filter_map(|r| resolve_ref(r, node, *resolve))
             .collect()
+    }
+
+    fn redact_edge_finding<'a>(
+        &self,
+        finding: &mut Violation,
+        source: &Path,
+        category: &str,
+        evidence: impl IntoIterator<Item = &'a str>,
+    ) {
+        let EdgeSource::FromContent { extract, .. } = &self.edges else {
+            return;
+        };
+        if !extract.redacts_by_default() {
+            return;
+        }
+        let locator = format!("edge\0{}\0{extract:?}\0{category}", crate::slash(source));
+        finding.redact_evidence(&self.id, &locator, evidence);
     }
 
     /// One violation per stale `derive_target` output: the source's
@@ -484,8 +604,14 @@ impl FileGraphRule {
             let mut target = String::new();
             caps.expand(to, &mut target);
             // Confine before any read: an absolute or root-escaping
-            // `to:` template must never read a file outside the tree.
-            let Some(target) = crate::pathsafe::normalize_confined(Path::new(&target)) else {
+            // `to:` template must never read a file outside the tree --
+            // lexically OR through an in-repo symlink (`out -> /elsewhere`),
+            // which the symlink-blind `normalize_confined` alone misses.
+            // `file_graph` has no `allow_out_of_root` opt-in, so any escape
+            // is denied.
+            let crate::pathsafe::Confined::In(target) =
+                crate::pathsafe::confine_read(Path::new(&target), ctx.root, false)
+            else {
                 out.push(Self::node_violation(
                     source,
                     &format!(
@@ -497,31 +623,52 @@ impl FileGraphRule {
 
             let src_bytes = match crate::io::read_capped(&ctx.root.join(source)) {
                 Ok(b) => b,
-                Err(e) => {
-                    out.push(Self::node_violation(source, &read_cap_reason(&e)));
+                Err(crate::io::ReadCapError::TooLarge(n)) => {
+                    out.push(alint_core::too_large_file_violation(source, n));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    out.push(alint_core::missing_file_violation(source));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    out.push(unreadable_file_violation(source, &e));
                     continue;
                 }
             };
             let digest = algo.hex(&src_bytes);
 
-            let Ok(tgt_bytes) = crate::io::read_capped(&ctx.root.join(&target)) else {
-                out.push(self.fresh_violation(
-                    &target,
-                    &format!(
-                        "is missing or unreadable (the derived output for {})",
-                        crate::slash(source)
-                    ),
-                ));
-                continue;
+            let tgt_bytes = match crate::io::read_capped(&ctx.root.join(&target)) {
+                Ok(bytes) => bytes,
+                Err(crate::io::ReadCapError::TooLarge(n)) => {
+                    out.push(alint_core::too_large_file_violation(&target, n));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    out.push(self.fresh_violation(
+                        &target,
+                        source,
+                        &format!(
+                            "is missing (the derived output for {})",
+                            crate::slash(source)
+                        ),
+                    ));
+                    continue;
+                }
+                Err(crate::io::ReadCapError::Io(e)) => {
+                    out.push(unreadable_file_violation(&target, &e));
+                    continue;
+                }
             };
-            let tgt_text = String::from_utf8_lossy(&tgt_bytes).into_owned();
+            let tgt_text = String::from_utf8_lossy(&tgt_bytes);
             let fresh = marker
                 .captures_iter(&tgt_text)
                 .filter_map(|c| c.get(1))
-                .any(|m| m.as_str() == digest);
+                .any(|m| m.as_str().eq_ignore_ascii_case(&digest));
             if !fresh {
                 out.push(self.fresh_violation(
                     &target,
+                    source,
                     &format!(
                         "is out of date with {}: it carries no {} freshness marker matching the \
                          source's current digest (regenerate it)",
@@ -545,68 +692,108 @@ impl FileGraphRule {
     }
 
     fn forbidden_violation(&self, src: &Path, target: &Path, pat: &ForbiddenPattern) -> Violation {
+        let target_text = crate::slash(target);
         let msg = self.message.clone().unwrap_or_else(|| {
             format!(
                 "{} has a forbidden dependency edge to {} (forbidden_edges: from {:?} to {:?})",
                 crate::slash(src),
-                crate::slash(target),
+                target_text,
                 pat.from_glob,
                 pat.to_glob,
             )
         });
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(src.to_path_buf())
-            // A node can have forbidden edges to several targets → key on the
-            // source, the offending target, and the prohibition pattern.
             .with_baseline_key(format!(
-                "forbidden\u{0}{}\u{0}{}\u{0}{}=>{}",
+                "forbidden\u{0}{}\u{0}{target_text}\u{0}{}=>{}",
                 crate::slash(src),
-                crate::slash(target),
                 pat.from_glob,
                 pat.to_glob
             ))
+            .with_related_location(RelatedLocation::new(target, "dependency target"));
+        self.redact_edge_finding(
+            &mut finding,
+            src,
+            "forbidden",
+            std::iter::once(target_text.as_str()),
+        );
+        finding
     }
 
-    fn cycle_violation(&self, nodes: &[PathBuf], cycle: &[usize]) -> Violation {
-        let mut rendered: String = cycle
+    fn cycle_violation(&self, nodes: &[PathBuf], comp: &CyclicComponent) -> Violation {
+        let name = |i: usize| crate::slash(&nodes[i]);
+        let mut rendered: String = comp
+            .cycle
             .iter()
-            .map(|&i| crate::slash(&nodes[i]))
+            .map(|&i| name(i))
             .collect::<Vec<_>>()
             .join(" \u{2192} ");
         // Close the loop so the cycle reads unambiguously.
         rendered.push_str(" \u{2192} ");
-        rendered.push_str(&crate::slash(&nodes[cycle[0]]));
-        let msg = self
-            .message
-            .clone()
-            .unwrap_or_else(|| format!("dependency cycle ({} files): {rendered}", cycle.len()));
-        // A cycle is a SET of files; key on the sorted member set so a new
-        // file joining the cycle changes the fingerprint (anchoring on one
-        // member would mask the larger cycle).
-        let mut members: Vec<String> = cycle.iter().map(|&i| crate::slash(&nodes[i])).collect();
-        members.sort();
-        Violation::new(msg)
-            .with_path(nodes[cycle[0]].clone())
-            .with_baseline_key(format!("cycle\u{0}{}", members.join("\u{0}")))
+        rendered.push_str(&name(comp.cycle[0]));
+        let members: Vec<String> = comp.members.iter().map(|&i| name(i)).collect();
+        let msg = self.message.clone().unwrap_or_else(|| {
+            if comp.cycle.len() == comp.members.len() {
+                // The component IS one simple cycle: render it as the path.
+                format!("dependency cycle ({} files): {rendered}", members.len())
+            } else {
+                // Interlocking cycles: name every participating file, plus one
+                // concrete cycle as an example.
+                format!(
+                    "dependency cycle among {} files: {} (e.g. {rendered})",
+                    members.len(),
+                    members.join(", ")
+                )
+            }
+        });
+        // A cycle is a SET of files; key on the sorted member set of the whole
+        // strongly connected component, so a new file joining it changes the
+        // fingerprint (anchoring on one member would mask the larger cycle). For
+        // a component that is one simple cycle this is the same key the
+        // per-cycle reporting produced.
+        let mut key_members = members;
+        key_members.sort();
+        let mut finding = Violation::new(msg)
+            .with_path(nodes[comp.members[0]].clone())
+            .with_baseline_key(format!("cycle\u{0}{}", key_members.join("\u{0}")))
+            .with_related_locations(
+                comp.members
+                    .iter()
+                    .copied()
+                    .filter(|&member| member != comp.members[0])
+                    .map(|member| RelatedLocation::new(&nodes[member], "cycle member")),
+            );
+        self.redact_edge_finding(
+            &mut finding,
+            &nodes[comp.members[0]],
+            "cycle",
+            key_members.iter().map(String::as_str),
+        );
+        finding
     }
 
     fn dangling_violation(&self, src: &Path, target: &Path) -> Violation {
+        let target_text = crate::slash(target);
         let msg = self.message.clone().unwrap_or_else(|| {
             format!(
-                "{} references {}, which does not resolve to any path on disk",
+                "{} references {target_text}, which does not resolve to any path on disk",
                 crate::slash(src),
-                crate::slash(target),
             )
         });
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(src.to_path_buf())
-            // A node can reference several dangling targets → key on the
-            // source and the specific unresolved target.
             .with_baseline_key(format!(
-                "dangling\u{0}{}\u{0}{}",
+                "dangling\u{0}{}\u{0}{target_text}",
                 crate::slash(src),
-                crate::slash(target)
             ))
+            .with_related_location(RelatedLocation::new(target, "unresolved target"));
+        self.redact_edge_finding(
+            &mut finding,
+            src,
+            "dangling",
+            std::iter::once(target_text.as_str()),
+        );
+        finding
     }
 
     fn orphan_violation(&self, node: &Path) -> Violation {
@@ -616,15 +803,17 @@ impl FileGraphRule {
                 crate::slash(node),
             )
         });
-        Violation::new(msg)
+        let mut finding = Violation::new(msg)
             .with_path(node.to_path_buf())
-            .with_baseline_key(format!("file_graph-orphan\u{0}{}", crate::slash(node)))
+            .with_baseline_key(format!("file_graph-orphan\u{0}{}", crate::slash(node)));
+        self.redact_edge_finding(&mut finding, node, "orphan", std::iter::empty());
+        finding
     }
 
     /// A stale / missing `derive_target` output. Anchored on the
     /// target (the file that needs regenerating); `reason` already
     /// names the source.
-    fn fresh_violation(&self, target: &Path, reason: &str) -> Violation {
+    fn fresh_violation(&self, target: &Path, source: &Path, reason: &str) -> Violation {
         let msg = self
             .message
             .clone()
@@ -632,16 +821,7 @@ impl FileGraphRule {
         Violation::new(msg)
             .with_path(target.to_path_buf())
             .with_baseline_key(format!("file_graph-fresh\u{0}{}", crate::slash(target)))
-    }
-}
-
-/// The user-facing reason fragment for a capped-read failure.
-fn read_cap_reason(e: &crate::io::ReadCapError) -> String {
-    match e {
-        crate::io::ReadCapError::TooLarge(n) => {
-            format!("is too large to analyze ({})", crate::io::over_cap(*n))
-        }
-        crate::io::ReadCapError::Io(e) => format!("could not be read: {e}"),
+            .with_related_location(RelatedLocation::new(source, "freshness source"))
     }
 }
 
@@ -676,83 +856,132 @@ fn resolve_ref(reference: &str, from_file: &Path, mode: Resolve) -> Option<PathB
     crate::pathsafe::normalize_confined(&joined)
 }
 
-/// A representative set of directed cycles in `adj` (node indices
-/// `0..n`), each canonicalised (rotated to start at its smallest
-/// index, so the same cycle always reports identically) and the
-/// whole set sorted. Iterative DFS — no recursion-depth limit on
-/// deep graphs.
-///
-/// This is *not* an enumeration of every distinct simple cycle
-/// (that is exponential and needs Johnson's algorithm); it records
-/// one cycle per DFS back-edge — enough to surface every file that
-/// participates in a cycle. A node already fully explored (BLACK)
-/// is not revisited, so a cycle reachable only through it from a
-/// later DFS root may go unlisted even though its members are
-/// flagged via another cycle.
-fn collect_cycles(adj: &BTreeMap<usize, Vec<usize>>, n: usize) -> Vec<Vec<usize>> {
-    const WHITE: u8 = 0;
-    const GRAY: u8 = 1;
-    const BLACK: u8 = 2;
+/// One strongly connected set of mutually-dependent nodes (size >= 2): every
+/// member lies on at least one directed cycle with every other member.
+#[derive(Debug)]
+struct CyclicComponent {
+    /// Node indices, ascending.
+    members: Vec<usize>,
+    /// A shortest directed cycle through the smallest member, starting at it.
+    cycle: Vec<usize>,
+}
 
-    let mut state = vec![WHITE; n];
-    let mut cycles: BTreeSet<Vec<usize>> = BTreeSet::new();
+/// Every strongly connected component of `adj` (node indices `0..n`) that
+/// contains a cycle, each with a representative shortest cycle through its
+/// smallest member; sorted by smallest member, so the report is deterministic.
+/// Iterative Tarjan - no recursion-depth limit on deep graphs - so it is linear
+/// in nodes + edges, and every node on ANY cycle is in exactly one component.
+///
+/// (Reporting one cycle per DFS back-edge -- the earlier approach -- missed
+/// nodes: with `a->b, a->d, b->c, c->a, d->b`, `b` is fully explored before `d`
+/// is visited, so `d`, which lies on `d->b->c->a->d`, was never reported.)
+/// Self-loops are dropped by the caller, so a component is never a lone node.
+fn cyclic_components(adj: &BTreeMap<usize, Vec<usize>>, n: usize) -> Vec<CyclicComponent> {
+    const UNSEEN: usize = usize::MAX;
     let empty: Vec<usize> = Vec::new();
+    let neighbors = |v: usize| adj.get(&v).unwrap_or(&empty);
+    let mut index = vec![UNSEEN; n];
+    let mut low = vec![0usize; n];
+    let mut on_stack = vec![false; n];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next = 0usize;
+    let mut comps: Vec<Vec<usize>> = Vec::new();
 
     for start in 0..n {
-        if state[start] != WHITE {
+        if index[start] != UNSEEN {
             continue;
         }
-        let mut path: Vec<usize> = vec![start];
-        let mut next_child: Vec<usize> = vec![0];
-        state[start] = GRAY;
-
-        while let Some(&node) = path.last() {
-            let neighbors = adj.get(&node).unwrap_or(&empty);
-            let child = next_child[path.len() - 1];
-            if child < neighbors.len() {
-                next_child[path.len() - 1] += 1;
-                let next = neighbors[child];
-                match state[next] {
-                    WHITE => {
-                        state[next] = GRAY;
-                        path.push(next);
-                        next_child.push(0);
-                    }
-                    GRAY => {
-                        // Back-edge: the cycle is the path suffix
-                        // from `next` to the current node.
-                        if let Some(pos) = path.iter().position(|&x| x == next) {
-                            cycles.insert(canonical_cycle(&path[pos..]));
-                        }
-                    }
-                    _ => {} // BLACK: fully explored, no new cycle.
+        // (node, next neighbour position) frames of the simulated recursion.
+        let mut call: Vec<(usize, usize)> = vec![(start, 0)];
+        index[start] = next;
+        low[start] = next;
+        next += 1;
+        stack.push(start);
+        on_stack[start] = true;
+        while let Some(&(v, child)) = call.last() {
+            let nb = neighbors(v);
+            if child < nb.len() {
+                if let Some(frame) = call.last_mut() {
+                    frame.1 += 1;
+                }
+                let w = nb[child];
+                if index[w] == UNSEEN {
+                    index[w] = next;
+                    low[w] = next;
+                    next += 1;
+                    stack.push(w);
+                    on_stack[w] = true;
+                    call.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
                 }
             } else {
-                state[node] = BLACK;
-                path.pop();
-                next_child.pop();
+                call.pop();
+                if let Some(&(u, _)) = call.last() {
+                    low[u] = low[u].min(low[v]);
+                }
+                if low[v] == index[v] {
+                    let mut comp = Vec::new();
+                    while let Some(w) = stack.pop() {
+                        on_stack[w] = false;
+                        comp.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    if comp.len() >= 2 {
+                        comp.sort_unstable();
+                        comps.push(comp);
+                    }
+                }
             }
         }
     }
-    cycles.into_iter().collect()
+    comps.sort_unstable_by_key(|c| c[0]);
+    comps
+        .into_iter()
+        .map(|members| {
+            let cycle = shortest_cycle_through(adj, &members);
+            CyclicComponent { members, cycle }
+        })
+        .collect()
 }
 
-/// Rotate a cycle so its smallest node index leads (direction
-/// preserved), giving every rotation of the same cycle one
-/// canonical form.
-fn canonical_cycle(cycle: &[usize]) -> Vec<usize> {
-    let min_pos = cycle
-        .iter()
-        .enumerate()
-        .min_by_key(|&(_, &v)| v)
-        .map_or(0, |(i, _)| i);
-    let mut out = Vec::with_capacity(cycle.len());
-    out.extend_from_slice(&cycle[min_pos..]);
-    out.extend_from_slice(&cycle[..min_pos]);
-    out
+/// A shortest directed cycle through `members[0]` (the smallest member) using
+/// only edges inside the component, starting at that member. Breadth-first over
+/// the ascending adjacency lists, so the choice is deterministic. Every member of
+/// a strongly connected component reaches every other, so a cycle always exists;
+/// the fallback (the bare member list) is unreachable in practice.
+fn shortest_cycle_through(adj: &BTreeMap<usize, Vec<usize>>, members: &[usize]) -> Vec<usize> {
+    let start = members[0];
+    let in_comp: HashSet<usize> = members.iter().copied().collect();
+    let mut parent: HashMap<usize, usize> = HashMap::new();
+    let mut queue = std::collections::VecDeque::from([start]);
+    while let Some(u) = queue.pop_front() {
+        for &w in adj.get(&u).into_iter().flatten() {
+            if !in_comp.contains(&w) {
+                continue;
+            }
+            if w == start {
+                let mut path = vec![u];
+                let mut cur = u;
+                while cur != start {
+                    cur = parent[&cur];
+                    path.push(cur);
+                }
+                path.reverse();
+                return path;
+            }
+            if w != start && !parent.contains_key(&w) {
+                parent.insert(w, u);
+                queue.push_back(w);
+            }
+        }
+    }
+    members.to_vec()
 }
 
-/// Resolve the map form of `require:` — exactly one of
+/// Resolve the map form of `require:` - exactly one of
 /// `forbidden_edges` / `no_orphans` (the bare-string modes are
 /// resolved in `build`).
 fn resolve_map_require(map: RequireMap, cfg: &impl Fn(String) -> Error) -> Result<Require> {
@@ -867,6 +1096,68 @@ fn resolve_edges(edges: EdgesSpec, cfg: &impl Fn(String) -> Error) -> Result<Edg
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: false },
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("nodes"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("edges.from_content.extract"),
+            selector_type: alint_core::SelectorType::Extract,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("edges.derive_target.from"),
+            selector_type: alint_core::SelectorType::Regex,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("edges.derive_target.to"),
+            selector_type: alint_core::SelectorType::PathTemplate,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.no_orphans.roots"),
+            selector_type: alint_core::SelectorType::GlobList,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.forbidden_edges[].from"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.forbidden_edges[].to"),
+            selector_type: alint_core::SelectorType::Glob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("require.fresh.marker"),
+            selector_type: alint_core::SelectorType::Regex,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::OtherFiles,
+    formats: std::borrow::Cow::Borrowed(alint_core::Format::ALL),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "file_graph")?;
     let opts: Options = spec
@@ -901,8 +1192,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         {
             return Err(cfg(
                 "`edges.derive_target` supports `require: fresh` (codegen freshness) \
-                 and `require: no_dangling` (the derived target must exist), not the \
-                 content-graph modes (acyclic / no_orphans / forbidden_edges)"
+             and `require: no_dangling` (the derived target must exist), not the \
+             content-graph modes (acyclic / no_orphans / forbidden_edges)"
                     .into(),
             ));
         }
@@ -921,673 +1212,5 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use alint_core::{FileEntry, FileIndex};
-
-    #[test]
-    fn require_spec_error_names_accepted_forms_not_internal_enum() {
-        // A value that is neither a mode name nor a map is rejected with a
-        // message naming the accepted forms, not the internal untagged enum.
-        let err = serde_yaml_ng::from_str::<RequireSpec>("42").unwrap_err();
-        assert!(
-            err.to_string().contains("a mode name"),
-            "expected a friendly message, got: {err}"
-        );
-        assert!(
-            !err.to_string().contains("RequireSpec"),
-            "message leaks the internal enum name: {err}"
-        );
-    }
-
-    fn index(files: &[&str]) -> FileIndex {
-        FileIndex::from_entries(
-            files
-                .iter()
-                .map(|p| FileEntry {
-                    path: Path::new(p).into(),
-                    is_dir: false,
-                    size: 1,
-                })
-                .collect(),
-        )
-    }
-
-    fn scope(pat: &str) -> Scope {
-        Scope::from_patterns(slice::from_ref(&pat.to_string())).expect("valid glob")
-    }
-
-    fn forbidden(
-        nodes: &str,
-        regex: &str,
-        resolve: Resolve,
-        from: &str,
-        to: &str,
-    ) -> FileGraphRule {
-        FileGraphRule {
-            id: "t".into(),
-            level: Level::Error,
-            policy_url: None,
-            message: None,
-            nodes: scope(nodes),
-            edges: EdgeSource::FromContent {
-                extract: Extract::Regex(regex.into()),
-                resolve,
-            },
-            require: Require::ForbiddenEdges(vec![ForbiddenPattern {
-                from: scope(from),
-                to: scope(to),
-                from_glob: from.into(),
-                to_glob: to.into(),
-            }]),
-        }
-    }
-
-    #[test]
-    fn node_error_and_orphan_on_same_node_dont_collide() {
-        // A node that is BOTH errored (unreadable / too-large / out-of-repo
-        // target) AND an orphan lands two path-only, line-less findings on the
-        // SAME path. Without distinct baseline_keys they share a fingerprint and
-        // a baseline silently masks a genuinely-new one (baseline.md §6). Both
-        // keys — and therefore both fingerprints — must differ.
-        let rule = acyclic(
-            "**/*.proto",
-            r#"import\s+"([^"]+)""#,
-            Resolve::RelativeToRepoRoot,
-        );
-        let node = Path::new("proto/a.proto");
-        let node_err = FileGraphRule::node_violation(node, "could not be read: boom");
-        let orphan = rule.orphan_violation(node);
-        assert_ne!(
-            node_err.baseline_key, orphan.baseline_key,
-            "node-error and orphan on the same node must carry distinct baseline_keys"
-        );
-        let fp = |v: &Violation| alint_core::baseline::fingerprint("file_graph", v, None);
-        assert_ne!(
-            fp(&node_err),
-            fp(&orphan),
-            "distinct keys must yield distinct fingerprints (no baseline masking)"
-        );
-    }
-
-    fn acyclic(nodes: &str, regex: &str, resolve: Resolve) -> FileGraphRule {
-        FileGraphRule {
-            id: "t".into(),
-            level: Level::Error,
-            policy_url: None,
-            message: None,
-            nodes: scope(nodes),
-            edges: EdgeSource::FromContent {
-                extract: Extract::Regex(regex.into()),
-                resolve,
-            },
-            require: Require::Acyclic,
-        }
-    }
-
-    fn eval(r: &FileGraphRule, root: &Path, idx: &FileIndex) -> Vec<Violation> {
-        let ctx = Context {
-            root,
-            index: idx,
-            registry: None,
-            facts: None,
-            vars: None,
-            git_tracked: None,
-            git_blame: None,
-        };
-        r.evaluate(&ctx).expect("evaluate ok")
-    }
-
-    #[test]
-    fn forbidden_edge_fires_on_relative_import() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("src/domain")).unwrap();
-        std::fs::create_dir_all(root.join("src/infra")).unwrap();
-        // domain reaches into infra — forbidden.
-        std::fs::write(
-            root.join("src/domain/order.ts"),
-            "import { db } from \"../infra/db\";\n",
-        )
-        .unwrap();
-        std::fs::write(root.join("src/infra/db.ts"), "export const db = 1;\n").unwrap();
-        let idx = index(&["src/domain/order.ts", "src/infra/db.ts"]);
-        let r = forbidden(
-            "src/**/*.ts",
-            r#"from\s+"(\.[^"]+)""#,
-            Resolve::RelativeToFile,
-            "src/domain/**",
-            "src/infra/**",
-        );
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "{v:?}");
-        assert!(v[0].message.contains("src/domain/order.ts"));
-        assert!(v[0].message.contains("src/infra/db"));
-    }
-
-    #[test]
-    fn forbidden_edge_silent_when_layering_respected() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("src/domain")).unwrap();
-        std::fs::create_dir_all(root.join("src/infra")).unwrap();
-        // infra → domain is allowed; domain imports a sibling only.
-        std::fs::write(
-            root.join("src/domain/order.ts"),
-            "import { money } from \"./money\";\n",
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("src/domain/money.ts"),
-            "export const money = 1;\n",
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("src/infra/db.ts"),
-            "import { order } from \"../domain/order\";\n",
-        )
-        .unwrap();
-        let idx = index(&[
-            "src/domain/order.ts",
-            "src/domain/money.ts",
-            "src/infra/db.ts",
-        ]);
-        let r = forbidden(
-            "src/**/*.ts",
-            r#"from\s+"(\.[^"]+)""#,
-            Resolve::RelativeToFile,
-            "src/domain/**",
-            "src/infra/**",
-        );
-        assert!(eval(&r, root, &idx).is_empty());
-    }
-
-    #[test]
-    fn bare_specifier_is_dropped_not_resolved() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("src/domain")).unwrap();
-        // A bare module specifier that lexically contains "infra"
-        // must NOT be treated as a path edge into src/infra.
-        std::fs::write(
-            root.join("src/domain/order.ts"),
-            "import x from \"@company/infra-sdk\";\n",
-        )
-        .unwrap();
-        let idx = index(&["src/domain/order.ts"]);
-        let r = forbidden(
-            "src/**/*.ts",
-            r#"from\s+"([^"]+)""#,
-            Resolve::RelativeToFile,
-            "src/domain/**",
-            "**/infra*/**",
-        );
-        assert!(
-            eval(&r, root, &idx).is_empty(),
-            "bare specifier must not resolve to a path edge",
-        );
-    }
-
-    #[test]
-    fn acyclic_fires_on_two_and_three_cycles() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        // a -> b -> c -> a (a 3-cycle).
-        std::fs::write(root.join("proto/a.proto"), "import \"proto/b.proto\";\n").unwrap();
-        std::fs::write(root.join("proto/b.proto"), "import \"proto/c.proto\";\n").unwrap();
-        std::fs::write(root.join("proto/c.proto"), "import \"proto/a.proto\";\n").unwrap();
-        let idx = index(&["proto/a.proto", "proto/b.proto", "proto/c.proto"]);
-        let r = acyclic(
-            "proto/**/*.proto",
-            r#"import\s+"([^"]+)""#,
-            Resolve::RelativeToRepoRoot,
-        );
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "one distinct cycle: {v:?}");
-        assert!(v[0].message.contains("dependency cycle"));
-        // Canonical: starts at the smallest path (proto/a.proto).
-        assert!(
-            v[0].message
-                .contains("proto/a.proto \u{2192} proto/b.proto")
-        );
-    }
-
-    #[test]
-    fn acyclic_silent_on_a_dag() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        // a -> b -> c, no back-edge.
-        std::fs::write(root.join("proto/a.proto"), "import \"proto/b.proto\";\n").unwrap();
-        std::fs::write(root.join("proto/b.proto"), "import \"proto/c.proto\";\n").unwrap();
-        std::fs::write(root.join("proto/c.proto"), "// leaf\n").unwrap();
-        let idx = index(&["proto/a.proto", "proto/b.proto", "proto/c.proto"]);
-        let r = acyclic(
-            "proto/**/*.proto",
-            r#"import\s+"([^"]+)""#,
-            Resolve::RelativeToRepoRoot,
-        );
-        assert!(eval(&r, root, &idx).is_empty());
-    }
-
-    #[test]
-    fn self_loop_is_not_a_cycle() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        std::fs::write(root.join("proto/a.proto"), "import \"proto/a.proto\";\n").unwrap();
-        let idx = index(&["proto/a.proto"]);
-        let r = acyclic(
-            "proto/**/*.proto",
-            r#"import\s+"([^"]+)""#,
-            Resolve::RelativeToRepoRoot,
-        );
-        assert!(eval(&r, root, &idx).is_empty(), "a self-edge is degenerate");
-    }
-
-    #[test]
-    fn resolve_ref_drops_non_path_references() {
-        let f = Path::new("src/a/b.ts");
-        // Relative-to-file: bare specifier dropped, relative kept.
-        assert_eq!(
-            resolve_ref("./c", f, Resolve::RelativeToFile),
-            Some(PathBuf::from("src/a/c"))
-        );
-        assert_eq!(
-            resolve_ref("../d/e", f, Resolve::RelativeToFile),
-            Some(PathBuf::from("src/d/e"))
-        );
-        assert_eq!(resolve_ref("react", f, Resolve::RelativeToFile), None);
-        // Root-escaping reference is dropped.
-        assert_eq!(
-            resolve_ref("../../../etc/passwd", f, Resolve::RelativeToFile),
-            None
-        );
-        // Relative-to-root: bare path kept, absolute / URL dropped.
-        assert_eq!(
-            resolve_ref("a/b.proto", f, Resolve::RelativeToRepoRoot),
-            Some(PathBuf::from("a/b.proto"))
-        );
-        assert_eq!(resolve_ref("/abs", f, Resolve::RelativeToRepoRoot), None);
-        assert_eq!(
-            resolve_ref("https://x/y", f, Resolve::RelativeToRepoRoot),
-            None
-        );
-    }
-
-    /// Generic constructor for the require modes the `forbidden` /
-    /// `acyclic` helpers don't cover.
-    fn mk(nodes: &str, regex: &str, resolve: Resolve, require: Require) -> FileGraphRule {
-        FileGraphRule {
-            id: "t".into(),
-            level: Level::Error,
-            policy_url: None,
-            message: None,
-            nodes: scope(nodes),
-            edges: EdgeSource::FromContent {
-                extract: Extract::Regex(regex.into()),
-                resolve,
-            },
-            require,
-        }
-    }
-
-    #[test]
-    fn no_dangling_fires_on_missing_then_silent_when_resolved() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("docs")).unwrap();
-        std::fs::write(root.join("docs/real.md"), "# real\n").unwrap();
-        let r = mk(
-            "docs/**/*.md",
-            r"\]\((\.[^)]+)\)",
-            Resolve::RelativeToFile,
-            Require::NoDangling,
-        );
-
-        // a.md links a sibling that doesn't exist -> dangling.
-        std::fs::write(root.join("docs/a.md"), "see [x](./missing.md)\n").unwrap();
-        let idx = index(&["docs/a.md", "docs/real.md"]);
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "{v:?}");
-        assert!(v[0].message.contains("docs/missing.md"));
-        assert!(v[0].message.contains("docs/a.md"));
-
-        // a.md links the existing real.md -> silent.
-        std::fs::write(root.join("docs/a.md"), "see [r](./real.md)\n").unwrap();
-        assert!(eval(&r, root, &idx).is_empty());
-    }
-
-    #[test]
-    fn no_dangling_dedups_a_repeated_edge() {
-        // A node that references the same missing target twice yields ONE
-        // dangling violation, not two (the duplicate edge is deduped).
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("docs")).unwrap();
-        let r = mk(
-            "docs/**/*.md",
-            r"\]\((\.[^)]+)\)",
-            Resolve::RelativeToFile,
-            Require::NoDangling,
-        );
-        std::fs::write(
-            root.join("docs/a.md"),
-            "[x](./missing.md) and [y](./missing.md)\n",
-        )
-        .unwrap();
-        let idx = index(&["docs/a.md"]);
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "repeated dangling edge deduped: {v:?}");
-        assert!(v[0].message.contains("docs/missing.md"));
-    }
-
-    #[test]
-    fn no_orphans_fires_on_unreferenced_node() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        // a -> b -> c. Nothing references a, so a is the orphan.
-        std::fs::write(root.join("proto/a.proto"), "import \"proto/b.proto\";\n").unwrap();
-        std::fs::write(root.join("proto/b.proto"), "import \"proto/c.proto\";\n").unwrap();
-        std::fs::write(root.join("proto/c.proto"), "// leaf\n").unwrap();
-        let idx = index(&["proto/a.proto", "proto/b.proto", "proto/c.proto"]);
-        let r = mk(
-            "proto/**/*.proto",
-            r#"import\s+"([^"]+)""#,
-            Resolve::RelativeToRepoRoot,
-            Require::NoOrphans { roots: None },
-        );
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "only proto/a.proto is unreferenced: {v:?}");
-        assert!(v[0].message.contains("proto/a.proto"));
-        assert!(v[0].message.contains("orphan"));
-    }
-
-    #[test]
-    fn no_orphans_roots_exempts_entry_point() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        std::fs::write(root.join("proto/a.proto"), "import \"proto/b.proto\";\n").unwrap();
-        std::fs::write(root.join("proto/b.proto"), "import \"proto/c.proto\";\n").unwrap();
-        std::fs::write(root.join("proto/c.proto"), "// leaf\n").unwrap();
-        let idx = index(&["proto/a.proto", "proto/b.proto", "proto/c.proto"]);
-        let r = mk(
-            "proto/**/*.proto",
-            r#"import\s+"([^"]+)""#,
-            Resolve::RelativeToRepoRoot,
-            Require::NoOrphans {
-                roots: Some(scope("proto/a.proto")),
-            },
-        );
-        assert!(
-            eval(&r, root, &idx).is_empty(),
-            "the declared root is exempt from the orphan check"
-        );
-    }
-
-    #[test]
-    fn build_accepts_named_and_map_require_forms() {
-        use crate::test_support::spec_yaml;
-        let base = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  \
-                    from_content:\n    extract:\n      regex: 'x'\n";
-        for tail in [
-            "require: no_dangling\nlevel: error\n",
-            "require: no_orphans\nlevel: error\n",
-            "require:\n  no_orphans:\n    roots: [\"src/main.rs\"]\nlevel: error\n",
-        ] {
-            let yaml = format!("{base}{tail}");
-            assert!(build(&spec_yaml(&yaml)).is_ok(), "should build: {yaml}");
-        }
-        // Two map modes at once -> rejected.
-        let bad = format!(
-            "{base}require:\n  forbidden_edges:\n    - {{from: a, to: b}}\n  \
-             no_orphans: {{}}\nlevel: error\n"
-        );
-        assert!(
-            build(&spec_yaml(&bad)).is_err(),
-            "setting two map modes must be rejected"
-        );
-    }
-
-    fn fresh_rule(nodes: &str, from: &str, to: &str, marker: &str) -> FileGraphRule {
-        FileGraphRule {
-            id: "t".into(),
-            level: Level::Error,
-            policy_url: None,
-            message: None,
-            nodes: scope(nodes),
-            edges: EdgeSource::DeriveTarget {
-                from: Regex::new(from).expect("valid from regex"),
-                to: to.into(),
-            },
-            require: Require::Fresh {
-                algo: Algorithm::Sha256,
-                marker: Regex::new(marker).expect("valid marker regex"),
-            },
-        }
-    }
-
-    #[test]
-    fn fresh_silent_when_marker_matches_then_stale_when_source_changes() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        let src = "message A {}\n";
-        std::fs::write(root.join("proto/a.proto"), src).unwrap();
-        let hash = Algorithm::Sha256.hex(src.as_bytes());
-        std::fs::write(
-            root.join("proto/a.pb.go"),
-            format!("// @generated sha256:{hash}\npackage a\n"),
-        )
-        .unwrap();
-        let idx = index(&["proto/a.proto", "proto/a.pb.go"]);
-        let r = fresh_rule(
-            "proto/**/*.proto",
-            r"(.*)\.proto",
-            "$1.pb.go",
-            r"sha256:([0-9a-f]{64})",
-        );
-        assert!(eval(&r, root, &idx).is_empty(), "marker matches -> fresh");
-
-        // The source changes; the generated marker is now stale.
-        std::fs::write(root.join("proto/a.proto"), "message A { reserved 1; }\n").unwrap();
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "{v:?}");
-        assert!(v[0].message.contains("proto/a.pb.go"));
-        assert!(v[0].message.contains("out of date"));
-    }
-
-    #[test]
-    fn fresh_fires_when_derived_target_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        std::fs::write(root.join("proto/a.proto"), "message A {}\n").unwrap();
-        let idx = index(&["proto/a.proto"]);
-        let r = fresh_rule(
-            "proto/**/*.proto",
-            r"(.*)\.proto",
-            "$1.pb.go",
-            r"sha256:([0-9a-f]{64})",
-        );
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "{v:?}");
-        assert!(v[0].message.contains("proto/a.pb.go"));
-        assert!(v[0].message.contains("missing or unreadable"));
-    }
-
-    #[test]
-    fn fresh_skips_sources_not_matching_from() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        std::fs::write(root.join("proto/notes.txt"), "not generated\n").unwrap();
-        let idx = index(&["proto/notes.txt"]);
-        // `from` matches only *.proto, so notes.txt is skipped.
-        let r = fresh_rule(
-            "proto/**/*",
-            r"(.*)\.proto",
-            "$1.pb.go",
-            r"sha256:([0-9a-f]{64})",
-        );
-        assert!(
-            eval(&r, root, &idx).is_empty(),
-            "a source not matching `from` is skipped"
-        );
-    }
-
-    fn derive_dangling_rule(nodes: &str, from: &str, to: &str) -> FileGraphRule {
-        FileGraphRule {
-            id: "t".into(),
-            level: Level::Error,
-            policy_url: None,
-            message: None,
-            nodes: scope(nodes),
-            edges: EdgeSource::DeriveTarget {
-                from: Regex::new(from).expect("valid from regex"),
-                to: to.into(),
-            },
-            require: Require::NoDangling,
-        }
-    }
-
-    #[test]
-    fn derive_target_no_dangling_requires_the_derived_sibling() {
-        // The elasticsearch shape: every licenses/X-LICENSE.txt must
-        // be accompanied by a sibling X-NOTICE.txt. No file read — the
-        // edge is derived purely from the node path.
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("licenses")).unwrap();
-        std::fs::write(root.join("licenses/arrow-LICENSE.txt"), "A\n").unwrap();
-        std::fs::write(root.join("licenses/arrow-NOTICE.txt"), "N\n").unwrap();
-        let r = derive_dangling_rule("licenses/**", r"(.+)-LICENSE\.txt", "$1-NOTICE.txt");
-
-        // sibling present -> silent.
-        let idx = index(&["licenses/arrow-LICENSE.txt", "licenses/arrow-NOTICE.txt"]);
-        assert!(eval(&r, root, &idx).is_empty(), "sibling present -> silent");
-
-        // a second license with no NOTICE sibling -> dangling.
-        let idx = index(&[
-            "licenses/arrow-LICENSE.txt",
-            "licenses/arrow-NOTICE.txt",
-            "licenses/lucene-LICENSE.txt",
-        ]);
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "{v:?}");
-        assert!(v[0].message.contains("licenses/lucene-NOTICE.txt"));
-        assert!(v[0].message.contains("licenses/lucene-LICENSE.txt"));
-    }
-
-    #[test]
-    fn derive_target_root_escape_fires_and_is_never_read() {
-        // Security regression (v0.12 path-confinement): an absolute or
-        // `..`-escaping `to:` must produce an "escapes the repo root"
-        // violation, never a filesystem read of the out-of-tree path.
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("proto")).unwrap();
-        std::fs::write(root.join("proto/a.proto"), "x").unwrap();
-        let idx = index(&["proto/a.proto"]);
-
-        // no_dangling + absolute `to:` -> escapes (the read oracle shape).
-        let r = derive_dangling_rule("proto/**/*.proto", r"(.*)\.proto", "/etc/passwd");
-        let v = eval(&r, root, &idx);
-        assert_eq!(v.len(), 1, "{v:?}");
-        assert!(
-            v[0].message.contains("escapes the repo root"),
-            "{}",
-            v[0].message
-        );
-
-        // no_dangling + `..`-escape -> escapes.
-        let r2 = derive_dangling_rule("proto/**/*.proto", r"(.*)/(.*)\.proto", "../../$2.out");
-        assert!(
-            eval(&r2, root, &idx)
-                .iter()
-                .any(|x| x.message.contains("escapes")),
-        );
-
-        // fresh + absolute `to:` -> escapes, WITHOUT reading the abs file.
-        let f = fresh_rule(
-            "proto/**/*.proto",
-            r"(.*)\.proto",
-            "/etc/hostname",
-            r"sha256:([0-9a-f]{64})",
-        );
-        let vf = eval(&f, root, &idx);
-        assert_eq!(vf.len(), 1, "{vf:?}");
-        assert!(
-            vf[0].message.contains("escapes the repo root"),
-            "{}",
-            vf[0].message
-        );
-    }
-
-    #[test]
-    fn derive_target_no_dangling_skips_nodes_not_matching_from() {
-        // A node the `from` regex doesn't capture has no derived edge,
-        // so it can't dangle (README.md is not an `*-LICENSE.txt`).
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("licenses")).unwrap();
-        std::fs::write(root.join("licenses/README.md"), "# licenses\n").unwrap();
-        let idx = index(&["licenses/README.md"]);
-        let r = derive_dangling_rule("licenses/**", r"(.+)-LICENSE\.txt", "$1-NOTICE.txt");
-        assert!(
-            eval(&r, root, &idx).is_empty(),
-            "a node not matching `from` has no edge"
-        );
-    }
-
-    #[test]
-    fn build_fresh_mode_and_edge_coupling() {
-        use crate::test_support::spec_yaml;
-        let ok = "id: t\nkind: file_graph\nnodes: \"**/*.proto\"\nedges:\n  \
-                  derive_target:\n    from: '(.*)\\.proto'\n    to: '$1.pb.go'\nrequire:\n  \
-                  fresh:\n    marker: 'sha256:([0-9a-f]{64})'\nlevel: error\n";
-        assert!(
-            build(&spec_yaml(ok)).is_ok(),
-            "derive_target + fresh should build: {ok}"
-        );
-
-        // `fresh` with `from_content` -> rejected (wrong edge type).
-        let bad_fc = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  from_content:\n    \
-                      extract:\n      regex: 'x'\nrequire:\n  fresh:\n    \
-                      marker: 'h:([0-9a-f])'\nlevel: error\n";
-        assert!(
-            build(&spec_yaml(bad_fc)).is_err(),
-            "fresh needs derive_target"
-        );
-
-        // `derive_target` with a content-graph mode (acyclic) -> rejected.
-        let bad_dt = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  derive_target:\n    \
-                      from: 'a'\n    to: 'b'\nrequire: acyclic\nlevel: error\n";
-        assert!(
-            build(&spec_yaml(bad_dt)).is_err(),
-            "derive_target rejected for the content-graph modes"
-        );
-
-        // `derive_target` with `no_dangling` -> builds (v0.12 decouple:
-        // the derived sibling must merely exist).
-        let dt_nd = "id: t\nkind: file_graph\nnodes: \"licenses/**\"\nedges:\n  \
-                     derive_target:\n    from: '(.+)-LICENSE\\.txt'\n    to: '$1-NOTICE.txt'\n\
-                     require: no_dangling\nlevel: error\n";
-        assert!(
-            build(&spec_yaml(dt_nd)).is_ok(),
-            "derive_target + no_dangling should build: {dt_nd}"
-        );
-
-        // A marker with no capture group -> rejected.
-        let bad_marker = "id: t\nkind: file_graph\nnodes: \"**/*\"\nedges:\n  \
-                          derive_target:\n    from: 'a'\n    to: 'b'\nrequire:\n  fresh:\n    \
-                          marker: 'nogroup'\nlevel: error\n";
-        assert!(
-            build(&spec_yaml(bad_marker)).is_err(),
-            "marker needs a capture group"
-        );
-    }
-}
+#[path = "file_graph_tests.rs"]
+mod tests;

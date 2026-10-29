@@ -1,3 +1,4 @@
+test_version: 1
 name: nested configs are ignored when nested_configs flag is false
 tags: [check, nested, composition, passing]
 
@@ -28,4 +29,5 @@ when: [check]
 expect:
   # The nested rule would have flagged index.ts if nested
   # discovery were on. It isn't, so nothing fires.
-  - violations: []
+  - exit: success
+    violations: []

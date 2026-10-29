@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_no_fixup is silent when HEAD is a normal commit
 tags: [check, git_commit_no_fixup, git, passing]
 
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

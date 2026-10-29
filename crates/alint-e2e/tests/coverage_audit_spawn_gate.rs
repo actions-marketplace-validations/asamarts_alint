@@ -1,21 +1,20 @@
 //! Spawn-gate drift audit — keep the RCE allow-list honest.
 //!
 //! alint refuses a process-spawning rule kind from any untrusted source
-//! (`extends:`, nested config, template, `require:` sub-rule). The set of
-//! spawning kinds is a hand-maintained allow-list,
-//! [`alint_dsl::SPAWNING_RULE_KINDS`]. The rejection logic is thoroughly
-//! tested elsewhere (`alint-dsl` unit tests; the CLI canary in
-//! `alint::tests::spawn_gate`) — but every one of those tests names the
-//! kinds it checks. None of them would catch the failure that actually
-//! shipped once (`gff`): a rule that *spawns a process* but was never added
-//! to the allow-list, so the gate waved it through and adopting a ruleset
-//! became arbitrary code execution.
+//! (`extends:`, nested config, template, `require:` sub-rule). W1 records that
+//! capability in each kind's `KindMeta`; during the one-release transition it
+//! must also equal the hand-maintained [`alint_dsl::SPAWNING_RULE_KINDS`] gate.
+//! The rejection logic is thoroughly tested elsewhere (`alint-dsl` unit tests;
+//! the CLI canary in `alint::tests::spawn_gate`) — but every one of those tests
+//! names the kinds it checks. None of them would catch the failure that actually
+//! shipped once (`gff`): a rule that *spawns a process* but was never added to
+//! the gate, so adopting a ruleset became arbitrary code execution.
 //!
-//! This audit is the missing cross-check. It scans the rule sources for the
-//! primitives that actually launch a subprocess and asserts that set of
-//! modules is *exactly* the allow-list — no more (an ungated spawner), no
-//! less (a stale allow-list entry). A new rule that shells out fails here
-//! until its kind is gated.
+//! This audit scans the rule sources for the primitives that actually launch a
+//! subprocess and asserts that set is exactly both metadata and the transition
+//! list — no more (an undeclared/ungated spawner), no less (a stale declaration).
+//! A new rule that shells out fails here until its kind declares
+//! `SpawnUserCommand` and is gated.
 
 use std::path::{Path, PathBuf};
 
@@ -98,6 +97,16 @@ fn spawning_module_paths() -> Vec<String> {
         for entry in std::fs::read_dir(&dir).expect("read alint-rules/src dir") {
             let path = entry.unwrap().path();
             if path.is_dir() {
+                // `fixers/` holds FIXERS, not rule kinds. A fixer that shells out
+                // (e.g. `GitUntrackFixer`'s `git rm --cached`) is a fix-op trust
+                // concern, gated by `alint_dsl::SPAWNING_FIX_OPS` + the sibling
+                // `coverage_audit_fix_spawn_gate` audit -- NOT a spawning rule kind.
+                // Excluding the subtree keeps this rule-kind gate from tripping on a
+                // fixer's subprocess (which would be a false RED, since no fixer
+                // module maps to a `SPAWNING_RULE_KINDS` entry).
+                if path.file_name().and_then(|n| n.to_str()) == Some("fixers") {
+                    continue;
+                }
                 stack.push(path);
                 continue;
             }
@@ -120,49 +129,65 @@ fn spawning_module_paths() -> Vec<String> {
 }
 
 #[test]
-fn spawning_allowlist_matches_the_rules_that_actually_spawn() {
+fn spawning_sources_metadata_and_transition_list_agree() {
     let found = spawning_module_paths();
+    let registry = alint_rules::builtin_registry();
 
-    // The allow-list as `src`-relative module paths. Each spawning kind lives in
-    // a top-level module named for the kind (`command` → command.rs, etc.); the
-    // audit relies on that convention and calls it out if it ever breaks.
-    let mut expected: Vec<String> = alint_dsl::SPAWNING_RULE_KINDS
-        .iter()
-        .map(|k| format!("{k}.rs"))
+    let mut declared: Vec<String> = registry
+        .kind_metadata()
+        .filter(|(_, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::SpawnUserCommand))
+        })
+        .map(|(kind, _)| format!("{kind}.rs"))
         .collect();
-    expected.sort();
+    declared.sort();
+
+    // Keep the old trust list as an equality cross-check for one release. Each
+    // spawning kind lives in a top-level module named for the kind.
+    let mut transition: Vec<String> = alint_dsl::SPAWNING_RULE_KINDS
+        .iter()
+        .map(|kind| format!("{kind}.rs"))
+        .collect();
+    transition.sort();
 
     assert_eq!(
-        found, expected,
-        "\n\nSPAWN-GATE DRIFT — the rule modules that launch a subprocess do not \
-         match alint_dsl::SPAWNING_RULE_KINDS.\n\
+        found, declared,
+        "\n\nSPAWN CAPABILITY DRIFT — source modules that launch a subprocess \
+         must exactly match KindMeta::SpawnUserCommand.\n\
          \n  modules that actually spawn : {found:?}\
-         \n  SPAWNING_RULE_KINDS (as .rs) : {expected:?}\n\
-         \nIf you added a rule that shells out, add its kind to SPAWNING_RULE_KINDS \
-         (crates/alint-dsl/src/lib.rs) — without it, an `extends:`'d or nested \
-         ruleset can run the rule as arbitrary code (the `gff` regression class). \
-         If you removed a spawner, drop its stale allow-list entry. If a spawning \
-         module is not named `<kind>.rs` at the top level, teach this audit the \
-         mapping."
+         \n  modules declared to spawn : {declared:?}"
+    );
+    assert_eq!(
+        declared, transition,
+        "KindMeta::SpawnUserCommand and the one-release \
+         alint_dsl::SPAWNING_RULE_KINDS transition list disagree"
     );
 }
 
 #[test]
-fn spawning_allowlist_is_non_empty_and_each_entry_has_a_module() {
-    // Cheap companion: a typo'd or emptied allow-list is itself a security
-    // regression (it would silently stop gating). Pin that every entry names
-    // a real rule module.
+fn spawning_metadata_is_non_empty_and_each_kind_has_a_module() {
+    let registry = alint_rules::builtin_registry();
+    let spawning: Vec<&str> = registry
+        .kind_metadata()
+        .filter(|(_kind, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::SpawnUserCommand))
+        })
+        .map(|(kind, _meta)| kind)
+        .collect();
     assert!(
-        !alint_dsl::SPAWNING_RULE_KINDS.is_empty(),
-        "SPAWNING_RULE_KINDS is empty — the process-spawn trust gate would gate nothing"
+        !spawning.is_empty(),
+        "no kind declares SpawnUserCommand — the source audit would be blind"
     );
     let src = rules_src_dir();
-    for kind in alint_dsl::SPAWNING_RULE_KINDS {
+    for kind in spawning {
         let module = src.join(format!("{kind}.rs"));
         assert!(
             module.exists(),
-            "SPAWNING_RULE_KINDS names {kind:?} but {} does not exist — stale or \
-             mistyped allow-list entry",
+            "SpawnUserCommand kind {kind:?} has no source module at {}",
             module.display()
         );
     }
@@ -203,4 +228,41 @@ fn spawn_detection_is_dynamic_and_precise() {
         "        // eventually calls Command::new( for you",
         &helpers
     ));
+}
+
+#[test]
+fn every_registered_spelling_of_a_spawning_kind_resolves_to_spawning_metadata() {
+    let registry = alint_rules::builtin_registry();
+    let catalog = registry.catalog();
+    let spawning_canonical: std::collections::BTreeSet<&str> = registry
+        .kind_metadata()
+        .filter(|(_kind, meta)| {
+            meta.capabilities
+                .iter()
+                .any(|entry| matches!(entry.capability, alint_core::Capability::SpawnUserCommand))
+        })
+        .map(|(kind, _meta)| kind)
+        .collect();
+
+    for spelling in registry
+        .known_kinds()
+        .filter(|kind| spawning_canonical.contains(registry.canonical_kind(kind)))
+    {
+        assert!(
+            catalog.meta(spelling).is_some_and(|meta| {
+                meta.capabilities.iter().any(|entry| {
+                    matches!(entry.capability, alint_core::Capability::SpawnUserCommand)
+                })
+            }),
+            "registered spelling {spelling:?} does not resolve to spawning metadata"
+        );
+    }
+
+    for kind in spawning_canonical {
+        let upper = kind.to_ascii_uppercase();
+        assert!(
+            !registry.known_kinds().any(|registered| registered == upper),
+            "{upper} is registered as an unreviewed second spelling"
+        );
+    }
 }

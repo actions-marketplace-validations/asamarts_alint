@@ -1,3 +1,4 @@
+test_version: 1
 name: a config-declared path escaping the repo root is confined (no out-of-tree read)
 
 given:
@@ -16,5 +17,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: schema-confined, level: error}

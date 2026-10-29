@@ -89,9 +89,10 @@ pub fn propose(scan: &Scan, progress: &Progress) -> Vec<Proposal> {
         id: AGENT_HYGIENE_URI.into(),
         kind: ProposalKind::BundledRuleset {
             uri: AGENT_HYGIENE_URI.into(),
+            except: Vec::new(),
         },
         confidence: Confidence::Medium,
-        summary: "Agent-hygiene leftovers detected — bundled ruleset would catch them.".into(),
+        summary: "Agent-hygiene leftovers detected - bundled ruleset would catch them.".into(),
         evidence,
     }]
 }

@@ -1,3 +1,4 @@
+test_version: 1
 name: file_exists fires when the required file is missing
 tags: [check, file_exists]
 
@@ -21,5 +22,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: has-readme, level: error}

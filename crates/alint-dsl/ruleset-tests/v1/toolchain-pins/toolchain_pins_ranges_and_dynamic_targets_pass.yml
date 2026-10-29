@@ -1,0 +1,41 @@
+test_version: 1
+name: toolchain-pins bundle leaves ranges and computed targets to later capability work
+tags: [check, extends, bundled, toolchain_pins, boundary]
+
+given:
+  tree:
+    .nvmrc: "22.14.0\n"
+    .node-version: "lts/*\n"
+    package.json: |
+      {"name":"demo","config":{"engines":{"node":"21.0.0"}},"engines":{"node":">=22 <23"}}
+    Dockerfile: |
+      ARG NODE_VERSION=22.14.0
+      FROM node:${NODE_VERSION}-alpine
+    .github:
+      workflows:
+        ci.yml: |
+          name: CI
+          on: push
+          jobs:
+            test:
+              strategy:
+                matrix:
+                  node: ['20', '22']
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/setup-node@v4
+                  with:
+                    node-version: v22.14.0
+                - uses: actions/setup-node@v4
+                  with:
+                    node-version: ${{ matrix.node }}
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/toolchain-pins@v1
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

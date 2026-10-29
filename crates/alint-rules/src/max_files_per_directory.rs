@@ -40,6 +40,13 @@ impl Rule for MaxFilesPerDirectoryRule {
         Some(&self.scope)
     }
 
+    /// The verdict is a whole-tree judgement (a directory's count includes files that are
+    /// outside a `--changed` diff), so evaluate on the full index. `path_scope` still lets
+    /// `--changed` skip the rule when no in-scope file changed.
+    fn requires_full_index(&self) -> bool {
+        true
+    }
+
     alint_core::rule_common_impl!();
 
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
@@ -74,6 +81,25 @@ impl Rule for MaxFilesPerDirectoryRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: true },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec.paths.as_ref().ok_or_else(|| {
         Error::rule_config(
@@ -93,7 +119,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if spec.fix.is_some() {
         return Err(Error::rule_config(
             &spec.id,
-            "max_files_per_directory has no fix op — file relocation is a human decision",
+            "max_files_per_directory has no fix op - file relocation is a human decision",
         ));
     }
     Ok(Box::new(MaxFilesPerDirectoryRule {

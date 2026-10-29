@@ -1,0 +1,109 @@
+test_version: 1
+name: toolchain-pins bundle reports exact-pin drift in every supported target class
+tags: [check, extends, bundled, toolchain_pins, cross_file, polyglot]
+
+given:
+  tree:
+    .nvmrc: "22.14.0\n"
+    .node-version: "22.13.1\n"
+    rust-toolchain.toml: |
+      [toolchain]
+      channel = "1.90.0"
+    rust-toolchain: "1.89.0\n"
+    .python-version: "3.13.7\n"
+    runtime.txt: "python-3.12.9\n"
+    Pipfile: |
+      [requires]
+      python_full_version = "3.12.9"
+    .ruby-version: "3.4.5\n"
+    Gemfile: |
+      source "https://rubygems.org"
+      ruby "3.3.8"
+    Gemfile.lock: |
+      RUBY VERSION
+         ruby 3.3.8p12
+    .java-version: "temurin-21.0.8+9\n"
+    .sdkmanrc: "java=temurin-17.0.12+7\n"
+    global.json: |
+      {"sdk":{"version":"9.0.306"},"tools":{"dotnet":"8.0.408"}}
+    .tool-versions: |
+      nodejs 22.13.1
+      rust 1.89.0
+      python 3.12.9
+      ruby 3.3.8
+      java temurin-17.0.12+7
+      dotnet-core 8.0.408
+    package.json: |
+      {"name":"demo","engines":{"node":"22.13.1"}}
+    Dockerfile: |
+      FROM node:22.13.1-alpine AS web
+      FROM rust:1.89.0-bookworm AS rust-build
+      FROM python:3.12.9-slim AS python-build
+      FROM ruby:3.3.8-alpine AS ruby-build
+      FROM eclipse-temurin:17.0.12_7-jdk AS java-build
+      FROM mcr.microsoft.com/dotnet/sdk:8.0.408-alpine AS dotnet-build
+    .github:
+      workflows:
+        ci.yml: |
+          name: CI
+          on: push
+          jobs:
+            test:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/setup-node@v4
+                  with:
+                    node-version: '22.13.1'
+                - uses: actions-rust-lang/setup-rust-toolchain@v1
+                  with:
+                    toolchain: '1.89.0'
+                - uses: actions/setup-python@v5
+                  with:
+                    python-version: '3.12.9'
+                - uses: ruby/setup-ruby@v1
+                  with:
+                    ruby-version: '3.3.8'
+                - uses: actions/setup-java@v5
+                  with:
+                    distribution: temurin
+                    java-version: '17.0.12'
+                - uses: actions/setup-dotnet@v5
+                  with:
+                    dotnet-version: '8.0.408'
+  config: |
+    version: 1
+    extends:
+      - alint://bundled/toolchain-pins@v1
+
+when: [check]
+
+expect:
+  - exit: success
+    violations:
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: .node-version}
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: .tool-versions}
+      - {rule: toolchain-node-declarations-coherent, level: warning, path: package.json}
+      - {rule: toolchain-node-dockerfiles-coherent, level: warning, path: Dockerfile}
+      - {rule: toolchain-node-github-actions-coherent, level: warning, path: .github/workflows/ci.yml}
+      - {rule: toolchain-rust-declarations-coherent, level: warning, path: rust-toolchain}
+      - {rule: toolchain-rust-declarations-coherent, level: warning, path: .tool-versions}
+      - {rule: toolchain-rust-dockerfiles-coherent, level: warning, path: Dockerfile}
+      - {rule: toolchain-rust-github-actions-coherent, level: warning, path: .github/workflows/ci.yml}
+      - {rule: toolchain-python-declarations-coherent, level: warning, path: .tool-versions}
+      - {rule: toolchain-python-declarations-coherent, level: warning, path: runtime.txt}
+      - {rule: toolchain-python-declarations-coherent, level: warning, path: Pipfile}
+      - {rule: toolchain-python-dockerfiles-coherent, level: warning, path: Dockerfile}
+      - {rule: toolchain-python-github-actions-coherent, level: warning, path: .github/workflows/ci.yml}
+      - {rule: toolchain-ruby-declarations-coherent, level: warning, path: .tool-versions}
+      - {rule: toolchain-ruby-declarations-coherent, level: warning, path: Gemfile}
+      - {rule: toolchain-ruby-declarations-coherent, level: warning, path: Gemfile.lock}
+      - {rule: toolchain-ruby-dockerfiles-coherent, level: warning, path: Dockerfile}
+      - {rule: toolchain-ruby-github-actions-coherent, level: warning, path: .github/workflows/ci.yml}
+      - {rule: toolchain-jvm-declarations-coherent, level: warning, path: .tool-versions}
+      - {rule: toolchain-jvm-declarations-coherent, level: warning, path: .sdkmanrc}
+      - {rule: toolchain-jvm-dockerfiles-coherent, level: warning, path: Dockerfile}
+      - {rule: toolchain-jvm-github-actions-coherent, level: warning, path: .github/workflows/ci.yml}
+      - {rule: toolchain-dotnet-declarations-coherent, level: warning, path: .tool-versions}
+      - {rule: toolchain-dotnet-declarations-coherent, level: warning, path: global.json}
+      - {rule: toolchain-dotnet-dockerfiles-coherent, level: warning, path: Dockerfile}
+      - {rule: toolchain-dotnet-github-actions-coherent, level: warning, path: .github/workflows/ci.yml}

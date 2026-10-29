@@ -1,3 +1,4 @@
+test_version: 1
 name: ordered_block fires when a marked block is out of order
 tags: [check, ordered_block, content]
 
@@ -29,5 +30,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: keep-sorted, level: warning, path: .gitignore}

@@ -1,3 +1,4 @@
+test_version: 1
 name: generated_file_fresh mutating mode fires when an in-place output is stale
 tags: [check, generated_file_fresh, plugin]
 
@@ -5,6 +6,9 @@ tags: [check, generated_file_fresh, plugin]
 # stale, so it fires. alint snapshots, runs, diffs, reports, and
 # RESTORES — the tree is left byte-identical (verified in the rule's
 # native tests).
+
+capabilities:
+  spawn: true
 
 given:
   tree:
@@ -22,5 +26,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: list-regen-fresh, level: error, path: gen/list.txt}

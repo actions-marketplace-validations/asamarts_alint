@@ -26,7 +26,7 @@ mod markdown;
 mod splice;
 
 use std::fs;
-use std::io::Write;
+use std::io::{IsTerminal as _, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -77,7 +77,11 @@ pub struct RunOptions {
     pub include_info: bool,
 }
 
-pub fn run(config_path: Option<&Path>, opts: &RunOptions) -> Result<ExitCode> {
+pub fn run(
+    config_path: Option<&Path>,
+    opts: &RunOptions,
+    registry: &alint_core::RuleRegistry,
+) -> Result<ExitCode> {
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let resolved_config_path = match config_path {
         Some(p) => p.to_path_buf(),
@@ -85,8 +89,11 @@ pub fn run(config_path: Option<&Path>, opts: &RunOptions) -> Result<ExitCode> {
             anyhow::anyhow!("no .alint.yml found (searched from {})", cwd.display())
         })?,
     };
-    let config = alint_dsl::load(&resolved_config_path)
-        .with_context(|| format!("loading {}", resolved_config_path.display()))?;
+    let config = alint_dsl::load_with(
+        &resolved_config_path,
+        &alint_dsl::LoadOptions::with_catalog(registry.catalog()),
+    )
+    .with_context(|| format!("loading {}", resolved_config_path.display()))?;
 
     let directives = collect_directives(&config, opts.include_info);
     let body = match opts.format {
@@ -108,18 +115,40 @@ fn collect_directives(config: &alint_core::Config, include_info: bool) -> Vec<Di
         .iter()
         .filter(|spec| !matches!(spec.level, Level::Off))
         .filter(|spec| include_info || !matches!(spec.level, Level::Info))
-        .map(|spec| Directive {
-            rule_id: spec.id.clone(),
-            severity: spec.level,
-            directive: spec.message.clone().unwrap_or_else(|| match &spec.paths {
-                // No author message: fall back to the kind AND the scope it
-                // applies to, so a generated AGENTS.md directive stays
-                // actionable ("file_exists rule on README.md", not just the
-                // bare "file_exists rule").
-                Some(p) => format!("{} rule on {}", spec.kind, p.render_scope()),
-                None => format!("{} rule", spec.kind),
-            }),
-            policy_url: spec.policy_url.clone(),
+        .map(|spec| {
+            let directive = spec.message.as_ref().map_or_else(
+                || match &spec.paths {
+                    // No author message: fall back to the kind AND the scope it
+                    // applies to, so a generated AGENTS.md directive stays
+                    // actionable ("file_exists rule on README.md", not just the
+                    // bare "file_exists rule").
+                    Some(_) if spec.field_is_sensitive("paths") => {
+                        format!("{} rule on <redacted>", spec.kind)
+                    }
+                    Some(paths) => format!("{} rule on {}", spec.kind, paths.render_scope()),
+                    None => format!("{} rule", spec.kind),
+                },
+                |message| {
+                    if spec.field_is_sensitive("message") {
+                        "<redacted>".to_string()
+                    } else {
+                        message.clone()
+                    }
+                },
+            );
+            let policy_url = spec.policy_url.as_ref().map(|url| {
+                if spec.field_is_sensitive("policy_url") {
+                    "<redacted>".to_string()
+                } else {
+                    url.clone()
+                }
+            });
+            Directive {
+                rule_id: spec.id.clone(),
+                severity: spec.level,
+                directive,
+                policy_url,
+            }
         })
         .collect();
     out.sort_by(|a, b| {
@@ -195,6 +224,17 @@ fn write_output(body: &str, opts: &RunOptions) -> Result<()> {
         (None, false) => {
             // stdout — `cmd_export_agents_md` configured the
             // anstream wrapper.
+            // A terminal must not receive raw control / bidi characters from
+            // config-derived text (messages, policy URLs). Only a terminal:
+            // redirected output (`> AGENTS.md`) is a file and must match what
+            // `--output` writes byte for byte (sanitizing would turn an emoji
+            // ZWJ sequence into a literal `\u{200d}`). The JSON format already
+            // escapes control chars and must stay valid JSON.
+            let body = if opts.format == OutputFormat::Json || !std::io::stdout().is_terminal() {
+                std::borrow::Cow::Borrowed(body)
+            } else {
+                alint_output::sanitize_terminal_multiline(body)
+            };
             std::io::stdout()
                 .write_all(body.as_bytes())
                 .context("writing to stdout")?;
@@ -269,15 +309,19 @@ mod tests {
             message: msg.map(str::to_string),
             policy_url: None,
             when: None,
+            expect_matches: false,
+            sensitive: false,
+            sensitive_fields: std::collections::BTreeSet::new(),
             fix: None,
             scope_filter: None,
-            extra: serde_yaml_ng::Mapping::new(),
+            extra: yaml_serde::Mapping::new(),
         }
     }
 
     fn config_with(rules: Vec<alint_core::RuleSpec>) -> alint_core::Config {
         alint_core::Config {
             version: 1,
+            requires: None,
             rules,
             facts: Vec::new(),
             extends: Vec::new(),
@@ -288,6 +332,7 @@ mod tests {
             nested_configs: false,
             allow_out_of_root: alint_core::AllowOutOfRoot::default(),
             baseline: None,
+            compatibility: Vec::new(),
         }
     }
 
@@ -334,6 +379,27 @@ mod tests {
         let dirs = collect_directives(&config_with(vec![s]), false);
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].directive, "file_exists rule on README.md");
+    }
+
+    #[test]
+    fn protected_directive_fields_never_export_raw_values() {
+        let mut path = spec("path", Level::Error, None);
+        path.paths = Some(alint_core::PathsSpec::Single("selector-secret.rs".into()));
+        path.sensitive_fields.insert("paths".to_string());
+        let mut message = spec("message", Level::Warning, Some("message-secret"));
+        message.policy_url = Some("https://example.test/url-secret".to_string());
+        message.sensitive_fields.insert("message".to_string());
+        message.sensitive_fields.insert("policy_url".to_string());
+
+        let directives = collect_directives(&config_with(vec![path, message]), false);
+        let rendered = format!("{directives:?}");
+
+        assert!(!rendered.contains("selector-secret"), "{rendered}");
+        assert!(!rendered.contains("message-secret"), "{rendered}");
+        assert!(!rendered.contains("url-secret"), "{rendered}");
+        assert_eq!(directives[0].directive, "file_exists rule on <redacted>");
+        assert_eq!(directives[1].directive, "<redacted>");
+        assert_eq!(directives[1].policy_url.as_deref(), Some("<redacted>"));
     }
 
     #[test]

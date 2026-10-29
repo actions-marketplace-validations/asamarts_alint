@@ -1,3 +1,4 @@
+test_version: 1
 name: file_min_size flags files below the size floor
 tags: [check, file_min_size, metadata]
 
@@ -29,5 +30,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: min-50, level: warning, path: tiny.txt}

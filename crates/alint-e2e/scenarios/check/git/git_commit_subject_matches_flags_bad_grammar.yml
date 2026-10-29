@@ -1,3 +1,4 @@
+test_version: 1
 name: git_commit_subject_matches fires on a subject that breaks the grammar
 tags: [check, git_commit_subject_matches, git, failing]
 
@@ -28,5 +29,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: subject-grammar, level: error}

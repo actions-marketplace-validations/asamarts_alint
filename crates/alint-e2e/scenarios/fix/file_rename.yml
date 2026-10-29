@@ -1,3 +1,4 @@
+test_version: 1
 name: file_rename normalizes Rust sources to snake_case
 tags: [fix, filename_case, file_rename]
 
@@ -21,11 +22,14 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: rust-snake, level: error, path: src/FooBar.rs}
       - {rule: rust-snake, level: error, path: src/XMLParser.rs}
-  - applied: [rust-snake]
-  - violations: []
+  - exit: success
+    applied: [rust-snake]
+  - exit: success
+    violations: []
 
 expect_tree:
   src:

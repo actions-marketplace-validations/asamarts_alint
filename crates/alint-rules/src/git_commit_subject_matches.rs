@@ -14,9 +14,10 @@
 //! Shares the family shape (the `commit_range` module): `since:`
 //! unset checks HEAD only; `since:` set checks `<since>..HEAD`,
 //! oldest-first, merge commits excluded unless `include_merges:`.
-//! Silent outside a git repo / with no commits; a bad `since:` ref
-//! hard-fails with a shallow-clone hint. `since:`'s `{{env.X}}`
-//! interpolation is resolved at config load by `alint-dsl`.
+//! An unavailable Git executable or repository is an analysis
+//! failure; an unborn repository has no commits and may pass. A bad
+//! `since:` ref hard-fails with a shallow-clone hint. `since:`'s
+//! `{{env.X}}` interpolation is resolved at config load by `alint-dsl`.
 //!
 //! Check-only — alint can't rewrite the user's commit history.
 
@@ -93,6 +94,32 @@ impl GitCommitSubjectMatchesRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::SingleShot,
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::Optional,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::Git {
+            operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::Log]),
+        },
+        condition: alint_core::CapabilityCondition::Always,
+    }]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::ASSERTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
@@ -107,7 +134,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         return Err(Error::rule_config(
             &spec.id,
             "`include_merges: true` has no effect without `since:`. Either remove it \
-             or set `since:` to enable range mode.",
+         or set `since:` to enable range mode.",
         ));
     }
     let matches = Regex::new(&opts.matches).map_err(|e| {
@@ -141,7 +168,7 @@ mod tests {
     }
 
     /// Construct the concrete rule directly so tests can drive
-    /// `check_one` — the real per-commit path — without a git repo.
+    /// `check_one` - the real per-commit path - without a git repo.
     fn match_rule(re: &str) -> GitCommitSubjectMatchesRule {
         GitCommitSubjectMatchesRule {
             id: "subject-grammar".into(),

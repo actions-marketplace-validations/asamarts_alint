@@ -1,6 +1,6 @@
 ---
 title: Installation
-description: Install alint via Homebrew, install.sh, npm, cargo (or cargo-binstall), Docker/Podman, or from source.
+description: Install alint via Homebrew, install.sh, npm, PyPI (uvx/pipx), cargo (or cargo-binstall), Docker/Podman, or from source.
 sidebar:
   order: 1
 ---
@@ -19,7 +19,7 @@ The recommended path on macOS and Linux. The [asamarts/homebrew-alint](https://g
 ## install.sh (Linux + macOS)
 
 ```bash
-curl -sSL https://alint.org/install.sh | bash
+curl -fsSL https://alint.org/install.sh | bash
 ```
 
 Detects platform (Linux / macOS, x86_64 / aarch64), downloads the matching tarball from GitHub Releases, verifies its SHA-256, and installs to `$INSTALL_DIR` (default `~/.local/bin`). This path is shell-based, so it does not cover Windows; Windows users have [npm](#npm), [cargo](#cargo), or the manual tarball (see [Windows](#windows)).
@@ -27,10 +27,10 @@ Detects platform (Linux / macOS, x86_64 / aarch64), downloads the matching tarba
 Pin a specific version (and skip the "latest release" GitHub API lookup, which can rate-limit on shared CI egress IPs):
 
 ```bash
-ALINT_VERSION=v0.15.2 curl -sSL https://alint.org/install.sh | bash
+curl -fsSL https://alint.org/install.sh | ALINT_VERSION=v0.20.1 bash
 ```
 
-Supply-chain note: the installer verifies the SHA-256 of the release tarball it downloads, but the script itself is fetched from the `main` branch (`alint.org/install.sh` redirects there). To pin the installer too, point `curl` at a release tag instead of `main` (for example `https://raw.githubusercontent.com/asamarts/alint/v0.15.2/install.sh`), or download it from the [Releases page](https://github.com/asamarts/alint/releases) and review it before running.
+Supply-chain note: the installer verifies the SHA-256 of the release tarball it downloads, but the script itself is fetched from the `main` branch (`alint.org/install.sh` redirects there). To pin the installer too, point `curl` at a release tag instead of `main` (for example `https://raw.githubusercontent.com/asamarts/alint/v0.20.1/install.sh`), or download it from the [Releases page](https://github.com/asamarts/alint/releases) and review it before running.
 
 ## npm
 
@@ -46,13 +46,32 @@ npx @asamarts/alint check
 
 Supports Linux (x64/arm64), macOS (x64/arm64), and Windows (x64). The install runs a postinstall script, so it needs network access at install time and does not work under `npm install --ignore-scripts`, Bun's `bunx`, or **pnpm 10+** (which blocks dependency build scripts by default — run `pnpm approve-builds @asamarts/alint` to allow it). A future release moves to per-platform packages to lift those limits.
 
+## PyPI (uvx / pipx / pip / uv)
+
+```bash
+# Run without installing (the Python equivalent of npx):
+uvx alint check
+pipx run alint check
+
+# Install as a standalone tool:
+uv tool install alint
+pipx install alint
+
+# Or into the current environment:
+pip install alint
+```
+
+The [`alint`](https://pypi.org/project/alint/) PyPI package ships the native binary **inside** a per-platform wheel (`py3-none-<platform>`): no source build, no PyO3, no Python in the hot path. It is the same executable the other channels ship, delivered through the Python packaging ecosystem. Because the wheel embeds the binary rather than downloading it in a postinstall step, it installs cleanly where the npm wrapper cannot: locked-down `--ignore-scripts`-style installs, offline/mirror setups, and `bunx`. Convenient for Python-tooling repos, pre-commit, and any environment that already has `uv` or `pipx`.
+
+Supports Linux (x86_64/aarch64, glibc **and** musl), macOS (x86_64/arm64), and Windows (x64). Python 3.7+ is enough to select a wheel; the binary itself is interpreter-independent.
+
 ## cargo
 
 ```bash
 cargo install alint
 ```
 
-Builds from source against the current stable Rust toolchain (requires rustc 1.85+ and `cargo` on `$PATH`). To install a **pre-built** binary instead of compiling, use [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
+Builds from source against the current stable Rust toolchain (requires rustc 1.88+ and `cargo` on `$PATH`). To install a **pre-built** binary instead of compiling, use [cargo-binstall](https://github.com/cargo-bins/cargo-binstall):
 
 ```bash
 cargo binstall alint
@@ -69,7 +88,7 @@ A distroless multi-arch image (`linux/amd64`, `linux/arm64`) is published to ghc
 docker run --rm -v "$PWD:/repo" ghcr.io/asamarts/alint:latest
 
 # Pin to an exact version:
-docker run --rm -v "$PWD:/repo" ghcr.io/asamarts/alint:v0.15.2 check
+docker run --rm -v "$PWD:/repo" ghcr.io/asamarts/alint:v0.20.1 check
 ```
 
 The image is OCI-standard, so **Podman runs it unchanged** — just use the fully-qualified name (Podman does not assume a default registry):
@@ -84,7 +103,7 @@ The image runs as the distroless `nonroot` user (UID 65532); host files must be 
 docker run --rm -u $(id -u):$(id -g) -v "$PWD:/repo" ghcr.io/asamarts/alint:latest fix
 ```
 
-Also published: the bare semver (`:0.15.2`), the `:<major>.<minor>` rolling channel, and the raw git tag (`:v0.15.2`).
+Also published: the bare semver (`:0.20.1`), the `:<major>.<minor>` rolling channel, and the raw git tag (`:v0.20.1`).
 
 ## Windows
 
@@ -92,7 +111,7 @@ The `install.sh` one-liner is shell-based and does not cover Windows. On Windows
 
 - **npm:** `npm install -g @asamarts/alint` (see [npm](#npm)) — the simplest path;
 - **cargo:** `cargo install alint` or `cargo binstall alint` (see [cargo](#cargo));
-- **manual:** download `alint-v0.15.2-x86_64-pc-windows-msvc.tar.gz` from the [Releases page](https://github.com/asamarts/alint/releases), extract, and put `alint.exe` on your `PATH`.
+- **manual:** download `alint-v0.20.1-x86_64-pc-windows-msvc.tar.gz` from the [Releases page](https://github.com/asamarts/alint/releases), extract, and put `alint.exe` on your `PATH`.
 
 Note on manually-downloaded binaries: a tarball downloaded through a **browser** carries a "mark of the web", so the first run can trip Windows SmartScreen ("More info → Run anyway") or, on macOS, Gatekeeper quarantine — clear it with `xattr -d com.apple.quarantine ./alint`. Binaries fetched by `curl`/npm/cargo/Homebrew/Docker carry no such mark and run without prompts.
 

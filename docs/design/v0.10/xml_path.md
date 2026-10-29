@@ -23,7 +23,7 @@ bigger scale; "completes the structured-query family
 JSON/YAML/TOML/XML") and the per-repo tracker in
 [`examples/README.md`](../../../examples/README.md#primitive-demand-tracker)
 (`xml_path_*` row: spark, dotnet-runtime). Canonical scope:
-[`../ROADMAP.md`](../ROADMAP.md#v010--case-study-coverage-push)
+[`../ROADMAP.md`](../ROADMAP.md#v010-case-study-coverage-push)
 (#7; the `dotnet@v1` bundled ruleset #10 depends on it).
 
 ## Problem
@@ -162,11 +162,13 @@ detector; depth recursion is the only XML DoS.)
 
 **Resolved (v0.10 post-audit P1):** `element_to_value` carries
 an explicit `depth` and refuses to descend past
-`MAX_XML_DEPTH` (256 — orders of magnitude beyond any real
+`MAX_XML_DEPTH` (256 at v0.10, lowered to 128 in the v0.16
+pre-release hardening for a wider overflow margin on 1 MB test /
+musl stacks — still orders of magnitude beyond any real
 `.csproj` / `pom.xml`, far below the overflow depth). Past the
 bound it returns an `Err` that flows through the **existing**
 parse-error path: one ordinary "not a valid XML document: XML
-nesting exceeds the maximum supported depth (256)" violation
+nesting exceeds the maximum supported depth (128)" violation
 for that file, per-file contained, no abort. This brings the
 XML arm to the same hardening posture the other formats already
 have.
@@ -208,11 +210,19 @@ the family, with one more `Format`):
   data, not prose markup; documented as out of scope, not a
   silent wrong answer.
 - **Single vs. array.** A path with exactly one
-  `<dependency>` maps it to an object, not a 1-element array,
-  so `dependency[*]` still matches (RFC 9535 wildcard over an
-  object's member) but `dependency[0]` would not. Documented;
-  the recommended idiom is `[*]` (works for one or many),
-  matching how the family already treats JSON.
+  `<dependency>` maps it to an object (a string for a leaf
+  element), not a 1-element array. So `dependency[*]` does NOT
+  reliably paper over cardinality: over a single leaf it matches
+  nothing, and `dependency[*]['@id']` / `dependency[*].child`
+  read the members of the lone object instead of descending — so
+  the single case is a silent miss while the many case works.
+  The cardinality-independent idiom is recursive descent
+  (`dependency..['@id']`, scoped under a parent so it does not
+  over-match), used when a rule must handle both one and many;
+  otherwise write the query for the data's actual shape. (This
+  corrects the original note, which claimed `[*]` "works for one
+  or many" — it does not for leaf elements or child/attribute
+  descents.)
 - **`@`/`#text` collision.** An XML attribute literally named
   `text` is `@text`; a child element named `#text` cannot occur
   (`#` is not a valid XML name start char), so the sentinel is

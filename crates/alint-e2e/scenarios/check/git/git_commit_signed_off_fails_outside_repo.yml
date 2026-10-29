@@ -1,0 +1,23 @@
+test_version: 1
+name: git_commit_signed_off fails closed outside a Git repository
+tags: [check, git_commit_signed_off, git]
+
+# The unconditional commit-history capability must be available before dispatch.
+
+given:
+  tree:
+    README.md: "# demo\n"
+  config: |
+    version: 1
+    rules:
+      - id: dco
+        kind: git_commit_signed_off
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: dco, kind: resource_read}

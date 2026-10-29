@@ -35,6 +35,8 @@ use std::path::{Path, PathBuf};
 use alint_core::{Engine, RuleEntry, WalkOptions, walk};
 use alint_rules::builtin_registry;
 
+use crate::support;
+
 /// Per-scenario `expected.toml` shape.
 #[derive(Debug, serde::Deserialize)]
 struct Expected {
@@ -73,7 +75,7 @@ fn discover_fixtures() -> Vec<PathBuf> {
 /// Build a single-config Engine from a fixture's `alint.yml`. Mirrors
 /// the load + build path that `alint check` uses.
 fn engine_for_fixture(scenario: &Path) -> Engine {
-    let config = alint_dsl::load(&scenario.join("alint.yml"))
+    let config = support::load(&scenario.join("alint.yml"))
         .unwrap_or_else(|e| panic!("loading {}: {e}", scenario.display()));
     let registry = builtin_registry();
     let mut entries = Vec::with_capacity(config.rules.len());

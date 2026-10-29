@@ -1,3 +1,4 @@
+test_version: 1
 name: indent_style spaces flags width-mismatched lines and tab indents
 tags: [check, indent_style, content]
 
@@ -20,6 +21,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: success
+    violations:
       - {rule: yml-2sp, level: warning, path: conf/bad_tab.yml}
       - {rule: yml-2sp, level: warning, path: conf/bad_width.yml}

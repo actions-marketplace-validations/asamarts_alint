@@ -1,3 +1,4 @@
+test_version: 1
 name: --changed keeps cross-file `pair` on full-tree semantics
 tags: [check, check_changed, changed, pair]
 
@@ -34,7 +35,9 @@ given:
 when: [check, check_changed]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: c-needs-h, level: error, path: "src/bar.c"}
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: c-needs-h, level: error, path: "src/bar.c"}

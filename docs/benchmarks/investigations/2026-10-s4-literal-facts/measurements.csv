@@ -1,0 +1,17 @@
+environment,tool,phase,workload,size,mode,metric,value,unit,quality
+linux-dev,callgrind,before,r1-facts,100k,facts,instructions,3971291017,Ir,deterministic
+linux-dev,callgrind,before,r2-facts,100k,facts,instructions,5384796126,Ir,deterministic
+linux-dev,callgrind,after,r1-facts,100k,facts,instructions,3974556592,Ir,deterministic
+linux-dev,callgrind,after,r2-facts,100k,facts,instructions,4109705441,Ir,deterministic
+linux-dev,gungraun,after,20-absent-literal-facts,10k,facts,instructions,9667081,Ir,deterministic
+linux-dev,hyperfine,before,S4-r2,100k,full,mean,4235.590,ms,invalid-CV-31.3pct
+linux-dev,hyperfine,before,S4-r2,100k,changed,mean,3864.295,ms,invalid-CV-24.5pct
+linux-dev,hyperfine,after,S4-r3,100k,full,mean,2271.431,ms,invalid-CV-48.5pct
+linux-dev,hyperfine,after,S4-r3,100k,changed,mean,1388.416,ms,invalid-CV-32.9pct
+private-macos-arm64,wall-clock,before,r1-facts,100k,facts,mean,252.0,ms,prior-10-run-diagnostic
+private-macos-arm64,wall-clock,before,r2-facts,100k,facts,mean,353.0,ms,prior-10-run-diagnostic
+private-macos-arm64,wall-clock,after,r1-facts,100k,facts,mean,477.174,ms,CV-0.43pct
+private-macos-arm64,wall-clock,after,r2-facts,100k,facts,mean,484.660,ms,CV-0.50pct
+private-macos-arm64,criterion,after,20-absent-literal-facts,1k,facts,estimate,66.632,us,quick-smoke
+private-macos-arm64,criterion,after,20-absent-literal-facts,10k,facts,estimate,399.26,us,quick-smoke
+private-macos-arm64,criterion,after,20-absent-literal-facts,100k,facts,estimate,3.9454,ms,quick-smoke

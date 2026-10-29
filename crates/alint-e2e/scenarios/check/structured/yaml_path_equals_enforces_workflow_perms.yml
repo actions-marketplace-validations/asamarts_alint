@@ -1,3 +1,4 @@
+test_version: 1
 name: yaml_path_equals catches GitHub workflows without minimal permissions
 tags: [check, yaml_path_equals, structured]
 
@@ -45,5 +46,6 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: workflow-contents-read, level: error, path: .github/workflows/bad.yml}

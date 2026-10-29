@@ -1,3 +1,4 @@
+test_version: 1
 name: no_trailing_whitespace is silent when files are clean
 tags: [check, no_trailing_whitespace, passing]
 
@@ -22,4 +23,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

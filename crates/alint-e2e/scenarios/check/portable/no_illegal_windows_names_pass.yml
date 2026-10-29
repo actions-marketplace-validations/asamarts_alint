@@ -1,3 +1,4 @@
+test_version: 1
 name: no_illegal_windows_names is silent on normal paths
 tags: [check, no_illegal_windows_names, portable, passing]
 
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

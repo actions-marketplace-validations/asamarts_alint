@@ -52,7 +52,7 @@ cargo test --workspace            # ~5s
 cargo run -p alint -- check       # dogfood: alint lints itself
 ```
 
-Rust 1.85+ required (the workspace MSRV: `[workspace.package].rust-version` in `Cargo.toml`; `rust-toolchain.toml` pins the `stable` channel for development).
+Rust 1.88+ required (the workspace MSRV: `[workspace.package].rust-version` in `Cargo.toml`; `rust-toolchain.toml` pins the `stable` channel for development).
 
 ### Pre-push checklist
 
@@ -74,6 +74,47 @@ ci/scripts/check-version-pins.sh           # README/SECURITY/docs/site install s
 ci/scripts/check-workspace-dep-floors.sh   # [workspace.dependencies] floors <= workspace.package.version
 ci/scripts/dogfood.sh                      # cargo build --release + alint check on this repo
 ```
+
+Not in `preflight.sh` (slower; CI's `MSRV` job and the release preflight run
+it): `ci/scripts/msrv.sh` compiles the workspace with the exact toolchain named
+by `[workspace.package].rust-version`, so the MSRV is never hand-copied into CI.
+
+### Private native macOS validation
+
+Maintainers with access to a privately managed Mac may supplement
+`cross-platform.yml` with native tests before pushing platform-sensitive changes
+or release candidates. The host identity and connection details stay in local
+SSH configuration and MUST NOT appear in the repository, CI variables, issues,
+or logs.
+
+Only immutable, maintainer-reviewed commits may run on a personal host. Cargo
+build scripts and tests execute native code; arbitrary fork or pull-request code
+requires a disposable VM or dedicated unprivileged account with no personal
+files, credentials, unlocked Keychain items, or forwarded SSH agent. Follow the
+source-transfer, environment-isolation, test, evidence, and cleanup requirements
+in [`docs/development/private-macos-validation.md`](docs/development/private-macos-validation.md).
+
+This private run supplements rather than replaces GitHub-hosted macOS CI. Linux
+`ci/scripts/preflight.sh` remains required because it owns the Ubuntu-defined
+docs-export and generated-artifact gates.
+
+### Dependency advisories
+
+`ci/scripts/deny.sh` (cargo-deny) and `ci/scripts/audit.sh` (cargo audit) fail
+CI and the release preflight on any RustSec **vulnerability** advisory against
+a crate in `Cargo.lock`; `unmaintained` / `unsound` advisories and yanked
+crates are reported as warnings. Fix a red advisory gate by upgrading the
+affected dependency. Only when the advisory provably does not affect alint,
+waive it in `deny.toml`, the single waiver list both gates read:
+
+```toml
+[advisories]
+ignore = [
+    { id = "RUSTSEC-YYYY-NNNN", reason = "why alint is unaffected; tracking issue" },
+]
+```
+
+Remove the waiver as soon as a fixed version is available.
 
 ### Bumping the workspace version
 
@@ -172,8 +213,8 @@ Every new rule kind needs:
 - Coverage via `coverage_audit_*.rs` (the audit tests will fail if a new rule
   kind ships without scenarios, which is intentional)
 
-For per-file rules, add the rule to the `S6` macro bench scenario list if it's
-a content rule that fans out over `**/*.rs`.
+For per-file rules, add the rule to the `S2` (`s2_content`) macro bench scenario
+if it's a content rule that fans out over `**/*.rs`.
 
 ### PR conventions
 
@@ -187,7 +228,21 @@ a content rule that fans out over `**/*.rs`.
 `main` is protected; PRs require:
 
 - Passing the PR CI workflows: `ci.yml` (preflight: fmt/clippy/test/docs/version-pins/dogfood, plus the `bench-smoke` and advisory `perf-gate` jobs) and `cross-platform.yml` (Linux/macOS/Windows tests). (`release.yml` is tag-triggered only and does not gate PRs.)
-  - **PRs from a fork** run the portable gate (fmt/clippy/test/build/audit/deny/docs/dogfood/examples/shell-tests) on ephemeral GitHub-hosted `ubuntu-latest` runners, never the maintainer's self-hosted box; the box-only jobs (`bench-smoke`, `perf-gate`, `coverage`) are skipped there and still run on push-to-`main` and collaborator-branch PRs. So a fork PR may show fewer checks and colder (uncached) build times; that's expected, not a failure. See `docs/design/v0.14/ci-fork-pr-isolation.md`.
+  - **Temporary security hold:** every PR currently runs the portable gate
+    (fmt/msrv/clippy/test/build/audit/deny/docs/dogfood/examples/shell-tests) on
+    ephemeral GitHub-hosted `ubuntu-latest` runners. The legacy fixed-label
+    listener is offline, so box-only `bench-smoke` and `coverage` are skipped
+    for PRs. The load-immune `perf-gate` is portable and runs on hosted
+    capacity. Exact admitted human PRs may return to local compute
+    only after the disposable one-job executor passes its isolation canaries.
+    See `docs/design/v0.14/ci-fork-pr-isolation.md`.
+  - Every workflow declares its `GITHUB_TOKEN` permissions. Ordinary test and
+    build workflows are `contents: read`; release, package, docs and benchmark
+    writers grant only the scopes used by the individual writer job. The
+    repository's combined "create and approve pull requests" setting remains
+    enabled solely because the benchmark recorder opens a review PR. Workflow
+    code may create that PR but must never approve one; the shell-test policy
+    gate rejects permission drift and approval operations.
 - One approving review (currently a single-maintainer project; this is the
   spot to call out if you'd like to be added as a co-maintainer)
 

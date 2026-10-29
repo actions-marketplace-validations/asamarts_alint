@@ -1,3 +1,4 @@
+test_version: 1
 name: file_normalize_line_endings rewrites CRLF → LF (and vice versa)
 tags: [fix, line_endings, file_normalize_line_endings]
 
@@ -19,10 +20,13 @@ given:
 when: [check, fix, check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: lf-only, level: error, path: src/a.rs}
-  - applied: [lf-only]
-  - violations: []
+  - exit: success
+    applied: [lf-only]
+  - exit: success
+    violations: []
 
 expect_tree:
   src:

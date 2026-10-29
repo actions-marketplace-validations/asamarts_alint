@@ -170,8 +170,8 @@ exact gap-class ADR-0012 named for the one field it had not yet reached.
 - Prior art for spec-based rendering: `export_agents_md::collect_directives`
   (`crates/alint/src/export_agents_md/mod.rs`).
 - The fields being retired were added across the explain enrichment (kind / paths /
-  message / when_src) and the kind-options change (extra); anchors at
-  `crates/alint-core/src/engine.rs:79-98` and the load site in
-  `crates/alint/src/main.rs`.
+  message / when_src) and the kind-options change (extra); anchors on `RuleEntry`
+  in `crates/alint-core/src/engine.rs` and the load site in
+  `crates/alint/src/config_cmd.rs`.
 - Independent of ADR-0011 (per-kind explanation prose), which adds a *new* data
   source rather than reorganising the config-instance projection this ADR covers.

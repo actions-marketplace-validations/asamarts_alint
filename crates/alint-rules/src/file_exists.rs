@@ -17,14 +17,14 @@ struct Options {
     #[serde(default)]
     root_only: bool,
     /// Restrict matches to files tracked in git's index: entries present in the
-    /// walked tree but not in `git ls-files` are skipped. No effect outside a
-    /// git repo. Default `false`.
+    /// walked tree but not in `git ls-files` are skipped. Repository
+    /// unavailability is an analysis failure when enabled. Default `false`.
     #[serde(default)]
     git_tracked_only: bool,
     /// Per-rule override for the workspace `respect_gitignore` setting. When
     /// `false`, this rule's literal-path checks also stat the filesystem
     /// directly, so it sees files that are tracked AND `.gitignore`-masked
-    /// (the bazel-style `.bazelversion` pattern — pitfall #18 in
+    /// (the bazel-style `.bazelversion` pattern - pitfall #18 in
     /// `docs/development/CONFIG-AUTHORING.md`). Honoured only by `file_exists`
     /// literal paths; glob patterns fall through to the workspace setting.
     /// Default: inherit the workspace `respect_gitignore`.
@@ -55,12 +55,12 @@ pub struct FileExistsRule {
     literal_paths: Option<Vec<PathBuf>>,
     root_only: bool,
     /// When `true`, only consider walked entries that are also
-    /// in git's index. Outside a git repo this becomes a silent
-    /// no-op — no entries qualify, so the rule reports the
-    /// "missing" violation as if no file existed.
+    /// in Git's index. The engine derives this dependency from
+    /// kind metadata and gates repository unavailability before
+    /// dispatch.
     git_tracked_only: bool,
     /// When `Some(false)`, the literal-path fast path also
-    /// checks the filesystem directly via `ctx.root.join(p)` —
+    /// checks the filesystem directly via `ctx.root.join(p)` -
     /// finds files that are present-on-disk but
     /// `.gitignore`-masked from the walker (closes the
     /// `bazel-style "tracked AND gitignored"` pattern from
@@ -70,20 +70,18 @@ pub struct FileExistsRule {
     fixer: Option<FileCreateFixer>,
 }
 
-/// True when `pattern` is a plain literal path string — no glob
-/// metacharacters, no `!` exclude prefix. Such patterns can be
-/// answered by an O(1) hash-set lookup against
-/// [`alint_core::FileIndex::contains_file`] instead of a O(N)
-/// scope-match scan.
-fn is_literal_path(pattern: &str) -> bool {
-    !pattern.starts_with('!')
-        && !pattern
-            .chars()
-            .any(|c| matches!(c, '*' | '?' | '[' | ']' | '{' | '}'))
+/// The literal path `pattern` names (escapes resolved), when it has no glob
+/// metacharacters and no `!` exclude prefix. Such patterns can be answered by
+/// an O(1) hash-set lookup against [`alint_core::FileIndex::contains_file`]
+/// instead of a O(N) scope-match scan. See
+/// [`alint_core::template::literal_glob_path`] (a `\` is an escape on
+/// non-Windows, so a raw metacharacter scan is not enough).
+fn literal_path(pattern: &str) -> Option<PathBuf> {
+    alint_core::template::literal_glob_path(pattern).map(PathBuf::from)
 }
 
 /// True iff `paths` is a flat list (single string or `Many`)
-/// with no excludes — `IncludeExclude` form is excluded since
+/// with no excludes - `IncludeExclude` form is excluded since
 /// the fast path can't honour excludes by hash lookup alone.
 fn paths_spec_has_no_excludes(spec: &PathsSpec) -> bool {
     match spec {
@@ -122,6 +120,10 @@ impl Rule for FileExistsRule {
         Some(&self.scope)
     }
 
+    fn supports_expect_matches(&self) -> bool {
+        false
+    }
+
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let found = if let Some(literals) = self.literal_paths.as_ref() {
             // Fast path: each pattern is a literal relative
@@ -156,7 +158,15 @@ impl Rule for FileExistsRule {
                     // doesn't stat through an in-repo symlink out of the tree
                     // (an existence oracle reachable from an extends'd ruleset).
                     let abs = ctx.root.join(&confined);
-                    if crate::pathsafe::resolved_within_root(&abs, ctx.root) && abs.is_file() {
+                    // `git_tracked_only` still applies to a file found by the stat:
+                    // the walker-bypass exists for tracked-but-gitignored files, so
+                    // an untracked one on disk must not satisfy the rule (v0.18.3).
+                    let tracked_ok = !self.git_tracked_only
+                        || ctx.git_tracked.is_some_and(|t| t.contains(&confined));
+                    if tracked_ok
+                        && crate::pathsafe::resolved_within_root(&abs, ctx.root)
+                        && abs.is_file()
+                    {
                         return true;
                     }
                 }
@@ -212,6 +222,34 @@ impl Rule for FileExistsRule {
     }
 }
 
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::FullIndex { path_scope: true },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::FileOnly,
+    respect_gitignore: true,
+    root_only: true,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::Git {
+            operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::TrackedSet]),
+        },
+        condition: alint_core::CapabilityCondition::OptionSet {
+            option: std::borrow::Cow::Borrowed("git_tracked_only"),
+        },
+    }]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("file_create")]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
+
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     alint_core::reject_scope_filter_on_cross_file(spec, "file_exists")?;
     let Some(paths) = &spec.paths else {
@@ -235,12 +273,11 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     // present AND tracked. When all preconditions hold,
     // `literal_paths` carries the parsed `PathBuf`s ready for
     // `FileIndex::contains_file` lookup at evaluate time.
-    let literal_paths =
-        if paths_spec_has_no_excludes(paths) && patterns.iter().all(|p| is_literal_path(p)) {
-            Some(patterns.iter().map(PathBuf::from).collect())
-        } else {
-            None
-        };
+    let literal_paths = if paths_spec_has_no_excludes(paths) {
+        patterns.iter().map(|p| literal_path(p)).collect()
+    } else {
+        None
+    };
     let fixer = match &spec.fix {
         Some(FixSpec::FileCreate { file_create: cfg }) => {
             let target = cfg
@@ -250,8 +287,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 .ok_or_else(|| {
                     Error::rule_config(
                         &spec.id,
-                        "fix.file_create needs a `path` — none of the rule's `paths:` \
-                         entries is a literal filename",
+                        "fix.file_create needs a `path` - none of the rule's `paths:` \
+                     entries is a literal filename",
                     )
                 })?;
             let source = alint_core::resolve_content_source(
@@ -260,7 +297,11 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
                 &cfg.content,
                 &cfg.content_from,
             )?;
-            Some(FileCreateFixer::new(target, source, cfg.create_parents))
+            Some(
+                FileCreateFixer::new(target, source, cfg.create_parents).with_applicability(
+                    cfg.applicability.unwrap_or(alint_core::Applicability::Safe),
+                ),
+            )
         }
         Some(other) => {
             return Err(Error::rule_config(
@@ -295,13 +336,10 @@ fn literal_is_nested(p: &Path) -> bool {
 
 /// Best-effort: return the first entry in `patterns` that has no glob
 /// metacharacters (so it's a usable file path). Returns `None` if every
-/// pattern is a glob — in that case the caller must require an
+/// pattern is a glob - in that case the caller must require an
 /// explicit `fix.file_create.path`.
 fn first_literal_path(patterns: &[String]) -> Option<PathBuf> {
-    patterns
-        .iter()
-        .find(|p| !p.chars().any(|c| matches!(c, '*' | '?' | '[' | '{')))
-        .map(PathBuf::from)
+    patterns.iter().find_map(|p| literal_path(p))
 }
 
 fn patterns_of(spec: &PathsSpec) -> Vec<String> {

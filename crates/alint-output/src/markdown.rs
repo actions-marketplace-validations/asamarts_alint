@@ -27,13 +27,19 @@ pub fn write_markdown(report: &Report, w: &mut dyn Write) -> std::io::Result<()>
     writeln!(w)?;
 
     let total = report.total_violations();
-    if total == 0 {
+    let note_count = report.total_notes();
+    let failure_count = report.total_analysis_failures();
+    if total == 0 && failure_count == 0 {
         writeln!(w, "No violations found.")?;
+        write_note_summary(w, note_count)?;
         return Ok(());
     }
 
     write_summary_line(w, report)?;
-    writeln!(w)?;
+    write_note_summary(w, note_count)?;
+    if note_count == 0 {
+        writeln!(w)?;
+    }
 
     let (by_file, cross_file) = bucket_violations(report);
 
@@ -60,6 +66,37 @@ pub fn write_markdown(report: &Report, w: &mut dyn Write) -> std::io::Result<()>
         writeln!(w)?;
     }
 
+    if failure_count > 0 {
+        writeln!(w, "## Analysis failures ({failure_count})")?;
+        writeln!(w)?;
+        for result in &report.results {
+            for failure in &result.analysis_failures {
+                let location = failure.report_path().map_or_else(
+                    || "repository".to_string(),
+                    |path| match (failure.line, failure.column) {
+                        (Some(line), Some(column)) => format!(
+                            "`{}` (line {line}, col {column})",
+                            md_inline_code(&path.display().to_string())
+                        ),
+                        (Some(line), None) => format!(
+                            "`{}` (line {line})",
+                            md_inline_code(&path.display().to_string())
+                        ),
+                        _ => format!("`{}`", md_inline_code(&path.display().to_string())),
+                    },
+                );
+                writeln!(
+                    w,
+                    "- **error** `{}` at {location} - analysis failure (`{}`): {}",
+                    md_inline_code(&result.rule_id),
+                    failure.kind.as_str(),
+                    md_escape(&failure.message),
+                )?;
+            }
+        }
+        writeln!(w)?;
+    }
+
     Ok(())
 }
 
@@ -70,40 +107,77 @@ pub fn write_fix_markdown(report: &FixReport, w: &mut dyn Write) -> std::io::Res
     let applied = report.applied();
     let skipped = report.skipped();
     let unfixable = report.unfixable();
+    let suggested = report.suggested();
+    let analysis_failures = report.total_analysis_failures();
+    // NB: a fix report is about *fixes*, not violations, so it must NOT reuse
+    // check's "No violations found." for an empty report - under `--fix-only`
+    // the residual (skipped/unfixable) items are filtered out, so an empty
+    // report there means "0 fixes applied" over a tree that still has violations,
+    // not a clean tree. Always print the honest summary counts, matching the
+    // human and JSON formatters (which have no emptiness special-case).
 
-    if applied + skipped + unfixable == 0 {
-        writeln!(w, "No violations found.")?;
-        return Ok(());
-    }
-
+    // `suggested` is appended only when non-zero so a run with no suggestions
+    // renders byte-identically to before the tier machinery existed.
+    let suggested_part = if suggested > 0 {
+        format!(", **{suggested} suggested**")
+    } else {
+        String::new()
+    };
+    let failure_part = if analysis_failures > 0 {
+        format!(", **{analysis_failures} analysis failures**")
+    } else {
+        String::new()
+    };
     writeln!(
         w,
-        "**{applied} applied**, **{skipped} skipped**, **{unfixable} unfixable**.",
+        "**{applied} applied**, **{skipped} skipped**, **{unfixable} unfixable**{suggested_part}{failure_part}.",
     )?;
     writeln!(w)?;
 
     for r in &report.results {
-        if r.items.is_empty() {
+        if r.items.is_empty() && r.analysis_failures.is_empty() {
             continue;
         }
-        writeln!(w, "## `{}` ({})", md_inline_code(&r.rule_id), r.items.len())?;
+        let count = r.items.len() + r.analysis_failures.len();
+        writeln!(w, "## `{}` ({count})", md_inline_code(&r.rule_id))?;
         writeln!(w)?;
         for item in &r.items {
-            let status_label = match &item.status {
-                FixStatus::Applied(msg) => format!("**applied** — {}", md_escape(msg)),
-                FixStatus::Skipped(msg) => format!("**skipped** — {}", md_escape(msg)),
-                FixStatus::Unfixable => "**unfixable**".to_string(),
+            // The applied summary already names its file, so show the path
+            // prefix only on the message-based skipped / unfixable lines.
+            let (status_label, show_path) = match &item.status {
+                FixStatus::Applied(msg) => (format!("**applied** - {}", md_escape(msg)), false),
+                FixStatus::Skipped { reason: msg, .. } => {
+                    (format!("**skipped** - {}", md_escape(msg)), true)
+                }
+                FixStatus::Suggested { summary, .. } => {
+                    (format!("**suggested** - {}", md_escape(summary)), true)
+                }
+                FixStatus::Unfixable => ("**unfixable**".to_string(), true),
             };
-            let path_part = item
-                .violation
-                .path
-                .as_ref()
-                .map(|p| format!("`{}` — ", md_inline_code(&p.display().to_string())))
-                .unwrap_or_default();
+            let path_part = if show_path {
+                item.violation
+                    .report_path()
+                    .map(|p| format!("`{}` - ", md_inline_code(&p.display().to_string())))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             writeln!(
                 w,
                 "- {path_part}{status_label}: {}",
                 md_escape(&item.violation.message)
+            )?;
+        }
+        for failure in &r.analysis_failures {
+            let path_part = failure
+                .report_path()
+                .map(|p| format!("`{}` - ", md_inline_code(&p.display().to_string())))
+                .unwrap_or_default();
+            writeln!(
+                w,
+                "- {path_part}**analysis failure** (`{}`): {}",
+                failure.kind.as_str(),
+                md_escape(&failure.message)
             )?;
         }
         writeln!(w)?;
@@ -114,11 +188,20 @@ pub fn write_fix_markdown(report: &FixReport, w: &mut dyn Write) -> std::io::Res
 
 // ─── Helpers ───────────────────────────────────────────────────────
 
+fn write_note_summary(w: &mut dyn Write, count: usize) -> std::io::Result<()> {
+    if count > 0 {
+        writeln!(w)?;
+        writeln!(w, "> {}", crate::note_summary(count))?;
+        writeln!(w)?;
+    }
+    Ok(())
+}
+
 fn write_summary_line(w: &mut dyn Write, report: &Report) -> std::io::Result<()> {
     let total = report.total_violations();
+    let failure_count = report.total_analysis_failures();
     let (errors, warnings, infos) = level_counts(report);
     let bucket_count = file_bucket_count(report);
-
     let file_phrase = if bucket_count == 1 {
         "1 file".to_string()
     } else {
@@ -136,20 +219,27 @@ fn write_summary_line(w: &mut dyn Write, report: &Report) -> std::io::Result<()>
         breakdown.push(format!("{infos} info"));
     }
 
-    if breakdown.is_empty() {
-        writeln!(
-            w,
-            "**{total} violation{} across {file_phrase}.**",
-            plural_s(total)
-        )?;
-    } else {
-        writeln!(
-            w,
-            "**{total} violation{} across {file_phrase}** ({}).",
-            plural_s(total),
-            breakdown.join(", "),
-        )?;
+    if failure_count > 0 {
+        breakdown.push(format!(
+            "{failure_count} analysis failure{}",
+            plural_s(failure_count)
+        ));
     }
+
+    let failure_phrase = if failure_count == 0 {
+        String::new()
+    } else {
+        format!(
+            " and {failure_count} analysis failure{}",
+            plural_s(failure_count)
+        )
+    };
+    writeln!(
+        w,
+        "**{total} violation{}{failure_phrase} across {file_phrase}** ({}).",
+        plural_s(total),
+        breakdown.join(", "),
+    )?;
     Ok(())
 }
 
@@ -175,7 +265,7 @@ fn write_violation_bullet(
 
     writeln!(
         w,
-        "- **{level}** {rule_part}{loc} — {}",
+        "- **{level}** {rule_part}{loc} - {}",
         md_escape(&violation.message)
     )?;
     Ok(())
@@ -214,7 +304,10 @@ fn file_bucket_count(report: &Report) -> usize {
             continue;
         }
         for v in &r.violations {
-            paths.insert(v.path.as_deref());
+            paths.insert(v.report_path());
+        }
+        for failure in &r.analysis_failures {
+            paths.insert(failure.report_path());
         }
     }
     paths.len()
@@ -233,11 +326,8 @@ fn bucket_violations(report: &Report) -> BucketedViolations<'_> {
             continue;
         }
         for violation in &result.violations {
-            match &violation.path {
-                Some(p) => by_file
-                    .entry(p.as_ref())
-                    .or_default()
-                    .push((result, violation)),
+            match violation.report_path() {
+                Some(path) => by_file.entry(path).or_default().push((result, violation)),
                 None => cross_file.push((result, violation)),
             }
         }
@@ -281,7 +371,11 @@ fn md_escape(s: &str) -> String {
             _ => out.push(ch),
         }
     }
-    out
+    // Neutralize any remaining terminal control bytes (ESC/BEL/...) from an
+    // attacker-named path or message, so previewing `--format markdown` in a
+    // terminal on an untrusted repo can't fire an escape sequence (audit R2 MED-1).
+    // `\n`/`\r` are already collapsed above, so this only touches other controls.
+    crate::sanitize::sanitize_terminal(&out).into_owned()
 }
 
 /// Escape a string for inclusion inside a backtick code span.
@@ -296,8 +390,10 @@ fn md_inline_code(s: &str) -> String {
     // Inline code is single-line by definition: a `\n`/`\r` (legal in a path on
     // Unix) would break out of the span and split the enclosing `## ` heading,
     // so collapse them to a space. A backtick would close the span early, so
-    // swap in the modifier-letter look-alike.
-    s.replace(['\r', '\n'], " ").replace('`', "ʼ")
+    // swap in the modifier-letter look-alike. Then neutralize any remaining
+    // terminal control bytes (ESC/BEL/...) so they can't fire in a terminal preview
+    // (audit R2 MED-1); `\r`/`\n` are already collapsed above.
+    crate::sanitize::sanitize_terminal(&s.replace(['\r', '\n'], " ").replace('`', "ʼ")).into_owned()
 }
 
 /// Escape a URL for use in a markdown link target.
@@ -332,7 +428,10 @@ fn md_url(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alint_core::{FixItem, FixReport, FixRuleResult, FixStatus, Report, RuleResult, Violation};
+    use alint_core::{
+        FindingDisposition, FixItem, FixReport, FixRuleResult, FixStatus, Report, RuleResult,
+        Violation,
+    };
     use std::path::{Path, PathBuf};
 
     fn render(report: &Report) -> String {
@@ -355,6 +454,7 @@ mod tests {
             violations,
             notes: Vec::new(),
             is_fixable: false,
+            analysis_failures: Vec::new(),
         }
     }
 
@@ -406,15 +506,24 @@ mod tests {
                     message: "TODO marker found".into(),
                     line: Some(12),
                     column: Some(4),
-                    is_note: false,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    fix_key: None,
+                    sensitive: false,
+                    is_fixable: false,
+                    not_fixable: false,
+                    proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
         let out = render(&report);
         assert!(out.contains("**1 violation across 1 file** (1 error)."));
         assert!(out.contains("## `src/lib.rs` (1)"));
-        assert!(out.contains("- **error** `no-todo` (line 12, col 4) — TODO marker found"));
+        assert!(out.contains("- **error** `no-todo` (line 12, col 4) - TODO marker found"));
     }
 
     #[test]
@@ -429,8 +538,17 @@ mod tests {
                         message: "z".into(),
                         line: None,
                         column: None,
-                        is_note: false,
+                        range: None,
+                        related_locations: Vec::new(),
+                        related_locations_omitted: 0,
+                        disposition: FindingDisposition::default(),
                         baseline_key: None,
+                        fix_key: None,
+                        sensitive: false,
+                        is_fixable: false,
+                        not_fixable: false,
+                        proposed_edits: Vec::new(),
+                        path_sensitive: false,
                     }],
                 ),
                 rule(
@@ -441,8 +559,17 @@ mod tests {
                         message: "a".into(),
                         line: None,
                         column: None,
-                        is_note: false,
+                        range: None,
+                        related_locations: Vec::new(),
+                        related_locations_omitted: 0,
+                        disposition: FindingDisposition::default(),
                         baseline_key: None,
+                        fix_key: None,
+                        sensitive: false,
+                        is_fixable: false,
+                        not_fixable: false,
+                        proposed_edits: Vec::new(),
+                        path_sensitive: false,
                     }],
                 ),
             ],
@@ -492,7 +619,7 @@ mod tests {
         };
         let out = render(&report);
         assert!(out.contains("## Cross-file (1)"));
-        assert!(out.contains("- **error** `unique-pkg` — duplicate package name"));
+        assert!(out.contains("- **error** `unique-pkg` - duplicate package name"));
     }
 
     #[test]
@@ -523,6 +650,7 @@ mod tests {
                 violations: vec![Violation::new("x").with_path(PathBuf::from("a.rs"))],
                 notes: Vec::new(),
                 is_fixable: false,
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render(&report);
@@ -569,33 +697,60 @@ mod tests {
                     message: "x".into(),
                     line: Some(7),
                     column: None,
-                    is_note: false,
+                    range: None,
+                    related_locations: Vec::new(),
+                    related_locations_omitted: 0,
+                    disposition: FindingDisposition::default(),
                     baseline_key: None,
+                    fix_key: None,
+                    sensitive: false,
+                    is_fixable: false,
+                    not_fixable: false,
+                    proposed_edits: Vec::new(),
+                    path_sensitive: false,
                 }],
             )],
         };
         let out = render(&report);
-        assert!(out.contains("(line 7) — x"));
+        assert!(out.contains("(line 7) - x"));
         assert!(!out.contains("col"));
     }
 
     #[test]
     fn output_is_deterministic_across_input_order() {
         let v1 = Violation {
+            range: None,
+            related_locations: Vec::new(),
+            related_locations_omitted: 0,
             path: Some(Path::new("a.rs").into()),
             message: "a".into(),
             line: Some(1),
             column: Some(1),
-            is_note: false,
+            disposition: FindingDisposition::default(),
             baseline_key: None,
+            fix_key: None,
+            sensitive: false,
+            is_fixable: false,
+            not_fixable: false,
+            proposed_edits: Vec::new(),
+            path_sensitive: false,
         };
         let v2 = Violation {
+            range: None,
+            related_locations: Vec::new(),
+            related_locations_omitted: 0,
             path: Some(Path::new("a.rs").into()),
             message: "b".into(),
             line: Some(2),
             column: Some(1),
-            is_note: false,
+            disposition: FindingDisposition::default(),
             baseline_key: None,
+            fix_key: None,
+            sensitive: false,
+            is_fixable: false,
+            not_fixable: false,
+            proposed_edits: Vec::new(),
+            path_sensitive: false,
         };
         let r1 = Report {
             results: vec![rule("r1", Level::Error, vec![v1.clone(), v2.clone()])],
@@ -607,16 +762,78 @@ mod tests {
     }
 
     #[test]
-    fn fix_report_empty_renders_clean() {
+    fn fix_report_empty_renders_honest_summary_not_a_clean_banner() {
+        // A fix report must never claim "No violations found." (that's a check
+        // message): under `--fix-only` an empty report means 0 fixes applied over
+        // a still-dirty tree. It prints the honest zeroed summary instead.
         let out = render_fix(&FixReport {
+            non_convergent: false,
             results: Vec::new(),
         });
-        assert!(out.contains("No violations found."));
+        assert!(
+            !out.contains("No violations found."),
+            "a fix report must not reuse check's clean banner: {out:?}"
+        );
+        assert!(
+            out.contains("**0 applied**, **0 skipped**, **0 unfixable**."),
+            "expected the zeroed fix summary: {out:?}"
+        );
+    }
+
+    #[test]
+    fn fix_report_renders_suggested_item() {
+        use alint_core::FixEdit;
+        let report = FixReport {
+            non_convergent: false,
+            results: vec![FixRuleResult {
+                rule_id: "cfg".into(),
+                level: Level::Error,
+                items: vec![FixItem {
+                    violation: Violation {
+                        path: Some(Path::new("app.json").into()),
+                        message: "value mismatch".into(),
+                        line: None,
+                        column: None,
+                        range: None,
+                        related_locations: Vec::new(),
+                        related_locations_omitted: 0,
+                        disposition: FindingDisposition::default(),
+                        baseline_key: None,
+                        fix_key: None,
+                        sensitive: false,
+                        is_fixable: false,
+                        not_fixable: false,
+                        proposed_edits: Vec::new(),
+                        path_sensitive: false,
+                    },
+                    status: FixStatus::Suggested {
+                        summary: "would set $.debug to false".into(),
+                        edit: Some(FixEdit::SetContent {
+                            path: Path::new("app.json").into(),
+                            content: Vec::new(),
+                        }),
+                    },
+                }],
+                analysis_failures: Vec::new(),
+            }],
+        };
+        let out = render_fix(&report);
+        // The dot in `$.debug` is markdown-escaped by `md_escape`, so match on
+        // the stable parts: the status label and the escaped summary tail.
+        assert!(
+            out.contains("**suggested** - would set $\\.debug to false"),
+            "suggested line should carry the summary: {out}"
+        );
+        assert!(
+            out.contains("**1 suggested**"),
+            "summary should count it: {out}"
+        );
     }
 
     #[test]
     fn fix_report_groups_by_rule_with_status() {
         let report = FixReport {
+            non_convergent: false,
             results: vec![FixRuleResult {
                 rule_id: "trim".into(),
                 level: Level::Warning,
@@ -627,10 +844,19 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: Some(1),
                             column: None,
-                            is_note: false,
+                            range: None,
+                            related_locations: Vec::new(),
+                            related_locations_omitted: 0,
+                            disposition: FindingDisposition::default(),
                             baseline_key: None,
+                            fix_key: None,
+                            sensitive: false,
+                            is_fixable: false,
+                            not_fixable: false,
+                            proposed_edits: Vec::new(),
+                            path_sensitive: false,
                         },
-                        status: FixStatus::Applied("removed 3 trailing spaces".into()),
+                        status: FixStatus::Applied("trimmed trailing whitespace in a.rs".into()),
                     },
                     FixItem {
                         violation: Violation {
@@ -638,12 +864,22 @@ mod tests {
                             message: "trailing whitespace".into(),
                             line: None,
                             column: None,
-                            is_note: false,
+                            range: None,
+                            related_locations: Vec::new(),
+                            related_locations_omitted: 0,
+                            disposition: FindingDisposition::default(),
                             baseline_key: None,
+                            fix_key: None,
+                            sensitive: false,
+                            is_fixable: false,
+                            not_fixable: false,
+                            proposed_edits: Vec::new(),
+                            path_sensitive: false,
                         },
                         status: FixStatus::Unfixable,
                     },
                 ],
+                analysis_failures: Vec::new(),
             }],
         };
         let out = render_fix(&report);
@@ -651,5 +887,23 @@ mod tests {
         assert!(out.contains("**applied**"));
         assert!(out.contains("**unfixable**"));
         assert!(out.contains("**1 applied**, **0 skipped**, **1 unfixable**."));
+        // Applied: the summary already carries the path, so it is not re-prefixed.
+        assert!(
+            out.contains("**applied** - trimmed trailing whitespace in a"),
+            "applied line should carry the summary verbatim: {out}"
+        );
+        assert!(
+            !out.contains("`a.rs` - **applied**"),
+            "applied line must not duplicate the path as a prefix: {out}"
+        );
+        // Unfixable is message-based, so it keeps the path prefix.
+        assert!(
+            out.contains("`b.rs` - **unfixable**"),
+            "unfixable line should keep the path prefix: {out}"
+        );
+        assert!(
+            !out.contains('\u{2014}'),
+            "markdown fix report must not contain an em-dash: {out}"
+        );
     }
 }

@@ -1,0 +1,66 @@
+test_version: 1
+name: pinned_references accepts immutable and local build inputs
+
+tags: [check, pinned_references, content, security, passing]
+
+docs:
+  title: Full commits digests exact orbs and local references pass
+  case: pass
+  kind: pinned_references
+
+given:
+  tree:
+    .github/workflows/ci.yml: |
+      jobs:
+        call:
+          uses: owner/repo/.github/workflows/test.yml@0123456789abcdef0123456789abcdef01234567
+        build:
+          container: ubuntu:24.04@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          steps:
+            - uses: ./actions/local
+    actions/demo/action.yml: |
+      runs:
+        using: composite
+        steps:
+          - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
+    .pre-commit-config.yaml: |
+      repos:
+        - repo: local
+        - repo: meta
+        - repo: https://github.com/pre-commit/pre-commit-hooks
+          rev: 0123456789abcdef0123456789abcdef01234567
+    .circleci/config.yml: |
+      version: 2.1
+      orbs:
+        node: circleci/node@5.2.0
+      jobs:
+        test:
+          docker:
+            - image: cimg/base:current@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    .gitlab-ci.yml: |
+      test:
+        image: alpine:latest@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+        script: echo test
+    Dockerfile: |
+      FROM scratch
+      ADD local-tool /usr/local/bin/tool
+      ADD --checksum=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef https://example.test/tool /usr/local/bin/remote-tool
+  config: |
+    version: 1
+    rules:
+      - id: immutable-standard-inputs
+        kind: pinned_references
+        paths:
+          - .github/workflows/*.yml
+          - "**/action.yml"
+          - .pre-commit-config.yaml
+          - .circleci/config.yml
+          - .gitlab-ci.yml
+          - Dockerfile
+        level: error
+
+when: [check]
+
+expect:
+  - exit: success
+    violations: []

@@ -9,8 +9,9 @@ name: editors e2e (LSP integration)
 #
 # Runs on GitHub-hosted ubuntu-latest (ships the GUI libs + xvfb that
 # @vscode/test-electron needs; the self-hosted bench runner is
-# headless-minimal). Gated on the editors, the LSP server, or the binary
-# so a server<->client contract change re-runs the real-client checks.
+# headless-minimal). Pull requests and direct main pushes are gated on the
+# editors, the LSP server, or the binary so a server<->client contract change
+# re-runs the real-client checks.
 
 on:
   pull_request:
@@ -20,7 +21,17 @@ on:
       - "crates/alint-lsp/**"
       - "crates/alint/**"
       - ".github/workflows/editors-e2e.yml"
+  push:
+    branches: [main]
+    paths:
+      - "editors/**"
+      - "crates/alint-lsp/**"
+      - "crates/alint/**"
+      - ".github/workflows/editors-e2e.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,9 +50,12 @@ jobs:
       - name: Build alint from this branch
         run: cargo build --release -p alint
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: "20"
+          # @vscode/test-electron 3 requires Node >= 22 (Node 20 is EOL). This
+          # is only the runner's Node; the tests themselves run inside the
+          # pinned VS Code's own extension host.
+          node-version: "22"
 
       - name: VS Code e2e (xvfb)
         working-directory: editors/vscode
@@ -100,11 +114,11 @@ jobs:
       - name: Build alint from this branch
         run: cargo build --release -p alint
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
 
       - name: JetBrains LSP integration test
         working-directory: editors/jetbrains

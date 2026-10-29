@@ -14,8 +14,8 @@
 //! `then_changed` — a `then_changed`-only change never triggers it (use
 //! a second rule with the globs swapped for a bidirectional pact).
 //!
-//! Graceful no-op outside a git repo, when `git` is unavailable, or
-//! when `if_changed` didn't change. A `since:` that fails to resolve
+//! Git or repository unavailability is an analysis failure. An unchanged
+//! `if_changed` set remains a normal pass. A `since:` that fails to resolve
 //! hard-fails with a shallow-clone hint (the user asked for a diff; a
 //! silently-empty range would mask the misconfiguration).
 //!
@@ -24,7 +24,9 @@
 use std::slice;
 
 use alint_core::git::{CommitRangeError, collect_changed_paths_checked};
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Context, Error, Level, RelatedLocation, Result, Rule, RuleSpec, Scope, Violation,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -62,7 +64,9 @@ impl Rule for PairChangedTogetherRule {
     fn evaluate(&self, ctx: &Context<'_>) -> Result<Vec<Violation>> {
         let changed = match collect_changed_paths_checked(ctx.root, &self.since) {
             Ok(Some(set)) => set,
-            Ok(None) => return Ok(Vec::new()), // not a git repo: silent
+            // Defensive direct-evaluation fallback; Engine capability routing
+            // reports repository unavailability before dispatch.
+            Ok(None) => return Ok(Vec::new()),
             Err(CommitRangeError::BadRange { stderr }) => return Err(self.bad_range(&stderr)),
         };
 
@@ -86,11 +90,17 @@ impl Rule for PairChangedTogetherRule {
                 self.since, self.if_changed, self.then_changed,
             )
         });
-        // No path (a repo-level co-change finding) → a fixed key so the
-        // fingerprint doesn't fall through to the volatile message.
-        Ok(vec![
-            Violation::new(msg).with_baseline_key("pair-changed-together"),
-        ])
+        // Preserve the existing pathless primary anchor and fingerprint. Changed
+        // trigger paths are navigable secondary evidence.
+        let finding = Violation::new(msg)
+            .with_baseline_key("pair-changed-together")
+            .with_related_locations(
+                changed
+                    .iter()
+                    .filter(|path| self.if_scope.matches(path, ctx.index))
+                    .map(|path| RelatedLocation::new(path, "changed trigger")),
+            );
+        Ok(vec![finding])
     }
 }
 
@@ -99,6 +109,43 @@ impl PairChangedTogetherRule {
         crate::commit_range::bad_diff_range(&self.id, &self.since, stderr)
     }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::SingleShot,
+    paths: alint_core::PathsSupport::Forbidden,
+    scope_filter: alint_core::ScopeFilterSupport::Rejected {
+        reason: std::borrow::Cow::Borrowed("scope_filter is not supported by this kind"),
+    },
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("if_changed"),
+            selector_type: alint_core::SelectorType::DiffGlob,
+            rerootable: false,
+        },
+        alint_core::SelectorMeta {
+            name: std::borrow::Cow::Borrowed("then_changed"),
+            selector_type: alint_core::SelectorType::DiffGlob,
+            rerootable: false,
+        },
+    ]),
+    since: alint_core::SinceSupport::Required,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::Git {
+            operations: std::borrow::Cow::Borrowed(&[alint_core::GitOperation::Diff]),
+        },
+        condition: alint_core::CapabilityCondition::Always,
+    }]),
+    content: alint_core::ContentAccess::PathOnly,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: false,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
@@ -125,8 +172,8 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     if opts.since.trim().is_empty() {
         return Err(Error::rule_config(
             &spec.id,
-            "`since` must not be empty — `pair_changed_together` is diff-scoped and needs a \
-             base ref (typically `since: \"{{env.ALINT_BASE_SHA | default('origin/main')}}\"`)",
+            "`since` must not be empty - `pair_changed_together` is diff-scoped and needs a \
+         base ref (typically `since: \"{{env.ALINT_BASE_SHA | default('origin/main')}}\"`)",
         ));
     }
     let if_scope = Scope::from_patterns(slice::from_ref(&opts.if_changed))

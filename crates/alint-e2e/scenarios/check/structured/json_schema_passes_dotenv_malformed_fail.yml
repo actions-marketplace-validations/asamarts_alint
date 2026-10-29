@@ -1,0 +1,36 @@
+test_version: 1
+name: json_schema_passes auto-detects malformed dotenv as one parse analysis failure
+tags: [check, json_schema_passes, structured, dotenv, failing]
+
+# Two things at once: (1) the `.env` file AUTO-DETECTS as dotenv with no explicit
+# `format:` (the filename-based detect branch, exercised end-to-end nowhere else);
+# (2) one invalid-key statement yields exactly ONE parse analysis failure,
+# symmetric with the XML malformed scenario -- not a flood.
+
+given:
+  tree:
+    schemas:
+      any.schema.json: |
+        {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object"
+        }
+    ".env": |
+      NODE_ENV=production
+      BAD KEY=value
+  config: |
+    version: 1
+    rules:
+      - id: env-parses
+        kind: json_schema_passes
+        paths: ".env"
+        schema_path: "schemas/any.schema.json"
+        level: error
+
+when: [check]
+
+expect:
+  - exit: policy_failure
+    violations: []
+    analysis_failures:
+      - {rule: env-parses, kind: resource_parse, path: .env}

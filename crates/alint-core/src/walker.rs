@@ -19,25 +19,64 @@ type EscapingSink = Arc<Mutex<Vec<Arc<Path>>>>;
 /// a hostile or accidental multi-GB file in a linted repo is skipped instead
 /// of OOM-ing the run. Shared source of truth: `alint-rules`'s `read_capped`
 /// family re-exports this constant (M3).
+///
+/// NOTE (bytes, not tree): this bounds INPUT size, not the parsed
+/// `serde_json::Value` tree a structured format expands into, which costs up to
+/// ~30x the input in RSS (attribute-heavy XML; ~6-10x for JSON / dotenv). The
+/// per-file structured tree is separately bounded by
+/// `structured_format::MAX_STRUCTURED_BYTES` (32 MiB, ~1 GB tree worst
+/// case). What remains is the AGGREGATE across the `par_iter` fan-out (several files
+/// parsing at once), a concurrent-parse-memory bound tracked as a follow-up (see
+/// `docs/design/format-coverage.md`, "Resource-pressure hardening").
 pub const MAX_ANALYZE_BYTES: u64 = 256 * 1024 * 1024;
 
-/// Read a walked file's bytes, first fast-rejecting (loudly) any file whose
-/// walk-time [`FileEntry::size`] exceeds [`MAX_ANALYZE_BYTES`] (no extra `stat`),
-/// then bounding the actual read to the cap (`read_bounded`, TOCTOU-safe). The
+/// Read a walked file's bytes, first fast-rejecting any file whose walk-time
+/// [`FileEntry::size`] exceeds [`MAX_ANALYZE_BYTES`] (no extra `stat`), then
+/// bounding the actual read to the cap (`read_bounded`, TOCTOU-safe). The
 /// per-file loops read the whole file into memory, so an uncapped read of a
-/// committed multi-GB blob would OOM the process; a bounded skip keeps the run
-/// alive and observable (M3). A genuine read error (permission, I/O) is logged
-/// at `warn` so it's observable with `-v` / `RUST_LOG` rather than silent (L7);
-/// a `NotFound` is a silent skip (the benign deleted-between-walk-and-read race).
+/// committed multi-GB blob would OOM the process.
+///
+/// This convenience API intentionally folds every failure into `None`; callers
+/// that determine a policy verdict MUST use [`read_for_analysis`] and surface
+/// its structural failure class instead.
 pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
+    match read_for_analysis(path, size) {
+        AnalysisRead::Bytes(b) => Some(b),
+        AnalysisRead::Missing | AnalysisRead::TooLarge(_) => None,
+        AnalysisRead::Unreadable(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
+            None
+        }
+    }
+}
+
+/// Outcome of [`read_for_analysis`]. Every non-byte variant prevents a policy
+/// verdict and must become a `resource_read` analysis failure in evaluation
+/// paths.
+#[derive(Debug)]
+pub enum AnalysisRead {
+    /// The file's bytes (within [`MAX_ANALYZE_BYTES`]).
+    Bytes(Vec<u8>),
+    /// The file vanished between repository discovery and the read.
+    Missing,
+    /// The file exceeds the bounded whole-file analysis cap. Carries the size
+    /// observed at the fast stat or `cap + 1` for a concurrent-growth read.
+    TooLarge(u64),
+    /// A genuine read error (permission denied, I/O).
+    Unreadable(std::io::Error),
+}
+
+/// [`read_capped_or_skip`], but preserving the reason analysis could not read
+/// the discovered file so policy-evaluation callers can fail loudly.
+pub fn read_for_analysis(path: &Path, size: u64) -> AnalysisRead {
     if size > MAX_ANALYZE_BYTES {
         tracing::warn!(
             path = %path.display(),
             size,
             cap = MAX_ANALYZE_BYTES,
-            "skipping file larger than the analysis cap"
+            "file exceeds the analysis cap"
         );
-        return None;
+        return AnalysisRead::TooLarge(size);
     }
     // M3-F2 (TOCTOU): the walk-time `size` above is a fast reject only — it can
     // be stale, so a file that GREW past the cap between the walk and here would
@@ -46,13 +85,12 @@ pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
     // `size` is ALSO forwarded as the read buffer's preallocation hint — alint
     // already stat-ed it during the walk, so it costs nothing and lets the read
     // finish in one syscall (see `read_bounded`).
-    read_bounded(path, MAX_ANALYZE_BYTES, size)
+    read_bounded_classified(path, MAX_ANALYZE_BYTES, size)
 }
 
 /// Read a whole file bounded to `cap` bytes — TOCTOU-safe: the read itself
 /// stops at `cap + 1` bytes, so the file's size *at read time* (not a possibly
-/// stale earlier stat / walk-time size) decides. A file that measures `> cap`
-/// is skipped (loud `warn`); a missing file is `None`.
+/// stale earlier stat / walk-time size) decides.
 ///
 /// `size_hint` (the walk-time [`FileEntry::size`], already stat-ed by the walk
 /// so free here) preallocates the buffer. It is strictly ADVISORY — capacity
@@ -67,14 +105,24 @@ pub fn read_capped_or_skip(path: &Path, size: u64) -> Option<Vec<u8>> {
 /// wall clock. Sizing the buffer up front restores the single-read behaviour
 /// `std::fs::read` had before the OOM cap. See
 /// docs/benchmarks/investigations/2026-07-v0.14-s2-harness-artifact/.
+#[cfg(test)]
 pub(crate) fn read_bounded(path: &Path, cap: u64, size_hint: u64) -> Option<Vec<u8>> {
+    match read_bounded_classified(path, cap, size_hint) {
+        AnalysisRead::Bytes(b) => Some(b),
+        AnalysisRead::Missing | AnalysisRead::TooLarge(_) | AnalysisRead::Unreadable(_) => None,
+    }
+}
+
+/// The classifying core of `read_bounded` (see its docs for the TOCTOU bound
+/// and the preallocation hint).
+fn read_bounded_classified(path: &Path, cap: u64, size_hint: u64) -> AnalysisRead {
     use std::io::Read as _;
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return AnalysisRead::Missing,
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
-            return None;
+            tracing::debug!(path = %path.display(), error = %e, "unreadable file");
+            return AnalysisRead::Unreadable(e);
         }
     };
     let prealloc = usize::try_from(size_hint.min(cap.saturating_add(1))).unwrap_or(0);
@@ -84,14 +132,14 @@ pub(crate) fn read_bounded(path: &Path, cap: u64, size_hint: u64) -> Option<Vec<
             tracing::warn!(
                 path = %path.display(),
                 cap,
-                "skipping file larger than the analysis cap (grew past its walk-time size)"
+                "file grew past the analysis cap"
             );
-            None
+            AnalysisRead::TooLarge(cap.saturating_add(1))
         }
-        Ok(_) => Some(buf),
+        Ok(_) => AnalysisRead::Bytes(buf),
         Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "skipping unreadable file");
-            None
+            tracing::debug!(path = %path.display(), error = %e, "unreadable file");
+            AnalysisRead::Unreadable(e)
         }
     }
 }
@@ -141,14 +189,12 @@ pub struct FileEntry {
 /// The indexed result of one filesystem walk. All rules share this index —
 /// the walk happens once per `alint check` invocation.
 ///
-/// `path_set` is a lazy `HashSet<Arc<Path>>` over file entries.
-/// Built once on first call to [`FileIndex::contains_file`] /
-/// [`FileIndex::file_path_set`] and re-used across all subsequent
-/// lookups. Cross-file rules that ask "does this exact path
-/// exist?" (most importantly `file_exists` instantiated by
-/// `for_each_dir`) hit the set instead of doing an O(N) linear
-/// scan over every entry. At 1M files in a 5,000-package
-/// monorepo, this turns the fan-out shape from O(D × N) =
+/// `file_entry_indices` is a lazy `HashMap<Arc<Path>, usize>` over file entries.
+/// Built once on the first exact-file lookup and re-used for both existence and
+/// metadata queries. `path_set` retains the public set view lazily, but internal
+/// callers do not build a second file index. Cross-file rules that ask exact-path
+/// questions use the map instead of scanning every entry. At 1M files in a
+/// 5,000-package monorepo, this turns the fan-out shape from O(D × N) =
 /// 5 × 10⁹ ops to O(D) = 5,000 lookups.
 ///
 /// `parent_to_children` (v0.9.8) is a second lazy index — for
@@ -159,6 +205,11 @@ pub struct FileEntry {
 /// per-dir O(N) scan. Closes the v0.9.5 → v0.9.8 cliff: at 1M
 /// files / 5K dirs, `dir_only_contains` drops from 5 billion
 /// path-parent comparisons to ~1 million.
+/// Shared repository-relative file index (see `FileIndex::tree_files`).
+type SharedFileIndex = Arc<HashMap<Arc<Path>, usize>>;
+/// Shared repository-relative path set including directories.
+type SharedPathSet = Arc<HashSet<Arc<Path>>>;
+
 #[derive(Debug, Default)]
 pub struct FileIndex {
     pub entries: Vec<FileEntry>,
@@ -167,35 +218,51 @@ pub struct FileIndex {
     /// tree bytes) but recorded here so `no_symlinks` can still flag them (M4).
     /// Relative paths, sorted + deduped. Empty for a fixture-built index.
     escaping_symlinks: Vec<Arc<Path>>,
-    path_set: OnceLock<HashSet<Arc<Path>>>,
+    path_set: OnceLock<SharedPathSet>,
+    all_path_set: OnceLock<SharedPathSet>,
+    /// Exact file path → position in `entries`, shared with changed-file indexes
+    /// when they need whole-tree exact-file lookups.
+    file_entry_indices: OnceLock<SharedFileIndex>,
+    /// For a `--changed`-filtered index: the FULL tree's exact-file index,
+    /// shared (not copied) from the index it was filtered from, so a lookup about
+    /// the repository rather than the iterated files (a
+    /// `scope_filter.has_ancestor` marker) still sees unchanged files. Unset on a
+    /// full index, where its own index represents the tree.
+    tree_files: OnceLock<SharedFileIndex>,
     parent_to_children: OnceLock<HashMap<Arc<Path>, Vec<usize>>>,
     /// Per-`since`-ref diff sets backing `scope_filter.changed_since:`.
-    /// Populated once by the engine before per-file dispatch (a ref
-    /// that resolves to "not a git repo" stores an empty set, so the
-    /// predicate silently matches nothing). Read lock-free in the
-    /// hot loop after `set`.
+    /// Populated once by the engine before per-file dispatch after repository
+    /// availability has been established. An unavailable repository routes a
+    /// typed analysis failure before any predicate reads this cache. Read
+    /// lock-free in the hot loop after `set`.
     changed_paths: OnceLock<HashMap<String, HashSet<std::path::PathBuf>>>,
     /// Per-predicate manifest-derived path sets backing
-    /// `scope_filter.include_manifest_paths:` / `exclude_manifest_paths:`. Keyed
-    /// by each predicate's canonical `(source, extract, derive_target)` cache
-    /// key, so rules sharing a config share one resolved set. Populated once by
-    /// the engine before per-file dispatch (a missing key = empty set, so the
-    /// predicate contributes nothing). Read lock-free in the hot loop after
-    /// `set`.
+    /// `scope_filter.include_manifest_paths:` / `exclude_manifest_paths:`.
+    /// Keyed by canonical predicate identity and populated before dispatch.
     manifest_paths: OnceLock<HashMap<String, crate::scope_filter::ManifestSet>>,
+    /// Structural failures encountered while resolving the same predicate keys.
+    /// Kept separate from the hot membership map: `ScopeFilter::matches` stays a
+    /// set lookup, while the engine routes failures once per active owning rule.
+    manifest_failures: OnceLock<HashMap<String, crate::scope_filter::ManifestFailure>>,
     /// Evaluated `facts:` values, cached so repeated [`Engine::run_for_file`]
     /// calls (the LSP per-keystroke path) don't re-scan the tree.
     /// ASSUMPTION: a given index is evaluated by one engine's fact set
     /// for its lifetime (true in alint — an index is walked fresh per
     /// run / per LSP session). Read lock-free after `set`.
     facts: OnceLock<crate::facts::FactValues>,
+    /// Run-scoped relation read and decode caches. Enabled only when at least
+    /// one configured rule consumes the relation layer, so a relation-free run
+    /// keeps the direct read path and allocates no cache entries. Filtered
+    /// indexes share the full index's caches.
+    reads: OnceLock<std::sync::Arc<crate::relation::ReadCache>>,
+    decodes: OnceLock<std::sync::Arc<crate::relation::DecodeCache>>,
 }
 
 impl FileIndex {
     /// Construct a [`FileIndex`] from raw entries. Equivalent to
     /// `FileIndex { entries, ..Default::default() }` but spelled
     /// out so test/bench fixtures don't have to know about the
-    /// internal lazy `path_set` field.
+    /// internal lazy indexes.
     pub fn from_entries(entries: Vec<FileEntry>) -> Self {
         Self::from_entries_with_escaping(entries, Vec::new())
     }
@@ -211,10 +278,16 @@ impl FileIndex {
             entries,
             escaping_symlinks,
             path_set: OnceLock::new(),
+            all_path_set: OnceLock::new(),
+            file_entry_indices: OnceLock::new(),
+            tree_files: OnceLock::new(),
             parent_to_children: OnceLock::new(),
             changed_paths: OnceLock::new(),
             manifest_paths: OnceLock::new(),
+            manifest_failures: OnceLock::new(),
             facts: OnceLock::new(),
+            reads: OnceLock::new(),
+            decodes: OnceLock::new(),
         }
     }
 
@@ -231,6 +304,43 @@ impl FileIndex {
     #[must_use]
     pub fn cached_facts(&self) -> Option<&crate::facts::FactValues> {
         self.facts.get()
+    }
+
+    /// The run-scoped relation read cache, if a relation consumer enabled it.
+    ///
+    /// The ordinary per-file path checks this once per file and reads directly
+    /// when it is `None`; it allocates no cache entry or retained bytes, so a
+    /// relation-free run is unchanged.
+    #[must_use]
+    pub fn read_cache(&self) -> Option<&crate::relation::ReadCache> {
+        self.reads.get().map(std::sync::Arc::as_ref)
+    }
+
+    /// The run-scoped relation decode cache, if a relation consumer enabled it.
+    #[must_use]
+    pub fn decode_cache(&self) -> Option<&crate::relation::DecodeCache> {
+        self.decodes.get().map(std::sync::Arc::as_ref)
+    }
+
+    /// Enable both relation caches. Idempotent: every caller shares the first
+    /// pair, so two relation rules cannot decode one `(adapter, resource)` pair
+    /// twice. The caches belong to this index's snapshot; a caller that
+    /// re-walks a changed tree gets a fresh index and fresh caches.
+    pub fn enable_relation_caches(&self) {
+        self.reads
+            .get_or_init(|| std::sync::Arc::new(crate::relation::ReadCache::new()));
+        self.decodes
+            .get_or_init(|| std::sync::Arc::new(crate::relation::DecodeCache::new()));
+    }
+
+    /// Share this index's relation caches with a filtered index built from it.
+    pub(crate) fn share_relation_caches(&self, other: &Self) {
+        if let Some(cache) = self.reads.get() {
+            let _ = other.reads.set(std::sync::Arc::clone(cache));
+        }
+        if let Some(cache) = self.decodes.get() {
+            let _ = other.decodes.set(std::sync::Arc::clone(cache));
+        }
     }
 
     /// Cache the evaluated facts (no-op if already set). The engine
@@ -276,8 +386,6 @@ impl FileIndex {
     }
 
     /// Look up the cached manifest-derived path set for a predicate's cache key.
-    /// `None` means the cache wasn't populated for this key (manifest absent /
-    /// unresolved); the predicate treats it as the empty set.
     #[must_use]
     pub(crate) fn manifest_paths(
         &self,
@@ -286,30 +394,43 @@ impl FileIndex {
         self.manifest_paths.get()?.get(cache_key)
     }
 
-    /// `true` once the engine has populated the manifest-paths cache.
+    /// Look up a structural manifest-resolution failure by predicate cache key.
+    #[must_use]
+    pub(crate) fn manifest_failure(
+        &self,
+        cache_key: &str,
+    ) -> Option<&crate::scope_filter::ManifestFailure> {
+        self.manifest_failures.get()?.get(cache_key)
+    }
+
+    /// `true` once the engine has populated both manifest caches.
     #[must_use]
     pub fn manifest_paths_initialized(&self) -> bool {
-        self.manifest_paths.get().is_some()
+        self.manifest_paths.get().is_some() && self.manifest_failures.get().is_some()
     }
 
-    /// Populate the manifest-paths cache (engine-only, once per run, before
-    /// parallel dispatch). A no-op if already set, so re-using one index across
-    /// `run` + `fix` is safe.
-    pub fn set_manifest_paths(&self, map: HashMap<String, crate::scope_filter::ManifestSet>) {
-        let _ = self.manifest_paths.set(map);
+    /// Populate manifest path sets and failures once before parallel dispatch.
+    pub(crate) fn set_manifest_paths(
+        &self,
+        paths: HashMap<String, crate::scope_filter::ManifestSet>,
+        failures: HashMap<String, crate::scope_filter::ManifestFailure>,
+    ) {
+        let _ = self.manifest_paths.set(paths);
+        let _ = self.manifest_failures.set(failures);
     }
 
-    /// The whole resolved manifest-paths map, if populated. The engine resolves
-    /// manifests against the FULL index (so `find_file` reaches them) and copies
-    /// the result onto the pre-filtered `--changed` index (whose own entries omit
-    /// unchanged manifests), so per-file `matches` against the filtered index
-    /// still sees the set. The declared path set is independent of which files
-    /// the run visits, so the same map is valid for both.
     #[must_use]
     pub(crate) fn manifest_paths_map(
         &self,
     ) -> Option<&HashMap<String, crate::scope_filter::ManifestSet>> {
         self.manifest_paths.get()
+    }
+
+    #[must_use]
+    pub(crate) fn manifest_failures_map(
+        &self,
+    ) -> Option<&HashMap<String, crate::scope_filter::ManifestFailure>> {
+        self.manifest_failures.get()
     }
 
     pub fn files(&self) -> impl Iterator<Item = &FileEntry> {
@@ -329,6 +450,10 @@ impl FileIndex {
     /// calls return the cached set. Concurrent first calls are
     /// safe (`OnceLock` ensures a single initialiser wins).
     pub fn file_path_set(&self) -> &HashSet<Arc<Path>> {
+        self.file_path_set_arc()
+    }
+
+    fn file_path_set_arc(&self) -> &SharedPathSet {
         self.path_set.get_or_init(|| {
             #[cfg(debug_assertions)]
             let start = std::time::Instant::now();
@@ -339,30 +464,90 @@ impl FileIndex {
                 .map(|e| Arc::clone(&e.path))
                 .collect();
             trace_index_build!("path_set", start, self.entries.len());
-            set
+            Arc::new(set)
         })
     }
 
-    /// O(1) "does this exact relative path exist as a file?"
-    /// query. Triggers the lazy build of the path set on first
-    /// call. Use this instead of iterating `files()` whenever a
-    /// rule needs to check a fully-qualified path — at scale,
-    /// the hash lookup is several orders of magnitude faster.
-    pub fn contains_file(&self, rel: &Path) -> bool {
-        self.file_path_set().contains(rel)
+    fn file_entry_indices_arc(&self) -> &SharedFileIndex {
+        self.file_entry_indices.get_or_init(|| {
+            #[cfg(debug_assertions)]
+            let start = std::time::Instant::now();
+            let mut indices = HashMap::with_capacity(self.entries.len());
+            for (index, entry) in self.entries.iter().enumerate() {
+                if !entry.is_dir {
+                    // A walked index has unique paths. Retaining the first entry
+                    // also preserves `find_file`'s historical result for a
+                    // hand-built index containing duplicates.
+                    indices.entry(Arc::clone(&entry.path)).or_insert(index);
+                }
+            }
+            trace_index_build!("file_entry_indices", start, self.entries.len());
+            Arc::new(indices)
+        })
     }
 
-    /// Find a file entry by its exact relative path. Uses the
-    /// lazy path set for the existence check, then re-scans
-    /// entries linearly to return the matching `&FileEntry`
-    /// (entries are pinned, but the set stores `Arc<Path>` keys
-    /// not direct entry references). Most callers want the
-    /// boolean answer — prefer [`FileIndex::contains_file`].
-    pub fn find_file(&self, rel: &Path) -> Option<&FileEntry> {
-        if !self.contains_file(rel) {
-            return None;
+    fn all_path_set_arc(&self) -> &SharedPathSet {
+        self.all_path_set.get_or_init(|| {
+            #[cfg(debug_assertions)]
+            let start = std::time::Instant::now();
+            let set = self
+                .entries
+                .iter()
+                .map(|entry| Arc::clone(&entry.path))
+                .collect();
+            trace_index_build!("all_path_set", start, self.entries.len());
+            Arc::new(set)
+        })
+    }
+
+    /// Share `full`'s exact-file index into this (`--changed`-filtered) index, so
+    /// [`Self::contains_file_in_tree`] answers about the whole repository.
+    /// Engine-only, once per run, and only when a rule needs it (a
+    /// `scope_filter.has_ancestor` marker lookup); a no-op if already set. The
+    /// map is reference-counted, not copied, but building it costs a pass over
+    /// the full index, which a run without such lookups should not pay.
+    pub(crate) fn share_tree_files_from(&self, full: &FileIndex) {
+        let _ = self
+            .tree_files
+            .set(Arc::clone(full.file_entry_indices_arc()));
+    }
+
+    /// Does `rel` exist as a file anywhere in the repository? On a full index this
+    /// is [`Self::contains_file`]; on a `--changed`-filtered index that shares the
+    /// tree's file set it also sees unchanged files. Use it for lookups about the
+    /// tree (ancestor markers), never for deciding which files to iterate.
+    pub fn contains_file_in_tree(&self, rel: &Path) -> bool {
+        match self.tree_files.get() {
+            Some(files) => files.contains_key(rel),
+            None => self.contains_file(rel),
         }
-        self.files().find(|e| &*e.path == rel)
+    }
+
+    /// O(1) "does this exact relative path exist as a file?"
+    /// query. Triggers the lazy build of the file-entry index on first call. Use
+    /// this instead of iterating `files()` whenever a rule needs to check a
+    /// fully-qualified path — at scale, the hash lookup is several orders of
+    /// magnitude faster.
+    pub fn contains_file(&self, rel: &Path) -> bool {
+        self.file_entry_indices_arc().contains_key(rel)
+    }
+
+    /// O(1) "does this exact relative path exist as an indexed file or
+    /// directory?" query. This is the path-resolution counterpart to
+    /// [`Self::contains_file`]: documentation links and other repository
+    /// references may legitimately target either kind.
+    pub fn contains_path(&self, rel: &Path) -> bool {
+        self.all_path_set_arc().contains(rel)
+    }
+
+    /// Find a file entry by its exact relative path in O(1) average time.
+    ///
+    /// The path → entry index is built lazily on first use. Like
+    /// [`Self::contains_file`], this only sees non-directory entries admitted by
+    /// the walker, preserving ignore and repository-boundary semantics.
+    pub fn find_file(&self, rel: &Path) -> Option<&FileEntry> {
+        let entry_index = *self.file_entry_indices_arc().get(rel)?;
+        self.entries.get(entry_index)
     }
 
     // ── v0.9.8 — parent_to_children index ────────────────────────
@@ -387,6 +572,15 @@ impl FileIndex {
         let map = self.parent_to_children.get_or_init(|| {
             #[cfg(debug_assertions)]
             let start = std::time::Instant::now();
+            // Dir path -> its entry's Arc, built in one pass so promoting a
+            // parent to a map key below is an O(1) probe. The previous per-parent
+            // linear `entries.iter().find(..)` made this build O(dirs x N) despite
+            // the documented O(N): 20k dirs took ~40s in a debug build
+            // (audit 2026-10 finding 6). First occurrence wins, as `find` did.
+            let mut dir_arcs: HashMap<&Path, &Arc<Path>> = HashMap::new();
+            for e in self.entries.iter().filter(|e| e.is_dir) {
+                dir_arcs.entry(&*e.path).or_insert(&e.path);
+            }
             let mut map: HashMap<Arc<Path>, Vec<usize>> = HashMap::new();
             for (idx, entry) in self.entries.iter().enumerate() {
                 let Some(parent) = entry.path.parent() else {
@@ -407,11 +601,9 @@ impl FileIndex {
                 // to allocating a fresh Arc if the parent dir
                 // isn't itself in the index (root-level files,
                 // ancestor dirs the walker excluded, etc.).
-                let key: Arc<Path> = self
-                    .entries
-                    .iter()
-                    .find(|e| e.is_dir && &*e.path == parent)
-                    .map_or_else(|| Arc::<Path>::from(parent), |e| Arc::clone(&e.path));
+                let key: Arc<Path> = dir_arcs
+                    .get(parent)
+                    .map_or_else(|| Arc::<Path>::from(parent), |a| Arc::clone(a));
                 map.insert(key, vec![idx]);
             }
             trace_index_build!("parent_to_children", start, self.entries.len());
@@ -574,6 +766,134 @@ pub fn walk(root: &Path, opts: &WalkOptions) -> Result<FileIndex> {
 /// of the original `walk()` body's setup half so both the
 /// sequential test path and the parallel runtime path stay in
 /// sync.
+/// The walk's override set: `.git/` plus every config `ignore:` pattern, each
+/// an exclusion.
+fn build_overrides(root: &Path, opts: &WalkOptions) -> Result<ignore::overrides::Override> {
+    let mut overrides_builder = OverrideBuilder::new(root);
+    overrides_builder
+        .add("!.git")
+        .map_err(|e| Error::Other(format!("ignore pattern .git: {e}")))?;
+    for pattern in &opts.extra_ignores {
+        let pattern = if pattern.starts_with('!') {
+            pattern.clone()
+        } else {
+            format!("!{pattern}")
+        };
+        overrides_builder
+            .add(&pattern)
+            .map_err(|e| Error::Other(format!("ignore pattern {pattern:?}: {e}")))?;
+    }
+    overrides_builder
+        .build()
+        .map_err(|e| Error::Other(format!("failed to build overrides: {e}")))
+}
+
+/// Whether [`walk`] would leave the repo-relative path `rel` out of the index
+/// if it existed (as a directory when `is_dir`): excluded by the config's
+/// `ignore:` / `.git`, or (with `respect_gitignore`) by a `.ignore` /
+/// `.gitignore` in `rel`'s ancestors, `.git/info/exclude`, or the global git
+/// excludes file -- itself or through an excluded ancestor directory, which
+/// the walk never descends into. `fix --dry-run` uses it to predict that a
+/// file a fix would create stays invisible to the rule, as the real `fix`
+/// discovers on its re-walk.
+///
+/// Mirrors the walker's precedence (overrides first; then, nearest directory
+/// first, `.ignore` before `.gitignore`; then `.git/info/exclude`; then the
+/// global excludes). A file that does not exist yet has no other walk
+/// filter to consult. Errors building a matcher read as "not ignored".
+#[must_use]
+pub fn would_walk_skip(root: &Path, opts: &WalkOptions, rel: &Path, is_dir: bool) -> bool {
+    use ignore::Match;
+    use ignore::gitignore::{Gitignore, GitignoreBuilder};
+    let rel: PathBuf = rel
+        .components()
+        .filter(|c| !matches!(c, std::path::Component::CurDir))
+        .collect();
+    if rel.as_os_str().is_empty() {
+        return false;
+    }
+    let overrides = build_overrides(root, opts).ok();
+    let load = |dir: &Path, name: &str| -> Option<Gitignore> {
+        let file = dir.join(name);
+        if !file.is_file() {
+            return None;
+        }
+        let mut b = GitignoreBuilder::new(dir);
+        b.add(&file);
+        b.build().ok()
+    };
+    // Matchers per ancestor directory, nearest first, built once.
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    let mut d = rel.parent();
+    while let Some(p) = d {
+        dirs.push(root.join(p));
+        d = p.parent();
+    }
+    if dirs.last().map(PathBuf::as_path) != Some(root) {
+        dirs.push(root.to_path_buf());
+    }
+    let (dot_ignore, git_ignore): (Vec<Gitignore>, Vec<Gitignore>) = if opts.respect_gitignore {
+        (
+            dirs.iter().filter_map(|d| load(d, ".ignore")).collect(),
+            dirs.iter().filter_map(|d| load(d, ".gitignore")).collect(),
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let exclude_file = root.join(".git/info/exclude");
+    let exclude = if opts.respect_gitignore && exclude_file.is_file() {
+        let mut b = GitignoreBuilder::new(root);
+        b.add(&exclude_file);
+        b.build().ok()
+    } else {
+        None
+    };
+    let global = opts.respect_gitignore.then(|| Gitignore::global().0);
+
+    let ignored = |abs: &Path, is_dir: bool| -> bool {
+        if let Some(ov) = &overrides {
+            match ov.matched(abs, is_dir) {
+                Match::Ignore(_) => return true,
+                Match::Whitelist(_) => return false,
+                Match::None => {}
+            }
+        }
+        for set in [&dot_ignore, &git_ignore] {
+            for gi in set {
+                // Only a matcher rooted at an ancestor of `abs` applies.
+                if !abs.starts_with(gi.path()) {
+                    continue;
+                }
+                match gi.matched(abs, is_dir) {
+                    Match::Ignore(_) => return true,
+                    Match::Whitelist(_) => return false,
+                    Match::None => {}
+                }
+            }
+        }
+        for gi in exclude.iter().chain(global.iter()) {
+            match gi.matched(abs, is_dir) {
+                Match::Ignore(_) => return true,
+                Match::Whitelist(_) => return false,
+                Match::None => {}
+            }
+        }
+        false
+    };
+    // The path itself, and every ancestor directory (an excluded directory is
+    // never descended into, so nothing below it is indexed).
+    let mut prefix = PathBuf::new();
+    let parts: Vec<_> = rel.components().collect();
+    for (i, c) in parts.iter().enumerate() {
+        prefix.push(c);
+        let last = i + 1 == parts.len();
+        if ignored(&root.join(&prefix), if last { is_dir } else { true }) {
+            return true;
+        }
+    }
+    false
+}
+
 fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<(WalkBuilder, EscapingSink)> {
     let mut builder = WalkBuilder::new(root);
     builder
@@ -589,24 +909,7 @@ fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<(WalkBuilder, E
     // `hidden(false)` and `require_git(false)` so the `ignore`
     // crate doesn't apply its own implicit `.git/` exclusion;
     // this override puts it back.
-    let mut overrides_builder = OverrideBuilder::new(root);
-    overrides_builder
-        .add("!.git")
-        .map_err(|e| Error::Other(format!("ignore pattern .git: {e}")))?;
-    for pattern in &opts.extra_ignores {
-        let pattern = if pattern.starts_with('!') {
-            pattern.clone()
-        } else {
-            format!("!{pattern}")
-        };
-        overrides_builder
-            .add(&pattern)
-            .map_err(|e| Error::Other(format!("ignore pattern {pattern:?}: {e}")))?;
-    }
-    let overrides = overrides_builder
-        .build()
-        .map_err(|e| Error::Other(format!("failed to build overrides: {e}")))?;
-    builder.overrides(overrides);
+    builder.overrides(build_overrides(root, opts)?);
 
     // Prune symlinks whose target escapes the repo root. With
     // `follow_links(true)`, a followed out-of-tree symlink would
@@ -637,18 +940,64 @@ fn build_walk_builder(root: &Path, opts: &WalkOptions) -> Result<(WalkBuilder, E
             // root) — can't be safely read anyway; prune it.
             _ => false,
         };
-        if !keep {
-            if let Ok(rel) = entry.path().strip_prefix(&root_for_rel) {
-                if !rel.as_os_str().is_empty() {
-                    if let Ok(mut v) = escaping_filter.lock() {
-                        v.push(Arc::from(rel));
-                    }
-                }
-            }
+        if !keep
+            && let Ok(rel) = entry.path().strip_prefix(&root_for_rel)
+            && !rel.as_os_str().is_empty()
+            && let Ok(mut v) = escaping_filter.lock()
+        {
+            v.push(Arc::from(rel));
         }
         keep
     });
     Ok((builder, escaping))
+}
+
+/// Whether a walk error is a PER-ENTRY condition to skip (return `Ok(None)`)
+/// rather than a fatal abort of the whole walk: a dangling symlink or a file
+/// that vanished mid-walk (I/O `NotFound`), or a symlink cycle. Any other error
+/// (permission denied, ...) is left to propagate.
+fn is_skippable_walk_error(err: &ignore::Error) -> bool {
+    if err.io_error().map(std::io::Error::kind) == Some(std::io::ErrorKind::NotFound) {
+        return true;
+    }
+    is_symlink_loop(err) || is_eloop(err)
+}
+
+/// Whether an `ignore` walk error is (or wraps) a symlink-cycle `Loop`. The
+/// `ignore` crate nests the real error under `WithPath` / `WithDepth` /
+/// `WithLineNumber` / `Partial`, and `Loop` carries no `io_error()`, so a
+/// straight `io_error().kind()` check misses it -- unwrap to find it. Catches
+/// the ancestor-based cycles the crate detects itself (`..`, mutual links).
+fn is_symlink_loop(err: &ignore::Error) -> bool {
+    use ignore::Error;
+    match err {
+        Error::Loop { .. } => true,
+        Error::WithPath { err, .. }
+        | Error::WithDepth { err, .. }
+        | Error::WithLineNumber { err, .. } => is_symlink_loop(err),
+        Error::Partial(errs) => errs.iter().any(is_symlink_loop),
+        _ => false,
+    }
+}
+
+/// Whether a walk error is a kernel `ELOOP` (too many levels of symbolic links)
+/// -- a DIRECT self-loop (`ln -s x x`) that the crate's ancestor tracking does
+/// not flag as a `Loop`. `std::io::ErrorKind::FilesystemLoop` is still unstable
+/// (rust #86442), so match the platform errno: 40 on Linux/Android, 62 on
+/// macOS/*BSD. Non-unix targets have no ELOOP here (symlink cycles surface via
+/// the crate's `Loop`), so this is a no-op there.
+#[cfg(unix)]
+fn is_eloop(err: &ignore::Error) -> bool {
+    const ELOOP: i32 = if cfg!(any(target_os = "linux", target_os = "android")) {
+        40
+    } else {
+        62
+    };
+    err.io_error().and_then(std::io::Error::raw_os_error) == Some(ELOOP)
+}
+#[cfg(not(unix))]
+fn is_eloop(_err: &ignore::Error) -> bool {
+    false
 }
 
 /// Convert one `ignore::DirEntry` (or its error) into a
@@ -661,7 +1010,31 @@ fn result_to_entry(
     root: &Path,
     result: std::result::Result<ignore::DirEntry, ignore::Error>,
 ) -> Result<Option<FileEntry>> {
-    let entry = result?;
+    let entry = match result {
+        Ok(entry) => entry,
+        Err(err) => {
+            // Skip a handful of PER-ENTRY conditions rather than aborting the
+            // ENTIRE run (one bad path anywhere must not make a whole repo
+            // un-lintable / un-fixable):
+            //   * a broken (dangling) symlink -- under `follow_links(true)` the
+            //     target can't be stat'd, surfacing as I/O `NotFound`. (The link
+            //     itself is not indexed, so `no_symlinks`/`file_remove` do not see
+            //     it -- a known detection gap, tracked separately.) `NotFound`
+            //     also covers a file that vanished mid-walk (listed then removed).
+            //   * a symlink CYCLE -- `sub/up -> ..`, a self-loop, or a mutual
+            //     loop. The `ignore` crate reports its own `Loop`, and the kernel
+            //     reports `ELOOP` (`FilesystemLoop`); neither is `NotFound`, so
+            //     before this both aborted the run with exit 2 on a single stray
+            //     link. `filter_entry` already prunes the recursion; the emitted
+            //     error just needs to be non-fatal too.
+            // Any OTHER error (permission denied, ...) still propagates and stops
+            // the walk, matching the prior contract.
+            if is_skippable_walk_error(&err) {
+                return Ok(None);
+            }
+            return Err(err.into());
+        }
+    };
     let abs = entry.path();
     let Ok(rel) = abs.strip_prefix(root) else {
         return Ok(None);
@@ -937,6 +1310,25 @@ mod tests {
     }
 
     #[test]
+    fn fileindex_contains_path_includes_files_and_directories() {
+        let idx = FileIndex::from_entries(vec![
+            FileEntry {
+                path: Path::new("a/x.rs").into(),
+                is_dir: false,
+                size: 0,
+            },
+            FileEntry {
+                path: Path::new("a").into(),
+                is_dir: true,
+                size: 0,
+            },
+        ]);
+        assert!(idx.contains_path(Path::new("a/x.rs")));
+        assert!(idx.contains_path(Path::new("a")));
+        assert!(!idx.contains_path(Path::new("missing")));
+    }
+
+    #[test]
     fn walk_excludes_dot_git_directory() {
         let tmp = td();
         touch(tmp.path(), "README.md", b"# demo\n");
@@ -1071,7 +1463,7 @@ mod tests {
     fn default_walk_options_respects_gitignore_and_no_extra_ignores() {
         let opts = WalkOptions::default();
         assert!(opts.respect_gitignore);
-        assert!(opts.extra_ignores.is_empty());
+        assert_eq!(opts.extra_ignores, Vec::<String>::new());
     }
 
     #[test]
@@ -1166,7 +1558,7 @@ mod tests {
     #[test]
     fn children_of_empty_index_returns_empty() {
         let idx = FileIndex::default();
-        assert!(idx.children_of(Path::new("anything")).is_empty());
+        assert_eq!(idx.children_of(Path::new("anything")), &[] as &[usize]);
     }
 
     #[test]
@@ -1208,7 +1600,10 @@ mod tests {
     #[test]
     fn children_of_dir_not_in_index_returns_empty() {
         let idx = synthetic_index(&[("a.rs", false)]);
-        assert!(idx.children_of(Path::new("nonexistent/dir")).is_empty());
+        assert_eq!(
+            idx.children_of(Path::new("nonexistent/dir")),
+            &[] as &[usize]
+        );
     }
 
     #[test]
@@ -1220,6 +1615,47 @@ mod tests {
         let first = idx.children_of(Path::new(""));
         let second = idx.children_of(Path::new(""));
         assert_eq!(first.as_ptr(), second.as_ptr());
+    }
+
+    #[test]
+    fn children_of_build_is_linear_in_the_dir_count() {
+        // Audit 2026-10 finding 6: the parent -> children build did a linear
+        // `entries.iter().find(..)` per parent dir, O(dirs x N): 20k dirs took
+        // ~40s in a debug build. Linear now; the bound is generous (a debug build
+        // on a loaded CI box), orders of magnitude above the fixed cost and well
+        // below the quadratic one.
+        const DIRS: usize = 20_000;
+        let mut entries = Vec::with_capacity(DIRS * 2);
+        for i in 0..DIRS {
+            let d = format!("d{i}");
+            entries.push(FileEntry {
+                path: Path::new(&d).into(),
+                is_dir: true,
+                size: 0,
+            });
+            entries.push(FileEntry {
+                path: Path::new(&format!("{d}/f.rs")).into(),
+                is_dir: false,
+                size: 1,
+            });
+        }
+        let idx = FileIndex::from_entries(entries);
+        let start = std::time::Instant::now();
+        assert_eq!(idx.children_of(Path::new("")).len(), DIRS);
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "children_of build took {elapsed:?} for {DIRS} dirs (quadratic?)"
+        );
+        // Correctness: each dir maps to exactly its own child.
+        for i in [0, DIRS / 2, DIRS - 1] {
+            let kids = idx.children_of(Path::new(&format!("d{i}")));
+            assert_eq!(kids.len(), 1);
+            assert_eq!(
+                &*idx.entries[kids[0]].path,
+                Path::new(&format!("d{i}/f.rs"))
+            );
+        }
     }
 
     #[test]
@@ -1285,6 +1721,74 @@ mod tests {
             .map(|e| e.path.to_str().unwrap())
             .collect();
         assert_eq!(descendants, vec!["crates/api/lib.rs"]);
+    }
+
+    #[test]
+    fn would_walk_skip_agrees_with_the_walk() {
+        // `fix --dry-run` predicts with this whether a file a fix would create
+        // is ever indexed; it must agree with `walk` on the same tree.
+        let tmp = td();
+        let root = tmp.path();
+        std::fs::write(root.join(".gitignore"), ".env\nbuild/\n*.log\n").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/.gitignore"), "!keep.log\nlocal.txt\n").unwrap();
+        std::fs::write(root.join(".ignore"), "scratch.txt\n").unwrap();
+        let opts = WalkOptions {
+            respect_gitignore: true,
+            extra_ignores: vec!["vendor/**".into()],
+        };
+        let cases = [
+            (".env", true),
+            ("build/out.txt", true),
+            ("a.log", true),
+            ("sub/keep.log", false),
+            ("sub/local.txt", true),
+            ("local.txt", false),
+            ("scratch.txt", true),
+            ("vendor/x.rs", true),
+            ("src/main.rs", false),
+            ("./README.md", false),
+        ];
+        for (rel, _) in cases {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        }
+        let idx = walk(root, &opts).unwrap();
+        for (rel, skipped) in cases {
+            let clean: PathBuf = Path::new(rel)
+                .components()
+                .filter(|c| !matches!(c, std::path::Component::CurDir))
+                .collect();
+            assert_eq!(
+                idx.contains_file(&clean),
+                !skipped,
+                "walk disagrees with the expectation for {rel}"
+            );
+            assert_eq!(
+                would_walk_skip(root, &opts, Path::new(rel), false),
+                skipped,
+                "{rel}"
+            );
+        }
+        // Without `respect_gitignore`, only `ignore:` (and `.git`) exclude.
+        let opts = WalkOptions {
+            respect_gitignore: false,
+            extra_ignores: vec!["vendor/**".into()],
+        };
+        assert!(!would_walk_skip(root, &opts, Path::new(".env"), false));
+        assert!(would_walk_skip(
+            root,
+            &opts,
+            Path::new("vendor/x.rs"),
+            false
+        ));
+        assert!(would_walk_skip(
+            root,
+            &opts,
+            Path::new(".git/config"),
+            false
+        ));
     }
 
     #[test]
@@ -1386,6 +1890,64 @@ mod tests {
             !names.iter().any(|p| p.as_os_str() == "pipe.txt"),
             "FIFO must be skipped, not indexed: {names:?}"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dangling_symlink_is_skipped_not_fatal() {
+        // Round-5 audit: with `follow_links(true)` a broken (dangling) symlink
+        // surfaced as a FATAL walk error, aborting the whole run before any rule
+        // ran -- so a repo containing one dangling link was entirely un-lintable
+        // (and `file_remove` could not clean it up). It must be skipped, leaving
+        // the rest of the tree indexed.
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::write(root.join("real.txt"), b"hi\n").unwrap();
+        symlink("/does/not/exist/at/all", root.join("dangling")).unwrap();
+
+        let idx = walk(root, &WalkOptions::default())
+            .expect("a dangling symlink must not abort the walk");
+        let names: Vec<_> = idx.entries.iter().map(|e| e.path.to_path_buf()).collect();
+        assert!(
+            names.iter().any(|p| p.as_os_str() == "real.txt"),
+            "the real file must still be indexed: {names:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlink_cycles_are_skipped_not_fatal() {
+        // Round-7 (5a): a symlink CYCLE surfaces as `ignore::Error::Loop`
+        // (ancestor-based: `..`, mutual) or a kernel ELOOP (a direct self-loop) --
+        // neither is `NotFound`, so before this a single stray cycle aborted the
+        // ENTIRE walk (exit 2), making the whole repo un-lintable / un-fixable.
+        // Each cycle shape must be skipped, leaving the rest of the tree indexed.
+        use std::os::unix::fs::symlink;
+        for shape in ["parent", "selfdir", "mutual", "selfref"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            std::fs::write(root.join("real.txt"), b"hi\n").unwrap();
+            match shape {
+                "parent" => {
+                    std::fs::create_dir(root.join("sub")).unwrap();
+                    symlink("..", root.join("sub/up")).unwrap();
+                }
+                "selfdir" => symlink(".", root.join("selfloop")).unwrap(),
+                "mutual" => {
+                    symlink("cyc_y", root.join("cyc_x")).unwrap();
+                    symlink("cyc_x", root.join("cyc_y")).unwrap();
+                }
+                "selfref" => symlink("loop", root.join("loop")).unwrap(),
+                _ => unreachable!(),
+            }
+            let idx = walk(root, &WalkOptions::default())
+                .unwrap_or_else(|e| panic!("cycle shape {shape:?} must not abort the walk: {e}"));
+            assert!(
+                idx.entries.iter().any(|e| e.path.as_os_str() == "real.txt"),
+                "cycle shape {shape:?}: the real file must still be indexed"
+            );
+        }
     }
 
     #[test]

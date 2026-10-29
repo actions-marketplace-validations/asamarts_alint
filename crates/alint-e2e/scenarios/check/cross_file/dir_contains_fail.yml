@@ -1,3 +1,4 @@
+test_version: 1
 name: dir_contains fires when required files are missing in a selected dir
 tags: [check, dir_contains, cross_file]
 
@@ -28,6 +29,7 @@ given:
 when: [check]
 
 expect:
-  - violations:
+  - exit: policy_failure
+    violations:
       - {rule: packages-have-readme-and-license, level: error, path: packages/beta}
       - {rule: packages-have-readme-and-license, level: error, path: packages/gamma}

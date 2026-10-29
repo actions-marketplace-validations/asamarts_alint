@@ -7,7 +7,7 @@
 //! rules.md is a docs-tree file the binary never ships, so the associations are
 //! generated into `crates/alint-rules/src/categories_gen.rs` and committed.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 
@@ -33,14 +33,19 @@ struct KindCats {
     cats: Vec<Category>,
 }
 
-/// (canonical kind -> categories, alias -> canonical kind, canonical kind -> summary).
-type Bridge = (Vec<KindCats>, Vec<(String, String)>, Vec<(String, String)>);
+/// Category bridge plus capped summaries and full opening-sentence descriptions.
+type Bridge = (
+    Vec<KindCats>,
+    Vec<(String, String)>,
+    Vec<(String, String)>,
+    Vec<(String, String)>,
+);
 
 pub fn run(check: bool) -> Result<()> {
     let root = crate::workspace_root()?;
     let md = fs::read_to_string(root.join(RULES_MD)).with_context(|| format!("read {RULES_MD}"))?;
 
-    let (kind_cats, alias_to_canonical, kind_summaries) = parse(&md)?;
+    let (kind_cats, alias_to_canonical, kind_summaries, kind_descriptions) = parse(&md)?;
     validate_against_registry(&kind_cats, &alias_to_canonical)?;
 
     // Two committed bridges from one parse: the category associations and the
@@ -55,7 +60,7 @@ pub fn run(check: bool) -> Result<()> {
     write_or_check(
         &root.join(KIND_DOCS_PATH),
         KIND_DOCS_PATH,
-        &render_summaries(&kind_summaries),
+        &render_summaries(&kind_summaries, &kind_descriptions),
         check,
     )?;
 
@@ -128,6 +133,7 @@ fn parse(md: &str) -> Result<Bridge> {
     let mut kind_cats: Vec<KindCats> = Vec::new();
     let mut alias_to_canonical: Vec<(String, String)> = Vec::new();
     let mut kind_summaries: Vec<(String, String)> = Vec::new();
+    let mut kind_descriptions: Vec<(String, String)> = Vec::new();
 
     for (fam, title, body) in &sections {
         let (canon, aliases) = parse_h3_title(title);
@@ -143,12 +149,14 @@ fn parse(md: &str) -> Result<Bridge> {
         // One summary per H3, shared by every canonical kind under the heading
         // (a multi-kind heading describes the group in one sentence).
         let summary = crate::docs_export::kind_summary(&clean_body, SUMMARY_MAX_CHARS);
+        let description = crate::docs_export::kind_summary(&clean_body, usize::MAX);
         for k in &canon {
             kind_cats.push(KindCats {
                 kind: k.clone(),
                 cats: cats.clone(),
             });
-            kind_summaries.push((k.clone(), summary.clone()));
+            kind_summaries.push((k.clone(), specialize_kind_description(k, &summary)));
+            kind_descriptions.push((k.clone(), specialize_kind_description(k, &description)));
         }
         for a in &aliases {
             alias_to_canonical.push((a.clone(), canon[0].clone()));
@@ -158,7 +166,25 @@ fn parse(md: &str) -> Result<Bridge> {
     kind_cats.sort_by(|a, b| a.kind.cmp(&b.kind));
     alias_to_canonical.sort();
     kind_summaries.sort();
-    Ok((kind_cats, alias_to_canonical, kind_summaries))
+    kind_descriptions.sort();
+    Ok((
+        kind_cats,
+        alias_to_canonical,
+        kind_summaries,
+        kind_descriptions,
+    ))
+}
+
+/// Multi-kind documentation sections describe both variants in one sentence.
+/// Detail surfaces name one kind at a time, so make that shared opener precise.
+fn specialize_kind_description(kind: &str, description: &str) -> String {
+    match kind {
+        "file_starts_with" => description.replacen("prefix / suffix", "prefix", 1),
+        "file_ends_with" => description.replacen("prefix / suffix", "suffix", 1),
+        "for_each_dir" => description.replacen("directory / file", "directory", 1),
+        "for_each_file" => description.replacen("directory / file", "file", 1),
+        _ => description.to_string(),
+    }
 }
 
 /// Split an H3 title into (canonical kinds, alias kinds). Aliases are the
@@ -228,16 +254,23 @@ fn validate_against_registry(
     alias_to_canonical: &[(String, String)],
 ) -> Result<()> {
     let registry = alint_rules::builtin_registry();
-    let known: BTreeSet<String> = registry.known_kinds().map(str::to_string).collect();
-    let alias_set: BTreeSet<&str> = alias_to_canonical.iter().map(|(a, _)| a.as_str()).collect();
-    let canonical_registry: BTreeSet<&String> = known
-        .iter()
-        .filter(|k| !alias_set.contains(k.as_str()))
+    let canonical_registry: BTreeSet<String> =
+        registry.canonical_kinds().map(str::to_string).collect();
+    let registry_aliases: BTreeMap<String, String> = registry
+        .aliases()
+        .map(|(alias, canonical)| (alias.to_string(), canonical.to_string()))
         .collect();
-    let documented: BTreeSet<&String> = kind_cats.iter().map(|kc| &kc.kind).collect();
+    let documented_aliases: BTreeMap<String, String> = alias_to_canonical.iter().cloned().collect();
+    if registry_aliases != documented_aliases {
+        bail!(
+            "alias mapping mismatch between {RULES_MD} and the registry.\n  registry: \
+             {registry_aliases:?}\n  documented: {documented_aliases:?}"
+        );
+    }
+    let documented: BTreeSet<String> = kind_cats.iter().map(|kc| kc.kind.clone()).collect();
 
-    let missing: Vec<&&String> = canonical_registry.difference(&documented).collect();
-    let extra: Vec<&&String> = documented.difference(&canonical_registry).collect();
+    let missing: Vec<&String> = canonical_registry.difference(&documented).collect();
+    let extra: Vec<&String> = documented.difference(&canonical_registry).collect();
     if !missing.is_empty() || !extra.is_empty() {
         bail!(
             "category coverage mismatch vs the registry.\n  canonical kinds with no \
@@ -246,14 +279,6 @@ fn validate_against_registry(
         );
     }
 
-    for (a, canon) in alias_to_canonical {
-        if !known.contains(a.as_str()) {
-            bail!("alias {a:?} in {RULES_MD} is not a registered rule kind");
-        }
-        if !documented.contains(canon) {
-            bail!("alias {a:?} maps to {canon:?}, which has no categories entry");
-        }
-    }
     Ok(())
 }
 
@@ -285,7 +310,10 @@ fn render(kind_cats: &[KindCats], alias_to_canonical: &[(String, String)]) -> St
 }
 
 /// Render the sibling per-kind summary bridge (ADR-0011).
-fn render_summaries(kind_summaries: &[(String, String)]) -> String {
+fn render_summaries(
+    kind_summaries: &[(String, String)],
+    kind_descriptions: &[(String, String)],
+) -> String {
     let mut s = String::new();
     s.push_str("//! @generated by `cargo run -p xtask -- gen-categories`. DO NOT EDIT.\n");
     s.push_str("//!\n");
@@ -299,6 +327,13 @@ fn render_summaries(kind_summaries: &[(String, String)]) -> String {
     s.push_str("pub static KIND_SUMMARIES: &[(&str, &str)] = &[\n");
     for (kind, summary) in kind_summaries {
         let _ = writeln!(s, "    ({kind:?}, {summary:?}),");
+    }
+    s.push_str("];\n\n");
+    s.push_str("/// Canonical rule kind -> its full opening sentence. Sorted by kind.\n");
+    s.push_str("#[rustfmt::skip]\n");
+    s.push_str("pub static KIND_DESCRIPTIONS: &[(&str, &str)] = &[\n");
+    for (kind, description) in kind_descriptions {
+        let _ = writeln!(s, "    ({kind:?}, {description:?}),");
     }
     s.push_str("];\n");
     s
@@ -342,7 +377,31 @@ mod tests {
 
         let (c, a) = parse_h3_title("`file_starts_with` / `file_ends_with`");
         assert_eq!(c, vec!["file_starts_with", "file_ends_with"]);
-        assert!(a.is_empty());
+        assert_eq!(a, [] as [String; 0]);
+    }
+
+    #[test]
+    fn shared_descriptions_are_specialized_for_each_kind() {
+        assert_eq!(
+            specialize_kind_description("file_starts_with", "Require a prefix / suffix."),
+            "Require a prefix."
+        );
+        assert_eq!(
+            specialize_kind_description("file_ends_with", "Require a prefix / suffix."),
+            "Require a suffix."
+        );
+        assert_eq!(
+            specialize_kind_description("for_each_dir", "Check each directory / file."),
+            "Check each directory."
+        );
+        assert_eq!(
+            specialize_kind_description("for_each_file", "Check each directory / file."),
+            "Check each file."
+        );
+        assert_eq!(
+            specialize_kind_description("file_exists", "Require a file."),
+            "Require a file."
+        );
     }
 
     #[test]

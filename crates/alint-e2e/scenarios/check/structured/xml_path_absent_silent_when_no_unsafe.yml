@@ -1,3 +1,4 @@
+test_version: 1
 name: xml_path_absent is silent when the csproj has no unsafe opt-in
 tags: [check, xml_path_absent]
 
@@ -26,4 +27,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

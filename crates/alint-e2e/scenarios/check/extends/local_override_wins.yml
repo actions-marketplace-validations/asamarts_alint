@@ -1,21 +1,15 @@
+test_version: 1
 name: local rule with the same id overrides the inherited one
 tags: [check, extends]
 
 given:
   tree:
-    base.yml: |
-      version: 1
-      rules:
-        - id: no-bak
-          kind: file_absent
-          paths: "**/*.bak"
-          level: error
-
+    # The inherited config is a package asset, separate from the repository.
     stale.bak: ""
 
   config: |
     version: 1
-    extends: [./base.yml]
+    extends: [./support/local_override_wins.yaml]
     rules:
       - id: no-bak
         kind: file_absent
@@ -27,5 +21,6 @@ when: [check]
 expect:
   # Child-level `warning` wins. If inheritance were wrong the level
   # would be `error`.
-  - violations:
+  - exit: success
+    violations:
       - {rule: no-bak, level: warning, path: stale.bak}

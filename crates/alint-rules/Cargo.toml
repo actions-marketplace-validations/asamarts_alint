@@ -9,30 +9,48 @@ repository.workspace = true
 homepage = "https://github.com/asamarts/alint"
 readme = "../../README.md"
 authors.workspace = true
+autotests = false
 # Implementation-detail crate of the alint binary, but cargo
 # requires every workspace dep of a published crate to have a
 # resolvable `version =` on crates.io. So this crate publishes
 # even though its description warns "Internal: Not a stable
 # public API." See alint-dsl/Cargo.toml for the v0.8 history.
 
+# All integration tests build into one binary: tests/main.rs declares each
+# file as a module (docs/design/build-dev-loop.md, section 2).
+[[test]]
+name = "it"
+path = "tests/main.rs"
+
+[features]
+# R4 differential shadow: runs the IR-backed cross_file equals evaluator next
+# to the authoritative one. Test-only; enabled from alint-e2e and corpus replay.
+# Release and bench feature trees must never contain it.
+shadow-ir = []
+
 [dependencies]
 alint-core.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml_ng.workspace = true
 regex.workspace = true
 globset.workspace = true
 content_inspector.workspace = true
+pulldown-cmark.workspace = true
+unicode-general-category.workspace = true
+spdx.workspace = true
 sha2.workspace = true
 serde_json_path.workspace = true
 toml.workspace = true
 roxmltree.workspace = true
 jsonschema.workspace = true
+memchr.workspace = true
+saphyr-parser.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
 tempfile.workspace = true
+yaml_serde.workspace = true
 
 [lints]
 workspace = true

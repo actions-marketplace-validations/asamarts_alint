@@ -11,10 +11,10 @@
 //! ```
 //!
 //! Bundled rulesets are deliberately limited: no `extends:` of
-//! their own (same rule as HTTPS extends), no `facts:` that read
-//! from the user repo's state, no `custom:` program execution.
-//! They're pure static rule catalogs that users layer on top of
-//! their own config.
+//! their own (same rule as HTTPS extends), only built-in repository
+//! facts, and no `custom:` program execution. They are static,
+//! offline policy catalogs that users layer on top of their own
+//! config.
 //!
 //! ## Versioning
 //!
@@ -48,6 +48,16 @@ const REGISTRY: &[(&str, &str, &str)] = &[
     ("java", "v1", include_str!("../rulesets/v1/java.yml")),
     ("dotnet", "v1", include_str!("../rulesets/v1/dotnet.yml")),
     ("php", "v1", include_str!("../rulesets/v1/php.yml")),
+    (
+        "versioning",
+        "v1",
+        include_str!("../rulesets/v1/versioning.yml"),
+    ),
+    (
+        "toolchain-pins",
+        "v1",
+        include_str!("../rulesets/v1/toolchain-pins.yml"),
+    ),
     // Namespaced utility rulesets. Slash-separated names are
     // resolved through the usual `alint://bundled/<name>@<rev>`
     // URI — the `@` separator splits name from rev, so slashes
@@ -154,8 +164,8 @@ pub fn resolve(spec: &str) -> Option<&'static str> {
         .map(|(_, _, body)| *body)
 }
 
-/// The list of every bundled ruleset this build ships — used by
-/// `alint list bundled` and by test assertions.
+/// The list of every bundled ruleset this build ships, used for
+/// unknown-URI diagnostics and test assertions.
 pub fn catalog() -> impl Iterator<Item = (&'static str, &'static str)> {
     REGISTRY.iter().map(|(name, rev, _)| (*name, *rev))
 }
@@ -191,7 +201,7 @@ mod tests {
         for (name, rev) in catalog() {
             let spec = format!("{name}@{rev}");
             let body = resolve(&spec).unwrap();
-            let parsed: Result<alint_core::Config, _> = serde_yaml_ng::from_str(body);
+            let parsed: Result<alint_core::Config, _> = yaml_serde::from_str(body);
             assert!(
                 parsed.is_ok(),
                 "bundled ruleset '{spec}' failed to parse: {}",
@@ -208,7 +218,7 @@ mod tests {
         for (name, rev) in catalog() {
             let spec = format!("{name}@{rev}");
             let body = resolve(&spec).unwrap();
-            let parsed: alint_core::Config = serde_yaml_ng::from_str(body).unwrap();
+            let parsed: alint_core::Config = yaml_serde::from_str(body).unwrap();
             assert!(
                 parsed.extends.is_empty(),
                 "bundled ruleset '{spec}' declares `extends:`, which is not allowed"

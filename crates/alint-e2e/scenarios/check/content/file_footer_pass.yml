@@ -1,3 +1,4 @@
+test_version: 1
 name: file_footer is silent when every file ends with the required footer
 tags: [check, file_footer, content]
 
@@ -24,4 +25,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

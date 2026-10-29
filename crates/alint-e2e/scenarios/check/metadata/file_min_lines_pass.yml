@@ -1,3 +1,4 @@
+test_version: 1
 name: file_min_lines passes when files clear the line floor
 tags: [check, file_min_lines, metadata, passing]
 
@@ -27,4 +28,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

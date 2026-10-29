@@ -1,0 +1,39 @@
+test_version: 1
+name: replace on a dotenv value uses the native context-safe edit
+tags: [fix, dotenv_path_matches, replace, dotenv, safety]
+
+# adotenv 0.2 native edit: `D = #q` would turn the intended value into an
+# inline comment. The editor quotes the rewritten value while preserving the
+# export prefix, spacing, comment, and line ending.
+
+given:
+  tree:
+    .env: "export D = q # note\n"
+  config: |
+    version: 1
+    rules:
+      - id: v-prefix
+        kind: dotenv_path_matches
+        paths: "**/.env"
+        path: "$.D"
+        matches: "^#"
+        level: error
+        fix:
+          replace:
+            pattern: "^"
+            replacement: "#"
+            applicability: safe
+
+when: [check, fix, check]
+
+expect:
+  - exit: policy_failure
+    violations:
+      - {rule: v-prefix, level: error, path: .env}
+  - exit: success
+    applied: [v-prefix]
+  - exit: success
+    violations: []
+
+expect_tree:
+  .env: "export D = \"#q\" # note\n"

@@ -49,7 +49,6 @@ rules:
   # --check form; if any file would change, the tool exits non-zero.
   - id: prettier-self-format
     kind: command_idempotent
-    paths: ".prettierignore"
     command: ["prettier", ".", "--check", "--cache"]
     timeout: 300
     level: warning
@@ -59,7 +58,6 @@ rules:
   # prettier-internal-rules/* are JS-AST analysis alint cannot express.
   - id: prettier-eslint
     kind: command_idempotent
-    paths: "eslint.config.js"
     command: ["eslint", ".", "--format", "friendly"]
     timeout: 300
     level: warning
@@ -68,7 +66,6 @@ rules:
   # lint:typecheck — tsc over JSDoc-typed sources. TS compiler; runner only.
   - id: prettier-typecheck
     kind: command_idempotent
-    paths: "tsconfig.json"
     command: ["tsc"]
     timeout: 600
     level: warning
@@ -77,7 +74,6 @@ rules:
   # lint:spellcheck — cspell against cspell.json allowlist. Lexical; runner.
   - id: prettier-spellcheck
     kind: command_idempotent
-    paths: "cspell.json"
     command: ["cspell", "--no-progress", "--relative", "--dot", "--gitignore"]
     timeout: 120
     level: info
@@ -86,7 +82,6 @@ rules:
   # lint:knip — unused exports + dependency analysis. JS dep-graph; runner.
   - id: prettier-knip
     kind: command_idempotent
-    paths: "knip.config.js"
     command: ["knip"]
     timeout: 300
     level: warning
@@ -97,7 +92,6 @@ rules:
   # opt-out is more nuanced than for_each_dir alone; keep the script as runner.
   - id: prettier-format-test-lint
     kind: command_idempotent
-    paths: "scripts/format-test-lint.js"
     command: ["node", "./scripts/format-test-lint.js"]
     timeout: 60
     level: warning
@@ -107,7 +101,6 @@ rules:
   # what command_idempotent models: run the project's `fix`, expect no diff.
   - id: prettier-fix-is-idempotent
     kind: command_idempotent
-    paths: "package.json"
     command: ["git", "diff", "--exit-code"]
     timeout: 60
     level: warning

@@ -79,7 +79,7 @@ impl PerFileRule for FileMaxLinesRule {
 /// `file_min_lines::count_lines`. Kept as a private function
 /// here (rather than reused from `file_min_lines`) because
 /// inlining it makes the unit tests explicit about what this
-/// rule's threshold is being compared against — and the
+/// rule's threshold is being compared against - and the
 /// implementation is one line, not worth a cross-module dep.
 fn count_lines(bytes: &[u8]) -> u64 {
     if bytes.is_empty() {
@@ -90,6 +90,25 @@ fn count_lines(bytes: &[u8]) -> u64 {
     let trailing_unterminated = u64::from(!bytes.ends_with(b"\n"));
     newlines + trailing_unterminated
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::PerFile { full_index: false },
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[]),
+    content: alint_core::ContentAccess::WholeFile,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let Some(_paths) = &spec.paths else {

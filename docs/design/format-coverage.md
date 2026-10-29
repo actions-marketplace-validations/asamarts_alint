@@ -1,7 +1,7 @@
 # Design doc: config-format coverage parity
 
-Status: Draft. (Draft | Implemented in <commit> | Superseded by <doc>.)
-Decisions: proposes ADR-0016 (`Format` is the single source of truth for config-format coverage; format-specific surfaces must cover every `Format` variant, enforced by a parity gate).
+Status: Implemented (format-coverage arc, PRs #213-#223; all 8 formats and the `structured_family_is_symmetric` parity gate shipped). Sections 1-4 are the original design record; section 5 tracks what actually shipped. The 4-format framing in sections 1-3 is the pre-arc starting point, not the current state (now JSON / YAML / TOML / XML / dotenv / properties / INI / HCL).
+Decisions: proposed an ADR (never written; the number ADR-0016 later went to the PyPI channel) recording that `Format` is the single source of truth for config-format coverage; format-specific surfaces must cover every `Format` variant, enforced by a parity gate.
 Demand evidence: [issue #212](https://github.com/asamarts/alint/issues/212). Surfaced by the `yaml_path_absent` kind shipping without its json/toml/xml siblings (fixed in #211 by the `structured_family_is_symmetric` gate); this doc generalizes that fix to the rest of the codebase.
 
 ## 1. Problem
@@ -73,7 +73,7 @@ No new option *keys* are introduced beyond the `xml:` extract mode and the `xml`
 
 `extract.rs`'s `structured(fmt, query, text)` already does `fmt.parse(text)` then runs the JSONPath and keeps string-valued matches. Adding `Extract::Xml(q) => structured(Format::Xml, q, text)` reuses that path verbatim. XML leaves are always strings under the xmltodict mapping, so an XML extract yields string values (a `.csproj` `<Version>1.2.3</Version>` extracts as `"1.2.3"`), exactly what `cross_file`/`file_graph`/`registry_paths_resolve` consume. Dispatch class is unchanged (cross-file, pure-parse, no spawn).
 
-### 3.2 The parity mechanism (the architectural core, ADR-0016)
+### 3.2 The parity mechanism (the architectural core)
 
 The decision this doc asks to record: **`Format` is the single source of truth for the config-format axis, and every format-specific surface must cover every `Format` variant.**
 
@@ -110,32 +110,34 @@ No new dependency. `xml_to_value` stays private; reuse is through the already-pu
 
 Adding XML variant-by-variant closes today's gap but leaves the drift risk. The durable change is the parity gate from 3.2 (a `Format::ALL`-covered test per surface); it is what actually prevents the next format from shipping half-wired. The bounded structural cleanup rides on top of it:
 
-- Collapse `Extract`'s three structured runtime variants into `Structured(Format, String)` (dispatch already calls `Format::parse`). The `ExtractSpec` config fields stay per-format (a serde requirement) but are now guarded by the gate.
-- Fold `TargetFormat` into `Format` + an alias map (its only non-redundant job is the `yml` spelling).
+- Collapse `Extract`'s four structured runtime variants (json/yaml/toml/xml) into `Structured(Format, String)` (dispatch already calls `Format::parse`). The `ExtractSpec` config fields stay per-format (a serde requirement) but are now guarded by the gate. **As built (Phase 1c): done.** It also lets `registry_paths_resolve`'s `exclude_query` fallback reuse the registry's own format via one `Extract::Structured(fmt, _) => Extract::Structured(*fmt, q)` arm instead of an explicit per-format match with a TOML default, which removes the "a new format's structured `exclude_query` silently parses as TOML" trap class outright.
+- Fold `TargetFormat` into `Format` + an alias map (its only non-redundant job is the `yml` spelling). **As built (Phase 1c): kept `TargetFormat`, deliberately** (decision recorded 2026-08-31). `Format` derives no `Deserialize`/`JsonSchema` today; folding `TargetFormat` in would add both to the core enum, and because schemars does not emit serde `alias`es, `yml` would drop out of the published config-schema enum unless re-added via field-level schema attributes that just re-express `TargetFormat`. The parity gate (`target_format_covers_every_format`) already makes `TargetFormat` drift-safe, so the fold is a lateral move; `TargetFormat` stays as the clean expression of "`Format`'s labels plus the `yml` alias".
 - Leave `did_you_mean` hand-maintained; the gate covers it.
 
-Constitution note: the constitution requires every registered kind to have firing and silent scenarios (constitution section 8) and the structured family to stay symmetric; ADR-0016 extends that invariant to the extract and schema-target surfaces.
+Constitution note: the constitution requires every registered kind to have firing and silent scenarios (constitution section 8) and the structured family to stay symmetric; the `Format` parity gate extends that invariant to the extract and schema-target surfaces.
 
 ### 5.3 Phase 1.5: dotenv (full wiring)
 
 dotenv is greenlit alongside the XML work: it is cheap and ubiquitous, and it exercises the `Format::ALL` seam end to end. Because a `Format` variant is all-or-nothing under the parity gate, `Format::Dotenv` is wired on every surface:
+
+**As built (Phase 1.5, decision 2026-09-01): initially hand-rolled instead of `dotenvy`; now adotenv 0.10.4.** The plan below assumed `dotenvy` could return literal values with substitution off, but `dotenvy` 0.15.7 expands `${VAR}` / `$VAR` **unconditionally** (confirmed in its `parse.rs`; only single-quotes / `\$` suppress it per value, with no global toggle), which is environment-dependent and wrong for static analysis. Alint therefore shipped a small dependency-free literal parser first. In v0.18.2 that implementation moved into [`adotenv`](https://github.com/asamarts/adotenv); alint now uses adotenv 0.10.4's lossless strict parser, exact spans, and native verified edits. Assigned values remain literal strings, while a bare declaration maps to JSON `null`. A no-substitution mode in `dotenvy` itself has since landed on its unreleased `master` (PR #172), but adotenv's tooling model now supplies the required provenance and editing contract. The first bullet's `dotenvy` mapper, dependency choice, and every-value-is-a-string claim are superseded; its filename detection still stands as built.
 
 - `Format`: add `Dotenv`, a `.env` arm in `parse` (via `dotenvy` 0.15, MIT, the maintained fork of the RUSTSEC-2021-0141 `dotenv`), and a `label`. Two dotenv-specific wrinkles: (a) detection cannot reuse `detect_from_path`'s extension match, because a bare `.env` has no extension (and `.env.local` has extension `local`), so it needs a filename branch (`.env`, `.env.*`); (b) `dotenvy` substitutes `${VAR}` by default, but a linter must keep values literal (deterministic, environment-independent), so the ~10-line mapper reads the raw pairs into a flat `Value::Object` of strings with substitution off. Values are not coerced (stringly-typed, like XML).
 - structured_path: three `dotenv_path_{equals,matches,absent}` builders + registrations. **Kind count 93 -> 96.** Flat keys make these useful: `dotenv_path_equals $.NODE_ENV == "production"`, `dotenv_path_absent $.AWS_SECRET_ACCESS_KEY`.
 - extract (`Structured(Format::Dotenv, q)`), `json_schema_passes` (`format: dotenv`), and the `did_you_mean` arms.
 - The full drift sweep the XML/absent work already exercised: schema branches + dispatch, all_kinds fixture, facts (96), a docs H3 + fail/pass `docs:` scenarios per kind, README/about counts, C4 model, options snapshot.
 
-Complexity: low. One new dependency, `dotenvy` (MIT, cargo-deny-clean). The parity gate turns "wire it everywhere" into a checklist, not a judgment call, which is exactly why dotenv is a safe first exercise of the seam.
+Complexity: low. The zero-runtime-dependency `adotenv` crate is the only added dependency. The parity gate turns "wire it everywhere" into a checklist, not a judgment call, which is exactly why dotenv was a safe first exercise of the seam.
 
 ### 5.4 New formats (Phase 2, demand-gated)
 
-The remaining candidates stay out of this change and are added only behind a concrete case-study or issue demand signal. The seam is the same as dotenv's: one arm in `Format::parse` + `label` + `detect_from_path`, then the parity gate makes the rest a checklist. All have a maintained, cargo-deny-clean crate; the cost is the up-front `Value`-mapping design, not the parsing.
+The remaining candidates stay out of this change and are added only behind a concrete case-study or issue demand signal. **As built (Phase 2, 2026-09-01): Java `.properties` shipped first** (demand: user greenlight), using the `java-properties` crate (the doc's vetted-crate approach was chosen over hand-rolling, since unlike dotenvy it returns literal values; verified). `Format::Properties` + `properties_path_*` (kinds 96 -> 99) wired on every surface behind the parity gate; flat literal-string map, dotted keys stay one key. **INI / `.cfg` shipped next (Phase 2, 2026-09-01, user greenlight): `Format::Ini` + `ini_path_*`, kinds 99 -> 102.** Built hand-rolled (`crates/alint-core/src/ini.rs`), NOT the table's `rust-ini`: that crate drags in a six-crate transitive tree (`ordered-multimap` -> `dlv-list` -> `const-random` -> `tiny-keccak`, the last CC0-1.0 and outside the cargo-deny allow-list) purely to preserve key order -- a poor trade for a supply-chain-conscious linter when the subset alint needs is small, so this took the same zero-dep call as dotenv. Mapping: 2-level `{ section: { key: "value" } }`, pre-section keys hoisted to the top level, values literal (quotes / inline `;`/`#` kept), a key repeated within one scope collapses to a file-order array (INI has no single duplicate-key runtime semantic), sections and keys case-preserving, and multi-line values follow the configparser indentation-continuation convention (added in adversarial review, since without it the auto-detected `tox.ini` / `setup.cfg` / `pytest.ini` either false-error or silently mis-parse). **HCL shipped last (Phase 2, 2026-09-01): `Format::Hcl` + `hcl_path_*`, kinds 102 -> 105**, via the doc's vetted `hcl-rs` crate (0.18, MIT/Apache, cargo-deny-clean -- no CC0 transitive, unlike rust-ini). As the doc predicted, `hcl::Value` is JSON-native: `hcl::from_str::<serde_json::Value>` maps directly (blocks nest type -> labels, values stay typed, expressions become opaque strings, single-vs-repeated block is the XML cardinality footgun). **The one thing the doc missed: hcl-rs OVERFLOWS THE STACK (SIGABRT, whole-process abort) on deep input** -- first observed at ~30 levels of block nesting on a 1-2 MB thread stack (huge per-level frames). The initial fix (a `{`/`[`-only `hcl_depth_within_limit` pre-scan + a 64 MB parse thread) was DEFEATED in adversarial review: hcl-rs also recurses on parentheses, function calls, unary `-`/`!` runs, binary/ternary operator chains, and any of those embedded in `${...}` string / heredoc interpolation -- an ~11 KB crafted `.tf` still aborted the run. Hardened across several adversarial rounds: `hcl_depth_within_limit` counts `{`/`[`/`(` nesting and unary `-`/`!` runs in EXPRESSION context (both capped at `MAX_HCL_DEPTH` = 256), while SKIPPING string / heredoc / comment CONTENT (a `-----` banner or a `((((` inside a `description` is not real nesting; counting it false-rejected legit `.tf`) -- the one construct still counted inside content is a `${...}` / `%{...}` interpolation, which carries a real recursing sub-expression (`count_interp`). Matching hcl-rs's lexer exactly at those content boundaries is itself a safety requirement (a later PR #223 round found two evasions here): the scan recognizes the same lenient heredoc terminators hcl-rs accepts (the tag as a whole token: leading and/or trailing whitespace or a trailing comment, e.g. `  EOT` / `EOT ` / `EOT # c`) and skips the same `#`/`//`/`/* */` comments hcl-rs honors inside an interpolation, so a bomb cannot hide in a region the scan wrongly treats as skipped content; a `MAX_HCL_BYTES` (64 KiB) size cap bounds the delimiter-less operator chains a lexical scan cannot count; and parsing runs on a 512 MB-stack thread so a file at those limits still has headroom. (The cap started at 256 KiB but was lowered to 64 KiB in a second adversarial round, PR #223: a binary/ternary chain costs only ~2 bytes per recursion level, so a ~160 KB file fit UNDER 256 KiB yet still overflowed the parse thread at ~75k levels; 64 KiB admits at most ~32k levels, a >2x margin, and a `SAFE_MAX_HCL_BYTES` compile-time assert now pins the ceiling so a future re-widening is a build error, not a latent crash.) Every recursion path is now either rejected as one parse-error violation or parsed safely -- verified with an expression-bomb regression battery through the real binary. This closes the format-coverage arc. The seam is the same as dotenv's: one arm in `Format::parse` + `label` + `detect_from_path`, then the parity gate makes the rest a checklist. All have a maintained, cargo-deny-clean crate; the cost is the up-front `Value`-mapping design, not the parsing.
 
 | format | leading crate (license) | value fit | effort | biggest mapping risk |
 |---|---|---|---|---|
 | Java `.properties` | `java-properties` 2.0 (MIT) | flat `HashMap<String,String>` to a flat Object | low | dotted keys (`a.b.c`) are ONE opaque key in Java; flat is faithful, nesting-on-`.` diverges and hits alint's JSONPath dotted-key bracket quirk |
-| INI / `.cfg` | `ini` (rust-ini) 0.21 (MIT) | 2-level section-key map | low-med | duplicate keys (rust-ini can keep them as an array; avoid `configparser`, which lowercases keys and is last-wins) plus where the pre-section "global" keys live |
-| HCL (Terraform) | `hcl` (hcl-rs) 0.19 (MIT/Apache) | `hcl::Value` is JSON-native, no mapper | med | a block type is an object when it appears once but an ARRAY when repeated (path shape depends on the file); `var.x` / `${...}` expressions arrive unevaluated as opaque strings |
+| INI / `.cfg` | ~~`ini` (rust-ini) 0.21 (MIT)~~ built hand-rolled (see prose: rust-ini's transitive tree carries a CC0-1.0 crate) | 2-level section-key map | low-med | duplicate keys (kept as a file-order array; avoid `configparser`, which lowercases keys and is last-wins) plus where the pre-section "global" keys live (hoisted to the top level) |
+| HCL (Terraform) | `hcl` (hcl-rs) 0.18 (MIT/Apache) — built | `hcl::Value` is JSON-native, no mapper | med | a block type is an object when it appears once but an ARRAY when repeated (path shape depends on the file); `var.x` / `${...}` expressions arrive unevaluated as opaque strings; **and (not foreseen) hcl-rs stack-overflows on deep input → depth guard + large-stack parse thread** |
 
 Effort is driven by mapping semantics, not parsing: HCL has the easiest parse (native `Value`) but the leakiest projection, so it is `med`, not `high`. With 5.2's runtime collapse landed, each is one `Format::parse` arm plus its config fields, not three enums.
 
@@ -155,3 +157,42 @@ All four resolved with the maintainer (2026-08-31):
 2. **Latent XML in `json_schema_passes`.** **Resolved: document and test it, add explicit `format: xml`.** No breaking change; the accidental auto-detect path (`.csproj` -> XML) becomes an intentional, tested capability.
 3. **New-format scope.** **Resolved: a supported `Format` variant is wired on every surface**, enforced by the parity gate. Extract-only "partial formats" are not a maintained tier; adding a `Format` variant means adding it everywhere.
 4. **Prioritization.** **Resolved: dotenv is greenlit as Phase 1.5** (full wiring, 5.3), shipped alongside the XML leveling. Java `.properties`, INI, and HCL stay demand-gated (5.4).
+
+## 8. Resource-pressure hardening
+
+Surfaced by the pre-v0.16 adversarial audit (rounds 3-4) and closed in it. Every crafted-SMALL-file DoS is fixed: the HCL/YAML/XML depth guards, the HCL byte cap, the per-element XML attribute cap, and the YAML alias-EXPANSION guard (`yaml_depth::expansion_within_limit`; a single anchor referenced many times, or a `<<: *a` merge, which `yaml_serde`'s own recursion/deref limits miss, ballooned a ~150 KB file into tens of millions of nodes). Round 4 also folded in the two general-engine resource-pressure fixes:
+
+- **Parse-tree memory amplification (per-file caps: FIXED).**
+  `MAX_ANALYZE_BYTES` (256 MiB, `walker.rs`) bounds input bytes, but a parsed
+  tree costs far more RSS: measured up to ~30x for attribute-heavy XML and
+  ~6-10x for JSON. `Format::parse` caps structured input at
+  `MAX_STRUCTURED_BYTES` (32 MiB, `structured_format.rs`; HCL keeps its
+  tighter 64 KiB cap). Lossless dotenv additionally caps parsed documents at
+  **4 MiB and 100,000 physical lines before parsing**, including comments
+  and multiline value lines. CRLF counts once, and a terminal ending adds no
+  phantom line. All-whitespace structured input retains the existing
+  empty-object fast path. Native dotenv span and verified-edit entry points
+  share both limits.
+  A synthetic 2 MiB file of repeated bare declarations aborted under a
+  512 MiB child-process address-space limit despite passing the generic byte
+  cap. The line budget rejects that input. A single 16 MiB warning-dense line
+  bypassed the line-only guard; the dotenv byte budget rejects it.
+  A further 4,000,000-byte / 100,000-line CR warning-density probe still
+  aborted below both budgets in adotenv 0.2.0. adotenv 0.2.1 removes discarded
+  warning lists, duplicate-only key tries and CR merge buffers from strict
+  parsing and native verification, addressing that root cause. The limits
+  remain necessary for retained lossless items, decoded escape maps and
+  value trees; they are not a general process-wide memory ceiling.
+  **Historical parser comparison (0.2.0, 2026-10-16):** on the synthetic
+  ceiling case (100,000 entries / 2.88 MiB), adotenv 0.2.0 measured 62 ms per
+  parse versus 19 ms for 0.1.1 (3.23x); the release CLI completed the full
+  check in about 143 ms. The selected byte budget retains that workload.
+  These timings predate the 0.2.1 allocation fix. Typical repository
+  benchmarks stayed green; add a dedicated dotenv benchmark if giant
+  generated `.env` files become a real workload.
+- **rayon global-pool init panic (FIXED).** Both engine dispatch loops (`engine/run.rs`) now run `par_iter` inside an explicitly-built pool via `with_worker_pool`: one pool built once and cached, via a three-tier fallback chain -- the default (`num_cpus`) pool, else a single spawned worker (`num_threads(1)`), else a `use_current_thread` pool that spawns zero new threads and runs on the calling thread -- under `RLIMIT_NPROC` / pids.max pressure (common in hardened CI / containers -- the self-hosted runner has hit pids limits). A constrained host degrades through one worker to on-caller execution instead of the lazy-global-pool `.expect` panic + "alint crashed" banner; `install` preserves `par_iter`'s ordering, so results are identical. Caching is required (a second `use_current_thread` build on one thread fails), and the cached pool is process-global; the third tier is thread-affine to its initializing thread, an accepted residual since the CLI runs on one main thread.
+
+Remaining follow-ups (each needs an extreme input AND a constrained host, and each is invasive relative to its payoff, so deferred to a dedicated robustness pass):
+
+1. **Concurrent-parse memory.** The per-file cap bounds ONE file's tree, but the per-file dispatch is parallel (up to `num_cpus` files at once), so aggregate transient parse memory is still (per-file cap) x fan-out. A concurrent-parse memory semaphore would bound the total, but blocking rayon workers on a semaphore risks pool starvation, so it wants careful design.
+2. **XML multi-element attribute residual (bounded, non-quadratic).** The per-element attribute cap (256) restored linear-time parsing; a max-size file of at-cap-width elements still costs a few seconds of CPU (linear in size). A document-wide attribute budget or a parse watchdog would bound wall-clock further; not needed for the sharp DoS, which is closed.

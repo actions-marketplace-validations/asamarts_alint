@@ -155,3 +155,71 @@ fn non_utf8_filename_does_not_break_json_or_agent() {
         );
     }
 }
+
+// A concrete edit path must never be serialized lossily: two distinct
+// non-UTF-8 filenames could otherwise advertise the same target. The optional
+// JSON/agent field is omitted when its path has no exact JSON string
+// representation; SARIF percent-encodes the original Unix filename bytes.
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_filename_does_not_break_fix_carrying_formats() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::Builder::new()
+        .prefix("alint-weirdpath-fix-")
+        .tempdir()
+        .unwrap();
+    std::fs::write(
+        dir.path().join(".alint.yml"),
+        "version: 1\nrules:\n  - id: trim\n    kind: no_trailing_whitespace\n    \
+         paths: \"**/*.txt\"\n    level: error\n    fix:\n      file_trim_trailing_whitespace: {}\n",
+    )
+    .unwrap();
+    let mut name = std::ffi::OsString::from("bad");
+    name.push(std::ffi::OsStr::from_bytes(b"\xff"));
+    name.push("name.txt");
+    std::fs::write(dir.path().join(&name), "trailing   \n").unwrap();
+
+    // `agent` (always attaches proposed_edit) and `json --include-fixes` (on request).
+    for args in [
+        &["check", ".", "--format", "agent"][..],
+        &["check", ".", "--format", "json", "--include-fixes"][..],
+    ] {
+        let out = run(dir.path(), args);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{args:?} must not abort (exit 2) on a non-UTF-8 path with a proposed_edit; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+            panic!(
+                "{args:?} stdout is not valid JSON: {e}\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        });
+        let blob = v.to_string();
+        assert!(
+            blob.contains("name.txt") && blob.contains('\u{fffd}'),
+            "{args:?} expected the ordinary display path to remain visible; got {blob}"
+        );
+        assert!(
+            !blob.contains("\"proposed_edit\""),
+            "{args:?} must not advertise an edit through a lossy path; got {blob}"
+        );
+    }
+
+    let out = run(dir.path(), &["check", ".", "--format", "sarif"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "SARIF must not abort on a non-UTF-8 fix path; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("SARIF output must be valid JSON");
+    let blob = value.to_string();
+    assert!(
+        blob.contains("bad%FFname.txt") && !blob.contains('\u{fffd}'),
+        "SARIF must preserve the exact filename bytes in its URI; got {blob}"
+    );
+}

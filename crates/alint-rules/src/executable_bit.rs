@@ -10,8 +10,12 @@
 //! rule is a no-op (never produces violations). Document this in
 //! the config so platform-specific behaviour isn't a surprise.
 
-use alint_core::{Context, Error, Level, Result, Rule, RuleSpec, Scope, Violation};
+use alint_core::{
+    Applicability, Context, Error, FixSpec, Fixer, Level, Result, Rule, RuleSpec, Scope, Violation,
+};
 use serde::Deserialize;
+
+use crate::fixers::ChmodFixer;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +38,7 @@ pub struct ExecutableBitRule {
     message: Option<String>,
     scope: Scope,
     require_exec: bool,
+    fixer: Option<ChmodFixer>,
 }
 
 impl Rule for ExecutableBitRule {
@@ -82,7 +87,33 @@ impl Rule for ExecutableBitRule {
         // so configs stay portable across platforms.
         Ok(Vec::new())
     }
+
+    fn fixer(&self) -> Option<&dyn Fixer> {
+        self.fixer.as_ref().map(|f| f as &dyn Fixer)
+    }
 }
+
+pub static META: alint_core::KindMeta = alint_core::KindMeta {
+    dispatch: alint_core::DispatchClass::RuleMajorScoped,
+    paths: alint_core::PathsSupport::Required,
+    scope_filter: alint_core::ScopeFilterSupport::Full,
+    git_tracked_only: alint_core::GitTrackedSupport::None,
+    respect_gitignore: false,
+    root_only: false,
+    selectors: std::borrow::Cow::Borrowed(&[]),
+    since: alint_core::SinceSupport::None,
+    capabilities: std::borrow::Cow::Borrowed(&[alint_core::CapabilityMeta {
+        capability: alint_core::Capability::UnixOnly,
+        condition: alint_core::CapabilityCondition::Always,
+    }]),
+    content: alint_core::ContentAccess::Metadata,
+    formats: std::borrow::Cow::Borrowed(&[]),
+    dependencies: std::borrow::Cow::Borrowed(&[]),
+    fix_ops: std::borrow::Cow::Borrowed(&[std::borrow::Cow::Borrowed("chmod")]),
+    expect_matches: true,
+    trace: alint_core::TraceMeta::SELECTION,
+    nested_rules: false,
+};
 
 pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let _paths = spec
@@ -92,12 +123,24 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
     let opts: Options = spec
         .deserialize_options()
         .map_err(|e| Error::rule_config(&spec.id, format!("invalid options: {e}")))?;
-    if spec.fix.is_some() {
-        return Err(Error::rule_config(
-            &spec.id,
-            "executable_bit has no fix op — chmod auto-apply is deferred (see ROADMAP)",
-        ));
-    }
+    // The only supported fix op is `chmod`, which sets (`require: true`) or clears
+    // (`require: false`) the executable bits to match the rule.
+    let fixer = match &spec.fix {
+        None => None,
+        Some(FixSpec::Chmod { chmod }) => Some(ChmodFixer::new(
+            opts.require,
+            chmod.applicability.unwrap_or(Applicability::Safe),
+        )),
+        Some(other) => {
+            return Err(Error::rule_config(
+                &spec.id,
+                format!(
+                    "fix.{} is not compatible with executable_bit (only `chmod`)",
+                    other.op_name()
+                ),
+            ));
+        }
+    };
     Ok(Box::new(ExecutableBitRule {
         id: spec.id.clone(),
         level: spec.level,
@@ -105,6 +148,7 @@ pub fn build(spec: &RuleSpec) -> Result<Box<dyn Rule>> {
         message: spec.message.clone(),
         scope: Scope::from_spec(spec)?,
         require_exec: opts.require,
+        fixer,
     }))
 }
 
@@ -141,7 +185,8 @@ mod tests {
     }
 
     #[test]
-    fn build_rejects_fix_block() {
+    fn build_rejects_an_incompatible_fix() {
+        // Only `chmod` is compatible; any other op is a config error.
         let spec = spec_yaml(
             "id: t\n\
              kind: executable_bit\n\
@@ -152,6 +197,28 @@ mod tests {
                file_remove: {}\n",
         );
         assert!(build(&spec).is_err());
+    }
+
+    #[test]
+    fn build_accepts_a_chmod_fix() {
+        let spec = spec_yaml(
+            "id: t\n\
+             kind: executable_bit\n\
+             paths: \"scripts/**\"\n\
+             require: true\n\
+             level: error\n\
+             fix: { chmod: {} }\n",
+        );
+        let rule = build(&spec).expect("chmod fix builds");
+        let fixer = rule.fixer().expect("the rule exposes a chmod fixer");
+        // Audit L3: chmod is Safe by DEFAULT (the rule requires the state, the
+        // change is reversible, only 0o111 moves). A flip to Unsafe would silently
+        // stop a bare `alint fix` from applying it.
+        assert_eq!(
+            fixer.applicability(),
+            Applicability::Safe,
+            "chmod must default to Safe"
+        );
     }
 
     /// ADR-0008: `git_tracked_only` is a kind-specific option on the existence
@@ -177,7 +244,7 @@ mod tests {
 
     /// ADR-0008: `respect_gitignore` is a `file_exists`-only option (the
     /// pitfall-#18 escape hatch), NOT a `rule_common` field. A non-existence
-    /// kind that receives it must reject it at load — the fail-loud it lacked
+    /// kind that receives it must reject it at load - the fail-loud it lacked
     /// while the field lived on `rule_common` (where `no_bom: respect_gitignore`
     /// validated, loaded, and was silently ignored).
     #[test]

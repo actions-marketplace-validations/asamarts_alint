@@ -1,3 +1,4 @@
+test_version: 1
 name: registry_paths_resolve is silent when every workspace member resolves
 tags: [check, registry_paths_resolve, cross_file, passing]
 
@@ -34,4 +35,5 @@ given:
 when: [check]
 
 expect:
-  - violations: []
+  - exit: success
+    violations: []

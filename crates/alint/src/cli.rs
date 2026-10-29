@@ -25,7 +25,7 @@ use crate::ALINT_LONG_VERSION;
     max_term_width = 100,
 )]
 // Several independent boolean flags are the natural shape of the
-// CLI surface — `--ascii`, `--compact`, `--fail-on-warning`,
+// CLI surface - `--ascii`, `--compact`, `--fail-on-warning`,
 // `--no-gitignore`. Collapsing them into a state-machine enum
 // would obscure, not clarify.
 #[allow(clippy::struct_excessive_bools)]
@@ -33,6 +33,17 @@ pub(crate) struct Cli {
     /// Path to a config file.
     #[arg(long, short = 'c', global = true)]
     pub(crate) config: Vec<PathBuf>,
+
+    /// Reference date for time-dependent rules. Strict UTC `YYYY-MM-DD`. Overrides
+    /// `ALINT_AS_OF`; without either, time-dependent rules use the current HEAD commit time.
+    #[arg(
+        long,
+        global = true,
+        env = "ALINT_AS_OF",
+        hide_env = true,
+        value_name = "YYYY-MM-DD"
+    )]
+    pub(crate) as_of: Option<alint_core::AnalysisTime>,
 
     /// Output format.
     #[arg(long, short = 'f', global = true, default_value = "human")]
@@ -48,7 +59,7 @@ pub(crate) struct Cli {
 
     /// List informational notes in full on stderr.
     ///
-    /// Notes are non-violation findings — e.g. entries a rule skipped
+    /// Notes are non-violation findings - e.g. entries a rule skipped
     /// rather than failed on. By default only a one-line count is shown.
     #[arg(long, global = true)]
     pub(crate) show_notes: bool,
@@ -98,11 +109,23 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub(crate) no_docs: bool,
 
+    /// Include the concrete proposed fix edit(s) in `json` output.
+    ///
+    /// Adds a `proposed_edit` array (source region + replacement text) to each
+    /// fixable finding in `--format json`, so a tool can preview/apply the fix
+    /// without running `alint fix`. Only Safe (auto-applyable) fixes are
+    /// included -- Unsafe fixes stay suggestions on alint's own `fix`. The
+    /// `agent` format always carries this; SARIF carries it as `result.fixes[]`.
+    /// No effect on other formats. Computing the edit re-reads the fixable files
+    /// during `check`, so it is opt-in here.
+    #[arg(long, global = true)]
+    pub(crate) include_fixes: bool,
+
     /// When to render progress on stderr for slow operations.
     ///
     /// Currently just `alint suggest`. `auto` (the default) renders
     /// when stderr is a TTY; `always` forces; `never` silences.
-    /// Progress always lives on stderr — `--format` JSON output on
+    /// Progress always lives on stderr - `--format` JSON output on
     /// stdout stays byte-clean.
     #[arg(
         long,
@@ -156,13 +179,25 @@ pub(crate) struct Cli {
     /// Applies to `check` and `fix` (the `agent` format emits `fix
     /// --only <rule-id>`); rejected on any other subcommand. Global, so
     /// the bare `alint --only <id>` lints the current directory like
-    /// `alint check --only <id>` — to lint a different path, use the
+    /// `alint check --only <id>` - to lint a different path, use the
     /// explicit form `alint check --only <id> <path>`.
     #[arg(long, global = true, value_name = "RULE_ID")]
     pub(crate) only: Vec<String>,
 
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
+    /// Injected rule registry for embedders/tests; `None` uses the built-ins.
+    #[arg(skip)]
+    pub(crate) registry: Option<alint_core::RuleRegistry>,
+}
+
+impl Cli {
+    /// The injected registry, or the built-in catalog for ordinary CLI use.
+    pub(crate) fn registry(&self) -> alint_core::RuleRegistry {
+        self.registry
+            .clone()
+            .unwrap_or_else(alint_rules::builtin_registry)
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -172,10 +207,9 @@ pub(crate) enum Command {
         /// Root of the repository to lint. Defaults to the current directory.
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Restrict the check to files in the working-tree diff.
-        /// Without `--base`, uses
-        /// `git ls-files --modified --others --exclude-standard`
-        /// (right shape for pre-commit). With `--base`, uses
+        /// Restrict the check to paths changed in Git.
+        /// Without `--base`, includes staged, unstaged, and untracked
+        /// paths (the right shape for pre-commit). With `--base`, uses
         /// `git diff --name-only <base>...HEAD` (right shape for
         /// PR checks). Cross-file rules (`pair`, `for_each_dir`,
         /// `every_matching_has`, `unique_by`, `dir_contains`,
@@ -200,10 +234,33 @@ pub(crate) enum Command {
         #[arg(long)]
         category: Option<String>,
     },
-    /// Show a rule's definition.
+    /// Show a configured rule, optionally tracing one real selected-rule run.
     Explain {
         /// Rule id to describe.
         rule_id: String,
+        /// Walk the repository and evaluate only this effective rule. A traced
+        /// command rule and any configured custom facts may execute subprocesses,
+        /// matching `check`; unrelated command rules never run. Trace outcomes
+        /// are diagnostic and exit 0, including violations and skips.
+        #[arg(long)]
+        trace: bool,
+        /// Include bounded, redacted extraction or nested-child evidence in the trace.
+        #[arg(long, requires = "trace")]
+        preview: bool,
+        /// Maximum retained preview rows (1..=100; default 20).
+        #[arg(
+            long,
+            value_name = "N",
+            requires = "preview",
+            value_parser = clap::value_parser!(u16).range(1..=100)
+        )]
+        preview_limit: Option<u16>,
+        /// Restrict the traced run to paths changed in Git.
+        #[arg(long, requires = "trace")]
+        changed: bool,
+        /// Base ref for the traced changed-path run. Implies `--changed`.
+        #[arg(long, value_name = "REF", requires = "trace")]
+        base: Option<String>,
     },
     /// Apply automatic fixes for violations whose rules declare one.
     Fix {
@@ -221,6 +278,24 @@ pub(crate) enum Command {
         /// Base ref for `--changed`. Implies `--changed`.
         #[arg(long, value_name = "REF")]
         base: Option<String>,
+        /// Also apply Unsafe-tier fixes, not just Safe ones. Unsafe fixes may be
+        /// destructive or change behavior, so they are opt-in: without this flag
+        /// they are surfaced as suggestions instead of applied. `file_remove`
+        /// (the fix for `file_absent` / `no_empty_files` / `no_submodules` /
+        /// `no_symlinks`) is Unsafe, so this flag is what applies it.
+        #[arg(long)]
+        unsafe_fixes: bool,
+        /// Report only the fixes that were applied: suppress the residual
+        /// (skipped / unfixable) findings and exit 0 unless a fix errored.
+        /// For "apply what you can and move on" workflows.
+        #[arg(long)]
+        fix_only: bool,
+        /// Show a unified diff of the fixes that would be applied, writing
+        /// nothing. Reflects the composed result at the chosen tier; the exit
+        /// code matches a real `fix`. Output is a unified diff regardless of
+        /// `--format`.
+        #[arg(long)]
+        diff: bool,
     },
     /// Snapshot current violations so later runs fail only on new ones.
     ///
@@ -258,7 +333,7 @@ pub(crate) enum Command {
     /// Scaffold a starter `.alint.yml` for the detected ecosystem.
     ///
     /// Detects the ecosystem (and optionally workspace shape) from the
-    /// repo. Refuses to overwrite an existing config — delete the
+    /// repo. Refuses to overwrite an existing config - delete the
     /// existing one first if you really mean it.
     Init {
         /// Root of the repository to write the config into.
@@ -297,7 +372,7 @@ pub(crate) enum Command {
         /// "Lint rules enforced by alint".
         #[arg(long, value_name = "TEXT")]
         section_title: Option<String>,
-        /// Include `level: info` rules. Default omits them —
+        /// Include `level: info` rules. Default omits them -
         /// info-level rules are nudges, not directives.
         #[arg(long)]
         include_info: bool,
@@ -315,7 +390,7 @@ pub(crate) enum Command {
     },
     /// Scan for antipatterns and propose rules that would catch them.
     ///
-    /// Prints proposals to stdout for review — never edits the user's
+    /// Prints proposals to stdout for review - never edits the user's
     /// config. Pairs naturally with `alint init` for a smarter
     /// cold-start adoption flow.
     Suggest {
@@ -353,6 +428,41 @@ pub(crate) enum Command {
         /// proposal so reviewers can decide quickly.
         #[arg(long)]
         explain: bool,
+    },
+    /// Run versioned policy tests in isolated temporary repositories.
+    ///
+    /// With no PATH, discovers mappings carrying top-level `test_version`
+    /// below `alint-tests/`; other fixture/config YAML is ignored.
+    /// Explicit files are always validated. Exit 1 means expectation
+    /// mismatch, 2 invalid input, and 3 a runner/sandbox failure.
+    Test {
+        /// Policy-test YAML files or directories. Defaults to `alint-tests/`.
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+        /// Select tests carrying this tag. Repeat for an AND filter.
+        #[arg(long, value_name = "TAG")]
+        tag: Vec<String>,
+        /// Case-sensitive substring match against test name or source path.
+        #[arg(long, value_name = "TEXT")]
+        filter: Option<String>,
+        /// Replace snapshots after every selected test's inline assertions pass.
+        #[arg(long)]
+        update_snapshots: bool,
+        /// Grant tests that declare `spawn: true` full native code-execution authority.
+        #[arg(long)]
+        allow_spawn: bool,
+        /// Grant tests that declare `host_keyring: true` access to the host keyring.
+        #[arg(long)]
+        allow_host_keyring: bool,
+        /// Report format. JSON follows `schemas/v1/policy-test-report.json`.
+        #[arg(
+            long,
+            short = 'f',
+            value_name = "FORMAT",
+            default_value = "human",
+            value_parser = clap::builder::PossibleValuesParser::new(["human", "json"]),
+        )]
+        format: String,
     },
     /// Parse-validate an `.alint.yml` without walking the tree.
     ///
@@ -412,7 +522,7 @@ pub(crate) enum RulesCommand {
     },
     /// List the rule categories: slug, title, and how many kinds each holds.
     Categories,
-    /// Show one rule kind: its summary, categories, aliases, and docs link.
+    /// Show one rule kind: summary, capabilities, selectors, fixes, and docs.
     /// Accepts an alias (resolves to the canonical kind).
     Show {
         /// The rule kind (or alias) to describe.
