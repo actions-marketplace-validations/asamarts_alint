@@ -90,7 +90,7 @@ jobs:
 
       - name: set up Python (pypi channel)
         if: matrix.channel == 'pypi'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
@@ -102,7 +102,7 @@ jobs:
 
       - name: install cargo-binstall (cargo-binstall channel)
         if: matrix.channel == 'cargo-binstall'
-        uses: cargo-bins/cargo-binstall@8a2045612414e945291083f820cd50b4d8fc2218 # v1.26.0
+        uses: cargo-bins/cargo-binstall@81df5c23b0dc775b009efdfc9895c5965b7a4e40 # v1.26.1
 
       - name: install cosign (so the install.sh leg exercises its verify path)
         # With cosign v3 present, install.sh's verification actually runs against
